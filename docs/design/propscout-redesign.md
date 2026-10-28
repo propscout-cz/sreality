@@ -25,9 +25,9 @@ fetch these links with curl or WebFetch.
 
 1. **PR #2115** (merged 2026-10-27; Railway deployed API, vite and realtime-worker):
    - the app is **PropScout.cz** (`lib/brand.ts`; tab titles are the page name alone (no prefix) under a "PS" favicon; a "PS" home-screen icon; extension name);
-   - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked per device in the
-     account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `globals.css`
-     `data-scheme` blocks, `components/SchemeSwatch.tsx`);
+   - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked in the
+     account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `styles/tokens.css`
+     `data-scheme` blocks, `components/SchemeSwatch.tsx`); since 2026-10-28 one store, kept in the user's profile;
    - new tokens `--color-chrome*` (top bar) and `--color-on-copper` / `--color-on-brick` (text on a fill);
    - CLAUDE.md "Where the detail lives" points at `.interface-design/system.md`; this file and the roadmap entry.
 2. **The design system artifact** (version 8): tokens for the six themes, a component bundle, and a preview of
@@ -52,7 +52,7 @@ fetch these links with curl or WebFetch.
 - **Nothing revealed on hover may move anything** (ruling 2026-10-27). A hover or focus reveal is an overlay
   on what is already there, never a line that grows a card or pushes content.
 - **Show, don't describe.** Proposals need pictures (shapes, mock-ups) of exactly what changes.
-- Design tokens in `globals.css` `@theme` need the operator's OK (CLAUDE.md). The three schemes are approved.
+- Design tokens in `styles/tokens.css` need the operator's OK (CLAUDE.md). The three schemes are approved.
 - The operator is non-technical but learns fast: explain the why, define jargon, give click-by-click steps.
 
 ## The rulings (2026-10-27)

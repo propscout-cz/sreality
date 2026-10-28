@@ -50,7 +50,7 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   Reads run as `authenticated` (`anon` gets nothing): `*_public` views, RLS'd tables, read models granted with no RLS (`browse_list`,
   `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
   Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
-  no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
+  no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`styles/tokens.css`) need operator OK. Backend rules don't apply.
 - **Chrome extension** (`chrome-extension/`) — Manifest v3, **vanilla TS only** (no React /
   Tailwind), closed shadow-root panel. Every network call goes through the background worker
   (`chrome.runtime.sendMessage`), never a direct `fetch`. Build-time `VITE_API_*` inlined

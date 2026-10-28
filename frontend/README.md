@@ -94,13 +94,14 @@ src/
     Region.tsx       part D
     Health.tsx       part E
   styles/
-    globals.css      design tokens (@theme), typography, base reset
+    tokens.css       design tokens: every colour and radius, six themes
+    globals.css      fonts (@theme), typography, base reset
 ```
 
 ## Design system in one place
 
-All visual tokens live in `src/styles/globals.css` under a single `@theme`
-block (light) plus a dark-mode mirror.  Colour names are domain words —
+All visual tokens live in `src/styles/tokens.css`: the Měď light block, then
+dark and the Kobalt and Grafit schemes.  Colour names are domain words —
 `--color-paper`, `--color-ink`, `--color-copper`, `--color-brick`, etc. —
 not abstract greys.  Depth strategy is **borders only** (no shadows),
 with one carve-out: map-anchored popovers may use a small shadow because

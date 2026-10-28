@@ -33,8 +33,7 @@ import StageWash, { type StageWashProps } from './StageWash';
 
 /* A dark room for the photo after dusk, as the prototype dims it (26 %); the
  * pipeline's thumbnails and the property page's gallery take the same. */
-export const PHOTO_DARK =
-  '[:root[data-theme=dark]_&]:brightness-[0.74] [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:brightness-[0.74]';
+export const PHOTO_DARK = '[:root[data-theme=dark]_&]:brightness-[0.74]';
 
 /* How far a press may travel and still be a tap (px). */
 const TAP_SLOP = 10;

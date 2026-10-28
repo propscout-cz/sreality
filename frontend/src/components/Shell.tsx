@@ -241,7 +241,7 @@ function TopBar() {
   );
   return (
     /* The bar draws in the `chrome` tokens: a dark band in the Měď scheme, the
-     * page's own paper in Kobalt and Grafit (globals.css). */
+     * page's own paper in Kobalt and Grafit (tokens.css). */
     <header className="border-b border-[var(--color-rule)] bg-[var(--color-chrome)] sticky top-0 z-30">
       {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes,
         * the pipeline board's stage headers and the property page's tab strip

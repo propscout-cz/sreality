@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="robots" content="noindex, nofollow" />
+    <!-- The device's cached appearance, on <html> before any CSS paints (lib/theme.ts
+         owns it; theme.test.ts runs this copy against the store). A future
+         Content-Security-Policy must list this script's sha256, which any edit changes. -->
+    <script>
+      try {
+        const d = document.documentElement, s = localStorage.getItem('sreality.scheme');
+        let t = localStorage.getItem('sreality.theme');
+        if (s === 'kobalt' || s === 'grafit') d.setAttribute('data-scheme', s);
+        if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        d.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      } catch {}
+    </script>
     <!-- Pre-hydration fallback only; React's TitleController sets the live
          title from the shared brand (src/lib/brand.ts) on mount. -->
     <title>PropScout.cz</title>

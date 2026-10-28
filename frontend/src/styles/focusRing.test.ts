@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 // vitest runs from frontend/; import.meta.url is not a file: URL under vite.
 const css = readFileSync(join(process.cwd(), 'src/styles/globals.css'), 'utf8');
+const tokens = readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8');
 
 describe('globals.css focus ring', () => {
   it('declares a global :focus-visible outline in the focus token', () => {
@@ -18,6 +19,6 @@ describe('globals.css focus ring', () => {
   });
 
   it('defines --color-focus in the base theme', () => {
-    expect(css).toMatch(/--color-focus:\s*rgba?\(/);
+    expect(tokens).toMatch(/--color-focus:\s*rgba?\(/);
   });
 });
