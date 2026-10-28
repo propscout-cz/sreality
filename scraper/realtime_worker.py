@@ -625,7 +625,7 @@ _AUTODEDUP_PASS_LOCK = _PassLock("autodedup")
 # end that drain at 300 s anyway: the heartbeat lane stops at SIGTERM like every lane, and the
 # watchdog exits the process once no beat has finished for LIVENESS_BOUND_SECONDS. So the
 # lease is released at once, in four parts:
-#   * `railway.worker.json` `drainingSeconds` 30: the room between SIGTERM and SIGKILL;
+#   * `.railway/railway.ts` `WORKER_DRAINING_SECONDS` 30: the room between SIGTERM and SIGKILL;
 #   * the pass reads the signal as `stopping` at every deadline checkpoint (between steps,
 #     every 256 pair decisions, before every fact slice): it stops there, rolls back on its own
 #     live connection — freeing its row locks at once, not at SIGKILL — and releases its lease

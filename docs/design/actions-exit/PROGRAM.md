@@ -41,7 +41,7 @@ flag, a settings knob that means "stop", or a portal name in shared scheduler co
 | Price-stats self-chain: 138 dispatches in 14 days (~14,700 min/month) on a weekly cron | `scrape_price_stats.yml` |
 | GitHub fires sub-hourly crons about 6×/day; the worker drains 96–99 % of every portal's queue | run counts; `detail_queue_completions` |
 | Worker memory: avg 7.4 GB, peak 21.5 of 22.9 GB (an autodedup pass is 11.4 GB) | Railway metrics, heartbeat |
-| Merges redeploy the image ~8–11×/day; `drainingSeconds` 30; a cut walk leaves `ended_at NULL` and does not resume | `railway.worker.json`, `portal_runner.py` |
+| Merges redeploy the image ~8–11×/day; `drainingSeconds` 30; a cut walk leaves `ended_at NULL` and does not resume | `.railway/railway.ts` (`WORKER_DRAINING_SECONDS`), `portal_runner.py` |
 | No SIGTERM handler in `portal_runner`, `portal` or any `*_main.py`; the worker cannot kill a pass (a thread) | code read |
 | `location_jobs` (mig 384) is already a CAS lease table: holder, expiry, last start/success, outcome, failures | `location_data/resolver/lease.py` |
 | Required checks: pytest, schema-and-sql, vitest, build, docs-budget; `strict=false` | branch protection API |
@@ -109,8 +109,9 @@ production.
   exactly one host.
 - **One service** (`python -m scraper.job_runner run`, exec form: a shell as PID 1 forwards no SIGTERM), **two
   identical replicas**, 8 GB / 4 vCPU each,
-  `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile with `ARG EXTRAS=api,clip,geo`
-  so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
+  `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
+  #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
+  env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
   `watchPatterns` cover the trees jobs import. Variables are references to shared project variables.
 - **Scheduling**: anchored, staggered slots on the database clock (`due_at` from `every_s` + `offset_s`);
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
@@ -195,9 +196,11 @@ production.
   is deleted.
 - **Secrets**: Railway shared variables are the store of record for runtime; GitHub keeps what CI, the
   canary and the attended forms read; the duplicated set is listed once in the toolkit-api skill. Deleted:
-  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: `RAILWAY_TOKEN` for
-  Railway's config plan/apply recipe; a new fine-grained token under the organisation for price-stats
-  "Run now".
+  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: a new fine-grained
+  token under the organisation for price-stats "Run now". No `RAILWAY_TOKEN`: M0 (#2060) applies
+  `.railway/railway.ts` by hand in merge windows (operator ruling R2, 2026-10-26); plan/apply in CI would need
+  one project token per Railway project, and is #2025's to decide. Shared variables are per project (the
+  three services are three projects), and IaC only references them (`ctx.shared.NAME`).
 
 ### 4.3 Honest limits (from the refuters)
 
@@ -251,7 +254,7 @@ One migration (rename + alias view, the new columns, `resource`, `job_runs` with
 per-worker liveness subjects); `scraper/job_lease.py` (moved + claim/renew/fence/release), `scraper/jobs.py`,
 `scraper/job_runner.py`, the `job/<name>` SQL arm, the request-only `run_job.yml`; the `job-runner` service
 added to `.railway/railway.ts`. **Scope change 2026-10-25 (operator ruling Q24, agent-platform grill):** the
-move of the three existing services to that file with Railway's plan-on-PR/apply-on-merge recipe, and the
+move of the three existing services to that file (operator-applied in windows, no CI recipe: ruling R2, #2060), and the
 deletion of the three `railway*.json`, is the agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due
 within the week, hard cutoff 2026-12-01); #2025 reuses the file and lands it for all four only if M0 has not
 landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR flips its entries' host to
@@ -346,8 +349,9 @@ GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory a
 Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); columns on the reused
 `scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~100), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
-`.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
-heartbeat row per replica; the runner's daily `job_runs` prune; `RAILWAY_TOKEN`; a LICENSE notice. **As built
+its service in `.railway/railway.ts` (~15: M0, #2060, ships the file and the one ARG, `EXTRAS`, which the runner sets);
+two code-only per-portal walk values; ~250 lines of tests; one `job-runner` heartbeat row per replica; the runner's
+daily `job_runs` prune; a LICENSE notice (no `RAILWAY_TOKEN` in M0; CI tokens are #2025's call). **As built
 (#2024):** `scraper/job_runner.py` ~725 lines (~595 of code), `scraper/job_process.py` ~410 (~300), `job_lease.py`
 +~375 (the runner's statements), `stop.py` +4/−3 (an opt-in hangup), ~2,200 test lines; the guard thread, the mixed
 kill mode, the straggler wait, atomic spawn and the per-call stopping budget are the growth over the estimate.

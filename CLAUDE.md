@@ -90,7 +90,7 @@ operator can watch, and work to completion.
   status (API / vite / realtime-worker), each with `state` + a live URL, no Railway token
   needed. For frontend-visible changes, follow with a real-browser check against the
   production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
-  send, …) against production autonomously.
+  send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).
 ## Fetching live state (fetch, don't ask)
 
 Dynamic state lives outside Git — don't ask, fetch it:
