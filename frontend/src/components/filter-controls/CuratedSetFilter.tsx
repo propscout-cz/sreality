@@ -15,7 +15,8 @@ import { PickButton } from '@/components/controls';
 import PipelineMark from '@/components/PipelineMark';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { useTagReads } from '@/lib/useCardTags';
-import { collectionLabel, isMine, useCollections } from '@/lib/collectionCache';
+import { useCollections } from '@/lib/collectionCache';
+import { collectionLabel, isMine } from '@/lib/collectionRules';
 import { usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import {

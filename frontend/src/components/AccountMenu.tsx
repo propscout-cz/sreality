@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
-import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
+import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
 

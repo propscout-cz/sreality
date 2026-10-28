@@ -2,9 +2,9 @@
  * price snapshots as one chart track each (MS9), and the dated price moves
  * (MS10). Kept side-effect-free (now injected, never Date.now()) so the
  * transforms are unit-testable. */
-import { fmtDateSlash } from '@/lib/format';
-import { portalBadge } from '@/lib/portals';
-import type { ListingSnapshotPublic } from '@/lib/types';
+import { fmtDateSlash } from './format';
+import { portalBadge } from './portals';
+import type { ListingSnapshotPublic } from './types';
 
 /* One advert of the property. A price step never spans two adverts, so each is
  * its own track; together the tracks are the property's time on the market. */
@@ -185,4 +185,12 @@ export function priceChangeEvents(series: PriceSeries[]): PriceChangeEvent[] {
     }
   }
   return events.sort((a, b) => b.t - a.t);
+}
+
+/* Each track's last move in percent, by track id: the newest event of its own
+ * line, so a pill beside one advert's price never describes another advert's. */
+export function lastMoveByTrack(series: PriceSeries[]): Map<number, number> {
+  const byTrack = new Map<number, number>();
+  for (const c of priceChangeEvents(series)) if (!byTrack.has(c.seriesId)) byTrack.set(c.seriesId, c.pct);
+  return byTrack;
 }

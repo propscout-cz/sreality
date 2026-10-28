@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COLOR_SCHEMES, THEME_MODES } from './theme';
+import { COLOR_SCHEMES, THEME_MODES } from './appearance';
 
 // vitest runs from frontend/; import.meta.url is not a file: URL under vite.
 const tokens = readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8');

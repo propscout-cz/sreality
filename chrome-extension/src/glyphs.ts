@@ -1,9 +1,12 @@
-/* The marks and stage rules every extension surface draws — the detail panel
- * and the search-page card controls — hand-reproduced from the SPA, which the
- * extension can't import (separate territory, classic content script). ONE
- * copy inside the extension, so the panel and a card never drift apart. */
+/* The marks every extension surface draws — the detail panel and the
+ * search-page card controls — as inline SVG copies of the SPA's icon
+ * components (React, so not importable), and the save rules the extension adds
+ * on top of the app's shared ones (lib/collectionRules). */
 
-import type { ExtCollection, PipelineStage } from './types';
+import { isMine, sortCollections } from '../../frontend/src/lib/collectionRules';
+import type { StageLook } from '../../frontend/src/lib/pipelineStage';
+import type { Collection } from '../../frontend/src/lib/types';
+import type { PipelineMembership } from './types';
 
 /* The SPA's <FunnelIcon> (icons.tsx) as inline SVG — the shared "pipeline"
  * glyph on every surface (a funnel with three arrows; filled body =
@@ -59,48 +62,10 @@ export function eyeOffIconSvg(filled: boolean): string {
   );
 }
 
-/* The stage's accent, mirroring the SPA's lib/pipelineStage.ts:stageAccent —
- * the operator's stage colour, copper when the stage has none (copper is THE
- * deal-tracking accent, rule #22). Values come from tokens.css's --tag-* vars,
- * which mirror the SPA palette by value. */
-const STAGE_COLORS = new Set([
-  'copper', 'sage', 'brick', 'ochre', 'slate', 'plum', 'teal', 'sand',
-]);
-
-export function stageAccent(color: string | null | undefined): { fg: string; soft: string } {
-  return color && STAGE_COLORS.has(color)
-    ? { fg: `var(--tag-${color})`, soft: `var(--tag-${color}-soft)` }
-    : { fg: 'var(--copper)', soft: 'var(--copper-soft)' };
-}
-
-/* The funnel badge, mirroring lib/pipelineStage.ts:stageBadge — the operator's
- * own short code, else the stage's 1-based ordinal among the live stages, else
- * nothing (stage list not loaded / stage archived). Never derived from
- * `position`: the live board reuses "9" across its three closed stages. */
-export function stageBadge(
-  code: string | null | undefined,
-  stageId: number | null | undefined,
-  stages: PipelineStage[] | null,
-): string | null {
-  if (code) return code;
-  if (stageId == null || stages == null) return null;
-  const idx = stages.findIndex((s) => s.id === stageId);
-  return idx < 0 ? null : String(idx + 1);
-}
-
-/* The save control's name and its checklist's, in the SPA's words
- * (CollectionSaveMenu's COLLECTION_SAVE_LABEL) — one verb on every surface. */
-export const COLLECTION_SAVE_LABEL = 'Uložit do kolekce';
-
-/* The checklist's order, the SPA menu's: monitored collections first, then by
- * name. Never the server's order — GET /collections sorts by updated_at, which
- * every add/remove bumps, so the row just clicked would jump to the top. */
-export function sortCollections(collections: ExtCollection[]): ExtCollection[] {
-  return [...collections].sort(
-    (a, b) =>
-      Number(b.monitoring_enabled) - Number(a.monitoring_enabled)
-      || a.name.localeCompare(b.name),
-  );
+/* A membership's stage as the app's stage helpers take it (lib/pipelineStage
+ * stageAccent / stageBadge); null out of the pipeline. */
+export function stageLook(p: PipelineMembership | null | undefined): StageLook | null {
+  return p?.in_pipeline && p.stage_id != null ? { id: p.stage_id, color: p.stage_color, code: p.stage_code } : null;
 }
 
 /* Whether a held list knows every collection a lookup names. RLS means a fresh
@@ -108,22 +73,15 @@ export function sortCollections(collections: ExtCollection[]): ExtCollection[] {
  * list is stale (made or shared since it was read) — re-read it. */
 export function knowsAll(
   collectionIds: readonly number[] | null | undefined,
-  collections: ExtCollection[],
+  collections: Collection[],
 ): boolean {
   const held = new Set(collections.map((c) => c.id));
   return (collectionIds ?? []).every((id) => held.has(id));
 }
 
-/* Mine vs shared with me, told by ONE field — the SPA's collectionCache
- * `isMine`: `owner_email` is null exactly when the collection (or note) is the
- * caller's. */
-export function isMine(x: { owner_email: string | null }): boolean {
-  return x.owner_email == null;
-}
-
 /* The save checklist's rows: MINE only, in its order. A view-only collection is
  * never a save target, so it is not offered (no disabled variant). */
-export function saveTargets(collections: ExtCollection[]): ExtCollection[] {
+export function saveTargets(collections: Collection[]): Collection[] {
   return sortCollections(collections.filter(isMine));
 }
 
@@ -134,32 +92,10 @@ export function saveTargets(collections: ExtCollection[]): ExtCollection[] {
  * without the list mine cannot be told from shared. */
 export function savedCollections(
   collectionIds: readonly number[] | null | undefined,
-  collections: ExtCollection[] | null,
-): ExtCollection[] | null {
+  collections: Collection[] | null,
+): Collection[] | null {
   const ids = new Set(collectionIds ?? []);
   if (ids.size === 0) return [];
   if (collections == null) return null;
   return saveTargets(collections).filter((c) => ids.has(c.id));
-}
-
-/* Who else can read a SHARED note on a property sitting in `collectionIds` —
- * the SPA's collectionCache `shareAudience`, so the two clients never disagree:
- * for a collection I own, every recipient; for one shared with me, its owner.
- * De-duplicated and sorted, so the composer label is stable. */
-export function shareAudience(
-  collectionIds: readonly number[],
-  collections: ExtCollection[],
-): string[] {
-  const byId = new Map(collections.map((c) => [c.id, c] as const));
-  const emails = new Set<string>();
-  for (const id of collectionIds) {
-    const c = byId.get(id);
-    if (c == null) continue;
-    if (isMine(c)) {
-      for (const s of c.shared_with ?? []) if (s.email != null) emails.add(s.email);
-    } else if (c.owner_email != null) {
-      emails.add(c.owner_email);
-    }
-  }
-  return [...emails].sort();
 }

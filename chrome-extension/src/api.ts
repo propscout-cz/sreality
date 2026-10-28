@@ -11,18 +11,16 @@ import type {
   CollectionWriteResult,
   DismissalWriteResult,
   EstimationRun,
-  ExtCollection,
   ExtNote,
-  ExtTag,
   IngestState,
   NotePatch,
   PipelineCardResult,
-  PipelineStage,
   PortalListing,
   PortalLookupItem,
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
+import type { Collection, PipelineStage, Tag } from '../../frontend/src/lib/types';
 
 if (!API_BASE_URL) {
   console.warn(
@@ -269,13 +267,13 @@ export function listPipelineStages(): Promise<ApiResult<PipelineStage[]>> {
 
 /* GET /collections — the caller's collections (rule #18), for the panel's
  * save-to-collection checklist. */
-export function listCollections(): Promise<ApiResult<ExtCollection[]>> {
+export function listCollections(): Promise<ApiResult<Collection[]>> {
   return requestData('/collections');
 }
 
 /* GET /tags — the caller's tags (rule #18), names + colours for the search-page
  * card chips, ordered by name. */
-export function listTags(): Promise<ApiResult<ExtTag[]>> {
+export function listTags(): Promise<ApiResult<Tag[]>> {
   return requestData('/tags');
 }
 

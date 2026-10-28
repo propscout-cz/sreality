@@ -1,11 +1,11 @@
-/* The MF result type and its shape rule are the SPA's own zero-dependency
- * module (like brand.ts), imported rather than copied. */
+/* The extension's wire shapes. The pipeline stages, collections and tags are the
+ * app's own types (frontend/src/lib/types.ts, the same routes), imported. */
+import type { Appearance } from '../../frontend/src/lib/appearance';
 import type { ReferenceRent } from '../../frontend/src/lib/mfReference';
+import type { TagColor } from '../../frontend/src/lib/types';
 
-/* Subset of the SPA's EstimationRun shape — we only consume the
- * fields needed by the yield panel. Mirroring frontend/src/lib/types.ts
- * but kept local so the extension build doesn't reach across into the
- * SPA's path aliases. */
+/* Subset of the SPA's EstimationRun shape — only the fields the yield panel
+ * reads (the panel's estimation flow is unchanged; its types with it). */
 
 export interface YieldScenario {
   rent_czk: number | null;
@@ -61,20 +61,7 @@ export interface PipelineMembership {
    * panel renders the same mark as the SPA without a second round trip.
    * stage_code null = fall back to the stage's ordinal in `stages`. */
   stage_code: string | null;
-  stage_color: string | null;
-}
-
-/* One operator-curated pipeline stage (GET /pipeline/stages). Mirrors the SPA's
- * stage shape; the extension reads id + label to populate the stage `<select>`. */
-export interface PipelineStage {
-  id: number;
-  key: string;
-  label: string;
-  position: number;
-  color: string | null;
-  is_terminal: boolean;
-  is_entry: boolean;
-  code: string | null;
+  stage_color: TagColor | null;
 }
 
 /* Response of the pipeline-card writes: POST /pipeline/cards (add) and
@@ -86,32 +73,9 @@ export interface PipelineCardResult {
   stage_key?: string | null;
   stage_label?: string | null;
   stage_code?: string | null;
-  stage_color?: string | null;
+  stage_color?: TagColor | null;
   added?: boolean;
   removed?: boolean;
-}
-
-/* One collection the caller can read (GET /collections): its own, or one
- * another account shared with it view-only (migration 610). Property-grain
- * (rule #18); `monitoring_enabled` marks it as a watchlist (always false on a
- * shared one: alerts go to its owner). `owner_email` is null exactly when it is
- * MINE — the one field mine vs shared is told by (glyphs.ts `isMine`). */
-export interface ExtCollection {
-  id: number;
-  name: string;
-  monitoring_enabled: boolean;
-  owner_email: string | null;
-  /* Who else reads it: on mine, every recipient; on a shared one, only my own
-   * grant (`email` null = me). Read for a note's share audience; absent from
-   * an API that predates sharing (same posture as `tag_ids`). */
-  shared_with?: { account_id: string; email: string | null }[];
-}
-
-/* A tag (GET /tags, rule #18): a name in one of the stage palette's colours. */
-export interface ExtTag {
-  id: number;
-  name: string;
-  color: string;
 }
 
 /* Response of POST /dismissals (`added`) and DELETE /dismissals/{id}
@@ -351,6 +315,9 @@ export interface BillingMe {
 export interface AuthState {
   signedIn: boolean;
   email: string | null;
+  /* The user's profile appearance (user_metadata.appearance in the token, so a
+   * pick reaches here at the next refresh); Měď light when signed out or unset. */
+  appearance: Appearance;
 }
 
 export interface ApiResponse<T> {

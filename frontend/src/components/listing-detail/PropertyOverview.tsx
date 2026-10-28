@@ -32,7 +32,7 @@ import {
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape } from '@/lib/mfReference';
 import { portalLabel } from '@/lib/portals';
-import { buildPriceSeries, priceChangeEvents, type PriceAdvert, type PriceSeries } from '@/lib/priceHistory';
+import { buildPriceSeries, lastMoveByTrack, type PriceAdvert, type PriceSeries } from '@/lib/priceHistory';
 import {
   fetchSoldComparables,
   SOLD_COMPS_LIMIT,
@@ -329,11 +329,7 @@ function AdvertsPriceCard({
   // Captured once (PriceHistoryBlock's #310 note): a per-render `now` re-derives the series.
   const [now] = useState(() => Date.now());
   const series = useMemo(() => buildPriceSeries(adverts, snapshots, now), [adverts, snapshots, now]);
-  const lastMove = useMemo(() => {
-    const byTrack = new Map<number, number>();
-    for (const c of priceChangeEvents(series)) if (!byTrack.has(c.seriesId)) byTrack.set(c.seriesId, c.pct);
-    return byTrack;
-  }, [series]);
+  const lastMove = useMemo(() => lastMoveByTrack(series), [series]);
   const trackIndex = new Map(series.map((s, i) => [s.id, i]));
   const ordered = useMemo(
     () =>

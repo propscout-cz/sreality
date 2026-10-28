@@ -4,7 +4,7 @@
  * The notes are stand-ins: the real sentences exist once, in the SQL. */
 import { describe, expect, it } from 'vitest';
 
-import { mfShape, type ReferenceRent } from './mfReference';
+import { mfShape, mfYieldText, type ReferenceRent } from './mfReference';
 
 const as = (o: object) => o as unknown as ReferenceRent;
 const RANGE = {
@@ -40,5 +40,25 @@ describe('mfShape', () => {
     expect(mfShape(undefined)).toEqual({ kind: 'none' });
     expect(mfShape(as({}))).toEqual({ kind: 'none' });
     expect(mfShape(as({ status: 'x', note: '' }))).toEqual({ kind: 'none' });
+  });
+});
+
+describe('mfYieldText', () => {
+  const NB = '\u00a0';
+  it("prints a value's yield, and the yield column alone the same", () => {
+    const ref = as({ monthly_rent_czk: 17_700 });
+    expect(mfYieldText(4.25, ref)).toBe(`4,3${NB}%`);
+    expect(mfYieldText(4.25)).toBe(`4,3${NB}%`);
+  });
+
+  it("prints a range's two ends, unit once", () => {
+    expect(mfYieldText(null, as({ range: RANGE }))).toBe(`3,4–4,2${NB}%`);
+  });
+
+  it('prints nothing for a rental range, a note, a value without a yield, or no result', () => {
+    expect(mfYieldText(null, as({ range: { ...RANGE, yield_min_pct: null, yield_max_pct: null } }))).toBeNull();
+    expect(mfYieldText(null, as({ note: '(a reason)' }))).toBeNull();
+    expect(mfYieldText(null, as({ monthly_rent_czk: 17_700 }))).toBeNull();
+    expect(mfYieldText(null)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /* The operator's state drawn OVER a search-page card's photo, so it reads from
  * across the grid:
  *   pipeline   — the photo toned in the stage's colour (the operator's, copper
- *                when none — glyphs.stageAccent), the stage's badge and name
+ *                when none — lib/pipelineStage stageAccent), its badge and name
  *                set over it. Hovering the card lifts the tone to show the photo.
  *   collection — toned the same way in copper (the extension's "saved"
  *                colour), a bookmark and the collection's name (+N for more)
@@ -28,9 +28,12 @@
  * z-index, one under the cluster's 900, and paint under it whatever the two
  * hosts' order in the card. */
 
-import tokens from './tokens.css?inline';
+import tokens from '../../frontend/src/styles/tokens.css?inline';
+import { themeHost } from './appearance';
 import { h } from './dom';
-import { bookmarkIconSvg, stageAccent } from './glyphs';
+import { bookmarkIconSvg } from './glyphs';
+import { stageAccent } from '../../frontend/src/lib/pipelineStage';
+import type { TagColor } from '../../frontend/src/lib/types';
 
 export const PHOTO_MARK_HOST_CLASS = '__mf_photo_mark_host';
 /* Anything smaller is a broker logo or an icon, not the listing's photo. */
@@ -41,12 +44,12 @@ const MAX_CHIPS = 4;
 
 export interface PhotoMarkView {
   /* The deal's stage; null out of the pipeline. */
-  stage: { color: string | null; badge: string | null; label: string | null } | null;
+  stage: { color: TagColor | null; badge: string | null; label: string | null } | null;
   /* The names of MY collections the property sits in, checklist order; null
    * when it is in none of mine. */
   collections: string[] | null;
   /* The property's tags, by name; empty when it has none. */
-  tags: { name: string; color: string }[];
+  tags: { name: string; color: TagColor }[];
 }
 
 export interface PhotoMark {
@@ -101,7 +104,7 @@ const css = (cardAttr: string): string => `
   }
   .label {
     max-width: calc(100% - 48px); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; font-size: clamp(9px, 3.4cqh, 11px); font-weight: 600;
+    white-space: nowrap; font-size: 11px; font-weight: 600;
     line-height: 1.2; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.9;
   }
   .badge svg { display: block; width: clamp(18px, min(15cqh, 12cqw), 44px); height: auto; }
@@ -114,8 +117,8 @@ const css = (cardAttr: string): string => `
     box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px;
     max-width: 100%; height: 24px; padding: 0 8px 0 6px;
     font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: 0.02em;
-    color: #fff; background: var(--copper); white-space: nowrap;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    color: var(--color-on-copper); background: var(--color-copper); white-space: nowrap;
+    border-radius: var(--radius-xs); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   }
   .saved svg { width: 13px; height: 13px; flex-shrink: 0; }
   .saved-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -125,7 +128,8 @@ const css = (cardAttr: string): string => `
     box-sizing: border-box; max-width: 100%; height: 20px; padding: 0 6px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: 11px; font-weight: 600; line-height: 18px; color: var(--chip);
-    background: rgba(255, 253, 248, 0.94); border: 1px solid var(--chip); border-radius: 2px;
+    background: color-mix(in srgb, var(--color-paper-3) 94%, transparent);
+    border: 1px solid var(--chip); border-radius: var(--radius-xs);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
   }
   :host-context([${cardAttr}]:hover) .tone { opacity: 0.25; }
@@ -238,6 +242,7 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
 
   function build(): NonNullable<typeof parts> {
     host = h('div', PHOTO_MARK_HOST_CLASS);
+    themeHost(host);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = css(cardAttr);
@@ -312,9 +317,9 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     const names = next.collections;
     // The face says the stage; without one, the collection.
     const face = s != null
-      ? { color: stageAccent(s.color).fg, glyph: false, badge: s.badge, label: s.label }
+      ? { color: stageAccent(s).fg, glyph: false, badge: s.badge, label: s.label }
       : names != null
-        ? { color: 'var(--copper)', glyph: true, badge: '', label: savedText(names) }
+        ? { color: 'var(--color-copper)', glyph: true, badge: '', label: savedText(names) }
         : null;
     for (const layer of stage) layer.hidden = face == null;
     if (face != null) {
@@ -335,12 +340,12 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     chips.replaceChildren(...shownTags.map((t) => {
       const chip = h('span', 'chip', t.name);
       // The tag palette IS the stage palette (TagColor), so its accent resolves alike.
-      chip.style.setProperty('--chip', stageAccent(t.color).fg);
+      chip.style.setProperty('--chip', stageAccent(t).fg);
       return chip;
     }));
     if (shownTags.length < next.tags.length) {
       const more = h('span', 'chip', `+${next.tags.length - shownTags.length}`);
-      more.style.setProperty('--chip', 'var(--ink-3)');
+      more.style.setProperty('--chip', 'var(--color-ink-3)');
       chips.append(more);
     }
     chips.hidden = next.tags.length === 0;

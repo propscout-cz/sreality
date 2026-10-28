@@ -568,7 +568,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "over its calc_area, forwarded verbatim; `result_basis` labels them with "
         "the REQUEST's basis and its docstring names both units. Nothing divides.",
     ),
-    # -- Frontend + extension: the label half --------------------------------
+    # -- Frontend: the label half (the extension imports it) -----------------
     RegisteredSite(
         path="frontend/src/lib/measure.ts",
         arm="unit",
@@ -605,19 +605,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "rendered through fmtMeasuredPricePerM2 with the row's published "
         "`price_per_m2_basis`. These two name a column and a cohort; neither "
         "labels a number.",
-    ),
-    RegisteredSite(
-        path="chrome-extension/src/content.ts",
-        arm="unit",
-        hits=1,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="`CZK_PER_M2_MONTH` — a third territory that can import neither "
-        "the Python nor the SPA module, so the rent-basis string is copied "
-        "VERBATIM from PPM2_UNIT_CS['rent_monthly_czk_m2']. One constant "
-        "labels both monthly per-m² figures the panel renders (the MF "
-        "reference rent and the fond rate); the bare capital unit would "
-        "misname either by a factor of twelve.",
     ),
     # -- Frontend: the tests that pin the vocabulary -------------------------
     RegisteredSite(
@@ -860,6 +847,18 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "CAPITAL suffix on a MONTHLY charge, twelve times wrong, while the "
         "extension already rendered the same field with the monthly one. It now "
         "reads the rent-basis string from the shared map.",
+    ),
+    RegisteredSite(
+        path="chrome-extension/src/content.ts",
+        arm="vocab",
+        hits=1,
+        measure="fond_per_m2",
+        kind=KIND_LABELS,
+        why="The listing panel's fond oprav + SVJ input, RunPanel's twin: the "
+        "suffix is PPM2_UNIT.rent, imported from the SPA's measure.ts (no copy). "
+        "The number is the operator's rate or the server's served default "
+        "(`fond_per_m2_czk_default`); the MF per-m² figures beside it go through "
+        "fmtMeasuredPricePerM2 on the rent basis.",
     ),
     RegisteredSite(
         path="frontend/src/pages/Datasets.tsx",

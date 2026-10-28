@@ -41,7 +41,7 @@ import ImageCarousel from '@/components/ImageCarousel';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { Hairline } from '@/components/section';
 import { Th } from '@/components/table';
-import { areaBasisLabel, categoryMainLabel, listingKindLabel } from '@/lib/enums';
+import { categoryMainLabel, listingKindLabel } from '@/lib/enums';
 import { FILTER_REGISTRY } from '@/lib/filterRegistry.generated';
 import {
   fmtArea,
@@ -52,7 +52,7 @@ import {
   fmtPct,
   fmtShortDate,
 } from '@/lib/format';
-import { ppm2BasisFromToken } from '@/lib/measure';
+import { areaBasisLabel, ppm2BasisFromToken } from '@/lib/measure';
 import { usePipelineMembers } from '@/lib/pipelineReads';
 import {
   fetchSoldComparables,

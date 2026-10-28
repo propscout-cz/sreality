@@ -9,11 +9,12 @@
  * in SQL, and arrive here as `note`. Surfaces differ only in how much of the
  * shape they have room for.
  *
- * Zero dependencies, like brand.ts, so the Chrome extension imports THIS file
- * instead of keeping a second copy of the rule. Keep it that way: no `@/`
- * aliases, no React, no DOM.
+ * The Chrome extension imports THIS file instead of keeping a second copy of the
+ * rule (its build refuses anything here but relative imports of plain .ts).
  *
  * Every `*_per_m2` figure is CZK per m² per MONTH — this is a rent map. */
+
+import { fmtPct } from './format';
 
 export interface ReferenceRentAdjustment {
   attribute: string;
@@ -76,4 +77,20 @@ export function mfShape(ref: ReferenceRent | null | undefined): MfShape {
   }
   if (ref.note != null && ref.note !== '') return { kind: 'note', note: ref.note };
   return { kind: 'none' };
+}
+
+/* The MF gross yield as a compact surface prints it: a range's two ends, else
+ * the property's `mf_gross_yield_pct` — which only a value has (migration 565
+ * divides the value's rent) — else null (a note, a rental, no result). A row
+ * that carries the yield column alone passes no result. */
+export function mfYieldText(
+  yieldPct: number | null | undefined,
+  ref?: ReferenceRent | null,
+): string | null {
+  const shape = mfShape(ref);
+  if (shape.kind === 'range') {
+    const { yield_min_pct: lo, yield_max_pct: hi } = shape.range;
+    return lo != null && hi != null ? `${fmtPct(lo, { unit: false })}–${fmtPct(hi)}` : null;
+  }
+  return yieldPct != null ? fmtPct(yieldPct) : null;
 }

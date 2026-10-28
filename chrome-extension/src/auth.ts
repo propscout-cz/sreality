@@ -6,6 +6,7 @@
  * reuse-detection, so a token shared between two independently-refreshing
  * sessions would eventually revoke both. This is a fully separate sign-in. */
 
+import { DEFAULT_APPEARANCE, parseAppearance } from '../../frontend/src/lib/appearance';
 import { SUPABASE_URL } from './config';
 import { SESSION_KEY, decodeJwtPayload, type StoredSession } from './session';
 import type { AuthState } from './types';
@@ -241,10 +242,11 @@ export async function refreshIfSignedIn(): Promise<void> {
 
 export async function getAuthState(): Promise<AuthState> {
   const s = await getStoredSession();
-  if (s == null) return { signedIn: false, email: null };
+  if (s == null) return { signedIn: false, email: null, appearance: DEFAULT_APPEARANCE };
   const claims = decodeJwtPayload(s.access_token);
   const email = typeof claims?.email === 'string' ? claims.email : null;
-  return { signedIn: true, email };
+  const metadata = claims?.user_metadata as { appearance?: unknown } | null | undefined;
+  return { signedIn: true, email, appearance: parseAppearance(metadata?.appearance) ?? DEFAULT_APPEARANCE };
 }
 
 /* Best-effort server-side revocation (design doc: "server-side revocation on

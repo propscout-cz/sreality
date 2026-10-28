@@ -21,15 +21,15 @@
  *  8. Focus is never stolen from the portal page (dom.ts keepFocus). */
 
 import type {
-  ApiMessage, ApiResult, ExtCollection, ExtTag, PipelineCardResult, PipelineMembership,
-  PipelineStage, PortalListing, PortalLookupItem,
+  ApiMessage, ApiResult, PipelineCardResult, PipelineMembership, PortalListing, PortalLookupItem,
 } from './types';
+import type { Collection, PipelineStage, Tag } from '../../frontend/src/lib/types';
 
 export type Curation = Pick<PortalListing, 'pipeline' | 'collection_ids' | 'tag_ids' | 'dismissed'>;
 export interface Lists {
   stages: PipelineStage[];
-  collections: ExtCollection[];
-  tags: ExtTag[];
+  collections: Collection[];
+  tags: Tag[];
 }
 export type ListKind = keyof Lists;
 /* `data` is set exactly when ok; "loading" also covers "not read yet" (both draw "Načítám…"). */
@@ -82,10 +82,10 @@ const READ: Record<ListKind, ApiMessage> = {
  * bumps; owner and recipients count (what is saved, who a shared note reaches). */
 const DRAWN: Record<ListKind, (data: never) => string> = {
   stages: (data: PipelineStage[]) => JSON.stringify(data),
-  collections: (data: ExtCollection[]) => JSON.stringify([...data].sort((a, b) => a.id - b.id).map((c) => [
+  collections: (data: Collection[]) => JSON.stringify([...data].sort((a, b) => a.id - b.id).map((c) => [
     c.id, c.name, c.monitoring_enabled, c.owner_email, (c.shared_with ?? []).map((r) => r.email),
   ])),
-  tags: (data: ExtTag[]) => JSON.stringify(data.map((t) => [t.id, t.name, t.color])),
+  tags: (data: Tag[]) => JSON.stringify(data.map((t) => [t.id, t.name, t.color])),
 };
 
 const fromCard = (card: PipelineCardResult, base: PipelineMembership): PipelineMembership => ({

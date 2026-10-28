@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPriceSeries,
   buildChartRows,
+  lastMoveByTrack,
   lowestActivePrice,
   priceChangeEvents,
   seriesValueKey,
@@ -313,5 +314,18 @@ describe('priceChangeEvents', () => {
   it('is empty for a flat or single-point track', () => {
     expect(priceChangeEvents([{ id: 1, label: 'A', points: [{ t: 1, price: 100 }], endT: 2 }]))
       .toEqual([]);
+  });
+});
+
+describe('lastMoveByTrack', () => {
+  it("names each track's own newest move, and no track without one", () => {
+    const moves = lastMoveByTrack([
+      { id: 1, label: 'A', points: [{ t: 1, price: 100 }, { t: 3, price: 90 }, { t: 6, price: 99 }], endT: 9 },
+      { id: 2, label: 'B', points: [{ t: 2, price: 200 }, { t: 8, price: 150 }], endT: 9 },
+      { id: 3, label: 'C', points: [{ t: 2, price: 300 }], endT: 9 },
+    ]);
+    expect([...moves.keys()].sort()).toEqual([1, 2]);
+    expect(moves.get(1)).toBeCloseTo(10, 5);
+    expect(moves.get(2)).toBeCloseTo(-25, 5);
   });
 });

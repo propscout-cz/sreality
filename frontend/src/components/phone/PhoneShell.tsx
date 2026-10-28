@@ -33,7 +33,8 @@ import {
   type PhoneTabKey,
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
-import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES, type ThemeMode } from '@/lib/appearance';
+import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from '@/components/SchemeSwatch';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';

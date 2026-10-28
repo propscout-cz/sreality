@@ -11,9 +11,7 @@ import {
 import type { HoverTarget } from '@/lib/hoverSync';
 import { Link } from 'react-router-dom';
 import CollectionMark from '@/components/CollectionMark';
-import CollectionSaveMenu, {
-  COLLECTION_SAVE_LABEL,
-} from '@/components/CollectionSaveMenu';
+import CollectionSaveMenu from '@/components/CollectionSaveMenu';
 import CurationMarks from '@/components/CurationMarks';
 import ImageCarousel, { type ImageCarouselHandle } from '@/components/ImageCarousel';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
@@ -27,6 +25,7 @@ import { useScrollRestoration } from '@/lib/useScrollRestoration';
 import { taggedImageUrls, useCardHydration } from '@/lib/hydration';
 import { COVER_OPTIONS, coverIndex, type CoverTag } from '@/lib/imageTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
+import { COLLECTION_SAVE_LABEL } from '@/lib/collectionRules';
 import {
   CARD_SORTS,
   sortToParam,
