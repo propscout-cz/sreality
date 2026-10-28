@@ -492,79 +492,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
     },
     {
-      "filename": "clip_tag.yml",
-      "name": "Dedup — CLIP image tagging (sharded)",
-      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "limit",
-          "description": "Max images tagged per shard per run",
-          "required": false,
-          "type": "string",
-          "default": "20000",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "Parallel R2 downloads",
-          "required": false,
-          "type": "string",
-          "default": "16",
-          "options": null
-        },
-        {
-          "name": "region_id",
-          "description": "Priority kraj id to drain first, then fall through to global (\"none\" = global full-scale, the default now that Středočeský is complete).",
-          "required": false,
-          "type": "string",
-          "default": "none",
-          "options": null
-        },
-        {
-          "name": "categories",
-          "description": "Comma category_main list to scope with region_id (e.g. dum,komercni)",
-          "required": false,
-          "type": "string",
-          "default": "dum,komercni",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report the pending count and exit without tagging",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "clip-tag",
-      "cancelInProgress": false,
-      "timeoutMinutes": 55,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/clip_tag.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/clip_tag.yml"
-    },
-    {
       "filename": "compare_condition_models.yml",
       "name": "Scoring: Condition model A/B (Haiku vs Sonnet)",
       "description": "Read-only validation harness for a cheaper condition-scoring model. For a sample of listings that already have a baseline-model score on their latest snapshot, it re-runs the SAME scoring request through a candidate model and reports per-axis agreement (exact / within-1 / mean abs diff / bias) plus the candidate vs baseline cost ratio.",
@@ -1639,7 +1566,7 @@
     {
       "filename": "label_proposal_backfill.yml",
       "name": "NEW DEDUP — Labeling secondary-CLIP proposals (sharded, dispatch-only)",
-      "description": "Wave 1 (docs/design/new-dedup/PROGRAM.md): scores every image currently in dedup_sim.labeling_sample against the operator's active Taxonomy v1 labels (dedup_sim.taxonomy_labels) using the stronger secondary CLIP checkpoint (dedup_sim_settings' labeling_secondary_model), writing one proposal row per image into dedup_sim.label_proposals for review on the Labeling page. Dispatch-only, not cron — the sample grows in bursts as the operator works through the program, not continuously. No-op if R2 is unconfigured or the taxonomy is still empty. Horizontally sharded (image_id %% 2), like the production clip_tag.yml but smaller (this is a curated sample, not the full corpus).",
+      "description": "Wave 1 (docs/design/new-dedup/PROGRAM.md): scores every image currently in dedup_sim.labeling_sample against the operator's active Taxonomy v1 labels (dedup_sim.taxonomy_labels) using the stronger secondary CLIP checkpoint (dedup_sim_settings' labeling_secondary_model), writing one proposal row per image into dedup_sim.label_proposals for review on the Labeling page. Dispatch-only, not cron — the sample grows in bursts as the operator works through the program, not continuously. No-op if R2 is unconfigured or the taxonomy is still empty. Horizontally sharded (image_id %% 2), unlike the runner's clip job (scripts/clip_tag_backfill.py), which runs unsharded over the full corpus; this is a curated sample.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2460,7 +2387,7 @@
     {
       "filename": "runner_image.yml",
       "name": "CI: runner image",
-      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api, the API's and the worker's one build) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -2470,6 +2397,7 @@
         ".github/workflows/runner_image.yml",
         "Dockerfile",
         "data/clip_taxonomy.json",
+        "data/requirements-clip-runner.txt",
         "pyproject.toml",
         "scraper/__init__.py",
         "scraper/clip_tagger.py",

@@ -351,7 +351,15 @@ def test_a_request_s_args_follow_the_registry_argv_and_the_child_learns_its_run(
     assert job_runner.child_command(job, None)[-4:] == ["-m", "scripts.x", "--limit", "5"]
     env = job_runner.child_env(job, 42, {"PATH": "/bin", "JOB_CPUS": "99"})
     assert env == {"PATH": "/bin", "JOB_CPUS": "3", "JOB_NAME": "test_job", "JOB_RUN_ID": "42",
-                   "PYTHONUNBUFFERED": "1"}
+                   "PYTHONUNBUFFERED": "1", "MALLOC_ARENA_MAX": "2"}
+
+
+def test_a_child_caps_glibcs_arenas_as_the_worker_does_unless_the_runner_sets_its_own() -> None:
+    """glibc gives each thread its own arena and keeps what it freed (E949: the worker runs with 2); clip decodes and
+    downloads on 20 threads beside torch's, inside its 2048 MB declaration."""
+    job = _job(argv=("scripts.x",), cpus=1)
+    assert job_runner.child_env(job, 1, {})["MALLOC_ARENA_MAX"] == "2"
+    assert job_runner.child_env(job, 1, {"MALLOC_ARENA_MAX": "4"})["MALLOC_ARENA_MAX"] == "4"
 
 
 def _drive(rig: Rig, until: float, *, step: float = 1.0, tick: bool = True) -> None:

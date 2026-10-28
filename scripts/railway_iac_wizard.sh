@@ -260,7 +260,7 @@ RUNNER=job-runner   # the job runner's service, in the worker's project (#2025)
 # The runner image's build inputs (.github/workflows/runner_image.yml): a pull request that changes one owes that check.
 # The scraper files are what the build's offline proof imports (Tagger.load).
 IMAGE_INPUTS=(Dockerfile .dockerignore pyproject.toml scripts/bake_clip_weights.py data/clip_taxonomy.json
-              scraper/__init__.py scraper/clip_tagger.py scraper/cpus.py)
+              data/requirements-clip-runner.txt scraper/__init__.py scraper/clip_tagger.py scraper/cpus.py)
 IMAGE_CHECK="CI: runner image"
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -599,10 +599,12 @@ mode_window() {
   pause
 
   stage "Brake"
-  if [[ "$label" == worker ]]; then
+  if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then
     gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
     BRAKE_ASKED=1
     agent_reports "autodedup.rt_lease is empty (one SQL read)"
+  elif [[ "$label" == worker ]]; then
+    say "Not needed: every change targets $RUNNER (#2025-R2 (a): $RUNNER alone needs no brake)."
   else
     say "Not needed: the apply does not touch the worker's project."
   fi

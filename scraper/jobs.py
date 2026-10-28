@@ -62,8 +62,11 @@ _FIXED: tuple[Job, ...] = (
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
         HOUR, 35 * 60, 55 * 60, 1024, 2, UNTIL_MOVED, LOCATION_HEAVY),
-    Job("clip", ("scripts.clip_tag_backfill", "--limit", "20000", "--workers", "16"),
-        15 * 60, 5 * 60, 55 * 60, 2048, 2, UNTIL_MOVED),
+    # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
+    # A chunk of 64: Pillow holds RGB at 4 B a pixel, so 128 photos at the p90 decode past 2048 beside the weights.
+    Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
+                 "--chunk", "64"),
+        15 * 60, 5 * 60, 55 * 60, 2048, 4, RUNNER),
     Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
         LOCATION_HEAVY, db_heavy=True),
     Job("price_stats", ("scraper.price_stats_main", "--start-year", "2015", "--window-years", "5"),

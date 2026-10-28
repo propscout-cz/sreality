@@ -2,12 +2,12 @@
 holding what is servable? Per portal, `check_publishing` judges ingest (the oldest never-fetched
 ad waiting in the detail queue), changes (the oldest repriced ad waiting), visible (new active ads
 whose property is not in browse_list), stock (active properties missing from browse_list) and
-photos (new ads' photos not stored, or stored narrow); for the fleet, stock and dirty (the oldest
-property waiting for maintenance). Each not-in-Browse count is split by the stage that blocks it,
-judged on the property's location ad and the publication rule as browse_projection judges them
-(a property not yet published is expected, never a blocker). The portal list is imported
-and every statement runs on the per-check clock; the module imports neither the harness nor the
-worker.
+photos (new ads' photos not stored, or stored narrow); for the fleet, stock, dirty (the oldest
+property waiting for maintenance) and photo tags (stored photos CLIP tagged past the 45-min line).
+Each not-in-Browse count is split by the stage that blocks it, judged on the property's location
+ad and the publication rule as browse_projection judges them (a property not yet published is
+expected, never a blocker). The portal list is imported and every statement runs on the
+per-check clock; the module imports neither the harness nor the worker.
 """
 
 from __future__ import annotations
@@ -172,6 +172,54 @@ select p.source, count(distinct p.listing_id) as ads,
 """
 
 _DIRTY_SQL = "select count(*), min(marked_at) from dirty_properties"
+
+# The runner's clip job (#2032) and the model it vectors with (data/clip_taxonomy.json); a test
+# pins all three.
+_TAG_JOB, _TAG_RUNNER, _CLIP_MODEL = "clip", "job-runner", "openai/clip-vit-base-patch32"
+_TAG_WINDOW_H = 24
+# About 10 days of image ids at ~190k a day: the read stays a primary-key range, far below any
+# photo stored today.
+_TAG_ID_WINDOW = 2_000_000
+
+# The clip row on the runner and the newest image id, read first: the cohort's bounds are then values, so its read is
+# a primary-key range with one keyed vector probe a photo. With the id floor an InitPlan and the row's bounds a join
+# filter, prod planned a merge join over the whole image_clip_embeddings key (15.4M rows, 6.5 s, 2026-10-27).
+_TAG_JOB_SQL = """
+select registry_at, paused_until, paused_by, pause_note, (select max(id) from images)
+  from scheduled_jobs
+ where job_name = %(job)s and runner = %(runner)s
+   and registry_at is not null and retired_at is null
+"""
+
+# A photo stored (storage_path set; last_download_attempt_at is stamped with it) since `since` and more than the line
+# ago. It is tagged once stamped AND vectored: a stamp with no vector (a terminal mark, an undecodable photo) is late
+# for ever, and an untagged one ages to now(). The LIMIT keeps the probe a per-photo lookup the planner cannot fold
+# into a join.
+_TAG_COHORT_SQL = """
+with cohort as (
+    select i.last_download_attempt_at as stored_at, i.clip_tagged_at is null as waiting,
+           i.clip_tagged_at is not null and e.vectored is null as stamped_no_vector,
+           extract(epoch from coalesce(case when e.vectored then i.clip_tagged_at end,
+                                       now()) - i.last_download_attempt_at) / 60.0 as lag_min
+      from images i
+      left join lateral (select true as vectored
+                           from image_clip_embeddings e
+                          where e.image_id = i.id and e.model = %(model)s
+                          limit 1) e on true
+     where i.id > %(min_id)s::bigint
+       and i.storage_path is not null
+       and i.last_download_attempt_at >= %(since)s::timestamptz
+       and i.last_download_attempt_at < now() - make_interval(mins => %(late_min)s::int))
+select count(*) as photos,
+       count(*) filter (where lag_min > %(late_min)s::int) as late,
+       count(*) filter (where waiting) as waiting,
+       count(*) filter (where stamped_no_vector) as stamped_no_vector,
+       percentile_cont(0.5) within group (order by lag_min) as p50_min,
+       percentile_cont(0.9) within group (order by lag_min) as p90_min,
+       percentile_cont(0.99) within group (order by lag_min) as p99_min,
+       min(stored_at) filter (where waiting) as oldest_waiting
+  from cohort
+"""
 
 
 def _pct(share: float) -> str:
@@ -393,6 +441,77 @@ def _dirty_cell(conn: Any, thresholds: dict[str, Any], at: _dt.datetime) -> dict
                 facts=facts)
 
 
+# --- the fleet's photo tags -----------------------------------------------------------------
+
+
+def _minutes(value: Any) -> float | None:
+    return None if value is None else round(float(value), 1)
+
+
+def _photo_tags_cell(conn: Any, thresholds: dict[str, Any], at: _dt.datetime) -> dict[str, Any]:
+    """The share of stored photos CLIP tagged past the line, or not yet; at most Watch if paused."""
+    late_min = int(thresholds["publishing_tag_late_min"])
+    subject = "fleet/photo_tags"
+    job = fetchone(conn, _TAG_JOB_SQL, {"job": _TAG_JOB, "runner": _TAG_RUNNER})
+    if job is None:
+        return cell(subject, "unknown", f"Not measured: {_TAG_JOB} is not on the job runner",
+                    unit="%")
+    registry_at, paused_until = as_utc(job[0]), as_utc(job[1])
+    paused_by, pause_note, newest = job[2], job[3], job[4]
+    day_back = at - _dt.timedelta(hours=_TAG_WINDOW_H)
+    # A deliberate pause (the AC2 hold, a rollback brake) is finite and signed (migration 675): it
+    # must open no incident, so it caps the cell at Watch, and once it ends the cohort starts afresh.
+    paused = paused_until is not None and paused_until > at
+    ended = paused_until if paused_until is not None and not paused else None
+    since = max(t for t in (day_back, registry_at, ended) if t is not None)
+    params = {"model": _CLIP_MODEL, "since": since, "late_min": late_min,
+              "min_id": None if newest is None else int(newest) - _TAG_ID_WINDOW}
+    row = fetchone(conn, _TAG_COHORT_SQL, params) or (0, 0, 0, 0, None, None, None, None)
+    photos, late, waiting, unvectored = (int(v or 0) for v in row[:4])
+    p50, p90, p99 = (_minutes(v) for v in row[4:7])
+    oldest = as_utc(row[7])
+    facts: dict[str, Any] = {
+        "photos": photos, "late": late, "p50_min": p50, "p90_min": p90, "p99_min": p99,
+        "waiting": waiting, "stamped_no_vector": unvectored,
+        "oldest_waiting_stored_at": iso(oldest), "window_from": iso(since),
+        "registry_at": iso(registry_at), "paused_until": iso(paused_until) if paused else None,
+        "paused_by": paused_by if paused else None, "pause_note": pause_note if paused else None,
+        "pause_ended_at": iso(ended)}
+    if since == day_back:
+        cohort = f"photos stored over {late_min} min and under {ago(_TAG_WINDOW_H * 3600)} ago"
+    elif since == ended:
+        cohort = (f"photos stored over {late_min} min ago since {_TAG_JOB}'s pause ended "
+                  f"{ago((at - since).total_seconds())} ago")
+    else:
+        cohort = (f"photos stored over {late_min} min ago since {_TAG_JOB} joined the job runner "
+                  f"{ago((at - since).total_seconds())} ago")
+    pause = (f"paused by {paused_by} until {iso(paused_until)}: {pause_note}; "
+             f"{waiting:,} photos waiting; " if paused else "")
+    min_n = int(thresholds["publishing_tag_min_n"])
+    if photos < min_n:
+        return cell(subject, "unknown", f"Not measured: {pause}{photos:,} {cohort}, fewer than "
+                    f"{min_n}", unit="%", facts=facts)
+    share, lower = late / photos, wilson_lower(late, photos) or 0.0
+    facts["lower_bound"] = round(lower, 4)
+    warn, fail = (float(thresholds["publishing_tag_late_warn"]),
+                  float(thresholds["publishing_tag_late_fail"]))
+    level = _graded(lower, warn, fail)
+    if paused and level == "fail":
+        level = "warn"
+    oldest_at = f", the oldest stored {ago((at - oldest).total_seconds())} ago" if oldest else ""
+    stamped = f"; {unvectored:,} stamped with no vector" if unvectored else ""
+    tail = (f": p50 {p50} min, p90 {p90} min, p99 {p99} min; {waiting:,} waiting{oldest_at}"
+            f"{stamped}")
+    if late:
+        body = (f"{late:,} of {photos:,} {cohort} were tagged over {late_min} min after it, or "
+                f"not yet ({_pct(share)}; lower bound {_pct(lower)}){tail}")
+    else:
+        body = f"all {photos:,} {cohort} were tagged within {late_min} min{tail}"
+    conditions = [] if level == "ok" else [(level, f"{pause}{body}")]
+    return judged(subject, conditions, f"{pause}{body}", value=round(100 * share, 2), unit="%",
+                  facts=facts)
+
+
 def check_publishing(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Do discovered ads reach Browse quickly, with their photos, and does Browse hold its stock?"""
     at = now(conn)
@@ -401,5 +520,6 @@ def check_publishing(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
              *_visible_cells(conn, thresholds, portals),
              *_stock_cells(conn, thresholds, portals),
              *_photo_cells(conn, thresholds, portals),
-             _dirty_cell(conn, thresholds, at)]
+             _dirty_cell(conn, thresholds, at),
+             _photo_tags_cell(conn, thresholds, at)]
     return result("publishing", cells, {})

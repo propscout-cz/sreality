@@ -99,7 +99,7 @@ def _entry(name: str) -> Job:
 def test_the_registry_spans_every_portal() -> None:
     assert len(PORTAL_CLASSES) >= 10, "the portal list shrank: a census over its walks proves less"
     assert len(jobs.declared()) == FIXED + len(PORTAL_CLASSES)
-    assert {"stale_images", "rent_map", "map_overlays"} <= {j.name for j in jobs.runner_jobs()}
+    assert {"stale_images", "rent_map", "map_overlays", "clip"} <= {j.name for j in jobs.runner_jobs()}
 
 
 @pytest.mark.parametrize("job", jobs.declared(), ids=lambda j: j.name)
@@ -538,6 +538,12 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
     unflipped = [replace(j, host=jobs.UNTIL_MOVED) if j.name in first_wave else j for j in jobs.declared()]
     assert pairing_problems(unflipped, workflows) == [  # deleted, not flipped
         f"{n}: waiting to move, and no scheduled workflow runs it" for n in ("stale_images", "rent_map", "map_overlays")]
+    # W5 (#2032): clip's move, both halves.
+    kept_clip = Workflow("clip_tag.yml", True, 3300, (Invocation("scripts.clip_tag_backfill", frozenset()),))
+    assert pairing_problems(jobs.declared(), {**workflows, kept_clip.file: kept_clip}) == [
+        "clip: on the runner, and clip_tag.yml still runs scripts.clip_tag_backfill"]
+    unflipped_clip = [replace(j, host=jobs.UNTIL_MOVED) if j.name == "clip" else j for j in jobs.declared()]
+    assert pairing_problems(unflipped_clip, workflows) == ["clip: waiting to move, and no scheduled workflow runs it"]
 
 
 def test_the_pairing_census_fires() -> None:
@@ -604,7 +610,7 @@ def test_the_github_set_tightens_itself_when_the_last_job_moves() -> None:
 def test_the_github_set_census_fires() -> None:
     entries, workflows = jobs.declared(), _repo_workflows()
     assert github_set_problems([*entries, replace(_entry("price_stats"), name="price_stats_twin")], workflows)
-    assert github_set_problems([*entries, replace(_entry("clip"), name="clip_twin")], workflows)
+    assert github_set_problems([*entries, replace(_entry("clip"), name="clip_twin", host=jobs.UNTIL_MOVED)], workflows)
     canary = workflows["verify_pipeline.yml"]
     assert github_set_problems(entries, {**workflows, "canary_twin.yml": replace(canary, file="canary_twin.yml")})
 

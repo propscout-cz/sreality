@@ -34,6 +34,14 @@ RUN case ",${EXTRAS}," in *,clip,*) \
       && HF_HUB_DOWNLOAD_TIMEOUT=60 python scripts/bake_clip_weights.py data/clip_checkpoint.json \
       && rm -rf /root/.cache/huggingface/xet ;; \
     esac
+# The vector stack beside torch, from one manifest, in its own layer after the weights, so a bump rebuilds neither
+# torch nor the checkpoint. Pillow decodes and resizes the pixels CLIP reads: the re-embed proof
+# (scripts/clip_reembed.py) holds only while these stay put. The later extras install keeps them (they satisfy its
+# ranges), and the offline proof below asserts them.
+COPY data/requirements-clip-runner.txt ./data/
+RUN case ",${EXTRAS}," in *,clip,*) \
+      pip install -r data/requirements-clip-runner.txt ;; \
+    esac
 
 COPY pyproject.toml ./
 COPY scraper/ ./scraper/
@@ -64,10 +72,17 @@ COPY data/ ./data/
 COPY autodedup/ ./autodedup/
 
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
-# The job runner's proof, offline: CPU torch, and Tagger.load reads only the baked checkpoint (a missing file fails
-# the build after Tagger.load's retries, and the old deployment stays live).
+# The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
+# replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
+# Tagger.load's retries, and the old deployment stays live).
 RUN case ",${EXTRAS}," in *,clip,*) \
       HF_HUB_OFFLINE=1 python -c 'import torch; assert torch.version.cuda is None, torch.version.cuda; \
+        assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__; \
+        from importlib.metadata import version; \
+        pins = dict(line.split("#")[0].strip().split("==") for line in open("data/requirements-clip-runner.txt") \
+                    if "==" in line.split("#")[0]); \
+        got = {name: version(name) for name in pins}; assert got == pins, (got, pins); \
+        print("CLIP stack torch", torch.__version__, got); \
         from scraper.clip_tagger import Tagger; t = Tagger.load(); \
         print("CLIP baked", t.model_id, t.revision, "torch", torch.__version__)' \
       && du -sh /root/.cache/huggingface ;; \

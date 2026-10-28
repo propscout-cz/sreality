@@ -81,10 +81,9 @@ class Tagger:
                 "data/clip_taxonomy.json has no 'revision' — refusing to embed "
                 "against an unpinned checkpoint"
             )
-        # The sharded backfill runs 4 jobs in parallel; concurrent HF downloads of
-        # the ~600 MB weights occasionally 503 / time out (the single-job trial
-        # never did). Retry with backoff; the workflow also caches
-        # ~/.cache/huggingface so every run after the first restores warm.
+        # Retry with backoff for the hub's transient 503s on a cold download of the
+        # ~600 MB weights; the runner image loads the baked weights offline, where a
+        # retry only delays the error.
         model = processor = None
         last_exc: Exception | None = None
         for attempt in range(4):
