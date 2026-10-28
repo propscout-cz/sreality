@@ -43,6 +43,40 @@ scheme is on.
 - Handoff with every ruling, the build queue with file pointers, and the open questions:
   `docs/design/propscout-redesign.md`.
 
+## Section cards (binding, operator ruling 2026-10-28: "go with section cards")
+One small-caps label marked every level (a section, a group, a field, a table head: 276 uses in 121 files), so a
+page's sections did not stand apart. Of four options drawn (headline and rule, section cards, ledger band, side
+index), **B, section cards** is ruled. **Picture with each value tagged: `docs/design/propscout-section-cards.png`**
+(its standalone page, `propscout-section-cards.html`, beside it). Build to match it.
+- **The ladder**, on every page. L1 page title: Fraunces 24 (unchanged). **L2 section: the section card's title**,
+  Fraunces 600 17/24, ink, sentence case. L3 group inside a section: Inter 600 14/20, ink, sentence case. L4 field
+  label: small caps 11/14, weight 600, `0.08em`, ink-3.
+- **Small caps are L4 only**: above a value, a control or a table column (and table heads, a list's day rule).
+  Never a section, group or card title.
+- **The card** (C1–C6): a `<section>` on `--color-paper-2`, 1px `--color-rule`, `--radius-md`, no shadow; 16 px between
+  cards (`space-y-4`). A title bar, padding 13 / 20 / 12 px, with a `--color-rule-soft` line under it. On one
+  baseline it holds the title (the h2), the count (mono 13, ink-3, a bare number, no brackets), then an optional
+  note (12, ink-3) and the actions (small secondary buttons or links), pushed right. Body padding 16 / 20 / 18 px,
+  12 px between blocks. Below `sm` the side padding is 16 px. A tab with one section still draws it as a card.
+- **No box in a box** (C7, C9). Inside a card, a group is an L3 title with a `--color-rule-soft` line between
+  groups, never a bordered or dashed box around it. The one inner frame kept is the figure tile
+  (`estimation/EstimateCard`: it frames one figure; its eyebrow is L4). A table that scrolls keeps its own box.
+- **Empty** (C10). A section with nothing keeps its card, title and count 0, with one muted line and the action
+  ("Zatím žádné vlastní fotky." + Nahrát). Valuo's dashed "Zatím bez ocenění" tile becomes that line.
+- **Where**: every section of the property page's tabs and of the other detail pages that stack `SectionLabel`
+  blocks (estimation run, broker, collection, share), and the admin pages' panels. Not section cards: items in a
+  list (Browse, map and kanban cards), the Stats tab's own settings panel and chart cards, dialogs and popovers.
+- **Build (SPA)**: `components/Panel.tsx` becomes the one section card (title L2 in the bar, a `count` prop,
+  `accessory` at the bar's right end, `lede` the body's first line). Wrap each detail section in it; Health, Costs,
+  LocationQuality, LocationPinAudit and NewDedupDashboard get the same card through that change. The
+  `SectionLabel` + `Hairline` pair between sections goes; `SectionLabel` stays only as the L4 field label. No new token.
+- **Chrome extension** (X1; plain CSS in `chrome-extension/src/styles.css`, its own tokens): the same card.
+  `--paper` on the panel's `--bg`, 1px `--rule`, 3px radius. Title bar 9 / 12 / 8 px with a `--rule` line under it.
+  Title 600 14/20 `--ink` in the panel's font (it loads no web fonts on a portal page, so no Fraunces). Count
+  `--ink-3` with tabular figures. Body 10 / 12 / 12 px, 10 px between cards. The eyebrows (`.mf-eyebrow`,
+  `.coll-eyebrow`, `.est-eyebrow`, `.notes-eyebrow`) become card titles. `.field-label` and `.mf-ledger-label` stay
+  L4. A new panel layout uses these cards from the start.
+
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`
 for emphasis; **dashed = absent** (a cell under the minimum n, an empty slot, "add a chart"). No shadows.
@@ -50,8 +84,9 @@ Surfaces: cards `--color-paper-2`; shelves / wells that RECEIVE content are inse
 `--color-paper-3`; a rollup (parent) row sits one step down on `--color-paper`.
 
 ## Typography
-Fraunces (`font-display`) for card titles, Inter for labels, tracked small caps (`0.7rem`, `0.18em`) for
-section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVERY number.
+Fraunces (`font-display`) for page, section-card and card titles, Inter for labels and group titles, tracked
+small caps for field labels and table heads only (the ladder: § Section cards), JetBrains Mono (`font-mono`)
+with `tabular-nums` on EVERY number.
 
 ## Spacing
 4 px base. Card padding `px-5 pt-4`; `space-y-5` between cards; `gap-3` inside rows.
