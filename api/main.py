@@ -1011,8 +1011,8 @@ def post_listings_lookup(
     conn: Any = Depends(tenant_pool.tenant_conn),
     market_conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
-    """Batch (source, native id) → MF rent/yield + latest estimate, for the
-    Chrome extension's detail panel + index-card overlay across all portals.
+    """Batch (source, native id) → MF rent/yield, the property's header facts (MS11 grain)
+    + latest estimate, for the Chrome extension's detail panel + index-card overlay across all portals.
 
     Two connections on purpose: shared market facts on the service-role conn
     (listings/properties are RLS-enabled-with-zero-policies — broker PII, the

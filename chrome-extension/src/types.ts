@@ -1,7 +1,6 @@
 /* The MF result type and its shape rule are the SPA's own zero-dependency
  * module (like brand.ts), imported rather than copied. */
 import type { ReferenceRent } from '../../frontend/src/lib/mfReference';
-import type { ListingSnapshotPublic, PropertySource } from '../../frontend/src/lib/types';
 
 /* Subset of the SPA's EstimationRun shape — we only consume the
  * fields needed by the yield panel. Mirroring frontend/src/lib/types.ts
@@ -223,21 +222,6 @@ export interface PortalListing {
   mf_reference_rent_czk: number | null;
   mf_gross_yield_pct: number | null;
   mf_reference_rent?: ReferenceRent | null;
-  /* What the PROPERTY is, each field at its MS11 grain
-   * (docs/design/merge-sprint/PROGRAM.md), off the same properties_public row as
-   * MF and, like it, null before attach. Stored slugs, as the SPA reads them.
-   * `canonical_listing_id` is the canonical advert, the price history's first
-   * track; `property_subtype` is the canonical advert's (`subtype` above is this
-   * advert's); `plot_area_m2` is THE plot measure (migration 534). */
-  canonical_listing_id: number | null;
-  first_seen_at: string | null;
-  tom_days: number | null;
-  floor: number | null;
-  total_floors: number | null;
-  condition: string | null;
-  ownership: string | null;
-  property_subtype: string | null;
-  plot_area_m2: number | null;
   /* The default service charge (fond oprav + SVJ) to seed the yield panel
    * with, in Kč per m² of floor area per MONTH — resolved server-side from
    * THIS subject's denominator. THREE distinct states, and collapsing any two
@@ -275,12 +259,6 @@ export interface PortalListing {
 
 export interface PortalLookupResponse {
   data: PortalListing[];
-}
-
-/* GET /properties/{id}/price-history: the SPA property page's two reads, row for
- * row (adverts oldest first, snapshots by scrape time). */
-export interface PriceHistoryResponse {
-  data: { sources: PropertySource[]; snapshots: ListingSnapshotPublic[] };
 }
 
 export interface PortalLookupItem {

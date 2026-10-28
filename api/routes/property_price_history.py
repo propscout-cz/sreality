@@ -1,11 +1,4 @@
-"""GET /properties/{id}/price-history: every ad of a property and the price snapshots of each.
-
-The Chrome extension's price chart. The same two reads the SPA's property page makes through
-PostgREST (frontend/src/lib/queries.ts fetchPropertySources + fetchSnapshotsForListings), column
-for column, served here because the extension reaches data only through the API. The canonical ad
-(the first track) is the lookup's `canonical_listing_id`. `require_token` on the service role, like
-/properties/{id}/location: market data, not per-account data.
-"""
+"""GET /properties/{id}/price-history: the SPA property page's ad + snapshot reads for the extension chart (require_token, service role)."""
 
 from __future__ import annotations
 
@@ -18,7 +11,8 @@ from api import dependencies as deps
 
 router = APIRouter(tags=["properties"], dependencies=[Depends(deps.require_token)])
 
-# The SPA's PROPERTY_SOURCE_COLS, oldest ad first; `id` breaks a tie as property_download does.
+# The SPA's PROPERTY_SOURCE_COLS (queries.ts fetchPropertySources), oldest ad first; `id` breaks
+# a tie as property_download does. The canonical ad (first track) is the lookup's canonical_listing_id.
 _SOURCES_SQL = (
     "select id, property_id, source, source_url, source_id_native, ad_reference, is_active,"
     " price_czk, first_seen_at, last_seen_at from property_sources_public"

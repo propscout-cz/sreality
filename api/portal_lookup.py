@@ -1,4 +1,4 @@
-"""POST /listings/lookup — batch (source, native id) → MF facts + latest estimate.
+"""POST /listings/lookup — batch (source, native id) → MF + property header facts + latest estimate.
 
 The Chrome extension overlays the Browse-card 'Výnos MF' yield
 (`mf_gross_yield_pct`) and the MF reference rent (`mf_reference_rent`) on
@@ -70,8 +70,8 @@ _LISTING_COLS: tuple[str, ...] = (
     "disposition", "subtype",
     "display_label", "is_active", "last_seen_at",
     "mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent",
-    "canonical_listing_id", "first_seen_at", "tom_days", "floor", "total_floors",
-    "condition", "ownership", "property_subtype", "plot_area_m2",
+    "canonical_listing_id", "property_is_active", "first_seen_at", "tom_days", "floor",
+    "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
 )
 
 _MARKET_SQL = f"""
@@ -114,8 +114,9 @@ SELECT
     -- What the property IS, each field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md):
     -- the panel header's facts, off the same row as MF and, like it, NULL before attach.
     -- `pp.listing_id` is the canonical ad (MS5), the first track of the price history;
-    -- `pp.subtype` is aliased because `l.subtype` above is this advert's own.
-    pp.listing_id AS canonical_listing_id,
+    -- `is_active` and `subtype` are aliased because `l.*` above are this advert's own,
+    -- and `first_seen_at` is the property's earliest ad, unlike `l.last_seen_at`.
+    pp.listing_id AS canonical_listing_id, pp.is_active AS property_is_active,
     pp.first_seen_at, pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
     pp.subtype AS property_subtype,
     {plot_area_sql('pp')} AS plot_area_m2
@@ -223,7 +224,7 @@ def lookup_portal_listings(
     tenant_conn: "psycopg.Connection",
     items: "list[s.PortalLookupItem]",
 ) -> dict[str, Any]:
-    """Resolve each (source, source_id) to its MF facts + latest estimate.
+    """Resolve each (source, source_id) to its MF + property header facts + latest estimate.
 
     One row per requested item, in request order; `found=false` (and null
     fields) when we have no listing for that pair. Market facts read on

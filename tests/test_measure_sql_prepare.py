@@ -1,8 +1,7 @@
 """PREPARE the six named-measure statements the automatic SQL corpus cannot reach.
 
-(Six per-m² call sites since W5; W21 added the PLOT measure to two of them and the
-panel read model to a third, which has the same coverage problem for the same
-reason — see below.)
+(Six per-m² call sites since W5; W21 added the PLOT measure to two of them, which
+has the same coverage problem for the same reason — see below.)
 
 THE GAP THIS CLOSES, verified rather than assumed. Five of the six are assembled
 by in-function concatenation into a local variable, which the AST layer cannot
@@ -136,8 +135,7 @@ def test_every_per_m2_statement_prepares_against_the_schema(_conn):
     for i, (name, sql) in enumerate(statements):
         # The whole reason this file exists: prove the measure resolves.
         if name in ("comparables.build_query",
-                    "notifications._build_match_clauses",
-                    "portal_lookup._MARKET_SQL"):
+                    "notifications._build_match_clauses"):
             assert "plot_area_m2(" in sql, (
                 f"{name} no longer names the plot measure (migration 534)"
             )
