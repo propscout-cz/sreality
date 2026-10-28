@@ -603,7 +603,8 @@ describe('<PropertyDetail> section cards', () => {
     expect(odhady).toHaveAttribute('id', 'estimations');
     expect(await within(odhady).findByText('No estimation runs for this property yet.')).toBeInTheDocument();
     expect(await within(bar(odhady)).findByText('0')).toBeInTheDocument();
-    fireEvent.click(within(odhady).getByRole('button', { name: /Run an estimation/ }));
+    expect(within(odhady).queryByRole('button', { name: /Run an estimation/ })).toBeNull();
+    fireEvent.click(within(bar(odhady)).getByRole('button', { name: 'Nový odhad' }));
     expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
     for (const region of [sold, odhady]) expect(region.querySelector('.border-dashed')).toBeNull();
   });

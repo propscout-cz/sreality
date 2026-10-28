@@ -145,7 +145,7 @@ export default function EstimationsBlock({
           {selected && <RunSummaryCard run={selected} />}
         </div>
       )}
-      {!selected && <NoRuns prefill={prefill} loading={runsQ.isLoading} readOnly={readOnly} />}
+      {!selected && <NoRuns loading={runsQ.isLoading} />}
 
       {selected && (
         <div className="pt-4">
@@ -224,34 +224,11 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
   );
 }
 
-function NoRuns({
-  prefill,
-  loading,
-  readOnly,
-}: {
-  prefill?: NewEstimationPrefill;
-  loading: boolean;
-  readOnly: boolean;
-}) {
-  const { open } = useNewEstimationModal();
+/* The empty card's one line (C10). Its action is the title bar's "Nový odhad", as the picture draws an
+   empty card's action in the bar (Moje fotky), never a second copy in the body. */
+function NoRuns({ loading }: { loading: boolean }) {
   if (loading) return <p className="text-sm text-[var(--color-ink-3)]">Loading runs…</p>;
-  return (
-    <PanelEmpty
-      action={
-        !readOnly && prefill ? (
-          <button
-            type="button"
-            onClick={() => open(prefill)}
-            className="text-sm text-[var(--color-copper)] hover:underline underline-offset-2"
-          >
-            Run an estimation →
-          </button>
-        ) : undefined
-      }
-    >
-      No estimation runs for this property yet.
-    </PanelEmpty>
-  );
+  return <PanelEmpty>No estimation runs for this property yet.</PanelEmpty>;
 }
 
 /* The runs' ledger columns, after its "when". */

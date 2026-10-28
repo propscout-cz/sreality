@@ -91,15 +91,17 @@ describe('EstimationsBlock MF card', () => {
   });
 
   /* C10 (section cards, operator ruling 2026-10-28): a section with nothing keeps its card,
-     its title and count 0, with one muted line and the way to start one — no dashed tile. */
-  it('keeps its card with no MF result and no runs: count 0, one line, the action', async () => {
+     its title and count 0, with one muted line; the way to start one is the title bar's
+     "Nový odhad" (as the picture draws Moje fotky), never a second copy in the body — no dashed tile. */
+  it('keeps its card with no MF result and no runs: count 0, one line, the action in the title bar', async () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
     const { container } = renderBlock(property({}), { listingId: 11 });
     const card = await screen.findByRole('region', { name: 'Estimates' });
     expect(card).toHaveAttribute('id', 'estimations');
     expect(await within(card).findByText('No estimation runs for this property yet.')).toBeInTheDocument();
     expect(within(card).getByText('0')).toBeInTheDocument();
-    expect(within(card).getByRole('button', { name: /Run an estimation/ })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Nový odhad' })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Run an estimation/ })).toBeNull();
     expect(container.querySelector('.border-dashed')).toBeNull();
   });
 
@@ -134,7 +136,7 @@ describe('EstimationsBlock first run', () => {
   it('starts the first run on the ad the page names, by its listing id', async () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
     renderBlock(property({ mf_reference_rent: FROZEN_REF }), { listingId: 11 });
-    fireEvent.click(await screen.findByRole('button', { name: /Run an estimation/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nový odhad' }));
     expect(openEstimation).toHaveBeenCalledWith({ listingId: 11 });
   });
 
@@ -142,7 +144,7 @@ describe('EstimationsBlock first run', () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
     renderBlock(property({ mf_reference_rent: FROZEN_REF }));
     await screen.findByText('No estimation runs for this property yet.');
-    expect(screen.queryByRole('button', { name: /Run an estimation/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
   });
 });
 

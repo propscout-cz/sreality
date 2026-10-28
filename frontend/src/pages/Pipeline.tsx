@@ -988,35 +988,13 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
     if (label) create.mutate(label);
   };
 
-  /* A section card like Sdílení (C1–C6): the stages its count, adding one its title-bar action. */
+  /* A section card like Sdílení (C1–C6): the stages its count. Adding a stage stays the body's last row:
+     a title bar holds buttons and links only (C6), never a field. */
   return (
     <Panel
       className="mt-5"
       title="Fáze pipeline"
       count={stages.length}
-      accessory={
-        <div className="flex items-center gap-2">
-          <input
-            aria-label="Nová fáze"
-            value={newLabel}
-            onChange={(e) => setNewLabel(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submitNew();
-            }}
-            placeholder="Nová fáze…"
-            maxLength={80}
-            className="h-8 w-44 px-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]"
-          />
-          <button
-            type="button"
-            onClick={submitNew}
-            disabled={!newLabel.trim() || create.isPending}
-            className={PANEL_ACTION}
-          >
-            Přidat
-          </button>
-        </div>
-      }
     >
       {err && <p className="text-xs text-[var(--color-brick)]">{err}</p>}
       <ul className="space-y-2">
@@ -1033,6 +1011,27 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           />
         ))}
       </ul>
+      <div className="flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-3">
+        <input
+          aria-label="Nová fáze"
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submitNew();
+          }}
+          placeholder="Nová fáze…"
+          maxLength={80}
+          className="flex-1 px-2 py-1 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]"
+        />
+        <button
+          type="button"
+          onClick={submitNew}
+          disabled={!newLabel.trim() || create.isPending}
+          className={PANEL_ACTION}
+        >
+          Přidat
+        </button>
+      </div>
     </Panel>
   );
 }
