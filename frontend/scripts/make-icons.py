@@ -2,8 +2,8 @@
 
 The mark is the header's wordmark (BrandMark in src/components/Shell.tsx) reduced to its
 two initials: "P" in ink and "S" in the copper accent, set in the self-hosted Fraunces at
-weight 600 on the paper canvas. Colours are the light @theme tokens (the Měď scheme) in
-src/styles/globals.css. Needs Pillow (FreeType reads the woff2 directly).
+weight 600 on the paper canvas. Colours are the light tokens (the Měď scheme) in
+src/styles/tokens.css. Needs Pillow (FreeType reads the woff2 directly).
 """
 from __future__ import annotations
 

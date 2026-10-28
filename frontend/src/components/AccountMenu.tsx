@@ -3,15 +3,9 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
-import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
-
-const MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'system', label: 'System' },
-];
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
@@ -77,7 +71,7 @@ export default function AccountMenu() {
             Signed in as {label}
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
-          {/* Every account picks its own look; the choice stays on this device. */}
+          {/* Every account picks its own look; the choice follows the user (lib/theme). */}
           <div role="group" aria-label="Colour scheme" className="px-3 pt-1 pb-1.5">
             <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)]">Colour scheme</p>
             <div className="mt-1.5 grid grid-cols-3 gap-1">
@@ -107,7 +101,7 @@ export default function AccountMenu() {
               fill
               segmentRole="menuitemradio"
               label="Light or dark"
-              options={MODES}
+              options={THEME_MODES}
               value={mode}
               onChange={setMode}
             />

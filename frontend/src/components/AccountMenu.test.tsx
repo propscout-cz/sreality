@@ -1,12 +1,14 @@
 /* The "Sign in" affordance is a destination, and the component's own comment
  * always called it a link — it was a <button> calling navigate('/login'). */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import AccountMenu from './AccountMenu';
 import * as auth from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
+import { setScheme, setTheme } from '@/lib/theme';
+import { ThemeToggle } from '@/pages/Settings';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
@@ -43,6 +45,10 @@ describe('<AccountMenu>', () => {
 
 describe('<AccountMenu> appearance', () => {
   afterEach(() => {
+    act(() => {
+      setScheme('med');
+      setTheme('light');
+    });
     document.documentElement.removeAttribute('data-scheme');
     document.documentElement.removeAttribute('data-theme');
     localStorage.clear();
@@ -57,6 +63,17 @@ describe('<AccountMenu> appearance', () => {
     expect(document.documentElement).toHaveAttribute('data-scheme', 'grafit');
     expect(localStorage.getItem('sreality.scheme')).toBe('grafit');
     expect(screen.getByRole('menuitemradio', { name: 'Grafit' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  /* One store behind every picker: Settings follows the menu without a reload. */
+  it('keeps Settings in step with the menu', () => {
+    renderAs({ email: 'a@example.cz' });
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole('button', { name: 'a@example.cz' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kobalt' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
+    expect(screen.getByRole('button', { name: 'Kobalt', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dark', pressed: true })).toBeInTheDocument();
   });
 
   it('sets light or dark beside the scheme', () => {

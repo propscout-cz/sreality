@@ -16,11 +16,11 @@
   --bg-sunk: #f1ebde;     /* a hair darker paper — input wells, a pressed toggle */
   --paper: #fffdf8;       /* fresh near-white paper — the section card (X1), buttons */
   --copper-deep: #9a4b25; /* copper hover */
-  /* Pipeline-stage palette, mirrored BY VALUE from the SPA's globals.css
+  /* Pipeline-stage palette, mirrored BY VALUE from the SPA's styles/tokens.css
      `--color-tag-*` light-theme tokens (the panel is light-only). The stage
      badge + pill take the operator's stage colour here exactly as they do in
      the SPA, so one stage never reads copper in the panel and teal in Browse.
-     Keep in step with globals.css if a colour is ever retuned. */
+     Keep in step with that file if a colour is ever retuned. */
   --tag-copper: #b3592d; --tag-copper-soft: #f3eadf;
   --tag-sage:   #5e7a4a; --tag-sage-soft:   rgba(94, 122, 74, 0.10);
   --tag-brick:  #a04b3d; --tag-brick-soft:  rgba(160, 75, 61, 0.10);

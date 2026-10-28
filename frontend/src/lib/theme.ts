@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
+import { readChoice, writeValue } from './persistedFlag';
 
+/* The user's appearance: a colour scheme (styles/tokens.css: Měď needs no
+ * attribute, Kobalt and Grafit set `data-scheme` on <html>) and a light/dark
+ * side, so every scheme has both. ONE store for every picker (account menu,
+ * phone account sheet, Settings), cached on the device (index.html applies the
+ * cache before the first paint) and kept in the signed-in user's profile. */
 export type ThemeMode = 'light' | 'dark' | 'system';
-
-/* The colour scheme (globals.css): Měď is the default and needs no attribute;
- * the other two set `data-scheme` on <html>. Light/dark is the separate
- * ThemeMode, so every scheme has both sides. */
 export type ColorScheme = 'med' | 'kobalt' | 'grafit';
+export interface Appearance {
+  scheme: ColorScheme;
+  theme: ThemeMode;
+}
 
 export const COLOR_SCHEMES: ReadonlyArray<{
   value: ColorScheme;
@@ -18,75 +24,125 @@ export const COLOR_SCHEMES: ReadonlyArray<{
   { value: 'grafit', label: 'Grafit', swatch: ['#f0f0ee', '#18181b', '#1b7548'] },
 ];
 
-const STORAGE_KEY = 'sreality.theme';
+/* Light or dark, in picker order; a surface in another language relabels it. */
+export const THEME_MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+];
+
+const SCHEMES = COLOR_SCHEMES.map((s) => s.value);
+const MODES = THEME_MODES.map((m) => m.value);
 const SCHEME_KEY = 'sreality.scheme';
+const THEME_KEY = 'sreality.theme';
 
-export function readStoredTheme(): ThemeMode {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY);
-    if (v === 'light' || v === 'dark' || v === 'system') return v;
-  } catch {
-    /* localStorage may be unavailable (SSR, private mode lockdown) — fall through */
+let state: Appearance = {
+  scheme: readChoice(SCHEME_KEY, SCHEMES, 'med'),
+  theme: readChoice(THEME_KEY, MODES, 'light'),
+};
+const listeners = new Set<() => void>();
+let systemQuery: MediaQueryList | null = null;
+
+/* "system" is resolved here, so <html> always carries light or dark; an OS
+ * flip re-applies it (the listener attaches the first time it is asked). */
+function systemIsDark(): boolean {
+  if (!systemQuery && typeof window.matchMedia === 'function') {
+    systemQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    systemQuery.addEventListener('change', () => {
+      if (state.theme === 'system') applyAppearance();
+    });
   }
-  return 'light';
+  return systemQuery?.matches ?? false;
 }
 
-export function writeStoredTheme(mode: ThemeMode): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, mode);
-  } catch {
-    /* ignore */
-  }
-}
-
-export function applyTheme(mode: ThemeMode): void {
+export function applyAppearance(): void {
   const root = document.documentElement;
-  if (mode === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', mode);
+  if (state.scheme === 'med') root.removeAttribute('data-scheme');
+  else root.setAttribute('data-scheme', state.scheme);
+  const dark = state.theme === 'dark' || (state.theme === 'system' && systemIsDark());
+  root.setAttribute('data-theme', dark ? 'dark' : 'light');
 }
 
-export function useTheme(): [ThemeMode, (mode: ThemeMode) => void] {
-  const [mode, setMode] = useState<ThemeMode>(() => readStoredTheme());
-
-  useEffect(() => {
-    applyTheme(mode);
-    writeStoredTheme(mode);
-  }, [mode]);
-
-  return [mode, setMode];
+function commit(next: Appearance): boolean {
+  if (next.scheme === state.scheme && next.theme === state.theme) return false;
+  state = next;
+  writeValue(SCHEME_KEY, next.scheme);
+  writeValue(THEME_KEY, next.theme);
+  applyAppearance();
+  for (const listener of listeners) listener();
+  return true;
 }
 
-export function readStoredScheme(): ColorScheme {
-  try {
-    const v = localStorage.getItem(SCHEME_KEY);
-    if (v === 'med' || v === 'kobalt' || v === 'grafit') return v;
-  } catch {
-    /* same as readStoredTheme */
+/* The signed-in user's profile (Supabase Auth user_metadata.appearance; no
+ * table, no route). `unsaved` = a choice made while signed in that the profile
+ * has not confirmed: it beats the profile's older value, and a failed write
+ * waits for the next change. updateUser holds Supabase's auth lock, so writes
+ * land in the order they were sent. */
+type SaveAppearance = (appearance: Appearance) => Promise<void>;
+let profile: { id: string; save: SaveAppearance } | null = null;
+let unsaved = false;
+
+function sendToProfile(): void {
+  const sent = state;
+  profile?.save(sent).then(
+    () => {
+      if (state === sent) unsaved = false;
+    },
+    () => {},
+  );
+}
+
+function choose(next: Appearance): void {
+  if (!commit(next) || !profile) return;
+  unsaved = true;
+  sendToProfile();
+}
+
+export function setScheme(scheme: ColorScheme): void {
+  choose({ ...state, scheme });
+}
+
+export function setTheme(theme: ThemeMode): void {
+  choose({ ...state, theme });
+}
+
+/* Metadata is client-writable: only the store's own ids get through. */
+function parseAppearance(value: unknown): Appearance | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { scheme, theme } = value as Record<string, unknown>;
+  if (!SCHEMES.includes(scheme as ColorScheme) || !MODES.includes(theme as ThemeMode)) return null;
+  return { scheme: scheme as ColorScheme, theme: theme as ThemeMode };
+}
+
+/* Fed every auth session (lib/auth.tsx). The profile's value wins and is
+ * cached here; a profile that holds none gets this device's choice, once per
+ * sign-in. A value this build does not know is left alone. */
+export function syncAppearance(
+  user: { id: string; user_metadata?: { appearance?: unknown } } | null,
+  save: SaveAppearance,
+): void {
+  const known = user !== null && profile?.id === user.id;
+  profile = user && { id: user.id, save };
+  if (!known) unsaved = false;
+  if (!user || unsaved) return;
+  const stored = user.user_metadata?.appearance;
+  const remote = parseAppearance(stored);
+  if (remote) commit(remote);
+  else if (stored == null && !known) {
+    unsaved = true;
+    sendToProfile();
   }
-  return 'med';
 }
 
-export function writeStoredScheme(scheme: ColorScheme): void {
-  try {
-    localStorage.setItem(SCHEME_KEY, scheme);
-  } catch {
-    /* ignore */
-  }
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
-export function applyScheme(scheme: ColorScheme): void {
-  const root = document.documentElement;
-  if (scheme === 'med') root.removeAttribute('data-scheme');
-  else root.setAttribute('data-scheme', scheme);
+export function useTheme(): [ThemeMode, (theme: ThemeMode) => void] {
+  return [useSyncExternalStore(subscribe, () => state.theme), setTheme];
 }
 
 export function useScheme(): [ColorScheme, (scheme: ColorScheme) => void] {
-  const [scheme, setScheme] = useState<ColorScheme>(() => readStoredScheme());
-
-  useEffect(() => {
-    applyScheme(scheme);
-    writeStoredScheme(scheme);
-  }, [scheme]);
-
-  return [scheme, setScheme];
+  return [useSyncExternalStore(subscribe, () => state.scheme), setScheme];
 }

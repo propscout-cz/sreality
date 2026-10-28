@@ -28,26 +28,6 @@ if (!('createObjectURL' in URL)) {
     'blob:stub';
 }
 
-// jsdom implements no media queries, so `useTokenColors` (which watches
-// prefers-color-scheme to re-read the CSS variables on a theme flip) throws on
-// mount. Every chart component reads its palette that way; the stub reports
-// light mode and a listener that never fires.
-if (typeof window.matchMedia !== 'function') {
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    }),
-  });
-}
-
 // jsdom 25 has AbortSignal.timeout but not AbortSignal.any, which every
 // browser the SPA targets ships and both read adapters use to combine React
 // Query's signal with their own deadline (lib/api.ts send(), lib/pgRead.ts).
