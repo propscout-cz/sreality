@@ -4,7 +4,7 @@ import { fmtShortDate } from '@/lib/format';
 import { portalLabel } from '@/lib/portals';
 import type { PropertyPublic } from '@/lib/queries';
 import type { ListingFreshnessCheckPublic, PropertySource } from '@/lib/types';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 import FreshnessBlock from './FreshnessBlock';
 
 /* Freshness checks are stored against the legacy sreality_id: empty by
@@ -20,13 +20,12 @@ export default function AuditPanel({
   checks: ListingFreshnessCheckPublic[];
 }) {
   return (
-    <div className="space-y-10">
+    <div className="space-y-4">
       {property.sreality_id != null && (
         <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Kontroly aktuálnosti" />
       )}
-      <div>
-        <SectionLabel>Identifikátory</SectionLabel>
-        <table className="mt-3 w-full max-w-2xl text-sm">
+      <Panel title="Identifikátory">
+        <table className="w-full max-w-2xl text-sm">
           <tbody>
             <tr className="border-b border-[var(--color-rule-soft)]">
               <th scope="row" className="py-2 pr-4 text-left font-normal text-[var(--color-ink-2)]">Nemovitost</th>
@@ -46,7 +45,7 @@ export default function AuditPanel({
             ))}
           </tbody>
         </table>
-      </div>
+      </Panel>
     </div>
   );
 }

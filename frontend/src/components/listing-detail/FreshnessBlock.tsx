@@ -3,7 +3,7 @@
  * by the desktop property page and the phone layout (#1767). */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import {
   ApiError,
   verifyListingFreshness,
@@ -36,15 +36,13 @@ export default function FreshnessBlock({
     },
   });
 
+  /* A section card (C1–C10): the re-check is its action; the log is a plain table in it, no box of
+   * its own (C9), its heads L4 (C8). */
   return (
-    <div>
-      <div className="flex items-center justify-between gap-4">
-        <SectionLabel>
-          <span>{label}</span>
-          <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
-            ({count})
-          </span>
-        </SectionLabel>
+    <Panel
+      title={label}
+      count={count}
+      accessory={
         <button
           type="button"
           onClick={() => verify.mutate()}
@@ -53,21 +51,19 @@ export default function FreshnessBlock({
         >
           {verify.isPending ? 'Ověřuji…' : 'Ověřit aktuálnost'}
         </button>
-      </div>
-
+      }
+    >
       <VerifyResult mutation={verify} />
 
       {count === 0 ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-          No on-demand freshness checks recorded.
-        </p>
+        <PanelEmpty>No on-demand freshness checks recorded.</PanelEmpty>
       ) : (
-        <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] bg-[var(--color-paper-2)]">
-                <th className="px-3 py-2 font-medium">Checked</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
+              <tr className="text-left text-[11px] leading-[14px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-3)]">
+                <th className="px-3 py-2 font-semibold">Checked</th>
+                <th className="px-3 py-2 font-semibold">Outcome</th>
               </tr>
             </thead>
             <tbody>
@@ -87,7 +83,7 @@ export default function FreshnessBlock({
           </table>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -100,7 +96,7 @@ function VerifyResult({
 }) {
   if (mutation.isPending) {
     return (
-      <p className="mt-3 text-sm text-[var(--color-ink-3)]">
+      <p className="text-sm text-[var(--color-ink-3)]">
         Re-fetching the listing from the source…
       </p>
     );
@@ -109,7 +105,7 @@ function VerifyResult({
     const err = mutation.error;
     const msg = err instanceof ApiError ? err.message : err.message;
     return (
-      <p className="mt-3 text-sm text-[var(--color-brick)]">
+      <p className="text-sm text-[var(--color-brick)]">
         Verification failed: {msg}
       </p>
     );
@@ -117,7 +113,7 @@ function VerifyResult({
   if (mutation.isSuccess) {
     const { outcome, what_changed } = mutation.data.data;
     return (
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-[var(--color-ink-2)]">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-ink-2)]">
         <OutcomeChip outcome={outcome} />
         <span>{freshnessOutcomeMessage(outcome, what_changed)}</span>
       </div>

@@ -36,6 +36,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listPropertyNotes: vi.fn(empty),
     listPipelineShares: vi.fn(async () => ({ shared_with: [], shared_with_me: [] })),
     fetchArtifactLinks: vi.fn(async () => new Map()),
+    listAttachments: vi.fn(empty),
+    listEstimations: vi.fn(async () => ({ data: [], total: 0, limit: 100, offset: 0, next_cursor: null })),
     addPipelineCard: vi.fn(async () => ({ property_id: 774, stage_key: 'review', added: true })),
   };
 });
@@ -528,6 +530,91 @@ describe('<PropertyDetail> tabs', () => {
   });
 });
 
+/* Section cards (operator ruling 2026-10-28, system.md § Section cards; the picture
+   docs/design/propscout-section-cards.png): every section of every tab is a card — a region
+   named by its title, a bare count beside the title (never in brackets, never in the title),
+   the actions in its title bar, 16 px between cards — and a section with nothing keeps its
+   card, says so in one muted line and offers its action (C10), never a dashed tile (C9). */
+describe('<PropertyDetail> section cards', () => {
+  const card = (name: string) => screen.findByRole('region', { name }, { timeout: 5000 });
+  const bar = (region: HTMLElement) => within(region).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+  const title = (region: HTMLElement) => within(region).getByRole('heading', { level: 2 });
+
+  it('draws the overview as cards, the adverts count beside its title and Popis empty in one line', async () => {
+    renderAt('/property/774');
+
+    const adverts = await card('Inzeráty a vývoj ceny');
+    expect(title(adverts)).toHaveTextContent(/^Inzeráty a vývoj ceny$/);
+    expect(within(bar(adverts)).getByText('2')).toBeInTheDocument();
+    expect(within(bar(adverts)).getByRole('button', { name: 'Detail ceny →' })).toBeInTheDocument();
+    for (const name of ['Je cena v pořádku?', 'Trh v okolí', 'Makléř']) expect(await card(name)).toBeInTheDocument();
+    const popis = await card('Popis');
+    expect(within(popis).getByText('Inzerát nemá popis.')).toBeInTheDocument();
+    expect(adverts.parentElement).toHaveClass('space-y-4');
+    expect(screen.getByRole('tabpanel').querySelector('.border-dashed')).toBeNull();
+  });
+
+  it('keeps the notes card above the tabs: a bare count, the viewing and the artifact link in its title bar', async () => {
+    renderAt('/property/774');
+
+    const notes = await card('Poznámky');
+    expect(title(notes)).toHaveTextContent(/^Poznámky$/);
+    expect(await within(bar(notes)).findByText('0')).toBeInTheDocument();
+    expect(within(bar(notes)).getByRole('button', { name: 'Naplánovat prohlídku' })).toBeInTheDocument();
+    expect(within(bar(notes)).getByRole('region', { name: 'Odkaz na artefakt' })).toBeInTheDocument();
+    expect(screen.queryByText('(0)')).toBeNull();
+  });
+
+  it('draws Fotky as two cards with their counts, each empty one in one line', async () => {
+    renderAt('/property/774?tab=fotky');
+
+    const mine = await card('Moje fotky');
+    expect(await within(mine).findByText('Zatím žádné vlastní fotky.')).toBeInTheDocument();
+    expect(within(bar(mine)).getByText('0')).toBeInTheDocument();
+    expect(within(bar(mine)).getByLabelText('Nahrát')).toHaveAttribute('type', 'file');
+    const gallery = await card('Fotky z inzerátu');
+    expect(within(bar(gallery)).getByText('0')).toBeInTheDocument();
+    expect(within(gallery).getByText('Žádné fotky.')).toBeInTheDocument();
+    expect(gallery.parentElement).toHaveClass('space-y-4');
+    expect(screen.getByRole('tabpanel').querySelector('.border-dashed')).toBeNull();
+  });
+
+  it('draws Cena a hodnota as cards: Odhady stays with count 0, one line and its action', async () => {
+    renderAt('/property/774?tab=hodnota');
+
+    const history = await card('Vývoj ceny');
+    expect(history.parentElement).toHaveClass('space-y-4');
+    const sold = await card('Registered sales');
+    expect(within(bar(sold)).getByText('realized prices, not asking prices')).toBeInTheDocument();
+    expect(within(sold).getByText('Bez souřadnic nelze hledat prodeje v okolí.')).toBeInTheDocument();
+    const odhady = await card('Odhady');
+    expect(odhady).toHaveAttribute('id', 'estimations');
+    expect(await within(odhady).findByText('No estimation runs for this property yet.')).toBeInTheDocument();
+    expect(await within(bar(odhady)).findByText('0')).toBeInTheDocument();
+    fireEvent.click(within(odhady).getByRole('button', { name: /Run an estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
+    for (const region of [sold, odhady]) expect(region.querySelector('.border-dashed')).toBeNull();
+  });
+
+  it('draws Inzeráty and Audit as cards, their counts bare', async () => {
+    renderAt('/property/774?tab=inzeraty');
+
+    const ads = await card('Sloučené inzeráty');
+    expect(title(ads)).toHaveTextContent(/^Sloučené inzeráty$/);
+    expect(within(bar(ads)).getByText('2')).toBeInTheDocument();
+    expect(within(bar(ads)).getByText('2 portály')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audit' }));
+    const checks = await card('Kontroly aktuálnosti');
+    expect(within(bar(checks)).getByText('0')).toBeInTheDocument();
+    expect(within(bar(checks)).getByRole('button', { name: 'Ověřit aktuálnost' })).toBeInTheDocument();
+    expect(screen.queryByText('(0)')).toBeNull();
+    const ids = await card('Identifikátory');
+    expect(checks.parentElement).toBe(ids.parentElement);
+    expect(ids.parentElement).toHaveClass('space-y-4');
+  });
+});
+
 /* The identity track's ask: "New estimation" is the canonical advert's, by its
    listings.id, on any portal. It used to be bound to a portal URL and its runs to
    a sreality id, so a property with no sreality advert could not be estimated. */
@@ -727,14 +814,30 @@ describe('<BrokerList>', () => {
     expect(screen.queryByText(/na vyžádání/)).not.toBeInTheDocument();
   });
 
-  it('renders nothing at all for a genuinely unattributed property', async () => {
+  /* C10 (section cards, operator ruling 2026-10-28): a section with nothing keeps its card, its
+     title and count 0, and says so in one muted line — it no longer disappears. */
+  it('keeps the card for a genuinely unattributed property: count 0 and one line', async () => {
     vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(new Map());
 
     renderListing();
 
     await waitFor(() => expect(brokers.fetchListingBrokersByIds).toHaveBeenCalled());
-    expect(screen.queryByText('Makléř')).toBeNull();
+    const card = await screen.findByRole('region', { name: 'Makléř' }, { timeout: 5000 });
+    expect(await within(card).findByText('Makléř není uveden.')).toBeInTheDocument();
+    expect(within(card).getByText('0')).toBeInTheDocument();
     expect(screen.queryByText('Makléře se nepodařilo načíst')).toBeNull();
+  });
+
+  /* While the read is out the card claims nothing: no "0", no "není uveden". */
+  it('claims no broker while the read is out', async () => {
+    vi.mocked(brokers.fetchListingBrokersByIds).mockReturnValue(new Promise(() => {}));
+
+    renderListing();
+
+    const card = await screen.findByRole('region', { name: 'Makléř' }, { timeout: 5000 });
+    expect(within(card).getByText('Načítám…')).toBeInTheDocument();
+    expect(within(card).queryByText('0')).toBeNull();
+    expect(within(card).queryByText('Makléř není uveden.')).toBeNull();
   });
 
   /* Rendering a failed read as an absent block asserted "no broker" for every
@@ -783,7 +886,7 @@ describe('<BrokerList>', () => {
     renderListing();
     // Scoped to the section: the header's own "ID 999" line is the identity sprint's, not the card's.
     const section = within(await screen.findByRole('region', { name: /^Makléř/ }));
-    expect(section.getByText('Sreality —')).toBeInTheDocument();
+    expect(await section.findByText('Sreality —')).toBeInTheDocument();
     expect(section.queryByText('999')).toBeNull();
     expect(section.queryByRole('button', { name: /číslo zakázky/ })).toBeNull();
   });

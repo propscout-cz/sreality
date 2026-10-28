@@ -23,16 +23,21 @@ export type CardAd = Pick<PropertySource, 'id' | 'source' | 'source_url' | 'ad_r
 export default function BrokerContactCard({
   broker,
   ads = [],
+  bare = false,
   className,
 }: {
   broker: BrokerContactFields;
   ads?: ReadonlyArray<CardAd>;
+  /* Inside a section card: no frame of its own (no box in a box, system.md § Section cards). */
+  bare?: boolean;
   className?: string;
 }) {
   return (
     <div
       className={[
-        'border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-3)] px-4 py-3 min-w-[15rem]',
+        bare
+          ? 'min-w-[15rem]'
+          : 'border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-3)] px-4 py-3 min-w-[15rem]',
         className,
       ]
         .filter(Boolean)

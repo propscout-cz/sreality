@@ -5,6 +5,7 @@
 import { Suspense, useMemo, useState } from 'react';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
+import Panel from '@/components/Panel';
 import { SectionLabel } from '@/components/section';
 import { timeLabelFull } from '@/lib/chartAxis';
 import { fmtAbsolute, fmtCzk, fmtPct, fmtShortDate } from '@/lib/format';
@@ -47,11 +48,10 @@ export default function PriceHistoryBlock({
   // size of each step (readable even if the chart itself fails to render).
   const changes = useMemo(() => priceChangeEvents(series), [series]);
 
+  /* A section card (C1–C10); the span's labels are L4 (C8). */
   return (
-    <div>
-      <SectionLabel>{label}</SectionLabel>
-
-      <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-4">
+    <Panel title={label}>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <Stat
           label="First seen"
           value={fmtShortDate(property.first_seen_at)}
@@ -78,7 +78,7 @@ export default function PriceHistoryBlock({
       </div>
 
       {series.length > 0 && (
-        <div className="mt-6">
+        <div className="pt-1">
           <ErrorBoundary
             label="price-chart"
             fallback={
@@ -99,7 +99,7 @@ export default function PriceHistoryBlock({
       )}
 
       {changes.length > 0 && (
-        <ul aria-label="Price moves" className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5">
+        <ul aria-label="Price moves" className="flex flex-wrap gap-x-5 gap-y-1.5">
           {changes.map((c) => (
             <li
               key={`${c.seriesId}-${c.t}`}
@@ -124,7 +124,7 @@ export default function PriceHistoryBlock({
           ))}
         </ul>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -149,9 +149,7 @@ function Stat({
         : 'var(--color-sage)';
   return (
     <div>
-      <p className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </p>
+      <SectionLabel>{label}</SectionLabel>
       <p
         className={['mt-1 text-sm text-[var(--color-ink)]', mono ? 'font-mono tabular-nums' : ''].join(' ')}
         title={title}

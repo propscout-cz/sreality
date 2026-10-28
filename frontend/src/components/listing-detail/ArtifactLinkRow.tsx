@@ -2,7 +2,8 @@
  * property, shown beside the notes. Property-grain like the rest of the curation block (rule 18),
  * so it follows a merge. A failed read is said out loud, never drawn as an empty field. With no
  * link it is one "+ Odkaz na artefakt" button that opens the field; `bare` drops the heading and
- * draws it on one line (the desktop notes section's header). */
+ * draws it on one line (the desktop notes card's title bar). Otherwise it is its own section card
+ * (the phone, system.md § Section cards). */
 
 import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -16,7 +17,7 @@ import { fmtAbsolute } from '@/lib/format';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
 import { PencilIcon, TrashIcon } from '@/components/icons';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 
 const URL_MAX = 2000;
 const NOT_A_URL = 'Zadejte celou adresu začínající http:// nebo https://';
@@ -215,14 +216,17 @@ export default function ArtifactLinkRow({
     );
   }
 
+  if (!bare) {
+    return (
+      <Panel title={<span id={labelId}>{label}</span>}>
+        <div>{body}</div>
+        {error && <p className="text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
+      </Panel>
+    );
+  }
   return (
-    <section aria-label={bare ? label : undefined} className={bare ? 'min-w-0' : undefined}>
-      {!bare && (
-        <SectionLabel>
-          <span id={labelId}>{label}</span>
-        </SectionLabel>
-      )}
-      <div className={bare ? '' : 'mt-3'}>{body}</div>
+    <section aria-label={label} className="min-w-0">
+      <div>{body}</div>
       {error && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
     </section>
   );

@@ -2,7 +2,7 @@
  * else: no run's frozen reference rent stands in for a missing one, and there
  * is no English placeholder of its own. */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -90,11 +90,17 @@ describe('EstimationsBlock MF card', () => {
     expect(container).not.toHaveTextContent('No MF reference');
   });
 
-  it('renders nothing at all with no MF result and no runs', async () => {
+  /* C10 (section cards, operator ruling 2026-10-28): a section with nothing keeps its card,
+     its title and count 0, with one muted line and the way to start one — no dashed tile. */
+  it('keeps its card with no MF result and no runs: count 0, one line, the action', async () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
-    const { container } = renderBlock(property({}));
-    await waitFor(() => expect(fetchRuns).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    const { container } = renderBlock(property({}), { listingId: 11 });
+    const card = await screen.findByRole('region', { name: 'Estimates' });
+    expect(card).toHaveAttribute('id', 'estimations');
+    expect(await within(card).findByText('No estimation runs for this property yet.')).toBeInTheDocument();
+    expect(within(card).getByText('0')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: /Run an estimation/ })).toBeInTheDocument();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 
   it('shows the property value with the property yield', async () => {

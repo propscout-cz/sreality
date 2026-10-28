@@ -1,7 +1,8 @@
 /* The property page's Valuo section (#valuo): a paid outside valuation, after our estimates and never
  * inside them (rule 12), for every signed-in user (operator ruling 2026-10-19). The card flips into its
  * editor in place (system.md), drawn from the API's `fields` alone, every value tagged with where it came
- * from. The phone reads the latest answer only: no editor, no button (#1760 Q10). */
+ * from. The phone reads the latest answer only: no editor, no button (#1760 Q10). A section card on both
+ * shells: with no answer it stays and says so (C10). */
 import { Suspense, useId, useState, type ReactNode } from 'react';
 
 import ErrorBanner from '@/components/ErrorBanner';
@@ -14,7 +15,7 @@ import RunHistory from '@/components/estimation/RunHistory';
 import { RunStatusChip } from '@/components/estimation/RunPanel';
 import { SingleSelectDropdown } from '@/components/filter-controls/SingleSelectDropdown';
 import { InfoHint } from '@/components/settings/SectionChrome';
-import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty, PanelGroup } from '@/components/Panel';
 import { Th, cellClass, type Column } from '@/components/table';
 import { ApiError } from '@/lib/api';
 import {
@@ -58,12 +59,11 @@ const PerM2 = ({ v, className }: { v: Valuation; className?: string }) => {
 const ENVIRONMENT: Record<Valuation['environment'], string> = { sandbox: 'sandbox', production: 'ostré' };
 const BRICK = 'text-[0.75rem] text-[var(--color-brick)]';
 
-export default function ValuoSection({ property, listingIds, adUrls = [], readOnly = false, bare = false }: {
+export default function ValuoSection({ property, listingIds, adUrls = [], readOnly = false }: {
   property: PropertyPublic;
   listingIds: number[];
   adUrls?: readonly (string | null)[]; // every ad of the property, delisted ones too: Valuo's own-ad match runs over them
   readOnly?: boolean;
-  bare?: boolean;
 }) {
   const pageQ = useValuoPage(property.property_id);
   const runsQ = useEstimationRuns(listingIds); // the estimations block's own query: one fetch for both
@@ -72,7 +72,6 @@ export default function ValuoSection({ property, listingIds, adUrls = [], readOn
   const [reusedAt, setReusedAt] = useState<string | null>(null);
   const page = pageQ.data ?? null;
   const history = page?.history ?? [];
-  if (readOnly && !history.some((v) => v.result)) return null;
 
   const shown = readOnly
     ? (history.find((v) => v.result) ?? null)
@@ -111,35 +110,34 @@ export default function ValuoSection({ property, listingIds, adUrls = [], readOn
               onEdit={canValue ? () => setEditing(true) : undefined} />
             {!readOnly && <Comparables key={shown.id} valuation={shown} fields={page.fields} adUrls={adUrls} />}
           </>
-        ) : !page.refusal && (
-          <EstimateCard tone="absent" eyebrow="Ocenění Valuo" className="flex flex-col items-start gap-2">
-            <p className={`text-sm ${INK3}`}>Zatím bez ocenění</p>
-            {canValue && <button type="button" onClick={() => setEditing(true)} className={LINK}>Ocenit přes Valuo →</button>}
-          </EstimateCard>
+        ) : (readOnly || !page.refusal) && (
+          // C10: the card keeps its title and says so in one line, never a dashed tile (C9).
+          <PanelEmpty action={canValue && <button type="button" onClick={() => setEditing(true)} className={LINK}>Ocenit přes Valuo →</button>}>
+            Zatím bez ocenění.
+          </PanelEmpty>
         )}
       </div>
     );
-  }
+  } else body = <PanelEmpty>Zatím bez ocenění.</PanelEmpty>; // the API answered with no page at all
 
+  /* A section card (C1–C10); the comparables and the ledger are its groups (C7). */
   return (
-    <>
-      {!bare && <Hairline />}
-      <section id="valuo" className="scroll-mt-28">
-        <div className="flex items-baseline justify-between gap-3">
-          <SectionLabel>Valuo</SectionLabel>
-          {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
-            <span className={`px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase ${INK3}`}>
-              Sandbox
-            </span>
-          )}
-        </div>
-        <div className="mt-4">{body}</div>
-        {!readOnly && page && history.length > 1 && (
-          <RunHistory title="Všechna ocenění" rows={history} columns={HISTORY_COLUMNS}
-            selectedId={shown?.id ?? null} onPick={(id) => pick(id)} when="Kdy" viewing="zobrazeno" />
-        )}
-      </section>
-    </>
+    <Panel
+      id="valuo"
+      title="Valuo"
+      className="scroll-mt-28!"
+      accessory={(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
+        <span className={`px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase ${INK3}`}>
+          Sandbox
+        </span>
+      )}
+    >
+      {body}
+      {!readOnly && page && history.length > 1 && (
+        <RunHistory title="Všechna ocenění" rows={history} columns={HISTORY_COLUMNS}
+          selectedId={shown?.id ?? null} onPick={(id) => pick(id)} when="Kdy" viewing="zobrazeno" />
+      )}
+    </Panel>
   );
 }
 
@@ -346,27 +344,27 @@ function Comparables({ valuation: v, fields, adUrls }: {
     { header: 'V\u00a0inzerci', align: 'right', className: `${NUM} text-[var(--color-ink-2)]`, cell: (r) => fmtTomDays(r.days) },
   ];
   return (
-    <div className="pt-3">
+    <>
       {base && <Recalculation valuation={v} base={base} kept={records.filter((_, i) => !dropped.has(i))} count={records.length}
         onReset={dropped.size > 0 ? () => setDropped(new Set()) : undefined} />}
-      <SectionLabel>
-        Srovnávací nemovitosti · <span className="font-mono tabular-nums tracking-normal">{records.length}</span>
-      </SectionLabel>
-      {base && <p className={`mt-1 text-[0.8rem] ${INK3}`}>Odškrtněte srovnání a přepočítáme odhad z ostatních.</p>}
-      <div className={`mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)] ${SCROLL_HINT}`}>
-        <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
-          <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
-            <tr>{columns.map((c) => <Th key={c.header} size="xs" align={c.align}>{c.header}</Th>)}</tr>
-          </thead>
-          <tbody>
-            {records.map((r, i) => (
-              <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
-                {columns.map((c) => <td key={c.header} className={cellClass(c, 'px-3 py-2 align-top')}>{c.cell(r, i)}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <PanelGroup title="Srovnávací nemovitosti" count={records.length}>
+        {base && <p className={`text-[0.8rem] ${INK3}`}>Odškrtněte srovnání a přepočítáme odhad z ostatních.</p>}
+        {/* A table that scrolls keeps its own box (system.md § Section cards). */}
+        <div className={`min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)] ${SCROLL_HINT}`}>
+          <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
+            <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
+              <tr>{columns.map((c) => <Th key={c.header} size="xs" align={c.align}>{c.header}</Th>)}</tr>
+            </thead>
+            <tbody>
+              {records.map((r, i) => (
+                <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
+                  {columns.map((c) => <td key={c.header} className={cellClass(c, 'px-3 py-2 align-top')}>{c.cell(r, i)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </PanelGroup>
       {opened?.photos && opened.photos.length > 0 && (
         <Suspense fallback={null}>
           {/* The viewer has no caption prop: its under-photo bar says which comparable this is. */}
@@ -375,7 +373,7 @@ function Comparables({ valuation: v, fields, adUrls }: {
               {address(opened) ?? 'Srovnání'} · <span className="font-mono tabular-nums">{czk(opened.price)}</span></span></p>)} />
         </Suspense>
       )}
-    </div>
+    </>
   );
 }
 

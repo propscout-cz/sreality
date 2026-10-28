@@ -17,7 +17,7 @@ import {
   FactsList,
   AmenityChips,
 } from '@/lib/listingFacts';
-import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 
 const DetailMap = lazyChunk(() => import('@/components/listing-detail/DetailMap'));
 const Gallery = lazyChunk(() => import('@/components/listing-detail/Gallery'));
@@ -46,13 +46,15 @@ export function ListingOverview({
         <PropertyIdentity listing={listing} showStatus={showStatus} />
         <LocationMap listing={listing} />
       </div>
-      <DescriptionBlock listing={listing} />
-      <Hairline />
-      <GalleryBlock
-        images={images}
-        isActive={listing.is_active}
-        loading={imagesLoading}
-      />
+      {/* Section cards (operator ruling 2026-10-28): 16 px apart. */}
+      <div className="mt-7 space-y-4">
+        <DescriptionBlock listing={listing} />
+        <GalleryBlock
+          images={images}
+          isActive={listing.is_active}
+          loading={imagesLoading}
+        />
+      </div>
     </>
   );
 }
@@ -270,11 +272,12 @@ export function GalleryBlock({
   label?: string;
   emptyText?: string;
 }) {
-  if (loading && images.length === 0) {
-    return (
-      <div>
-        <SectionLabel>{label}</SectionLabel>
-        <div className="mt-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+  /* A section card (C1–C10): the count only once the photos are known. */
+  const pending = loading && images.length === 0;
+  return (
+    <Panel title={label} count={pending ? null : images.length}>
+      {pending ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
@@ -282,31 +285,14 @@ export function GalleryBlock({
             />
           ))}
         </div>
-      </div>
-    );
-  }
-  if (images.length === 0) {
-    return (
-      <div>
-        <SectionLabel>{label}</SectionLabel>
-        <p className="mt-2 text-sm text-[var(--color-ink-3)]">{emptyText}</p>
-      </div>
-    );
-  }
-  return (
-    <div>
-      <div className="flex items-baseline justify-between">
-        <SectionLabel>{label}</SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {images.length}
-        </p>
-      </div>
-      <div className="mt-3">
+      ) : images.length === 0 ? (
+        <PanelEmpty>{emptyText}</PanelEmpty>
+      ) : (
         <Suspense fallback={null}>
           <Gallery images={images} isActive={isActive} />
         </Suspense>
-      </div>
-    </div>
+      )}
+    </Panel>
   );
 }
 
@@ -320,15 +306,19 @@ function DescriptionBlock({ listing }: { listing: ListingPublic }) {
   return <DescriptionBody text={text} />;
 }
 
+/* The description as a section card. With no text the card stays when the caller
+ * names its empty line (C10, the property page's "Inzerát nemá popis."). */
 export function DescriptionBody({
   text,
   label = 'Description',
-  className = 'mt-7',
+  empty,
+  className,
   clamp = 'line-clamp-4',
   words = ['Show more', 'Show less'],
 }: {
   text: string;
   label?: string;
+  empty?: string;
   className?: string;
   /* The collapsed height, as a Tailwind line-clamp class. */
   clamp?: string;
@@ -345,27 +335,32 @@ export function DescriptionBody({
   }, [text, clamp]);
 
   return (
-    <div className={className}>
-      <SectionLabel>{label}</SectionLabel>
-      <p
-        ref={ref}
-        className={
-          'mt-3 text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap ' +
-          (expanded ? '' : clamp)
-        }
-      >
-        {text}
-      </p>
-      {(overflows || expanded) && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-        >
-          {expanded ? words[1] : words[0]}
-        </button>
+    <Panel title={label} className={className}>
+      {text ? (
+        <div>
+          <p
+            ref={ref}
+            className={
+              'text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap ' +
+              (expanded ? '' : clamp)
+            }
+          >
+            {text}
+          </p>
+          {(overflows || expanded) && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
+            >
+              {expanded ? words[1] : words[0]}
+            </button>
+          )}
+        </div>
+      ) : (
+        <PanelEmpty>{empty}</PanelEmpty>
       )}
-    </div>
+    </Panel>
   );
 }
 

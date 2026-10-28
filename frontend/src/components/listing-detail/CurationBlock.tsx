@@ -69,7 +69,7 @@ import ErrorBanner from '@/components/ErrorBanner';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 import ArtifactLinkRow from './ArtifactLinkRow';
 import { ViewingFields, ViewingHead, ViewingToggle } from './NoteViewing';
 import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/attachments';
@@ -92,7 +92,7 @@ export default function CurationBlock({
   listing_id: number;
 }) {
   return (
-    <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5">
+    <div className="mt-6">
       <NotesRow
         property_id={property_id}
         listing_id={listing_id}
@@ -103,8 +103,8 @@ export default function CurationBlock({
 }
 
 /* The phone property page's tags + notes (#1767): the same rows, the notes
- * composer always open. Collections sit in the page's curation row there (the
- * collection sheet), so they are not repeated. */
+ * composer always open, each its own section card. Collections sit in the page's
+ * curation row there (the collection sheet), so they are not repeated. */
 export function PhoneTagsAndNotes({
   property_id,
   listing_id,
@@ -113,7 +113,7 @@ export function PhoneTagsAndNotes({
   listing_id: number;
 }) {
   return (
-    <div className="space-y-7">
+    <div className="space-y-4">
       <TagsRow property_id={property_id} label="Štítky" />
       <ArtifactLinkRow property_id={property_id} />
       <NotesRow property_id={property_id} listing_id={listing_id} alwaysOpen />
@@ -137,24 +137,20 @@ function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?:
 
   if (readFailed(membershipQ)) {
     return (
-      <div>
-        <SectionLabel>{label}</SectionLabel>
+      <Panel title={label}>
         <ErrorBanner
           title="Štítky"
           message="se nepodařilo načíst."
           onRetry={() => void membershipQ.refetch()}
         />
-      </div>
+      </Panel>
     );
   }
 
   return (
-    <div>
-      <SectionLabel>{label}</SectionLabel>
-      <div className="mt-3">
-        <TagAssignList property_id={property_id} memberIds={memberIds} size="block" />
-      </div>
-    </div>
+    <Panel title={label}>
+      <TagAssignList property_id={property_id} memberIds={memberIds} size="block" />
+    </Panel>
   );
 }
 
@@ -307,192 +303,195 @@ export function NotesRow({
   const ordered = useMemo(() => sectionOrder(notes), [notes]);
   const shown = showAll ? ordered : ordered.slice(0, NOTES_SHOWN);
 
+  /* A section card (C1–C10): the title and a bare count ("—" when the read failed, never a 0
+   * it does not know), the viewing and the desktop's artifact link as its actions (C6). The
+   * wrapper takes a dropped file anywhere on the card. */
   return (
-    <section aria-labelledby={notesLabelId} className="relative" {...composerDrop.handlers}>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h2 className="flex items-baseline gap-2 font-sans text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
-          <span id={notesLabelId}>{label}</span>
-          <span className="font-mono tracking-normal tabular-nums text-[var(--color-ink-3)]">
-            {failed ? '(—)' : `(${notes.length})`}
-          </span>
-        </h2>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {/* The desktop composer is one line until used: the viewing is one click from the heading. */}
-          {!alwaysOpen && slot == null && (
-            <button
-              type="button"
-              onClick={() => {
-                setSlot(defaultSlot());
-                setOpened(true);
-              }}
-              className={QUIET}
-            >
-              <CalendarIcon className="h-3.5 w-3.5" />
-              <span>Naplánovat prohlídku</span>
-            </button>
-          )}
-          {aside}
-        </div>
-      </div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!canSave) return;
-          // A files-only note still needs a body (1-4000 chars); its file names say what it holds.
-          // A viewing's date says what it is: its text may stay empty.
-          const text =
-            trimmed || (slot ? '' : `Přílohy: ${staged.map((f) => f.name).join(', ')}`.slice(0, BODY_MAX));
-          create.mutate({ text, files: staged, viewing_at: slot ? slotInstant(slot) : null });
-        }}
-        onFocus={() => setOpened(true)}
-        className={[
-          'mt-3 rounded-[var(--radius-md)] border bg-[var(--color-paper-3)] transition-colors',
-          expanded ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule-strong)] hover:border-[var(--color-copper)]/50',
-        ].join(' ')}
+    <div className="relative" {...composerDrop.handlers}>
+      <Panel
+        title={<span id={notesLabelId}>{label}</span>}
+        count={failed ? '—' : notesQ.isSuccess ? notes.length : null}
+        accessory={
+          !alwaysOpen && slot == null ? (
+            <>
+              {/* The desktop composer is one line until used: the viewing is one click from the heading. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSlot(defaultSlot());
+                  setOpened(true);
+                }}
+                className={QUIET}
+              >
+                <CalendarIcon className="h-3.5 w-3.5" />
+                <span>Naplánovat prohlídku</span>
+              </button>
+              {aside}
+            </>
+          ) : (
+            aside
+          )
+        }
       >
-        {slot && (
-          <div className="border-b border-[var(--color-rule-soft)] px-3.5 py-2.5">
-            <ViewingFields slot={slot} onChange={setSlot} disabled={create.isPending} />
-          </div>
-        )}
-        <textarea
-          aria-labelledby={notesLabelId}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onPaste={(e) => {
-            const files = Array.from(e.clipboardData.files);
-            if (files.length === 0) return;
+        <form
+          onSubmit={(e) => {
             e.preventDefault();
-            stage(files);
+            if (!canSave) return;
+            // A files-only note still needs a body (1-4000 chars); its file names say what it holds.
+            // A viewing's date says what it is: its text may stay empty.
+            const text =
+              trimmed || (slot ? '' : `Přílohy: ${staged.map((f) => f.name).join(', ')}`.slice(0, BODY_MAX));
+            create.mutate({ text, files: staged, viewing_at: slot ? slotInstant(slot) : null });
           }}
-          placeholder={
-            slot
-              ? 'Co na prohlídce ověřit, kontakt na makléře… (nepovinné)'
-              : 'Napište poznámku… soubory sem přetáhněte nebo vložte'
-          }
-          rows={expanded ? 3 : 1}
-          maxLength={BODY_MAX}
-          className="block w-full resize-none bg-transparent px-3.5 py-2.5 text-sm leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-3)]"
-        />
-        {expanded && (
-          <div className="border-t border-[var(--color-rule-soft)] px-2 py-2">
-            <div className="px-1.5">
-              <StagedFiles
-                files={staged}
-                onRemove={(file) => setStaged((prev) => prev.filter((f) => f !== file))}
-                disabled={create.isPending}
-              />
+          onFocus={() => setOpened(true)}
+          className={[
+            'rounded-[var(--radius-md)] border bg-[var(--color-paper-3)] transition-colors',
+            expanded ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule-strong)] hover:border-[var(--color-copper)]/50',
+          ].join(' ')}
+        >
+          {slot && (
+            <div className="border-b border-[var(--color-rule-soft)] px-3.5 py-2.5">
+              <ViewingFields slot={slot} onChange={setSlot} disabled={create.isPending} />
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1">
-                <AttachButton
-                  onFiles={stage}
-                  label="Přiložit soubory"
-                  text="Přiložit"
-                  showText
-                  disabled={create.isPending || staged.length >= NOTE_ATTACHMENT_MAX_FILES}
-                />
-                <ViewingToggle slot={slot} onChange={setSlot} disabled={create.isPending} className={QUIET} />
-                {canShare && (
-                  <label className="flex cursor-pointer select-none items-center gap-2 px-2 text-[0.8rem] text-[var(--color-ink-2)]">
-                    <input
-                      type="checkbox"
-                      checked={shareNew}
-                      onChange={(e) => setShareNew(e.target.checked)}
-                      disabled={create.isPending}
-                      className="accent-[var(--color-copper)]"
-                    />
-                    <span>{WORDS.shareWith(audience.join(', '))}</span>
-                  </label>
-                )}
-                {audienceFailed && (
-                  <ReadFailedMark what="Sdílení" variant="header" onRetry={() => void membership.query.refetch()} />
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {body.length > BODY_MAX - 400 && (
-                  <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
-                    {body.length} / {BODY_MAX}
-                  </span>
-                )}
-                {!alwaysOpen && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBody('');
-                      setSlot(null);
-                      setStaged([]);
-                      setShareNew(false);
-                      setError(null);
-                      setOpened(false);
-                    }}
-                    disabled={create.isPending}
-                    className={QUIET}
-                  >
-                    Zrušit
-                  </button>
-                )}
-                <button type="submit" disabled={!canSave} className={PRIMARY}>
-                  {create.isPending
-                    ? progress
-                      ? `Nahrávám ${progress.done + 1} / ${progress.total}…`
-                      : 'Ukládám…'
-                    : slot
-                      ? 'Uložit prohlídku'
-                      : 'Uložit poznámku'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </form>
-      {error && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
-      <FileProblems problems={problems} onDismiss={() => setProblems([])} dismissLabel="Zavřít" />
-      {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
-
-      {failed ? (
-        <div className="mt-3">
-          <ErrorBanner title="Poznámky" message="se nepodařilo načíst." onRetry={() => void notesQ.refetch()} />
-        </div>
-      ) : notesQ.isLoading ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">Načítám…</p>
-      ) : notes.length === 0 ? null : (
-        <>
-          <ul className="mt-3 space-y-2">
-            {shown.map((n) => (
-              <li key={n.id}>
-                <NoteRow
-                  property_id={property_id}
-                  note={n}
-                  audience={audience}
-                  onSave={(patch) =>
-                    updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(refreshNotes)
-                  }
-                  onToggleShared={() =>
-                    updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
-                      refreshNotes,
-                    )
-                  }
-                  onDelete={() =>
-                    deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
-                      refreshNotes();
-                      refreshNoteCounts();
-                    })
-                  }
-                  onFilesChanged={refreshNotes}
-                />
-              </li>
-            ))}
-          </ul>
-          {notes.length > NOTES_SHOWN && (
-            <button type="button" onClick={() => setShowAll((v) => !v)} className={`${QUIET} mt-1`}>
-              {showAll ? 'Zobrazit méně' : `Zobrazit všechny poznámky (${notes.length})`}
-            </button>
           )}
-        </>
-      )}
-    </section>
+          <textarea
+            aria-labelledby={notesLabelId}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (files.length === 0) return;
+              e.preventDefault();
+              stage(files);
+            }}
+            placeholder={
+              slot
+                ? 'Co na prohlídce ověřit, kontakt na makléře… (nepovinné)'
+                : 'Napište poznámku… soubory sem přetáhněte nebo vložte'
+            }
+            rows={expanded ? 3 : 1}
+            maxLength={BODY_MAX}
+            className="block w-full resize-none bg-transparent px-3.5 py-2.5 text-sm leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-3)]"
+          />
+          {expanded && (
+            <div className="border-t border-[var(--color-rule-soft)] px-2 py-2">
+              <div className="px-1.5">
+                <StagedFiles
+                  files={staged}
+                  onRemove={(file) => setStaged((prev) => prev.filter((f) => f !== file))}
+                  disabled={create.isPending}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1">
+                  <AttachButton
+                    onFiles={stage}
+                    label="Přiložit soubory"
+                    text="Přiložit"
+                    showText
+                    disabled={create.isPending || staged.length >= NOTE_ATTACHMENT_MAX_FILES}
+                  />
+                  <ViewingToggle slot={slot} onChange={setSlot} disabled={create.isPending} className={QUIET} />
+                  {canShare && (
+                    <label className="flex cursor-pointer select-none items-center gap-2 px-2 text-[0.8rem] text-[var(--color-ink-2)]">
+                      <input
+                        type="checkbox"
+                        checked={shareNew}
+                        onChange={(e) => setShareNew(e.target.checked)}
+                        disabled={create.isPending}
+                        className="accent-[var(--color-copper)]"
+                      />
+                      <span>{WORDS.shareWith(audience.join(', '))}</span>
+                    </label>
+                  )}
+                  {audienceFailed && (
+                    <ReadFailedMark what="Sdílení" variant="header" onRetry={() => void membership.query.refetch()} />
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {body.length > BODY_MAX - 400 && (
+                    <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
+                      {body.length} / {BODY_MAX}
+                    </span>
+                  )}
+                  {!alwaysOpen && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBody('');
+                        setSlot(null);
+                        setStaged([]);
+                        setShareNew(false);
+                        setError(null);
+                        setOpened(false);
+                      }}
+                      disabled={create.isPending}
+                      className={QUIET}
+                    >
+                      Zrušit
+                    </button>
+                  )}
+                  <button type="submit" disabled={!canSave} className={PRIMARY}>
+                    {create.isPending
+                      ? progress
+                        ? `Nahrávám ${progress.done + 1} / ${progress.total}…`
+                        : 'Ukládám…'
+                      : slot
+                        ? 'Uložit prohlídku'
+                        : 'Uložit poznámku'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </form>
+        {error && <p className="text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
+        <FileProblems problems={problems} onDismiss={() => setProblems([])} dismissLabel="Zavřít" />
+
+        {failed ? (
+          <div>
+            <ErrorBanner title="Poznámky" message="se nepodařilo načíst." onRetry={() => void notesQ.refetch()} />
+          </div>
+        ) : notesQ.isLoading ? (
+          <p className="text-sm text-[var(--color-ink-3)]">Načítám…</p>
+        ) : notes.length === 0 ? null : (
+          <>
+            <ul className="space-y-2">
+              {shown.map((n) => (
+                <li key={n.id}>
+                  <NoteRow
+                    property_id={property_id}
+                    note={n}
+                    audience={audience}
+                    onSave={(patch) =>
+                      updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(refreshNotes)
+                    }
+                    onToggleShared={() =>
+                      updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
+                        refreshNotes,
+                      )
+                    }
+                    onDelete={() =>
+                      deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
+                        refreshNotes();
+                        refreshNoteCounts();
+                      })
+                    }
+                    onFilesChanged={refreshNotes}
+                  />
+                </li>
+              ))}
+            </ul>
+            {notes.length > NOTES_SHOWN && (
+              <button type="button" onClick={() => setShowAll((v) => !v)} className={QUIET}>
+                {showAll ? 'Zobrazit méně' : `Zobrazit všechny poznámky (${notes.length})`}
+              </button>
+            )}
+          </>
+        )}
+      </Panel>
+      {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
+    </div>
   );
 }
 

@@ -130,9 +130,15 @@ describe('<MarketTile>', () => {
       ],
       total: 2,
     });
-    renderTile();
+    const { container } = renderTile();
     expect(await screen.findByRole('link', { name: 'Otevřít Statistiky →' })).toHaveAttribute('href', '/browse?tab=stats');
     expect(fetchStatsPivot).not.toHaveBeenCalled();
+    /* A section card (C1–C10): the region is named by its title; the hint is one muted line and its
+       action (C10), never a dashed box inside the card (C9); the explore button is the title bar's. */
+    const card = screen.getByRole('region', { name: 'Okolí dashboard' });
+    const bar = within(card).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+    expect(within(bar).getByRole('button', { name: /Prozkoumat okolí/ })).toBeInTheDocument();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 
   it('opens the explore window over the same neighbourhood, lens and dashboard', async () => {

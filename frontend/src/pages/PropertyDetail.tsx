@@ -13,7 +13,8 @@
  * tabs (operator ruling 2026-10-22, design A — components/listing-detail/
  * PropertyTabs): Přehled answers each question in one card, the other tabs hold
  * the full sections. The open tab is `?tab=`; older deep links keep landing on
- * their section's tab.
+ * their section's tab. Every section is a section card (components/Panel,
+ * operator ruling 2026-10-28), 16 px apart, a lone one too.
  *
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
@@ -53,6 +54,7 @@ import type {
 } from '@/lib/types';
 import { lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
 import Skeleton from '@/components/Skeleton';
+import Panel from '@/components/Panel';
 import {
   GalleryBlock,
   LocationMap,
@@ -396,7 +398,7 @@ export default function PropertyDetail() {
           ),
           fotky: (
             /* My own photos (Photos W2), then the canonical advert's. */
-            <div className="space-y-10">
+            <div className="space-y-4">
               <Suspense fallback={<Skeleton height={120} />}>
                 <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
                   <PropertyPhotos property_id={propertyId} lang="cs" />
@@ -417,7 +419,7 @@ export default function PropertyDetail() {
                the only REALIZED prices on the page — a sale is never linked to a
                property, rule #15); then our estimation chapter (MF reference +
                our runs), never mixed with Valuo's (rule 12). */
-            <div className="space-y-12">
+            <div className="space-y-4">
               <PriceHistoryBlock
                 property={property}
                 adverts={chartAdverts}
@@ -429,25 +431,18 @@ export default function PropertyDetail() {
                   property={property}
                   listingIds={advertIds}
                   adUrls={sources.map((s) => s.source_url)}
-                  bare
                 />
               </Suspense>
               <Suspense fallback={<Skeleton height={160} />}>
-                {property.lat != null && property.lng != null ? (
-                  /* Keyed on the property: the block's radius and category seed
-                     are mount-time state. */
-                  <SoldCompsBlock
-                    key={propertyId}
-                    categoryMain={property.category_main}
-                    lat={property.lat}
-                    lng={property.lng}
-                    propertyId={propertyId}
-                  />
-                ) : (
-                  <p className="text-sm text-[var(--color-ink-3)]">
-                    Bez souřadnic nelze hledat prodeje v okolí.
-                  </p>
-                )}
+                {/* Keyed on the property: the block's radius and category seed
+                    are mount-time state. Without coordinates it says so. */}
+                <SoldCompsBlock
+                  key={propertyId}
+                  categoryMain={property.category_main}
+                  lat={property.lat}
+                  lng={property.lng}
+                  propertyId={propertyId}
+                />
               </Suspense>
               <Suspense fallback={<Skeleton height={180} />}>
                 <EstimationsBlock
@@ -455,7 +450,6 @@ export default function PropertyDetail() {
                   listingIds={advertIds}
                   prefill={newEstimationPrefill}
                   label="Odhady"
-                  bare
                 />
               </Suspense>
             </div>
@@ -480,16 +474,18 @@ export default function PropertyDetail() {
                 initialLetters={initialLetters}
               />
             ) : sourcesFailed ? (
-              <p className="text-sm text-[var(--color-brick)]">
-                Inzeráty se nepodařilo načíst
-                <button
-                  type="button"
-                  onClick={() => void sourcesQ.refetch()}
-                  className="ml-3 font-medium underline underline-offset-2 hover:no-underline"
-                >
-                  Zkusit znovu
-                </button>
-              </p>
+              <Panel title="Inzeráty">
+                <p className="text-sm text-[var(--color-brick)]">
+                  Inzeráty se nepodařilo načíst
+                  <button
+                    type="button"
+                    onClick={() => void sourcesQ.refetch()}
+                    className="ml-3 font-medium underline underline-offset-2 hover:no-underline"
+                  >
+                    Zkusit znovu
+                  </button>
+                </p>
+              </Panel>
             ) : (
               <Skeleton height={120} />
             ),

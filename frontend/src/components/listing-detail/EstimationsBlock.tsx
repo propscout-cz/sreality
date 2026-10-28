@@ -31,15 +31,17 @@ import {
 } from '@/components/NewEstimationModal';
 import type { PropertyPublic } from '@/lib/queries';
 import type { EstimationRun } from '@/lib/types';
-import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import type { Column } from '@/components/table';
+
+/* The anchor every estimation link lands on (`#estimations`). */
+const SECTION_ID = 'estimations';
 
 export default function EstimationsBlock({
   listing,
   listingIds,
   prefill,
   readOnly = false,
-  bare = false,
   label = 'Estimates',
 }: {
   /* The property as its header shows it, MF included: one result per
@@ -55,8 +57,6 @@ export default function EstimationsBlock({
   /* The phone (#1760 Q10): the runs are read, never started — no "Run an
    * estimation", no re-run; the detail popup still opens. */
   readOnly?: boolean;
-  /* No leading hairline: the phone layout separates its sections itself. */
-  bare?: boolean;
   label?: string;
 }) {
   const runsQ = useEstimationRuns(listingIds);
@@ -92,7 +92,6 @@ export default function EstimationsBlock({
 
   // #estimations deep-links (estimations list, /estimation/:id redirects)
   // scroll the section into view once, after the runs arrive.
-  const sectionRef = useRef<HTMLElement | null>(null);
   const scrolledRef = useRef(false);
   const wantsScroll =
     location.hash === '#estimations' || location.hash === '#feedback';
@@ -101,7 +100,7 @@ export default function EstimationsBlock({
     if (runsQ.isLoading) return;
     scrolledRef.current = true;
     const raf = requestAnimationFrame(() => {
-      sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById(SECTION_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     return () => cancelAnimationFrame(raf);
   }, [wantsScroll, runsQ.isLoading]);
@@ -110,68 +109,58 @@ export default function EstimationsBlock({
   // frozen reference rent belongs to that run's own page, not to this card.
   const hasMf = mfShape(listing.mf_reference_rent).kind !== 'none';
 
-  // Nothing to say: no MF result, no runs. The section disappears entirely
-  // (e.g. land parcels) rather than rendering an empty shell.
-  if (!hasMf && runs.length === 0) return null;
-
   const openedViaFeedbackHash =
     location.hash === '#feedback'
     && selected != null
     && runParam != null
     && String(selected.id) === runParam;
 
+  /* A section card (C1–C10). With no run it stays, its count 0, and says so with
+     the way to start one (C10) — the old dashed "no runs" tile is that line. */
   return (
-    <>
-      {!bare && <Hairline />}
-      <section id="estimations" ref={sectionRef} className="scroll-mt-28">
-        <div className="flex items-baseline justify-between">
-          <SectionLabel>{label}</SectionLabel>
-          <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-            {runs.length === 0
-              ? ''
-              : `${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`}
-          </p>
-        </div>
-
-        {/* Two authorities, side by side: the ministry's reference figure
-            and our comparables-based estimate. */}
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+    <Panel
+      id={SECTION_ID}
+      title={label}
+      count={runsQ.isSuccess ? runs.length : null}
+      className="scroll-mt-28!"
+    >
+      {/* Two authorities, side by side: the ministry's reference figure
+          and our comparables-based estimate. */}
+      {(hasMf || selected) && (
+        <div className="grid gap-4 sm:grid-cols-2">
           <MfReferenceCard
             refRent={listing.mf_reference_rent}
             yieldPct={listing.mf_gross_yield_pct}
           />
-          {selected ? (
-            <RunSummaryCard run={selected} />
-          ) : (
-            <NoRunsCard prefill={prefill} loading={runsQ.isLoading} readOnly={readOnly} />
-          )}
+          {selected && <RunSummaryCard run={selected} />}
         </div>
+      )}
+      {!selected && <NoRuns prefill={prefill} loading={runsQ.isLoading} readOnly={readOnly} />}
 
-        {selected && (
-          <div className="mt-7">
-            <RunBody
-              key={selected.id}
-              run={selected}
-              subject={listing}
-              embedded
-              initialDetailOpen={openedViaFeedbackHash}
-              onRerun={
-                readOnly
-                  ? undefined
-                  : (overrides) => rerunMut.mutate({ run: selected, overrides })
-              }
-              rerunPending={rerunMut.isPending}
-              rerunError={rerunMut.error}
-            />
-          </div>
-        )}
+      {selected && (
+        <div className="pt-4">
+          <RunBody
+            key={selected.id}
+            run={selected}
+            subject={listing}
+            embedded
+            initialDetailOpen={openedViaFeedbackHash}
+            onRerun={
+              readOnly
+                ? undefined
+                : (overrides) => rerunMut.mutate({ run: selected, overrides })
+            }
+            rerunPending={rerunMut.isPending}
+            rerunError={rerunMut.error}
+          />
+        </div>
+      )}
 
-        {runs.length > 1 && (
-          <RunHistory title="All runs" rows={runs} columns={RUN_COLUMNS}
-            selectedId={selected?.id ?? null} onPick={selectRun} when="When" viewing="viewing" />
-        )}
-      </section>
-    </>
+      {runs.length > 1 && (
+        <RunHistory title="All runs" rows={runs} columns={RUN_COLUMNS}
+          selectedId={selected?.id ?? null} onPick={selectRun} when="When" viewing="viewing" />
+      )}
+    </Panel>
   );
 }
 
@@ -225,7 +214,7 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
   );
 }
 
-function NoRunsCard({
+function NoRuns({
   prefill,
   loading,
   readOnly,
@@ -235,16 +224,11 @@ function NoRunsCard({
   readOnly: boolean;
 }) {
   const { open } = useNewEstimationModal();
+  if (loading) return <p className="text-sm text-[var(--color-ink-3)]">Loading runs…</p>;
   return (
-    <EstimateCard tone="absent" eyebrow="Náš odhad" className="flex flex-col items-start justify-center gap-2">
-      {loading ? (
-        <p className="text-sm text-[var(--color-ink-3)]">Loading runs…</p>
-      ) : (
-        <>
-          <p className="text-sm text-[var(--color-ink-3)]">
-            No estimation runs for this property yet.
-          </p>
-          {!readOnly && prefill && (
+    <PanelEmpty
+      action={
+        !readOnly && prefill ? (
           <button
             type="button"
             onClick={() => open(prefill)}
@@ -252,10 +236,11 @@ function NoRunsCard({
           >
             Run an estimation →
           </button>
-          )}
-        </>
-      )}
-    </EstimateCard>
+        ) : undefined
+      }
+    >
+      No estimation runs for this property yet.
+    </PanelEmpty>
   );
 }
 
