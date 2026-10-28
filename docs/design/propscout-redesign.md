@@ -286,7 +286,9 @@ screen's language as it is unless the operator rules otherwise.
 column drop in the same PR. As built: the tagger, both writers, the taxonomy anchors, the bake-off render limb
 (`--render-max` is gone; P1b now draws any non-document photo) and every SPA reader are removed; migration 686
 recreates both views without `clip_render_score` and drops the index and the column. It is applied after the
-PR deploys (the deployed tagger and SPA used the column until then), after a backup. The scope as approved:
+PR deploys (the deployed tagger and SPA used the column until then), after a backup. Migration 687 (the
+operator's follow-up, 2026-10-28) drops the never-set `image_tag_annotations.render_flagged` too and recreates
+`image_tag_annotations_public` without it. The scope as approved:
 
 - **Nothing that must stay reads it.** None of autodedup's 20 `DECISION_MODULES` reads the score; its CLIP read
   (`export_sql.py`) takes only `fine_tag`, `logical_tag` and `confidence`. No SQL function, RPC or matview reads it
