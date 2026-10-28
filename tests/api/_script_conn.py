@@ -61,5 +61,5 @@ class ScriptConn:
     def transaction(self) -> ScriptTx:
         return ScriptTx(self)
 
-    def cursor(self) -> ScriptCur:
+    def cursor(self, row_factory: Any = None) -> ScriptCur:
         return ScriptCur(self)
