@@ -557,7 +557,6 @@ function SoldDialog({ row, onClose }: { row: SoldComparable; onClose: () => void
     url,
     tag: null,
     confidence: null,
-    renderScore: null,
   }));
   const gap = askToSoldPct(row);
   const days = daysListed(row);

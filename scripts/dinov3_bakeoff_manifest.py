@@ -7,7 +7,7 @@ and presign-only against R2: it writes nothing to any table, least of all
 
 WHAT IT EMITS. One JSON manifest carrying, for every image it draws, a 7-day
 presigned R2 GET URL (so the pod that consumes it needs NO credentials), the stored
-`phash`, the stored `render_score`, and — per PAIR — the stored-CLIP cosine computed
+`phash`, and — per PAIR — the stored-CLIP cosine computed
 in SQL with pgvector's `<=>`. That last one is the incumbent's arm scored at zero GPU
 cost on byte-identical pairs, which is the only way the comparison is fair.
 
@@ -114,7 +114,7 @@ _IMAGE_ROWCOUNT_SQL = """
 # P1a's scan pool. TABLESAMPLE SYSTEM is block-granular, so it scatters across the
 # whole id range for the price of reading a fraction of the blocks — the same reason
 # toolkit/tag_candidates.py uses it. Three narrow columns only; storage_path and
-# render_score are fetched later for the handful of images that end up in a pair.
+# the CLIP tag are fetched later for the handful of images that end up in a pair.
 _P1A_POOL_SQL = """
     SELECT i.id, i.listing_id, i.phash
     FROM images i TABLESAMPLE SYSTEM (%(pct)s)
@@ -141,17 +141,15 @@ _P1A_COLLISIONS_SQL = """
     LIMIT %(groups)s
 """
 
-# P1b's sample: real photos, not renders and not documents. render_score NULL means
-# "CLIP declined to score it" (drawings/documents), which is why the filter is on the
-# tag rather than on render_score alone.
+# P1b's sample: photos, not documents, by their CLIP tag. Render scoring is gone
+# (operator ruling 2026-10-28), so a render can be drawn here like any photo.
 _P1B_SAMPLE_SQL = """
-    SELECT i.id, i.listing_id, i.phash, i.storage_path, t.render_score, t.logical_tag
+    SELECT i.id, i.listing_id, i.phash, i.storage_path, t.logical_tag
     FROM images i TABLESAMPLE SYSTEM (%(pct)s)
     JOIN image_clip_tags t ON t.image_id = i.id
     WHERE i.storage_path IS NOT NULL
       AND i.listing_id IS NOT NULL
       AND t.logical_tag <> ALL(%(document_tags)s::text[])
-      AND (t.render_score IS NULL OR t.render_score < %(render_max)s)
     LIMIT %(limit)s
 """
 
@@ -195,7 +193,7 @@ _CANARY_SQL = """
 
 _IMAGE_META_SQL = """
     SELECT i.id, i.storage_path, i.phash, i.listing_id, ll.obec_kod AS obec_id,
-           t.render_score, t.logical_tag
+           t.logical_tag
     FROM images i
     LEFT JOIN listings li ON li.id = i.listing_id
     LEFT JOIN listing_location ll ON ll.listing_id = li.id
@@ -455,7 +453,6 @@ def draw_populations(conn: Any, args: argparse.Namespace) -> dict[str, Any]:
     p1b_rows = _fetch(conn, _P1B_SAMPLE_SQL, {
         "pct": p1b_pct, "limit": args.p1b_images,
         "document_tags": CLIP_DOCUMENT_TAGS,
-        "render_max": args.render_max,
     })
     p1b_images = sorted({int(r[0]) for r in p1b_rows})
     LOG.info("P1b: images=%d (pct=%.3f) x %d transforms", len(p1b_images), p1b_pct,
@@ -544,11 +541,10 @@ def build_manifest(conn: Any, args: argparse.Namespace) -> dict[str, Any]:
     meta: dict[int, dict[str, Any]] = {}
     for start in range(0, len(used_ids), 5000):
         for row in _fetch(conn, _IMAGE_META_SQL, {"ids": used_ids[start:start + 5000]}):
-            iid, storage_path, phash, listing_id, obec_id, render_score, logical_tag = row
+            iid, storage_path, phash, listing_id, obec_id, logical_tag = row
             meta[int(iid)] = {
                 "key": storage_path,
                 "phash": int(phash) if phash is not None else None,
-                "render_score": float(render_score) if render_score is not None else None,
                 "listing_id": int(listing_id) if listing_id is not None else None,
                 "obec_id": int(obec_id) if obec_id is not None else None,
                 "clip_tag": logical_tag,
@@ -573,7 +569,7 @@ def build_manifest(conn: Any, args: argparse.Namespace) -> dict[str, Any]:
                 continue
             images[str(iid)] = {
                 "url": r2.presigned_get(m["key"], expires_in=args.expires),
-                "phash": m["phash"], "render_score": m["render_score"],
+                "phash": m["phash"],
                 "listing_id": m["listing_id"], "obec_id": m["obec_id"],
                 "clip_tag": m["clip_tag"],
             }
@@ -663,8 +659,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                     help="Cap on positive label rows read per population family.")
     ap.add_argument("--label-sources", default="human,human_confirmed,machine",
                     help="image_tag_labels.source values that define a population.")
-    ap.add_argument("--render-max", type=float, default=0.95,
-                    help="P1b skips images whose render_score is at/above this.")
     ap.add_argument("--document-tags", default=",".join(DEFAULT_DOCUMENT_TAG_PATTERNS),
                     help="ILIKE patterns selecting P4's document tags.")
     ap.add_argument("--r2-key", default=None,

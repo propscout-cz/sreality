@@ -17,7 +17,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import ImageCarousel from './ImageCarousel';
 
 const frames = (...urls: string[]) =>
-  urls.map((url) => ({ url, tag: null, confidence: null, renderScore: null }));
+  urls.map((url) => ({ url, tag: null, confidence: null }));
 
 describe('<ImageCarousel>', () => {
   it('pages to the next frame after one of them failed to load', () => {
@@ -75,7 +75,7 @@ describe('<ImageCarousel>', () => {
   /* Ruling P02 with its note (2026-10-27): a Browse card's photo draws no room tag;
      every other carousel keeps it, always shown. */
   const tagged = (...urls: string[]) =>
-    urls.map((url) => ({ url, tag: 'kitchen', confidence: 0.9, renderScore: null }));
+    urls.map((url) => ({ url, tag: 'kitchen', confidence: 0.9 }));
 
   it('shows the current frame\'s room tag by default, always on', () => {
     render(<ImageCarousel images={tagged('1.jpg', '2.jpg')} />);

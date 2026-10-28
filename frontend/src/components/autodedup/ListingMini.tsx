@@ -136,11 +136,10 @@ export function MemberGallery({
       <ImageCarousel
         images={frames.map((img) => ({
           url: imageSrc(img),
-          /* No CLIP tag on this surface: both decorations are explicitly null
-           * rather than faked into a badge that means nothing. */
+          /* No CLIP tag on this surface: it is explicitly null rather than
+           * faked into a badge that means nothing. */
           tag: null,
           confidence: null,
-          renderScore: null,
         }))}
         aspect="aspect-[4/3]"
         eager={eager}

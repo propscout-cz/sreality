@@ -121,7 +121,6 @@ const photo = (id: number): ImagePublic =>
     storage_path: null,
     clip_fine_tag: null,
     clip_confidence: null,
-    clip_render_score: null,
   }) as unknown as ImagePublic;
 
 /* The carousel's "n / total" pill, matched on the LEAF node: every ancestor's
@@ -1154,18 +1153,18 @@ describe('<ListingCards> the title drops what the filter says', () => {
   });
 });
 
-/* Rulings P02 and P03 (2026-10-27): the photo shows just the counter. P02's note,
-   "remove it from the card entirely": no room tag on the card, not on hover or focus. */
+/* Ruling P02 (2026-10-27): the photo shows just the counter. Its note, "remove it
+   from the card entirely": no room tag on the card, not on hover or focus. */
 describe('<ListingCards> the photo overlays', () => {
-  const tagged = (renderScore: number) =>
+  const tagged = () =>
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
       new Map([[111, [1, 2].map((id) => ({
-        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9, clip_render_score: renderScore,
+        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9,
       }) as unknown as ImagePublic)]]),
     );
 
   it('draws no room tag on the photo, hovered or focused', async () => {
-    tagged(0.1);
+    tagged();
     renderGrid();
     await screen.findByText(counterIs('1 / 2'));
     expect(screen.queryByText('kuchyně')).toBeNull();
@@ -1176,13 +1175,6 @@ describe('<ListingCards> the photo overlays', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next photo' }));
     expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
     expect(screen.queryByText('kuchyně')).toBeNull();
-  });
-
-  it('draws no render verdict, whatever the score', async () => {
-    tagged(0.9);
-    renderGrid();
-    await screen.findByText(counterIs('1 / 2'));
-    expect(screen.queryByText(/^Render \d+$|^Foto \d+$/)).toBeNull();
   });
 });
 

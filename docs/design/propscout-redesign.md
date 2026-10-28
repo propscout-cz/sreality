@@ -39,8 +39,8 @@ fetch these links with curl or WebFetch.
 4. **Agenda 1, Browse card** (P01, P02, P03, P05 and the P06 chip restyle): built on branch
    `feature/browse-card-hierarchy` (PR #2127).
 5. **Agendas 2–8** (every other confirmed ruling): built on branch `feature/redesign-rulings`, one commit per
-   agenda; the as-built notes are under "What to build next". Not built: the render-scoring removal and the
-   unruled additions (both below).
+   agenda; the as-built notes are under "What to build next". Not built: the unruled additions (below). The
+   render-scoring removal is built (branch `feature/remove-render-scoring`, below).
 6. **Tab strips** (operator ruling 2026-10-27: option A, a rule across the column): one `components/Tabs.tsx`,
    built on branch `feature/shared-controls`; the binding pattern is `.interface-design/system.md` § Tab strip.
 
@@ -191,8 +191,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
 1. **Browse card** — **built** (branch `feature/browse-card-hierarchy`). As built: P05 drops the prefix only
    on a card whose own type and deal are the ones the filter pins (`cohortKind` from `BrowseExperience`); a
    subtype ("Rodinný dům") stays, since the filter doesn't name it (`lib/filters` `cohortKindOf`). P03 hides the verdict on the Browse card
-   only (`ImageCarousel` `renderBadge={false}`); the gallery, lightbox and the other carousels keep it until
-   the render-scoring removal. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
+   only (`ImageCarousel` `renderBadge={false}`); the render-scoring removal (below) then took the verdict off
+   every photo. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
    clicked photo arrow doesn't keep the tag shown).
 2. **Browse page, map and stats** — **built** (branch `feature/redesign-rulings`). P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
@@ -282,7 +282,11 @@ screen's language as it is unless the operator rules otherwise.
 
 ## Render scoring: remove end to end (operator note on P03)
 
-Not started: **scoped 2026-10-28, awaiting the operator's go** on the list below before anything is built.
+**Built** (branch `feature/remove-render-scoring`): the operator approved the scope below on 2026-10-28, with the
+column drop in the same PR. As built: the tagger, both writers, the taxonomy anchors, the bake-off render limb
+(`--render-max` is gone; P1b now draws any non-document photo) and every SPA reader are removed; migration 686
+recreates both views without `clip_render_score` and drops the index and the column. It is applied after the
+PR deploys (the deployed tagger and SPA used the column until then), after a backup. The scope as approved:
 
 - **Nothing that must stay reads it.** None of autodedup's 20 `DECISION_MODULES` reads the score; its CLIP read
   (`export_sql.py`) takes only `fine_tag`, `logical_tag` and `confidence`. No SQL function, RPC or matview reads it
@@ -327,5 +331,5 @@ directly). Keep `lastChange.note` in the index current.
 ## Suggested opening for the next session
 
 > Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda and the section
-> cards are built; what is left is the render-scoring scope (send the operator the list first) and the open
-> questions under agendas 3 and 7.
+> cards are built, and so is the render-scoring removal; what is left is the open questions under agendas 3
+> and 7.

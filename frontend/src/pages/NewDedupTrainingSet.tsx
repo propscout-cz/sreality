@@ -324,8 +324,8 @@ export default function NewDedupTrainingSet() {
    * same one the listing gallery and the labeling grids open, so arrow-key
    * walking, Escape layering, the focus trap and the scroll lock behave here
    * exactly as they do there. It takes ImagePublic rows; a training row already
-   * carries the only two fields imageSrc reads, and the badges the viewer draws
-   * self-guard on null, so the row is widened rather than re-fetched — at
+   * carries the only two fields imageSrc reads, and the tag badge the viewer
+   * draws self-guards on null, so the row is widened rather than re-fetched — at
    * 10,000 tiles a page, fetching a full image row per tile would be the
    * expensive way to show the same photo. `sreality_id` and `sequence` are not
    * on a training row and nothing here reads them. */

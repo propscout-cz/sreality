@@ -530,7 +530,6 @@ function Card({
         hoverZoom
         fadeChevrons
         roomTag={false}
-        renderBadge={false}
         tabbableChevrons={false}
       >
         {merge && (
