@@ -42,6 +42,14 @@ toolkit work.
   device (`lib/theme.ts`). A scheme only changes token VALUES (`globals.css`); new tokens `--color-chrome*`
   (the top bar: a dark band in Měď), `--color-on-copper` / `--color-on-brick` (text on an accent or danger
   fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
+- **Done, one appearance** (2026-10-28): the palette moved to `styles/tokens.css` (`:root` + `:host` rules, ready
+  for the extension); one store in `lib/theme.ts` behind all three pickers, "system" resolved to a concrete
+  `data-theme` (the four `@media` copies deleted), painted from `index.html` before CSS, kept in the user's
+  Supabase Auth profile (`user_metadata.appearance`) with the device cache. One rule: the newest explicit
+  pick wins, per user (a default never overwrites a profile). Another device's pick lands at the next page
+  load or token refresh. **Next:** `index.html`'s
+  `color-scheme` meta and its theme-color pair still follow the OS until CSS loads (the pre-paint script knows
+  the side and could set both).
 - **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
   revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
 - **Done, agenda 1 Browse card** (2026-10-27): the portals left the photo for a quiet line at the top of
@@ -1027,7 +1035,7 @@ indentation across 136 files and was reverted before commit. Unconditional lint
 ban on the literal; a source-level test guards the global rule the 63 now rely
 on. **Operator ask, not smuggled:** `--color-focus` composites to 1.86:1 in
 light mode (the base palette) — under WCAG 2.4.11's 3:1; dark passes at 3.16:1.
-Raising it is a `globals.css` `@theme` change reserved for you; no conformance
+Raising it is a `styles/tokens.css` change reserved for you; no conformance
 claim is made until it lands.
 
 **W4 — focus has a destination (merged).** `<main id="main" tabIndex={-1}>`

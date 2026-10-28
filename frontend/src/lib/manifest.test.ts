@@ -12,7 +12,7 @@ import { ROUTES } from './routes';
 // vitest runs from frontend/; import.meta.url is not a file: URL under vite.
 const publicDir = join(process.cwd(), 'public');
 const manifest = JSON.parse(readFileSync(join(publicDir, 'manifest.webmanifest'), 'utf8'));
-const css = readFileSync(join(process.cwd(), 'src/styles/globals.css'), 'utf8');
+const tokens = readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8');
 
 describe('manifest.webmanifest', () => {
   it('names the app from lib/brand.ts', () => {
@@ -34,7 +34,7 @@ describe('manifest.webmanifest', () => {
   });
 
   it('paints the paper token', () => {
-    const paper = css.match(/@theme\s*\{[^}]*--color-paper:\s*(#[0-9a-f]{6})/i)?.[1];
+    const paper = tokens.match(/:root, :host\s*\{[^}]*--color-paper:\s*(#[0-9a-f]{6})/i)?.[1];
     expect(manifest.theme_color).toBe(paper);
     expect(manifest.background_color).toBe(paper);
   });

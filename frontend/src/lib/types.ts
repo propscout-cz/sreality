@@ -518,7 +518,7 @@ export interface EstimationListResponse {
 /* -------------------------------------------------------------------------- */
 
 /* Mirrors the 024 CHECK constraint + api/schemas.TagColor. Adding a new
- * colour requires a migration + a globals.css token + a bump here. */
+ * colour requires a migration + a tokens.css token + a bump here. */
 export type TagColor =
   | 'copper' | 'sage' | 'brick' | 'ochre'
   | 'slate'  | 'plum' | 'teal'  | 'sand';

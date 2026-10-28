@@ -44,7 +44,7 @@ from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, label_cs, type_label_
 _FONT_DIR = Path(__file__).parent / "fonts"
 SANS, SANS_BOLD, DISPLAY = "Inter", "Inter-SemiBold", "Fraunces-SemiBold"
 
-# The SPA's light-theme tokens (frontend/src/styles/globals.css); RULE is its 8% ink
+# The SPA's light-theme tokens (frontend/src/styles/tokens.css); RULE is its 8% ink
 # hairline flattened onto white.
 INK = colors.HexColor("#1a1c22")
 INK_2 = colors.HexColor("#4a4d57")

@@ -1,7 +1,7 @@
 # Interface design system — PropScout.cz SPA
 
 Saved 2026-10-19 after the Browse › Stats dashboard build (`docs/design/stats-dashboard.md`). The tokens are
-`frontend/src/styles/globals.css` `@theme`; nothing here adds one (operator OK is needed for a new token, CLAUDE.md).
+`frontend/src/styles/tokens.css`; nothing here adds one (operator OK is needed for a new token, CLAUDE.md).
 
 ## Direction and feel
 A civic-archive ledger for a property analyst: dense, quiet, numbers first. Paper surfaces, ink text,
@@ -12,10 +12,11 @@ disabled / placeholder text only, never for data (contrast).
 
 ## Colour schemes (2026-10-26, operator ask)
 Three schemes, each with a light and a dark side; the user picks both (account menu, phone account sheet,
-Settings → Appearance; stored per device in `lib/theme.ts`). A scheme changes token VALUES only: every token
+Settings → Appearance; one store, `lib/theme.ts`, kept in the user's profile with a device cache; System
+resolves to a concrete `data-theme`). A scheme changes token VALUES only: every token
 keeps its name, so `--color-copper` means "the accent" in all three, and component code never asks which
 scheme is on.
-- **Měď** (default, in `@theme`): laid-paper canvas, verdigris accent `#1f6b5c`, and a dark ink top bar.
+- **Měď** (default, the `:root, :host` block): laid-paper canvas, verdigris accent `#1f6b5c`, and a dark ink top bar.
 - **Kobalt** (`data-scheme="kobalt"`): cool porcelain canvas, cobalt accent `#1f45b5`, light top bar.
 - **Grafit** (`data-scheme="grafit"`): monochrome — the accent is ink (`#18181b`), so colour on screen only
   ever means something (a live price, a drop, an error, a tag, a pin); light top bar.

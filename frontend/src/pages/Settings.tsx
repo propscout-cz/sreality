@@ -52,9 +52,9 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
-import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
 import SchemeSwatch from '@/components/SchemeSwatch';
-import { PickButton, SegmentedBar, Switch, Field, type SegmentOption } from '@/components/controls';
+import { PickButton, SegmentedBar, Switch, Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import TiersSection from '@/components/TiersSection';
 import { useWorkflowDocs, type WorkflowDoc } from '@/lib/workflowDocs';
@@ -192,11 +192,7 @@ export default function Settings() {
 /* Appearance                                                            */
 /* -------------------------------------------------------------------- */
 
-const THEME_OPTS: ReadonlyArray<SegmentOption<ThemeMode>> = [
-  { value: 'light',  label: 'Light',  glyph: <ThemeGlyph kind="sun" />    },
-  { value: 'dark',   label: 'Dark',   glyph: <ThemeGlyph kind="moon" />   },
-  { value: 'system', label: 'System', glyph: <ThemeGlyph kind="system" /> },
-];
+const THEME_OPTS = THEME_MODES.map((m) => ({ ...m, glyph: <ThemeGlyph kind={m.value} /> }));
 
 export function ThemeToggle() {
   const [mode, setMode] = useTheme();
@@ -219,14 +215,14 @@ export function ThemeToggle() {
       <SegmentedBar hug label="Light or dark" options={THEME_OPTS} value={mode} onChange={setMode} />
       <p className="text-xs text-[var(--color-ink-3)] mt-2.5">
         Měď and Light are the default. System follows your OS preference. Every user
-        picks both in the account menu too; the choice stays on this device.
+        picks both in the account menu too; the choice follows your account.
       </p>
     </div>
   );
 }
 
-function ThemeGlyph({ kind }: { kind: 'sun' | 'moon' | 'system' }) {
-  if (kind === 'sun') {
+function ThemeGlyph({ kind }: { kind: ThemeMode }) {
+  if (kind === 'light') {
     return (
       <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
         <circle cx="8" cy="8" r="2.6" />
@@ -234,7 +230,7 @@ function ThemeGlyph({ kind }: { kind: 'sun' | 'moon' | 'system' }) {
       </svg>
     );
   }
-  if (kind === 'moon') {
+  if (kind === 'dark') {
     return (
       <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
         <path d="M13.2 9.6A5.2 5.2 0 0 1 6.4 2.8a5.4 5.4 0 1 0 6.8 6.8Z" />
