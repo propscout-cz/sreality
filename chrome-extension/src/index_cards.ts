@@ -14,8 +14,9 @@
  *   eye      — hides the property / restores it, one click either way
  *              (migration 536). Absent while the property is a LIVE deal.
  *
- * Operator state is PROPERTY-grain: a write repaints every card of that
- * property on the page, and the panel when it shows the same property.
+ * Operator state is PROPERTY-grain and lives in the one store (store.ts): a
+ * write repaints every card of that property on the page, and the panel when it
+ * shows the same property — both draw from the store, neither syncs the other.
  *
  * A card in the pipeline, a collection or tagged also gets that drawn over its
  * photo (index_photo_mark.ts): the photo toned in the stage colour under the
@@ -29,11 +30,12 @@
  * on the card. */
 
 import tokens from './tokens.css?inline';
+import { COLLECTIONS_URL, friendlyDetail } from './config';
+import { h, keepFocus } from './dom';
 import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
-  collectionsKey,
   eyeOffIconSvg,
   funnelIconSvg,
   knowsAll,
@@ -43,21 +45,9 @@ import {
   stageBadge,
 } from './glyphs';
 import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
+import { isLiveDeal, type Curation, type ListKind, type Pending, type Store } from './store';
 import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
-import type {
-  ApiMessage,
-  ApiResult,
-  CollectionWriteResult,
-  DismissalWriteResult,
-  ExtCollection,
-  ExtTag,
-  PipelineCardResult,
-  PipelineMembership,
-  PipelineStage,
-  PortalListing,
-} from './types';
-
-type Caller = <T>(m: ApiMessage) => Promise<ApiResult<T>>;
+import type { PortalListing } from './types';
 
 /* Holds the listing id the card was mounted FOR, not a boolean: SPA routers
  * recycle card DOM nodes between result sets, so a node can still carry the
@@ -73,7 +63,6 @@ const HOST_CLASS = '__mf_card_host';
 const MENU_HOST_ID = '__mf_menu_host__';
 const PAGE_STYLE_ID = '__mf_card_style__';
 const STAGE_MENU_LABEL = 'Fáze v pipeline';
-const LIST_RETRY_MS = 1500;
 
 export interface BadgeView {
   kind: 'yield' | 'est' | 'cta';
@@ -82,23 +71,18 @@ export interface BadgeView {
 }
 
 export interface CardLayerDeps {
-  call: Caller;
-  /* The overlay's lookup results by native id — the one store. Entries are
-   * replaced, never mutated. */
+  /* Curation, the lists and the writes (store.ts). */
+  store: Store;
+  /* The overlay's lookup results by native id: what each card's listing IS
+   * (facts, badge). Its curation fields are the lookup's; the store's are live. */
   cache: Map<string, PortalListing>;
   /* The yield badge for this card, or null when it gets none. */
   badgeFor: (listing: PortalListing) => BadgeView | null;
   openPanel: (ref: PortalRef, href: string, listing: PortalListing) => void;
-  /* The app's collections page, for the checklist's manage link; null hides it. */
-  collectionsUrl: string | null;
   /* Whether dismissed properties are drawn barely visible right now. */
   veilOn: () => boolean;
-  /* An API failure detail in the operator's words. */
-  describe: (detail: string) => string;
   /* Say why a write failed (the dock's line). */
   flash: (message: string) => void;
-  /* A write made here settled: this is the property's state now. */
-  onWrite: (listing: PortalListing) => void;
   /* Cards were repainted — the dismissed count may have moved. */
   onRefresh: () => void;
 }
@@ -110,8 +94,8 @@ export interface CardLayer {
   /* Repaint every card and the open menu from the store. */
   refresh: () => void;
   dismissedCount: () => number;
-  /* Drop every control and everything loaded: the overlay stopped, or the
-   * session changed and what is held belongs to the account that left. */
+  /* Drop every control: the overlay stopped, or the session changed (the store
+   * dropped what the account that left had read). */
   reset: () => void;
 }
 
@@ -140,11 +124,6 @@ interface CardHandle {
   paint: () => void;
   destroy: () => void;
 }
-
-const OUT_OF_PIPELINE: PipelineMembership = {
-  in_pipeline: false, stage_id: null, stage_key: null, stage_label: null,
-  stage_code: null, stage_color: null,
-};
 
 /* In the portal's DOM, so it only ever names our own attributes. Dimming the
  * card's CHILDREN rather than the card keeps our own controls legible on it —
@@ -316,23 +295,6 @@ const SHIELDED_EVENTS = [
   'pointerup', 'touchstart', 'touchend', 'keydown', 'keyup', 'keypress',
 ] as const;
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className: string, text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}
-
-function button(className: string, text?: string): HTMLButtonElement {
-  const b = el('button', className, text);
-  b.type = 'button';
-  return b;
-}
-
 function setBusy(node: HTMLElement, busy: boolean): void {
   /* aria-disabled, never `disabled`: a disabled button drops keyboard focus to
    * the portal page for the length of the write. Handlers ignore busy clicks. */
@@ -360,28 +322,21 @@ export function holdsOneListing(card: HTMLElement, sourceId: string): boolean {
 }
 
 export function createCardLayer(deps: CardLayerDeps): CardLayer {
-  const { call, cache } = deps;
+  const { store, cache } = deps;
   injectPageStyle();
 
   const handles = new Map<HTMLElement, CardHandle>();
-  /* `p:` pipeline, `d:` dismissal, `c:` collection — one write of a kind per
-   * property at a time. */
-  const busy = new Set<string>();
-  let epoch = 0;  // bumped by reset(): answers to older asks are dropped
-
-  let stages: PipelineStage[] | null = null;
-  let stagesLoading = false;
-  let stagesFailed = false;
-  let collections: ExtCollection[] | null = null;
-  let collectionsLoading = false;
-  let collectionsFailed = false;
   /* Collection ids a held list did not know and was re-read for — once each, so
    * an id a fresh read still lacks cannot loop the re-read. */
   const rereadFor = new Set<number>();
-  /* Read once a card on the page carries a tag; tags are edited in the app. */
-  let tags: ExtTag[] | null = null;
-  let tagsLoading = false;
-  let tagsFailed = false;
+  /* Lists this run has read. Each overlay run reads a list afresh the first time a
+   * card needs it — a rename made in the app shows, a read that failed is asked
+   * once more — and after that only one never read (paint runs on every pass). */
+  const read = new Set<ListKind>();
+  function need(kind: ListKind): void {
+    if (read.has(kind)) store.ensure(kind);
+    else if (store.load(kind, true)) read.add(kind);
+  }
 
   let menu: Menu | null = null;
   let menuDom: MenuDom | null = null;
@@ -390,267 +345,31 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
    * pointer swallows the click being made, so it is rebuilt only on a change. */
   let menuPainted = '';
 
-  function listingOf(propertyId: number): PortalListing | null {
-    for (const l of cache.values()) if (l.property_id === propertyId) return l;
-    return null;
-  }
-
-  /* Operator state is property-grain: every advert of the property on this
-   * page takes the change. */
-  function patch(propertyId: number, change: (l: PortalListing) => PortalListing): void {
-    for (const [id, l] of cache) {
-      if (l.property_id === propertyId) cache.set(id, change(l));
-    }
-    refresh();
-  }
-
-  function settled(propertyId: number): void {
-    const l = listingOf(propertyId);
-    if (l != null) deps.onWrite(l);
-  }
-
-  /* A LIVE deal and a dismissal never coexist (the API refuses it). Liveness is
-   * read off the stage list — the one place `is_terminal` lives; until it has
-   * loaded an in-pipeline card counts as live, the server's own answer for one. */
-  function isLive(l: PortalListing): boolean {
-    const p = l.pipeline;
-    if (!p?.in_pipeline) return false;
-    const stage = stages?.find((s) => s.id === p.stage_id);
-    return stage == null || !stage.is_terminal;
-  }
-
-  /* Bounded retry, like the panel's list reads: one network blip must not
-   * strip stage-changing for the page view. */
-  async function readList<T>(message: ApiMessage, asked: number): Promise<T | null> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await call<T>(message);
-      if (asked !== epoch) return null;
-      if (res.ok) return res.data;
-      if (attempt < 2) {
-        await sleep(LIST_RETRY_MS);
-        if (asked !== epoch) return null;
-      }
-    }
-    return null;
-  }
-
-  async function loadStages(): Promise<void> {
-    if (stages != null || stagesLoading) return;
-    stagesLoading = true;
-    const hadFailed = stagesFailed;
-    stagesFailed = false;
-    if (hadFailed) refresh();
-    const asked = epoch;
-    const data = await readList<PipelineStage[]>({ type: 'list_pipeline_stages' }, asked);
-    if (asked !== epoch) return;
-    stagesLoading = false;
-    if (data == null) stagesFailed = true;
-    else stages = data;
-    refresh();
-  }
-
-  async function loadTags(): Promise<void> {
-    if (tags != null || tagsLoading || tagsFailed) return;
-    tagsLoading = true;
-    const asked = epoch;
-    const data = await readList<ExtTag[]>({ type: 'list_tags' }, asked);
-    if (asked !== epoch) return;
-    tagsLoading = false;
-    if (data == null) tagsFailed = true;
-    else tags = data;
-    refresh();
-  }
-
-  /* `reread` re-reads a list already held: opening the checklist does, so a
-   * collection made in the app since the page loaded shows up. */
-  async function loadCollections(reread: boolean): Promise<void> {
-    if (collectionsLoading || (collections != null && !reread)) return;
-    collectionsLoading = true;
-    const hadFailed = collectionsFailed;
-    collectionsFailed = false;
-    if (hadFailed) refresh();
-    const asked = epoch;
-    const data = await readList<ExtCollection[]>({ type: 'list_collections' }, asked);
-    if (asked !== epoch) return;
-    collectionsLoading = false;
-    if (data == null) {
-      // A failed re-read keeps the list it already had; only an empty menu fails.
-      if (collections != null) return;
-      collectionsFailed = true;
-      refresh();
-      return;
-    }
-    /* The usual re-read changes nothing and lands just as the checklist opened —
-     * rebuilding it then, under the pointer, can swallow the click being made. */
-    const changed = collections == null || collectionsKey(collections) !== collectionsKey(data);
-    collections = data;
-    if (changed) refresh();
-  }
-
   // ---- writes ---------------------------------------------------------------
-  // Optimistic, then reconciled from the server's answer; a failure puts the
-  // prior state back and says why. All through the SAME routes the app uses.
+  // The store's one write path (optimistic, put back on failure); a failure is
+  // said where it can be seen.
 
-  async function addToPipeline(propertyId: number): Promise<void> {
-    const key = `p:${propertyId}`;
-    if (busy.has(key)) return;
-    const asked = epoch;
-    busy.add(key);
-    patch(propertyId, (l) => ({ ...l, pipeline: { ...OUT_OF_PIPELINE, in_pipeline: true } }));
-    const res = await call<PipelineCardResult>({ type: 'add_pipeline_card', property_id: propertyId });
-    if (asked !== epoch) return;
-    busy.delete(key);
-    if (!res.ok) {
-      patch(propertyId, (l) => ({ ...l, pipeline: OUT_OF_PIPELINE }));
-      deps.flash(`Uložení do pipeline selhalo: ${deps.describe(res.detail)}`);
-      return;
-    }
-    const card = res.data;
-    /* A new card is live (the entry stage can't be terminal), and a live deal
-     * lifts the caller's dismissal server-side — mirror it. */
-    patch(propertyId, (l) => ({
-      ...l,
-      pipeline: {
-        in_pipeline: true,
-        stage_id: card.stage_id ?? null,
-        stage_key: card.stage_key ?? null,
-        stage_label: card.stage_label ?? null,
-        stage_code: card.stage_code ?? null,
-        stage_color: card.stage_color ?? null,
-      },
-      dismissed: l.dismissed == null ? l.dismissed : false,
-    }));
-    settled(propertyId);
-  }
-
-  async function moveStage(propertyId: number, stageId: number): Promise<void> {
-    const key = `p:${propertyId}`;
-    const prior = listingOf(propertyId)?.pipeline;
-    if (busy.has(key) || prior == null || prior.stage_id === stageId) return;
-    const target = stages?.find((s) => s.id === stageId) ?? null;
-    const asked = epoch;
-    busy.add(key);
-    patch(propertyId, (l) => ({
-      ...l,
-      pipeline: {
-        in_pipeline: true, stage_id: stageId,
-        stage_key: target?.key ?? prior.stage_key,
-        stage_label: target?.label ?? prior.stage_label,
-        stage_code: target?.code ?? null,
-        stage_color: target?.color ?? prior.stage_color,
-      },
-    }));
-    const res = await call<PipelineCardResult>({
-      type: 'move_pipeline_card', property_id: propertyId, stage_id: stageId,
-    });
-    if (asked !== epoch) return;
-    busy.delete(key);
-    if (!res.ok) {
-      patch(propertyId, (l) => ({ ...l, pipeline: prior }));
-      deps.flash(`Změna fáze selhala: ${deps.describe(res.detail)}`);
-      return;
-    }
-    const card = res.data;
-    // Re-opening a closed deal makes it live, which lifts its dismissal server-side.
-    const reopened = target != null && !target.is_terminal;
-    patch(propertyId, (l) => ({
-      ...l,
-      pipeline: {
-        in_pipeline: true,
-        stage_id: card.stage_id ?? stageId,
-        stage_key: card.stage_key ?? target?.key ?? prior.stage_key,
-        stage_label: card.stage_label ?? target?.label ?? prior.stage_label,
-        stage_code: card.stage_code ?? target?.code ?? null,
-        stage_color: card.stage_color ?? target?.color ?? prior.stage_color,
-      },
-      dismissed: reopened && l.dismissed != null ? false : l.dismissed,
-    }));
-    settled(propertyId);
-  }
-
-  async function removeFromPipeline(propertyId: number): Promise<void> {
-    const key = `p:${propertyId}`;
-    const prior = listingOf(propertyId)?.pipeline;
-    if (busy.has(key) || prior == null || !prior.in_pipeline) return;
-    const asked = epoch;
-    busy.add(key);
-    patch(propertyId, (l) => ({ ...l, pipeline: OUT_OF_PIPELINE }));
-    const res = await call<PipelineCardResult>({
-      type: 'remove_pipeline_card', property_id: propertyId,
-    });
-    if (asked !== epoch) return;
-    busy.delete(key);
-    if (!res.ok) {
-      patch(propertyId, (l) => ({ ...l, pipeline: prior }));
-      deps.flash(`Odebrání z pipeline selhalo: ${deps.describe(res.detail)}`);
-      return;
-    }
-    refresh();
-    settled(propertyId);
-  }
-
-  async function toggleDismiss(propertyId: number): Promise<void> {
-    const key = `d:${propertyId}`;
-    const wasOn = listingOf(propertyId)?.dismissed;
-    if (busy.has(key) || wasOn == null) return;
-    const asked = epoch;
-    busy.add(key);
-    patch(propertyId, (l) => ({ ...l, dismissed: !wasOn }));
-    const res = await call<DismissalWriteResult>({
-      type: wasOn ? 'undismiss_property' : 'dismiss_property', property_id: propertyId,
-    });
-    if (asked !== epoch) return;
-    busy.delete(key);
-    if (!res.ok) {
-      patch(propertyId, (l) => ({ ...l, dismissed: wasOn }));
-      deps.flash(`Skrytí se nepodařilo uložit: ${deps.describe(res.detail)}`);
-      return;
-    }
-    refresh();
-    settled(propertyId);
-  }
-
-  function withMembership(l: PortalListing, collectionId: number, member: boolean): PortalListing {
-    const ids = l.collection_ids ?? [];
-    if (ids.includes(collectionId) === member) return l;
-    return {
-      ...l,
-      collection_ids: member ? [...ids, collectionId] : ids.filter((id) => id !== collectionId),
-    };
+  async function flashFailure(pending: Pending, what: string): Promise<void> {
+    const res = await pending;
+    if (res?.ok === false) deps.flash(`${what}: ${friendlyDetail(res.detail)}`);
   }
 
   async function toggleCollection(propertyId: number, collectionId: number): Promise<void> {
-    const key = `c:${propertyId}`;
-    const l = listingOf(propertyId);
-    if (busy.has(key) || l == null) return;
-    const add = !(l.collection_ids ?? []).includes(collectionId);
-    const asked = epoch;
-    busy.add(key);
+    if (store.busy('collections', propertyId)) return;
     if (menu?.propertyId === propertyId) menu.error = null;
-    patch(propertyId, (row) => withMembership(row, collectionId, add));
-    const res = await call<CollectionWriteResult>({
-      type: add ? 'add_to_collection' : 'remove_from_collection',
-      collection_id: collectionId,
-      property_id: propertyId,
-    });
-    if (asked !== epoch) return;
-    busy.delete(key);
-    if (!res.ok) {
-      const message = add
-        ? `Uložení do kolekce se nepodařilo: ${deps.describe(res.detail)}`
-        : `Odebrání z kolekce se nepodařilo: ${deps.describe(res.detail)}`;
-      /* Say it where it can be seen: beside the rows while the checklist is
-       * still open for this property, else on the dock. */
-      if (menu?.kind === 'collections' && menu.propertyId === propertyId) menu.error = message;
-      else deps.flash(message);
-      patch(propertyId, (row) => withMembership(row, collectionId, !add));
-      /* The likeliest cause is a collection deleted in the app since the list
-       * loaded (a 404) — re-read it so the dead row goes away. */
-      void loadCollections(true);
-      return;
+    const res = await store.toggleCollection(propertyId, collectionId);
+    if (res == null || res.ok) return;
+    const message = res.on
+      ? `Uložení do kolekce se nepodařilo: ${friendlyDetail(res.detail)}`
+      : `Odebrání z kolekce se nepodařilo: ${friendlyDetail(res.detail)}`;
+    /* Beside the rows while the checklist is still open for this property,
+     * else on the dock. */
+    if (menu?.kind === 'collections' && menu.propertyId === propertyId) {
+      menu.error = message;
+      renderMenu();
+    } else {
+      deps.flash(message);
     }
-    refresh();
-    settled(propertyId);
   }
 
   // ---- the card cluster -----------------------------------------------------
@@ -673,29 +392,29 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = CARD_CSS;
-    const bar = el('div', 'bar');
-    const funnel = button('act');
-    const save = button('act');
-    const hide = button('act act--dismiss');
-    const badge = button('badge');
+    const bar = h('div', 'bar');
+    const funnel = h('button', 'act');
+    const save = h('button', 'act');
+    const hide = h('button', 'act act--dismiss');
+    const badge = h('button', 'badge');
     bar.append(funnel, save, hide, badge);
     shadow.append(style, bar);
     const mark = createPhotoMark(card, PROCESSED_ATTR);
 
-    const current = (): { listing: PortalListing; propertyId: number } | null => {
+    const current = (): { curation: Curation | null; propertyId: number } | null => {
       const listing = cache.get(sourceId);
       return listing?.found && listing.property_id != null
-        ? { listing, propertyId: listing.property_id }
+        ? { curation: store.curation(listing.property_id), propertyId: listing.property_id }
         : null;
     };
 
     funnel.onclick = () => {
       const now = current();
-      if (now == null || busy.has(`p:${now.propertyId}`)) return;
-      if (now.listing.pipeline?.in_pipeline) toggleMenu('stages', now.propertyId, funnel, host);
+      if (now == null || store.busy('pipeline', now.propertyId)) return;
+      if (now.curation?.pipeline?.in_pipeline) toggleMenu('stages', now.propertyId, funnel, host);
       else {
         closeMenu(false);
-        void addToPipeline(now.propertyId);
+        void flashFailure(store.addToPipeline(now.propertyId), 'Uložení do pipeline selhalo');
       }
     };
     save.onclick = () => {
@@ -706,7 +425,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const now = current();
       if (now == null) return;
       closeMenu(false);
-      void toggleDismiss(now.propertyId);
+      void flashFailure(store.toggleDismiss(now.propertyId), 'Skrytí se nepodařilo uložit');
     };
     badge.onclick = () => {
       const listing = cache.get(sourceId);
@@ -730,42 +449,46 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const l = cache.get(sourceId);
       if (l == null) return;
       const pid = l.found ? l.property_id : null;
-      const p = pid != null ? l.pipeline : null;
+      const cur = pid != null ? store.curation(pid) : null;
+      const stages = store.list('stages').data;
+      const collections = store.list('collections').data;
+      const collectionsFailed = store.list('collections').status === 'failed';
+      const p = cur?.pipeline;
       const inPipe = p?.in_pipeline ?? false;
       const code = inPipe ? stageBadge(p?.stage_code, p?.stage_id, stages) : null;
-      const memberIds = pid != null ? l.collection_ids ?? [] : [];
+      const memberIds = cur?.collection_ids ?? [];
       /* Saved = in one of MINE; until the list lands mine is unknown, and no
        * mark beats a wrong one (a shared-only property is not saved). */
       const savedNames = (savedCollections(memberIds, collections) ?? []).map((c) => c.name);
       const saved = savedNames.length;
-      const tagIds = pid != null ? l.tag_ids ?? [] : [];
-      const tagged = (tags ?? [])
+      const tagIds = cur?.tag_ids ?? [];
+      const tagged = (store.list('tags').data ?? [])
         .filter((t) => tagIds.includes(t.id))
         .map((t) => ({ name: t.name, color: t.color }));
-      const dismissed = pid != null && l.dismissed === true;
-      const canHide = pid != null && l.dismissed != null && !isLive(l);
+      const dismissed = cur?.dismissed === true;
+      const canHide = cur?.dismissed != null && !isLiveDeal(p, stages);
       const veiled = dismissed && deps.veilOn();
       const view = deps.badgeFor(l);
       /* The lists tell mine from shared and name the label; they name the tag
        * chips. A held list that lacks one of the card's collections is stale
-       * (made or shared in the app since it was read): re-read it once. Before
-       * the unchanged-paint return, so a stale-but-unchanged card still asks. */
-      if (memberIds.length > 0 && !collectionsFailed) {
-        if (collections == null) void loadCollections(false);
-        else if (!collectionsLoading && !knowsAll(memberIds, collections)) {
+       * (made or shared in the app since it was read): re-read it once — an id
+       * is spent only on a read that went out, not on one already under way.
+       * Before the unchanged-paint return, so a stale-but-unchanged card asks. */
+      if (memberIds.length > 0) {
+        need('collections');
+        if (collections != null && !knowsAll(memberIds, collections)) {
           const fresh = memberIds.filter((id) => !rereadFor.has(id));
-          if (fresh.length > 0) {
-            for (const id of fresh) rereadFor.add(id);
-            void loadCollections(true);
-          }
+          if (fresh.length > 0 && store.load('collections', true)) for (const id of fresh) rereadFor.add(id);
         }
       }
-      if (tagIds.length > 0) void loadTags();
+      if (tagIds.length > 0) need('tags');
+      const busyPipeline = pid != null && store.busy('pipeline', pid);
+      const busyDismiss = pid != null && store.busy('dismissed', pid);
       const state = JSON.stringify([
         pid, inPipe, p?.stage_label, p?.stage_color, code, saved, savedNames, tagged, dismissed,
         memberIds.length > 0 && collectionsFailed,
         canHide,
-        veiled, view, busy.has(`p:${pid}`), busy.has(`d:${pid}`),
+        veiled, view, busyPipeline, busyDismiss,
         menu?.anchor === funnel, menu?.anchor === save,
       ]);
       if (state === painted) return;
@@ -791,9 +514,9 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
         funnel.removeAttribute('aria-haspopup');
         funnel.removeAttribute('aria-expanded');
       }
-      setBusy(funnel, busy.has(`p:${pid}`));
+      setBusy(funnel, busyPipeline);
       funnel.innerHTML = funnelIconSvg(inPipe);
-      if (code != null) funnel.appendChild(el('span', 'code', code));
+      if (code != null) funnel.appendChild(h('span', 'code', code));
 
       save.hidden = pid == null;
       save.className = 'act' + (saved > 0 ? ' act--saved' : '');
@@ -814,7 +537,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       hide.title = hideLabel;
       hide.setAttribute('aria-label', hideLabel);
       hide.setAttribute('aria-pressed', String(dismissed));
-      setBusy(hide, busy.has(`d:${pid}`));
+      setBusy(hide, busyDismiss);
       hide.innerHTML = eyeOffIconSvg(dismissed);
 
       badge.hidden = view == null;
@@ -853,7 +576,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     card.appendChild(host);
     paint();
     // The stage list names each card's badge and says which deals are live.
-    if (hasProperty && !stagesFailed) void loadStages();
+    if (hasProperty) need('stages');
   }
 
   function clear(card: HTMLElement): void {
@@ -880,8 +603,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   function dismissedCount(): number {
     const ids = new Set<string>();
     for (const [card, handle] of handles) {
-      const l = cache.get(handle.sourceId);
-      if (card.isConnected && l?.property_id != null && l.dismissed === true) {
+      const pid = cache.get(handle.sourceId)?.property_id;
+      if (card.isConnected && pid != null && store.curation(pid)?.dismissed === true) {
         ids.add(handle.sourceId);
       }
     }
@@ -889,20 +612,10 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   }
 
   function reset(): void {
-    epoch++;
     closeMenu(false);
     for (const card of [...handles.keys()]) clear(card);
-    busy.clear();
-    stages = null;
-    stagesLoading = false;
-    stagesFailed = false;
-    collections = null;
-    collectionsLoading = false;
-    collectionsFailed = false;
     rereadFor.clear();
-    tags = null;
-    tagsLoading = false;
-    tagsFailed = false;
+    read.clear();
   }
 
   // ---- the menus ------------------------------------------------------------
@@ -920,7 +633,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = MENU_CSS;
-    const box = el('div', 'menu');
+    const box = h('div', 'menu');
     box.tabIndex = -1;
     box.addEventListener('keydown', onMenuKey);
     shadow.append(style, box);
@@ -933,8 +646,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     window.addEventListener('scroll', placeMenu, { capture: true, passive: true });
     window.addEventListener('resize', placeMenu);
 
-    if (kind === 'stages') void loadStages();
-    else void loadCollections(true);
+    if (kind === 'stages') store.load('stages');
+    else store.load('collections', true);
     refresh();
     focusInMenu(kind === 'stages' ? '[aria-checked="true"]' : '.row');
   }
@@ -1013,44 +726,43 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   }
 
   function renderMenu(): void {
-    if (menu == null || menuDom == null) return;
-    const l = listingOf(menu.propertyId);
+    const open = menu;
+    if (open == null || menuDom == null) return;
+    const cur = store.curation(open.propertyId);
     if (
-      !menu.anchor.isConnected || l == null
-      || (menu.kind === 'stages' && !l.pipeline?.in_pipeline)
+      !open.anchor.isConnected || cur == null
+      || (open.kind === 'stages' && !cur.pipeline?.in_pipeline)
     ) {
       closeMenu(false);
       return;
     }
     const { box, shadow } = menuDom;
     const view = JSON.stringify([
-      menu.kind, menu.propertyId, menu.confirming, menu.error,
-      l.pipeline, l.collection_ids, busy.has(`p:${menu.propertyId}`), busy.has(`c:${menu.propertyId}`),
-      stages, stagesFailed, collections, collectionsFailed,
+      open.kind, open.propertyId, open.confirming, open.error,
+      cur.pipeline, cur.collection_ids,
+      store.busy('pipeline', open.propertyId), store.busy('collections', open.propertyId),
+      store.list('stages'), store.list('collections'),
     ]);
     if (view === menuPainted) {
       placeMenu();
       return;
     }
     menuPainted = view;
-    const focusedKey = (shadow.activeElement as HTMLElement | null)?.dataset.key ?? null;
     const listTop = box.querySelector<HTMLElement>('.list')?.scrollTop ?? 0;
-    box.replaceChildren();
-    if (menu.kind === 'stages') buildStageMenu(box, l, menu);
-    else buildCollectionMenu(box, l, menu);
+    keepFocus(shadow, () => {
+      box.replaceChildren();
+      if (open.kind === 'stages') buildStageMenu(box, cur, open);
+      else buildCollectionMenu(box, cur, open);
+    }, () => box);
     const list = box.querySelector<HTMLElement>('.list');
     if (list != null) list.scrollTop = listTop;
-    if (focusedKey != null) {
-      (box.querySelector<HTMLElement>(`[data-key="${focusedKey}"]`) ?? box)
-        .focus({ preventScroll: true });
-    }
     placeMenu();
   }
 
   function stateLine(text: string, retry?: () => void): HTMLElement {
-    const p = el('p', 'state', text);
+    const p = h('p', 'state', text);
     if (retry != null) {
-      const again = button('link', 'Zkusit znovu');
+      const again = h('button', 'link', 'Zkusit znovu');
       again.dataset.key = 'retry';
       again.onclick = retry;
       p.append(' ', again);
@@ -1060,56 +772,57 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
   /* The app's <PipelineStageMenu>: every stage as a row (the current one
    * checked), then removal behind its two-step confirm. */
-  function buildStageMenu(box: HTMLElement, l: PortalListing, open: Menu): void {
+  function buildStageMenu(box: HTMLElement, cur: Curation, open: Menu): void {
     const propertyId = open.propertyId;
-    const pending = busy.has(`p:${propertyId}`);
+    const pending = store.busy('pipeline', propertyId);
+    const { data: stages, status } = store.list('stages');
     box.setAttribute('role', 'menu');
     box.setAttribute('aria-label', STAGE_MENU_LABEL);
-    box.appendChild(el('p', 'eyebrow', STAGE_MENU_LABEL));
+    box.appendChild(h('p', 'eyebrow', STAGE_MENU_LABEL));
 
     if (stages == null) {
-      box.appendChild(stagesFailed
-        ? stateLine('Fáze se nepodařilo načíst.', () => { void loadStages(); })
+      box.appendChild(status === 'failed'
+        ? stateLine('Fáze se nepodařilo načíst.', () => { store.load('stages'); })
         : stateLine('Načítám fáze…'));
     } else {
-      const list = el('div', 'list');
+      const list = h('div', 'list');
       for (const stage of stages) {
-        const isCurrent = stage.id === l.pipeline?.stage_id;
+        const isCurrent = stage.id === cur.pipeline?.stage_id;
         const accent = stageAccent(stage.color);
-        const row = button('row');
+        const row = h('button', 'row');
         row.setAttribute('role', 'menuitemradio');
         row.setAttribute('aria-checked', String(isCurrent));
         row.dataset.key = `stage-${stage.id}`;
         setBusy(row, pending);
-        const code = el('span', 'stage-code', stageBadge(stage.code, stage.id, stages) ?? '·');
+        const code = h('span', 'stage-code', stageBadge(stage.code, stage.id, stages) ?? '·');
         code.setAttribute('aria-hidden', 'true');
         code.style.color = accent.fg;
-        row.append(code, el('span', 'name', stage.label));
+        row.append(code, h('span', 'name', stage.label));
         if (isCurrent) {
-          const mark = el('span', 'mark', '✓');
+          const mark = h('span', 'mark', '✓');
           mark.setAttribute('aria-hidden', 'true');
           mark.style.color = accent.fg;
           row.appendChild(mark);
         }
         row.onclick = () => {
-          if (busy.has(`p:${propertyId}`)) return;
+          if (store.busy('pipeline', propertyId)) return;
           // Close first: the write repaints, and focus must already be back on the funnel.
           closeMenu(true);
-          if (!isCurrent) void moveStage(propertyId, stage.id);
+          if (!isCurrent) void flashFailure(store.moveStage(propertyId, stage.id), 'Změna fáze selhala');
         };
         list.appendChild(row);
       }
       box.appendChild(list);
     }
 
-    box.appendChild(el('div', 'sep'));
+    box.appendChild(h('div', 'sep'));
     if (!open.confirming) {
-      const remove = button('row row--remove', 'Odebrat z pipeline');
+      const remove = h('button', 'row row--remove', 'Odebrat z pipeline');
       remove.setAttribute('role', 'menuitem');
       remove.dataset.key = 'remove';
       setBusy(remove, pending);
       remove.onclick = () => {
-        if (busy.has(`p:${propertyId}`)) return;
+        if (store.busy('pipeline', propertyId)) return;
         open.confirming = true;
         renderMenu();
         focusInMenu('.yes');
@@ -1121,9 +834,9 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     /* Removal is the one pipeline action with no undo — the card's dates are
      * deleted and re-adding restamps them — so it asks, in the app's words,
      * and points at the closed stages, which keep the deal's record. */
-    const confirm = el('div', 'confirm');
-    confirm.appendChild(el('p', 'confirm-q', 'Odebrat z pipeline?'));
-    confirm.appendChild(el(
+    const confirm = h('div', 'confirm');
+    confirm.appendChild(h('p', 'confirm-q', 'Odebrat z pipeline?'));
+    confirm.appendChild(h(
       'p', 'confirm-d',
       'Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po '
         + 'opětovném přidání se počítají znovu.'
@@ -1131,14 +844,14 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
           ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.'
           : ''),
     ));
-    const actions = el('div', 'confirm-actions');
-    const yes = button('yes', 'Odebrat');
+    const actions = h('div', 'confirm-actions');
+    const yes = h('button', 'yes', 'Odebrat');
     yes.dataset.key = 'confirm-yes';
     yes.onclick = () => {
       closeMenu(true);
-      void removeFromPipeline(propertyId);
+      void flashFailure(store.removeFromPipeline(propertyId), 'Odebrání z pipeline selhalo');
     };
-    const no = button('no', 'Zrušit');
+    const no = h('button', 'no', 'Zrušit');
     no.dataset.key = 'confirm-no';
     no.onclick = () => {
       open.confirming = false;
@@ -1153,37 +866,38 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   /* The app's <CollectionSaveMenu>: every collection of MINE as a checkable
    * row, monitored ones first and bell-marked. It stays open across clicks — a
    * property can sit in several collections. */
-  function buildCollectionMenu(box: HTMLElement, l: PortalListing, open: Menu): void {
+  function buildCollectionMenu(box: HTMLElement, cur: Curation, open: Menu): void {
     const propertyId = open.propertyId;
-    const memberIds = new Set(l.collection_ids ?? []);
-    const pending = busy.has(`c:${propertyId}`);
+    const memberIds = new Set(cur.collection_ids ?? []);
+    const pending = store.busy('collections', propertyId);
+    const { data: collections, status } = store.list('collections');
     box.setAttribute('role', 'group');
     box.setAttribute('aria-label', COLLECTION_SAVE_LABEL);
-    box.appendChild(el('p', 'eyebrow', COLLECTION_SAVE_LABEL));
+    box.appendChild(h('p', 'eyebrow', COLLECTION_SAVE_LABEL));
 
     if (collections == null) {
       /* A failed read is NOT an empty one — "no collections yet" would tell an
        * operator whose collections exist that they have none. */
-      box.appendChild(collectionsFailed
-        ? stateLine('Kolekce se nepodařilo načíst.', () => { void loadCollections(true); })
+      box.appendChild(status === 'failed'
+        ? stateLine('Kolekce se nepodařilo načíst.', () => { store.load('collections', true); })
         : stateLine('Načítám kolekce…'));
     } else if (saveTargets(collections).length === 0) {
       box.appendChild(stateLine('Zatím nemáte žádnou kolekci.'));
     } else {
-      const list = el('div', 'list');
+      const list = h('div', 'list');
       for (const c of saveTargets(collections)) {
         const member = memberIds.has(c.id);
-        const row = button('row' + (member ? ' row--member' : ''));
+        const row = h('button', 'row' + (member ? ' row--member' : ''));
         row.setAttribute('aria-pressed', String(member));
         row.dataset.key = `coll-${c.id}`;
         setBusy(row, pending);
-        const check = el('span', 'check', '✓');
+        const check = h('span', 'check', '✓');
         check.setAttribute('aria-hidden', 'true');
-        const name = el('span', 'name', c.name);
+        const name = h('span', 'name', c.name);
         name.title = c.name;
         row.append(check, name);
         if (c.monitoring_enabled) {
-          const bell = el('span', 'bell');
+          const bell = h('span', 'bell');
           bell.title = 'Sledovaná — upozorní na změny';
           bell.innerHTML = bellIconSvg();
           row.appendChild(bell);
@@ -1195,18 +909,18 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     }
 
     if (open.error != null) {
-      const err = el('p', 'error', open.error);
+      const err = h('p', 'error', open.error);
       err.setAttribute('role', 'alert');
       box.appendChild(err);
     }
 
     /* Creating, renaming and monitoring settings stay in the app — the
      * checklist only files the property. */
-    if (deps.collectionsUrl != null) {
-      const manage = el('a', 'link manage', collections != null && saveTargets(collections).length === 0
+    if (COLLECTIONS_URL != null) {
+      const manage = h('a', 'link manage', collections != null && saveTargets(collections).length === 0
         ? 'Založit kolekci v aplikaci →'
         : 'Spravovat kolekce →');
-      manage.href = deps.collectionsUrl;
+      manage.href = COLLECTIONS_URL;
       manage.target = '_blank';
       manage.rel = 'noopener';
       box.appendChild(manage);

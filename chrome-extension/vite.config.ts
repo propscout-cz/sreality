@@ -45,7 +45,9 @@ type EntryName = keyof typeof ENTRIES;
  * directly for PKCE exchange + refresh). Derived from origin, not the full
  * URL (host_permissions is origin + /*, no path). Falls back to an empty
  * host_permissions when a var is unset (e.g. a forked PR build with no
- * secrets) — least-privilege over silently wildcarding. */
+ * secrets) — least-privilege over silently wildcarding. The scheme default
+ * repeats src/config.ts normalizeBaseUrl on purpose: this file runs in Node,
+ * and config.ts reads import.meta.env (Vite-only) as it loads. */
 function originPermission(raw: string | undefined): string | null {
   const trimmed = (raw ?? '').trim();
   if (trimmed === '') return null;

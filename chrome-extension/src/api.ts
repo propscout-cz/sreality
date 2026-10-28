@@ -4,6 +4,7 @@
  * and isn't subject to sreality.cz's CORS posture. */
 
 import { getAccessToken } from './auth';
+import { API_BASE_URL, API_NOT_CONFIGURED_DETAIL, NOT_SIGNED_IN_DETAIL } from './config';
 import type {
   ApiResult,
   BillingMe,
@@ -19,43 +20,16 @@ import type {
   PipelineStage,
   PortalListing,
   PortalLookupItem,
-  PortalLookupResponse,
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
 
-/* Tolerate an operator entering the API URL without a scheme (e.g. just
- * `api.up.railway.app`) — fetch() needs an absolute URL, so default to https.
- * Also strip any trailing slash so `BASE_URL + path` doesn't double up.
- *
- * NB: this is duplicated as a tiny inline in content.ts — MV3 content scripts
- * are classic scripts that can't `import`, so the content + service-worker
- * bundles cannot share a runtime module. A 5-line pure helper is the cheapest
- * thing to copy across that boundary. */
-function normalizeBaseUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  return withScheme.replace(/\/$/, '');
-}
-
-const BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? '');
-
-if (!BASE_URL) {
+if (!API_BASE_URL) {
   console.warn(
     '[sreality-ext] VITE_API_BASE_URL is empty — extension cannot ' +
     'reach the FastAPI service. Set it in .env and rebuild.',
   );
 }
-
-/* Every extension-touched route now runs on verify_jwt + the tenant pool
- * (Wave 1 W1-1), so a request with no session is a clean, expected "please
- * sign in" — not a network failure. `status: 401` + this sentinel `detail`
- * lets the panel show a sign-in prompt instead of a raw error string. */
-export const NOT_SIGNED_IN_DETAIL = 'not_signed_in';
-/* A build without VITE_API_BASE_URL; the search page's notice (index_overlay.ts,
- * by value) offers no retry for it. */
-export const API_NOT_CONFIGURED_DETAIL = 'API base URL not configured';
 
 /* Same transport deadline the SPA uses (frontend/src/lib/api.ts,
  * REQUEST_DEADLINE_MS) — duplicated by value because the territories share no
@@ -69,7 +43,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<ApiResult<T>> {
-  if (!BASE_URL) {
+  if (!API_BASE_URL) {
     return { ok: false, status: 0, detail: API_NOT_CONFIGURED_DETAIL };
   }
   const token = await getAccessToken();
@@ -86,7 +60,7 @@ async function request<T>(
   let res: Response;
   let text: string;
   try {
-    res = await fetch(BASE_URL + path, {
+    res = await fetch(API_BASE_URL + path, {
       ...init,
       headers,
       signal: AbortSignal.timeout(REQUEST_DEADLINE_MS),
@@ -131,6 +105,12 @@ async function request<T>(
   return { ok: true, data: body as T };
 }
 
+/* The read routes answer `{data: [...]}`: unwrap to the array, once for all. */
+async function requestData<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+  const res = await request<{ data: T }>(path, init);
+  return res.ok ? { ok: true, data: res.data.data } : res;
+}
+
 /* POST /listings/lookup — batch (source, native id) → our scraped facts +
  * precomputed MF reference rent / "Výnos MF" yield + latest estimate. One
  * request resolves every visible card on an index page; the detail panel
@@ -139,12 +119,10 @@ export async function lookupListings(
   items: PortalLookupItem[],
 ): Promise<ApiResult<PortalListing[]>> {
   if (items.length === 0) return { ok: true, data: [] };
-  const res = await request<PortalLookupResponse>('/listings/lookup', {
+  return requestData<PortalListing[]>('/listings/lookup', {
     method: 'POST',
     body: JSON.stringify({ items }),
   });
-  if (!res.ok) return res;
-  return { ok: true, data: res.data.data };
 }
 
 /* POST /listings/ingest — ask for an ad we do not hold: the API resolves the
@@ -284,27 +262,21 @@ export async function movePipelineCard(
 }
 
 /* GET /pipeline/stages — the operator-curated stage list, to populate the stage
- * `<select>`. Returns `{data:[...]}`; we unwrap to the array. */
-export async function listPipelineStages(): Promise<ApiResult<PipelineStage[]>> {
-  const res = await request<{ data: PipelineStage[] }>('/pipeline/stages');
-  if (!res.ok) return res;
-  return { ok: true, data: res.data.data };
+ * `<select>`. */
+export function listPipelineStages(): Promise<ApiResult<PipelineStage[]>> {
+  return requestData('/pipeline/stages');
 }
 
 /* GET /collections — the caller's collections (rule #18), for the panel's
- * save-to-collection checklist. Returns `{data:[...]}`; we unwrap to the array. */
-export async function listCollections(): Promise<ApiResult<ExtCollection[]>> {
-  const res = await request<{ data: ExtCollection[] }>('/collections');
-  if (!res.ok) return res;
-  return { ok: true, data: res.data.data };
+ * save-to-collection checklist. */
+export function listCollections(): Promise<ApiResult<ExtCollection[]>> {
+  return requestData('/collections');
 }
 
 /* GET /tags — the caller's tags (rule #18), names + colours for the search-page
- * card chips. Returns `{data:[...]}` ordered by name; we unwrap to the array. */
-export async function listTags(): Promise<ApiResult<ExtTag[]>> {
-  const res = await request<{ data: ExtTag[] }>('/tags');
-  if (!res.ok) return res;
-  return { ok: true, data: res.data.data };
+ * card chips, ordered by name. */
+export function listTags(): Promise<ApiResult<ExtTag[]>> {
+  return requestData('/tags');
 }
 
 /* POST /properties/:id/tags — tag the property (rule #18). The SAME route the
@@ -356,11 +328,9 @@ export async function removeFromCollection(
 }
 
 /* GET /properties/:id/notes — the property's operator notes (rule #18),
- * most-recent-first. Returns `{data:[...]}`; we unwrap to the array. */
-export async function listNotes(property_id: number): Promise<ApiResult<ExtNote[]>> {
-  const res = await request<{ data: ExtNote[] }>(`/properties/${property_id}/notes`);
-  if (!res.ok) return res;
-  return { ok: true, data: res.data.data };
+ * most-recent-first. */
+export function listNotes(property_id: number): Promise<ApiResult<ExtNote[]>> {
+  return requestData(`/properties/${property_id}/notes`);
 }
 
 /* POST /properties/:id/notes — add an operator note to the property. The SAME

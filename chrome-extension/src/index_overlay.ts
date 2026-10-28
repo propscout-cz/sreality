@@ -30,6 +30,12 @@ import { APP_NAME } from '../../frontend/src/lib/brand';
 // The MF result's ONE shape rule, shared with the SPA (a zero-dependency module).
 import { mfShape } from '../../frontend/src/lib/mfReference';
 import {
+  API_NOT_CONFIGURED_DETAIL,
+  EXTENSION_RELOADED_DETAIL,
+  NOT_SIGNED_IN_DETAIL,
+} from './config';
+import { h } from './dom';
+import {
   PROCESSED_ATTR,
   VEIL_ROOT_ATTR,
   createCardLayer,
@@ -38,11 +44,10 @@ import {
 } from './index_cards';
 import { mountDock, onVeilChange, readVeil, writeVeil, type DockHandle } from './index_dock';
 import { createPromoWash } from './index_promo';
-import { onAccountChange } from './session';
+import { sleep, type Store } from './store';
 import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
-import type { ApiMessage, ApiResult, AuthState, PortalListing } from './types';
+import type { ApiResult, AuthState, PortalListing } from './types';
 
-type Caller = <T>(m: ApiMessage) => Promise<ApiResult<T>>;
 type OpenPanel = (
   ref: PortalRef, url: string, prefetched?: PortalListing | null,
 ) => Promise<void>;
@@ -76,14 +81,13 @@ const MAX_LOOKUP_PER_PASS = 50;
  * button asks get_auth_state first and skips the Google round trip when a
  * session already exists.
  *
- * Generations: one lookup is out at a time, but an account change or the retry
- * button starts a new generation whose lookup goes out even while an older one
- * is pending (a hung request can't swallow the click), as does the tab becoming
- * visible while one is out. Only the current generation decides the notice:
- * an older ask's FAILURE is dropped (an old 401 landing after a sign-in would
- * raise a false notice), but an older ask's OK answer still fills the cache
- * and badges — rows are rows (an answer asked before an account change never
- * arrives: content.ts's call drops it). A lookup unanswered after
+ * Rounds: one lookup is out at a time, but an account change or the retry
+ * button starts a new round whose lookup goes out even while an older one is
+ * pending (a hung request can't swallow the click), as does the tab becoming
+ * visible while one is out. Only the current round decides the notice: an
+ * older ask's FAILURE is dropped, but its OK answer still fills the cache and
+ * badges — rows are rows. (An answer asked before an account change never
+ * arrives at all: the store's one session generation drops it.) A lookup unanswered after
  * LOOKUP_TIMEOUT_MS is SHOWN as failed so a hung one can't leave the page
  * silent, and its answer, whenever it lands, still counts: the deadline
  * decides what the notice says, not what the cache holds.
@@ -100,26 +104,6 @@ const RETRY_MIN_BUSY_MS = 400;
 /* A live region inserted already filled is typically not announced, so the
  * notice goes in empty and gets its text a frame + this long later. */
 const LIVE_REGION_SETTLE_MS = 100;
-
-/* Mirrors api.ts's NOT_SIGNED_IN_DETAIL — duplicated by value, not imported, as
- * content.ts does: api.ts runs only in the background service worker, and the
- * content bundle never fetches directly. */
-const NOT_SIGNED_IN_DETAIL = 'not_signed_in';
-
-/* A failed card write's reason, in the panel's words (content.ts's friendlyDetail). */
-function describeDetail(detail: string): string {
-  return detail === NOT_SIGNED_IN_DETAIL ? 'nejste přihlášeni' : detail;
-}
-/* api.ts's API_NOT_CONFIGURED_DETAIL, by value for the same reason: a build
- * without VITE_API_BASE_URL, which neither a retry nor a reload can fix. */
-const API_NOT_CONFIGURED_DETAIL = 'API base URL not configured';
-
-/* call()'s detail when this content script has been orphaned — Chrome throws
- * the same "Extension context invalidated" for a reload, an update, a disable
- * and a removal, so the copy names none of them (content.ts's runtimeDetail
- * uses it; it lives here because content.ts imports this module, not the
- * reverse). Only a page reload helps. */
-export const EXTENSION_RELOADED_DETAIL = 'Spojení s rozšířením se přerušilo — obnovte stránku';
 
 /* × lasts for the page, not for one overlay run: content.ts restarts the
  * overlay on every soft-nav back from a listing, and a signed-out operator who
@@ -160,26 +144,14 @@ interface NoticeHandle {
   destroy: () => void;
 }
 
-export interface IndexOverlayOptions {
-  /* The app's collections page, for the card checklist's "Spravovat kolekce"
-   * link; null hides the link. */
-  collectionsUrl: string | null;
-  /* A write made on a card settled: this is the property's operator state now
-   * (the panel mirrors it when it shows the same property). */
-  onCardWrite: (listing: PortalListing) => void;
-}
-
 export interface IndexOverlayHandle {
   /* Disconnect the observer, cancel any pending scan, remove everything drawn —
    * called when a route change (SPA soft-nav) moves the tab off an index page,
    * so repeated navigations don't stack duplicate observers scanning the DOM. */
   stop: () => void;
-  /* The panel changed this property's pipeline / collections / dismissal:
-   * repaint its cards. */
-  sync: (listing: PortalListing) => void;
 }
 
-function fmtPct(n: number | null): string {
+export function fmtPct(n: number | null | undefined): string {
   return n == null
     ? '—'
     : `${n.toLocaleString('cs-CZ', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
@@ -202,7 +174,7 @@ export function mfYieldText(listing: PortalListing | null): string | null {
   return `${low}–${fmtPct(hi)}`;
 }
 
-function fmtCzk(n: number | null): string {
+export function fmtCzk(n: number | null | undefined): string {
   return n == null ? '—' : `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
 }
 
@@ -213,13 +185,11 @@ export function failureKind(detail: string): FailureKind {
   return 'error';
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 export async function runIndexOverlay(
-  call: Caller, openPanel: OpenPanel, opts: IndexOverlayOptions,
+  store: Store, openPanel: OpenPanel,
 ): Promise<IndexOverlayHandle> {
   const portal = portalForHost(location.hostname);
-  if (portal == null) return { stop: () => {}, sync: () => {} };
+  if (portal == null) return { stop: () => {} };
 
   const cache = new Map<string, PortalListing>();
 
@@ -235,9 +205,9 @@ export async function runIndexOverlay(
   let retrying = false;
   let signInError: string | null = null;
   let notice: NoticeHandle | null = null;
-  let gen = 0;  // bumped by an account change or a retry: answers to older asks are stale
-  let inFlightGen: number | null = null;  // generation of the lookup that is out
-  let rescan = false;  // a pass skipped its lookup because this generation's was out
+  let round = 0;  // bumped by an account change, a retry or the tab coming back: see Rounds
+  let inFlightRound: number | null = null;  // round of the lookup that is out
+  let rescan = false;  // a pass skipped its lookup because this round's was out
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   const schedule = (): void => {
@@ -258,7 +228,7 @@ export async function runIndexOverlay(
 
   /* The notice is a pure function of the state above: shown, updated in
    * place, or removed — never a second host. While an ask for the current
-   * generation is out, a notice that isn't up stays down (the answer decides;
+   * round is out, a notice that isn't up stays down (the answer decides;
    * raising the previous failure meanwhile would offer a retry that throws
    * that answer away); an error notice that is up reads busy ("Načítám…"),
    * a sign-in notice keeps its button (busy there means a sign-in is running). */
@@ -274,7 +244,7 @@ export async function runIndexOverlay(
       notice.destroy();
       notice = null;
     }
-    const looking = inFlightGen === gen;
+    const looking = inFlightRound === round;
     if (notice == null) {
       if (looking || dock == null) return;
       notice = mountNotice(handlers, dock.slot);
@@ -286,21 +256,19 @@ export async function runIndexOverlay(
     });
   }
 
+  // What each card's listing IS; its curation went to the store as the lookup answered.
   function keep(rows: PortalListing[]): void {
     for (const l of rows) cache.set(l.source_id, l);
   }
 
   const promos = createPromoWash();
   const layer = createCardLayer({
-    call,
+    store,
     cache,
     badgeFor,
     openPanel: (ref, href, listing) => { void openPanel(ref, href, listing); },
-    collectionsUrl: opts.collectionsUrl,
     veilOn: () => veil,
-    describe: describeDetail,
     flash: (message) => { dock?.flash(message); },
-    onWrite: opts.onCardWrite,
     onRefresh: () => { dock?.setCount(layer.dismissedCount()); },
   });
 
@@ -360,34 +328,31 @@ export async function runIndexOverlay(
       hits.filter((h) => !cache.has(h.ref.sourceId)).map((h) => h.ref.sourceId),
     )].slice(0, MAX_LOOKUP_PER_PASS);
     if (ids.length === 0 || backingOff()) return;
-    if (inFlightGen === gen) {
+    if (inFlightRound === round) {
       rescan = true;
       return;
     }
-    const asked = gen;
-    inFlightGen = asked;
+    const asked = round;
+    inFlightRound = asked;
     syncNotice();  // a notice already up reads busy while this ask is out
-    const answer = call<PortalListing[]>({
-      type: 'lookup_listings',
-      items: ids.map((id) => ({ source: portal!.source, source_id: id })),
-    });
+    const answer = store.lookup(ids.map((id) => ({ source: portal!.source, source_id: id })));
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<null>((resolve) => {
       deadline = setTimeout(() => resolve(null), LOOKUP_TIMEOUT_MS);
     });
     const res = await Promise.race([answer, late]);
     clearTimeout(deadline);
-    if (inFlightGen === asked) inFlightGen = null;
+    if (inFlightRound === asked) inFlightRound = null;
     if (stopped) return;
-    // Superseded: the newer generation decides the notice, but its rows still count.
-    const current = asked === gen;
+    // Superseded: the newer round decides the notice, but its rows still count.
+    const current = asked === round;
     if (res == null) {
       if (current) {
         settle({ ok: false, status: 0, detail: `Server neodpověděl do ${LOOKUP_TIMEOUT_MS / 1000} s` });
       }
       void answer.then((eventual) => {
         if (stopped || !eventual.ok) return;
-        if (asked === gen) settle(eventual);
+        if (asked === round) settle(eventual);
         else keep(eventual.data);
         schedule();
       });
@@ -443,13 +408,13 @@ export async function runIndexOverlay(
     signInError = null;
     syncNotice();
     try {
-      const auth = await call<AuthState>({ type: 'get_auth_state' });
+      const auth = await store.call<AuthState>({ type: 'get_auth_state' });
       if (stopped || (auth.ok && auth.data.signedIn)) return;
       if (!auth.ok && failureKind(auth.detail) === 'reload') {
         orphaned(auth.detail);
         return;
       }
-      const res = await call<undefined>({ type: 'sign_in' });
+      const res = await store.call<undefined>({ type: 'sign_in' });
       if (stopped || res.ok) return;
       if (failureKind(res.detail) === 'reload') orphaned(res.detail);
       else signInError = `Přihlášení selhalo: ${res.detail}`;
@@ -466,7 +431,7 @@ export async function runIndexOverlay(
     if (retrying) return;
     retrying = true;
     failedAt = null;
-    gen++;
+    round++;
     syncNotice();
     try {
       await Promise.all([pass(), sleep(RETRY_MIN_BUSY_MS)]);
@@ -483,37 +448,20 @@ export async function runIndexOverlay(
   const onVisibility = (): void => {
     if (stopped || failure == null || document.visibilityState !== 'visible') return;
     failedAt = null;
-    if (inFlightGen === gen) gen++;
+    if (inFlightRound === round) round++;
     schedule();
   };
 
-  /* What makes a property's operator state on a card: the three things the
-   * card controls and the panel both write, and the tags the panel assigns. */
-  const curation = (l: PortalListing): string =>
-    JSON.stringify([l.pipeline, l.collection_ids, l.dismissed, l.tag_ids]);
+  /* A write here or in the panel, a list read, a lookup: the cards repaint from
+   * the store (each card only when what it draws changed). */
+  const unsubscribeStore = store.subscribe(() => { if (!stopped) layer.refresh(); });
 
-  function sync(listing: PortalListing): void {
-    if (stopped || !listing.found || listing.property_id == null) return;
-    let changed = false;
-    for (const [id, l] of cache) {
-      if (l.property_id !== listing.property_id || curation(l) === curation(listing)) continue;
-      cache.set(id, {
-        ...l,
-        pipeline: listing.pipeline,
-        collection_ids: listing.collection_ids,
-        tag_ids: listing.tag_ids,
-        dismissed: listing.dismissed,
-      });
-      changed = true;
-    }
-    if (changed) layer.refresh();
-  }
-
-  /* Every row, list and control here was read as the account that just left:
-   * drop them and ask again (a signed-out answer raises the notice). */
-  const unsubscribeAccount = onAccountChange(() => {
+  /* Every row and control here was read as the account that just left (the
+   * store dropped its curation and lists): drop them and ask again (a
+   * signed-out answer raises the notice). */
+  const unsubscribeAccount = store.onAccountChange(() => {
     if (stopped) return;
-    gen++;
+    round++;
     cache.clear();
     layer.reset();
     failure = null;
@@ -538,6 +486,7 @@ export async function runIndexOverlay(
       document.removeEventListener('visibilitychange', onVisibility);
       unsubscribeVeil();
       unsubscribeAccount();
+      unsubscribeStore();
       if (timer != null) clearTimeout(timer);
       /* The controls go with the overlay: a later run starts from an empty
        * cache, and a card still marked as mounted would be skipped by it. */
@@ -547,7 +496,6 @@ export async function runIndexOverlay(
       dock?.destroy();
       dock = null;
     },
-    sync,
   };
 }
 
@@ -685,28 +633,28 @@ const NOTICE_CSS = `
  * every focusable element of the portal page. The first text waits
  * LIVE_REGION_SETTLE_MS after mount (see there). */
 function mountNotice(on: NoticeHandlers, slot: HTMLElement): NoticeHandle {
-  const box = el('div', '__mf_notice is-pending');
-  const head = el('div', 'n-head');
-  const mark = el('span', 'n-mark');
-  mark.append(el('span', 'n-tick'), el('span', 'n-word', APP_NAME));
-  const close = button('n-close', '×');
+  const box = h('div', '__mf_notice is-pending');
+  const head = h('div', 'n-head');
+  const mark = h('span', 'n-mark');
+  mark.append(h('span', 'n-tick'), h('span', 'n-word', APP_NAME));
+  const close = h('button', 'n-close', '×');
   close.title = 'Skrýt';
   close.setAttribute('aria-label', 'Skrýt');
   close.onclick = on.dismiss;
   head.append(mark, close);
 
-  const body = el('div', 'n-body');
+  const body = h('div', 'n-body');
   body.setAttribute('role', 'status');
   body.setAttribute('aria-live', 'polite');
-  const text = el('p', 'n-text');
-  const detail = el('p', 'n-detail');
-  const error = el('p', 'n-error');
+  const text = h('p', 'n-text');
+  const detail = h('p', 'n-detail');
+  const error = h('p', 'n-error');
   body.append(text, detail, error);
 
   let live = false;  // the first text is in (the box is transparent until then)
   let kind: FailureKind = 'error';
   let busy = false;
-  const action = button('n-primary', '');
+  const action = h('button', 'n-primary', '');
   action.onclick = () => {
     if (!live) return;
     if (kind === 'reload') { on.reload(); return; }
@@ -766,21 +714,6 @@ function mountNotice(on: NoticeHandlers, slot: HTMLElement): NoticeHandle {
       box.remove();
     },
   };
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className: string, text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}
-
-function button(className: string, text: string): HTMLButtonElement {
-  const b = el('button', className, text);
-  b.type = 'button';
-  return b;
 }
 
 /* Only on change — rewriting a live region's text re-announces it, and passes

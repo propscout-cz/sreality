@@ -6,17 +6,10 @@
  * reuse-detection, so a token shared between two independently-refreshing
  * sessions would eventually revoke both. This is a fully separate sign-in. */
 
+import { SUPABASE_URL } from './config';
 import { SESSION_KEY, decodeJwtPayload, type StoredSession } from './session';
 import type { AuthState } from './types';
 
-function normalizeBaseUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  return withScheme.replace(/\/$/, '');
-}
-
-const SUPABASE_URL = normalizeBaseUrl(import.meta.env.VITE_SUPABASE_URL ?? '');
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 /* Every GoTrue REST endpoint lives under /auth/v1 — Supabase's Kong gateway
  * 404s ("requested path is invalid") on anything hit at the bare project
