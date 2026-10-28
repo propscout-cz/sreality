@@ -31,16 +31,15 @@
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { themeHost } from './appearance';
-import { COLLECTIONS_URL, friendlyDetail } from './config';
-import { h, keepFocus } from './dom';
+import { buildCollectionChecklist, stateLine } from './checklist';
+import { friendlyDetail } from './config';
+import { h, keepFocus, setBusy } from './dom';
 import {
-  bellIconSvg,
   bookmarkIconSvg,
   eyeOffIconSvg,
   funnelIconSvg,
   knowsAll,
   savedCollections,
-  saveTargets,
   stageLook,
 } from './glyphs';
 import { COLLECTION_SAVE_LABEL } from '../../frontend/src/lib/collectionRules';
@@ -206,8 +205,8 @@ const CARD_CSS = `
   @media (prefers-reduced-motion: reduce) { .bar, .act { transition: none; } }
 `;
 
-/* The panel's slip, floated: a popover surface, the accent "filed" top edge.
- * Rows are the panel checklist's rows. */
+/* A popover surface with the accent "filed" top edge. The collection menu's
+ * rows are the shared save checklist (checklist.ts), the side sheet's pickers'. */
 const MENU_CSS = `
   ${tokens}
   :host { all: initial; }
@@ -300,13 +299,6 @@ const SHIELDED_EVENTS = [
   'click', 'auxclick', 'dblclick', 'mousedown', 'mouseup', 'pointerdown',
   'pointerup', 'touchstart', 'touchend', 'keydown', 'keyup', 'keypress',
 ] as const;
-
-function setBusy(node: HTMLElement, busy: boolean): void {
-  /* aria-disabled, never `disabled`: a disabled button drops keyboard focus to
-   * the portal page for the length of the write. Handlers ignore busy clicks. */
-  if (busy) node.setAttribute('aria-disabled', 'true');
-  else node.removeAttribute('aria-disabled');
-}
 
 function injectPageStyle(): void {
   if (document.getElementById(PAGE_STYLE_ID) != null) return;
@@ -768,17 +760,6 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     placeMenu();
   }
 
-  function stateLine(text: string, retry?: () => void): HTMLElement {
-    const p = h('p', 'state', text);
-    if (retry != null) {
-      const again = h('button', 'link', 'Zkusit znovu');
-      again.dataset.key = 'retry';
-      again.onclick = retry;
-      p.append(' ', again);
-    }
-    return p;
-  }
-
   /* The app's <PipelineStageMenu>: every stage as a row (the current one
    * checked), then removal behind its two-step confirm. */
   function buildStageMenu(box: HTMLElement, cur: Curation, open: Menu): void {
@@ -877,63 +858,19 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
    * property can sit in several collections. */
   function buildCollectionMenu(box: HTMLElement, cur: Curation, open: Menu): void {
     const propertyId = open.propertyId;
-    const memberIds = new Set(cur.collection_ids ?? []);
-    const pending = store.busy('collections', propertyId);
     const { data: collections, status } = store.list('collections');
     box.setAttribute('role', 'group');
     box.setAttribute('aria-label', COLLECTION_SAVE_LABEL);
     box.appendChild(h('p', 'eyebrow', COLLECTION_SAVE_LABEL));
-
-    if (collections == null) {
-      /* A failed read is NOT an empty one — "no collections yet" would tell an
-       * operator whose collections exist that they have none. */
-      box.appendChild(status === 'failed'
-        ? stateLine('Kolekce se nepodařilo načíst.', () => { store.load('collections', true); })
-        : stateLine('Načítám kolekce…'));
-    } else if (saveTargets(collections).length === 0) {
-      box.appendChild(stateLine('Zatím nemáte žádnou kolekci.'));
-    } else {
-      const list = h('div', 'list');
-      for (const c of saveTargets(collections)) {
-        const member = memberIds.has(c.id);
-        const row = h('button', 'row' + (member ? ' row--member' : ''));
-        row.setAttribute('aria-pressed', String(member));
-        row.dataset.key = `coll-${c.id}`;
-        setBusy(row, pending);
-        const check = h('span', 'check', '✓');
-        check.setAttribute('aria-hidden', 'true');
-        const name = h('span', 'name', c.name);
-        name.title = c.name;
-        row.append(check, name);
-        if (c.monitoring_enabled) {
-          const bell = h('span', 'bell');
-          bell.title = 'Sledovaná — upozorní na změny';
-          bell.innerHTML = bellIconSvg();
-          row.appendChild(bell);
-        }
-        row.onclick = () => { void toggleCollection(propertyId, c.id); };
-        list.appendChild(row);
-      }
-      box.appendChild(list);
-    }
-
-    if (open.error != null) {
-      const err = h('p', 'error', open.error);
-      err.setAttribute('role', 'alert');
-      box.appendChild(err);
-    }
-
-    /* Creating, renaming and monitoring settings stay in the app — the
-     * checklist only files the property. */
-    if (COLLECTIONS_URL != null) {
-      const manage = h('a', 'link manage', collections != null && saveTargets(collections).length === 0
-        ? 'Založit kolekci v aplikaci →'
-        : 'Spravovat kolekce →');
-      manage.href = COLLECTIONS_URL;
-      manage.target = '_blank';
-      manage.rel = 'noopener';
-      box.appendChild(manage);
-    }
+    buildCollectionChecklist(box, {
+      collections,
+      failed: status === 'failed',
+      memberIds: new Set(cur.collection_ids ?? []),
+      busy: store.busy('collections', propertyId),
+      error: open.error,
+      retry: () => { store.load('collections', true); },
+      toggle: (id) => { void toggleCollection(propertyId, id); },
+    });
   }
 
   return { mount, clear, refresh, dismissedCount, reset };

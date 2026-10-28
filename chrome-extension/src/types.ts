@@ -2,10 +2,10 @@
  * app's own types (frontend/src/lib/types.ts, the same routes), imported. */
 import type { Appearance } from '../../frontend/src/lib/appearance';
 import type { ReferenceRent } from '../../frontend/src/lib/mfReference';
-import type { TagColor } from '../../frontend/src/lib/types';
+import type { ListingSnapshotPublic, PropertySource, TagColor } from '../../frontend/src/lib/types';
 
-/* Subset of the SPA's EstimationRun shape — only the fields the yield panel
- * reads (the panel's estimation flow is unchanged; its types with it). */
+/* Subset of the SPA's EstimationRun shape — only the fields the side sheet's
+ * Výnos editor reads (the old panel's estimation flow, moved unchanged). */
 
 export interface YieldScenario {
   rent_czk: number | null;
@@ -21,7 +21,6 @@ export interface EstimationRun {
   id: number;
   status: 'pending' | 'running' | 'success' | 'failed';
   estimate_kind: 'rent' | 'sale' | null;
-  input_sreality_id: number | null;
   input_purchase_price_czk: number | null;
   estimated_monthly_rent_czk: number | null;
   estimated_sale_price_czk: number | null;
@@ -29,15 +28,7 @@ export interface EstimationRun {
   confidence: 'high' | 'medium' | 'low' | null;
   input_spec: { area_m2?: number | null } | null;
   scenario: YieldScenario | null;
-  reference_rent: ReferenceRent | null;
   error_message: string | null;
-}
-
-export interface EstimationListResponse {
-  data: EstimationRun[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 export interface YieldScenarioUpdate {
@@ -62,6 +53,8 @@ export interface PipelineMembership {
    * stage_code null = fall back to the stage's ordinal in `stages`. */
   stage_code: string | null;
   stage_color: TagColor | null;
+  /* Since when the card sits at its stage (the move PATCH stamps it): "ve fázi od". */
+  entered_stage_at: string | null;
 }
 
 /* Response of the pipeline-card writes: POST /pipeline/cards (add) and
@@ -74,6 +67,7 @@ export interface PipelineCardResult {
   stage_label?: string | null;
   stage_code?: string | null;
   stage_color?: TagColor | null;
+  entered_stage_at?: string | null;
   added?: boolean;
   removed?: boolean;
 }
@@ -117,11 +111,6 @@ export interface PortalListing {
   source: string;
   source_id: string;
   found: boolean;
-  /* LEGACY app-wide listing identity (negative for non-sreality portals).
-   * NULL for a post-Gate-2 listing — use `found` to test DB membership and
-   * `listing_id` to reference the listing in a write. The deep link uses the
-   * canonical /listing/{source}/{source_id} natural-key route regardless. */
-  sreality_id: number | null;
   /* Surrogate listing identity — present for every listing in our DB. */
   listing_id: number | null;
   /* The grouping property (the pipeline + dedup grain). Null when not in our
@@ -146,13 +135,6 @@ export interface PortalListing {
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
   disposition: string | null;
-  /* Portal-agnostic property sub-type (migration 152): the meaningful "kind"
-   * for commercial/houses where disposition is NULL. */
-  subtype: string | null;
-  /* The display "kind": the Czech subtype label (commercial/houses) else the
-   * disposition (apartments). Computed server-side so the extension carries no
-   * slug→label dictionary of its own. */
-  kind_label: string | null;
   /* The ONE place string the whole product prints, composed server-side from
    * the listing's resolved location (migration 503). It replaced a
    * `district ?? locality` pair that this panel fell back through in one order
@@ -160,7 +142,6 @@ export interface PortalListing {
    * be labelled two different ways on two surfaces. */
   display_label: string | null;
   is_active: boolean | null;
-  last_seen_at: string | null;
   /* MF is PROPERTY-grain — every advert of one flat shows its property's
    * figures; null for a non-flat, and for an advert not yet attached to a
    * property. `mf_reference_rent` is the whole result, rendered by its SHAPE
@@ -169,21 +150,24 @@ export interface PortalListing {
   mf_reference_rent_czk: number | null;
   mf_gross_yield_pct: number | null;
   mf_reference_rent?: ReferenceRent | null;
-  /* The default service charge (fond oprav + SVJ) to seed the yield panel
-   * with, in Kč per m² of floor area per MONTH — resolved server-side from
-   * THIS subject's denominator. THREE distinct states, and collapsing any two
-   * of them blanks the panel's headline yield:
-   *   a number — the rate to seed;
-   *   `null`   — no fond can apply to this subject at all (its area is a
-   *              parcel). This is the server's ANSWER, and the one definition
-   *              of that decision — no consumer re-derives it;
-   *   absent   — the API predates W7 and knows nothing of the field.
-   * Optional on the wire for exactly that last reason: `api.ts` sends no
-   * version header, so a bundle built here can meet an older deployment, and
-   * the compiler must force that case to be handled (see `defaultFond` /
-   * LEGACY_FOND_FALLBACK_CZK_PER_M2 in content.ts). The one definition of the
-   * NUMBER lives in api/schemas.DEFAULT_FOND_CZK_PER_M2. */
-  fond_per_m2_czk_default?: number | null;
+  /* What the property IS, each at its MS11 grain (api/portal_lookup._LISTING_COLS), off the
+   * same properties_public row as MF and like it NULL before attach: the panel header's
+   * facts. `canonical_listing_id` is the canonical ad, the price chart's first track. */
+  canonical_listing_id: number | null;
+  property_is_active: boolean | null;
+  tom_days: number | null;
+  floor: number | null;
+  total_floors: number | null;
+  condition: string | null;
+  ownership: string | null;
+  property_subtype: string | null;
+  plot_area_m2: number | null;
+  /* The default service charge (fond oprav + SVJ) to seed the Výnos editor with,
+   * in Kč per m² of floor area per MONTH, resolved server-side from THIS
+   * subject's denominator (the one definition: api/schemas.DEFAULT_FOND_CZK_PER_M2).
+   * `null` is the server's answer that no fond can apply (the area is a parcel);
+   * the lookup serves the key on every row, found or not. */
+  fond_per_m2_czk_default: number | null;
   latest_estimation: {
     estimation_id: number;
     estimate_kind: 'rent' | 'sale' | null;
@@ -202,6 +186,13 @@ export interface PortalListing {
    * when there is no property yet; absent when the API predates the field —
    * either way the panel shows no hide control. */
   dismissed?: boolean | null;
+}
+
+/* GET /properties/{id}/price-history: every ad of the property (oldest first) and their
+ * price snapshots — the SPA property page's two reads, column for column. */
+export interface PriceHistory {
+  sources: PropertySource[];
+  snapshots: ListingSnapshotPublic[];
 }
 
 export interface PortalLookupItem {
@@ -243,6 +234,7 @@ export type ApiMessage =
       category_main?: string | null;
     }
   | { type: 'get_estimation'; run_id: number }
+  | { type: 'get_price_history'; property_id: number }
   | { type: 'add_pipeline_card'; property_id: number }
   | { type: 'remove_pipeline_card'; property_id: number }
   | { type: 'move_pipeline_card'; property_id: number; stage_id: number }

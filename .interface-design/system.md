@@ -72,14 +72,16 @@ index), **B, section cards** is ruled. **Picture with each value tagged: `docs/d
   `accessory` at the bar's right end, `lede` the body's first line). Wrap each detail section in it; Health, Costs,
   LocationQuality, LocationPinAudit and NewDedupDashboard get the same card through that change. The
   `SectionLabel` + `Hairline` pair between sections goes; `SectionLabel` stays only as the L4 field label. No new token.
-- **Chrome extension** (X1; plain CSS, the app's palette `frontend/src/styles/tokens.css` — the search-page
-  surfaces since 2026-10-28; the listing panel's own `chrome-extension/src/tokens.css` goes with that panel): the
-  same card. `--color-paper-2` on the panel's `--color-paper`, 1px `--color-rule`, `--radius-xs`. Title bar 9 / 12 / 8 px with a `--color-rule` line under it.
-  Title 600 14/20 `--color-ink` in the panel's font (it loads no web fonts on a portal page, so no Fraunces). Count
-  `--color-ink-3` with tabular figures. Body 10 / 12 / 12 px, 10 px between cards. The eyebrows (`.mf-eyebrow`,
-  `.coll-eyebrow`, `.est-eyebrow`, `.notes-eyebrow`) become card titles. `.field-label` and `.mf-ledger-label` stay
-  L4. A new panel layout uses these cards from the start. Built: `chrome-extension/src/card.ts` `buildCard` (the MF, estimate
-  and notes blocks and the collection / tag checklists).
+- **Chrome extension** (X1; plain CSS, the app's palette `frontend/src/styles/tokens.css` on every shadow root,
+  the host wearing the user's scheme and theme): the listing panel is a **side sheet** (operator rulings 2026-10-28) —
+  full height on the right edge, ~360 px, covering the page, `--color-paper` under a `--color-chrome` top bar, folding
+  to a tab on that edge — of the same cards: `--color-paper-2` on the sheet's `--color-paper`, 1px `--color-rule`,
+  `--radius-xs`, no shadow. Title bar 9 / 12 / 8 px with a `--color-rule` line under it; title 600 14/20
+  `--color-ink` in the system font (no web font loads on a portal page, so no Fraunces), the count `--color-ink-3`
+  mono tabular, a note (12, ink-3) pushed right. Body 10 / 12 / 12 px, 10 px between cards. The header sits on the
+  sheet, not in a card. "AI agenti" is the one accent card: a `--color-copper` title band over a
+  `--color-copper-soft` body. Field labels and group heads inside a card are L4. Built:
+  `chrome-extension/src/card.ts` `buildCard` (every card of the sheet), `panel.css` (the one stylesheet).
 
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`

@@ -1012,16 +1012,15 @@ rules. Identify which one a task belongs to before you start.
   re-inject for. `background.ts` listens for `chrome.webNavigation.onHistoryStateUpdated`
   (`webNavigation` permission, filtered to the same `PORTALS` host list) and relays the new URL
   to the tab's already-injected content script (`route_changed` message), which re-runs its
-  page-type decision (`renderForUrl` in `content.ts`) without needing a real reload — this
-  fixed the "panel only appears after F5" bug. `renderForUrl` keys on the **listing identity**
-  (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't tear
-  down the panel and discard the operator's note draft + calculator edits. Because the panel's
-  state is a single module global that `openPanel` replaces wholesale, **every apply that resumes
-  after an `await` is epoch-guarded** (`renderEpoch` / `setStateIf`) — without it, listing A's
-  lookup or its ~6-minute estimation poll paints into listing B's panel. That epoch ("is this
-  still the same panel instance?") sits alongside the property-id guards (`setStateFor` /
-  `loadNotes`, "is the panel still showing this property?"), which survive a re-open of the same
-  listing. **The operator's curation lives in ONE store** (`src/store.ts`, shared by the panel and
+  page-type decision (`content.ts`, the entry and router) without needing a real reload — this
+  fixed the "panel only appears after F5" bug. The router keys on the **listing identity**
+  (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't
+  re-open the side sheet and discard the operator's note draft + calculator edits. Every panel
+  open is a new **epoch** (`panel.ts`): anything resuming after an `await` (the lookup, the price
+  history, the ~6-minute estimation poll in `panel_agents.ts`, the add-to-database flow) applies
+  only while its epoch is current — without it, listing A's answers paint into listing B's sheet —
+  and the Moje card guards its note reads and writes by property id, which survives a re-open of
+  the same listing. **The operator's curation lives in ONE store** (`src/store.ts`, shared by the panel and
   the search-page cards, no DOM or `chrome`, unit-tested under `node --test`): each property's
   pipeline / collections / tags / dismissal keyed by `property_id`, the stage / collection / tag
   lists (one status each, the bounded retry), the one optimistic write path (put back once on
@@ -1041,51 +1040,53 @@ rules. Identify which one a task belongs to before you start.
   the extension ID, which is baked into the Supabase redirect allowlist, the Google OAuth client,
   and `CORS_ALLOW_ORIGINS` — add the new ID alongside the old one before cutover
   (`chrome-extension/README.md`, "Keeping it up to date"). Match patterns are exact-host, so an apex-canonical
-  portal (e.g. `realitymix.cz`) needs its apex pattern, not just `www.`. **Detail pages** get a floating
-  panel (closed shadow root). For ANY listing we have it shows a **"Přidat do pipeline"**
-  deal-pipeline control (bookmark; once in, change stage via a native `<select>`, and remove
-  behind the panel's two-step confirm — rule #22: no surface removes a card on one click)
-  + a save-to-collection control (rule #18 — the SPA header's "Uložit do kolekce": a checklist of
-  every collection of mine, monitored first — a shared one is never a save target) + **operator notes** (list existing + add a new
-  one via `GET`/`POST /properties/{id}/notes`, property-grain, the viewed advert recorded as
-  the note's `origin_listing_ref_id`) + an "Otevřít v aplikaci" deep-link to the SPA
-  (`{VITE_APP_BASE_URL}/listing/{source}/{native}` — an advert alias that lands on the
-  property page with that advert's row open) + subject facts; for a flat it shows the
-  property's MF result by SHAPE (value + "Výnos MF" on a sale flat, range + (i) note, note,
-  nothing before attach) and, for sale apartments, the comparables estimation as the deeper
-  tool/fallback (the bookmark + link + facts are not gated). The lookup also carries the property's
-  header facts at their MS11 grain (`docs/design/merge-sprint/PROGRAM.md`), off the same
-  `properties_public` row as MF, NULL before attach, the plot through `plot_area_m2` (keys:
-  `portal_lookup._LISTING_COLS`); the price chart reads `GET /properties/{id}/price-history`
-  (`require_token`, service role): the SPA property page's `property_sources_public` +
-  `listing_snapshots_public` reads, column for column.
-  The estimation's editable **net-yield
-  calculator** (rent / fond oprav+SVJ / cena / **rekonstrukce**, with the renovation joining
-  the price as the acquisition-cost denominator — migration 213) mirrors the SPA's `YieldBlock`
-  by value: the yield % is **computed-on-read client-side in BOTH** `computeYield` (extension)
-  and `YieldBlock` (SPA) — there is no server-side yield (the scenario inputs are the single
-  stored truth, `estimation_runs.scenario` + `ScenarioUpdateIn`). The extension does import pure
-  `frontend/src/lib` modules (`brand`, `portalIds`, `mfReference`), but no such module holds the
-  formula yet (it is inline in `RunPanel.tsx` `YieldBlock`), so it is duplicated by value
-  (like `<FunnelIcon>`): **a yield-formula change must touch both
-  `computeYield` and `YieldBlock` in the same PR** (the field hints — fond/měs + the acquisition
-  denominator — are mirrored too). The bookmark is property-grain
-  (rule #22): `POST /listings/lookup` returns the listing's `property_id` + pipeline
-  membership, and the toggle writes through the SAME JWT-gated (`tenant_conn`)
-  `POST/DELETE /pipeline/cards` the SPA's `PipelineToggle` uses — one write path, one
-  `<FunnelIcon>` glyph everywhere. Reachable from index/search pages too: the per-card
-  badge opens this same panel. The panel can be **minimized** (a `−` in the header) to a
-  tiny one-line bar showing only the two yield figures (MF + comparables estimate); the
-  preference persists across listings via `chrome.storage.local` (`panelMinimized`, the
-  "storage" permission) so it stays tucked away while browsing, and `openPanel` awaits it
-  before first paint (no flash).
+  portal (e.g. `realitymix.cz`) needs its apex pattern, not just `www.`. **Detail pages** get the
+  **side sheet** (operator rulings 2026-10-28; `.interface-design/system.md` § Section cards, X1): a
+  full-height ~360 px sheet on the right edge in one closed shadow root (`sheet.ts`), covering the
+  page (never pushing it), opening by itself; folded it is a tab on that edge (PS mark, stage badge,
+  this ad's price drop, MF). The fold is remembered in `chrome.storage.local` (`panelFolded`; the old
+  panel's `panelMinimized` is read once as the first fold and removed) and the sheet starts folded
+  on a viewport under 1280 px. Its top bar holds the wordmark, "V aplikaci" (the
+  `{VITE_APP_BASE_URL}/listing/{source}/{native}` deep link), the account menu (email + Odhlásit) and
+  the fold. Under it: the header (`panel_header.ts`: deal, status, days on market, title, address,
+  the property type's fact chips, this ad's price in the live colour with its last move and per-m²
+  + basis, the MF gross yield only when served), then three section cards. **Vývoj ceny**
+  (`panel_price.ts`) draws one step line per ad from `GET /properties/{id}/price-history`
+  (`require_token`, service role: the SPA property page's `property_sources_public` +
+  `listing_snapshots_public` reads, column for column) through the app's `lib/priceHistory` and
+  `lib/chartAxis`; the header's pill is this ad's own track's last move (`lastMoveByTrack`), never
+  the canonical ad's lineage. **Moje** (`panel_mine.ts`) is the deal pipeline (out → "Přidat do
+  pipeline" at the entry stage; in → a step bar over ≤ 4 open stages, else the stage `<select>`, "ve
+  fázi od" from the lookup's `pipeline.entered_stage_at`, and "Uzavřít ▾" = the closed stages +
+  removal behind the two-step confirm — rule #22: no surface removes a card on one click), the hide
+  toggle, collections and tags as chips (three, then "+N") over the save checklist shared with the
+  search cards (`checklist.ts`), and the notes (latest + count, expanding in place to the full CRUD
+  with sharing). **AI agenti** (`panel_agents.ts`) holds the Výnos row — the estimation flow for
+  flats for sale, its four-field assumptions editor (rent / fond oprav+SVJ / cena /
+  **rekonstrukce**, the renovation joining the price as the acquisition-cost denominator —
+  migration 213) — the agents to come ("Brzy") and a chat box with no backend yet. The other states
+  (signed out, an ad we lack with "Přidat do databáze", a failure, the static loading skeleton) are
+  one card each (`panel_states.ts`). The lookup carries the property's header facts at their MS11
+  grain (`docs/design/merge-sprint/PROGRAM.md`), off the same `properties_public` row as MF, NULL
+  before attach, the plot through `plot_area_m2` (keys: `portal_lookup._LISTING_COLS`).
+  The editable **net-yield calculator** mirrors the SPA's `YieldBlock` by value: the yield % is
+  **computed-on-read client-side in BOTH** `panel_agents.ts` and `YieldBlock` (SPA) — there is no
+  server-side yield (the scenario inputs are the single stored truth, `estimation_runs.scenario` +
+  `ScenarioUpdateIn`). No `frontend/src/lib` module holds the formula yet (it is inline in
+  `RunPanel.tsx` `YieldBlock`), so it is duplicated by value: **a yield-formula change must touch
+  both `panel_agents.ts` and `YieldBlock` in the same PR** (the field hints — fond/měs + the
+  acquisition denominator — are mirrored too). The bookmark is property-grain (rule #22): `POST
+  /listings/lookup` returns the listing's `property_id` + pipeline membership, and every curation
+  write goes through the store to the SAME JWT-gated (`tenant_conn`) routes the SPA uses — one write
+  path, one `<FunnelIcon>` glyph everywhere. Reachable from index/search pages too: the per-card
+  badge opens the same sheet (unfolded).
   **Index/search pages** get per-card badges via anchor-href scanning (no per-portal card
   selectors — robust to markup changes). The default display is a **read** through
   `POST /listings/lookup`, which maps a card's on-page `(source, native id)` to our row +
   MF figures + `sreality_id` (the public views don't expose `source_id_native`, so the
   browser can't resolve non-sreality listings directly). Badges come only from a successful
-  lookup; a failed one raises ONE page-level notice (bottom-LEFT corner — the panel owns the
-  right one — in a closed shadow root, shown only while cards the URL doesn't rule out as sale
+  lookup; a failed one raises ONE page-level notice (bottom-LEFT corner — the listing sheet owns the
+  right edge — in a closed shadow root, shown only while cards the URL doesn't rule out as sale
   apartments wait on it): a sign-in button when signed out (that 401 used to leave search pages
   silent, read as a broken extension — 2026-09-24), "Obnovit stránku" when the extension was
   reloaded / updated / disabled / removed under the open tab (the overlay then stops scanning),
@@ -1108,9 +1109,9 @@ rules. Identify which one a task belongs to before you start.
   `themeHost` stamps `data-scheme` / `data-theme` on each host by `lib/appearance.ts`
   `paintAppearance`, from the profile's `user_metadata.appearance` that `get_auth_state` reads off the
   session token (Měď light when signed out or unset; asked at start and on every session change;
-  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The listing panel keeps its own light palette (`src/tokens.css` +
-  `src/styles.css?inline`) until it is replaced, with the app's tokens ahead of it for the stage and
-  tag colours only (its host is not themed). Every definition the app already has is IMPORTED from
+  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The side
+  sheet is one of them: `tokens.css` + its one stylesheet `src/panel.css` (system fonts only, no web
+  font on a portal page). Every definition the app already has is IMPORTED from
   `frontend/src/lib` (formatters, the per-m² vocabulary, the MF shape and yield text, the stage
   look, the collection rules, the appearance values, the wire types), and `vite.config.ts`'s
   `assert-pure-app-imports` fails the build when such a module imports anything but another plain
@@ -3672,9 +3673,8 @@ renumber.** Navigate by area:
     and were never at risk.)
     The confirm therefore names that consequence and points at the terminal stages, which
     close a deal while KEEPING its record — the data-preserving alternative to deletion. The menu
-    also replaced the listing header's own `<select>` + bare ✕, and the Chrome-extension panel gained
-    the same confirm on its ✕ (`buildConfirmRow` — one destructive-confirm shape for the whole panel,
-    not one per action). The kanban is the sanctioned exception, on both counts: moves are
+    also replaced the listing header's own `<select>` + bare ✕; the Chrome-extension side sheet puts
+    removal under its "Uzavřít ▾" menu, after the closed stages, behind the same two-step confirm. The kanban is the sanctioned exception, on both counts: moves are
     drag-and-drop and its trash already carried the confirm.
     **Menus hang off `<AnchoredPopover>`, which portals to `<body>`.** Not a style choice: the funnel
     sits inside an `overflow-hidden` card AND inside that card's `<Link>`, so the app's other

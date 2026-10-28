@@ -1,4 +1,4 @@
-/* The marks every extension surface draws — the detail panel and the
+/* The marks every extension surface draws — the listing side sheet and the
  * search-page card controls — as inline SVG copies of the SPA's icon
  * components (React, so not importable), and the save rules the extension adds
  * on top of the app's shared ones (lib/collectionRules). */
@@ -98,4 +98,36 @@ export function savedCollections(
   if (ids.size === 0) return [];
   if (collections == null) return null;
   return saveTargets(collections).filter((c) => ids.has(c.id));
+}
+
+/* The side sheet's line icons (the approved panel design's set), 16-unit grid,
+ * stroked in currentColor; `spark` is the AI agents' filled mark. */
+const LINE = {
+  pin: '<path d="M8 14s4.5-4.2 4.5-7.5a4.5 4.5 0 00-9 0C3.5 9.8 8 14 8 14z"/><circle cx="8" cy="6.5" r="1.5"/>',
+  out: '<path d="M9.5 3.5h3v3M12.5 3.5L7.5 8.5M11 9.5v3H3.5V5h3"/>',
+  more: '<circle cx="3.5" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/>'
+    + '<circle cx="12.5" cy="8" r=".9" fill="currentColor"/>',
+  fold: '<path d="M6.5 4.5L10 8l-3.5 3.5"/>',
+  down: '<path d="M4.5 6.5L8 10l3.5-3.5"/>',
+  plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+  arrow: '<path d="M3.5 8h9M9 4.5L12.5 8 9 11.5"/>',
+  send: '<path d="M8 12.5v-9M4 7.5l4-4 4 4"/>',
+  yield: '<path d="M4 12L12 4"/><circle cx="5" cy="5" r="1.6"/><circle cx="11" cy="11" r="1.6"/>',
+  flip: '<path d="M3.5 7.5a4.5 4.5 0 017.9-2.9M12.5 3v2.5H10M12.5 8.5a4.5 4.5 0 01-7.9 2.9M3.5 13v-2.5H6"/>',
+  reno: '<path d="M2.5 13.5h11M4 13.5V7l4-3 4 3v6.5M6.5 13.5v-3h3v3M8 1.5V4"/>',
+  scout: '<circle cx="7" cy="7" r="4.5"/><path d="M10.3 10.3L13.5 13.5"/>',
+  pencil: '<path d="M3 13l.6-2.6L10.8 3.2a1.1 1.1 0 011.6 0l.4.4a1.1 1.1 0 010 1.6L5.6 12.4z"/>',
+  trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/>',
+};
+const SPARK = '<path d="M7 1.8l1.45 3.75L12.2 7 8.45 8.45 7 12.2 5.55 8.45 1.8 7l3.75-1.45z"/>'
+  + '<path d="M12.6 10.4l.55 1.45 1.45.55-1.45.55-.55 1.45-.55-1.45-1.45-.55 1.45-.55z"/>';
+
+export type LineIcon = keyof typeof LINE;
+
+export function lineIcon(name: LineIcon): string {
+  return `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">${LINE[name]}</svg>`;
+}
+
+export function sparkIcon(): string {
+  return `<svg viewBox="0 0 16 16" aria-hidden="true">${SPARK}</svg>`;
 }

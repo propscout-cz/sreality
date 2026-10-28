@@ -727,8 +727,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
-  keeps its `<select>` and gains the same confirm on ✕ via a generic
-  `buildConfirmRow` — one destructive-confirm shape for the whole panel.
+  kept its `<select>` and gained the same confirm on ✕ (since 2026-10-28 its side
+  sheet: a step bar or the `<select>`, removal under "Uzavřít ▾" behind the confirm).
 - **`AnchoredPopover`** — the missing primitive. The funnel sits inside an
   `overflow-hidden` card AND inside the card's `<Link>`, so the app's existing
   `absolute` popovers would be clipped and every click inside one would

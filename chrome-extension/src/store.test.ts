@@ -44,6 +44,7 @@ const fail = (detail = 'boom'): ApiResult<unknown> => ({ ok: false, status: 500,
 
 const OUT = {
   in_pipeline: false, stage_id: null, stage_key: null, stage_label: null, stage_code: null, stage_color: null,
+  entered_stage_at: null,
 };
 const IN = { ...OUT, in_pipeline: true, stage_id: 2, stage_key: 'v', stage_label: 'Prohlídka', stage_code: 'P' };
 
@@ -151,6 +152,13 @@ test('4. one write per property and kind at a time; another kind or property goe
   await first;
   assert.equal(h.store.busy('pipeline', 1), false);
   assert.equal(h.store.curation(1)?.pipeline?.stage_label, 'Nové');
+
+  // A move restamps the stage date: unknown while it is out, the card's once it lands.
+  const move = h.store.moveStage(1, 2);
+  assert.equal(h.store.curation(1)?.pipeline?.entered_stage_at, null);
+  h.reply('move_pipeline_card', ok({ stage_id: 2, entered_stage_at: '2026-10-28T09:00:00Z' }));
+  await move;
+  assert.equal(h.store.curation(1)?.pipeline?.entered_stage_at, '2026-10-28T09:00:00Z');
 
   // A new card is live, and a live deal lifts the dismissal.
   await h.seed([row(3, { dismissed: true })]);

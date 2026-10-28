@@ -1,6 +1,6 @@
 /* The search page's corner dock — the one page-level thing the extension shows
  * on EVERY index page with listing cards, whatever their category: a small bar
- * in the bottom-left corner (the panel owns the bottom-right) holding the
+ * in the bottom-left corner (the listing sheet owns the right edge) holding the
  * "Skrýt skryté" switch. Above it, in the same column so nothing overlaps: a
  * slot for the lookup-failure notice (index_overlay.ts) and a line for the
  * reason a card write failed.

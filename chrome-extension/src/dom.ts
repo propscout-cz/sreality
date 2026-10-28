@@ -13,6 +13,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/* aria-disabled, never `disabled`: a disabled button drops keyboard focus to the
+ * portal page for the length of a write. Handlers ignore a busy click. */
+export function setBusy(node: HTMLElement, busy: boolean): void {
+  if (busy) node.setAttribute('aria-disabled', 'true');
+  else node.removeAttribute('aria-disabled');
+}
+
 interface FocusRoot {
   readonly activeElement: Element | null;
   querySelector<E extends Element = Element>(selectors: string): E | null;
