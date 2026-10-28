@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createCollection, deleteCollection } from '@/lib/api';
 import { isMine, revalidateCollections, useCollections } from '@/lib/collectionCache';
-import { SectionLabel } from '@/components/section';
 import { BellGlyph } from '@/components/CollectionSaveMenu';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -57,16 +56,25 @@ function CollectionsDesktop() {
             onCreated={() => revalidateCollections(qc)}
           />
         </div>
-        {!listQ.error && shared.length > 0 && (
-          <section className="mt-10">
-            <SectionLabel>Shared with me</SectionLabel>
-            <div className="mt-3">
-              <CollectionList items={shared} />
-            </div>
-          </section>
-        )}
+        {!listQ.error && shared.length > 0 && <SharedWithMe items={shared} />}
       </div>
     </div>
+  );
+}
+
+/* A group of the list, not a section card (items in a list are not cards):
+ * an L3 title (system.md § Section cards ladder), never small caps. */
+function SharedWithMe({ items }: { items: Collection[] }) {
+  const titleId = useId();
+  return (
+    <section aria-labelledby={titleId} className="mt-10">
+      <h2 id={titleId} className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
+        Shared with me
+      </h2>
+      <div className="mt-3">
+        <CollectionList items={items} />
+      </div>
+    </section>
   );
 }
 
