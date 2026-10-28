@@ -22,9 +22,10 @@ Two shapes over one row:
   first; `reap_lost` closes a run whose lease lapsed as `lost` (a failure), re-run at once, then
   backed off on a second loss in a row. Every runner-facing call is one transaction under
   `STATEMENT_TIMEOUT_S` (`_bounded`).
-* `held` — a leased lane with no schedule (the location resolver drain, run every few
-  seconds by the realtime worker and by `location_resolve.yml`): no due time and no run
-  history, just mutual exclusion and the last outcome.
+* `held` — a leased lane with no schedule (the location resolver drain, run every few seconds by the realtime worker
+  and by `location_resolve.yml`): no due time and no run history, just mutual exclusion and the last outcome. It yields
+  a `Hold` its holder renews (`renew`) and stops by (`Hold.fenced`); `fence` makes each of the holder's commits refuse
+  a lapsed lease; the release falls back to one fresh connection when the holding one died.
 """
 from __future__ import annotations
 
@@ -34,13 +35,15 @@ import socket
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 import psycopg
 from psycopg.types.json import Jsonb
+
+from scraper import db
 
 if TYPE_CHECKING:
     from scraper.jobs import Job
@@ -139,22 +142,12 @@ UPDATE scheduled_jobs
 RETURNING 1
 """
 
-_RELEASE_JOB_SQL = f"""
-UPDATE scheduled_jobs j
-   SET lease_holder = NULL,
-       lease_expires_at = NULL,
-       last_outcome = %(outcome)s,
-       last_error = %(error)s,
-       last_success_at = CASE WHEN %(outcome)s = 'ok' THEN now() ELSE j.last_success_at END,
-       consecutive_failures = CASE WHEN %(outcome)s = 'ok' THEN 0
-                                   WHEN %(not_failure)s THEN j.consecutive_failures
-                                   ELSE j.consecutive_failures + 1 END,
-       due_at = CASE WHEN %(due_at)s::timestamptz IS NOT NULL THEN %(due_at)s::timestamptz
-                     WHEN j.due_at IS NULL THEN NULL
-                     WHEN %(outcome)s = 'interrupted' THEN now()
-                     ELSE {_NEXT_SLOT_SQL} END
- WHERE j.job_name = %(job)s AND j.lease_holder = %(holder)s
-RETURNING 1
+# The holder's last statement before a commit: its row, still live by the clock (`now()` is the transaction's start),
+# locked until the commit. A lapsed lease returns nothing and the commit rolls back; a take-over waits for the commit.
+_FENCE_SQL = """
+SELECT 1 FROM scheduled_jobs
+ WHERE job_name = %(job)s AND lease_holder = %(holder)s AND lease_expires_at > clock_timestamp()
+   FOR UPDATE
 """
 
 _CLOSE_RUN_SQL = """
@@ -381,20 +374,32 @@ def holder_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
+class LeaseLost(Exception):
+    """The holder's lease lapsed or passed to another holder: nothing may commit under it."""
+
+
 @dataclass
-class Lease:
+class Hold:
+    """A held lease row: renewed by `renew`, stopped by at `fence_at`, and checked at each commit by `fence`."""
+
     job_name: str
     holder: str
-    run_id: int
     ttl_s: int
-    args: list[str] | None
-    requested_by: str | None
     fence_at: float
-    due_slot: bool = False  # the row was due and unpaused when claimed: the run also took its scheduled slot
 
     def fenced(self, at: float | None = None) -> bool:
         """True once the holder must stop: its lease may lapse before another renewal lands."""
         return (clock() if at is None else at) >= self.fence_at
+
+
+@dataclass
+class Lease(Hold):
+    """A claimed scheduled job: its hold plus the open run, a request's args and who asked."""
+
+    run_id: int
+    args: list[str] | None
+    requested_by: str | None
+    due_slot: bool = False  # the row was due and unpaused when claimed: the run also took its scheduled slot
 
 
 @dataclass(frozen=True)
@@ -444,10 +449,11 @@ def claim(conn: psycopg.Connection, job_name: str, *, holder: str | None = None,
     except psycopg.errors.UniqueViolation:
         LOG.info("LEASE race lost job=%s: another holder opened a run on it or its resource", job_name)
         return None
-    return Lease(job_name, holder, run_id, ttl_s, args, requested_by, _fence_at(sent_at, ttl_s), bool(due_slot))
+    return Lease(job_name, holder, ttl_s, _fence_at(sent_at, ttl_s), run_id=run_id, args=args,
+                 requested_by=requested_by, due_slot=bool(due_slot))
 
 
-def renew(conn: psycopg.Connection, lease: Lease) -> bool:
+def renew(conn: psycopg.Connection, lease: Hold) -> bool:
     """Extends a lease that has not lapsed; on False the holder keeps its old fence and must stop by it."""
     sent_at = clock()
     with _bounded(conn) as cur:
@@ -460,19 +466,36 @@ def renew(conn: psycopg.Connection, lease: Lease) -> bool:
     return renewed
 
 
-def release(conn: psycopg.Connection, lease: Lease, outcome: str, *, due: str | None = None,
-            error: str | None = None, exit_code: int | None = None, peak_rss_mb: int | None = None,
-            log_tail: str | None = None) -> bool:
-    """Closes the run and frees the row once the work has stopped; `due` (DUE_KINDS) defaults to now for interrupted,
-    else slot. False: the lease was already lost."""
+def fence(conn: psycopg.Connection, hold: Hold) -> None:
+    """Inside the holder's transaction, as its last statement before the commit: locks the holder's still-live row
+    until the commit, or raises `LeaseLost` so the transaction rolls back instead of committing beside the next holder.
+    """
+    if conn.autocommit and conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE:
+        raise RuntimeError("fence() runs inside the transaction it guards: open conn.transaction() first")
+    with conn.cursor() as cur:
+        cur.execute(_FENCE_SQL, {"job": hold.job_name, "holder": hold.holder})
+        if cur.fetchone() is None:
+            raise LeaseLost(f"the {hold.job_name} lease of {hold.holder} lapsed or passed to another holder")
+
+
+def _release_params(hold: Hold, outcome: str, *, due: str | None, error: str | None) -> dict[str, object]:
+    """`_RELEASE_RUN_SQL`'s parameters for a hold that took no due slot on a request: a lane's, and a run's base."""
     if outcome not in RELEASE_OUTCOMES:
         raise ValueError(f"{outcome!r} is not a release outcome")
     due = due or ("now" if outcome == "interrupted" else "slot")
     if due not in DUE_KINDS:
         raise ValueError(f"{due!r} is not a due kind")
+    return {"job": hold.job_name, "holder": hold.holder, "outcome": outcome, "not_failure": outcome in NOT_FAILURES,
+            "error": error[:500] if error else None, "due": due, "requested": False, "due_slot": False}
+
+
+def release(conn: psycopg.Connection, lease: Lease, outcome: str, *, due: str | None = None,
+            error: str | None = None, exit_code: int | None = None, peak_rss_mb: int | None = None,
+            log_tail: str | None = None) -> bool:
+    """Closes the run and frees the row once the work has stopped; `due` (DUE_KINDS) defaults to now for interrupted,
+    else slot. False: the lease was already lost."""
     params = {
-        "job": lease.job_name, "holder": lease.holder, "outcome": outcome, "not_failure": outcome in NOT_FAILURES,
-        "error": error[:500] if error else None, "due": due, "requested": lease.requested_by is not None,
+        **_release_params(lease, outcome, due=due, error=error), "requested": lease.requested_by is not None,
         "due_slot": lease.due_slot, "run_id": lease.run_id, "exit_code": exit_code, "peak_rss_mb": peak_rss_mb,
         "log_tail": log_tail,
     }
@@ -596,36 +619,74 @@ def prune_runs(conn: psycopg.Connection, *, days: int = 90) -> int:
         return cur.rowcount
 
 
-def _release_params(job_name: str, holder: str, outcome: str, error: str | None,
-                    due_at: datetime | None) -> dict[str, object]:
-    if outcome not in RELEASE_OUTCOMES:
-        raise ValueError(f"{outcome!r} is not a release outcome")
-    return {"job": job_name, "holder": holder, "outcome": outcome, "not_failure": outcome in NOT_FAILURES,
-            "error": error[:500] if error else None, "due_at": due_at}
+def _fresh_connection() -> psycopg.Connection:
+    # One attempt, bounded: a fallback release must not hold back the error it is releasing under.
+    return db.connect(attempts=1, connect_timeout=10)
+
+
+def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None) -> None:
+    with _bounded(conn) as cur:
+        cur.execute(_RELEASE_RUN_SQL, _release_params(hold, outcome, due=None, error=error))
+        if cur.fetchone() is None:
+            LOG.warning("LEASE lost job=%s holder=%s: another holder had it at the release, so its outcome %s is "
+                        "not recorded", hold.job_name, hold.holder, outcome)
+
+
+def _give_back(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
+               original: BaseException | None, connect: Callable[[], psycopg.Connection]) -> None:
+    """Releases on the holding connection, else once on a fresh one. Never replaces `original`: a failure is noted on
+    it and the lease expires by itself; with no `original`, the release's own failure is the error."""
+    try:
+        _release_hold(conn, hold, outcome, error)
+        return
+    except Exception as exc:  # noqa: BLE001 - retried on a fresh connection below
+        first = exc
+    fresh = None
+    try:
+        fresh = connect()
+        _release_hold(fresh, hold, outcome, error)
+    except Exception as exc:
+        if original is None:
+            raise exc from first
+        original.add_note(f"releasing the {hold.job_name} lease failed ({type(first).__name__}: {first}) and again on "
+                          f"a fresh connection ({type(exc).__name__}: {exc}); it expires by itself")
+        return
+    finally:
+        if fresh is not None:
+            with suppress(Exception):
+                fresh.close()
+    note = (f"releasing the {hold.job_name} lease failed on the holding connection ({type(first).__name__}: {first}); "
+            "released on a fresh connection")
+    if original is None:
+        LOG.warning("LEASE %s", note)
+    else:
+        original.add_note(note)
 
 
 @contextmanager
 def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str = "github_actions",
-         ttl_s: int = 3600) -> Iterator[bool]:
-    """Yields True when this run owns the lane, False when another run holds it or it is paused or retired."""
+         ttl_s: int = 3600, connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[Hold | None]:
+    """Yields this run's `Hold` on the lane, or None when another run holds it or it is paused or retired. `connect`
+    opens the fallback connection the release uses when `conn` died."""
     holder = holder_id()
-    with conn.cursor() as cur:
+    sent_at = clock()
+    with _bounded(conn) as cur:
         cur.execute(_UPSERT_LANE_SQL, (job_name, cadence, runner))
         cur.execute(_ACQUIRE_LANE_SQL, (holder, ttl_s, job_name))
         acquired = cur.fetchone() is not None
     if not acquired:
         LOG.info("LEASE busy job=%s", job_name)
-        yield False
+        yield None
         return
-    outcome, error = "ok", None
+    hold = Hold(job_name, holder, ttl_s, _fence_at(sent_at, ttl_s))
+    outcome, error, original = "ok", None, None
     try:
-        yield True
+        yield hold
     except Exception as exc:  # noqa: BLE001 - the lease must be released either way
-        outcome, error = "failed", str(exc)[:500]
+        outcome, error, original = "failed", str(exc), exc
         raise
-    except BaseException:
-        outcome = "interrupted"
+    except BaseException as exc:
+        outcome, original = "interrupted", exc
         raise
     finally:
-        with conn.cursor() as cur:
-            cur.execute(_RELEASE_JOB_SQL, _release_params(job_name, holder, outcome, error, None))
+        _give_back(conn, hold, outcome, error, original, connect)

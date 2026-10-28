@@ -141,8 +141,8 @@ production.
   inherits the runner's own peak at exec; shared pages count twice, the safe direction; a job shorter than one
   sample records none), and the tail is the last 64 lines. Children carry `oom_score_adj +500`, set by an exec
   shim in the same pid, so an OOM kills the job, not the runner. **Residual:** a fenced child's statement already
-  sent keeps running on the server and can commit (autocommit; the pooler keeps the backend's client alive); the
-  database commit fence for the claim path and `held()` is a follow-up.
+  sent keeps running on the server and can commit (autocommit; the pooler keeps the backend's client alive). The
+  database commit fence, `job_lease.fence` (#2114), serves a holder of its own `Hold`; a runner child holds none.
 - **Retries**: an interrupted run (deploy, kill) is due again at once and is claimed by the new deployment
   within seconds; exit 75 ("more remains") re-dues after 60 s and replaces every self-chain and PAT; failed
   runs back off exponentially from 60 s, capped at the cadence and the next slot; a timeout retries on that
