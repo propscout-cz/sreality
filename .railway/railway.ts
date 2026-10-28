@@ -34,7 +34,7 @@ const api = (name: string) => project(name, { resources: [service("sreality", {
   healthcheck: "/health",
   healthcheckTimeout: 30,
   replicas: { [REGION]: 1 },
-  deploy: { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 3,
+  deploy: { restartPolicyMaxRetries: 3,   // ON_FAILURE is the default: declared, it stores as null and plans forever
             drainingSeconds: API_DRAINING_SECONDS, limitOverride: LIMITS },
   domains: [{ domain: "api.propscout.cz", port: 8080 }],   // dashboard-owned: IaC cannot register a domain
   env: { EXTRAS: "api", ...kept(
@@ -76,7 +76,7 @@ const vite = (name: string) => project(name, { resources: [service("sreality", {
   healthcheck: "/healthz",
   healthcheckTimeout: 30,
   replicas: { [REGION]: 1 },
-  deploy: { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 3,
+  deploy: { restartPolicyMaxRetries: 3,   // ON_FAILURE is the default: declared, it stores as null and plans forever
             drainingSeconds: VITE_DRAINING_SECONDS, limitOverride: LIMITS },
   domains: [{ domain: "app.propscout.cz", port: 8080 }],
   env: kept("VITE_API_BASE_URL", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_URL"),   // frontend/Dockerfile build args
