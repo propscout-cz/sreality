@@ -52,7 +52,7 @@ from psycopg.rows import dict_row
 
 from api.schemas import DEFAULT_FOND_CZK_PER_M2
 from toolkit.filter_registry import label_cs
-from toolkit.measures import LAND_CATEGORY_MAIN
+from toolkit.measures import LAND_CATEGORY_MAIN, plot_area_sql
 
 if TYPE_CHECKING:
     import psycopg
@@ -70,10 +70,12 @@ _LISTING_COLS: tuple[str, ...] = (
     "disposition", "subtype",
     "display_label", "is_active", "last_seen_at",
     "mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent",
+    "canonical_listing_id", "first_seen_at", "tom_days", "floor", "total_floors",
+    "condition", "ownership", "property_subtype", "plot_area_m2",
 )
 
-_MARKET_SQL = """
-WITH req(source, source_id) AS (VALUES {values})
+_MARKET_SQL = f"""
+WITH req(source, source_id) AS (VALUES {{values}})
 SELECT
     req.source,
     req.source_id,
@@ -108,7 +110,15 @@ SELECT
     -- (property_id NULL) has no property, so no MF.
     pp.mf_reference_rent_czk,
     pp.mf_gross_yield_pct,
-    pp.mf_reference_rent
+    pp.mf_reference_rent,
+    -- What the property IS, each field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md):
+    -- the panel header's facts, off the same row as MF and, like it, NULL before attach.
+    -- `pp.listing_id` is the canonical ad (MS5), the first track of the price history;
+    -- `pp.subtype` is aliased because `l.subtype` above is this advert's own.
+    pp.listing_id AS canonical_listing_id,
+    pp.first_seen_at, pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
+    pp.subtype AS property_subtype,
+    {plot_area_sql('pp')} AS plot_area_m2
 FROM req
 LEFT JOIN listings l
     ON l.source = req.source AND l.source_id_native = req.source_id

@@ -72,6 +72,7 @@ from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
 from api.routes.property_location import router as property_location_router
+from api.routes.property_price_history import router as property_price_history_router
 from api.routes.valuo import router as valuo_router
 from api.routes.map_overlays import router as map_overlays_router
 from api.new_dedup_bakeoff import router as new_dedup_bakeoff_router
@@ -325,6 +326,9 @@ app.include_router(property_download_router)
 # granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
 # terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
 app.include_router(property_location_router)
+# /properties/{id}/price-history — the extension's price chart: every ad of the property and its
+# price snapshots, the SPA property page's two reads. JWT-gated, service role (market data).
+app.include_router(property_price_history_router)
 # /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
