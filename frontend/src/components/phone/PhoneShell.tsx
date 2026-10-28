@@ -33,7 +33,7 @@ import {
   type PhoneTabKey,
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
-import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
 import SchemeSwatch from '@/components/SchemeSwatch';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
@@ -271,11 +271,9 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
   );
 }
 
-const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
-  { value: 'light', label: 'Světlý' },
-  { value: 'dark', label: 'Tmavý' },
-  { value: 'system', label: 'Systém' },
-];
+/* The shared modes in the sheet's Czech. */
+const THEME_LABEL: Record<ThemeMode, string> = { light: 'Světlý', dark: 'Tmavý', system: 'Systém' };
+const THEMES = THEME_MODES.map((m) => ({ ...m, label: THEME_LABEL[m.value] }));
 
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();

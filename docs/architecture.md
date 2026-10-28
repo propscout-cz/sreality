@@ -964,7 +964,9 @@ rules. Identify which one a task belongs to before you start.
 - **No write path in the SPA's code.** Any UI action that needs a write goes through the
   FastAPI service, not direct Postgres — by convention: `authenticated` holds RLS-scoped
   table write grants (migrations 290/292/294) the SPA never uses. The toolkit's
-  write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
+  write-allowed exceptions (see Toolkit rule #5) are reachable only via the API. The one
+  exception is the user's own Auth profile: `user_metadata.appearance` (`lib/theme.ts`, via
+  `supabase.auth.updateUser`), client-writable, validated on read, never trusted server-side.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
@@ -980,12 +982,13 @@ rules. Identify which one a task belongs to before you start.
   level (an address binds its street), its register name, and `context` = the register obec
   name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
   `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
-- Frontend conventions live in `frontend/README.md`. Design tokens are in
-  `frontend/src/styles/globals.css` under a single `@theme` block; **never tweak these
+- Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
+  radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
+  `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
   tokens without operator approval** — they encode the agreed visual direction
   (civic-archive feel, oxidised-copper accent, borders-only depth, tabular numerals,
-  Czech locale formatting). Add new tokens only at the bottom of the file with a clear
-  domain-name.
+  Czech locale formatting). A new token goes into every theme block (`lib/theme.test.ts`
+  checks) with a clear domain-name.
 - Backend rules below (psycopg, no `supabase-py`, stdlib-first, etc.) do not apply
   inside `frontend/`.
 
@@ -1100,8 +1103,9 @@ rules. Identify which one a task belongs to before you start.
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
 - **Vanilla TypeScript only — no React, no Tailwind.** The panel lives inside a closed
   shadow root with its own scoped CSS in `src/styles.css?inline`. Palette mirrors the
-  SPA's civic-archive tokens by hand-coded values (no `@theme` import). Keep the bundle
-  small.
+  SPA's civic-archive tokens by hand-coded values for now; a later change has it read
+  the SPA's `frontend/src/styles/tokens.css`, whose rules already name `:host`. Keep the
+  bundle small.
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` so `host_permissions` covers the API origin and the fetch
   isn't subject to the portal's CORS posture. The content script never calls `fetch`

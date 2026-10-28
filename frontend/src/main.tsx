@@ -6,12 +6,11 @@ import App from './App';
 import { AuthProvider } from './lib/auth';
 import { isTransientApiError } from './lib/api';
 import { createMutationCache } from './lib/mutationCache';
-import { applyScheme, applyTheme, readStoredScheme, readStoredTheme } from './lib/theme';
+import { applyAppearance } from './lib/theme';
 import { registerServiceWorker } from './lib/serviceWorker';
 import './styles/globals.css';
 
-applyTheme(readStoredTheme());
-applyScheme(readStoredScheme());
+applyAppearance();
 registerServiceWorker();
 
 /* The global "a write failed" toast — see lib/mutationCache. */

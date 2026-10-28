@@ -5,7 +5,7 @@
  * second only when two accounts are used in one browser. So they get tests.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { ACTIVE_BOARD_KEY, EDIT_AS_OWNER_KEY, getActiveBoard, setActiveBoard, setEditAsOwner } from './acting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   reads: [] as string[],
   /* Per relation, envelopes served (in order) before the real rows. */
   failNext: {} as Record<string, unknown[]>,
+  updateUser: vi.fn(async (_attrs: unknown) => ({ data: {}, error: null })),
+  getUser: vi.fn(async () => ({ data: { user: null as unknown }, error: null })),
 }));
 
 vi.mock('./supabase', () => {
@@ -56,6 +58,8 @@ vi.mock('./supabase', () => {
           h.listeners.push(cb);
           return { data: { subscription: { unsubscribe: () => {} } } };
         },
+        updateUser: h.updateUser,
+        getUser: h.getUser,
       },
     },
   };
@@ -340,5 +344,32 @@ describe('AuthProvider push binding', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(endPushHere).not.toHaveBeenCalled();
     expect(syncAppBadge).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthProvider appearance', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-scheme');
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.clear();
+  });
+
+  /* A fresh page load: the store reads the profile from Auth once per load. */
+  it('reads the profile from Auth at load, and sends a pick through updateUser', async () => {
+    vi.resetModules();
+    const fresh = { AuthProvider: (await import('./auth')).AuthProvider, theme: await import('./theme') };
+    const appearance = { scheme: 'grafit', theme: 'dark', at: '2020-01-01T10:00:00.000Z' };
+    h.getUser.mockResolvedValueOnce({ data: { user: { id: 'user-1', user_metadata: { appearance } } }, error: null });
+    h.initialSession = sessionFor('user-1');
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <fresh.AuthProvider><span /></fresh.AuthProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-scheme', 'grafit'));
+    act(() => fresh.theme.setScheme('kobalt'));
+    expect(h.updateUser).toHaveBeenLastCalledWith({
+      data: { appearance: { scheme: 'kobalt', theme: 'dark', at: expect.any(String) } },
+    });
   });
 });
