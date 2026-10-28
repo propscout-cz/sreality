@@ -257,10 +257,6 @@ export interface PortalListing {
   dismissed?: boolean | null;
 }
 
-export interface PortalLookupResponse {
-  data: PortalListing[];
-}
-
 export interface PortalLookupItem {
   source: string;
   source_id: string;

@@ -1016,9 +1016,15 @@ rules. Identify which one a task belongs to before you start.
   state is a single module global that `openPanel` replaces wholesale, **every apply that resumes
   after an `await` is epoch-guarded** (`renderEpoch` / `setStateIf`) — without it, listing A's
   lookup or its ~6-minute estimation poll paints into listing B's panel. That epoch ("is this
-  still the same panel instance?") sits alongside the older property-id guards
-  (`applyMembershipIf` / `loadNotes`, "is the panel still showing this property?"), which survive
-  a re-open of the same listing. Index-card badges mark the card with the **listing id** they were
+  still the same panel instance?") sits alongside the property-id guards (`setStateFor` /
+  `loadNotes`, "is the panel still showing this property?"), which survive a re-open of the same
+  listing. **The operator's curation lives in ONE store** (`src/store.ts`, shared by the panel and
+  the search-page cards, no DOM or `chrome`, unit-tested under `node --test`): each property's
+  pipeline / collections / tags / dismissal keyed by `property_id`, the stage / collection / tag
+  lists (one status each, the bounded retry), the one optimistic write path (put back once on
+  failure, one write per property and kind at a time) and the transport's ONE session generation.
+  Both surfaces subscribe and re-render from it, so neither syncs the other, and its header lists
+  the invariants its tests hold. Index-card badges mark the card with the **listing id** they were
   drawn for (not a boolean), so a card DOM node recycled by the portal's router is re-badged
   rather than left showing the previous listing's yield.
   **Distribution + auto-update:** an unpacked install has no update channel at all, so the
@@ -1054,7 +1060,7 @@ rules. Identify which one a task belongs to before you start.
   and `YieldBlock` (SPA) — there is no server-side yield (the scenario inputs are the single
   stored truth, `estimation_runs.scenario` + `ScenarioUpdateIn`). The two clients are separate
   build territories that can't share a runtime module, so the formula is duplicated by value
-  (like `normalizeBaseUrl` / `<FunnelIcon>`): **a yield-formula change must touch both
+  (like `<FunnelIcon>`): **a yield-formula change must touch both
   `computeYield` and `YieldBlock` in the same PR** (the field hints — fond/měs + the acquisition
   denominator — are mirrored too). The bookmark is property-grain
   (rule #22): `POST /listings/lookup` returns the listing's `property_id` + pipeline
@@ -1078,10 +1084,10 @@ rules. Identify which one a task belongs to before you start.
   reloaded / updated / disabled / removed under the open tab (the overlay then stops scanning),
   the error + "Zkusit znovu" otherwise (no button for a build without an API URL). × lasts for
   the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once. Every content
-  script watches the stored session's user (`session.ts` `onAccountChange`; a token refresh changes nothing): an account
-  change in any tab drops the lookup cache, card controls and every cached list and re-asks the cards and any open panel at
-  once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
-  excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
+  script watches the stored session's user (`session.ts` `onAccountChange`, through the store; a token refresh changes nothing): an account
+  change in any tab clears the store (curation, lists, writes in flight), drops the lookup cache and card controls and re-asks the cards and any open panel at
+  once (or prompts); a reply to a call sent before the change is never delivered (the store's `call`, auth messages
+  excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per round (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
   `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
   `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
@@ -3031,7 +3037,8 @@ renumber.** Navigate by area:
     cascades memberships away) and the merge (operator state re-points `collection_properties`, so
     the map's keys change). The hand-typed key lists it replaced had drifted — every one but the
     menu forgot the shared map — the same failure `lib/browseInvalidation.ts` records for Browse. The
-    extension holds no such cache, so this is an SPA-scoped claim.
+    extension keeps its own single list and membership (`chrome-extension/src/store.ts`, shared by its
+    panel and search-page cards), so this is an SPA-scoped claim.
     **`collections` is also a Browse COHORT FILTER** (`ListingFilters.collections`,
     `?collections=<ids>` / `?collections_excluded=<ids>|any`, registry id `collections`, BROWSE
     agenda only). The in side is **OR** — a property matches if it is in ANY selected collection —

@@ -17,7 +17,6 @@ import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
-  collectionsKey,
   eyeOffIconSvg,
   funnelIconSvg,
   isMine,
@@ -28,33 +27,39 @@ import {
   stageBadge,
 } from './glyphs';
 import {
-  EXTENSION_RELOADED_DETAIL,
   failureKind,
+  fmtCzk,
+  fmtPct,
   mfYieldText,
   runIndexOverlay,
   type IndexOverlayHandle,
 } from './index_overlay';
 import { buildCard } from './card';
+import {
+  APP_BASE_URL,
+  COLLECTIONS_URL,
+  EXTENSION_RELOADED_DETAIL,
+  NOT_SIGNED_IN_DETAIL,
+  friendlyDetail,
+} from './config';
+import { keepFocus } from './dom';
 import { INGEST_STEP_CS, isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
 import { onAccountChange } from './session';
+import { createStore, isLiveDeal, sleep, type Pending } from './store';
 import type {
   AgentQuota,
   ApiMessage,
   ApiResult,
   AuthState,
   BillingMe,
-  CollectionWriteResult,
-  DismissalWriteResult,
   EstimationRun,
   ExtCollection,
   ExtNote,
   ExtTag,
   IngestState,
-  PipelineCardResult,
   PipelineStage,
   PortalListing,
   RouteMessage,
-  TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
 // Shared product brand — the ONE definition (frontend/src/lib/brand.ts), the
@@ -122,31 +127,7 @@ const minimizedReady: Promise<void> = chrome.storage.local
   .then((r) => { minimized = r[MINIMIZED_KEY] === true; })
   .catch(() => { /* storage unavailable → default to expanded */ });
 
-/* SPA base URL for the "Otevřít v aplikaci" deep-link, inlined at build time.
- * Inlined here (not shared with api.ts) because MV3 content scripts are classic
- * scripts that can't `import` — content.js must stay self-contained. Empty →
- * link hidden. Default https when the operator omits the scheme. */
-const APP_BASE_URL = ((raw: string): string => {
-  const t = raw.trim();
-  if (t === '') return '';
-  return (/^https?:\/\//i.test(t) ? t : `https://${t}`).replace(/\/$/, '');
-})(import.meta.env.VITE_APP_BASE_URL ?? '');
-
-/* The app's collections page — the "Spravovat kolekce" link of both save
- * checklists (the panel's and the search-page cards'). Null → link hidden. */
-const COLLECTIONS_URL = APP_BASE_URL ? `${APP_BASE_URL}/collections` : null;
-
 type Phase = 'loading' | 'deactivated' | 'active' | 'error' | 'signed_out';
-
-/* Mirrors api.ts's NOT_SIGNED_IN_DETAIL — duplicated, not imported, for the
- * same reason normalizeBaseUrl is duplicated above: api.ts/auth.ts run only
- * in the background service worker (chrome.identity, direct fetches), and
- * content.ts must stay a self-contained bundle that never fetches directly. */
-const NOT_SIGNED_IN_DETAIL = 'not_signed_in';
-
-function friendlyDetail(detail: string): string {
-  return detail === NOT_SIGNED_IN_DETAIL ? 'nejste přihlášeni' : detail;
-}
 
 interface PanelState {
   phase: Phase;
@@ -173,42 +154,22 @@ interface PanelState {
   renovation: number | null;
   /* True while an estimation is being created/polled. */
   busy: boolean;
-  /* True while a pipeline add/remove/move is in flight (disables the control). */
-  pipelineBusy: boolean;
   /* True while the pill shows its "Odebrat z pipeline?" confirm row. Removal is
    * the one destructive pipeline action and it has no undo — the card's "v
    * pipeline od" / "ve fázi od" are deleted and re-adding restamps them — so
    * the ✕ asks first, the same two-step the note rows and the SPA's stage menu
    * use (rule #22: one pipeline affordance, one behaviour, every surface). */
   pipelineConfirmRemove: boolean;
-  /* Operator-curated stage list for the stage `<select>` (null = not loaded). */
-  stages: PipelineStage[] | null;
-  /* The caller's collections, for the save-to-collection checklist (null = not
-   * loaded). */
-  collections: ExtCollection[] | null;
-  /* True once every retry of the collection-list read failed while there was no
-   * list to show — the checklist says so instead of "Načítám…" forever. */
-  collectionsFailed: boolean;
   /* True while the checklist under the action bar is open. */
   collectionsOpen: boolean;
-  /* True while a collection add/remove is in flight (disables the checklist). */
-  collectionBusy: boolean;
   /* The last add/remove failure, shown inside the checklist beside the row the
    * operator just clicked — not at the foot of the panel. */
   collectionError: string | null;
-  /* The caller's tags, for the tag row and its checklist (null = not loaded). */
-  tags: ExtTag[] | null;
-  /* True once every retry of the tag-list read failed with nothing to show. */
-  tagsFailed: boolean;
   /* True while the tag checklist is open. One checklist at a time: opening it
    * closes the collection one, and the other way round. */
   tagsOpen: boolean;
-  /* True while a tag attach/detach is in flight (disables the checklist). */
-  tagBusy: boolean;
   /* The last attach/detach failure, shown inside the tag checklist. */
   tagError: string | null;
-  /* True while a dismiss / undo is in flight (disables the control). */
-  dismissBusy: boolean;
   /* The property's operator notes (null = not loaded). Per-property, not cached. */
   notes: ExtNote[] | null;
   /* True once every retry of the notes read failed: the panel says so and offers
@@ -234,9 +195,26 @@ interface PanelState {
   errorMessage: string | null;
 }
 
+/* What a render reads: the panel's own state plus, from the one store (store.ts),
+ * its property's curation (on `listing`), the lists that name it and the writes
+ * in flight — projected per render by `view`, never copied into the state. */
+interface PanelView extends PanelState {
+  stages: PipelineStage[] | null;
+  collections: ExtCollection[] | null;
+  /* Every retry of the read failed with no list to show: say so, not "Načítám…". */
+  collectionsFailed: boolean;
+  tags: ExtTag[] | null;
+  tagsFailed: boolean;
+  /* A write of that kind is in flight for the property (disables its control). */
+  pipelineBusy: boolean;
+  collectionBusy: boolean;
+  tagBusy: boolean;
+  dismissBusy: boolean;
+}
+
 /* An extension reload, update, disable or removal orphans the content script
  * already in an open tab (Chrome re-injects only on page load): sendMessage
- * then throws "Extension context invalidated." synchronously. call() resolves
+ * then throws "Extension context invalidated." synchronously. send() resolves
  * with that as a failure instead of rejecting — every caller's busy flag
  * ("Přihlašuji…") waits for a result — and says what actually fixes it (a
  * detail the search page's notice recognises, to offer a reload instead of a
@@ -248,24 +226,12 @@ function runtimeDetail(message: string | undefined): string {
   return message ?? 'runtime error';
 }
 
-/* Bumped by an account change (onAccountChange below, subscribed before any overlay's): a
- * reply to anything asked earlier was authorised as the account that left, so call() never
- * delivers it — nothing is painted with its rows. The auth messages always answer. */
-let sessionGen = 0;
-const ALWAYS_ANSWERED = new Set<ApiMessage['type']>(['get_auth_state', 'sign_in', 'sign_out']);
-
-export function call<T>(message: ApiMessage): Promise<ApiResult<T>> {
-  const gen = sessionGen;
+function send(message: ApiMessage): Promise<ApiResult<unknown>> {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage(message, (response: ApiResult<T>) => {
-        const error = chrome.runtime.lastError;  // read even when dropped: Chrome logs it unchecked
-        if (gen !== sessionGen && !ALWAYS_ANSWERED.has(message.type)) return;
-        if (error) {
-          resolve({ ok: false, status: 0, detail: runtimeDetail(error.message) });
-          return;
-        }
-        resolve(response);
+      chrome.runtime.sendMessage(message, (response: ApiResult<unknown>) => {
+        const error = chrome.runtime.lastError;  // always read: Chrome logs an unchecked one
+        resolve(error ? { ok: false, status: 0, detail: runtimeDetail(error.message) } : response);
       });
     } catch (err) {
       resolve({
@@ -277,25 +243,20 @@ export function call<T>(message: ApiMessage): Promise<ApiResult<T>> {
   });
 }
 
+/* The one store both surfaces draw from (store.ts). Created before any overlay
+ * subscribes, so its account-change clear runs first. */
+const store = createStore({ send, sleep, onAccountChange, retryMs: 1500 });
+const { call } = store;
+
 // ----------------------------------------------------------------------
 // Formatting
 // ----------------------------------------------------------------------
-
-function fmtCzk(n: number | null | undefined): string {
-  return n == null ? '—' : `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
-}
 
 /* A note's timestamp as a compact cs-CZ date (full datetime in the title attr). */
 function fmtNoteDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
-}
-
-function fmtPct(n: number | null | undefined): string {
-  return n == null
-    ? '—'
-    : `${n.toLocaleString('cs-CZ', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
 }
 
 function formatNumber(n: number | null): string {
@@ -323,14 +284,6 @@ const TRASH_ICON_SVG =
   '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>' +
   '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
   '<line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
-
-/* Immutably set the listing's pipeline membership on a state update. */
-function withPipeline(
-  prev: PanelState, membership: PortalListing['pipeline'],
-): PanelState {
-  if (prev.listing == null) return prev;
-  return { ...prev, listing: { ...prev.listing, pipeline: membership } };
-}
 
 const COLLECTION_MENU_ID = 'collection-menu';
 const TAG_MENU_ID = 'tag-menu';
@@ -604,10 +557,6 @@ function mountPanel(): {
   panel.className = 'panel';
   shadow.appendChild(panel);
 
-  let lastFocusedKey:
-    | 'rent' | 'cost' | 'price' | 'renovation' | 'note' | 'note-edit' | 'note-share'
-    | 'coll-toggle' | `coll-${number}` | 'tag-toggle' | `tag-${number}` | null = null;
-
   /* The ledger header band: a small copper index-mark + product wordmark, and
    * the close control. The wordmark is the shared product brand (APP_NAME) —
    * mirrors the SPA header — so it reads honestly for every listing, including
@@ -652,7 +601,7 @@ function mountPanel(): {
    * (the operator's at-a-glance triage signal), with a restore chevron + close.
    * Clicking anywhere on the bar (except ×) expands. Reads as the spine of the
    * same filed card — copper tick + stamped copper figures. */
-  function renderMinimizedBar(state: PanelState): HTMLElement {
+  function renderMinimizedBar(state: PanelView): HTMLElement {
     const bar = document.createElement('div');
     bar.className = 'min-bar';
     bar.title = 'Rozbalit panel';
@@ -734,44 +683,13 @@ function mountPanel(): {
   const render = (state: PanelState): void => {
     const panelTop = panel.scrollTop;
     const listTop = panel.querySelector<HTMLElement>('.coll-list')?.scrollTop ?? 0;
-    /* Chrome fires `blur` on a focused element as it is REMOVED, so the clear
-     * inside build() runs its blur handler and forgets lastFocusedKey — which
-     * had silently disabled this restore. Carry the key across, but only while
-     * focus really is in the panel: a key carried after the operator moved on
-     * to the page would pull focus back out of it on some later render. */
-    const active = shadow.activeElement;
-    const focusKey = active != null ? lastFocusedKey : null;
-    const selection = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
-      ? { start: active.selectionStart, end: active.selectionEnd }
-      : null;
-
-    build(state);
-
-    lastFocusedKey = focusKey;
-    if (focusKey != null) {
-      const target = shadow.querySelector<HTMLElement>(`[data-key="${focusKey}"]`);
-      target?.focus({ preventScroll: true });  // the scroll is restored below
-      if (target == null || shadow.activeElement !== target) {
-        /* Gone from this render, or disabled: forget it, for the same reason
-         * the carry above is conditional. */
-        lastFocusedKey = null;
-      } else if (
-        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
-        && target.selectionStart != null  // null = an input type without a caret
-      ) {
-        const n = target.value.length;
-        target.setSelectionRange(
-          Math.min(selection?.start ?? n, n), Math.min(selection?.end ?? n, n),
-        );
-      }
-    }
-
+    keepFocus(shadow, () => build(view(state)));
     panel.scrollTop = panelTop;
     const list = panel.querySelector<HTMLElement>('.coll-list');
     if (list != null) list.scrollTop = listTop;
   };
 
-  const build = (state: PanelState): void => {
+  const build = (state: PanelView): void => {
     panel.innerHTML = '';
     /* Minimized collapses every phase to the tiny bar EXCEPT error (a failure
      * should stay fully visible). The minimize control itself only shows once
@@ -839,7 +757,7 @@ function mountPanel(): {
   /* An ad we do not hold: say so and offer to add it. While the flow runs, its
    * step stands where the button was; a refusal or failure is one sentence
    * above the button, which a click re-sends (the API is idempotent). */
-  function renderNotInDb(body: HTMLElement, state: PanelState): void {
+  function renderNotInDb(body: HTMLElement, state: PanelView): void {
     body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
     if (state.ingestStep != null) {
       body.appendChild(note(INGEST_STEP_CS[state.ingestStep], 'note--loading'));
@@ -883,7 +801,7 @@ function mountPanel(): {
    * raw 401. Google OAuth via chrome.identity.launchWebAuthFlow + PKCE, run
    * in the background worker (the only context that can open the auth
    * window and reach GoTrue). */
-  function renderSignedOut(body: HTMLElement, state: PanelState): void {
+  function renderSignedOut(body: HTMLElement, state: PanelView): void {
     body.appendChild(note('Pro zobrazení dat se prosím přihlaste.'));
     if (state.errorMessage != null) body.appendChild(errorLine(state.errorMessage));
     const btn = document.createElement('button');
@@ -898,7 +816,7 @@ function mountPanel(): {
   /* The signed-in operator's identity + a sign-out control — shown atop the
    * panel body whenever a session is loaded (active/deactivated/error), so
    * signing out is always one click away without a separate popup surface. */
-  function renderAuthStrip(body: HTMLElement, state: PanelState): void {
+  function renderAuthStrip(body: HTMLElement, state: PanelView): void {
     if (state.authEmail == null) return;
     const strip = document.createElement('div');
     strip.className = 'auth-strip';
@@ -920,7 +838,7 @@ function mountPanel(): {
    * bookmark (left) + the "open in our app" deep-link (right). Either may be
    * absent (no property yet / no SPA base configured); the row appears only if
    * something landed in it. */
-  function renderActionsBar(body: HTMLElement, state: PanelState): void {
+  function renderActionsBar(body: HTMLElement, state: PanelView): void {
     const row = document.createElement('div');
     row.className = 'actions-bar';
     renderPipelineToggle(row, state);       // the funnel — sole pipeline affordance (rule #22)
@@ -933,7 +851,7 @@ function mountPanel(): {
     renderTagMenu(body, state);
   }
 
-  function renderAppLink(container: HTMLElement, state: PanelState): void {
+  function renderAppLink(container: HTMLElement, state: PanelView): void {
     const l = state.listing;
     // `found` is the DB-membership flag the lookup already returns. Gating on
     // sreality_id != null would hide the app link for every post-Gate-2 listing,
@@ -963,7 +881,7 @@ function mountPanel(): {
    * app's single-choice control — change stage via the SAME audited move PATCH)
    * + a `✕` to remove. Property-grain — shown for ANY listing we have a property
    * for, hidden during the brief window a freshly-scraped row has no property_id. */
-  function renderPipelineToggle(container: HTMLElement, state: PanelState): void {
+  function renderPipelineToggle(container: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
     const inPipe = l.pipeline?.in_pipeline ?? false;
@@ -1073,7 +991,7 @@ function mountPanel(): {
    * exactly as in the app. A separate affordance from the pipeline funnel
    * (rule #22). Neutral while unsaved: copper is the pipeline's accent, and only
    * the SAVED state borrows the soft copper tint. */
-  function renderCollectionToggle(container: HTMLElement, state: PanelState): void {
+  function renderCollectionToggle(container: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
     const saved = savedCollections(l.collection_ids, state.collections);
@@ -1106,8 +1024,6 @@ function mountPanel(): {
     caret.setAttribute('aria-hidden', 'true');
     caret.textContent = '▾';
     btn.appendChild(caret);
-    btn.addEventListener('focus', () => { lastFocusedKey = 'coll-toggle'; });
-    btn.addEventListener('blur', () => { if (lastFocusedKey === 'coll-toggle') lastFocusedKey = null; });
     btn.onclick = () => onToggleCollectionsMenu();
     btn.onkeydown = (e) => {
       if (e.key !== 'Escape' || !state.collectionsOpen) return;
@@ -1125,7 +1041,7 @@ function mountPanel(): {
    * opens IN the panel's flow rather than floating over it: the panel re-renders
    * wholesale on every state change and is pinned to the viewport's bottom
    * edge, so a card in the flow is the shape that survives both. */
-  function renderCollectionMenu(body: HTMLElement, state: PanelState): void {
+  function renderCollectionMenu(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (!state.collectionsOpen || l == null || !l.found || l.property_id == null) return;
     const memberIds = new Set(l.collection_ids ?? []);
@@ -1147,7 +1063,7 @@ function mountPanel(): {
       p.className = 'coll-state';
       if (state.collectionsFailed) {
         p.textContent = 'Kolekce se nepodařilo načíst. ';
-        p.appendChild(retryLink(() => { void loadCollections(true); }));
+        p.appendChild(retryLink(() => { void store.load('collections', true); }));
       } else {
         p.textContent = 'Načítám kolekce…';
         p.classList.add('note--loading');
@@ -1174,8 +1090,6 @@ function mountPanel(): {
         row.setAttribute('aria-pressed', String(member));
         const key = `coll-${c.id}` as const;
         row.dataset.key = key;
-        row.addEventListener('focus', () => { lastFocusedKey = key; });
-        row.addEventListener('blur', () => { if (lastFocusedKey === key) lastFocusedKey = null; });
 
         const box = document.createElement('span');
         box.className = 'coll-check';
@@ -1234,7 +1148,7 @@ function mountPanel(): {
    * only assigns; creating, renaming and recolouring a tag stay in the app's
    * assign list, as collections are managed in the app. Absent when there is
    * no property yet, or from an API that predates `tag_ids`. */
-  function renderTagRow(body: HTMLElement, state: PanelState): void {
+  function renderTagRow(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null || l.tag_ids === undefined) return;
     const ids = l.tag_ids ?? [];
@@ -1258,8 +1172,6 @@ function mountPanel(): {
     caret.setAttribute('aria-hidden', 'true');
     caret.textContent = '▾';
     btn.appendChild(caret);
-    btn.addEventListener('focus', () => { lastFocusedKey = 'tag-toggle'; });
-    btn.addEventListener('blur', () => { if (lastFocusedKey === 'tag-toggle') lastFocusedKey = null; });
     btn.onclick = () => onToggleTagsMenu();
     btn.onkeydown = (e) => {
       if (e.key !== 'Escape' || !state.tagsOpen) return;
@@ -1272,7 +1184,7 @@ function mountPanel(): {
 
   /* The checklist the tag button opens — the collection checklist's shape, each
    * row the tag's chip; one click attaches or detaches, and it stays open. */
-  function renderTagMenu(body: HTMLElement, state: PanelState): void {
+  function renderTagMenu(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (!state.tagsOpen || l == null || !l.found || l.property_id == null) return;
     const ids = new Set(l.tag_ids ?? []);
@@ -1292,7 +1204,7 @@ function mountPanel(): {
       p.className = 'coll-state';
       if (state.tagsFailed) {
         p.textContent = 'Štítky se nepodařilo načíst. ';
-        p.appendChild(retryLink(() => { void loadTags(true); }));
+        p.appendChild(retryLink(() => { void store.load('tags', true); }));
       } else {
         p.textContent = 'Načítám štítky…';
         p.classList.add('note--loading');
@@ -1316,8 +1228,6 @@ function mountPanel(): {
         row.setAttribute('aria-pressed', String(member));
         const key = `tag-${t.id}` as const;
         row.dataset.key = key;
-        row.addEventListener('focus', () => { lastFocusedKey = key; });
-        row.addEventListener('blur', () => { if (lastFocusedKey === key) lastFocusedKey = null; });
 
         const box = document.createElement('span');
         box.className = 'coll-check';
@@ -1362,10 +1272,10 @@ function mountPanel(): {
    * DismissButton, one click either way (hiding destroys nothing). Absent when
    * there is no property, when the API predates the field, and while the
    * property is a LIVE deal; a deal closed into a terminal stage keeps it. */
-  function renderDismissToggle(container: HTMLElement, state: PanelState): void {
+  function renderDismissToggle(container: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
-    if (l.dismissed == null || isLiveDeal(state)) return;
+    if (l.dismissed == null || isLiveDeal(l.pipeline, state.stages)) return;
     const on = l.dismissed;
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1385,7 +1295,7 @@ function mountPanel(): {
    * we have a property for: the notes I can read (mine, plus another author's
    * SHARED ones, migration 610; most-recent-first) + an add box. A saved note
    * carries the viewed advert as origin provenance. */
-  function renderNotes(body: HTMLElement, state: PanelState): void {
+  function renderNotes(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
     const audience = noteAudience(state);
@@ -1423,8 +1333,6 @@ function mountPanel(): {
     ta.value = noteDraft;
     ta.dataset.key = 'note';
     ta.disabled = state.noteBusy;
-    ta.addEventListener('focus', () => { lastFocusedKey = 'note'; });
-    ta.addEventListener('blur', () => { if (lastFocusedKey === 'note') lastFocusedKey = null; });
     ta.addEventListener('input', (e) => {
       noteDraft = (e.target as HTMLTextAreaElement).value;
     });
@@ -1440,8 +1348,6 @@ function mountPanel(): {
       box.checked = noteShareDraft;
       box.disabled = state.noteBusy;
       box.dataset.key = 'note-share';
-      box.addEventListener('focus', () => { lastFocusedKey = 'note-share'; });
-      box.addEventListener('blur', () => { if (lastFocusedKey === 'note-share') lastFocusedKey = null; });
       box.addEventListener('change', () => { noteShareDraft = box.checked; });
       const who = document.createElement('span');
       who.textContent = `Sdílet s ${audience.join(', ')}`;
@@ -1450,7 +1356,7 @@ function mountPanel(): {
     } else if (audience == null && state.collectionsFailed) {
       // An unknown audience is not "nobody": say so and read again.
       const line = errorLine('Sdílení se nepodařilo načíst. ');
-      line.appendChild(retryLink(() => { void loadCollections(true); }));
+      line.appendChild(retryLink(() => { void store.load('collections', true); }));
       sec.appendChild(line);
     }
 
@@ -1501,7 +1407,7 @@ function mountPanel(): {
    * shared mark and toggle, an edit/delete icon pair, and (when this note is the
    * one pending delete) a confirm row in place of the meta line — mirrors the
    * SPA NoteRow's two-step confirm. */
-  function buildNoteItem(n: ExtNote, state: PanelState, audience: string[] | null): HTMLElement {
+  function buildNoteItem(n: ExtNote, state: PanelView, audience: string[] | null): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item';
 
@@ -1585,7 +1491,7 @@ function mountPanel(): {
   /* A note in inline-edit mode: textarea (seeded from + writing to the module
    * global noteEditDraft, same non-rerendering-per-keystroke pattern as the
    * add-note box) + Save/Cancel. */
-  function buildNoteEditItem(n: ExtNote, state: PanelState): HTMLElement {
+  function buildNoteEditItem(n: ExtNote, state: PanelView): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item note-item--editing';
 
@@ -1596,8 +1502,6 @@ function mountPanel(): {
     ta.value = noteEditDraft;
     ta.dataset.key = 'note-edit';
     ta.disabled = state.noteRowBusy;
-    ta.addEventListener('focus', () => { lastFocusedKey = 'note-edit'; });
-    ta.addEventListener('blur', () => { if (lastFocusedKey === 'note-edit') lastFocusedKey = null; });
     ta.addEventListener('input', (e) => {
       noteEditDraft = (e.target as HTMLTextAreaElement).value;
     });
@@ -1632,7 +1536,7 @@ function mountPanel(): {
    * nothing. The yield figure appears only when the result has one (a sale
    * flat), and names the card; a rental flat shows its rent under the source's
    * name. No reason text is written here. */
-  function renderMfBlock(body: HTMLElement, state: PanelState): void {
+  function renderMfBlock(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found) return;
     const shape = mfShape(l.mf_reference_rent);
@@ -1694,7 +1598,7 @@ function mountPanel(): {
   /* The catalog subject line: the disposition as the headword, area + price as
    * tabular metadata, the place on a quiet second line. Left-aligned, like an
    * archive entry — grounds the operator before the yield figure. */
-  function renderSubjectFacts(body: HTMLElement, state: PanelState): void {
+  function renderSubjectFacts(body: HTMLElement, state: PanelView): void {
     const l = state.listing;
     if (l == null || !l.found) return;
     const subject = document.createElement('div');
@@ -1738,7 +1642,7 @@ function mountPanel(): {
     if (subject.childElementCount > 0) body.appendChild(subject);
   }
 
-  function renderEstimation(body: HTMLElement, state: PanelState): void {
+  function renderEstimation(body: HTMLElement, state: PanelView): void {
     const card = buildCard({ title: 'Odhad výnosu (komparativní)' });
     const sec = card.body;
 
@@ -1887,10 +1791,6 @@ function mountPanel(): {
     input.value = formatNumber(opts.value);
     input.disabled = opts.disabled === true;
     input.dataset.key = opts.key;
-    input.addEventListener('focus', () => { lastFocusedKey = opts.key; });
-    input.addEventListener('blur', () => {
-      if (lastFocusedKey === opts.key) lastFocusedKey = null;
-    });
     input.addEventListener('input', (e) => {
       opts.onInput(parseNumber((e.target as HTMLInputElement).value));
     });
@@ -1937,41 +1837,60 @@ let patchTimer: ReturnType<typeof setTimeout> | null = null;
  * the panel on every SPA soft-navigation (see the entry section), listing-to-
  * listing browsing is now the COMMON path through these awaits.
  *
- * Two layers, deliberately: the property-id guards below (applyMembershipIf,
+ * Two layers, deliberately: the property-id guards below (setStateFor,
  * loadNotes, onAddNote) answer "is the panel still showing this property?" and
  * survive a re-open of the SAME listing; this epoch answers the stricter "is this
  * still the same panel instance?", which is what openPanel's own awaits and the
- * multi-minute estimation poll need. */
+ * multi-minute estimation poll need. Curation needs neither: the store keys it
+ * by property, and a render reads the property it shows. */
 let renderEpoch = 0;
 
-function setState(updater: (prev: PanelState) => PanelState): void {
-  const shown = state.listing;
-  state = updater(state);
-  render(state);
-  /* On a search page the same property is also drawn on its card(s): a change
-   * to its pipeline / collections / dismissal made here repaints them. */
-  if (state.listing != null && state.listing !== shown) indexOverlay?.sync(state.listing);
+/* The property the panel shows, if it is one we hold. */
+function shownProperty(): number | null {
+  const l = (state as PanelState | undefined)?.listing;
+  return l?.found ? l.property_id : null;
 }
 
-/* The other direction: a write made on a search-page card settled. The panel
- * takes it only while it shows that same property. */
-function onCardWrite(listing: PortalListing): void {
-  const shown = (state as PanelState | undefined)?.listing;
-  if (shown?.property_id == null || shown.property_id !== listing.property_id) return;
-  setState((prev) => (prev.listing == null ? prev : {
-    ...prev,
-    listing: {
-      ...prev.listing,
-      pipeline: listing.pipeline,
-      collection_ids: listing.collection_ids,
-      dismissed: listing.dismissed,
-    },
-  }));
+function view(s: PanelState): PanelView {
+  const pid = s.listing?.found ? s.listing.property_id : null;
+  const curation = pid != null ? store.curation(pid) : null;
+  const collections = store.list('collections');
+  const tags = store.list('tags');
+  return {
+    ...s,
+    listing: s.listing != null && curation != null ? { ...s.listing, ...curation } : s.listing,
+    stages: store.list('stages').data,
+    collections: collections.data,
+    collectionsFailed: collections.status === 'failed',
+    tags: tags.data,
+    tagsFailed: tags.status === 'failed',
+    pipelineBusy: pid != null && store.busy('pipeline', pid),
+    collectionBusy: pid != null && store.busy('collections', pid),
+    tagBusy: pid != null && store.busy('tags', pid),
+    dismissBusy: pid != null && store.busy('dismissed', pid),
+  };
+}
+
+/* A list, or the shown property's curation, changed — here, on a card, anywhere. */
+store.subscribe((propertyId) => {
+  if (state == null) return;
+  if (propertyId == null || propertyId === shownProperty()) render(state);
+});
+
+function setState(updater: (prev: PanelState) => PanelState): void {
+  state = updater(state);
+  render(state);
 }
 
 /* setState, but a no-op once the panel it was captured for has been replaced. */
 function setStateIf(epoch: number, updater: (prev: PanelState) => PanelState): void {
   if (epoch === renderEpoch) setState(updater);
+}
+
+/* setState, but only while the panel still shows `propertyId`: a write can
+ * outlive its panel. */
+function setStateFor(propertyId: number, patch: (prev: PanelState) => Partial<PanelState>): void {
+  setState((prev) => (prev.listing?.property_id === propertyId ? { ...prev, ...patch(prev) } : prev));
 }
 
 function schedulePatch(): void {
@@ -2084,7 +2003,7 @@ async function onCreateRun(): Promise<void> {
   let row = res.data;
   for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
     if (row.status === 'success' || row.status === 'failed') break;
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await sleep(POLL_INTERVAL_MS);
     if (epoch !== renderEpoch) return;  // navigated away — stop burning polls
     const next = await call<EstimationRun>({ type: 'get_estimation', run_id: row.id });
     if (!next.ok) break;
@@ -2116,7 +2035,7 @@ async function onIngest(): Promise<void> {
   const epoch = renderEpoch;
   const outcome = await runIngest(panelUrl, {
     call: (message) => call<IngestState>(message),
-    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    sleep,
     alive: () => epoch === renderEpoch,
     onStep: (step) => setStateIf(epoch, (prev) => ({
       ...prev, ingestStep: step, ingestMessage: null,
@@ -2153,24 +2072,25 @@ function onUpgrade(): void {
   if (APP_BASE_URL) window.open(APP_BASE_URL, '_blank', 'noopener');
 }
 
-/* Bookmark / un-bookmark the listing's property into the deal pipeline. The
- * UI flips optimistically (one re-render), then reconciles from the server:
- * an add returns the entry-stage label to display; a remove clears membership.
- * On failure we revert and surface the reason. Reuses the SAME bearer-gated
- * /pipeline/cards endpoints the SPA writes through. */
-/* Apply a pipeline-membership update only if the panel STILL represents the
- * property the write was started for. The panel state is a single module global
- * that openPanel() replaces wholesale — re-opening for a different card (an index
- * badge, a MutationObserver re-pass) mid-request would otherwise bleed this
- * listing's result onto that one. Network writes target the captured propertyId
- * regardless; this guard only protects the display. */
-function applyMembershipIf(
-  propertyId: number, membership: PortalListing['pipeline'], patch: Partial<PanelState>,
-): (prev: PanelState) => PanelState {
-  return (prev) =>
-    prev.listing?.property_id === propertyId
-      ? withPipeline({ ...prev, ...patch }, membership)
-      : prev;
+/* The panel's writes go through the store's one write path (store.ts:
+ * optimistic, reconciled, put back once on failure — through the same
+ * bearer-gated routes the SPA writes through). The panel keeps only its own
+ * state: it clears its error line(s) once the store took the write (null: one
+ * of its kind is in flight), and says a failure where it can be seen. */
+async function panelWrite(
+  write: (propertyId: number) => Pending, clear: Partial<PanelState>,
+  failed: (prev: PanelState, detail: string, on: boolean) => Partial<PanelState>,
+  settled: Partial<PanelState> = {},
+): Promise<void> {
+  const propertyId = state.listing?.property_id;
+  if (propertyId == null) return;
+  const pending = write(propertyId);
+  if (pending == null) return;
+  setStateFor(propertyId, () => clear);
+  const res = await pending;
+  setStateFor(propertyId, (prev) => ({
+    ...settled, ...(res.ok ? {} : failed(prev, friendlyDetail(res.detail), res.on)),
+  }));
 }
 
 /* Ask before removing (PanelState.pipelineConfirmRemove) — the ✕ opens the
@@ -2183,139 +2103,56 @@ function onRemovePipelineCancel(): void {
   setState((prev) => ({ ...prev, pipelineConfirmRemove: false }));
 }
 
-async function onTogglePipeline(): Promise<void> {
-  const l = state.listing;
-  if (l == null || l.property_id == null) return;
-  const propertyId = l.property_id;
-  const wasIn = l.pipeline?.in_pipeline ?? false;
-  const prior = l.pipeline;
-
-  setState(applyMembershipIf(
-    propertyId,
-    { in_pipeline: !wasIn, stage_id: null, stage_key: null, stage_label: null,
-      stage_code: null, stage_color: null },
-    { pipelineBusy: true, errorMessage: null },
-  ));
-
-  const res = await call<PipelineCardResult>({
-    type: wasIn ? 'remove_pipeline_card' : 'add_pipeline_card',
-    property_id: propertyId,
-  });
-
-  if (!res.ok) {
-    setState(applyMembershipIf(
-      propertyId,
-      wasIn
-        ? { in_pipeline: true, stage_id: prior?.stage_id ?? null,
-            stage_key: prior?.stage_key ?? null, stage_label: prior?.stage_label ?? null,
-            stage_code: prior?.stage_code ?? null, stage_color: prior?.stage_color ?? null }
-        : { in_pipeline: false, stage_id: null, stage_key: null, stage_label: null,
-            stage_code: null, stage_color: null },
-      { pipelineBusy: false, pipelineConfirmRemove: false,
-        errorMessage: `Uložení do pipeline selhalo: ${friendlyDetail(res.detail)}` },
-    ));
-    return;
-  }
-
-  setState(applyMembershipIf(
-    propertyId,
-    wasIn
-      ? { in_pipeline: false, stage_id: null, stage_key: null, stage_label: null,
-          stage_code: null, stage_color: null }
-      : {
-          in_pipeline: true,
-          stage_id: res.data.stage_id ?? null,
-          stage_key: res.data.stage_key ?? null,
-          stage_label: res.data.stage_label ?? null,
-          stage_code: res.data.stage_code ?? null,
-          stage_color: res.data.stage_color ?? null,
-        },
-    { pipelineBusy: false, pipelineConfirmRemove: false },
-  ));
-  // A new card is live (the entry stage can't be terminal), and a live deal lifts
-  // the caller's dismissal server-side — mirror it.
-  if (!wasIn) setState(applyDismissedIf(propertyId, false, {}));
+/* Bookmark / un-bookmark the listing's property into the deal pipeline. */
+function onTogglePipeline(): Promise<void> {
+  return panelWrite(
+    (id) => (store.curation(id)?.pipeline?.in_pipeline ? store.removeFromPipeline(id) : store.addToPipeline(id)),
+    { errorMessage: null },
+    (_, detail) => ({ errorMessage: `Uložení do pipeline selhalo: ${detail}` }),
+    { pipelineConfirmRemove: false },
+  );
 }
 
-/* A LIVE deal and a dismissal never coexist: the API refuses the dismissal, and
- * any write that leaves a card live lifts it. Liveness is read off the stage list
- * — the one place `is_terminal` lives — so a stage move needs no second flag kept
- * in sync. Until that list has loaded an in-pipeline card counts as live: the
- * conservative answer, and the server's own for a live deal. */
-function isLiveDeal(state: PanelState): boolean {
-  const p = state.listing?.pipeline;
-  if (!p?.in_pipeline) return false;
-  const stage = state.stages?.find((s) => s.id === p.stage_id);
-  return stage == null || !stage.is_terminal;
+/* Change the deal stage: the SAME audited PATCH the SPA's PipelineToggle and
+ * the kanban use (stamps `entered_stage_at`, logs a `moved` event). Moving the
+ * card answers the "remove?" question a different way — close the confirm
+ * rather than leave it hanging over a card that just moved. */
+function onMoveStage(stageId: number): Promise<void> {
+  return panelWrite(
+    (id) => store.moveStage(id, stageId), { pipelineConfirmRemove: false, errorMessage: null },
+    (_, detail) => ({ errorMessage: `Změna fáze selhala: ${detail}` }),
+  );
 }
 
-/* Apply a dismissal update only if the panel STILL represents the property the
- * write was started for — the same identity guard as the two toggles above. */
-function applyDismissedIf(
-  propertyId: number, dismissed: boolean, patch: Partial<PanelState>,
-): (prev: PanelState) => PanelState {
-  return (prev) =>
-    prev.listing?.property_id === propertyId
-      ? {
-          ...prev,
-          ...patch,
-          listing: prev.listing.dismissed == null
-            ? prev.listing
-            : { ...prev.listing, dismissed },
-        }
-      : prev;
+/* Hide / restore the listing's property (the SAME /dismissals routes as the SPA). */
+function onToggleDismiss(): Promise<void> {
+  return panelWrite(
+    (id) => store.toggleDismiss(id), { errorMessage: null },
+    (_, detail) => ({ errorMessage: `Skrytí se nepodařilo uložit: ${detail}` }),
+  );
 }
 
-/* Hide / restore the listing's property. Optimistic flip → reconcile; revert +
- * surface the reason on failure. Writes through the SAME /dismissals routes as
- * the SPA. */
-async function onToggleDismiss(): Promise<void> {
-  const l = state.listing;
-  if (l == null || l.property_id == null || l.dismissed == null) return;
-  const propertyId = l.property_id;
-  const wasOn = l.dismissed;
-
-  setState(applyDismissedIf(propertyId, !wasOn, { dismissBusy: true, errorMessage: null }));
-
-  const res = await call<DismissalWriteResult>({
-    type: wasOn ? 'undismiss_property' : 'dismiss_property',
-    property_id: propertyId,
-  });
-
-  if (!res.ok) {
-    setState(applyDismissedIf(propertyId, wasOn, {
-      dismissBusy: false,
-      errorMessage: `Skrytí se nepodařilo uložit: ${friendlyDetail(res.detail)}`,
-    }));
-    return;
-  }
-
-  setState(applyDismissedIf(propertyId, !wasOn, { dismissBusy: false }));
+/* Add the listing's property to one collection of mine, or take it out (rule
+ * #18), through the SAME /collections/{id}/properties routes the SPA uses. A
+ * failure shows in the checklist when it is open, else on the panel's own error
+ * line — it may have been closed mid-write, and an error inside a closed
+ * checklist is a revert nobody is told about. */
+function onToggleCollection(collectionId: number): Promise<void> {
+  return panelWrite((id) => store.toggleCollection(id, collectionId), { collectionError: null },
+    (prev, detail, add) => {
+      const message = `${add ? 'Uložení do kolekce' : 'Odebrání z kolekce'} se nepodařilo: ${detail}`;
+      return prev.collectionsOpen ? { collectionError: message } : { errorMessage: message };
+    });
 }
 
-/* One collection write, applied as a single add/remove to whatever the panel
- * shows NOW — never as a whole list captured at click time: the panel can be
- * re-opened for the same property while the write is in flight (a fresh
- * lookup, a fresh state), and overwriting that with a stale copy would drop
- * what was saved since. Guarded by property like the other toggles, so a panel
- * showing a different property is left alone (the panel state is a module
- * global that openPanel replaces wholesale). `member` is the membership this
- * step establishes; `patch` sees the state it lands on. */
-function applyCollectionWriteIf(
-  propertyId: number,
-  collectionId: number,
-  member: boolean,
-  patch: (prev: PanelState) => Partial<PanelState>,
-): (prev: PanelState) => PanelState {
-  return (prev) => {
-    const l = prev.listing;
-    if (l == null || l.property_id !== propertyId) return prev;
-    const ids = l.collection_ids ?? [];
-    const next = ids.includes(collectionId) === member
-      ? ids
-      : member ? [...ids, collectionId] : ids.filter((id) => id !== collectionId);
-    return { ...prev, ...patch(prev), listing: { ...l, collection_ids: next } };
-  };
+/* Attach one tag to the listing's property, or detach it (rule #18), through
+ * the SAME /properties/{id}/tags routes the SPA's TagAssignList uses. */
+function onToggleTag(tagId: number): Promise<void> {
+  return panelWrite((id) => store.toggleTag(id, tagId), { tagError: null },
+    (prev, detail, attach) => {
+      const message = `${attach ? 'Přidání štítku' : 'Odebrání štítku'} se nepodařilo: ${detail}`;
+      return prev.tagsOpen ? { tagError: message } : { errorMessage: message };
+    });
 }
 
 /* The SPA's TagChip: the tag's name in its colour on its soft wash. The tag
@@ -2331,79 +2168,19 @@ function tagChip(tag: ExtTag): HTMLElement {
   return chip;
 }
 
-/* applyCollectionWriteIf's twin for tags: one attach/detach applied to whatever
- * the panel shows NOW, guarded by property. */
-function applyTagWriteIf(
-  propertyId: number,
-  tagId: number,
-  member: boolean,
-  patch: (prev: PanelState) => Partial<PanelState>,
-): (prev: PanelState) => PanelState {
-  return (prev) => {
-    const l = prev.listing;
-    if (l == null || l.property_id !== propertyId) return prev;
-    const ids = l.tag_ids ?? [];
-    const next = ids.includes(tagId) === member
-      ? ids
-      : member ? [...ids, tagId] : ids.filter((id) => id !== tagId);
-    return { ...prev, ...patch(prev), listing: { ...l, tag_ids: next } };
-  };
-}
-
-/* Bumped by every tag write, for the same reason as collectionWriteSeq. */
-let tagWriteSeq = 0;
-
 function onToggleTagsMenu(): void {
   const opening = !state.tagsOpen;
   setState((prev) => ({
     ...prev, tagsOpen: opening, tagError: null,
     ...(opening ? { collectionsOpen: false, collectionError: null } : {}),
   }));
-  if (opening) void loadTags(true);
+  if (opening) void store.load('tags', true);
 }
 
 function onCloseTagsMenu(): void {
   setState((prev) => ({ ...prev, tagsOpen: false, tagError: null }));
   panelShadow?.querySelector<HTMLElement>('.tag-toggle')?.focus();
 }
-
-/* Attach one tag to the listing's property, or detach it (rule #18): optimistic,
- * reconciled, undone with the reason on failure — onToggleCollection's shape,
- * through the SAME /properties/{id}/tags routes the SPA's TagAssignList uses. */
-async function onToggleTag(tagId: number): Promise<void> {
-  const l = state.listing;
-  if (l == null || l.property_id == null || state.tagBusy) return;
-  const propertyId = l.property_id;
-  const attach = !(l.tag_ids ?? []).includes(tagId);
-  const seq = ++tagWriteSeq;
-  const settled = (): Partial<PanelState> => (seq === tagWriteSeq ? { tagBusy: false } : {});
-
-  setState(applyTagWriteIf(propertyId, tagId, attach, () => ({ tagBusy: true, tagError: null })));
-
-  const res = await call<TagWriteResult>({
-    type: attach ? 'attach_tag' : 'detach_tag', tag_id: tagId, property_id: propertyId,
-  });
-
-  if (!res.ok) {
-    const message = attach
-      ? `Přidání štítku se nepodařilo: ${friendlyDetail(res.detail)}`
-      : `Odebrání štítku se nepodařilo: ${friendlyDetail(res.detail)}`;
-    setState(applyTagWriteIf(propertyId, tagId, !attach, (prev) => ({
-      ...settled(),
-      ...(prev.tagsOpen ? { tagError: message } : { errorMessage: message }),
-    })));
-    // Likeliest cause: the tag was deleted in the app since the list loaded.
-    void loadTags(true);
-    return;
-  }
-
-  setState(applyTagWriteIf(propertyId, tagId, attach, settled));
-}
-
-/* Bumped by every collection write. collectionBusy serialises the writes of
- * one panel, but a write can outlive its panel: one landing after a re-open
- * must not clear the busy flag of a newer write it knows nothing about. */
-let collectionWriteSeq = 0;
 
 /* Open / close the save-to-collection checklist. Opening also re-reads the
  * collection list in the background: the list is cached for the life of the
@@ -2415,7 +2192,7 @@ function onToggleCollectionsMenu(): void {
     ...prev, collectionsOpen: opening, collectionError: null,
     ...(opening ? { tagsOpen: false, tagError: null } : {}),
   }));
-  if (opening) void loadCollections(true);
+  if (opening) void store.load('collections', true);
 }
 
 /* Escape: close, and hand focus back to the trigger — the row that had it was
@@ -2425,236 +2202,17 @@ function onCloseCollectionsMenu(): void {
   panelShadow?.querySelector<HTMLElement>('.collection-toggle')?.focus();
 }
 
-/* Add the listing's property to one collection, or take it out (rule #18).
- * Optimistic, then reconciled; on failure the step is undone and the reason
- * shown. One write at a time per panel (every row reads busy meanwhile, as in
- * the SPA menu). Writes through the SAME bearer-gated
- * /collections/{id}/properties routes the SPA uses, which resolve a
- * merged-away property to its survivor server-side. */
-async function onToggleCollection(collectionId: number): Promise<void> {
-  const l = state.listing;
-  if (l == null || l.property_id == null || state.collectionBusy) return;
-  const propertyId = l.property_id;
-  const add = !(l.collection_ids ?? []).includes(collectionId);
-  const seq = ++collectionWriteSeq;
-  const settled = (): Partial<PanelState> =>
-    seq === collectionWriteSeq ? { collectionBusy: false } : {};
-
-  setState(applyCollectionWriteIf(
-    propertyId, collectionId, add, () => ({ collectionBusy: true, collectionError: null }),
-  ));
-
-  const res = await call<CollectionWriteResult>({
-    type: add ? 'add_to_collection' : 'remove_from_collection',
-    collection_id: collectionId,
-    property_id: propertyId,
-  });
-
-  if (!res.ok) {
-    const message = add
-      ? `Uložení do kolekce se nepodařilo: ${friendlyDetail(res.detail)}`
-      : `Odebrání z kolekce se nepodařilo: ${friendlyDetail(res.detail)}`;
-    /* Say it where it can be seen: in the checklist when it is open, else on
-     * the panel's own error line — it may have been closed mid-write, and an
-     * error inside a closed checklist is a revert nobody is told about. */
-    setState(applyCollectionWriteIf(propertyId, collectionId, !add, (prev) => ({
-      ...settled(),
-      ...(prev.collectionsOpen ? { collectionError: message } : { errorMessage: message }),
-    })));
-    /* The likeliest cause is a collection deleted in the app since the list
-     * loaded (a 404) — re-read it so the dead row goes away. */
-    void loadCollections(true);
-    return;
-  }
-
-  setState(applyCollectionWriteIf(propertyId, collectionId, add, settled));
-}
-
-/* Change the deal stage of the in-pipeline property. The SAME audited PATCH the
- * SPA's PipelineToggle + the kanban use (stamps `entered_stage_at`, logs a
- * `moved` event). Optimistic: recolour/reselect from the chosen stage, then
- * reconcile from the server; revert on failure. Identity-guarded like the toggle. */
-async function onMoveStage(stageId: number): Promise<void> {
-  const l = state.listing;
-  if (l == null || l.property_id == null || l.pipeline == null) return;
-  if (l.pipeline.stage_id === stageId) return;  // no-op (already there)
-  const propertyId = l.property_id;
-  const prior = l.pipeline;
-  const target = state.stages?.find((s) => s.id === stageId) ?? null;
-
-  setState(applyMembershipIf(
-    propertyId,
-    {
-      in_pipeline: true, stage_id: stageId,
-      stage_key: target?.key ?? prior.stage_key,
-      stage_label: target?.label ?? prior.stage_label,
-      stage_code: target?.code ?? null,
-      stage_color: target?.color ?? prior.stage_color,
-    },
-    // Moving the card answers the "remove?" question a different way — close
-    // the confirm rather than leaving it hanging over a card that just moved.
-    { pipelineBusy: true, pipelineConfirmRemove: false, errorMessage: null },
-  ));
-
-  const res = await call<PipelineCardResult>({
-    type: 'move_pipeline_card', property_id: propertyId, stage_id: stageId,
-  });
-
-  if (!res.ok) {
-    setState(applyMembershipIf(
-      propertyId, prior,
-      { pipelineBusy: false, errorMessage: `Změna fáze selhala: ${friendlyDetail(res.detail)}` },
-    ));
-    return;
-  }
-
-  setState(applyMembershipIf(
-    propertyId,
-    {
-      in_pipeline: true,
-      stage_id: res.data.stage_id ?? stageId,
-      stage_key: res.data.stage_key ?? target?.key ?? prior.stage_key,
-      stage_label: res.data.stage_label ?? target?.label ?? prior.stage_label,
-      stage_code: res.data.stage_code ?? target?.code ?? null,
-      stage_color: res.data.stage_color ?? target?.color ?? prior.stage_color,
-    },
-    { pipelineBusy: false },
-  ));
-  // Re-opening a closed deal makes it live, which lifts its dismissal server-side.
-  if (target != null && !target.is_terminal) setState(applyDismissedIf(propertyId, false, {}));
-}
-
-/* The operator-curated stage list, cached at module scope for the life of the
- * tab until the account changes (unlike the SPA's 60 s cache; stages change
- * rarely). Reused across panel re-opens so changing cards never re-fetches. A
- * transient failure retries a few times (bounded) so a single network blip
- * can't strip stage-changing for the page view; a persistent failure leaves the
- * select on its current-stage fallback and self-heals on the next panel open. */
-let cachedStages: PipelineStage[] | null = null;
-let stagesLoading = false;
-
-async function loadStages(): Promise<void> {
-  if (cachedStages != null) {
-    if (state.stages == null) setState((prev) => ({ ...prev, stages: cachedStages }));
-    return;
-  }
-  if (stagesLoading) return;  // a load is already in flight — dedupe across opens
-  stagesLoading = true;
-  const gen = sessionGen;
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await call<PipelineStage[]>({ type: 'list_pipeline_stages' });
-      if (res.ok) {
-        cachedStages = res.data;
-        setState((prev) => ({ ...prev, stages: cachedStages }));
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 1500));  // transient blip → back off + retry
-      if (gen !== sessionGen) return;
-    }
-  } finally {
-    if (gen === sessionGen) stagesLoading = false;
-  }
-}
-
-/* The caller's collection list — loaded once per page, cached at module scope
- * and reused across panel re-opens, exactly like loadStages above (the save
- * control names the property's collections from it, the checklist lists it).
- * `refresh` re-reads it even when cached: opening the panel or the checklist
- * does, so a collection made or shared in the app since the tab loaded shows up. Same bounded retry;
- * when every attempt fails with nothing to show, the checklist says so and
- * offers a retry instead of loading forever. */
-let cachedCollections: ExtCollection[] | null = null;
-let collectionsLoading = false;
-
-async function loadCollections(refresh = false): Promise<void> {
-  if (cachedCollections != null && !refresh) {
-    if (state.collections == null) {
-      setState((prev) => ({ ...prev, collections: cachedCollections }));
-    }
-    return;
-  }
-  if (collectionsLoading) return;  // a load is already in flight — dedupe across opens
-  collectionsLoading = true;
-  const gen = sessionGen;
-  if (state.collectionsFailed) setState((prev) => ({ ...prev, collectionsFailed: false }));
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await call<ExtCollection[]>({ type: 'list_collections' });
-      if (res.ok) {
-        const changed = cachedCollections == null
-          || collectionsKey(cachedCollections) !== collectionsKey(res.data);
-        cachedCollections = res.data;
-        /* The usual refresh changes nothing, and it lands just as the checklist
-         * opened — a wholesale rebuild then, under the pointer, can swallow the
-         * click the operator is making. Only a real change re-renders. */
-        if (changed || state.collections == null || state.collectionsFailed) {
-          setState((prev) => ({ ...prev, collections: cachedCollections, collectionsFailed: false }));
-        }
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 1500));  // transient blip → back off + retry
-      if (gen !== sessionGen) return;
-    }
-    // A failed REFRESH keeps the list it already had; only an empty panel fails.
-    if (state.collections == null) {
-      setState((prev) => ({ ...prev, collectionsFailed: true }));
-    }
-  } finally {
-    if (gen === sessionGen) collectionsLoading = false;
-  }
-}
-
-/* The caller's tag list — loadCollections' twin: cached at module scope across
- * panel opens, re-read when the checklist opens, bounded retry. */
-let cachedTags: ExtTag[] | null = null;
-let tagsLoading = false;
-
-async function loadTags(refresh = false): Promise<void> {
-  if (cachedTags != null && !refresh) {
-    if (state.tags == null) setState((prev) => ({ ...prev, tags: cachedTags }));
-    return;
-  }
-  if (tagsLoading) return;
-  tagsLoading = true;
-  const gen = sessionGen;
-  if (state.tagsFailed) setState((prev) => ({ ...prev, tagsFailed: false }));
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await call<ExtTag[]>({ type: 'list_tags' });
-      if (res.ok) {
-        const key = (list: ExtTag[]): string =>
-          JSON.stringify(list.map((t) => [t.id, t.name, t.color]));
-        const changed = cachedTags == null || key(cachedTags) !== key(res.data);
-        cachedTags = res.data;
-        // Only a real change re-renders: a rebuild under the pointer can swallow a click.
-        if (changed || state.tags == null || state.tagsFailed) {
-          setState((prev) => ({ ...prev, tags: cachedTags, tagsFailed: false }));
-        }
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 1500));
-      if (gen !== sessionGen) return;
-    }
-    if (state.tags == null) setState((prev) => ({ ...prev, tagsFailed: true }));
-  } finally {
-    if (gen === sessionGen) tagsLoading = false;
-  }
-}
-
-/* The lists and the open panel belong to the account that read them: an account change
- * drops the lists (the next open re-reads them) and puts the panel on the prompt or re-reads it. */
-onAccountChange((user) => {
-  sessionGen++;
+/* The panel belongs to the account that read it: once the store dropped what
+ * that account had read, an account change puts the panel on the prompt or
+ * re-reads it. */
+store.onAccountChange((user) => {
   ingestForbidden = false;
-  cachedStages = cachedCollections = cachedTags = null;
-  stagesLoading = collectionsLoading = tagsLoading = false;
   if (panelRef == null || document.getElementById(HOST_ELEMENT_ID) == null) return;
   if (user != null) return void openPanel(panelRef, panelUrl);
   renderEpoch++;
   setState((prev) => ({
     ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
-    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
+    collectionsOpen: false, tagsOpen: false,
   }));
 });
 
@@ -2688,7 +2246,7 @@ let noteShareDraft = false;
  * shareAudience over the same facts (the lookup's collection_ids × the
  * collection list). Null = not known yet (the list loading or failed), which
  * must never read as "nobody": no checkbox, no share toggle, no "nobody" claim. */
-function noteAudience(s: PanelState): string[] | null {
+function noteAudience(s: PanelView): string[] | null {
   const l = s.listing;
   if (l == null) return null;
   if ((l.collection_ids ?? []).length === 0) return [];
@@ -2696,12 +2254,12 @@ function noteAudience(s: PanelState): string[] | null {
   return shareAudience(l.collection_ids ?? [], s.collections);
 }
 
-/* Notes are PER-PROPERTY (not global like stages/collections), so they're fetched
- * fresh per panel open and held in panel state — never module-cached. The dedup
+/* Notes are PER-PROPERTY (not page-wide like the store's lists), so they're fetched
+ * fresh per panel open and held in panel state — never cached. The dedup
  * is the per-panel `state.notes == null` guard, NOT a page-wide in-flight flag: a
  * page-wide flag would early-return (and strand) a DIFFERENT property opened while
- * the first's fetch is still in flight (stages/collections survive that only via
- * their module cache re-apply, which notes deliberately don't have). A duplicate
+ * the first's fetch is still in flight (a list survives that because it is one
+ * page-wide value; notes are one per property). A duplicate
  * fetch from a rapid same-property re-open is harmless (idempotent, identity-
  * guarded apply). Retried on a transient blip; identity-guarded so a mid-flight
  * panel re-open can't apply one property's notes onto another. When every try
@@ -2718,7 +2276,7 @@ async function loadNotes(): Promise<void> {
       setState((prev) => (mine(prev) ? { ...prev, notes: res.data } : prev));
       return;
     }
-    await new Promise((r) => setTimeout(r, 1500));
+    await sleep(1500);
   }
   setState((prev) => (mine(prev) ? { ...prev, notesFailed: true } : prev));
 }
@@ -2734,7 +2292,7 @@ async function onAddNote(): Promise<void> {
   if (body === '') return;
   const propertyId = l.property_id;
   // Shared only while the checkbox is on screen, i.e. someone would read it.
-  const shared = noteShareDraft && (noteAudience(state)?.length ?? 0) > 0;
+  const shared = noteShareDraft && (noteAudience(view(state))?.length ?? 0) > 0;
   setState((prev) => ({ ...prev, noteBusy: true, errorMessage: null }));
   const res = await call<ExtNote>({
     type: 'add_note', property_id: propertyId, body, shared,
@@ -2900,10 +2458,8 @@ export async function openPanel(
     rentTouched: false, costTouched: false, priceTouched: false,
     renovationTouched: false,
     rent: null, costPerM2: null, price: null, renovation: null, busy: false,
-    pipelineBusy: false, pipelineConfirmRemove: false, stages: cachedStages,
-    collections: cachedCollections, collectionsFailed: false, collectionsOpen: false,
-    collectionBusy: false, collectionError: null, dismissBusy: false,
-    tags: cachedTags, tagsFailed: false, tagsOpen: false, tagBusy: false, tagError: null,
+    pipelineConfirmRemove: false, collectionsOpen: false, collectionError: null,
+    tagsOpen: false, tagError: null,
     notes: null, notesFailed: false, noteBusy: false, quota: null, errorMessage: null,
     noteEditingId: null, noteConfirmDeleteId: null, noteRowBusy: false,
     ingestStep: null, ingestMessage: null,
@@ -2949,15 +2505,17 @@ export async function openPanel(
   /* The lookup for a listing the operator has already navigated away from must
    * not land — this is the apply that would otherwise show A's yield under B. */
   if (epoch !== renderEpoch) return;
-  await showListing(epoch, listing);
+  await showListing(epoch, listing, prefetched === undefined);
 }
 
 /* Paint one lookup row and start what a held ad needs. Shared by openPanel and
  * the add-to-database flow (onIngest), so an ad the panel just added gets
- * exactly the controls of any ad we hold. */
+ * exactly the controls of any ad we hold. A row a card handed over is not
+ * `fresh`: its curation is the page's lookup, and the store's may be newer. */
 async function showListing(
-  epoch: number, listing: PortalListing | null,
+  epoch: number, listing: PortalListing | null, fresh = true,
 ): Promise<void> {
+  store.seed([listing], fresh);
   /* The panel is for an ad we hold (app link, facts, MF, estimate); an ad we
    * lack gets only the offer to add it — an estimation is always of a held ad. */
   const held = listing?.found ? listing : null;
@@ -2984,9 +2542,9 @@ async function showListing(
    * shared note reaches, and a share or collection made in the app since the
    * tab loaded must not leave either wrong — the SPA re-reads after 30 s. */
   if (held.property_id != null) {
-    void loadStages();
-    void loadCollections(true);
-    void loadTags();
+    void store.load('stages');
+    void store.load('collections', true);
+    void store.load('tags');
     void loadNotes();  // the property's existing notes (per-property, lazy)
   }
 
@@ -3053,7 +2611,7 @@ function renderForUrl(url: string): void {
 
   document.getElementById(HOST_ELEMENT_ID)?.remove();
   if (portalForHost(window.location.hostname) != null) {
-    runIndexOverlay(call, openPanel, { collectionsUrl: COLLECTIONS_URL, onCardWrite })
+    runIndexOverlay(store, openPanel)
       .then((overlay) => {
         /* Another route change landed while the overlay was starting — adopt
          * nothing, or its observer outlives the page it was scanning. Keyed on

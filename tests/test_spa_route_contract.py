@@ -36,7 +36,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 ROUTES_TS = REPO / "frontend" / "src" / "lib" / "routes.ts"
-EXTENSION_TS = REPO / "chrome-extension" / "src" / "content.ts"
+EXTENSION_SRC = REPO / "chrome-extension" / "src"
 MIGRATIONS = REPO / "migrations"
 
 # `key: def('/pattern'),` — the one authored form in the registry.
@@ -53,6 +53,13 @@ CROSS_TERRITORY = {
 # the SPA's push wave (W5b, PR #1948): until it is in this tree its registry half waits; its shape is pinned anyway.
 PUSH_EMITTED = {"notificationOpen": "/n/:dispatchId", "notifications": "/notifications"}
 _LANDING_PAGE = REPO / "frontend" / "src" / "pages" / "NotificationOpen.tsx"
+
+
+def _extension_source() -> str:
+    """Every extension module, as one text: a link may be built in any of them."""
+    files = sorted(p for p in EXTENSION_SRC.glob("*.ts") if not p.name.endswith(".test.ts"))
+    assert files, f"no extension modules under {EXTENSION_SRC}"
+    return "\n".join(p.read_text() for p in files)
 
 
 def _registry() -> dict[str, str]:
@@ -76,20 +83,20 @@ def test_the_registry_still_declares_every_externally_emitted_route() -> None:
         assert registry[key] == expected, (
             f"ROUTES.{key} changed from {expected!r} to {registry[key]!r}. Every "
             f"installed extension still points at the old path. Update "
-            f"chrome-extension/src/content.ts and this contract together."
+            f"chrome-extension/src and this contract together."
         )
 
 
 def test_extension_builds_the_canonical_listing_route() -> None:
     """Vanilla-TS territory, so this reads the source rather than calling it."""
-    src = EXTENSION_TS.read_text()
+    src = _extension_source()
     built = re.search(
         r"\$\{APP_BASE_URL\}(/listing/\$\{encodeURIComponent\([^)]+\)\}"
         r"/\$\{encodeURIComponent\([^)]+\)\})",
         src,
     )
     assert built, (
-        "chrome-extension/src/content.ts no longer builds a "
+        "chrome-extension/src no longer builds a "
         "${APP_BASE_URL}/listing/{source}/{native} URL — if the shape changed, "
         "check it still matches the SPA registry."
     )
@@ -103,9 +110,9 @@ def test_extension_builds_the_canonical_listing_route() -> None:
 
 def test_extension_builds_the_collections_route() -> None:
     """The save-to-collection checklist links to the app's collections page."""
-    src = EXTENSION_TS.read_text()
+    src = _extension_source()
     assert f"${{APP_BASE_URL}}{CROSS_TERRITORY['collections']}`" in src, (
-        "chrome-extension/src/content.ts no longer builds "
+        "chrome-extension/src no longer builds "
         "${APP_BASE_URL}/collections — if the link moved, check it still matches "
         "the SPA registry."
     )
@@ -213,7 +220,7 @@ def test_the_contract_names_only_what_actually_crosses_a_boundary() -> None:
     Every entry must be emitted by the extension. An entry nothing emits is dead
     weight that still has to be kept in sync.
     """
-    emitters = EXTENSION_TS.read_text()
+    emitters = _extension_source()
     for key, pattern in CROSS_TERRITORY.items():
         literal_prefix = pattern.split("/:")[0]
         assert literal_prefix in emitters, (
@@ -224,5 +231,5 @@ def test_the_contract_names_only_what_actually_crosses_a_boundary() -> None:
 
 def test_registry_file_is_where_this_test_thinks_it_is() -> None:
     assert ROUTES_TS.exists(), ROUTES_TS
-    assert EXTENSION_TS.exists(), EXTENSION_TS
+    assert EXTENSION_SRC.is_dir(), EXTENSION_SRC
     assert os.path.getsize(ROUTES_TS) > 0
