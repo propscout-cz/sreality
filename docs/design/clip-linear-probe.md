@@ -68,7 +68,7 @@ live. Reconciling this doc's trainer plan with the new table (v1 scope, multi-he
 6. CI **does** replay pgvector (`migrations.yml` builds `postgresql-17-pgvector`); migration 226's
    comment is stale. The CI gap is *performance* (PREPARE-only), not schema.
 7. Smaller drift: `retag_from_embeddings.py` "active-only" docstring stale; dead `--categories`
-   in `clip_tag.yml`; `ImageRenderBadge` 0.65 vs engine 0.95; `imageTags.ts` "12 canonical" (=15);
+   in `clip_tag.yml`; `ImageRenderBadge` 0.65 vs engine 0.95 (moot: render scoring removed 2026-10-28); `imageTags.ts` "12 canonical" (=15);
    `queries.ts` `.limit(2000)` silent-undercount cliff; a residual tagged-but-vectorless tail
    (historical ~19%, closing) that any embeddings-JOIN campaign silently skips.
 
@@ -90,7 +90,7 @@ render-vs-photo are orthogonal axes, **not** classes.
 **v1 trains ONE multinomial head over the ~10–11 logical classes with ≥16 grouped examples,
 plus an explicit `other`/OOD sink.** The multi-head shape (per-parent fine sub-heads like
 bathroom shower/tub, sigmoid axes) is the documented target, deferred until a class hits
-≥40 images across ≥25 properties AND a consumer actually reads it. `render_score` is untouched.
+≥40 images across ≥25 properties AND a consumer actually reads it. `render_score` is untouched (render scoring was removed later, 2026-10-28).
 
 ### D3 — Provenance by write-time composition (no read-side resolver)
 Rejected: per-version model keys (`probe/v1` rows would add 8.27M rows per retrain and force an
@@ -191,7 +191,7 @@ PR opens before its label budget is banked.
 - **P0b** provenance columns + shadow table (additive migration).
 - **P0c** label map v1 + snapshot export in the training job.
 - **P0d** blind-labeling mode in the Train CTA.
-- **Cleanup PRs** (independent, any time): render badge 0.65→0.95, `imageTags.ts` comment, retag
+- **Cleanup PRs** (independent, any time): ~~render badge 0.65→0.95~~ (render scoring removed 2026-10-28), `imageTags.ts` comment, retag
   docstring, dead `--categories`, `.limit(2000)`, update/retire `clip-visual-embeddings.md`,
   stale migration-226 CI comment.
 - **P1** trainer + eval harness + representativeness canary; shadow campaign.

@@ -80,9 +80,9 @@ toolkit work.
   weight change, the inset count pill, arrow keys everywhere; the property strip now pins under the header (it
   hid behind it). Kept unruled: Browse's tab count, the collection's divider, the broker window's single tab,
   the filled toggles. Pattern: `.interface-design/system.md` § Tab strip.
-- **Next (not built):** removing render scoring end to end (operator note on P03), scoped first. Open for the
-  operator: the phone header's P31 controls, and whether the property page should get the city-index strip
-  (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.
+- **Built 2026-10-28:** the operator review notes P19 (the city-index card on Přehled), P24 and phone P31; and
+  render scoring removed end to end (P03: tagger, writers, SPA, migration 686 dropping the column). Handoff:
+  `docs/design/propscout-redesign.md`.
 - **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
   S05, S08, S10 declined; the confirmed ones are built (above; handoff § Stats review).
 - **Ruled 2026-10-28: section cards** (operator ask: "find a better way to separate sections … same pattern on the
