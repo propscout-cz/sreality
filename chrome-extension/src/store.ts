@@ -1,4 +1,4 @@
-/* The extension's ONE data layer, shared by the listing panel (content.ts) and the
+/* The extension's ONE data layer, shared by the listing panel (panel.ts) and the
  * search-page cards (index_cards.ts): the transport and its session generation,
  * each property's curation, the lists that name it, and the one write path.
  * Surfaces subscribe and re-render from it. No DOM, no `chrome`, no runtime import

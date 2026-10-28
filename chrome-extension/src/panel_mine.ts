@@ -11,7 +11,7 @@ import { buildCard } from './card';
 import { buildChecklist, buildCollectionChecklist, stateLine } from './checklist';
 import { APP_BASE_URL, friendlyDetail } from './config';
 import { h, setBusy } from './dom';
-import { bellIconSvg, bookmarkIconSvg, eyeOffIconSvg, funnelIconSvg, lineIcon, savedCollections } from './glyphs';
+import { bellIconSvg, bookmarkIconSvg, codeBadge, eyeOffIconSvg, funnelIconSvg, lineIcon, savedCollections } from './glyphs';
 import { cutChips, fmtDate, stageControl } from './panel_logic';
 import { isLiveDeal, type Pending, type Store } from './store';
 import type { PortalListing } from './types';
@@ -204,17 +204,20 @@ export function createMine(deps: MineDeps) {
     return btn;
   }
 
-  function codeBadge(stage: PipelineStage, stages: readonly PipelineStage[]): HTMLElement {
-    const accent = stageAccent(stage);
-    const code = h('span', 'code', stageBadge(stage, stages) ?? '·');
-    code.style.color = accent.fg;
-    code.style.background = accent.soft;
+  /* A stage as the close menu names it: its badge (a mark beside the label, hidden from AT) and its label. */
+  function stageName(stage: PipelineStage, stages: readonly PipelineStage[]): Node[] {
+    const label = h('span', '', stage.label);
+    const code = codeBadge(stage, stages);
+    if (code == null) return [label];
     code.setAttribute('aria-hidden', 'true');
-    return code;
+    return [code, label];
   }
 
+  /* A move answers the open "remove?" question (and the menu) another way: both close. */
   function move(id: number, stageId: number): void {
     if (store.busy('pipeline', id)) return;
+    closeOpen = false;
+    confirmRemove = false;
     void write(store.moveStage(id, stageId), (d) => `Změna fáze selhala: ${d}`);
   }
 
@@ -232,6 +235,7 @@ export function createMine(deps: MineDeps) {
       add.onclick = () => {
         if (store.busy('pipeline', id)) return;
         void write(store.addToPipeline(id), (d) => `Uložení do pipeline selhalo: ${d}`);
+        focus('close-trigger');  // the button just became the stage bar
       };
       line.appendChild(add);
       const hide = dismissToggle(view, id, true);
@@ -256,7 +260,7 @@ export function createMine(deps: MineDeps) {
     trigger.setAttribute('aria-haspopup', 'menu');
     trigger.setAttribute('aria-expanded', String(closeOpen));
     if (closed && current != null && stages != null) {
-      trigger.append(codeBadge(current, stages), h('span', '', current.label));
+      trigger.append(...stageName(current, stages));
       trigger.setAttribute('aria-label', `Uzavřeno: ${current.label}`);
     } else {
       trigger.appendChild(h('span', '', 'Uzavřít'));
@@ -280,7 +284,7 @@ export function createMine(deps: MineDeps) {
 
     if (stages == null) {
       pipe.appendChild(status === 'failed'
-        ? stateLine('Fáze se nepodařilo načíst.', () => { store.load('stages', true); })
+        ? stateLine('Fáze se nepodařilo načíst.', () => { store.load('stages', true); }, 'err')
         : h('p', 'meta', p.stage_label ?? 'Načítám fáze…'));
     } else if (stageControl(stages) === 'bar') {
       const open = stages.filter((s) => !s.is_terminal);
@@ -304,13 +308,13 @@ export function createMine(deps: MineDeps) {
       });
       pipe.appendChild(steps);
     } else {
-      // Today's dropdown: every stage, the audited move on change.
+      // Today's dropdown over the open stages (closing a deal is the "Uzavřít" menu's), the audited move on change.
       const select = h('select', '');
       select.dataset.key = 'stage-select';
       select.title = 'Změnit fázi';
       select.setAttribute('aria-label', 'Fáze v pipeline');
       select.disabled = busy;
-      for (const s of stages) {
+      for (const s of stages.filter((x) => !x.is_terminal || x.id === p.stage_id)) {
         const opt = h('option', '', s.label);
         opt.value = String(s.id);
         opt.selected = s.id === p.stage_id;
@@ -347,7 +351,7 @@ export function createMine(deps: MineDeps) {
       item.setAttribute('role', 'menuitemradio');
       item.setAttribute('aria-checked', String(stage.id === currentId));
       item.dataset.key = items.length === 0 ? 'close-first' : `close-${stage.id}`;
-      item.append(codeBadge(stage, stages), h('span', '', stage.label));
+      item.append(...stageName(stage, stages));
       item.onclick = () => {
         closeOpen = false;
         if (stage.id !== currentId) move(id, stage.id);
@@ -367,7 +371,11 @@ export function createMine(deps: MineDeps) {
     };
     items.push(remove);
     menu.append(...items.slice(0, -1));
-    if (items.length > 1) menu.appendChild(h('div', 'sep'));
+    if (items.length > 1) {
+      const sep = h('div', 'sep');
+      sep.setAttribute('role', 'separator');
+      menu.appendChild(sep);
+    }
     menu.appendChild(remove);
     menu.onkeydown = (e) => {
       e.stopPropagation();  // ours, not the portal's (lightboxes close on Escape too)
@@ -403,8 +411,9 @@ export function createMine(deps: MineDeps) {
     setBusy(yes, busy);
     yes.onclick = () => {
       if (store.busy('pipeline', id)) return;
-      void write(store.removeFromPipeline(id), (d) => `Uložení do pipeline selhalo: ${d}`)
+      void write(store.removeFromPipeline(id), (d) => `Odebrání z pipeline selhalo: ${d}`)
         .then(() => { confirmRemove = false; repaint(); });
+      focus('pipeline-add');  // the card is out: the confirm became the CTA
     };
     const no = h('button', 'q', 'Zrušit');
     no.dataset.key = 'remove-no';
@@ -487,11 +496,12 @@ export function createMine(deps: MineDeps) {
     const saved = savedCollections(view.collection_ids, list.data);
     if (saved == null) {
       grp.appendChild(list.status === 'failed'
-        ? stateLine('Kolekce se nepodařilo načíst.', () => { store.load('collections', true); })
+        ? stateLine('Kolekce se nepodařilo načíst.', () => { store.load('collections', true); }, 'err')
         : h('p', 'meta', 'Načítám kolekce…'));
     } else {
       grp.appendChild(chipRow(saved, 'collections', (c) => {
         const chip = h('button', 'chip');
+        chip.dataset.key = `coll-chip-${c.id}`;
         chip.innerHTML = bookmarkIconSvg(true);
         chip.appendChild(h('span', '', c.name));
         chip.title = c.name;
@@ -540,11 +550,15 @@ export function createMine(deps: MineDeps) {
     const ids = view.tag_ids ?? [];
     if (list.data == null && ids.length > 0) {
       grp.appendChild(list.status === 'failed'
-        ? stateLine('Štítky se nepodařilo načíst.', () => { store.load('tags', true); })
+        ? stateLine('Štítky se nepodařilo načíst.', () => { store.load('tags', true); }, 'err')
         : h('p', 'meta', 'Načítám štítky…'));
     } else {
       const attached = (list.data ?? []).filter((t) => ids.includes(t.id));
-      grp.appendChild(chipRow(attached, 'tags', (t) => tagChip(t, 'button'), 'Přidat štítek'));
+      grp.appendChild(chipRow(attached, 'tags', (t) => {
+        const chip = tagChip(t, 'button');
+        chip.dataset.key = `tag-chip-${t.id}`;
+        return chip;
+      }, 'Přidat štítek'));
     }
     if (picker === 'tags') {
       grp.appendChild(pickerBox('tags', 'Štítky', (box) => buildChecklist<Tag>(box, {
@@ -606,10 +620,12 @@ export function createMine(deps: MineDeps) {
       ta.addEventListener('input', () => { editDraft = ta.value; });
       const actions = h('div', 'row-actions');
       const save = h('button', 'cta', notes.rowBusy ? 'Ukládám…' : 'Uložit');
+      save.dataset.key = `note-${n.id}-save`;
       setBusy(save, notes.rowBusy);
       save.onclick = () => { if (!notes.rowBusy) void saveEdit(n.id); };
       const cancel = h('button', 'q', 'Zrušit');
-      cancel.onclick = () => { notes.editingId = null; repaint(); };
+      cancel.dataset.key = `note-${n.id}-cancel`;
+      cancel.onclick = () => { notes.editingId = null; repaint(); focus(`note-${n.id}-edit`); };
       actions.append(save, cancel);
       item.append(ta, actions);
       return item;
@@ -617,6 +633,7 @@ export function createMine(deps: MineDeps) {
     const top = h('div', 'note-top');
     top.appendChild(h('p', 'note-body', n.body));
     const edit = h('button', 'icon-btn');
+    edit.dataset.key = `note-${n.id}-edit`;
     edit.innerHTML = lineIcon('pencil');
     edit.setAttribute('aria-label', 'Upravit poznámku');
     edit.title = 'Upravit poznámku';
@@ -628,6 +645,7 @@ export function createMine(deps: MineDeps) {
       focus('note-edit');
     };
     const del = h('button', 'icon-btn icon-btn--danger');
+    del.dataset.key = `note-${n.id}-del`;
     del.innerHTML = lineIcon('trash');
     del.setAttribute('aria-label', 'Smazat poznámku');
     del.title = 'Smazat poznámku';
@@ -639,10 +657,12 @@ export function createMine(deps: MineDeps) {
       const confirm = h('div', 'row-actions');
       confirm.appendChild(h('span', 'meta', 'Smazat tuto poznámku?'));
       const yes = h('button', 'danger', notes.rowBusy ? 'Mažu…' : 'Smazat');
+      yes.dataset.key = `note-${n.id}-del-yes`;
       setBusy(yes, notes.rowBusy);
       yes.onclick = () => { if (!notes.rowBusy) void deleteNote(n.id); };
       const no = h('button', 'q', 'Zrušit');
-      no.onclick = () => { notes.confirmDeleteId = null; repaint(); };
+      no.dataset.key = `note-${n.id}-del-no`;
+      no.onclick = () => { notes.confirmDeleteId = null; repaint(); focus(`note-${n.id}-del`); };
       confirm.append(yes, no);
       item.appendChild(confirm);
       return item;
@@ -651,6 +671,7 @@ export function createMine(deps: MineDeps) {
     // Making private is always safe; sharing names who it reaches, once that is known.
     if (n.shared || (who != null && who.length > 0)) {
       const toggle = h('button', 'q', n.shared ? 'Nesdílet' : `Sdílet s ${(who ?? []).join(', ')}`);
+      toggle.dataset.key = `note-${n.id}-share`;
       setBusy(toggle, notes.rowBusy);
       toggle.onclick = () => { void toggleShared(n); };
       meta.appendChild(toggle);
@@ -682,11 +703,10 @@ export function createMine(deps: MineDeps) {
       share.append(box, h('span', '', `Sdílet s ${who.join(', ')}`));
       out.push(share);
     } else if (who == null && store.list('collections').status === 'failed') {
-      const line = stateLine('Sdílení se nepodařilo načíst.', () => { store.load('collections', true); });
-      line.className = 'err';
-      out.push(line);
+      out.push(stateLine('Sdílení se nepodařilo načíst.', () => { store.load('collections', true); }, 'err'));
     }
     const save = h('button', 'cta', notes.busy ? 'Ukládám…' : 'Uložit poznámku');
+    save.dataset.key = 'note-save';
     setBusy(save, notes.busy);
     save.onclick = () => { if (!notes.busy) void addNote(); };
     out.push(save);
@@ -710,9 +730,7 @@ export function createMine(deps: MineDeps) {
     const who = audience();
 
     if (notes.failed) {
-      const line = stateLine('Poznámky se nepodařilo načíst.', () => { if (propertyId != null) void loadNotes(propertyId); });
-      line.className = 'err';
-      grp.appendChild(line);
+      grp.appendChild(stateLine('Poznámky se nepodařilo načíst.', () => { if (propertyId != null) void loadNotes(propertyId); }, 'err'));
     } else if (list == null) {
       grp.appendChild(h('p', 'meta', 'Načítám poznámky…'));
     } else if (notes.expanded) {
@@ -729,9 +747,7 @@ export function createMine(deps: MineDeps) {
     if (notes.expanded) {
       grp.append(...composer(who));
     } else if (!notes.failed) {
-      const add = h('button', 'q edge');
-      add.style.marginLeft = '-8px';
-      add.style.alignSelf = 'flex-start';
+      const add = h('button', 'q note-add');
       add.dataset.key = 'note-add';
       add.innerHTML = lineIcon('plus');
       add.appendChild(h('span', '', 'Přidat poznámku'));
@@ -754,7 +770,7 @@ export function createMine(deps: MineDeps) {
     const c = buildCard({ title: 'Moje', variant: 'mine' });
     const saved = h('div', 'grp saved');
     saved.appendChild(collectionsBlock(view, id));
-    if (view.tag_ids !== undefined) saved.appendChild(tagsBlock(view, id));
+    saved.appendChild(tagsBlock(view, id));
     c.body.append(pipelineGroup(view, id), saved, notesGroup());
     return c.section;
   }

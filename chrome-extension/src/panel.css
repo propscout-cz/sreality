@@ -15,7 +15,6 @@
   --ag-on: var(--color-on-copper);
   --ag-soft: var(--color-copper-soft);
   --ag-line: color-mix(in srgb, var(--color-copper) 26%, var(--color-paper-2));
-  --ag-on-2: color-mix(in srgb, var(--color-on-copper) 78%, var(--color-copper));
 }
 
 * { box-sizing: border-box; }
@@ -90,7 +89,7 @@ svg.i {
 }
 
 .tab {
-  top: 96px; right: 0; width: 56px; padding: 10px 4px 12px;
+  top: 96px; right: 0; min-width: 56px; padding: 10px 4px 12px;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   background: var(--color-paper-2); border: 1px solid var(--color-rule); border-right: 0;
   border-radius: var(--radius-md) 0 0 var(--radius-md); box-shadow: var(--lift);
@@ -225,7 +224,7 @@ svg.i {
 .pipe { position: relative; display: flex; flex-direction: column; gap: 6px; }
 .steps { display: flex; gap: 6px; }
 .stg { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 4px 0; }
-.stg-bar { display: block; height: 4px; border-radius: 2px; background: var(--color-inset); }
+.stg-bar { display: block; height: 4px; border-radius: var(--radius-xs); background: var(--color-inset); }
 .stg-name {
   display: flex; align-items: center; gap: 6px; min-width: 0;
   font-size: 12px; line-height: 16px; font-weight: 500; color: var(--color-ink-3);
@@ -323,6 +322,7 @@ textarea { width: 100%; min-height: 56px; padding: 7px 10px; resize: vertical; }
 textarea:focus, .field input:focus { outline: none; border-color: var(--color-copper); }
 .share { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: var(--color-ink-2); }
 .row-actions { display: flex; align-items: center; gap: 8px; }
+.note-add { margin-left: -8px; align-self: flex-start; }
 
 /* ---- AI agenti: the accent band over a soft body ------------------------------ */
 
@@ -330,7 +330,7 @@ textarea:focus, .field input:focus { outline: none; border-color: var(--color-co
 .agcard .card-bar { background: var(--ag); color: var(--ag-on); align-items: center; border-bottom: 0; }
 .agcard .card-title { color: var(--ag-on); }
 .spark {
-  width: 22px; height: 22px; border-radius: 5px; flex: none;
+  width: 22px; height: 22px; border-radius: var(--radius-sm); flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--ag-on); background: color-mix(in srgb, var(--ag-on) 18%, var(--ag));
 }
@@ -350,6 +350,7 @@ button.agrow:hover:not([aria-disabled="true"]) { border-color: var(--ag); }
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--color-copper); background: var(--ag-soft);
 }
+.agtext { min-width: 0; }
 .agname { display: block; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--color-ink); }
 .agdesc { display: block; font-size: 12px; line-height: 16px; color: var(--color-ink-3); }
 .agend { display: inline-flex; align-items: center; justify-content: flex-end; color: var(--color-copper); }
@@ -384,7 +385,7 @@ button.agrow:hover:not([aria-disabled="true"]) { border-color: var(--ag); }
 }
 .chat-title { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; font-weight: 600; }
 .av {
-  width: 22px; height: 22px; border-radius: 5px; flex: none;
+  width: 22px; height: 22px; border-radius: var(--radius-sm); flex: none;
   display: inline-flex; align-items: center; justify-content: center; color: var(--ag-on); background: var(--ag);
 }
 .opening { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; }
@@ -440,5 +441,5 @@ button.agrow:hover:not([aria-disabled="true"]) { border-color: var(--ag); }
 
 /* ---- the other states ----------------------------------------------------------- */
 
-.sk { display: block; border-radius: 2px; background: var(--color-inset); }
+.sk { display: block; border-radius: var(--radius-xs); background: var(--color-inset); }
 .sk-head { display: flex; flex-direction: column; gap: 8px; padding: 2px 4px 8px; }

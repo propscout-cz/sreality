@@ -10,11 +10,10 @@ import {
 } from '../../frontend/src/lib/format';
 import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/src/lib/measure';
 import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
-import { stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
 import type { PipelineStage } from '../../frontend/src/lib/types';
 import { h } from './dom';
-import { lineIcon, stageLook } from './glyphs';
-import { factChips } from './panel_logic';
+import { codeBadge, lineIcon, stageLook } from './glyphs';
+import { factChips, tabMarkList } from './panel_logic';
 import type { PortalListing } from './types';
 
 const MF_TITLE = 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)';
@@ -111,24 +110,15 @@ export function tabMarks(
   l: PortalListing | null, move: number | null, stages: readonly PipelineStage[] | null,
 ): Node[] {
   if (l == null || !l.found) return [];
-  const marks: Node[] = [];
   const look = stageLook(l.pipeline);
-  const badge = look && stageBadge(look, stages ?? []);
-  if (look != null && badge != null) {
-    const accent = stageAccent(look);
-    const code = h('span', 'code', badge);
-    code.style.color = accent.fg;
-    code.style.background = accent.soft;
-    code.title = `V pipeline: ${l.pipeline?.stage_label ?? ''}`;
-    marks.push(code);
-  }
-  if (move != null && move < 0) marks.push(moveBadge(move));
+  const code = look && codeBadge(look, stages);
+  if (code != null) code.title = `V pipeline: ${l.pipeline?.stage_label ?? ''}`;
   const mf = mfYieldText(l.mf_gross_yield_pct, l.mf_reference_rent);
+  let box: HTMLElement | null = null;
   if (mf != null) {
-    const box = h('span', 'tab-mf');
+    box = h('span', 'tab-mf');
     box.title = MF_TITLE;
     box.append(h('span', 'l4', 'MF'), h('span', 'mono', mf));
-    marks.push(box);
   }
-  return marks;
+  return tabMarkList<Node>(code, move, box, moveBadge);
 }

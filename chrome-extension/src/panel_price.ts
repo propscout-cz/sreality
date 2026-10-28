@@ -5,7 +5,9 @@
 
 import { timeAxisSpec, valueAxisSpec } from '../../frontend/src/lib/chartAxis';
 import { czPlural, fmtCzk } from '../../frontend/src/lib/format';
-import { buildPriceSeries, lastMoveByTrack, priceChangeEvents, type PriceSeries } from '../../frontend/src/lib/priceHistory';
+import {
+  buildPriceSeries, canonicalFirst, lastMoveByTrack, priceChangeEvents, type PriceSeries,
+} from '../../frontend/src/lib/priceHistory';
 import { buildCard } from './card';
 import { stateLine } from './checklist';
 import { h } from './dom';
@@ -22,14 +24,9 @@ const RIGHT = 84;
 
 export type HistoryView = { status: 'loading' | 'failed' } | { status: 'ok'; data: PriceHistory };
 
-/* The property's ads as tracks, the canonical ad first (it owns the accent). */
+/* The property's ads as tracks, the canonical ad first (the app's order). */
 export function priceSeries(l: PortalListing, data: PriceHistory, nowMs: number): PriceSeries[] {
-  const canonical = l.canonical_listing_id;
-  const ads = [
-    ...data.sources.filter((s) => s.id === canonical),
-    ...data.sources.filter((s) => s.id !== canonical),
-  ];
-  return buildPriceSeries(ads, data.snapshots, nowMs);
+  return buildPriceSeries(canonicalFirst(data.sources, l.canonical_listing_id), data.snapshots, nowMs);
 }
 
 /* This ad's own last move, never another ad's: the header's pill. */
@@ -50,7 +47,9 @@ function text(x: number, y: number, cls: string, value: string): SVGTextElement 
   return t;
 }
 
-function chart(series: PriceSeries[], live: ReadonlySet<number>): SVGSVGElement {
+/* The canonical ad's track, by id (never by position: an ad with no price has no
+ * track), owns the accent, the fill and the step dots; none when it has no track. */
+function chart(series: PriceSeries[], live: ReadonlySet<number>, canonicalId: number | null): SVGSVGElement {
   const prices = series.flatMap((s) => s.points.map((p) => p.price));
   const yAxis = valueAxisSpec([Math.min(...prices), Math.max(...prices)], { targetTicks: 3 });
   const t0 = Math.min(...series.map((s) => s.points[0].t));
@@ -58,7 +57,7 @@ function chart(series: PriceSeries[], live: ReadonlySet<number>): SVGSVGElement 
   const xAxis = timeAxisSpec([t0, t1], { targetTicks: 4 });
   const yLabels = yAxis.ticks.map((v) => yAxis.format(v));
   const frame: ChartFrame = {
-    width: WIDTH, height: HEIGHT, top: 10, bottom: 20, right: RIGHT,
+    width: WIDTH, height: HEIGHT, top: 10, bottom: 20, right: RIGHT, labelCh: SANS_CH,
     left: Math.ceil(8 + Math.max(...yLabels.map((l) => l.length)) * MONO_CH),
   };
   const shape = chartShape(series, frame, [t0, t1], yAxis.domain);
@@ -67,7 +66,7 @@ function chart(series: PriceSeries[], live: ReadonlySet<number>): SVGSVGElement 
   const root = svg('svg', { viewBox: `0 0 ${WIDTH} ${HEIGHT}`, role: 'img', class: 'chart' });
   root.setAttribute('aria-label', 'Cena podle inzerátu: ' + series.map((s) =>
     `${s.label} ${fmtCzk(s.points[s.points.length - 1].price)}${live.has(s.id) ? '' : ' (stažený)'}`).join(', '));
-  const canonical = shape.tracks[0];
+  const canonical = shape.tracks.find((t) => t.id === canonicalId);
   if (canonical != null) root.appendChild(svg('path', { d: canonical.area, class: 'area' }));
   yAxis.ticks.forEach((v, i) => {
     const y = shape.y(v);
@@ -78,7 +77,7 @@ function chart(series: PriceSeries[], live: ReadonlySet<number>): SVGSVGElement 
   for (const t of xAxis.ticks) root.appendChild(text(shape.x(t), HEIGHT - 5, 'ax axm', xAxis.formatTick(t)));
 
   // The canonical track last, on top of the rest.
-  const order = [...shape.tracks.slice(1), ...shape.tracks.slice(0, 1)];
+  const order = [...shape.tracks.filter((t) => t !== canonical), ...(canonical != null ? [canonical] : [])];
   for (const track of order) {
     const first = track === canonical;
     const gone = !live.has(track.id);
@@ -101,7 +100,9 @@ function chart(series: PriceSeries[], live: ReadonlySet<number>): SVGSVGElement 
   return root;
 }
 
-export function priceCard(history: HistoryView, series: PriceSeries[] | null, retry: () => void): HTMLElement {
+export function priceCard(
+  history: HistoryView, series: PriceSeries[] | null, canonicalId: number | null, retry: () => void,
+): HTMLElement {
   const note = h('span', 'card-note');
   const card = buildCard({ title: 'Vývoj ceny', actions: [note] });
   if (history.status === 'loading') {
@@ -111,9 +112,7 @@ export function priceCard(history: HistoryView, series: PriceSeries[] | null, re
     return card.section;
   }
   if (history.status !== 'ok' || series == null) {
-    const line = stateLine('Vývoj ceny se nepodařilo načíst.', retry);
-    line.className = 'err';
-    card.body.appendChild(line);
+    card.body.appendChild(stateLine('Vývoj ceny se nepodařilo načíst.', retry, 'err'));
     return card.section;
   }
   const { portals, withdrawn } = portalNote(history.data.sources);
@@ -124,7 +123,7 @@ export function priceCard(history: HistoryView, series: PriceSeries[] | null, re
     return card.section;
   }
   const live = new Set(history.data.sources.filter((s) => s.is_active).map((s) => s.id));
-  card.body.appendChild(chart(series, live));
+  card.body.appendChild(chart(series, live, canonicalId));
   if (priceChangeEvents(series).length === 0) {
     const since = Math.min(...series.map((s) => s.points[0].t));
     card.body.appendChild(h('p', 'meta', `Cena se od ${fmtDate(since)} nezměnila.`));

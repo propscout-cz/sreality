@@ -4,8 +4,9 @@
  * on top of the app's shared ones (lib/collectionRules). */
 
 import { isMine, sortCollections } from '../../frontend/src/lib/collectionRules';
-import type { StageLook } from '../../frontend/src/lib/pipelineStage';
-import type { Collection } from '../../frontend/src/lib/types';
+import { stageAccent, stageBadge, type StageLook } from '../../frontend/src/lib/pipelineStage';
+import type { Collection, PipelineStage } from '../../frontend/src/lib/types';
+import { h } from './dom';
 import type { PipelineMembership } from './types';
 
 /* The SPA's <FunnelIcon> (icons.tsx) as inline SVG — the shared "pipeline"
@@ -66,6 +67,18 @@ export function eyeOffIconSvg(filled: boolean): string {
  * stageAccent / stageBadge); null out of the pipeline. */
 export function stageLook(p: PipelineMembership | null | undefined): StageLook | null {
   return p?.in_pipeline && p.stage_id != null ? { id: p.stage_id, color: p.stage_color, code: p.stage_code } : null;
+}
+
+/* A stage's code badge in the stage's own colours (the side sheet's close menu
+ * and the folded tab); null for a stage the list cannot badge. */
+export function codeBadge(stage: StageLook, stages: readonly PipelineStage[] | null): HTMLElement | null {
+  const badge = stageBadge(stage, stages ?? []);
+  if (badge == null) return null;
+  const accent = stageAccent(stage);
+  const code = h('span', 'code', badge);
+  code.style.color = accent.fg;
+  code.style.background = accent.soft;
+  return code;
 }
 
 /* Whether a held list knows every collection a lookup names. RLS means a fresh

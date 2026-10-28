@@ -25,8 +25,9 @@ export interface Checklist<T> {
   manage: { href: string; text: string } | null;
 }
 
-export function stateLine(text: string, retry?: () => void): HTMLElement {
-  const p = h('p', 'state', text);
+/* A list's state in one line; the side sheet draws a failed read as its failure lines ('err'). */
+export function stateLine(text: string, retry?: () => void, cls = 'state'): HTMLElement {
+  const p = h('p', cls, text);
   if (retry != null) {
     const again = h('button', 'link', 'Zkusit znovu');
     again.dataset.key = 'retry';

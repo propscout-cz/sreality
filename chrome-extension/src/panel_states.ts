@@ -67,7 +67,7 @@ export function skeleton(): Node[] {
   head.setAttribute('aria-hidden', 'true');
   head.append(block('45%', 12), block('70%', 22), block('55%', 14), block('60%', 30));
   const cards = ['Vývoj ceny', 'Moje', 'AI agenti'].map((title, i) => {
-    const card = buildCard({ title });
+    const card = buildCard({ title, variant: i === 2 ? 'agcard' : undefined });
     card.body.append(block('100%', i === 0 ? 96 : 32), block(i === 0 ? '40%' : '70%', 12));
     card.section.setAttribute('aria-hidden', 'true');
     return card.section;

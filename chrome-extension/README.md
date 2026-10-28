@@ -50,7 +50,7 @@ maxima, remax, mmreality, ceskereality).
     every try says so with **Zkusit znovu**, never "no notes" (MS16).
   - **AI agenti** (`src/panel_agents.ts`), the accent card: on a flat for sale
     the **Výnos** row runs the comparables estimate (`POST /estimations`, polled
-    2 s up to 6 min), shows its yield and opens the assumptions editor below it
+    2 s up to 6 min) and shows its yield with the assumptions editor below it
     — rent, fond oprav + SVJ, price, renovation, a live yield and **Reset**,
     saved to the run's `scenario`; the monthly quota (zbývá N), the trial line
     and, at the limit, **Upgradovat**. Flip agent, Agent přestavby and

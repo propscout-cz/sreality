@@ -11,8 +11,8 @@
  * by its filled eye. The card is never removed: pulling nodes out of a portal's
  * result grid breaks its layout and its paging, and a card that is gone can't
  * be un-hidden from where it stood. The preference is per browser, kept in
- * chrome.storage.local like the panel's minimized state, and follows the
- * operator across portals and tabs. */
+ * chrome.storage.local like the side sheet's fold (`panelFolded`), and follows
+ * the operator across portals and tabs. */
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { themeHost } from './appearance';

@@ -145,11 +145,10 @@ export interface PortalListing {
   /* MF is PROPERTY-grain — every advert of one flat shows its property's
    * figures; null for a non-flat, and for an advert not yet attached to a
    * property. `mf_reference_rent` is the whole result, rendered by its SHAPE
-   * (mfShape): a value's breakdown, a range + note, or a note alone. Absent
-   * only from an API that predates it — then there is nothing to render. */
+   * (mfShape): a value's breakdown, a range + note, or a note alone. */
   mf_reference_rent_czk: number | null;
   mf_gross_yield_pct: number | null;
-  mf_reference_rent?: ReferenceRent | null;
+  mf_reference_rent: ReferenceRent | null;
   /* What the property IS, each at its MS11 grain (api/portal_lookup._LISTING_COLS), off the
    * same properties_public row as MF and like it NULL before attach: the panel header's
    * facts. `canonical_listing_id` is the canonical ad, the price chart's first track. */
@@ -179,13 +178,11 @@ export interface PortalListing {
    * `savedCollections`). Null when the listing has no property yet (same
    * posture as `pipeline`). */
   collection_ids: number[] | null;
-  /* The property's tags (rule #18), same posture; absent from an API that
-   * predates the field. Names + colours come from `list_tags`. */
-  tag_ids?: number[] | null;
+  /* The property's tags (rule #18), same posture. Names + colours come from `list_tags`. */
+  tag_ids: number[] | null;
   /* Whether the caller dismissed the listing's property (migration 536). Null
-   * when there is no property yet; absent when the API predates the field —
-   * either way the panel shows no hide control. */
-  dismissed?: boolean | null;
+   * when there is no property yet, and then the panel shows no hide control. */
+  dismissed: boolean | null;
 }
 
 /* GET /properties/{id}/price-history: every ad of the property (oldest first) and their

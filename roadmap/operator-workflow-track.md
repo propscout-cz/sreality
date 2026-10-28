@@ -303,8 +303,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   prefilter's second read, the property page's private editor, the sidebar's include-only picker,
   the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
 - **Next (unscheduled):**
-  - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
+  - Browse cards ~~and the Chrome-extension panel~~ show no tag and cannot assign one; when they do,
     their writes settle through `settleTagWrite` (the `cohortScoped` knob is gone, U-CURATED-SCOPE).
+    (The extension half is done 2026-10-28: the side sheet's Moje card shows and assigns tags.)
   - ~~"Not in collection" on Browse~~ — done 2026-10-19 in U-CURATED-SCOPE ("V žádné kolekci",
     judged in SQL by migration 629, not by `property_ids_excluded`).
 

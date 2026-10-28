@@ -993,8 +993,9 @@ rules. Identify which one a task belongs to before you start.
   inside `frontend/`.
 
 **Chrome-extension territory** (`chrome-extension/`):
-- Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
-  listing pages. The content script matches **every scraped portal's host** (sreality,
+- Manifest v3 browser extension that overlays a side sheet on portal listing pages (the
+  property's facts, price history, the operator's curation, the MF gross yield and the Výnos
+  estimate). The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
   `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
   `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
@@ -1119,7 +1120,9 @@ rules. Identify which one a task belongs to before you start.
   rail, but the extension's `tsc` checks their whole closure (`lib/types.ts` reaches `filters.ts`
   and the filter registry) under `verbatimModuleSyntax`, and in CI with no `frontend/node_modules`,
   so a type import written without `type`, or any package import there, fails the extension job.
-  Keep the bundle small.
+  Keep the bundle small. (2026-10-28: the side sheet broke this — `content.js` grew by half, most
+  of it the filter registry that `lib/portals.ts` and `lib/enums.ts` load; the fix is owed and
+  the operator's call, `roadmap/ui-track.md` § the extension's panel.)
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` so `host_permissions` covers the API origin and the fetch
   isn't subject to the portal's CORS posture. The content script never calls `fetch`
@@ -3053,11 +3056,12 @@ renumber.** Navigate by area:
     sole pipeline affordance), the listing-detail header (`CollectionSaveToggle`; the page's second
     editor, a chip row in `CurationBlock`, was deleted 2026-10), the phone curation row and margin
     marks, and the Chrome-extension panel.**
-    The panel's control is the SPA header's `CollectionSaveToggle` + `CollectionSaveMenu` reproduced
-    by value (a bookmark button opening a checklist of collections, monitored ones first and
-    bell-marked); it replaced a one-click "Sledovat" bell that could only reach the single
-    monitoring collection, so the panel and the app offer the same verb. Since collection sharing
-    (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
+    The side sheet shows the property's saved collections as chips (three, then "+N"), and its
+    "+" and "+N" open the SPA header's `CollectionSaveMenu` reproduced by value: the one save
+    checklist (`chrome-extension/src/checklist.ts`) that the search cards share, own collections
+    only, monitored ones first and bell-marked. It replaced a one-click "Sledovat" bell that
+    could only reach the single monitoring collection, so the panel and the app offer the same
+    verb. Since collection sharing (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
     view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
     readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
     imports the same rules (`lib/collectionRules.ts`: `isMine`, `sortCollections`, `shareAudience`
@@ -3130,8 +3134,8 @@ renumber.** Navigate by area:
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
     `CurationBlock` uses (the viewed advert's surrogate id as `origin_listing_ref_id`); notes are
     NOT batched into `POST /listings/lookup` (too heavy per index card) — the panel fetches them
-    lazily via `GET /properties/{id}/notes` on open. Tags are the one curation surface the
-    extension does not yet expose, and a note's files the one part of a note (it shows the text).
+    lazily via `GET /properties/{id}/notes` on open. A note's files are the one part of a note the
+    extension does not show (it shows the text).
     **A property carries files; a note may reference them** (migrations 592, 660,
     `property_attachments`): property-grain, `note_id` optional, carried by their own
     `CurationTable` before the notes (the same bytes once per account and property: a twin folds)
@@ -3885,11 +3889,13 @@ renumber.** Navigate by area:
     optimistic remove-from-pipeline, the app's destructive-action pattern). `<DragOverlay
     dropAnimation={null}>` so the released card doesn't fly back to origin before the optimistic
     move lands it in the target column. **On the listing-detail header** (a record page, no board
-    to drag onto) `PipelineToggle` changes the stage with a native `<select>` (the app's
-    single-choice control) tinted the stage colour + a remove `✕`, and the not-yet-in-pipeline
-    state is the funnel "Přidat do pipeline". The **Chrome-extension panel** mirrors this exactly
-    (a native `<select>` + remove `✕` in a soft-tinted pill, vanilla TS). All three surfaces
-    (kanban drag, listing-detail select, extension select) call the SAME `movePipelineCard` PATCH
+    to drag onto) the shared `<PipelineStageMenu>` changes the stage and removes behind its
+    two-step confirm, and the not-yet-in-pipeline state is the funnel "Přidat do pipeline". The
+    **Chrome-extension side sheet** (vanilla TS) changes the stage on a step bar over the open
+    stages (`STEP_BAR_MAX` = 4, `panel_logic.stageControl`), or a native `<select>` of them above
+    that, and removes only under its "Uzavřít ▾" menu (the closed stages, then "Odebrat z pipeline…"
+    behind the two-step confirm); it has no ✕. All three surfaces (kanban drag, listing-detail
+    stage menu, extension step bar/select) call the SAME `movePipelineCard` PATCH
     (stamps `entered_stage_at`, logs the `moved` event) with the same optimistic-update shape — one
     audited write, never a second-grade path. The stage a surface renders comes from the shared
     `members` map (`PipelineMembership`); the per-property `PipelineCard` type and its

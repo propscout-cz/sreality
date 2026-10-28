@@ -11,20 +11,16 @@ import { APP_NAME, APP_SHORT } from '../../frontend/src/lib/brand';
 import { themeHost } from './appearance';
 import { h, keepFocus } from './dom';
 import { lineIcon } from './glyphs';
-import { startsFolded } from './panel_logic';
+import { FOLDED_KEY, LEGACY_FOLD_KEY, startsFolded, storedFold } from './panel_logic';
 
 const HOST_ID = '__propscout_sheet__';
-const FOLDED_KEY = 'panelFolded';
-/* The old floating panel's "minimized" choice: read once as the first fold
- * state, then removed. */
-const LEGACY_KEY = 'panelMinimized';
 
 let stored: boolean | null = null;
 const storedReady: Promise<void> = chrome.storage.local
-  .get([FOLDED_KEY, LEGACY_KEY])
+  .get([FOLDED_KEY, LEGACY_FOLD_KEY])
   .then((r) => {
-    stored = typeof r[FOLDED_KEY] === 'boolean' ? r[FOLDED_KEY] as boolean : r[LEGACY_KEY] === true ? true : null;
-    if (LEGACY_KEY in r) void chrome.storage.local.remove(LEGACY_KEY);
+    stored = storedFold(r);
+    if (LEGACY_FOLD_KEY in r) void chrome.storage.local.remove(LEGACY_FOLD_KEY);
   })
   .catch(() => { /* storage unavailable: the viewport decides */ });
 /* Decided once per page load, then the operator's. */
@@ -97,6 +93,7 @@ export async function mountSheet(onFold: () => void): Promise<Sheet> {
     bar.appendChild(word);
     if (frame.appHref != null) {
       const link = h('a', 'toplink', 'V aplikaci');
+      link.dataset.key = 'app-link';
       link.href = frame.appHref;
       link.target = '_blank';
       link.rel = 'noopener';
@@ -127,14 +124,18 @@ export async function mountSheet(onFold: () => void): Promise<Sheet> {
         const menu = h('div', 'menu');
         menu.dataset.menu = 'account';
         menu.setAttribute('role', 'menu');
-        menu.setAttribute('aria-label', 'Účet');
+        // The menu's name says who is signed in; the visible line repeats it outside the a11y tree.
+        menu.setAttribute('aria-label', `Účet ${frame.email}`);
         const who = h('p', 'menu-who meta', frame.email);
         who.title = frame.email;
+        who.setAttribute('aria-hidden', 'true');
+        const sep = h('div', 'sep');
+        sep.setAttribute('role', 'separator');
         const out = h('button', 'mi', 'Odhlásit');
         out.setAttribute('role', 'menuitem');
         out.dataset.key = 'sign-out';
         out.onclick = () => { frame.onAccount(false); frame.onSignOut(); };
-        menu.append(who, h('div', 'sep'), out);
+        menu.append(who, sep, out);
         menu.onkeydown = (e) => {
           if (e.key !== 'Escape') return;
           e.stopPropagation();  // ours, not the portal's (lightboxes close on Escape too)
@@ -164,10 +165,12 @@ export async function mountSheet(onFold: () => void): Promise<Sheet> {
       if (folded) {
         const tab = h('button', 'tab');
         tab.dataset.key = 'fold';
-        tab.setAttribute('aria-label', `${APP_NAME} — rozbalit panel`);
         tab.title = 'Rozbalit panel';
         tab.setAttribute('aria-expanded', 'false');
-        tab.append(h('span', 'tab-mark', APP_SHORT), ...frame.tab());
+        // Named by its content (no aria-label), so the marks it shows are announced too.
+        const mark = h('span', 'tab-mark', APP_SHORT);
+        mark.setAttribute('aria-hidden', 'true');
+        tab.append(h('span', 'sr', `${APP_NAME} — rozbalit panel`), mark, ...frame.tab());
         tab.onclick = () => setFolded(false);
         root.replaceChildren(tab);
         return;

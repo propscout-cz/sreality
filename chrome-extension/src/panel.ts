@@ -102,7 +102,9 @@ export function createPanel(store: Store) {
       case 'active': {
         const l = view() as PortalListing;
         const nodes: Node[] = [header(l, adMove(series, l.listing_id))];
-        if (state.history != null) nodes.push(priceCard(state.history, series, () => { void loadHistory(epoch); }));
+        if (state.history != null) {
+          nodes.push(priceCard(state.history, series, l.canonical_listing_id, () => { void loadHistory(epoch); }));
+        }
         const own = mine.card(l);
         if (own != null) nodes.push(own);
         nodes.push(agents.card(l));
@@ -167,6 +169,9 @@ export function createPanel(store: Store) {
     state = { ...initial(), email: state.email };
     series = null;
     if (sheet == null || !sheet.connected()) {
+      // A portal that dropped the host leaves the old sheet's page listener behind: take it off.
+      sheet?.remove();
+      sheet = null;
       const mounted = await mountSheet(repaint);
       if (at !== epoch) {
         mounted.remove();

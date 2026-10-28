@@ -40,7 +40,6 @@ interface Estimate {
   busy: boolean;
   quota: AgentQuota | null;
   error: string | null;
-  editorOpen: boolean;
   rentTouched: boolean;
   costTouched: boolean;
   priceTouched: boolean;
@@ -53,7 +52,7 @@ interface Estimate {
 }
 
 const blank = (listing: PortalListing | null): Estimate => ({
-  listing, run: null, busy: false, quota: null, error: null, editorOpen: false,
+  listing, run: null, busy: false, quota: null, error: null,
   rentTouched: false, costTouched: false, priceTouched: false, renovationTouched: false,
   rent: null, costPerM2: null, price: null, renovation: null,
 });
@@ -284,12 +283,8 @@ export function createAgents(deps: AgentsDeps) {
     // A metered run consumed a slot (success, or failed once created).
     void loadQuota(at);
     s.busy = false;
-    if (row.status !== 'success') {
-      s.error = row.error_message ?? 'Odhad se nedokončil včas.';
-    } else {
-      seed(s, row);
-      s.editorOpen = true;
-    }
+    if (row.status !== 'success') s.error = row.error_message ?? 'Odhad se nedokončil včas.';
+    else seed(s, row);
     repaint();
   }
 
@@ -319,7 +314,6 @@ export function createAgents(deps: AgentsDeps) {
 
   function editor(run: EstimationRun): HTMLElement {
     const box = h('div', 'editor');
-    box.id = 'vynos-editor';
     if (run.estimate_kind === 'rent' && run.estimated_monthly_rent_czk == null) {
       box.appendChild(h('p', 'meta', 'Bez srovnatelných nájmů v okolí — počítáno z MF nájmu (uprav dle potřeby).'));
     } else if (run.confidence === 'low') {
@@ -355,8 +349,7 @@ export function createAgents(deps: AgentsDeps) {
     const g = h('span', 'agglyph');
     g.setAttribute('aria-hidden', 'true');
     g.innerHTML = glyph;
-    const text = h('span', '');
-    text.style.minWidth = '0';
+    const text = h('span', 'agtext');
     text.append(h('span', 'agname', name), h('span', 'agdesc', desc));
     const tail = h('span', 'agend');
     if (end != null) tail.appendChild(end);
@@ -382,19 +375,17 @@ export function createAgents(deps: AgentsDeps) {
     } else if (run?.status === 'success') {
       const value = h('span', 'mono', fmtPct(computeYield(s)));
       value.dataset.yield = '';
-      const r = row(glyph, name, 'Výnos z odhadu', value);
+      const r = row(glyph, name, 'Výnos z odhadu', value, 'div');
       r.dataset.key = 'vynos';
-      r.setAttribute('aria-expanded', String(s.editorOpen));
-      r.setAttribute('aria-controls', 'vynos-editor');
-      r.onclick = () => { s.editorOpen = !s.editorOpen; repaint(); };
-      out.push(r);
-      if (s.editorOpen) out.push(editor(run));
+      r.tabIndex = -1;  // no control, but the run button's focus lands on its result, not on the page
+      out.push(r, editor(run));
     } else if (run == null && metered && q.remaining <= 0) {
       // The monthly allowance is spent: an upgrade instead of a run that would 429.
       const r = row(glyph, name, `Měsíční limit vyčerpán (${q.used}/${q.quota}).`, null);
       setBusy(r, true);
       out.push(r);
       const up = h('button', 'cta', 'Upgradovat');
+      up.dataset.key = 'upgrade';
       up.title = 'Správa plánu ve webové aplikaci.';
       up.onclick = () => { if (APP_BASE_URL) window.open(APP_BASE_URL, '_blank', 'noopener'); };
       out.push(up);
@@ -421,17 +412,19 @@ export function createAgents(deps: AgentsDeps) {
     const opening = h('div', 'opening');
     opening.append(av(), h('p', '', 'Ptejte se na tuto nemovitost: na cenu, na okolí, nebo co ověřit na prohlídce.'));
     const suggs = h('div', 'suggs');
-    for (const text of SUGGESTIONS) {
+    SUGGESTIONS.forEach((text, i) => {
       const b = h('button', 'sugg', text);
+      b.dataset.key = `sugg-${i}`;
       b.setAttribute('aria-disabled', 'true');
       b.setAttribute('aria-describedby', CHAT_SOON_ID);
       suggs.appendChild(b);
-    }
+    });
     const composer = h('div', 'composer');
     const label = h('label', 'sr', 'Zpráva agentovi');
     label.htmlFor = 'chat-ask';
     const ask = h('input', 'ask');
     ask.id = 'chat-ask';
+    ask.dataset.key = 'chat-ask';
     ask.type = 'text';
     ask.readOnly = true;
     ask.placeholder = 'Zeptejte se na tuto nemovitost…';
@@ -439,6 +432,7 @@ export function createAgents(deps: AgentsDeps) {
     ask.setAttribute('aria-describedby', CHAT_SOON_ID);
     const send = h('button', 'send');
     send.innerHTML = lineIcon('send');
+    send.dataset.key = 'chat-send';
     send.setAttribute('aria-label', 'Odeslat');
     send.setAttribute('aria-disabled', 'true');
     send.setAttribute('aria-describedby', CHAT_SOON_ID);
