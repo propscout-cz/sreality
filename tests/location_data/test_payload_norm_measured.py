@@ -14,7 +14,8 @@ remax's churn does not exist within one: three fetches eight seconds apart are
 byte-identical, and the tokens only re-roll for the next session. The live drain is
 a fresh process per run, so cross-session is what production measures.
 
-TWO edits to those bytes, both deliberate. The trim above, and a contact scrub:
+THREE edits to those bytes, all deliberate. The trim above, a contact scrub, and the same-length
+blanking of the third-party keys the pages embed (#2035). The contact scrub:
 git history is permanent, so the brokers' phone numbers, e-mail addresses and names
 were replaced with the house placeholders (`+420 XXX XXX XXX`, `agent@example.cz`,
 `Jan Novák`) by `scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`. It is

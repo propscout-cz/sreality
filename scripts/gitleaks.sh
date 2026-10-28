@@ -2,7 +2,8 @@
 # THE gitleaks: CI's `secrets` job and the .githooks run it through here, so one version and one output policy (values
 # redacted, each finding shown, quiet when clean) scan every boundary (#2035). The release is fetched once into the user
 # cache and checked against its pinned sha256.
-# Usage: scripts/gitleaks.sh <gitleaks subcommand and args>   e.g. scripts/gitleaks.sh git   (the whole history)
+# Usage: scripts/gitleaks.sh <gitleaks subcommand and args>
+#   the whole history, a merge by its own changes: scripts/gitleaks.sh git --log-opts="--all --remerge-diff"
 set -euo pipefail
 version=8.30.1
 case "$(uname -s)-$(uname -m)" in

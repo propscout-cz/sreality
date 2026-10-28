@@ -1,4 +1,4 @@
-# Every finding of the full-history scan (`scripts/gitleaks.sh git`), each judged once on 2026-10-28 (#2035), so the
+# Every finding of the full-history scan (the command in scripts/gitleaks.sh), each judged once on 2026-10-28 (#2035), so the
 # scan exits 0 over history. History only: a new finding is fixed, or, when it is no secret, marked `gitleaks:allow`
 # on its own line, which survives a rebase or a squash where a commit-keyed fingerprint here would not.
 
