@@ -1417,6 +1417,19 @@ describe('<Pipeline> shared boards', () => {
       fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
       await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
     });
+
+    /* Section cards (operator ruling 2026-10-28): the block is one card, its
+       title the region's name and the recipients its count. */
+    it('opens as the Sdílení section card, its count the recipients', async () => {
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      const card = screen.getByRole('region', { name: 'Sdílení' });
+      expect(card.tagName).toBe('SECTION');
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+      expect(within(card).getByRole('heading', { level: 2, name: 'Sdílení' }).nextElementSibling)
+        .toHaveTextContent('1');
+      expect(card.parentElement).not.toHaveClass('border');
+    });
   });
 });
 

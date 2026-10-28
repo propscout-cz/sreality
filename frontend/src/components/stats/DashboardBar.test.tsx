@@ -300,6 +300,17 @@ describe('<DashboardBar> the list', () => {
     expect(menuItems()).toEqual(['Načíst', 'Uložit jako vlastní', 'Přestat sledovat']);
   });
 
+  /* Section cards (operator ruling 2026-10-28) are not drawn in a dialog: the
+     sharing block sits in it as a dialog section under an L3 heading. */
+  it('draws the share dialog\'s block as a dialog section, never a section card', async () => {
+    renderBar();
+    await menuFor('Ceny');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sdílet…' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { level: 3, name: 'Sdílení' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('region')).toBeNull();
+  });
+
   it('duplicates an own dashboard as stored: a new row named "<name> (kopie)", nothing loaded or activated', async () => {
     const filtered = row({ id: 'd-filt', name: 'Pozemky', charts: [B], filter_spec: SHARED_FILTER, color: 'sage' });
     const copied = row({ id: 'd-copy', name: 'Pozemky (kopie)', charts: [B], filter_spec: SHARED_FILTER, color: 'sage' });

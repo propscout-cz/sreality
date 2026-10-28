@@ -402,9 +402,9 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
       {active != null && <ViewerLine share={active} />}
 
       {sharing && active == null && (
-        <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
+        <div className="mt-5">
           <PipelineSharing shares={shares} />
-        </section>
+        </div>
       )}
 
       {manage && !readOnly && stages.length > 0 && <StageManager stages={stages} />}
