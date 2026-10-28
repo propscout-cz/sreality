@@ -14,13 +14,17 @@ W2-a the quarter was filled only on the point-in-polygon branch (`cast_obce_for_
 and deletes the query.
 
 FILL also places the row when BIND's pin election did not (W2-a3): **the portal pin when one
-was admissible, else the finest bound unit's own registry point.** 29 % of towned rows
+was admissible, else the finest bound entity's own registry point** — a část obce's at the
+centroid of its own doors (v5.8), since RÚIAN draws it no polygon. 29 % of towned rows
 (8,706 of 29,892, measured 2026-09-12 08:05Z) carried `geom NULL` because the only position
 the resolver published was a pin, and a listing bound by NAME has none — so a row that knows
 its town would have vanished from W3's map, which re-sources lat/lng from `listing_location`
 with no fallback. The point is the registry's, so the granularity, the confidence and the
 radius are all unchanged: the LEVEL is what tells a reader how coarse the position is, and
 `disputed` is never set by this path — a town centre is not a disagreement with anything.
+Since v5.8 the radius is never smaller than the placed-on entity's own reach (the část's
+farthest door, the polygon's `containment_radius_m`): a row on Praha's point said 1 km and
+could be 17.6 km off.
 
 ONE field may fall back to a claim when the registry has none: `psc`. The street and both
 house numbers are the REGISTER's or nothing — a house number is published only off a bound
@@ -75,8 +79,10 @@ def fill(
     registry: RegistryView,
     *,
     operator: dict[str, str] | None = None,
+    place: bool = True,
 ) -> Fill:
-    """-> the fifteen hierarchy/address values of the answer row, and its registry point."""
+    """-> the fifteen hierarchy/address values of the answer row, and its registry point.
+    `place=False` (a pin or a street already placed the row) skips the point's one read."""
     operator = operator or {}
     values: dict[str, object] = {}
     chain = _chain(binding, registry)
@@ -93,7 +99,7 @@ def fill(
         if binding.ruian_adm_kod is not None
         else None
     )
-    lat, lon = _registry_point(point, chain)
+    lat, lon, extent = _registry_point(point, chain, registry) if place else (None, None, None)
     return Fill(
         kraj_kod=values.get("kraj_kod"),          # type: ignore[arg-type]
         okres_kod=values.get("okres_kod"),        # type: ignore[arg-type]
@@ -119,6 +125,7 @@ def fill(
         or (point.psc if point is not None and point.psc else constraints.psc),
         lat=lat,
         lon=lon,
+        extent_m=extent,
         katastr_kod=_katastr_kod(binding, chain, point, registry),
     )
 
@@ -139,13 +146,15 @@ def position(filled: Fill, binding: Binding) -> Position:
         lon=filled.lon,
         origin="registry_point" if binding.target_kind == "address_point" else "admin_centroid",
         source_claim_ids=binding.source_claim_ids,
+        extent_m=filled.extent_m,
     )
 
 
 def _chain(binding: Binding, registry: RegistryView) -> tuple[AdminUnit, ...]:
-    """The registry read FILL makes for every row (the only other is `part_katastr_kod`, for
-    a část bound in a multi-KÚ obec). The finest bound unit first, so its own level lands on
-    the row alongside every ancestor, and a one-KÚ obec carries its sole KÚ."""
+    """The registry read FILL makes for every row (the only other is `part_point`, for a
+    bound část no pin placed or whose obec spans several KÚ). The finest bound unit first, so
+    its own level lands on the row alongside every ancestor, and a one-KÚ obec carries its
+    sole KÚ."""
     if binding.cast_obce_unit_id is not None:
         chain = tuple(registry.admin_chain(binding.cast_obce_unit_id))
         if chain:
@@ -177,31 +186,36 @@ def _katastr_kod(
     if binding.target_kind == "street":
         return binding.street_katastr_kod
     if binding.target_kind == "admin_unit" and chain and chain[0].level == "cast_obce":
-        return registry.part_katastr_kod(chain[0].unit_id)
+        part = registry.part_point(chain[0].unit_id)
+        return None if part is None else part.katastr_kod
     return None
 
 
 def _registry_point(
-    point: AddressPoint | None, chain: tuple[AdminUnit, ...]
-) -> tuple[float | None, float | None]:
-    """The FINEST bound entity that HAS a point: the address point, else the first unit on
-    the chain carrying one.
+    point: AddressPoint | None, chain: tuple[AdminUnit, ...], registry: RegistryView,
+) -> tuple[float | None, float | None, float | None]:
+    """(lat, lon, reach) of the FINEST bound entity that HAS a point: the address point, else
+    a bound část obce's own doors, else the first unit on the chain carrying one.
 
     "Has one" is the whole subtlety, and it is why this walks instead of reading `chain[0]`.
     RÚIAN draws no polygon for a část obce or a městský obvod, so the two levels a Czech
-    listing most often names by hand are exactly the two with no point of their own; a street
-    has none either (`ruian_streets` carries no geometry, which is also why BIND's street
-    candidate has no position). Each of them takes its TOWN's point rather than nothing —
-    coarser than the granularity says, and still the honest answer to "where is this?".
+    listing most often names by hand are exactly the two with no point of their own. A část
+    takes the centroid of its doors (v5.8), as a bound street does in BIND; a městský obvod,
+    or a část with no door, takes its TOWN's point — coarser than the granularity says, and
+    the radius then says so, since the reach is the polygon's.
     """
     if point is not None and point.lat is not None and point.lon is not None:
-        return point.lat, point.lon
+        return point.lat, point.lon, None
+    if chain and chain[0].level == "cast_obce":
+        part = registry.part_point(chain[0].unit_id)
+        if part is not None:
+            return part.lat, part.lon, part.extent_m
     for unit in chain:
         if unit.level in _UNPLACEABLE_LEVELS:
             continue
         if unit.lat is not None and unit.lon is not None:
-            return unit.lat, unit.lon
-    return None, None
+            return unit.lat, unit.lon, unit.extent_m
+    return None, None, None
 
 
 def _cp(point: AddressPoint | None) -> str | None:

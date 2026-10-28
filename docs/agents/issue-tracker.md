@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues on `propscout-cz/sreality` (owned by the company organisation since #2008; `waiff/sreality` redirects). Use the `gh` CLI for all operations.
+Issues and specs for this repo live as GitHub issues on `propscout-cz/sreality`. Use the `gh` CLI for all operations.
 
 **The repo is public: every issue is world-readable.** Keep tokens, DB URLs, operator-private rulings and personal data out of issue titles, bodies and comments.
 
@@ -110,4 +110,3 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or a live claim (`python3 -m scripts.ticket_claim status <n>` exits 1); first in map order wins.
 - **Claim**: `python3 -m scripts.ticket_claim claim <n>`, the session's first write (§ Claiming a ticket).
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
-- **A map may live in another repo.** The AI-CRM program's map and its tickets live in a private planning repo (the owner's ruling of 2026-10-04), because its tickets weigh legal and security questions that do not belong in a public tracker. The owner gives the map's URL when invoking `/wayfinder`. Take `<owner>/<repo>` from that URL, pass `-R <owner>/<repo>` to every `gh` call for that map (prefix `GH_REPO=<owner>/<repo>` to a ticket-claim command), and keep its research files there, never in this repo.

@@ -321,6 +321,20 @@ _Avoid_: function, endpoint, capability (in prose)
 One execution of a workflow, with its inputs and its result. A run usually concerns one property.
 _Avoid_: job, execution, session
 
+**Agent worker**:
+The always-on service, separate from the realtime worker and the job runner, where the platform itself
+runs a workflow a user starts from the app or the extension. It holds the executor, which takes each
+queued run, runs the agent's loop with the platform's skills and tools, and records every step. The
+alternative is a workflow run in the user's own assistant.
+_Avoid_: runner (alone, which means the job runner), agent (for the place), server run
+
+**Monthly dollar budget**:
+The most the platform pays for one account's AI use in a month, in dollars, set by the account's plan.
+Each run reserves its cost ceiling against it when admitted, so every run the account starts draws on
+it, scheduled runs and chat included. Not built yet: until runs open beyond the allowlist, a per-run
+spending cap and a platform-wide daily ceiling bound spend instead.
+_Avoid_: allowance, credits, quota (a monthly count of runs, as the agent-estimation quota is today)
+
 **Area takeoff**:
 The workflow that measures a property's rentable floor areas from its plans.
 _Avoid_: offtake, area offtake

@@ -90,4 +90,11 @@ from __future__ import annotations
 #      the part; "X u Y" retries as X kept to Y; a street line naming a part is that part; of two
 #      accent-folded twins, the one with a door in the one bound part, else the one a claim with
 #      diacritics spells, binds; abbreviations fold (ČSA, nám., tř. …); a PSČ yields to the street.
-RESOLVER_VERSION = "resolver:v5.7"
+# v5.8 = the fallback point (operator ruling 2026-10-25). A row no pin and no street placed,
+#      bound to a část obce, stands at the centroid of that část's own doors (`part_point`,
+#      which also answers its KÚ — `part_katastr_kod` folded into it), not on its town's point:
+#      23,618 active quarter-level ads stood on a town point, Prague's in Vinohrady. A FILL
+#      placement's radius is never below the placed-on entity's reach — the část's farthest
+#      door, the polygon's `containment_radius_m` (Praha 17.6 km where `obec` said 1 km).
+#      The bump re-queues the corpus.
+RESOLVER_VERSION = "resolver:v5.8"

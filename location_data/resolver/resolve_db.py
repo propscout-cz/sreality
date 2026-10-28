@@ -57,6 +57,7 @@ from location_data.resolver.types import (
     AddressPoint,
     AdminUnit,
     Claim,
+    PartPoint,
     Street,
     StreetPoint,
 )
@@ -314,15 +315,24 @@ SELECT ST_Y(c.g), ST_X(c.g),
  GROUP BY 1, 2
 """
 
-# A část obce's KÚ by the same door rule. `ruian_ap_cast_obce (cast_obce_unit_id)` is its
-# index. Asked lazily, for a row bound to a část in a multi-KÚ obec only.
-_PART_KATASTR_SQL = f"""
+# WHERE A ČÁST OBCE IS (v5.8): the street's derivation over the část's doors — RÚIAN draws no
+# polygon for one — and its KÚ by the same door rule, in the one round trip.
+# `ruian_ap_cast_obce (cast_obce_unit_id)` is its index. Asked lazily: for a row bound to a
+# část that no pin placed, or whose obec spans several KÚ; the run cache makes it one per část.
+_PART_POINT_SQL = f"""
 WITH p AS (
     SELECT ap.kod_adm, ap.geom
       FROM ruian_address_points ap
      WHERE ap.cast_obce_unit_id = %s AND ap.valid_to IS NULL AND ap.geom IS NOT NULL
+), c AS (
+    SELECT ST_Centroid(ST_Collect(p.geom)) AS g FROM p
 )
-{_doors_katastr("p")}
+SELECT ST_Y(c.g), ST_X(c.g),
+       MAX(ST_Distance(c.g::geography, p.geom::geography)),
+       count(*),
+       ({_doors_katastr("p")})
+  FROM p, c
+ GROUP BY 1, 2
 """
 
 # The unit column list `_admin_unit` unpacks positionally, over ONE point expression: the
@@ -382,11 +392,11 @@ SELECT {_ADMIN_COLUMNS}, n.psc_set
 # that KÚ by the hierarchy alone, so FILL needs no geometry for 3,942 of the 6,258 obce. An
 # index read on `ruian_admin_units_parent`, in the round trip FILL already makes.
 _ADMIN_CHAIN_TAIL = f"""
-SELECT {_ADMIN_CHAIN_COLUMNS}, NULL::char(5)[], ks.code
+SELECT {_ADMIN_CHAIN_COLUMNS}, NULL::char(5)[], ks.code, gp.r
   FROM chain c
   JOIN ruian_admin_units u ON u.id = c.id
   LEFT JOIN LATERAL (
-    SELECT g.representative_point AS pt
+    SELECT g.representative_point AS pt, g.containment_radius_m AS r
       FROM ruian_admin_unit_geometries g
      WHERE g.unit_id = u.id
        AND g.registry_version_id = %s
@@ -609,7 +619,9 @@ def sources_bulk(conn: psycopg.Connection, listing_ids: Sequence[int]) -> dict[i
         return {int(r[0]): str(r[1]) for r in cur.fetchall()}
 
 
-def _admin_unit(row: Sequence[Any], *, sole_katastr_kod: int | None = None) -> AdminUnit:
+def _admin_unit(
+    row: Sequence[Any], *, sole_katastr_kod: int | None = None, extent_m: Any = None,
+) -> AdminUnit:
     path = str(row[5] or "")
     return AdminUnit(
         unit_id=int(row[0]), level=str(row[1]), code=int(row[2]), name=str(row[3]),
@@ -619,12 +631,14 @@ def _admin_unit(row: Sequence[Any], *, sole_katastr_kod: int | None = None) -> A
         psc_set=tuple(str(p).strip() for p in (row[9] or ())),
         obec_kod=_path_code(path, "b"), okres_kod=_path_code(path, "o"),
         kraj_kod=_path_code(path, "k"), sole_katastr_kod=sole_katastr_kod,
+        extent_m=None if extent_m is None else float(extent_m),
     )
 
 
 def _chain_unit(row: Sequence[Any]) -> AdminUnit:
-    """A chain row: the unit columns, then the obec's one KÚ child (NULL off an obec row)."""
-    return _admin_unit(row[:10], sole_katastr_kod=row[10])
+    """A chain row: the unit columns, the obec's one KÚ child (NULL off an obec row), then how
+    far the unit's polygon reaches from its point (NULL where RÚIAN draws none)."""
+    return _admin_unit(row[:10], sole_katastr_kod=row[10], extent_m=row[11])
 
 
 def _path_code(path: str, prefix: str) -> int | None:
@@ -740,11 +754,17 @@ class SqlRegistryView:
             katastr_kod=rows[0][4], part_unit_ids=tuple(rows[0][5] or ()),
         )
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
+    def part_point(self, unit_id: int) -> PartPoint | None:
         rows = self._rows(
-            "part_katastr_kod", _PART_KATASTR_SQL, (unit_id, self._version, self._version)
+            "part_point", _PART_POINT_SQL, (unit_id, self._version, self._version)
         )
-        return int(rows[0][0]) if rows else None
+        if not rows or rows[0][0] is None or rows[0][1] is None:
+            return None
+        return PartPoint(
+            lat=float(rows[0][0]), lon=float(rows[0][1]), extent_m=float(rows[0][2] or 0.0),
+            point_count=int(rows[0][3] or 0),
+            katastr_kod=None if rows[0][4] is None else int(rows[0][4]),
+        )
 
     def admin_units_by_name(self, name_norm: str, *, levels: Sequence[str] = ()) -> list[AdminUnit]:
         wanted = list(levels)
@@ -975,10 +995,8 @@ class CachedRegistryView:
             lambda: composite.build_street_index(self.streets_in_obec(obec_kod)),
         )
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
-        return self._cache.get(
-            ("part_katastr_kod", unit_id), lambda: self._inner.part_katastr_kod(unit_id)
-        )
+    def part_point(self, unit_id: int) -> PartPoint | None:
+        return self._cache.get(("part_point", unit_id), lambda: self._inner.part_point(unit_id))
 
     def admin_units_by_name(
         self, name_norm: str, *, levels: Sequence[str] = ()
