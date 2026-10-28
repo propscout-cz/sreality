@@ -85,6 +85,12 @@ toolkit work.
   (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.
 - **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
   S05, S08, S10 declined; the confirmed ones are built (above; handoff § Stats review).
+- **Ruled 2026-10-28: section cards** (operator ask: "find a better way to separate sections … same pattern on the
+  new chrome plugin layout"; option B of four). Every detail-page section, the admin panels and the extension's
+  panel sections become a card with a title bar (Fraunces title, count, actions); small caps stay for field labels
+  only. Spec `.interface-design/system.md` § Section cards, picture `docs/design/propscout-section-cards.png`.
+- **Next (not built):** the section cards: `components/Panel.tsx` first, then the property page's tabs, the other
+  detail pages, and the extension's panel (with its new layout).
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes

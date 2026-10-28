@@ -1,6 +1,6 @@
 # PropScout.cz redesign: handoff
 
-Status 2026-10-27. This is the one place to pick the redesign up from. It records what is done, what the
+Status 2026-10-28. This is the one place to pick the redesign up from. It records what is done, what the
 operator ruled, and what is next. Read it top to bottom before touching any of the screens named here.
 
 ## Where everything lives
@@ -9,6 +9,7 @@ operator ruled, and what is next. Read it top to bottom before touching any of t
 | --- | --- | --- |
 | Rename + three colour schemes (built) | PR waiff/sreality#2115, merged and live 2026-10-27 | Yes |
 | Design rules for every build | `.interface-design/system.md` (§ Colour schemes, § Hierarchy rulings) | **Yes** |
+| Section cards: how every page separates its sections (app + extension), ruled 2026-10-28 | `.interface-design/system.md` § Section cards; picture `docs/design/propscout-section-cards.png` | **Yes** (§ Section cards below) |
 | Design system artifact: previews of every agenda, as ruled | https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m | Direction only |
 | Removal review: 35 before/after pictures and the operator's answers | https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV | The rulings below are copied from it |
 | Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes** (§ Stats review below) |
@@ -160,6 +161,21 @@ proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.t
   turns the same switch on (so a loaded dashboard reads "Upraveno od načtení", as the switch does) and leaves focus
   on that chart's heading.
 
+## Section cards (ruled 2026-10-28)
+
+The operator found the small grey capital headings ("MOJE FOTKY (0)", "VÝVOJ CENY", "VALUO") too weak to tell
+sections apart, and asked for one pattern for the app and the Chrome extension. Four options were drawn
+(headline and rule, section cards, ledger band, side index; https://claude.ai/artifact/VYURnTgzeSshYX1Vsn3C3v,
+private to the operator's account) and **B, section cards**, was chosen. Each section is a paper card with a
+title bar: a Fraunces title, its count, the actions on the right. Small caps are left for field labels only.
+
+**The binding spec is `.interface-design/system.md` § Section cards; the picture is
+`docs/design/propscout-section-cards.png`** (standalone page `propscout-section-cards.html`), each value tagged
+C1–C10 and X1 (the extension). Not built yet. Build order: upgrade `components/Panel.tsx` into the section card,
+then wrap the property page's tabs (`pages/PropertyDetail.tsx` and `components/listing-detail/*`), then the other
+detail pages that stack `SectionLabel` blocks. The extension takes the same card in its own CSS, in whichever
+PR builds its new panel layout.
+
 ## What to build next
 
 Agenda 1 shipped as its own PR (#2127). **Operator ruling 2026-10-27: agendas 2–8 go in ONE PR**
@@ -293,5 +309,5 @@ directly). Keep `lastChange.note` in the index current.
 ## Suggested opening for the next session
 
 > Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda is built; what
-> is left is the render-scoring scope (send the operator the list first) and the open questions under
-> agendas 3 and 7.
+> is left is the section cards (§ Section cards: match `docs/design/propscout-section-cards.png`), the
+> render-scoring scope (send the operator the list first) and the open questions under agendas 3 and 7.
