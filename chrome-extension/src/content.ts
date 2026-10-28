@@ -44,13 +44,12 @@ import type {
   AuthState,
   BillingMe,
   EstimationRun,
-  ExtNote,
   IngestState,
   PortalListing,
   RouteMessage,
   YieldScenarioUpdate,
 } from './types';
-import type { Collection, PipelineStage, Tag } from '../../frontend/src/lib/types';
+import type { Collection, Note, PipelineStage, Tag } from '../../frontend/src/lib/types';
 // Shared product brand — the ONE definition (frontend/src/lib/brand.ts), the
 // same one the SPA uses. Rebranding there updates the panel wordmark here too.
 import { APP_NAME } from '../../frontend/src/lib/brand';
@@ -138,7 +137,7 @@ interface PanelState {
   /* The last attach/detach failure, shown inside the tag checklist. */
   tagError: string | null;
   /* The property's operator notes (null = not loaded). Per-property, not cached. */
-  notes: ExtNote[] | null;
+  notes: Note[] | null;
   /* True once every retry of the notes read failed: the panel says so and offers
    * a retry instead of drawing "no notes" (MS16). */
   notesFailed: boolean;
@@ -517,8 +516,9 @@ function mountPanel(): {
   const shadow = host.attachShadow({ mode: 'closed' });
   const styleEl = document.createElement('style');
   /* TEMPORARY (until this panel is replaced): the app's palette ahead of the
-   * panel's own, for the stage and tag colours lib/pipelineStage names. The host
-   * carries no theme attributes, so it stays Měď light like the rest of it. */
+   * panel's own, for the stage colours lib/pipelineStage names and the brick
+   * styles.css's note deletion reads. The host carries no theme attributes, so
+   * it stays Měď light like the rest of it. */
   styleEl.textContent = tokens + styles;
   shadow.appendChild(styleEl);
 
@@ -1342,7 +1342,7 @@ function mountPanel(): {
   /* Another author's SHARED note (they marked it; a share put it in reach):
    * read only — no edit or delete, a neutral left rule, and the author first on
    * its meta line (the SPA's ForeignNoteRow). */
-  function buildForeignNoteItem(n: ExtNote): HTMLElement {
+  function buildForeignNoteItem(n: Note): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item note-item--foreign';
     item.setAttribute('role', 'group');
@@ -1361,7 +1361,7 @@ function mountPanel(): {
   }
 
   /* The note's date/edited marker; the exact stamps on hover. */
-  function noteDate(n: ExtNote): HTMLElement {
+  function noteDate(n: Note): HTMLElement {
     const date = document.createElement('span');
     date.className = 'note-date';
     date.textContent = fmtNoteDate(n.created_at) + (n.updated_at != null ? ' (upraveno)' : '');
@@ -1375,7 +1375,7 @@ function mountPanel(): {
    * shared mark and toggle, an edit/delete icon pair, and (when this note is the
    * one pending delete) a confirm row in place of the meta line — mirrors the
    * SPA NoteRow's two-step confirm. */
-  function buildNoteItem(n: ExtNote, state: PanelView, audience: string[] | null): HTMLElement {
+  function buildNoteItem(n: Note, state: PanelView, audience: string[] | null): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item';
 
@@ -1459,7 +1459,7 @@ function mountPanel(): {
   /* A note in inline-edit mode: textarea (seeded from + writing to the module
    * global noteEditDraft, same non-rerendering-per-keystroke pattern as the
    * add-note box) + Save/Cancel. */
-  function buildNoteEditItem(n: ExtNote, state: PanelView): HTMLElement {
+  function buildNoteEditItem(n: Note, state: PanelView): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item note-item--editing';
 
@@ -2233,7 +2233,7 @@ async function loadNotes(): Promise<void> {
   const propertyId = l.property_id;
   const mine = (prev: PanelState): boolean => prev.listing?.property_id === propertyId;
   if (state.notesFailed) setState((prev) => ({ ...prev, notesFailed: false }));
-  const res = await store.retry(() => call<ExtNote[]>({ type: 'list_notes', property_id: propertyId }));
+  const res = await store.retry(() => call<Note[]>({ type: 'list_notes', property_id: propertyId }));
   if (res == null) return;
   setState((prev) => (!mine(prev) ? prev : res.ok ? { ...prev, notes: res.data } : { ...prev, notesFailed: true }));
 }
@@ -2251,7 +2251,7 @@ async function onAddNote(): Promise<void> {
   // Shared only while the checkbox is on screen, i.e. someone would read it.
   const shared = noteShareDraft && (noteAudience(view(state))?.length ?? 0) > 0;
   setState((prev) => ({ ...prev, noteBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'add_note', property_id: propertyId, body, shared,
     origin_listing_ref_id: l.listing_id ?? null,
   });
@@ -2278,7 +2278,7 @@ async function onAddNote(): Promise<void> {
 
 /* Open a note for inline edit — seeds the edit draft with its current body and
  * closes any delete-confirm row (a note can't be mid-edit and mid-confirm). */
-function onEditNoteStart(note: ExtNote): void {
+function onEditNoteStart(note: Note): void {
   noteEditDraft = note.body;
   setState((prev) => ({ ...prev, noteEditingId: note.id, noteConfirmDeleteId: null }));
 }
@@ -2297,7 +2297,7 @@ async function onEditNoteSave(noteId: number): Promise<void> {
   if (body === '') return;
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'update_note', property_id: propertyId, note_id: noteId, patch: { body },
   });
   if (!res.ok) {
@@ -2318,12 +2318,12 @@ async function onEditNoteSave(noteId: number): Promise<void> {
 
 /* Mark one of my notes shared, or private again (PATCH {shared}; not an edit,
  * so `updated_at` stays). Identity-guarded like the other note writes. */
-async function onToggleNoteShared(note: ExtNote): Promise<void> {
+async function onToggleNoteShared(note: Note): Promise<void> {
   const l = state.listing;
   if (l == null || l.property_id == null || state.noteRowBusy) return;
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'update_note', property_id: propertyId, note_id: note.id, patch: { shared: !note.shared },
   });
   if (!res.ok) {

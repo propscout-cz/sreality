@@ -46,6 +46,19 @@ export function parseAppearance(value: unknown): SavedAppearance | null {
   return { scheme: scheme as ColorScheme, theme: theme as ThemeMode, at };
 }
 
+/* `paintAppearance`'s systemDark: the OS side, and `onFlip` on every OS flip
+ * (the listener attaches the first time it is asked). */
+export function followSystemDark(onFlip: () => void): () => boolean {
+  let query: MediaQueryList | null = null;
+  return () => {
+    if (query == null && typeof window.matchMedia === 'function') {
+      query = window.matchMedia('(prefers-color-scheme: dark)');
+      query.addEventListener('change', onFlip);
+    }
+    return query?.matches ?? false;
+  };
+}
+
 /* THE paint rule (styles/tokens.css): Měď carries no `data-scheme`, and
  * `data-theme` is always light or dark — `system` asks `systemDark`, and only then. */
 export function paintAppearance(el: Element, { scheme, theme }: Appearance, systemDark: () => boolean): void {

@@ -1108,14 +1108,17 @@ rules. Identify which one a task belongs to before you start.
   `themeHost` stamps `data-scheme` / `data-theme` on each host by `lib/appearance.ts`
   `paintAppearance`, from the profile's `user_metadata.appearance` that `get_auth_state` reads off the
   session token (Měď light when signed out or unset; asked at start and on every session change;
-  `system` follows the OS). The listing panel keeps its own light palette (`src/tokens.css` +
+  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The listing panel keeps its own light palette (`src/tokens.css` +
   `src/styles.css?inline`) until it is replaced, with the app's tokens ahead of it for the stage and
   tag colours only (its host is not themed). Every definition the app already has is IMPORTED from
   `frontend/src/lib` (formatters, the per-m² vocabulary, the MF shape and yield text, the stage
   look, the collection rules, the appearance values, the wire types), and `vite.config.ts`'s
   `assert-pure-app-imports` fails the build when such a module imports anything but another plain
-  `.ts` module by relative path (no package, no `@/` alias, no `.tsx`). The bundle is minified
-  (esbuild, with source maps). Keep it small.
+  `.ts` module by relative path (no package, no `@/` alias, no `.tsx`). Type-only imports pass the
+  rail, but the extension's `tsc` checks their whole closure (`lib/types.ts` reaches `filters.ts`
+  and the filter registry) under `verbatimModuleSyntax`, and in CI with no `frontend/node_modules`,
+  so a type import written without `type`, or any package import there, fails the extension job.
+  Keep the bundle small.
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` so `host_permissions` covers the API origin and the fetch
   isn't subject to the portal's CORS posture. The content script never calls `fetch`
@@ -4268,11 +4271,13 @@ renumber.** Navigate by area:
     **The faces.** `toolkit/measures.py` renders the SQL (`per_m2_sql(alias)`), mirrors the
     resolution order for rows that never touched Postgres, and owns the vocabulary, the floors and
     the unit strings; `frontend/src/lib/measure.ts` is its SPA twin and reads the server-published
-    token wherever a column exists; the Chrome extension, which can import neither, copies the one
-    unit string VERBATIM. `api/estimate_yield._scale` may not multiply a per-m² percentile by an
-    area without `require_scalable_basis` agreeing that the product may be CALLED what the caller
-    intends — the arithmetic is identical for a monthly and a capital rate, which is exactly why
-    an unlabelled one is dangerous rather than merely untidy.
+    token wherever a column exists; the Chrome extension imports that module (`PPM2_UNIT`, and
+    `fmtMeasuredPricePerM2` from `lib/format.ts`) and spells no unit of its own, so the one
+    SPA-to-Python value test in `tests/test_measure_registry_census.py` covers it too.
+    `api/estimate_yield._scale` may not multiply a per-m² percentile by an area without
+    `require_scalable_basis` agreeing that the product may be CALLED what the caller intends — the
+    arithmetic is identical for a monthly and a capital rate, which is exactly why an unlabelled one
+    is dangerous rather than merely untidy.
 
     **Why a rail and not a rule.** The program that unified this found **64 live call sites** —
     nine SQL definitions, five Python-emitted statements bypassing every view, six client-side

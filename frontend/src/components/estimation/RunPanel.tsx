@@ -724,9 +724,8 @@ function YieldBlock({
           /* A fond is levied per m² per MONTH — the yield formula one card up
              subtracts it from the monthly rent before annualising. The bare
              capital `Kč/m²` this carried misnamed it by a factor of twelve, and
-             disagreed with the extension, which renders the same field with
-             `CZK_PER_M2_MONTH`. Sourced from the shared map rather than retyped
-             so the two territories cannot drift again. */
+             disagreed with the extension. Both now read the shared map (the
+             extension imports measure.ts), so the territories cannot drift. */
           suffix={PPM2_UNIT.rent}
           onChange={setCostTouching}
           hint={

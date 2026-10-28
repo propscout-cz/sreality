@@ -3,7 +3,7 @@
  * frontend/src/styles/tokens.css. */
 
 :host {
-  /* Mirrored civic-archive tokens (keep aligned with the SPA). */
+  /* Frozen: no longer the SPA's; deleted with the panel in C3. */
   --bg: #f7f3ec;          /* aged paper — the panel surface */
   --ink: #1c1c1c;         /* primary text + the card edge */
   --ink-3: #555;          /* secondary text */

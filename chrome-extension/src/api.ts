@@ -11,7 +11,6 @@ import type {
   CollectionWriteResult,
   DismissalWriteResult,
   EstimationRun,
-  ExtNote,
   IngestState,
   NotePatch,
   PipelineCardResult,
@@ -20,7 +19,7 @@ import type {
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
-import type { Collection, PipelineStage, Tag } from '../../frontend/src/lib/types';
+import type { Collection, Note, PipelineStage, Tag } from '../../frontend/src/lib/types';
 
 if (!API_BASE_URL) {
   console.warn(
@@ -327,7 +326,7 @@ export async function removeFromCollection(
 
 /* GET /properties/:id/notes — the property's operator notes (rule #18),
  * most-recent-first. */
-export function listNotes(property_id: number): Promise<ApiResult<ExtNote[]>> {
+export function listNotes(property_id: number): Promise<ApiResult<Note[]>> {
   return requestData(`/properties/${property_id}/notes`);
 }
 
@@ -341,8 +340,8 @@ export async function addNote(
   body: string,
   shared: boolean,
   origin_listing_ref_id: number | null,
-): Promise<ApiResult<ExtNote>> {
-  return request<ExtNote>(`/properties/${property_id}/notes`, {
+): Promise<ApiResult<Note>> {
+  return request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     body: JSON.stringify({ body, shared, origin_listing_ref_id }),
   });
@@ -355,8 +354,8 @@ export async function updateNote(
   property_id: number,
   note_id: number,
   patch: NotePatch,
-): Promise<ApiResult<ExtNote>> {
-  return request<ExtNote>(`/properties/${property_id}/notes/${note_id}`, {
+): Promise<ApiResult<Note>> {
+  return request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });

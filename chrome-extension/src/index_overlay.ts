@@ -596,7 +596,7 @@ const NOTICE_CSS = `
     border-radius: var(--radius-sm); cursor: pointer; transition: background 120ms ease;
   }
   .n-primary:hover { background: var(--color-copper-2); }
-  .n-primary[aria-disabled="true"] { background: var(--color-ink-4); cursor: wait; }
+  .n-primary[aria-disabled="true"] { background: var(--color-ink-3); cursor: wait; }
   .n-close:focus-visible, .n-primary:focus-visible {
     outline: 2px solid var(--color-focus); outline-offset: 2px;
   }

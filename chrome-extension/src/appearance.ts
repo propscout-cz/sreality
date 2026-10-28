@@ -6,33 +6,33 @@
  * session changes (a sign-in or sign-out, or the refresh that carries a new
  * pick); `system` follows the OS while the page is open. */
 
-import { DEFAULT_APPEARANCE, paintAppearance, type Appearance } from '../../frontend/src/lib/appearance';
+import { DEFAULT_APPEARANCE, followSystemDark, paintAppearance, type Appearance } from '../../frontend/src/lib/appearance';
 import { SESSION_KEY, onStoredChange } from './session';
 
-/* Weak, so a host the page or a surface has removed is collected, not kept here. */
-const hosts = new Set<WeakRef<Element>>();
+type Pin = 'light' | undefined;
+/* Weak, so a host the page or a surface has removed is collected, not kept
+ * here; its dead ref goes at the next themeHost or repaint. */
+const hosts = new Map<WeakRef<Element>, Pin>();
 let current: Appearance = DEFAULT_APPEARANCE;
-let systemQuery: MediaQueryList | null = null;
+const systemDark = followSystemDark(() => { if (current.theme === 'system') repaint(); });
 
-function systemDark(): boolean {
-  if (systemQuery == null) {
-    systemQuery = matchMedia('(prefers-color-scheme: dark)');
-    systemQuery.addEventListener('change', () => { if (current.theme === 'system') repaint(); });
-  }
-  return systemQuery.matches;
-}
+const paint = (host: Element, pin: Pin): void =>
+  paintAppearance(host, pin ? { ...current, theme: pin } : current, systemDark);
 
 function repaint(): void {
-  for (const ref of hosts) {
+  for (const [ref, pin] of hosts) {
     const host = ref.deref();
     if (host == null) hosts.delete(ref);
-    else paintAppearance(host, current, systemDark);
+    else paint(host, pin);
   }
 }
 
-export function themeHost(host: Element): void {
-  hosts.add(new WeakRef(host));
-  paintAppearance(host, current, systemDark);
+/* `pin` keeps the user's scheme on its light side whatever their theme: for
+ * paint laid over a photo, whose white type needs the light tones under it. */
+export function themeHost(host: Element, pin?: 'light'): void {
+  for (const ref of hosts.keys()) if (ref.deref() == null) hosts.delete(ref);
+  hosts.set(new WeakRef(host), pin);
+  paint(host, pin);
 }
 
 export function followAppearance(read: () => Promise<Appearance | null>): void {

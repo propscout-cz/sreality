@@ -535,8 +535,8 @@ host goes in both.
 The bundle itself carries no secret and every write is per-user + RLS-scoped
 (Wave 1), so the remaining gap to a public listing is process, not code:
 
-- `sourcemap:false` for the store build (the bundle is minified already;
-  `sourcemap:true` today is a dev/debug convenience — flip it off before
+- `sourcemap:false` + confirm `minify:'esbuild'` for the store build
+  (`sourcemap:true` today is a dev/debug convenience — flip it off before
   packaging a store submission).
 - A privacy policy URL + per-permission justifications (`identity`,
   `alarms`, `storage`, the two `host_permissions` origins) + a single-purpose

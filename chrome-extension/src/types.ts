@@ -102,23 +102,6 @@ export interface TagWriteResult {
   detached?: boolean;
 }
 
-/* One note about a PROPERTY (rule #18) the caller can read: its own, or
- * another author's SHARED note on a property a share puts in reach (migration
- * 610). Read via GET /properties/{id}/notes (most-recent-first). */
-export interface ExtNote {
-  id: number;
-  property_id: number;
-  body: string;
-  /* The author's consent for it to cross a share (default false). A foreign
-   * note is always shared — else it would not be readable. */
-  shared: boolean;
-  created_at: string;
-  /* Null until the operator edits the note's body (marking it shared is not an edit). */
-  updated_at: string | null;
-  /* The author's email; null exactly when the note is mine (read-only otherwise). */
-  owner_email: string | null;
-}
-
 /* PATCH /properties/{id}/notes/{note_id}: at least one field (author only). */
 export interface NotePatch {
   body?: string;

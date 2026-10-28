@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import {
+  DEFAULT_APPEARANCE,
   MODES,
   SCHEMES,
+  followSystemDark,
   isTime,
   paintAppearance,
   parseAppearance,
@@ -29,25 +31,18 @@ const CHOSEN_KEY = 'sreality.appearance.chosen';
 type Cached = Appearance & { at?: string; user?: string };
 const [cachedAt, cachedUser] = readValue(CHOSEN_KEY, '').split(' ');
 let state: Cached = {
-  scheme: readChoice(SCHEME_KEY, SCHEMES, 'med'),
-  theme: readChoice(THEME_KEY, MODES, 'light'),
+  scheme: readChoice(SCHEME_KEY, SCHEMES, DEFAULT_APPEARANCE.scheme),
+  theme: readChoice(THEME_KEY, MODES, DEFAULT_APPEARANCE.theme),
   at: isTime(cachedAt) ? cachedAt : undefined,
   user: cachedUser || undefined,
 };
 const listeners = new Set<() => void>();
-let systemQuery: MediaQueryList | null = null;
 
 /* "system" is resolved here, so <html> always carries light or dark; an OS
- * flip re-applies it (the listener attaches the first time it is asked). */
-function systemIsDark(): boolean {
-  if (!systemQuery && typeof window.matchMedia === 'function') {
-    systemQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    systemQuery.addEventListener('change', () => {
-      if (state.theme === 'system') applyAppearance();
-    });
-  }
-  return systemQuery?.matches ?? false;
-}
+ * flip re-applies it. */
+const systemIsDark = followSystemDark(() => {
+  if (state.theme === 'system') applyAppearance();
+});
 
 export function applyAppearance(): void {
   paintAppearance(document.documentElement, state, systemIsDark);

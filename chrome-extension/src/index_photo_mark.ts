@@ -14,7 +14,9 @@
  *                broker logos and video marks.
  * A property can carry all three. The card's cluster stays the control; this
  * is only the mark (aria-hidden — the cluster's labels say it; tags are edited
- * in the app).
+ * in the app). It is paint on a photo, so it wears the user's scheme on its
+ * light side in either theme: a dark side's lighter tones would wash out the
+ * white type (the corner pill and chips stay light beside a dark cluster).
  *
  * The photo is found by geometry, not markup, like the card itself: the
  * largest image the card shows, cut to the boxes that clip it, each corner
@@ -242,7 +244,7 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
 
   function build(): NonNullable<typeof parts> {
     host = h('div', PHOTO_MARK_HOST_CLASS);
-    themeHost(host);
+    themeHost(host, 'light');
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = css(cardAttr);

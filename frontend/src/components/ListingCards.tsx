@@ -39,6 +39,7 @@ import {
 } from '@/lib/format';
 import type { CohortKind } from '@/lib/filters';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
+import { mfYieldText } from '@/lib/mfReference';
 import { listingKindParts, listingTypeLabel } from '@/lib/enums';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
@@ -677,10 +678,7 @@ function Card({
           >
             Výnos MF{' '}
             <span className="text-[var(--color-ink)] font-medium">
-              {r.mf_gross_yield_pct.toLocaleString('cs-CZ', {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              })}{' '}%
+              {mfYieldText(r.mf_gross_yield_pct)}
             </span>
           </p>
         )}

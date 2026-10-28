@@ -84,12 +84,12 @@ const DOCK_CSS = `
   .switch:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
   .track {
     box-sizing: border-box; position: relative; width: 26px; height: 14px; flex-shrink: 0;
-    background: var(--color-paper-3); border: 1px solid var(--color-ink-4);
+    background: var(--color-paper-3); border: 1px solid var(--color-ink-3);
     transition: background 120ms ease, border-color 120ms ease;
   }
   .thumb {
     position: absolute; top: 1px; left: 1px; width: 10px; height: 10px;
-    background: var(--color-ink-4);
+    background: var(--color-ink-3);
     transition: transform 120ms ease, background 120ms ease;
   }
   .switch[aria-checked="true"] .track { background: var(--color-copper-soft); border-color: var(--color-copper); }

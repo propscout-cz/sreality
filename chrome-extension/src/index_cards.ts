@@ -260,7 +260,7 @@ const MENU_CSS = `
     box-sizing: border-box; display: inline-flex; align-items: center;
     justify-content: center; width: 14px; height: 14px; flex-shrink: 0;
     font-size: 11px; line-height: 1; color: transparent;
-    background: var(--color-paper-3); border: 1px solid var(--color-ink-4);
+    background: var(--color-paper-3); border: 1px solid var(--color-ink-3);
     border-radius: var(--radius-xs);
   }
   .row--member .check {

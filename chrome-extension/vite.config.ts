@@ -94,8 +94,7 @@ export default defineConfig(({ mode }) => {
         },
       },
       target: 'es2022',
-      // The source maps keep a minified bundle debuggable (and `npm run watch` too).
-      minify: 'esbuild',
+      minify: false,
     },
     plugins: [
       {

@@ -2,7 +2,7 @@
  * sync with the user's profile, and the palette it switches (styles/tokens.css):
  * every theme must define every colour token the default (Měď light) declares,
  * or it would silently fall back to Měď for that token. */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COLOR_SCHEMES, THEME_MODES } from './appearance';
@@ -243,6 +243,17 @@ describe('tokens.css', () => {
     for (const t of ['--color-chrome', '--color-chrome-accent', '--color-on-copper', '--color-on-brick', '--color-tag-sand']) {
       expect(base).toContain(t);
     }
+  });
+
+  /* The extension's shadow roots name tokens in plain CSS that no build checks:
+   * a rename here must fail this, not leave the portal pages unstyled. */
+  it('declares every token the Chrome extension reads', () => {
+    const dir = join(process.cwd(), '../chrome-extension/src');
+    const sources = readdirSync(dir).filter((f) => /\.(ts|css)$/.test(f)).map((f) => readFileSync(join(dir, f), 'utf8'));
+    const read = new Set(sources.flatMap((s) => [...s.matchAll(/var\((--(?:color|radius)-[a-z0-9-]+)[,)]/g)].map((m) => m[1])));
+    const declared = block(':root, :host');
+    expect(read.size).toBeGreaterThan(0);
+    for (const t of read) expect(declared, `the extension reads ${t}`).toContain(`${t}:`);
   });
 
   /* Tags are the user's colours: only light/dark changes them, never the scheme. */
