@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -242,5 +242,17 @@ describe('<RunDetailModal>', () => {
 
     const feedback = await screen.findByRole('button', { name: /Provide feedback/ });
     expect(runDetail().contains(feedback)).toBe(true);
+  });
+
+  it('heads each section with an L3 title between its hairlines, never a section card (system.md § Section cards)', async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    await screen.findByRole('button', { name: String(COMPARABLE_LISTING_ID) });
+
+    const dialog = runDetail();
+    expect(within(dialog).getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
+      .toEqual(expect.arrayContaining(['Rent range', 'Inputs', 'Trace', 'Comparables', 'Feedback history']));
+    expect(within(dialog).queryAllByRole('region')).toHaveLength(0);
+    expect(dialog.querySelector('#feedback')).not.toBeNull();
   });
 });
