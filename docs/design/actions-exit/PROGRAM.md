@@ -99,7 +99,7 @@ production.
   `registry_at IS NOT NULL AND runner = 'job-runner'` that its registry no longer names. Whole-day grids
   are phased so a slot falls at, or up to 3 days after, the calendar run it replaces. CI pins
   (`tests/scraper/test_job_registry.py`): every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
-  (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 70 % of a replica); no two
+  (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 81 % of a replica, 70 % until #2155); no two
   DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted; scheduled runs and their
   retries, not a deploy's at-once re-run of an interrupted one); the API's stuck-run
   cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
@@ -317,9 +317,9 @@ rule, `scraper.job_runner once <job>` read as running `<job>`, without which the
 reference) applied at its head in one runner-only window (no autodedup brake: #2025-R2), then merged at once:
 `clip` every 900 s at offset 300 s, `timeout_s` kept at 3300 with its own `--max-seconds 1500` budget, a
 re-select every 300 s and whenever the snapshot drains, the tag phase ending on a re-select under one chunk
-(64 a chunk: Pillow holds RGB at 4 B a pixel, so 128 at the p90 would decode past 2048 MB; children run with
+(64 a chunk: Pillow holds RGB at 4 B a pixel; children run with
 `MALLOC_ARENA_MAX=2`); exit 75 only when the budget cut a run that was making progress or a re-tag campaign stays open, exit 1
-when its downloads failed and it marked nothing (a whole chunk's worth), exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 2048 MB,
+when its downloads failed and it marked nothing (a whole chunk's worth), exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 3072 MB (the first run peaked at 2,386; #2155),
 no resource. The order is the last 45 min first, then the priority kraje, then newest first. The next chunk's
 GETs download while this one encodes, each chunk waits at most 45 s for them, and the job's R2 client gives up
 a stalled GET after 2 × (5 + 20) s; a GET that failed is retried by the next run, not the same one. A batch that
