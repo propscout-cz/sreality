@@ -26,7 +26,6 @@ const photo = (id: number, storage_path: string | null): ImagePublic => ({
   clip_fine_tag: null,
   clip_logical_tag: null,
   clip_confidence: null,
-  clip_render_score: null,
   phash: null,
 });
 

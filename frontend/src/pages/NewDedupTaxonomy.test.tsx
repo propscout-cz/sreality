@@ -166,7 +166,7 @@ const NEIGHBOURS: TagNeighbour[] = [
 const IMAGE: ImagePublic = {
   id: 101, sreality_id: 555, sequence: 1, sreality_url: 'https://sdn.cz/x.jpg',
   storage_path: 'img/555/1.jpg', clip_fine_tag: null, clip_logical_tag: null,
-  clip_confidence: null, clip_render_score: null, phash: null,
+  clip_confidence: null, phash: null,
 };
 
 /* The retag surface's fixtures. Three positives on FASADA (tag 3), because the

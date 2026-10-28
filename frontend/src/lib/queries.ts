@@ -1262,7 +1262,7 @@ export const fetchListingFloors = async (
  * (clip_fine_tag / clip_logical_tag / clip_confidence, migration 236) so every
  * photo surface can render its bottom-left tag badge from the same read. */
 const IMAGE_PUBLIC_COLS =
-  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,clip_render_score,phash';
+  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,phash';
 
 /* Batch image fetch keyed on `sreality_id` — kept for the callers whose upstream
  * read model is still sreality-keyed and carries no surrogate id. These

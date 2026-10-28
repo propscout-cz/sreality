@@ -94,7 +94,6 @@ function images(listingId: number, n: number): ImagePublic[] {
     clip_fine_tag: null,
     clip_logical_tag: null,
     clip_confidence: null,
-    clip_render_score: null,
     phash: null,
   }));
 }

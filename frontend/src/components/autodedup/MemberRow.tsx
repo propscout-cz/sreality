@@ -48,12 +48,11 @@ export default function MemberRow({
   badge?: string;
 }) {
   /* The carousel wants render-ready urls; these photos carry no CLIP tag on
-   * this surface, so both decorations are explicitly null rather than faked. */
+   * this surface, so the tag is explicitly null rather than faked. */
   const images = member.images.map((img) => ({
     url: imageSrc(img),
     tag: null,
     confidence: null,
-    renderScore: null,
   }));
   const inApp = memberListingPath(member);
   return (
