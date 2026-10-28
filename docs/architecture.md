@@ -964,7 +964,9 @@ rules. Identify which one a task belongs to before you start.
 - **No write path in the SPA's code.** Any UI action that needs a write goes through the
   FastAPI service, not direct Postgres — by convention: `authenticated` holds RLS-scoped
   table write grants (migrations 290/292/294) the SPA never uses. The toolkit's
-  write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
+  write-allowed exceptions (see Toolkit rule #5) are reachable only via the API. The one
+  exception is the user's own Auth profile: `user_metadata.appearance` (`lib/theme.ts`, via
+  `supabase.auth.updateUser`), client-writable, validated on read, never trusted server-side.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route

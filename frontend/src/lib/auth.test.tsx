@@ -5,7 +5,7 @@
  * second only when two accounts are used in one browser. So they get tests.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { ACTIVE_BOARD_KEY, EDIT_AS_OWNER_KEY, getActiveBoard, setActiveBoard, setEditAsOwner } from './acting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   reads: [] as string[],
   /* Per relation, envelopes served (in order) before the real rows. */
   failNext: {} as Record<string, unknown[]>,
+  updateUser: vi.fn(async (_attrs: unknown) => ({ data: {}, error: null as unknown })),
 }));
 
 vi.mock('./supabase', () => {
@@ -56,6 +57,7 @@ vi.mock('./supabase', () => {
           h.listeners.push(cb);
           return { data: { subscription: { unsubscribe: () => {} } } };
         },
+        updateUser: h.updateUser,
       },
     },
   };
@@ -72,6 +74,7 @@ import { isTransientApiError } from './api';
 import { syncAppBadge } from './appBadge';
 import { AuthProvider, useAuth } from './auth';
 import { endPushHere, setPushGate } from './push';
+import { setScheme, syncAppearance } from './theme';
 
 /* A fresh object each call — exactly what Supabase hands out per auth event,
  * and the reason keying on the session object refetched three times. */
@@ -340,5 +343,30 @@ describe('AuthProvider push binding', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(endPushHere).not.toHaveBeenCalled();
     expect(syncAppBadge).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthProvider appearance', () => {
+  /* The store is module state: each case starts and ends signed out. */
+  beforeEach(() => {
+    syncAppearance(null, async () => {});
+    setScheme('kobalt');
+    h.updateUser.mockClear();
+  });
+  afterEach(() => {
+    syncAppearance(null, async () => {});
+    setScheme('med');
+    localStorage.clear();
+  });
+
+  it("writes this device's choice to a profile without one, and keeps it owed when Supabase answers an error", async () => {
+    h.updateUser.mockResolvedValueOnce({ data: {}, error: new Error('offline') });
+    h.initialSession = sessionFor('user-1');
+    renderAuth(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await waitFor(() =>
+      expect(h.updateUser).toHaveBeenCalledWith({ data: { appearance: { scheme: 'kobalt', theme: 'light' } } }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(localStorage.getItem('sreality.appearance.unsaved')).toBe('user-1');
   });
 });

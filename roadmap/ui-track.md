@@ -45,7 +45,10 @@ toolkit work.
 - **Done, one appearance** (2026-10-28): the palette moved to `styles/tokens.css` (`:root` + `:host` rules, ready
   for the extension); one store in `lib/theme.ts` behind all three pickers, "system" resolved to a concrete
   `data-theme` (the four `@media` copies deleted), painted from `index.html` before CSS, kept in the user's
-  Supabase Auth profile (`user_metadata.appearance`) with the device cache.
+  Supabase Auth profile (`user_metadata.appearance`) with the device cache. Another device's change lands at
+  the next token refresh (up to an hour: the session is read from the device). **Next:** `index.html`'s
+  `color-scheme` meta and its theme-color pair still follow the OS until CSS loads (the pre-paint script knows
+  the side and could set both).
 - **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
   revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
 - **Done, agenda 1 Browse card** (2026-10-27): the portals left the photo for a quiet line at the top of

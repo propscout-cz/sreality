@@ -610,7 +610,8 @@ paying tenants, a second operator, or any agent-worker incident.
   the user opens it. Bytes count toward a per-account quota (a new `usage_ledger` action). The API serves them with
   `attachment` and `nosniff` (`api/attachments.py:153-164`); links handed to MCP clients stay authenticated, never
   presigned. A Content-Security-Policy with img-src 'self' and a sanitising Markdown renderer that drops remote images
-  come before any in-app rendering (F63).
+  come before any in-app rendering (F63); its script-src must carry the sha256 of the inline appearance script in
+  `frontend/index.html`.
 - **Temporary vs persistent:** run directories die with the run; nothing undeclared is promoted; "save to property"
   copies an artifact into `property_attachments` (whose allowlist gains Markdown). AI-written scripts are artifacts of
   kind script and never enter skills/; skill changes travel only as pull requests (§ 3.2).

@@ -6,7 +6,8 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="robots" content="noindex, nofollow" />
     <!-- The device's cached appearance, on <html> before any CSS paints (lib/theme.ts
-         owns it; theme.test.ts runs this copy against the store). -->
+         owns it; theme.test.ts runs this copy against the store). A future
+         Content-Security-Policy must list this script's sha256, which any edit changes. -->
     <script>
       try {
         const d = document.documentElement, s = localStorage.getItem('sreality.scheme');

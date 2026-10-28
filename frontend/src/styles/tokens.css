@@ -54,6 +54,31 @@
   --color-chrome-active:  #30373c;
   --color-chrome-accent:  #7cc4b2;
 
+  /* Tag palette (U2.6). Eight-name closed set, enforced server-side by the
+   * CHECK constraint in migration 024 and by api/schemas.TagColor. Tags (and
+   * the pipeline stages that borrow them) are the USER's colours, so they are
+   * the same in every scheme: only light/dark sets them, no scheme rule does.
+   * Each `-fg` value holds 4.5:1 on its own `-soft` wash over a card. Copper,
+   * sage, brick and ochre used to alias the accent and status tokens; they are
+   * literal now, because in Kobalt and Grafit the accent is not copper.
+   * Adding a new colour = a new migration (ALTER CHECK) + new tokens here. */
+  --color-tag-copper:       #2f6658;
+  --color-tag-copper-soft:  rgba(47, 102, 88, 0.12);
+  --color-tag-sage:         #4b6a35;
+  --color-tag-sage-soft:    rgba(75, 106, 53, 0.12);
+  --color-tag-brick:        #9a3e30;
+  --color-tag-brick-soft:   rgba(154, 62, 48, 0.12);
+  --color-tag-ochre:        #86601a;
+  --color-tag-ochre-soft:   rgba(134, 96, 26, 0.12);
+  --color-tag-slate:        #42536b;
+  --color-tag-slate-soft:   rgba(66, 83, 107, 0.12);
+  --color-tag-plum:         #74405e;
+  --color-tag-plum-soft:    rgba(116, 64, 94, 0.12);
+  --color-tag-teal:         #286876;
+  --color-tag-teal-soft:    rgba(40, 104, 118, 0.12);
+  --color-tag-sand:         #6c6034;
+  --color-tag-sand-soft:    rgba(108, 96, 52, 0.12);
+
   /* Radii. Tight — archival, not friendly. */
   --radius-xs: 3px;
   --radius-sm: 4px;
@@ -95,6 +120,24 @@
   --color-chrome-ink-2:   #9ca0a7;
   --color-chrome-active:  #22282c;
   --color-chrome-accent:  #6cc0ad;
+
+  /* Tags, dark. */
+  --color-tag-copper:       #7fbcae;
+  --color-tag-copper-soft:  rgba(127, 188, 174, 0.16);
+  --color-tag-sage:         #a3c487;
+  --color-tag-sage-soft:    rgba(163, 196, 135, 0.16);
+  --color-tag-brick:        #e3917f;
+  --color-tag-brick-soft:   rgba(227, 145, 127, 0.16);
+  --color-tag-ochre:        #e0b264;
+  --color-tag-ochre-soft:   rgba(224, 178, 100, 0.16);
+  --color-tag-slate:        #9fb0c8;
+  --color-tag-slate-soft:   rgba(159, 176, 200, 0.16);
+  --color-tag-plum:         #d29cbd;
+  --color-tag-plum-soft:    rgba(210, 156, 189, 0.16);
+  --color-tag-teal:         #7cc0cc;
+  --color-tag-teal-soft:    rgba(124, 192, 204, 0.16);
+  --color-tag-sand:         #d4c18c;
+  --color-tag-sand-soft:    rgba(212, 193, 140, 0.16);
   color-scheme: dark;
 }
 
@@ -240,52 +283,4 @@
   --color-chrome-ink-2:   #a0a0a6;
   --color-chrome-active:  #26262a;
   --color-chrome-accent:  #efefed;
-}
-
-/* ----------------------------------------------------------------------------
- * Tag palette (U2.6). Eight-name closed set, enforced server-side by the
- * CHECK constraint in migration 024 and by api/schemas.TagColor. Tags (and the
- * pipeline stages that borrow them) are the USER's colours, so they are the
- * same in every scheme — only light/dark changes them. Each `-fg` value holds
- * 4.5:1 on its own `-soft` wash over a card. Copper, sage, brick and ochre used
- * to alias the accent and status tokens; they are literal now, because in
- * Kobalt and Grafit the accent is not copper.
- * Adding a new colour = a new migration (ALTER CHECK) + new tokens here.
- * -------------------------------------------------------------------------- */
-:root, :host {
-  --color-tag-copper:       #2f6658;
-  --color-tag-copper-soft:  rgba(47, 102, 88, 0.12);
-  --color-tag-sage:         #4b6a35;
-  --color-tag-sage-soft:    rgba(75, 106, 53, 0.12);
-  --color-tag-brick:        #9a3e30;
-  --color-tag-brick-soft:   rgba(154, 62, 48, 0.12);
-  --color-tag-ochre:        #86601a;
-  --color-tag-ochre-soft:   rgba(134, 96, 26, 0.12);
-  --color-tag-slate:        #42536b;
-  --color-tag-slate-soft:   rgba(66, 83, 107, 0.12);
-  --color-tag-plum:         #74405e;
-  --color-tag-plum-soft:    rgba(116, 64, 94, 0.12);
-  --color-tag-teal:         #286876;
-  --color-tag-teal-soft:    rgba(40, 104, 118, 0.12);
-  --color-tag-sand:         #6c6034;
-  --color-tag-sand-soft:    rgba(108, 96, 52, 0.12);
-}
-
-:root[data-theme="dark"], :host([data-theme="dark"]) {
-  --color-tag-copper:       #7fbcae;
-  --color-tag-copper-soft:  rgba(127, 188, 174, 0.16);
-  --color-tag-sage:         #a3c487;
-  --color-tag-sage-soft:    rgba(163, 196, 135, 0.16);
-  --color-tag-brick:        #e3917f;
-  --color-tag-brick-soft:   rgba(227, 145, 127, 0.16);
-  --color-tag-ochre:        #e0b264;
-  --color-tag-ochre-soft:   rgba(224, 178, 100, 0.16);
-  --color-tag-slate:        #9fb0c8;
-  --color-tag-slate-soft:   rgba(159, 176, 200, 0.16);
-  --color-tag-plum:         #d29cbd;
-  --color-tag-plum-soft:    rgba(210, 156, 189, 0.16);
-  --color-tag-teal:         #7cc0cc;
-  --color-tag-teal-soft:    rgba(124, 192, 204, 0.16);
-  --color-tag-sand:         #d4c18c;
-  --color-tag-sand-soft:    rgba(212, 193, 140, 0.16);
 }

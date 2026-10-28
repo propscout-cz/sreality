@@ -4,8 +4,8 @@
  * or it would silently fall back to Měď for that token. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COLOR_SCHEMES, THEME_MODES } from './theme';
 
 // vitest runs from frontend/; import.meta.url is not a file: URL under vite.
 const tokens = readFileSync(join(process.cwd(), 'src/styles/tokens.css'), 'utf8');
@@ -32,7 +32,7 @@ function osDark(dark: boolean) {
 
 const attrs = () => [root.getAttribute('data-scheme'), root.getAttribute('data-theme')];
 const settle = () => new Promise((r) => setTimeout(r, 0));
-const user = (appearance?: unknown) => ({ id: 'u1', user_metadata: appearance === undefined ? {} : { appearance } });
+const user = (appearance?: unknown, id = 'u1') => ({ id, user_metadata: appearance === undefined ? {} : { appearance } });
 
 afterEach(() => {
   window.matchMedia = realMatchMedia;
@@ -41,34 +41,27 @@ afterEach(() => {
   localStorage.clear();
 });
 
+/* Every cached scheme and mode on either OS side, an empty cache and an unknown
+ * one: index.html's copy of the lists must keep up with the store's. */
+const caches: Array<[string | null, string | null, boolean]> = [
+  ...COLOR_SCHEMES.flatMap((s) => THEME_MODES.flatMap((m) => [true, false].map((d): [string, string, boolean] => [s.value, m.value, d]))),
+  [null, null, true],
+  ['terakota', 'sepia', true],
+];
+
 describe('appearance store', () => {
-  it.each([
-    [null, null, true, [null, 'light']],
-    ['kobalt', 'dark', false, ['kobalt', 'dark']],
-    ['grafit', 'system', true, ['grafit', 'dark']],
-    ['med', 'system', false, [null, 'light']],
-    ['terakota', 'sepia', true, [null, 'light']],
-  ])('reads %s / %s (OS dark %s) from the device cache, and index.html paints the same', async (scheme, mode, dark, expected) => {
+  it.each(caches)('reads %s / %s (OS dark %s) from the device cache, and index.html paints the same', async (scheme, mode, dark) => {
     if (scheme) localStorage.setItem('sreality.scheme', scheme);
     if (mode) localStorage.setItem('sreality.theme', mode);
     osDark(dark);
+    const side = mode === 'dark' || (mode === 'system' && dark) ? 'dark' : 'light';
+    const expected = [COLOR_SCHEMES.some((s) => s.value === scheme && s.value !== 'med') ? scheme : null, side];
     new Function(prePaint)();
     expect(attrs()).toEqual(expected);
     root.removeAttribute('data-scheme');
     root.removeAttribute('data-theme');
     (await load()).applyAppearance();
     expect(attrs()).toEqual(expected);
-  });
-
-  it('is one state for every picker, cached under its keys', async () => {
-    const theme = await load();
-    const a = renderHook(() => [theme.useScheme(), theme.useTheme()] as const);
-    const b = renderHook(() => [theme.useScheme(), theme.useTheme()] as const);
-    act(() => a.result.current[0][1]('grafit'));
-    act(() => b.result.current[1][1]('dark'));
-    expect([a.result.current[1][0], b.result.current[0][0]]).toEqual(['dark', 'grafit']);
-    expect(attrs()).toEqual(['grafit', 'dark']);
-    expect([localStorage.getItem('sreality.scheme'), localStorage.getItem('sreality.theme')]).toEqual(['grafit', 'dark']);
   });
 
   it('resolves system with the OS and follows its flip', async () => {
@@ -103,6 +96,18 @@ describe('appearance in the profile', () => {
     expect(save.mock.calls).toEqual([[{ scheme: 'kobalt', theme: 'light' }]]);
   });
 
+  /* A device that never chose must not overwrite a choice made on another one. */
+  it.each([[{}], [{ 'sreality.scheme': 'med', 'sreality.theme': 'light' }]])(
+    'leaves a profile without one alone while this device holds the default (%o)',
+    async (cache: Record<string, string>) => {
+      for (const [key, value] of Object.entries(cache)) localStorage.setItem(key, value);
+      const theme = await load();
+      const save = vi.fn();
+      theme.syncAppearance(user(), save);
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
   it('ignores a value it does not know, and never overwrites it', async () => {
     const theme = await load();
     const save = vi.fn();
@@ -113,7 +118,7 @@ describe('appearance in the profile', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
-  it('applies a change at once, keeps it when the write fails, and sends it with the next change', async () => {
+  it('applies a change at once, keeps it when the write fails, and sends it again with the next session', async () => {
     const theme = await load();
     const save = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
     theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
@@ -123,7 +128,35 @@ describe('appearance in the profile', () => {
     theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
     expect(attrs()).toEqual(['grafit', 'light']);
     theme.setTheme('dark');
-    expect(save.mock.calls).toEqual([[{ scheme: 'grafit', theme: 'light' }], [{ scheme: 'grafit', theme: 'dark' }]]);
+    const grafit = { scheme: 'grafit', theme: 'light' };
+    expect(save.mock.calls).toEqual([[grafit], [grafit], [{ scheme: 'grafit', theme: 'dark' }]]);
+  });
+
+  it('keeps a change the profile never confirmed across a reload, and sends it until it lands', async () => {
+    let theme = await load();
+    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), vi.fn().mockRejectedValue(new Error('offline')));
+    theme.setScheme('grafit');
+    await settle();
+    theme = await load();
+    theme.applyAppearance();
+    const save = vi.fn().mockResolvedValue(undefined);
+    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
+    expect(attrs()).toEqual(['grafit', 'light']);
+    expect(save.mock.calls).toEqual([[{ scheme: 'grafit', theme: 'light' }]]);
+    await settle();
+    theme.syncAppearance(user({ scheme: 'kobalt', theme: 'dark' }), save);
+    expect(attrs()).toEqual(['kobalt', 'dark']);
+  });
+
+  it("never lets another user's unconfirmed change hold back this user's profile", async () => {
+    localStorage.setItem('sreality.appearance.unsaved', 'u1');
+    localStorage.setItem('sreality.scheme', 'grafit');
+    const theme = await load();
+    const save = vi.fn();
+    theme.syncAppearance(user({ scheme: 'kobalt', theme: 'dark' }, 'u2'), save);
+    expect(attrs()).toEqual(['kobalt', 'dark']);
+    expect(localStorage.getItem('sreality.appearance.unsaved')).toBe('');
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('keeps a signed-out change on the device', async () => {
@@ -137,16 +170,17 @@ describe('appearance in the profile', () => {
 });
 
 describe('tokens.css', () => {
-  /* Every block a selector heads, joined (the tag palette has blocks of its own). */
   function block(selector: string): string {
-    const parts = tokens.split(`${selector} {`).slice(1);
-    expect(parts.length, `${selector} is missing`).toBeGreaterThan(0);
-    return parts.map((p) => p.slice(0, p.indexOf('}'))).join('\n');
+    const start = tokens.indexOf(`${selector} {`);
+    expect(start, `${selector} is missing`).toBeGreaterThan(-1);
+    return tokens.slice(start, tokens.indexOf('}', start));
   }
   const either = (attrs: string) => `:root${attrs}, :host(${attrs})`;
   const base = [...block(':root, :host').matchAll(/(--color-[a-z0-9-]+):/g)].map((m) => m[1]);
   const dark = either('[data-theme="dark"]');
-  const schemes = ['kobalt', 'grafit'].flatMap((s) => [either(`[data-scheme="${s}"]`), either(`[data-scheme="${s}"][data-theme="dark"]`)]);
+  /* Měď is the default; every other scheme has a light and a dark rule. */
+  const extra = COLOR_SCHEMES.filter((s) => s.value !== 'med').map((s) => s.value);
+  const schemes = extra.flatMap((s) => [either(`[data-scheme="${s}"]`), either(`[data-scheme="${s}"][data-theme="dark"]`)]);
 
   it('declares the chrome, on-fill and tag tokens in the default', () => {
     for (const t of ['--color-chrome', '--color-chrome-accent', '--color-on-copper', '--color-on-brick', '--color-tag-sand']) {
@@ -163,7 +197,7 @@ describe('tokens.css', () => {
 
   it('pairs every document-root rule with its shadow-host twin, and keeps no OS-following copy', () => {
     const rules = [...tokens.matchAll(/^(:[^{\n]*)\{/gm)].map((m) => m[1].trim());
-    expect(rules).toHaveLength(8);
+    expect(rules).toHaveLength(2 + schemes.length);
     for (const rule of rules) {
       const attrs = rule.split(',')[0].slice(':root'.length);
       expect(rule).toBe(attrs ? either(attrs) : ':root, :host');

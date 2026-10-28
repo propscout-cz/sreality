@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { readChoice, writeValue } from './persistedFlag';
+import { readChoice, readValue, writeValue } from './persistedFlag';
 
 /* The user's appearance: a colour scheme (styles/tokens.css: Měď needs no
  * attribute, Kobalt and Grafit set `data-scheme` on <html>) and a light/dark
@@ -35,10 +35,13 @@ const SCHEMES = COLOR_SCHEMES.map((s) => s.value);
 const MODES = THEME_MODES.map((m) => m.value);
 const SCHEME_KEY = 'sreality.scheme';
 const THEME_KEY = 'sreality.theme';
+/* The user id whose change the profile has not confirmed yet ('' = none). */
+const UNSAVED_KEY = 'sreality.appearance.unsaved';
+const DEFAULT_APPEARANCE: Appearance = { scheme: 'med', theme: 'light' };
 
 let state: Appearance = {
-  scheme: readChoice(SCHEME_KEY, SCHEMES, 'med'),
-  theme: readChoice(THEME_KEY, MODES, 'light'),
+  scheme: readChoice(SCHEME_KEY, SCHEMES, DEFAULT_APPEARANCE.scheme),
+  theme: readChoice(THEME_KEY, MODES, DEFAULT_APPEARANCE.theme),
 };
 const listeners = new Set<() => void>();
 let systemQuery: MediaQueryList | null = null;
@@ -75,26 +78,38 @@ function commit(next: Appearance): boolean {
 
 /* The signed-in user's profile (Supabase Auth user_metadata.appearance; no
  * table, no route). `unsaved` = a choice made while signed in that the profile
- * has not confirmed: it beats the profile's older value, and a failed write
- * waits for the next change. updateUser holds Supabase's auth lock, so writes
- * land in the order they were sent. */
+ * has not confirmed: it beats the profile's older value and goes again with
+ * every session event until a write lands. Its marker sits beside the device
+ * cache, keyed to the user, so a reload keeps it. updateUser holds Supabase's
+ * auth lock, so writes land in the order they were sent. */
 type SaveAppearance = (appearance: Appearance) => Promise<void>;
 let profile: { id: string; save: SaveAppearance } | null = null;
 let unsaved = false;
+let sending: Appearance | null = null;
+
+function markUnsaved(id: string): void {
+  unsaved = true;
+  writeValue(UNSAVED_KEY, id);
+}
 
 function sendToProfile(): void {
+  if (!profile || sending === state) return;
+  const { id, save } = profile;
   const sent = state;
-  profile?.save(sent).then(
-    () => {
-      if (state === sent) unsaved = false;
-    },
-    () => {},
-  );
+  sending = sent;
+  const settle = (saved: boolean) => {
+    if (sending === sent) sending = null;
+    if (saved && state === sent && profile?.id === id) {
+      unsaved = false;
+      writeValue(UNSAVED_KEY, '');
+    }
+  };
+  save(sent).then(() => settle(true), () => settle(false));
 }
 
 function choose(next: Appearance): void {
   if (!commit(next) || !profile) return;
-  unsaved = true;
+  markUnsaved(profile.id);
   sendToProfile();
 }
 
@@ -114,22 +129,39 @@ function parseAppearance(value: unknown): Appearance | null {
   return { scheme: scheme as ColorScheme, theme: theme as ThemeMode };
 }
 
-/* Fed every auth session (lib/auth.tsx). The profile's value wins and is
- * cached here; a profile that holds none gets this device's choice, once per
- * sign-in. A value this build does not know is left alone. */
+/* Fed every auth session (lib/auth.tsx), which is the copy Supabase keeps on
+ * the device: another device's change arrives with the next token refresh (up
+ * to an hour). The profile's value wins and is cached here, unless this device
+ * still owes it a change. A profile that holds none gets this device's choice
+ * once per sign-in, and only when it differs from the default, so a device that
+ * never chose cannot overwrite another's choice. A value this build does not
+ * know is left alone. */
 export function syncAppearance(
   user: { id: string; user_metadata?: { appearance?: unknown } } | null,
   save: SaveAppearance,
 ): void {
   const known = user !== null && profile?.id === user.id;
   profile = user && { id: user.id, save };
-  if (!known) unsaved = false;
-  if (!user || unsaved) return;
+  if (!known) {
+    const owedTo = readValue(UNSAVED_KEY, '');
+    unsaved = user !== null && owedTo === user.id;
+    /* Another user's owed change ends here: it never holds back this user's profile. */
+    if (user && owedTo && !unsaved) writeValue(UNSAVED_KEY, '');
+  }
+  if (!user) return;
+  if (unsaved) {
+    sendToProfile();
+    return;
+  }
   const stored = user.user_metadata?.appearance;
   const remote = parseAppearance(stored);
   if (remote) commit(remote);
-  else if (stored == null && !known) {
-    unsaved = true;
+  else if (
+    stored == null &&
+    !known &&
+    (state.scheme !== DEFAULT_APPEARANCE.scheme || state.theme !== DEFAULT_APPEARANCE.theme)
+  ) {
+    markUnsaved(user.id);
     sendToProfile();
   }
 }
