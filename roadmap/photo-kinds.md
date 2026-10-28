@@ -27,5 +27,5 @@ rows, so the CLIP lane stays; only its product read paths go.
 
 - v2 as data: `promote` from R2 vectors (deletes the dedup_sim coupling), one shared split, per-head calibration, exam_v2 single-phase draw, heads ložnice / jídelna / nezařízená místnost / domovní vchod from existing labels; WC / chodba / zahrada / balkon / schodiště / situační plán / document after labelling (~12–16 operator hours).
 - "Has a floor plan" Browse + Watchdog filter on `image_photo_kinds` (kind 46), one `filter_compiler` hook (rule 16).
-- Render scoring is gone (2026-10-28, migration 686): `image_clip_tags_render_null_idx`, `render_score` and NEW DEDUP's render limb
+- Render scoring is gone (2026-10-28, migrations 686 + 687): `image_clip_tags_render_null_idx`, `render_score`, the never-set `image_tag_annotations.render_flagged` and NEW DEDUP's render limb
   went with it (`docs/design/propscout-redesign.md`); `clip_retag.yml` was folded into `clip_tag.yml` 2026-10-25.
