@@ -407,7 +407,7 @@ export function FilterSidebar({
     >
       {/* Pinned: Reset and the fold arrow stay in reach however far the filters scroll. */}
       <div className="sticky top-0 z-10 bg-[var(--color-paper)] px-5 py-4 flex items-center justify-between border-b border-[var(--color-rule-soft)]">
-        <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
+        <h2 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           Filters
         </h2>
         <div className="flex items-center gap-3">

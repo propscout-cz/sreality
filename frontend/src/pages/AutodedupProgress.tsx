@@ -120,7 +120,7 @@ function KeyValues({
   const entries = Object.entries(blob ?? {});
   return (
     <div>
-      <h3 className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+      <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
         {title}
       </h3>
       {entries.length === 0 ? (

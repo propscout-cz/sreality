@@ -280,7 +280,7 @@ export default function TagContentsGallery({
   return (
     <section className="mt-6 border-t border-[var(--color-rule)] pt-4">
       <div className="flex items-baseline gap-2 flex-wrap">
-        <h2 className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+        <h2 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           What this tag actually contains
         </h2>
         <span className="font-mono text-[0.7rem] tabular-nums text-[var(--color-ink-4)]">

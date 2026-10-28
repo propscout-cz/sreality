@@ -26,7 +26,7 @@ export default function OverlapEvidence({
 
   return (
     <section className="mt-6 border-t border-[var(--color-rule)] pt-4">
-      <h2 className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+      <h2 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
         Overlap evidence
       </h2>
       <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
