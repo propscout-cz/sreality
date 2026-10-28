@@ -144,7 +144,9 @@ def test_the_runners_clip_chunk_decodes_inside_its_memory_declaration() -> None:
     Prod's stored photos above id 308.2M (2026-10-27): sreality 1.68 MP on average, p90 2.43 MP. At the p90, a chunk
     beside the fp32 weights (605,247,071 B), one encode batch's full-size uint8 arrays (the slow processor's, 32 at
     3 B a pixel), the prefetched chunk's bytes (~0.4 MB a photo) and the interpreter with torch (~512 MiB) fits
-    memory_mb, the figure the co-tenancy census counts: 128 a chunk does not (~2.5 GiB), 64 does."""
+    memory_mb, the figure the co-tenancy census counts. The model undercounts: at 64 a chunk it reads ~1.9 GiB, and
+    the first runner run (job_runs 6, 2026-10-28, 20,922 photos) peaked at 2,386 MB, so memory_mb also keeps a
+    quarter over that measured peak (#2155)."""
     from scraper import jobs
 
     (clip,) = [j for j in jobs.runner_jobs() if j.name == "clip"]
@@ -152,6 +154,8 @@ def test_the_runners_clip_chunk_decodes_inside_its_memory_declaration() -> None:
     p90_px, mib = 2.43e6, 2**20
     peak = (args.chunk * p90_px * 4 + 605_247_071 + args.batch_size * p90_px * 3 + args.chunk * 0.4e6) / mib + 512
     assert peak <= clip.memory_mb, f"a p90 chunk of {args.chunk} peaks near {peak:.0f} MiB, past {clip.memory_mb}"
+    measured_peak_mb = 2386
+    assert clip.memory_mb >= 1.25 * measured_peak_mb, f"{clip.memory_mb} leaves under a quarter over {measured_peak_mb}"
 
 
 def test_fresh_photos_come_before_the_priority_kraje() -> None:

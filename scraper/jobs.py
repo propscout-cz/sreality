@@ -17,8 +17,9 @@ HOUR, DAY = 3600, 86400
 # Children per replica (job_runner.MAX_CHILDREN enforces it); the largest that many declarations fit this share of
 # one replica.
 RUNNER_MAX_CONCURRENT = 3
-# Railway's 8 GB = 8e9 B (.railway/railway.ts RUNNER_MEMORY_BYTES), in MiB.
-REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.70
+# Railway's 8 GB = 8e9 B (.railway/railway.ts RUNNER_MEMORY_BYTES), in MiB. 81 %, not 70 %, since clip's honest
+# 3072 (#2155; operator ruling 2026-10-28): revisit with the replica's memory when ruian_load moves.
+REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
@@ -63,10 +64,10 @@ _FIXED: tuple[Job, ...] = (
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
         HOUR, 35 * 60, 55 * 60, 1024, 2, UNTIL_MOVED, LOCATION_HEAVY),
     # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
-    # A chunk of 64: Pillow holds RGB at 4 B a pixel, so 128 photos at the p90 decode past 2048 beside the weights.
+    # A chunk of 64: Pillow holds RGB at 4 B a pixel. Its first runner run peaked at 2,386 MB (#2155), so 3072.
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
-        15 * 60, 5 * 60, 55 * 60, 2048, 4, RUNNER),
+        15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
     Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
         LOCATION_HEAVY, db_heavy=True),
     Job("price_stats", ("scraper.price_stats_main", "--start-year", "2015", "--window-years", "5"),
