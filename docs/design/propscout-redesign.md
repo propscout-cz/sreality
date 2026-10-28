@@ -229,8 +229,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    skeleton draws the folded lane too.
 4. **Watchdogs** — **built** (branch `feature/redesign-rulings`). P24 (Delete into a ⋯ menu, keeping its confirm), P25 (created date as a grey line under the
    name, drop the column): `pages/WatchdogManage.tsx`.
-   As built: the page stays English, so ⋯ holds one danger item, "Delete…", running the same confirm before
-   the delete. The created date is a grey line under the name, outside its link, the full timestamp in its
+   As built: ⋯ holds one danger item, "Smazat…" (the ruling's word: a new control takes it, the rest of the page
+   stays English, as on the collection page), running the same confirm before the delete. The created date is a grey line under the name, outside its link, the full timestamp in its
    tooltip; the filter cell's cap rose from 420 to 540 px.
 5. **Notifications** — **built** (branch `feature/redesign-rulings`). P27 (load older items on reaching the end, as Browse does): `pages/Notifications.tsx`,
    `components/LoadMore.tsx`.
