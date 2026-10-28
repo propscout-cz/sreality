@@ -40,7 +40,7 @@ _USER = uuid.uuid4()
 
 # The panel header's property facts (MS11), off the same `pp` row as MF.
 _PROPERTY_FACTS = (
-    "canonical_listing_id", "property_is_active", "first_seen_at", "tom_days", "floor",
+    "canonical_listing_id", "property_is_active", "tom_days", "floor",
     "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
 )
 
@@ -269,7 +269,7 @@ def test_lookup_serves_the_property_facts_beside_the_adverts_own_kind() -> None:
         _mk_market_row("idnes", "merged", True, listing_id=41, property_id=901,
                        category_main="dum", category_type="prodej", subtype="vila",
                        is_active=False, property_is_active=True,
-                       canonical_listing_id=40, first_seen_at=_TS, tom_days=94,
+                       canonical_listing_id=40, tom_days=94,
                        total_floors=2, condition="velmi_dobry", ownership="osobni",
                        property_subtype="rodinny_dum", plot_area_m2=Decimal("905.0")),
         _mk_market_row("idnes", "fresh", True, listing_id=42, property_id=None,
@@ -280,7 +280,6 @@ def test_lookup_serves_the_property_facts_beside_the_adverts_own_kind() -> None:
     )["data"]
     assert merged["canonical_listing_id"] == 40
     assert (merged["is_active"], merged["property_is_active"]) == (False, True)
-    assert merged["first_seen_at"] == _TS.isoformat()
     assert (merged["tom_days"], merged["floor"], merged["total_floors"]) == (94, None, 2)
     assert (merged["condition"], merged["ownership"]) == ("velmi_dobry", "osobni")
     assert merged["plot_area_m2"] == 905.0 and type(merged["plot_area_m2"]) is float
@@ -297,7 +296,7 @@ def test_lookup_reads_the_property_facts_off_pp_and_the_plot_measure() -> None:
     assert "pp.listing_id AS canonical_listing_id" in code
     assert "pp.is_active AS property_is_active" in code
     assert "pp.subtype AS property_subtype" in code
-    for col in ("first_seen_at", "tom_days", "floor", "total_floors", "condition", "ownership"):
+    for col in ("tom_days", "floor", "total_floors", "condition", "ownership"):
         assert f"pp.{col}" in code and f"l.{col}" not in code, col
     assert set(_PROPERTY_FACTS) <= set(pl._LISTING_COLS)
     # An f-string constant leaves the offline `%` sweep (tests/sql_corpus.py reads literals only).

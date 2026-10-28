@@ -70,7 +70,7 @@ _LISTING_COLS: tuple[str, ...] = (
     "disposition", "subtype",
     "display_label", "is_active", "last_seen_at",
     "mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent",
-    "canonical_listing_id", "property_is_active", "first_seen_at", "tom_days", "floor",
+    "canonical_listing_id", "property_is_active", "tom_days", "floor",
     "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
 )
 
@@ -114,10 +114,9 @@ SELECT
     -- What the property IS, each field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md):
     -- the panel header's facts, off the same row as MF and, like it, NULL before attach.
     -- `pp.listing_id` is the canonical ad (MS5), the first track of the price history;
-    -- `is_active` and `subtype` are aliased because `l.*` above are this advert's own,
-    -- and `first_seen_at` is the property's earliest ad, unlike `l.last_seen_at`.
+    -- `is_active` and `subtype` are aliased because `l.*` above are this advert's own.
     pp.listing_id AS canonical_listing_id, pp.is_active AS property_is_active,
-    pp.first_seen_at, pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
+    pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
     pp.subtype AS property_subtype,
     {plot_area_sql('pp')} AS plot_area_m2
 FROM req
