@@ -45,10 +45,10 @@ class Job:
 _FIXED: tuple[Job, ...] = (
     Job("stale_images",
         ("scripts.refresh_stale_image_urls", "--limit", "5000", "--min-age", "3 days", "--cooldown", "14 days"),
-        6 * HOUR, 20 * 60, 20 * 60, 256, 1, UNTIL_MOVED),
+        6 * HOUR, 20 * 60, 20 * 60, 256, 1, RUNNER),
     # The long grids sit at, or up to 3 days after, the calendar run they replace (5th 03:00; Jan/Apr/Jul/Oct 2nd).
-    Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, UNTIL_MOVED),
-    Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, UNTIL_MOVED,
+    Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, RUNNER),
+    Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, RUNNER,
         db_heavy=True),
     Job("location_full_resolve",
         ("location_data.resolver.drain", "--full-sweep", "--max-seconds", "1800", "--batch-size", "250"),

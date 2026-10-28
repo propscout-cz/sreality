@@ -148,9 +148,10 @@ def insert_revision(
         # from the rows just written in a savepoint of this transaction (a rolled-back
         # ingest leaves the previous tiles). A refused guard (datum, shrink) writes
         # nothing and must not block the rent data: the revision lands, the map keeps
-        # its previous render, and fetch_rent_map.yml's re-render step fails loudly on
-        # the same refusal. Any other failure rolls the whole ingest back, as a failed
-        # matview refresh did.
+        # its previous render, and the rent_map job's closing re-render
+        # (scripts/fetch_rent_map.py) fails on the same refusal; override with a
+        # `map_overlays` request `--sections rent_map --accept-shrink` (#2026's form).
+        # Any other failure rolls the whole ingest back, as a failed matview refresh did.
         overlay_refused: str | None = None
         try:
             tiles = render_sql_section(conn, OVERLAY_SECTION)

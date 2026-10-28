@@ -2244,7 +2244,7 @@ export const updatePortalLimits = (
 
 /* ----- rent map: MF Cenová mapa nájemného (migration 132) ------------------
  * Revision history + manual upload + on-demand fetch, all on the bearer-gated
- * /admin/* surface. The same data also auto-grabs monthly via fetch_rent_map.yml. */
+ * /admin/* surface. The same data also auto-grabs monthly via the job runner's rent_map. */
 
 export interface RentMapRevision {
   source_revision: number;

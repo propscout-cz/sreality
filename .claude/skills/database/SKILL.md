@@ -471,7 +471,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `location_resolve.yml mode=full-resolve` sweep the bump triggers; check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
-  are rebuilt by `scripts/ingest_map_overlays.py` (`ingest_map_overlays.yml`; `--sections kraje` after a boundaries ingest;
+  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence

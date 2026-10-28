@@ -1046,8 +1046,8 @@ def test_a_replica_beats_only_while_its_claim_passes_complete() -> None:
 
 
 def test_an_empty_registry_registers_nothing_and_still_beats() -> None:
-    """The dark runner (#2025 holds no job until its move PR): an empty claim pass still completes, so each replica
-    beats and its liveness subject is green before the first job moves."""
+    """An empty registry (the dark runner before #2025 PR-2): an empty claim pass still completes, so each replica
+    beats and its liveness subject is green with no job to run."""
     rig = _rig([], beats=True)
     rig.runner.tick()
     assert [e[1] for e in rig.ledger.named("register")] == [[]] and rig.runner.registered

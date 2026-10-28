@@ -2,9 +2,10 @@
 
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
-rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. It runs nothing until a move PR (#2025, #2027–#2033) flips an
-entry's host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and
-8 GB (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
+rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
+`map_overlays`, whose workflows that PR deleted; each later move PR (#2027–#2033) flips more entries' host. On
+Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+(`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
 ## Verbs (`python -m scraper.job_runner <verb>`)

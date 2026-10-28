@@ -206,7 +206,7 @@ is enough at z ≤ 12 and the sources are already generalised); minzoom bounds t
 
 Seeds: none. The registry rows come from the ingest (UPSERT), so adding a layer needs no migration.
 
-## Ingest — `scripts/ingest_map_overlays.py` + `.github/workflows/ingest_map_overlays.yml`
+## Ingest — `scripts/ingest_map_overlays.py` + the job runner's `map_overlays` job (`scraper/jobs.py`)
 
 ONE registry in Python, `SOURCES`: an ordered mapping section → `Section(label, sort, minzoom,
 maxzoom, attribution, licence, source_url, note, revised_at reader, layers=[Layer(key, label,
@@ -240,11 +240,13 @@ Draw order inside the flood section: the SPA draws layers in reverse `sort`, so 
 LINE layer (ST_Boundary of the dissolved active-zone polygons, subdivided), drawn on top.
 
 CLI: `python -m scripts.ingest_map_overlays [--sections metro,flood] [--dry-run] [--accept-shrink]`.
-Workflow: `workflow_dispatch` (sections, dry_run, accept_shrink) + quarterly cron
-`0 4 2 1,4,7,10 *`; `pip install -e .`; `SUPABASE_DB_URL` secret; a leading description comment
-under `name:`; regenerate `frontend/src/lib/workflowDocs.generated.ts`
-(`python -m scripts.generate_workflow_docs`). `ingest_boundaries.yml` gains a final step
-`python -m scripts.ingest_map_overlays --sections kraje`.
+Job (since #2025; before it, the quarterly workflow `ingest_map_overlays.yml`): the runner's `map_overlays`
+entry in `scraper/jobs.py`, a 91-day grid at 22:00Z with a 2 h timeout; by hand, a request through "Jobs: run now"
+with `--sections`, `--dry-run` or `--accept-shrink` as its args. A request's ok run is the job's ok run (its cell
+turns green), so `--sections rent_map --accept-shrink` is for a refused rent-map render only; after it, file a
+`rent_map` request too, or `job/rent_map` stays red until its own backed-off retry. A failed run retries daily at
+22:00Z (a DB-heavy job retries in its own hour), re-fetching every publisher, until it succeeds or is paused.
+`ingest_boundaries.yml` gains a final step `python -m scripts.ingest_map_overlays --sections kraje`.
 
 Registry values:
 
@@ -375,8 +377,8 @@ URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy
 Section `rent_map` (label "Cenová mapa nájemného", 7–12, attribution "Ministerstvo financí ČR –
 Cenová mapa nájemného"), layer `rent_map` with `scale = {prop: 'vk1', stops: RENT_RAMP, null_color,
 unit: 'rent_per_m2'}` and `variants = [{key:'vk1', label:'1+kk, 1+1', prop:'vk1'} … vk4]`; SqlSource
-= `admin_boundaries` × latest `rent_map_values` revision (the matview's query). `fetch_rent_map.yml`
-re-renders the section after an ingest. The SPA deletes `fetchRentMapChoropleth`, `RentMapPolygon`,
+= `admin_boundaries` × latest `rent_map_values` revision (the matview's query). The monthly `rent_map`
+job (`scripts/fetch_rent_map.py`) re-renders the section after an ingest. The SPA deletes `fetchRentMapChoropleth`, `RentMapPolygon`,
 `toRentFC`, `rentPopupHtml`, the `rent-map` source/layers/effects/handlers, `RentMapControls`,
 `showRentMap`/`rentVk` (URL `rentmap`/`rentvk` read as legacy → `rent_map:vkN`). Migration 601 drops
 `rent_map_choropleth_public`, `rent_map_kraje_public`, the `rent_map_choropleth` matview and its
@@ -410,16 +412,17 @@ Backend, as built (2026-10-15):
   never waits on the network. `api/rent_map.py`'s `insert_revision` calls it where it refreshed the
   matview, after the COPYs and before the `rent_map_cells` refresh. A refused guard writes nothing and
   is caught: the revision still lands (`mf_reference()` keeps flowing), the map keeps its previous
-  tiles, the API logs an ERROR, and `fetch_rent_map.yml`'s re-render step fails red on the same refusal
-  (`ingest_map_overlays.yml` with `accept_shrink` overrides). Any other failure rolls the whole ingest
-  back, as a failed refresh did. Cost, estimated (not yet measured end to end): the ingest request
-  grows by 30–60 s — 19 MB of EPSG:3857 GeoJSON through Python and ~4.7k tile envelopes rendered (a
-  dense Prague sample of z8–z12 tiles took ~14 ms a tile, sparse ones far less) — inside the SPA's
-  130 s request deadline.
-- **Workflow**: `fetch_rent_map.yml` ends with `python -m scripts.ingest_map_overlays --sections
-  rent_map` (`--dry-run` mirrored); every run re-renders, so the tile version, and with it the
-  browsers' cached tiles, turns over monthly. `ingest_map_overlays.yml`'s full quarterly run includes
-  `rent_map`, so it still stamps `map_overlay_tiles`; the API's single-section render stamps nothing.
+  tiles, the API logs an ERROR, and the `rent_map` job's closing re-render fails red on the same refusal
+  (a `map_overlays` request `--sections rent_map --accept-shrink` through #2026's "Jobs: run now" form
+  overrides). Any other failure rolls the whole ingest back, as a failed refresh did. Cost, estimated
+  (not yet measured end to end): the ingest request grows by 30–60 s — 19 MB of EPSG:3857 GeoJSON
+  through Python and ~4.7k tile envelopes rendered (a dense Prague sample of z8–z12 tiles took ~14 ms
+  a tile, sparse ones far less) — inside the SPA's 130 s request deadline.
+- **Job**: `scripts/fetch_rent_map.py` (the `rent_map` job) ends with
+  `ingest_map_overlays.main(["--sections", "rent_map"])` (`--dry-run` mirrored; `fetch_rent_map.yml`'s last
+  step until #2025 folded it); every run re-renders, so the tile version, and with it the browsers' cached
+  tiles, turns over monthly. The quarterly `map_overlays` job's full run includes `rent_map`, so it still
+  stamps `map_overlay_tiles`; the API's single-section render stamps nothing.
 - **Migration 601**: drops both views and the matview (its unique index goes with it) and deletes the
   matview's `derived_artifacts` row (`tests/test_derived_artifacts_stamping.py` fails a row nothing
   stamps); no CASCADE (the live catalog shows no other dependent), a DO-block self-check. Applied only
@@ -436,7 +439,7 @@ Backend, as built (2026-10-15):
 | wave | files |
 | --- | --- |
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
-| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml`; `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
+| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
 | spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |
@@ -445,7 +448,8 @@ Backend, as built (2026-10-15):
 
 1. Apply 600 from the branch (`apply_migration.yml` dry run, then `confirm=APPLY`); verify with one
    aggregate SELECT. 2. CI green; PR marked ready; the operator merges. 3. Dispatch
-   `ingest_map_overlays.yml` from main; verify counts, tile sizes and the datum check in its log.
+   `ingest_map_overlays.yml` from main (since #2025, a `map_overlays` request); verify counts, tile sizes and
+   the datum check in its log.
 4. Railway commit status per service; read-only browser check of Browse with `?layers=metro`.
 5. Cleanup PR: build, ingest `rent_map` from the branch (the workflow now exists on main), merge,
    then apply 601.

@@ -154,6 +154,6 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   map's choropleth (reference overlay `rent_map`, VK1–4 variants; a refused guard keeps the revision
   and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; every caller of the
   measure sees the new revision at that REFRESH, nothing to recompute. Fed by the monthly
-  `fetch_rent_map.yml` (its last step re-renders `rent_map`) and the Settings upload / "Fetch latest
+  `rent_map` runner job (it re-renders `rent_map` last) and the Settings upload / "Fetch latest
   now" (`POST /admin/rent-map/*`). Sheet sanity check:
   Litoměřice older 3+1, 68 m², +výtah +balkon +garáž → 291 Kč/m² → 19 788 Kč.

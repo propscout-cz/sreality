@@ -931,7 +931,7 @@ function RentMapSection() {
           )}
           {result?.overlay_refused && (
             <p className="mt-1 text-sm text-[var(--color-brick)]">
-              {`The map's rent choropleth was not re-rendered (${result.overlay_refused}); Browse still colours by the previous revision. Fix the source or re-run the rent-map workflow.`}
+              {`The map's rent choropleth was not re-rendered (${result.overlay_refused}); Browse still colours by the previous revision. Fix the source; to accept a smaller layer, file a map_overlays request with --sections rent_map --accept-shrink through GitHub's "Jobs: run now".`}
             </p>
           )}
           {error && <p className="mt-2 text-sm text-[var(--color-brick)]">{error}</p>}
