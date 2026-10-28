@@ -28,6 +28,7 @@ import { usePageTitle } from '@/lib/pageTitle';
 import { useBlobUrl } from '@/lib/useBlobUrl';
 import BuildingUnitEditor from '@/components/BuildingUnitEditor';
 import RangeStrip from '@/components/estimation/RangeStrip';
+import Panel, { PanelEmpty, PanelGroup } from '@/components/Panel';
 import type {
   BuildingAttachment,
   BuildingChildRun,
@@ -111,39 +112,42 @@ export default function BuildingDetail() {
       <Crumb id={b.id} />
       <Header building={b} />
       {isInFlight && <InFlightNotice building={b} />}
-      <SubjectBlock building={b} />
-      <Warnings building={b} />
-      <RollupSection building={b} />
-      <OperatorInputsSection building={b} onUpdated={onConfirmed} />
-      <AttachmentsSection building={b} onChanged={onConfirmed} />
+      {/* Section cards, 16 px apart (system.md § Section cards). */}
+      <div className="mt-5 space-y-4">
+        <SubjectBlock building={b} />
+        <Warnings building={b} />
+        <RollupSection building={b} />
+        <OperatorInputsSection building={b} onUpdated={onConfirmed} />
+        <AttachmentsSection building={b} onChanged={onConfirmed} />
 
-      {b.status === 'awaiting_input' && (
-        <div className="mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={() => reExtractMut.mutate()}
-            disabled={reExtractMut.isPending}
-            className="text-[0.78rem] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] disabled:opacity-50"
-          >
-            {reExtractMut.isPending ? 'Re-extracting…' : 'Re-extract from snapshot'}
-          </button>
-        </div>
-      )}
+        {b.status === 'awaiting_input' && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => reExtractMut.mutate()}
+              disabled={reExtractMut.isPending}
+              className="text-[0.78rem] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] disabled:opacity-50"
+            >
+              {reExtractMut.isPending ? 'Re-extracting…' : 'Re-extract from snapshot'}
+            </button>
+          </div>
+        )}
 
-      {b.status === 'awaiting_input' ? (
-        <BuildingUnitEditor building={b} onConfirmed={onConfirmed} />
-      ) : b.children && b.children.length > 0 ? (
-        <UnitsWithEstimates building={b} />
-      ) : (
-        <ReadOnlyUnits building={b} />
-      )}
+        {b.status === 'awaiting_input' ? (
+          <BuildingUnitEditor building={b} onConfirmed={onConfirmed} />
+        ) : b.children && b.children.length > 0 ? (
+          <UnitsWithEstimates building={b} />
+        ) : (
+          <ReadOnlyUnits building={b} />
+        )}
 
-      {b.status === 'failed' && b.error_message && (
-        <div className="mt-6 p-4 rounded-[var(--radius-md)] border border-[var(--color-brick)]/40 bg-[var(--color-brick-soft)] text-[var(--color-brick)] text-sm">
-          <p className="font-medium">Building decomposition failed.</p>
-          <p className="mt-1 text-[0.83rem]">{b.error_message}</p>
-        </div>
-      )}
+        {b.status === 'failed' && b.error_message && (
+          <div className="p-4 rounded-[var(--radius-md)] border border-[var(--color-brick)]/40 bg-[var(--color-brick-soft)] text-[var(--color-brick)] text-sm">
+            <p className="font-medium">Building decomposition failed.</p>
+            <p className="mt-1 text-[0.83rem]">{b.error_message}</p>
+          </div>
+        )}
+      </div>
     </Page>
   );
 }
@@ -275,11 +279,8 @@ function SubjectBlock({ building }: { building: BuildingRun }) {
 
   if (rows.length === 0) return null;
   return (
-    <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)] px-5 py-4">
-      <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Subject
-      </h2>
-      <dl className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-[0.85rem]">
+    <Panel title="Subject">
+      <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-[0.85rem]">
         {rows.map(([k, v]) => (
           <div key={k as string}>
             <dt className="text-[var(--color-ink-3)] text-[0.75rem]">{k as string}</dt>
@@ -287,7 +288,7 @@ function SubjectBlock({ building }: { building: BuildingRun }) {
           </div>
         ))}
       </dl>
-    </section>
+    </Panel>
   );
 }
 
@@ -295,7 +296,7 @@ function Warnings({ building }: { building: BuildingRun }) {
   const w = building.warnings ?? [];
   if (w.length === 0) return null;
   return (
-    <section className="mt-3 px-4 py-3 rounded-[var(--radius-sm)] border border-[var(--color-ochre)]/40 bg-[var(--color-ochre-soft)] text-[var(--color-ochre)] text-[0.83rem]">
+    <section className="px-4 py-3 rounded-[var(--radius-sm)] border border-[var(--color-ochre)]/40 bg-[var(--color-ochre-soft)] text-[var(--color-ochre)] text-[0.83rem]">
       <p className="font-medium">Heads-up</p>
       <ul className="mt-1 list-disc list-inside space-y-1">
         {w.map((s, i) => <li key={i}>{s}</li>)}
@@ -316,15 +317,11 @@ function RollupSection({ building }: { building: BuildingRun }) {
   if (!relevant || (!hasRent && !hasSale)) return null;
 
   return (
-    <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)] px-5 py-4">
-      <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Building totals
-      </h2>
-      <p className="mt-1 text-[0.78rem] text-[var(--color-ink-3)]">
-        Summed across all successfully-estimated units. P50 is a straight
-        sum; P25 / P75 sum the per-unit ranges.
-      </p>
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
+    <Panel
+      title="Building totals"
+      lede="Summed across all successfully-estimated units. P50 is a straight sum; P25 / P75 sum the per-unit ranges."
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
         {hasRent && (
           <RangeStrip
             label="Total monthly rent (Kč)"
@@ -350,7 +347,7 @@ function RollupSection({ building }: { building: BuildingRun }) {
           />
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -376,20 +373,18 @@ function UnitsWithEstimates({ building }: { building: BuildingRun }) {
   if (units.length === 0) return null;
 
   return (
-    <section className="mt-6">
-      <header className="mb-3">
-        <h2 className="text-[1rem]" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>
-          Units
-        </h2>
-        <p className="text-[0.78rem] text-[var(--color-ink-3)] mt-1">
-          {building.status === 'estimating'
-            ? 'Estimating each unit — this updates as estimates land.'
-            : 'One rent + one sale estimate per confirmed unit.'}
-        </p>
-      </header>
-      <div className="space-y-4">
+    <Panel
+      title="Units"
+      count={units.length}
+      lede={
+        building.status === 'estimating'
+          ? 'Estimating each unit — this updates as estimates land.'
+          : 'One rent + one sale estimate per confirmed unit.'
+      }
+    >
+      <div className="space-y-3">
         {units.map((u) => (
-          <UnitEstimateCard
+          <UnitEstimateGroup
             key={u.unit_id}
             unit={u}
             rent={byUnit.get(u.unit_id)?.rent}
@@ -397,11 +392,12 @@ function UnitsWithEstimates({ building }: { building: BuildingRun }) {
           />
         ))}
       </div>
-    </section>
+    </Panel>
   );
 }
 
-function UnitEstimateCard({
+/* One unit inside the Units card: an L3 group (C7), never a box in a box. */
+function UnitEstimateGroup({
   unit, rent, sale,
 }: {
   unit: BuildingUnit;
@@ -416,30 +412,29 @@ function UnitEstimateCard({
   ].filter((x): x is string => x != null && x !== '');
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)]">
-      <header className="px-5 py-3 border-b border-[var(--color-rule)] flex items-baseline justify-between gap-3">
-        <div className="flex items-baseline gap-2 min-w-0">
-          <span className="font-mono text-[0.78rem] text-[var(--color-ink-3)]">{unit.unit_id}</span>
-          <span className="text-[0.92rem] text-[var(--color-ink)] truncate">
-            {unit.label ?? unit.disposition ?? 'Unit'}
-          </span>
+    <PanelGroup
+      title={
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="font-mono text-[0.78rem] font-normal text-[var(--color-ink-3)]">{unit.unit_id}</span>
+          <span className="truncate">{unit.label ?? unit.disposition ?? 'Unit'}</span>
           {unit.is_potential && (
-            <span className="text-[0.65rem] tracking-[0.12em] uppercase text-[var(--color-ochre)]">
+            <span className="text-[0.65rem] font-normal tracking-[0.12em] uppercase text-[var(--color-ochre)]">
               potential
             </span>
           )}
-        </div>
-        {facts.length > 0 && (
-          <p className="shrink-0 text-[0.75rem] text-[var(--color-ink-3)]">
-            {facts.join(' · ')}
-          </p>
-        )}
-      </header>
-      <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
+        </span>
+      }
+      accessory={
+        facts.length > 0 ? (
+          <p className="text-[0.75rem] text-[var(--color-ink-3)]">{facts.join(' · ')}</p>
+        ) : undefined
+      }
+    >
+      <div className="pt-1 grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
         <UnitEstimateBlock kind="rent" child={rent} />
         <UnitEstimateBlock kind="sale" child={sale} />
       </div>
-    </div>
+    </PanelGroup>
   );
 }
 
@@ -506,51 +501,52 @@ function ReadOnlyUnits({ building }: { building: BuildingRun }) {
       : building.units_proposal?.units ?? [];
   if (units.length === 0) return null;
   return (
-    <section className="mt-6 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)]">
-      <header className="px-5 py-3 border-b border-[var(--color-rule)]">
-        <h2 className="text-[1rem]" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>
-          Units
-        </h2>
-        <p className="text-[0.78rem] text-[var(--color-ink-3)] mt-1">
-          {building.units
-            ? 'Operator-confirmed list. Per-unit estimates appear once they finish.'
-            : 'Extractor proposal — not yet confirmed.'}
-        </p>
-      </header>
-      <table className="w-full text-[0.83rem]">
-        <thead>
-          <tr className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-            <th className="text-left px-4 py-2">Id</th>
-            <th className="text-left px-4 py-2">Label</th>
-            <th className="text-left px-4 py-2">Floor</th>
-            <th className="text-right px-4 py-2">Area m²</th>
-            <th className="text-left px-4 py-2">Disposition</th>
-            <th className="text-left px-4 py-2">Condition</th>
-            <th className="text-left px-4 py-2">Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {units.map((u) => (
-            <tr key={u.unit_id} className="border-t border-[var(--color-rule)]">
-              <td className="px-4 py-2 font-mono text-[var(--color-ink-3)]">{u.unit_id}</td>
-              <td className="px-4 py-2">{u.label ?? '—'}</td>
-              <td className="px-4 py-2">{u.floor ?? '—'}</td>
-              <td className="px-4 py-2 text-right">{u.area_m2 != null ? fmtArea(u.area_m2) : '—'}</td>
-              <td className="px-4 py-2">{u.disposition ?? '—'}</td>
-              <td className="px-4 py-2">
-                {u.condition ?? '—'}
-                {u.is_potential && (
-                  <span className="ml-2 text-[0.7rem] tracking-[0.12em] uppercase text-[var(--color-ochre)]">
-                    potential
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-2 text-[var(--color-ink-3)]">{u.notes ?? '—'}</td>
+    <Panel
+      title="Units"
+      count={units.length}
+      lede={
+        building.units
+          ? 'Operator-confirmed list. Per-unit estimates appear once they finish.'
+          : 'Extractor proposal — not yet confirmed.'
+      }
+    >
+      {/* A table that scrolls keeps its own box (C9). */}
+      <div className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">
+        <table className="w-full text-[0.83rem]">
+          <thead>
+            <tr className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+              <th className="text-left px-4 py-2">Id</th>
+              <th className="text-left px-4 py-2">Label</th>
+              <th className="text-left px-4 py-2">Floor</th>
+              <th className="text-right px-4 py-2">Area m²</th>
+              <th className="text-left px-4 py-2">Disposition</th>
+              <th className="text-left px-4 py-2">Condition</th>
+              <th className="text-left px-4 py-2">Notes</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {units.map((u) => (
+              <tr key={u.unit_id} className="border-t border-[var(--color-rule)]">
+                <td className="px-4 py-2 font-mono text-[var(--color-ink-3)]">{u.unit_id}</td>
+                <td className="px-4 py-2">{u.label ?? '—'}</td>
+                <td className="px-4 py-2">{u.floor ?? '—'}</td>
+                <td className="px-4 py-2 text-right">{u.area_m2 != null ? fmtArea(u.area_m2) : '—'}</td>
+                <td className="px-4 py-2">{u.disposition ?? '—'}</td>
+                <td className="px-4 py-2">
+                  {u.condition ?? '—'}
+                  {u.is_potential && (
+                    <span className="ml-2 text-[0.7rem] tracking-[0.12em] uppercase text-[var(--color-ochre)]">
+                      potential
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-[var(--color-ink-3)]">{u.notes ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }
 
@@ -597,91 +593,84 @@ function OperatorInputsSection({
   if (!hasAny) return null;
 
   return (
-    <section className="mt-6 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)]">
-      <header className="px-5 py-3 border-b border-[var(--color-rule)]">
-        <h2 className="text-[0.85rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Operator context
-        </h2>
-      </header>
-      <div className="p-5 space-y-3">
-        <div>
-          <label
-            htmlFor={instrId}
-            className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
-          >
-            Special instructions
-          </label>
-          {editable ? (
-            <textarea
-              id={instrId}
-              value={instr}
-              onChange={(e) => setInstr(e.target.value)}
-              disabled={mut.isPending}
-              rows={2}
-              maxLength={10_000}
-              placeholder="e.g. Treat the attic as habitable. Owner says heating refurbished in 2022."
-              className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
-            />
-          ) : (
-            <pre className="mt-1 whitespace-pre-wrap text-[0.85rem] leading-relaxed font-sans text-[var(--color-ink)]">
-              {building.special_instructions || (
-                <span className="text-[var(--color-ink-3)]">—</span>
-              )}
-            </pre>
-          )}
-        </div>
-        <div>
-          <label
-            htmlFor={ctxId}
-            className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
-          >
-            Property context
-          </label>
-          {editable ? (
-            <textarea
-              id={ctxId}
-              value={ctx}
-              onChange={(e) => setCtx(e.target.value)}
-              disabled={mut.isPending}
-              rows={4}
-              maxLength={20_000}
-              placeholder="Anything the listing doesn't say — legal status, neighbours, planning, recent work, …"
-              className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
-            />
-          ) : (
-            <pre className="mt-1 whitespace-pre-wrap text-[0.85rem] leading-relaxed font-sans text-[var(--color-ink)]">
-              {building.contextual_text || (
-                <span className="text-[var(--color-ink-3)]">—</span>
-              )}
-            </pre>
-          )}
-        </div>
-        {editable && (
-          <div className="flex items-center justify-between gap-3">
-            {error && (
-              <p className="text-[0.78rem] text-[var(--color-brick)]">{error}</p>
+    <Panel title="Operator context">
+      <div>
+        <label
+          htmlFor={instrId}
+          className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
+        >
+          Special instructions
+        </label>
+        {editable ? (
+          <textarea
+            id={instrId}
+            value={instr}
+            onChange={(e) => setInstr(e.target.value)}
+            disabled={mut.isPending}
+            rows={2}
+            maxLength={10_000}
+            placeholder="e.g. Treat the attic as habitable. Owner says heating refurbished in 2022."
+            className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
+          />
+        ) : (
+          <pre className="mt-1 whitespace-pre-wrap text-[0.85rem] leading-relaxed font-sans text-[var(--color-ink)]">
+            {building.special_instructions || (
+              <span className="text-[var(--color-ink-3)]">—</span>
             )}
-            <p className="text-[0.7rem] text-[var(--color-ink-3)]">
-              Re-extract after edits so the new context flows into the unit
-              proposal.
-            </p>
-            <button
-              type="button"
-              onClick={() => mut.mutate()}
-              disabled={!dirty || mut.isPending}
-              className={[
-                'shrink-0 px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] border',
-                !dirty || mut.isPending
-                  ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
-              ].join(' ')}
-            >
-              {mut.isPending ? 'Saving…' : 'Save'}
-            </button>
-          </div>
+          </pre>
         )}
       </div>
-    </section>
+      <div>
+        <label
+          htmlFor={ctxId}
+          className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
+        >
+          Property context
+        </label>
+        {editable ? (
+          <textarea
+            id={ctxId}
+            value={ctx}
+            onChange={(e) => setCtx(e.target.value)}
+            disabled={mut.isPending}
+            rows={4}
+            maxLength={20_000}
+            placeholder="Anything the listing doesn't say — legal status, neighbours, planning, recent work, …"
+            className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
+          />
+        ) : (
+          <pre className="mt-1 whitespace-pre-wrap text-[0.85rem] leading-relaxed font-sans text-[var(--color-ink)]">
+            {building.contextual_text || (
+              <span className="text-[var(--color-ink-3)]">—</span>
+            )}
+          </pre>
+        )}
+      </div>
+      {editable && (
+        <div className="flex items-center justify-between gap-3">
+          {error && (
+            <p className="text-[0.78rem] text-[var(--color-brick)]">{error}</p>
+          )}
+          <p className="text-[0.7rem] text-[var(--color-ink-3)]">
+            Re-extract after edits so the new context flows into the unit
+            proposal.
+          </p>
+          <button
+            type="button"
+            onClick={() => mut.mutate()}
+            disabled={!dirty || mut.isPending}
+            className={[
+              'shrink-0 px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] border',
+              !dirty || mut.isPending
+                ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
+            ].join(' ')}
+          >
+            {mut.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -748,67 +737,62 @@ function AttachmentsSection({
   if (!showSection) return null;
 
   return (
-    <section className="mt-6 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)]">
-      <header className="px-5 py-3 border-b border-[var(--color-rule)] flex items-baseline justify-between gap-4">
-        <h2 id={headingId} className="text-[0.85rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Attachments
-        </h2>
-        <span className="text-[0.7rem] text-[var(--color-ink-3)]">
-          {attachments.length}/{ATTACHMENT_MAX_FILES}
-        </span>
-      </header>
-      <div className="p-5 space-y-3">
-        {attachments.length === 0 && (
-          <p className="text-[0.85rem] text-[var(--color-ink-3)]">
-            No attachments yet. Upload floor plans, photos, or technical
-            drawings — the extractor will read them on the next pass.
-          </p>
-        )}
-        {attachments.length > 0 && (
-          <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {attachments.map((a) => (
-              <AttachmentCard
-                key={a.id}
-                buildingId={building.id}
-                attachment={a}
-                onDelete={
-                  editable
-                    ? () => deleteMut.mutate(a.id)
-                    : undefined
-                }
-                deleting={deleteMut.isPending}
-              />
-            ))}
-          </ul>
-        )}
-        {editable && (
-          <div>
-            <input
-              type="file"
-              multiple
-              aria-labelledby={headingId}
-              accept={ATTACHMENT_MIME.join(',')}
-              disabled={uploadMut.isPending}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  uploadMut.mutate(e.target.files);
-                }
-                e.target.value = '';
-              }}
-              className="block text-[0.78rem] text-[var(--color-ink-2)] file:mr-2 file:rounded-[var(--radius-sm)] file:border file:border-[var(--color-rule)] file:bg-[var(--color-inset)] file:text-[var(--color-ink)] file:px-3 file:py-1.5 file:text-[0.78rem] file:cursor-pointer hover:file:bg-[var(--color-paper)] disabled:opacity-60"
+    <Panel
+      /* The title's own id still names the upload input below. */
+      title={<span id={headingId}>Attachments</span>}
+      count={attachments.length}
+      note={`max ${ATTACHMENT_MAX_FILES}`}
+    >
+      {attachments.length === 0 && (
+        <PanelEmpty>
+          No attachments yet. Upload floor plans, photos, or technical
+          drawings — the extractor will read them on the next pass.
+        </PanelEmpty>
+      )}
+      {attachments.length > 0 && (
+        <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          {attachments.map((a) => (
+            <AttachmentCard
+              key={a.id}
+              buildingId={building.id}
+              attachment={a}
+              onDelete={
+                editable
+                  ? () => deleteMut.mutate(a.id)
+                  : undefined
+              }
+              deleting={deleteMut.isPending}
             />
-            <p className="mt-1 text-[0.7rem] text-[var(--color-ink-3)]">
-              {uploadMut.isPending
-                ? 'Uploading…'
-                : 'PNG / JPEG / WebP. Up to 20 files, 25 MB each.'}
-            </p>
-          </div>
-        )}
-        {error && (
-          <p className="text-[0.78rem] text-[var(--color-brick)]">{error}</p>
-        )}
-      </div>
-    </section>
+          ))}
+        </ul>
+      )}
+      {editable && (
+        <div>
+          <input
+            type="file"
+            multiple
+            aria-labelledby={headingId}
+            accept={ATTACHMENT_MIME.join(',')}
+            disabled={uploadMut.isPending}
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                uploadMut.mutate(e.target.files);
+              }
+              e.target.value = '';
+            }}
+            className="block text-[0.78rem] text-[var(--color-ink-2)] file:mr-2 file:rounded-[var(--radius-sm)] file:border file:border-[var(--color-rule)] file:bg-[var(--color-inset)] file:text-[var(--color-ink)] file:px-3 file:py-1.5 file:text-[0.78rem] file:cursor-pointer hover:file:bg-[var(--color-paper)] disabled:opacity-60"
+          />
+          <p className="mt-1 text-[0.7rem] text-[var(--color-ink-3)]">
+            {uploadMut.isPending
+              ? 'Uploading…'
+              : 'PNG / JPEG / WebP. Up to 20 files, 25 MB each.'}
+          </p>
+        </div>
+      )}
+      {error && (
+        <p className="text-[0.78rem] text-[var(--color-brick)]">{error}</p>
+      )}
+    </Panel>
   );
 }
 

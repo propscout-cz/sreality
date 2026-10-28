@@ -36,7 +36,7 @@ export default function DefinitionNotes({
 
   return (
     <section className="mt-6 border-t border-[var(--color-rule)] pt-4" data-testid="definition-notes">
-      <h2 className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+      <h2 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
         Notes from the training set{notes.length > 0 && ` · ${notes.length} open`}
       </h2>
       <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">

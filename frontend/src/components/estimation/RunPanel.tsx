@@ -9,12 +9,28 @@
  * `embedded` drops the big headline + the run-level MF reference card —
  * the estimations section renders both itself, side by side.
  *
+ * Section cards (operator ruling 2026-10-28, system.md § Section cards): on
+ * the run's own page every section is a Panel card; embedded in the property
+ * page's card the same sections are L3 PanelGroups (no box in a box); inside
+ * the detail dialog they are L3 headings between the dialog's hairlines.
+ *
  * Call sites MUST key RunBody by run.id: YieldBlock and RerunBlock seed
  * their editable state from the run at mount, so switching runs without a
  * remount would show the previous run's edits. (A background refetch of
  * the SAME run deliberately does not reset them — that would wipe the
  * operator's in-progress edits.) */
-import { Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentProps } from 'react';
+import {
+  Suspense,
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
@@ -86,6 +102,7 @@ import type {
   Trace,
 } from '@/lib/types';
 import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelGroup } from '@/components/Panel';
 import { Th } from '@/components/table';
 
 const ComparablesMap = lazyChunk(
@@ -123,75 +140,131 @@ export function RunBody({
   const isFailed = run.status === 'failed';
   const isInFlight = run.status === 'pending' || run.status === 'running';
 
+  let sections: ReactNode;
   if (isInFlight) {
-    return (
+    sections = (
       <>
         <InFlightBlock run={run} />
-        <Hairline />
         <InputRecap run={run} />
       </>
     );
-  }
-
-  if (isFailed) {
+  } else if (isFailed) {
     // Failed runs keep the diagnostics inline — there's no estimate to lead
     // with, so the error + inputs + trace are the whole story.
-    return (
+    sections = (
       <>
         <FailedBlock run={run} />
-        <Hairline />
         <InputRecap run={run} />
-        <Hairline />
-        <SectionLabel>Trace</SectionLabel>
-        <div className="mt-4">
+        <RunSection title="Trace">
           <Timeline trace={run.trace} runId={run.id} />
-        </div>
+        </RunSection>
         {onRerun && (
-          <>
-            <Hairline />
+          <RunSection title="Re-run">
             <RerunBlock
               run={run}
               onRerun={onRerun}
               pending={rerunPending}
               error={rerunError}
             />
-          </>
+          </RunSection>
+        )}
+      </>
+    );
+  } else {
+    sections = (
+      <>
+        {!embedded && <EstimateHeadline run={run} />}
+        <YieldBlock run={run} subject={subject} />
+        {!embedded && mfShape(run.reference_rent).kind !== 'none' && (
+          <RunSection title="Reference · Cenová mapa MF">
+            <div className="max-w-[27rem]">
+              <MfReferenceCard refRent={run.reference_rent} />
+            </div>
+          </RunSection>
+        )}
+        <RunSection title={onRerun ? 'Detail and re-run' : 'Estimation detail'}>
+          {onRerun ? (
+            <RerunBlock
+              run={run}
+              onRerun={onRerun}
+              pending={rerunPending}
+              error={rerunError}
+              onShowDetail={() => setDetailOpen(true)}
+            />
+          ) : (
+            <div>
+              <ShowDetailButton onClick={() => setDetailOpen(true)} />
+            </div>
+          )}
+        </RunSection>
+        {detailOpen && (
+          <RunDetailModal run={run} onClose={() => setDetailOpen(false)} />
         )}
       </>
     );
   }
 
   return (
+    <RunSectionMode.Provider value={embedded ? 'group' : 'card'}>
+      <div className={embedded ? 'space-y-3' : 'space-y-4'}>{sections}</div>
+    </RunSectionMode.Provider>
+  );
+}
+
+/* Where a run's section is drawn decides its shape: a card on the run's own
+ * page, an L3 group inside the property page's card, an L3 heading in the
+ * detail dialog (which keeps its hairlines). React context crosses the
+ * dialog's portal, so RunDetailModal sets its own. */
+type RunSectionShape = 'card' | 'group' | 'dialog';
+const RunSectionMode = createContext<RunSectionShape>('dialog');
+
+function RunSection({
+  title,
+  count,
+  note,
+  accessory,
+  id,
+  children,
+}: {
+  title: ReactNode;
+  count?: number | null;
+  note?: ReactNode;
+  accessory?: ReactNode;
+  id?: string;
+  children: ReactNode;
+}) {
+  const shape = useContext(RunSectionMode);
+  if (shape === 'card') {
+    return (
+      <Panel title={title} count={count} note={note} accessory={accessory} id={id}>
+        {children}
+      </Panel>
+    );
+  }
+  const right = note != null || accessory != null ? (
     <>
-      {!embedded && <EstimateHeadline run={run} />}
-      <YieldBlock run={run} subject={subject} />
-      {!embedded && mfShape(run.reference_rent).kind !== 'none' && (
-        <>
-          <Hairline />
-          <SectionLabel>Reference · Cenová mapa MF</SectionLabel>
-          <div className="mt-3 max-w-[27rem]">
-            <MfReferenceCard refRent={run.reference_rent} />
-          </div>
-        </>
-      )}
-
-      <Hairline />
-      {onRerun ? (
-        <RerunBlock
-          run={run}
-          onRerun={onRerun}
-          pending={rerunPending}
-          error={rerunError}
-          onShowDetail={() => setDetailOpen(true)}
-        />
-      ) : (
-        <ShowDetailButton onClick={() => setDetailOpen(true)} />
-      )}
-
-      {detailOpen && (
-        <RunDetailModal run={run} onClose={() => setDetailOpen(false)} />
-      )}
+      {note != null && <span className="text-xs text-[var(--color-ink-3)]">{note}</span>}
+      {accessory}
     </>
+  ) : undefined;
+  if (shape === 'group') {
+    return (
+      <PanelGroup title={title} count={count} accessory={right}>
+        {children}
+      </PanelGroup>
+    );
+  }
+  return (
+    <div id={id} className="space-y-3">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">{title}</h3>
+        {count != null && (
+          <span className="font-mono text-xs tabular-nums text-[var(--color-ink-3)]">{count}</span>
+        )}
+        {right && <div className="ml-auto flex flex-wrap items-baseline gap-x-3 gap-y-1">{right}</div>}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -208,23 +281,24 @@ function EstimateHeadline({ run }: { run: EstimationRun }) {
         ? `${fmtCzk(run.estimated_monthly_rent_czk)} / mo`
         : 'No estimate produced';
   return (
-    <div>
-      <SectionLabel>Estimate run</SectionLabel>
-      <h2
-        className="mt-1.5 text-[2.4rem] leading-[1.05] tabular-nums"
-        style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
-      >
-        {value}
-      </h2>
-      {run.gross_yield_pct != null && (
-        <p className="mt-1 text-sm font-mono tabular-nums text-[var(--color-ink-2)]">
-          gross yield{' '}
-          <span className="text-[var(--color-ink)]">
-            {fmtPct(run.gross_yield_pct, { digits: 2 })}
-          </span>
+    <RunSection title="Estimate run">
+      <div>
+        <p
+          className="text-[2.4rem] leading-[1.05] tabular-nums"
+          style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+        >
+          {value}
         </p>
-      )}
-    </div>
+        {run.gross_yield_pct != null && (
+          <p className="mt-1 text-sm font-mono tabular-nums text-[var(--color-ink-2)]">
+            gross yield{' '}
+            <span className="text-[var(--color-ink)]">
+              {fmtPct(run.gross_yield_pct, { digits: 2 })}
+            </span>
+          </p>
+        )}
+      </div>
+    </RunSection>
   );
 }
 
@@ -291,10 +365,18 @@ export function RunDetailModal({
       >
         <DialogClose onClick={onClose} className="absolute top-3 right-3 z-10" />
 
+        {/* React context crosses the portal: without this the sections would
+            take the card shape of the RunBody that opened the dialog. */}
+        <RunSectionMode.Provider value="dialog">
         <div className="p-6">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-            Estimation detail · run #{run.id}
-          </p>
+          {/* A dialog title, not a small-caps label (small caps are L4 field labels only). */}
+          <h2
+            className="pr-10 text-xl leading-tight"
+            style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+          >
+            Estimation detail · run{' '}
+            <span className="font-mono tabular-nums text-[var(--color-ink-3)]">#{run.id}</span>
+          </h2>
 
           <Hairline />
           <RentRange run={run} />
@@ -317,10 +399,9 @@ export function RunDetailModal({
           )}
 
           <Hairline />
-          <SectionLabel>Trace</SectionLabel>
-          <div className="mt-4">
+          <RunSection title="Trace">
             <Timeline trace={run.trace} runId={run.id} />
-          </div>
+          </RunSection>
 
           <Hairline />
           <ComparablesSection run={run} />
@@ -328,6 +409,7 @@ export function RunDetailModal({
           <Hairline />
           <FeedbackBlock runId={run.id} />
         </div>
+        </RunSectionMode.Provider>
 
         {/* Feedback composer floats above the modal; mounted only while the
             popup is open, so the "Provide feedback" affordance lives with it.
@@ -419,26 +501,22 @@ function RentRange({ run }: { run: EstimationRun }) {
   const stripLabel = isSale ? 'Sale price (Kč)' : 'Monthly rent (Kč)';
   if (median == null || p25 == null || p75 == null) {
     return (
-      <div>
-        <SectionLabel>{sectionLabel}</SectionLabel>
-        <p className="mt-2 text-sm text-[var(--color-ink-3)]">
+      <RunSection title={sectionLabel}>
+        <p className="text-sm text-[var(--color-ink-3)]">
           Range data not available.
         </p>
-      </div>
+      </RunSection>
     );
   }
   return (
-    <div>
-      <SectionLabel>{sectionLabel}</SectionLabel>
-      <div className="mt-3">
-        <RangeStrip
-          label={stripLabel}
-          range={{ low: p25, mid: median, high: p75 }}
-          caption="p25 · median · p75"
-          format={(n) => fmtCzk(n)}
-        />
-      </div>
-    </div>
+    <RunSection title={sectionLabel}>
+      <RangeStrip
+        label={stripLabel}
+        range={{ low: p25, mid: median, high: p75 }}
+        caption="p25 · median · p75"
+        format={(n) => fmtCzk(n)}
+      />
+    </RunSection>
   );
 }
 
@@ -599,30 +677,23 @@ function YieldBlock({
       : 'Set purchase price';
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between gap-3">
-        <SectionLabel>Yield</SectionLabel>
-        <div className="flex items-baseline gap-3">
-          {hasOverrides && (
-            <button
-              type="button"
-              onClick={resetScenario}
-              className="text-[0.7rem] tracking-wide uppercase text-[var(--color-copper)] hover:text-[var(--color-copper-2)] hover:underline underline-offset-2 transition-colors"
-              title="Discard edits and restore the defaults"
-            >
-              Reset
-            </button>
-          )}
-          <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)]">
-            {hasOverrides ? 'edited · synced' : 'live calculation'}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 px-5 py-5 rounded-[var(--radius-md)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)]">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Gross yield
-        </p>
+    <RunSection
+      title="Yield"
+      note={hasOverrides ? 'edited · synced' : 'live calculation'}
+      accessory={hasOverrides ? (
+        <button
+          type="button"
+          onClick={resetScenario}
+          className="text-xs text-[var(--color-copper)] hover:text-[var(--color-copper-2)] hover:underline underline-offset-2 transition-colors"
+          title="Discard edits and restore the defaults"
+        >
+          Reset
+        </button>
+      ) : undefined}
+    >
+      {/* The figure tile: the one inner frame a card keeps (C9); its eyebrow is L4. */}
+      <div className="px-5 py-5 rounded-[var(--radius-md)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)]">
+        <SectionLabel>Gross yield</SectionLabel>
         <p
           className="mt-1.5 tabular-nums leading-none"
           style={{
@@ -639,7 +710,7 @@ function YieldBlock({
         </p>
       </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <NumField
           label="Monthly rent"
           value={rent}
@@ -693,7 +764,7 @@ function YieldBlock({
           }
         />
       </div>
-    </div>
+    </RunSection>
   );
 }
 
@@ -703,12 +774,11 @@ function YieldBlock({
 
 function FailedBlock({ run }: { run: EstimationRun }) {
   return (
-    <div>
-      <SectionLabel>Error</SectionLabel>
-      <pre className="mt-3 px-3 py-2.5 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)] text-[0.8rem] font-mono whitespace-pre-wrap break-words">
+    <RunSection title="Error">
+      <pre className="px-3 py-2.5 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)] text-[0.8rem] font-mono whitespace-pre-wrap break-words">
         {run.error_message ?? 'Unknown error.'}
       </pre>
-    </div>
+    </RunSection>
   );
 }
 
@@ -716,14 +786,19 @@ function InFlightBlock({ run }: { run: EstimationRun }) {
   const label =
     run.status === 'pending' ? 'Queued' : 'Estimating';
   return (
-    <div className="flex items-start gap-3">
-      <span
-        aria-hidden
-        className="mt-1.5 inline-block h-2 w-2 rounded-full bg-[var(--color-copper)] animate-pulse"
-      />
+    <RunSection
+      title={
+        <span className="inline-flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-2 w-2 rounded-full bg-[var(--color-copper)] animate-pulse"
+          />
+          {label}
+        </span>
+      }
+    >
       <div>
-        <SectionLabel>{label}</SectionLabel>
-        <p className="mt-2 text-[0.95rem] text-[var(--color-ink)]">
+        <p className="text-[0.95rem] text-[var(--color-ink)]">
           {run.mode === 'agent'
             ? 'The agent is working through comparables and refining its estimate.'
             : 'Pulling comparables and computing the rent distribution.'}
@@ -733,7 +808,7 @@ function InFlightBlock({ run }: { run: EstimationRun }) {
           completes. Started {fmtRelative(run.created_at)}.
         </p>
       </div>
-    </div>
+    </RunSection>
   );
 }
 
@@ -743,9 +818,8 @@ function InFlightBlock({ run }: { run: EstimationRun }) {
 
 function Warnings({ warnings }: { warnings: string[] }) {
   return (
-    <div>
-      <SectionLabel>Warnings</SectionLabel>
-      <ul className="mt-3 space-y-2">
+    <RunSection title="Warnings">
+      <ul className="space-y-2">
         {warnings.map((w, i) => (
           <li
             key={i}
@@ -755,7 +829,7 @@ function Warnings({ warnings }: { warnings: string[] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </RunSection>
   );
 }
 
@@ -796,41 +870,44 @@ function InputRecap({ run }: { run: EstimationRun }) {
   }
 
   return (
-    <div>
-      <SectionLabel>Inputs</SectionLabel>
-      {run.input_url && (
-        <p className="mt-3 text-sm">
-          <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">URL</span>
-          <a
-            href={run.input_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline break-all"
-          >
-            {run.input_url}
-          </a>
-        </p>
-      )}
-      {ad != null && (
-        <p className="mt-1.5 text-sm">
-          <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">Listing</span>
-          <Link
-            to={ad}
-            className="font-mono tabular-nums text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline"
-          >
-            {run.subject_source} {run.subject_source_id_native}
-          </Link>
-        </p>
+    <RunSection title="Inputs">
+      {(run.input_url || ad != null) && (
+        <div className="space-y-1.5">
+          {run.input_url && (
+            <p className="text-sm">
+              <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">URL</span>
+              <a
+                href={run.input_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline break-all"
+              >
+                {run.input_url}
+              </a>
+            </p>
+          )}
+          {ad != null && (
+            <p className="text-sm">
+              <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">Listing</span>
+              <Link
+                to={ad}
+                className="font-mono tabular-nums text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline"
+              >
+                {run.subject_source} {run.subject_source_id_native}
+              </Link>
+            </p>
+          )}
+        </div>
       )}
 
-      <dl className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3">
+      <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3">
         {facts.map(([label, value]) => (
           <Fact key={label} label={label} value={value} />
         ))}
       </dl>
 
       {run.parent_run_id != null && (
-        <p className="mt-4 text-[0.78rem] text-[var(--color-ink-3)]">
+        <p className="text-[0.78rem] text-[var(--color-ink-3)]">
           Re-run of{' '}
           <Link
             to={ROUTES.estimationDetail.build({ id: run.parent_run_id })}
@@ -841,7 +918,7 @@ function InputRecap({ run }: { run: EstimationRun }) {
           {run.rerun_reason ? ` · ${run.rerun_reason}` : ''}
         </p>
       )}
-    </div>
+    </RunSection>
   );
 }
 
@@ -902,9 +979,8 @@ function OperatorInputsPanel({ run }: { run: EstimationRun }) {
   const hasCtx = !!run.contextual_text;
   if (!hasInstr && !hasCtx) return null;
   return (
-    <div className="mt-6">
-      <SectionLabel>Operator context</SectionLabel>
-      <div className="mt-3 space-y-3">
+    <RunSection title="Operator context">
+      <div className="space-y-3">
         {hasInstr && (
           <div>
             <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
@@ -926,7 +1002,7 @@ function OperatorInputsPanel({ run }: { run: EstimationRun }) {
           </div>
         )}
       </div>
-    </div>
+    </RunSection>
   );
 }
 
@@ -1102,12 +1178,11 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
 
   if (comps.length === 0) {
     return (
-      <div>
-        <SectionLabel>Comparables</SectionLabel>
-        <p className="mt-2 text-sm text-[var(--color-ink-3)]">
+      <RunSection title="Comparables" count={0}>
+        <p className="text-sm text-[var(--color-ink-3)]">
           No comparables recorded for this run.
         </p>
-      </div>
+      </RunSection>
     );
   }
 
@@ -1124,16 +1199,9 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
   const activeImages = activeId != null ? images.get(activeId) ?? [] : [];
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between">
-        <SectionLabel>Comparables</SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {comps.length}
-        </p>
-      </div>
-
+    <RunSection title="Comparables" count={comps.length}>
       {!phone && subjectLat != null && subjectLng != null && mapPoints.length > 0 && (
-        <div className="mt-4">
+        <div>
           <Suspense
             fallback={
               <div className="h-80 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
@@ -1151,7 +1219,7 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
         </div>
       )}
 
-      <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-rule)] overflow-hidden">
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
             <tr>
@@ -1199,7 +1267,7 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
           />
         </Suspense>
       )}
-    </div>
+    </RunSection>
   );
 }
 
@@ -1304,13 +1372,10 @@ function ExcludedComparables({
   if (!excluded || excluded.length === 0) return null;
   return (
     <div className="mt-6">
-      <div className="flex items-baseline justify-between">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          Considered and set aside
-        </p>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {excluded.length}
-        </p>
+      {/* An L3 group title (Inter 600 14/20, ink) with its bare count beside it, never small caps. */}
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">Considered and set aside</h3>
+        <span className="font-mono text-xs tabular-nums text-[var(--color-ink-3)]">{excluded.length}</span>
       </div>
       <ul className="mt-3 space-y-1.5">
         {excluded.map((row) => (
@@ -1790,9 +1855,8 @@ function FeedbackBlock({ runId }: { runId: number }) {
   }, [openedViaHash, rows]);
 
   return (
-    <div id="feedback">
-      <SectionLabel>Feedback history</SectionLabel>
-      <p className="mt-2 text-[0.78rem] text-[var(--color-ink-3)] leading-relaxed">
+    <RunSection id="feedback" title="Feedback history">
+      <p className="text-[0.78rem] text-[var(--color-ink-3)] leading-relaxed">
         Previous notes on this run and the prompt edits they triggered.
         Use the <span className="text-[var(--color-copper)]">Provide
         feedback</span> button pinned at the top of the page to add a
@@ -1809,7 +1873,7 @@ function FeedbackBlock({ runId }: { runId: number }) {
         decideError={decideMut.error}
         autoExpandRefinementId={autoExpandRefinementId}
       />
-    </div>
+    </RunSection>
   );
 }
 
@@ -1945,9 +2009,8 @@ function FloatingFeedbackPanel({
       {/* Panel 1 — feedback composer ---------------------------------- */}
       <section className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] shadow-[0_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--color-rule)] flex items-center justify-between gap-3">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-            Feedback
-          </p>
+          {/* A panel title: L3, never small caps (system.md § Section cards). */}
+          <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">Feedback</h3>
           <button
             type="button"
             onClick={() => setOpen(false)}
@@ -2043,10 +2106,10 @@ function FloatingFeedbackPanel({
       {/* Panel 2 — skill prompt editor -------------------------------- */}
       <section className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] shadow-[0_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--color-rule)] flex items-center justify-between gap-3">
-          <p id={promptLabelId} className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
+          <h3 id={promptLabelId} className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
             Skill prompt · {effectiveSkillName}
-          </p>
-          <span className="text-[0.65rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
+          </h3>
+          <span className="text-xs text-[var(--color-ink-3)]">
             {skillSource === 'trace'
               ? `from run trace · mode ${run.mode}`
               : run.mode === 'agent'

@@ -7,13 +7,17 @@
  * page owns what the writes ARE (`onShare` / `onRevoke`, each a promise that
  * also revalidates whatever the page reads). A refusal (no such account, your
  * own address — the API's 422) is a sentence about the field, so it sits under
- * the field. The mode choice exists only where a share has modes (`modes`). */
+ * the field. The mode choice exists only where a share has modes (`modes`).
+ *
+ * `frame` (section cards, operator ruling 2026-10-28): on a page the block is a
+ * section card — its title the card's title, the recipients its count; in a
+ * dialog it is a dialog section under an L3 heading, never a card. */
 
 import { useState, type ReactNode } from 'react';
 import { useMutation } from '@tanstack/react-query';
 
 import { Field, Segmented } from '@/components/controls';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 import { TwoStep } from '@/components/TwoStep';
 import type { PipelineShareMode } from '@/lib/types';
 
@@ -66,6 +70,8 @@ export default function ShareBlock({
   onRevoke,
   modes = false,
   lang = 'en',
+  frame = 'card',
+  id,
 }: {
   title: string;
   description: ReactNode;
@@ -75,6 +81,9 @@ export default function ShareBlock({
   onRevoke: (account_id: string) => Promise<unknown>;
   modes?: boolean;
   lang?: ShareBlockLang;
+  frame?: 'card' | 'dialog';
+  /* The card's id (a disclosure's aria-controls target). */
+  id?: string;
 }) {
   const w = WORDS[lang];
   const [email, setEmail] = useState('');
@@ -92,10 +101,9 @@ export default function ShareBlock({
 
   const trimmed = email.trim();
 
-  return (
+  const body = (
     <div>
-      <SectionLabel>{title}</SectionLabel>
-      <p className="mt-2 text-[0.78rem] text-[var(--color-ink-4)] max-w-2xl">{description}</p>
+      <p className="text-[0.78rem] text-[var(--color-ink-4)] max-w-2xl">{description}</p>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -157,6 +165,20 @@ export default function ShareBlock({
         </ul>
       )}
     </div>
+  );
+
+  if (frame === 'dialog') {
+    return (
+      <div id={id} className="space-y-2">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">{title}</h3>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Panel id={id} title={title} count={recipients.length}>
+      {body}
+    </Panel>
   );
 }
 

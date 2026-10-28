@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useNewTabProps } from '@/lib/linkGestures';
 import {
@@ -17,7 +17,7 @@ import ImageTagBadge from '@/components/ImageTagBadge';
 import { portalBadge } from '@/lib/portals';
 import { listingPath } from '@/lib/listingUrl';
 import Dialog, { DialogClose } from '@/components/Dialog';
-import { Hairline, SectionLabel } from '@/components/section';
+import { Hairline } from '@/components/section';
 
 /* The comparable's detail card, opened from a row of the estimation-detail
  * comparables table — which is itself inside a dialog, so this is the app's
@@ -136,12 +136,18 @@ function Header({ listing, titleId }: { listing: ListingPublic; titleId: string 
   );
 }
 
+/* A dialog has no section cards: its sections are L3 titles (Inter 600 14/20, ink) between
+ * hairlines (system.md § Section cards). Small caps stay for the field labels under them. */
+function DialogSectionTitle({ children }: { children: ReactNode }) {
+  return <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">{children}</h3>;
+}
+
 function Carousel({ images, isActive }: { images: ImagePublic[]; isActive: boolean }) {
   const [i, setI] = useState(0);
   if (images.length === 0) {
     return (
       <div>
-        <SectionLabel>Photos</SectionLabel>
+        <DialogSectionTitle>Photos</DialogSectionTitle>
         <p className="mt-2 text-sm text-[var(--color-ink-3)]">No photos recorded.</p>
       </div>
     );
@@ -152,7 +158,7 @@ function Carousel({ images, isActive }: { images: ImagePublic[]; isActive: boole
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <SectionLabel>Photos</SectionLabel>
+        <DialogSectionTitle>Photos</DialogSectionTitle>
         <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
           {safe + 1} / {images.length}
         </p>
@@ -268,7 +274,7 @@ function SummarySection({
 }) {
   return (
     <div>
-      <SectionLabel>Summary</SectionLabel>
+      <DialogSectionTitle>Summary</DialogSectionTitle>
       {loading ? (
         <p className="mt-2 text-sm text-[var(--color-ink-3)]">Generating…</p>
       ) : error ? (
@@ -314,7 +320,7 @@ function Facts({ listing }: { listing: ListingPublic }) {
   ];
   return (
     <div>
-      <SectionLabel>Details</SectionLabel>
+      <DialogSectionTitle>Details</DialogSectionTitle>
       <dl className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-3">
         {facts.map(([label, value]) => (
           <div key={label}>

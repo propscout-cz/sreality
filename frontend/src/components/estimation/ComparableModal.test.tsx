@@ -99,6 +99,22 @@ describe('<ComparableModal> as a dialog', () => {
   });
 });
 
+/* A dialog has no section cards (system.md § Section cards): its sections are
+ * L3 titles between hairlines, never small caps (L4 is for field labels only). */
+describe('<ComparableModal> section headings', () => {
+  it.each([
+    ['with photos', [photo(1), photo(2)]],
+    ['with no photos', []],
+  ])('titles Photos, Summary and Details as L3 headings (%s)', (_case, images) => {
+    renderModal(images);
+    for (const name of ['Photos', 'Summary', 'Details']) {
+      const h = screen.getByRole('heading', { level: 3, name });
+      expect(h).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+      expect(h).not.toHaveClass('uppercase');
+    }
+  });
+});
+
 describe('<ComparableModal> photo thumbnails', () => {
   it('names every thumbnail by its position in the strip', () => {
     renderModal([photo(1), photo(2), photo(3)]);

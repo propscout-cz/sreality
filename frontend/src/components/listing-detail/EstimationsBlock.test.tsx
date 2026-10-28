@@ -2,7 +2,7 @@
  * else: no run's frozen reference rent stands in for a missing one, and there
  * is no English placeholder of its own. */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -67,12 +67,12 @@ const property = (mf: Partial<PropertyPublic>): PropertyPublic =>
     ...mf,
   }) as unknown as PropertyPublic;
 
-function renderBlock(listing: PropertyPublic, prefill?: { listingId: number }) {
+function renderBlock(listing: PropertyPublic, prefill?: { listingId: number }, readOnly = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <EstimationsBlock listing={listing} listingIds={[listing.id]} prefill={prefill} />
+        <EstimationsBlock listing={listing} listingIds={[listing.id]} prefill={prefill} readOnly={readOnly} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -90,11 +90,19 @@ describe('EstimationsBlock MF card', () => {
     expect(container).not.toHaveTextContent('No MF reference');
   });
 
-  it('renders nothing at all with no MF result and no runs', async () => {
+  /* C10 (section cards, operator ruling 2026-10-28): a section with nothing keeps its card,
+     its title and count 0, with one muted line; the way to start one is the title bar's
+     "Nový odhad" (as the picture draws Moje fotky), never a second copy in the body — no dashed tile. */
+  it('keeps its card with no MF result and no runs: count 0, one line, the action in the title bar', async () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
-    const { container } = renderBlock(property({}));
-    await waitFor(() => expect(fetchRuns).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    const { container } = renderBlock(property({}), { listingId: 11 });
+    const card = await screen.findByRole('region', { name: 'Estimates' });
+    expect(card).toHaveAttribute('id', 'estimations');
+    expect(await within(card).findByText('No estimation runs for this property yet.')).toBeInTheDocument();
+    expect(within(card).getByText('0')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Nový odhad' })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Run an estimation/ })).toBeNull();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 
   it('shows the property value with the property yield', async () => {
@@ -128,7 +136,7 @@ describe('EstimationsBlock first run', () => {
   it('starts the first run on the ad the page names, by its listing id', async () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
     renderBlock(property({ mf_reference_rent: FROZEN_REF }), { listingId: 11 });
-    fireEvent.click(await screen.findByRole('button', { name: /Run an estimation/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nový odhad' }));
     expect(openEstimation).toHaveBeenCalledWith({ listingId: 11 });
   });
 
@@ -136,6 +144,39 @@ describe('EstimationsBlock first run', () => {
     fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
     renderBlock(property({ mf_reference_rent: FROZEN_REF }));
     await screen.findByText('No estimation runs for this property yet.');
-    expect(screen.queryByRole('button', { name: /Run an estimation/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
+  });
+});
+
+/* The binding picture (docs/design/propscout-section-cards.png) draws "Nový odhad" in
+   the card's title bar (C6): a small secondary button opening the SAME flow as the
+   page header's "New estimation" — the one modal, with the page's prefill. */
+describe('EstimationsBlock title-bar Nový odhad', () => {
+  beforeEach(() => {
+    fetchRuns.mockReset();
+    openEstimation.mockClear();
+  });
+
+  it('sits in the title bar beside the count and opens the new-estimation flow', async () => {
+    fetchRuns.mockResolvedValue({ data: [run], total: 1, limit: 50, offset: 0, next_cursor: null });
+    renderBlock(property({}), { listingId: 11 });
+    const card = await screen.findByRole('region', { name: 'Estimates' });
+    await within(card).findByTestId('run-body');
+    const bar = within(card).getByRole('heading', { level: 2, name: 'Estimates' }).parentElement!;
+    const button = within(bar).getByRole('button', { name: 'Nový odhad' });
+    expect(button.className).not.toMatch(/bg-\[var\(--color-copper\)\]/);
+    fireEvent.click(button);
+    expect(openEstimation).toHaveBeenCalledWith({ listingId: 11 });
+  });
+
+  it('is not offered read-only (the phone) or without an ad to estimate', async () => {
+    fetchRuns.mockResolvedValue({ data: [run], total: 1, limit: 50, offset: 0, next_cursor: null });
+    const { unmount } = renderBlock(property({}), { listingId: 11 }, true);
+    await screen.findByTestId('run-body');
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
+    unmount();
+    renderBlock(property({}));
+    await screen.findByTestId('run-body');
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
   });
 });

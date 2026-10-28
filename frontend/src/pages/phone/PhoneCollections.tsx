@@ -111,7 +111,7 @@ export default function PhoneCollections() {
         <section aria-labelledby={sharedHeadingId} className="mt-6">
           <h3
             id={sharedHeadingId}
-            className="px-4 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]"
+            className="px-4 pb-2 text-sm leading-5 font-semibold text-[var(--color-ink)]"
           >
             Sdílené se mnou
           </h3>

@@ -9,7 +9,7 @@ operator ruled, and what is next. Read it top to bottom before touching any of t
 | --- | --- | --- |
 | Rename + three colour schemes (built) | PR waiff/sreality#2115, merged and live 2026-10-27 | Yes |
 | Design rules for every build | `.interface-design/system.md` (§ Colour schemes, § Hierarchy rulings) | **Yes** |
-| Section cards: how every page separates its sections (app + extension), ruled 2026-10-28 | `.interface-design/system.md` § Section cards; picture `docs/design/propscout-section-cards.png` | **Yes** (§ Section cards below) |
+| Section cards: how every page separates its sections (app + extension), ruled and built 2026-10-28 | `.interface-design/system.md` § Section cards; picture `docs/design/propscout-section-cards.png` | **Yes** (§ Section cards below) |
 | Design system artifact: previews of every agenda, as ruled | https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m | Direction only |
 | Removal review: 35 before/after pictures and the operator's answers | https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV | The rulings below are copied from it |
 | Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes** (§ Stats review below) |
@@ -171,10 +171,14 @@ title bar: a Fraunces title, its count, the actions on the right. Small caps are
 
 **The binding spec is `.interface-design/system.md` § Section cards; the picture is
 `docs/design/propscout-section-cards.png`** (standalone page `propscout-section-cards.html`), each value tagged
-C1–C10 and X1 (the extension). Not built yet. Build order: upgrade `components/Panel.tsx` into the section card,
-then wrap the property page's tabs (`pages/PropertyDetail.tsx` and `components/listing-detail/*`), then the other
-detail pages that stack `SectionLabel` blocks. The extension takes the same card in its own CSS, in whichever
-PR builds its new panel layout.
+C1–C10 and X1 (the extension). **Built 2026-10-28** (branch `feature/section-cards`). As built:
+`components/Panel.tsx` is the one card (`Panel`: title, bare `count`, `note`, `accessory`, `lede`), with
+`PanelGroup` (C7, an L3 group), `PanelEmpty` (C10) and `PANEL_ACTION` (C6, the title bar's small secondary
+button). It wraps every section of the property page's tabs, desktop and phone, and of the estimation run, broker
+(phone too), collection, sharing (`ShareBlock`), building and pipeline (Sdílení, Fáze pipeline) pages; the admin
+panels (Health, Costs, LocationQuality, LocationPinAudit, NewDedupDashboard) get it through `Panel`. Dialogs keep
+their hairlines, their sections L3. `SectionLabel` is the L4 field label only. The extension's X1 cards are built
+in the same PR.
 
 ## What to build next
 
@@ -308,6 +312,6 @@ directly). Keep `lastChange.note` in the index current.
 
 ## Suggested opening for the next session
 
-> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda is built; what
-> is left is the section cards (§ Section cards: match `docs/design/propscout-section-cards.png`), the
-> render-scoring scope (send the operator the list first) and the open questions under agendas 3 and 7.
+> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda and the section
+> cards are built; what is left is the render-scoring scope (send the operator the list first) and the open
+> questions under agendas 3 and 7.

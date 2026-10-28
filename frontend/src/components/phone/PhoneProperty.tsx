@@ -4,9 +4,10 @@
  * affordance and the property's number; the canonical ad's photos as a swiper
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
- * curation row; then hairline-separated sections, Poloha first (a streamed Mapy
- * static image through the API, never a WebGL map on the phone), then "Moje fotky"
- * (the camera and the user's own photos, PropertyPhotos).
+ * curation row; then the sections as section cards (components/Panel, the desktop
+ * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (a streamed
+ * Mapy static image through the API, never a WebGL map on the phone), then "Moje
+ * fotky" (the camera and the user's own photos, PropertyPhotos).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
@@ -61,11 +62,6 @@ const PhoneTagsAndNotes = lazyChunk(() =>
 );
 
 export const NOTES_SECTION_ID = 'poznamky';
-
-/* A reused block's frame: the block brings its own label; an empty block (it
- * rendered nothing) takes no room and draws no rule. */
-const BLOCK = 'min-w-0 px-4 py-4 empty:hidden';
-
 
 /* "Na trhu 12 dní · 3 portály · cena snížena 7. 10." */
 export function metaLine({
@@ -202,13 +198,13 @@ export default function PhoneProperty({
 
       <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
 
-      <div className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
+      {/* Every section is its own card, reused blocks included; one that has nothing keeps its card
+          and says so (C10). */}
+      <div className="space-y-4 border-t border-[var(--color-rule)] px-4 pt-4">
         <LocationSection propertyId={propertyId} />
-        <div className={BLOCK}>
-          <Suspense fallback={<Skeleton height={168} />}>
-            <PropertyPhotos property_id={propertyId} lang="cs" camera />
-          </Suspense>
-        </div>
+        <Suspense fallback={<Skeleton height={168} />}>
+          <PropertyPhotos property_id={propertyId} lang="cs" camera />
+        </Suspense>
         <FactsSection property={property} />
         <DescriptionSection text={property.description} />
         <AdsSection
@@ -219,9 +215,7 @@ export default function PhoneProperty({
           openedId={openedAdvertId}
           details={adDetails}
         />
-        <div className={BLOCK}>
-          <PriceHistoryBlock property={property} adverts={chartAdverts} snapshots={snapshots} label="Vývoj ceny" />
-        </div>
+        <PriceHistoryBlock property={property} adverts={chartAdverts} snapshots={snapshots} label="Vývoj ceny" />
         <BrokersSection
           adverts={sources}
           canonicalId={property.id}
@@ -229,28 +223,22 @@ export default function PhoneProperty({
           onRetryAdverts={onRetrySources}
         />
         <SoldSection property={property} />
-        <div className={BLOCK}>
-          <Suspense fallback={<Skeleton height={140} />}>
-            <EstimationsBlock listing={property} listingIds={advertIds} readOnly bare label="Odhady" />
-          </Suspense>
-        </div>
-        <div className={BLOCK}>
-          {/* No placeholder: most properties hold no Valuo answer, so the block takes no room. */}
-          <Suspense fallback={null}>
-            <ValuoSection property={property} listingIds={advertIds} readOnly bare />
-          </Suspense>
-        </div>
+        <Suspense fallback={<Skeleton height={140} />}>
+          <EstimationsBlock listing={property} listingIds={advertIds} readOnly label="Odhady" />
+        </Suspense>
+        <Suspense fallback={<Skeleton height={140} />}>
+          <ValuoSection property={property} listingIds={advertIds} readOnly />
+        </Suspense>
         {property.sreality_id != null && (
-          <div className={BLOCK}>
-            <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />
-          </div>
+          <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />
         )}
-        <section id={NOTES_SECTION_ID} aria-label="Štítky a poznámky" className={`scroll-mt-16 ${BLOCK}`}>
+        {/* Štítky, the artifact link and Poznámky: three cards; the curation row's "Poznámka" scrolls here. */}
+        <div id={NOTES_SECTION_ID} className="scroll-mt-16">
           <Suspense fallback={<Skeleton height={140} />}>
             <PhoneTagsAndNotes property_id={propertyId} listing_id={property.id} />
           </Suspense>
-        </section>
-        <div className="px-4 py-4">
+        </div>
+        <div className="py-2">
           <DownloadPropertyButton propertyId={propertyId} images={images} variant="phone" />
         </div>
       </div>

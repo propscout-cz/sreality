@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
-import Panel from '@/components/Panel';
+import Panel, { PanelGroup } from '@/components/Panel';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
 import {
@@ -245,10 +245,11 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
   });
   const input = 'rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper)] px-2 py-1.5 text-sm';
   return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] px-3 py-2.5">
-      <div className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)] mb-2">
-        Operator correction (appends a claim, resolves immediately)
-      </div>
+    /* A group inside the inspector card (C7): an L3 title, no box of its own. */
+    <PanelGroup
+      title="Operator correction"
+      accessory={<span className="text-xs text-[var(--color-ink-3)]">appends a claim, resolves immediately</span>}
+    >
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(e) => { e.preventDefault(); if (value.trim()) mut.mutate(); }}
@@ -293,7 +294,7 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
           ) : null}
         </div>
       ) : null}
-    </div>
+    </PanelGroup>
   );
 }
 

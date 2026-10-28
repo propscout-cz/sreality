@@ -148,7 +148,10 @@ describe('<Collections> on the phone', () => {
     renderPage();
     const mine = await screen.findByRole('list', { name: 'Sbírky' });
     expect(within(mine).getAllByRole('link')).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Sdílené se mnou' })).toBeInTheDocument();
+    /* A group of the list: an L3 title like the desktop's, never small caps (section cards ladder). */
+    const sharedTitle = screen.getByRole('heading', { name: 'Sdílené se mnou' });
+    expect(sharedTitle).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+    expect(sharedTitle).not.toHaveClass('uppercase');
     const shared = screen.getByRole('list', { name: 'Sdílené se mnou' });
     const [row] = within(shared).getAllByRole('link');
     expect(row).toHaveAttribute('href', ROUTES.collectionDetail.build({ id: 5 }));

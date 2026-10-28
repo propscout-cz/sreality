@@ -195,6 +195,63 @@
 
 .p-body { padding: 0.8rem 0.85rem 0.9rem; }
 
+/* ---- section card (X1, .interface-design/system.md § Section cards) -- */
+/* Every titled block of the panel is ONE card (card.ts buildCard): fresh paper
+   on the panel's aged paper, a hairline edge, a title bar over a body. The
+   spec's px are written in rem (at a 16 px root) so the card scales with the
+   rest of the panel. The title is the panel's own font, never small caps:
+   small caps are field labels only (.field-label, .mf-ledger-label). */
+
+.card {
+  margin: 0.625rem 0;  /* 10 px between cards: adjacent margins collapse */
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+.card:first-child { margin-top: 0; }
+.card:last-child { margin-bottom: 0; }
+
+.card-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5625rem 0.75rem 0.5rem;  /* 9 / 12 / 8 */
+  border-bottom: 1px solid var(--rule);
+}
+
+.card-title {
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  font-size: 0.875rem;   /* 14 */
+  font-weight: 600;
+  line-height: 1.25rem;  /* 20 */
+  color: var(--ink);
+}
+
+.card-count {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.card-body { padding: 0.625rem 0.75rem 0.75rem; }  /* 10 / 12 / 12 */
+
+.card-body > :first-child { margin-top: 0; }
+.card-body > :last-child { margin-bottom: 0; }
+
+/* A state line inside a card reads from the title's edge (C10). */
+.card-body .note { text-align: left; }
+
 /* ---- auth strip (the signed-in identity + sign-out control) --------- */
 
 .auth-strip {
@@ -260,23 +317,10 @@
   color: var(--ink-4);
 }
 
-/* ---- MF hero (the stamped valuation) -------------------------------- */
-
-.mf {
-  text-align: center;
-  margin: 0.35rem 0 0.85rem;
-}
-
-.mf-eyebrow {
-  margin: 0;
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--ink-3);
-}
+/* ---- MF card (the stamped valuation) -------------------------------- */
 
 .mf-figure {
-  margin: 0.1rem 0 0;
+  margin: 0;
   font-size: 2.5rem;
   font-weight: 600;
   line-height: 1.05;
@@ -285,16 +329,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Ruled off the figure above it; the card's own edge closes it below. */
 .mf-ledger {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 0.6rem;
-  margin-top: 0.7rem;
-  padding: 0.4rem 0.1rem;
-  text-align: left;
+  margin-top: 0.6rem;
+  padding-top: 0.45rem;
   border-top: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
+}
+
+/* No figure (a rental flat): the ledger opens the body, under the bar's rule. */
+.mf-ledger:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .mf-ledger-label {
@@ -545,29 +594,15 @@
 
 .collection-toggle[aria-expanded="true"] .collection-caret { transform: rotate(180deg); }
 
-/* The checklist: an inset slip under the action row, like the estimate and
-   notes slips — every collection a checkable row (the SPA's CollectionSaveMenu). */
-.coll-menu {
-  margin-top: 0.6rem;
-  padding: 0.55rem 0.55rem 0.6rem;
-  background: var(--bg-sunk);
-  border: 1px solid var(--rule);
-}
-
-.coll-eyebrow {
-  margin: 0 0 0.35rem 0.15rem;
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--ink-3);
-}
-
+/* The checklist: a section card under the action row (the tag checklist takes
+   the same shape) — every collection a checkable row (the SPA's
+   CollectionSaveMenu). */
 .coll-list {
   display: flex;
   flex-direction: column;
   gap: 0.05rem;
   max-height: 11rem;
-  margin: 0;
+  margin: 0 -0.4rem;  /* the rows' padding hangs into the body's: ticks align with the title */
   padding: 0;
   overflow-y: auto;
   list-style: none;
@@ -633,13 +668,13 @@
 .coll-bell-icon { width: 0.8rem; height: 0.8rem; }
 
 .coll-state {
-  margin: 0.1rem 0.15rem;
+  margin: 0.1rem 0;
   font-size: 0.74rem;
   color: var(--ink-3);
 }
 
 .coll-error {
-  margin: 0.35rem 0.15rem 0;
+  margin: 0.35rem 0 0;
   font-size: 0.7rem;
   line-height: 1.35;
   color: #b34730;
@@ -656,7 +691,7 @@
 
 .coll-manage {
   display: inline-block;
-  margin: 0.45rem 0 0 0.15rem;
+  margin: 0.45rem 0 0;
   font-size: 0.62rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -730,22 +765,7 @@
 
 .app-link:hover .app-link-arrow { transform: translateX(2px); }
 
-/* ---- estimate slip (the working calculator) ------------------------- */
-
-.est {
-  margin-top: 0.85rem;
-  padding: 0.7rem 0.75rem 0.75rem;
-  background: var(--bg-sunk);
-  border: 1px solid var(--rule);
-}
-
-.est-eyebrow {
-  margin: 0 0 0.55rem;
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--ink-3);
-}
+/* ---- estimate card (the working calculator) ------------------------- */
 
 .fields {
   display: grid;
@@ -774,7 +794,7 @@
   font: inherit;
   font-size: 0.82rem;
   color: var(--ink);
-  background: var(--paper);
+  background: var(--bg-sunk);  /* a well in the card's paper */
   border: 1px solid var(--rule);
   font-variant-numeric: tabular-nums;
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -879,22 +899,7 @@
 .btn-primary:hover { background: var(--copper-deep); }
 .btn-primary:disabled { background: var(--ink-4); cursor: wait; }
 
-/* ---- operator notes (per-property, rule #18) ------------------------ */
-
-.notes {
-  margin-top: 0.85rem;
-  padding: 0.7rem 0.75rem 0.75rem;
-  background: var(--bg-sunk);
-  border: 1px solid var(--rule);
-}
-
-.notes-eyebrow {
-  margin: 0 0 0.55rem;
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--ink-3);
-}
+/* ---- operator notes card (per-property, rule #18) ------------------- */
 
 .notes-list {
   display: flex;
@@ -907,7 +912,7 @@
 
 .note-item {
   padding: 0.4rem 0.5rem;
-  background: var(--paper);
+  background: var(--bg);  /* one step down: an item on the card */
   border: 1px solid var(--rule);
 }
 
@@ -979,7 +984,7 @@
   font: inherit;
   font-size: 0.8rem;
   color: var(--ink);
-  background: var(--paper);
+  background: var(--bg-sunk);
   border: 1px solid var(--rule);
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }

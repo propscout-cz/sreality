@@ -180,7 +180,7 @@ export default function TiersSection() {
       </form>
 
       <div>
-        <h4 className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mb-1.5">
+        <h4 className="mb-1.5 text-sm leading-5 font-semibold text-[var(--color-ink)]">
           Accounts
         </h4>
         <table className="w-full text-[0.8rem]">

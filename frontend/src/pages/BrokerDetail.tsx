@@ -14,6 +14,7 @@ import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
 import { portalBadge } from '../lib/portals';
 import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
 import { advertPath, propertyPath } from '@/lib/listingUrl';
 import { categoryMainLabel, categoryTypeLabel, listingKindLabel } from '@/lib/enums';
@@ -156,21 +157,24 @@ function BrokerDetailDesktop() {
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
           </div>
 
-          <div className="mt-7 grid gap-7 md:grid-cols-2">
-            <Footprint shares={dossier.region_shares} />
-            <Firms rows={dossier.memberships} />
-          </div>
+          {/* Section cards, 16 px apart (system.md § Section cards). */}
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-4 md:grid-cols-2 items-start">
+              <Footprint shares={dossier.region_shares} />
+              <Firms rows={dossier.memberships} />
+            </div>
 
-          <Inventory
-            rows={listingsQ.data ?? []}
-            loading={listingsQ.isLoading}
-            error={listingsQ.isError ? (listingsQ.error as Error) : null}
-            total={b.listing_count}
-            categoryMain={categoryMain}
-            categoryType={categoryType}
-            onCategoryMainChange={setCategoryMain}
-            onCategoryTypeChange={setCategoryType}
-          />
+            <Inventory
+              rows={listingsQ.data ?? []}
+              loading={listingsQ.isLoading}
+              error={listingsQ.isError ? (listingsQ.error as Error) : null}
+              total={b.listing_count}
+              categoryMain={categoryMain}
+              categoryType={categoryType}
+              onCategoryMainChange={setCategoryMain}
+              onCategoryTypeChange={setCategoryType}
+            />
+          </div>
         </>
       )}
     </div>
@@ -245,70 +249,60 @@ function Stat({
 function Footprint({ shares }: { shares: BrokerRegionShare[] }) {
   const max = shares.reduce((m, s) => Math.max(m, s.active_property_count), 0) || 1;
   return (
-    <section>
-      <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Kde inzeruje
-      </h2>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-2)] px-4 py-3">
-        {shares.length === 0 ? (
-          <p className="text-sm text-[var(--color-ink-4)]">Bez aktivního regionu.</p>
-        ) : (
-          <ul className="space-y-2">
-            {shares.slice(0, 8).map((s) => (
-              <li key={s.geo_id} className="flex items-center gap-3">
-                <span className="w-40 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
-                  {s.name ?? '—'}
-                </span>
-                <span className="flex-1 h-1.5 rounded-full bg-[var(--color-inset)] overflow-hidden">
-                  <span
-                    className="block h-full bg-[var(--color-copper)]"
-                    style={{ width: `${Math.max(4, (s.active_property_count / max) * 100)}%` }}
-                  />
-                </span>
-                <span className="w-10 shrink-0 text-right text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink)]">
-                  {fmtCount(s.active_property_count)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+    <Panel title="Kde inzeruje" count={shares.length}>
+      {shares.length === 0 ? (
+        <PanelEmpty>Bez aktivního regionu.</PanelEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {shares.slice(0, 8).map((s) => (
+            <li key={s.geo_id} className="flex items-center gap-3">
+              <span className="w-40 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
+                {s.name ?? '—'}
+              </span>
+              <span className="flex-1 h-1.5 rounded-full bg-[var(--color-inset)] overflow-hidden">
+                <span
+                  className="block h-full bg-[var(--color-copper)]"
+                  style={{ width: `${Math.max(4, (s.active_property_count / max) * 100)}%` }}
+                />
+              </span>
+              <span className="w-10 shrink-0 text-right text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink)]">
+                {fmtCount(s.active_property_count)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
 function Firms({ rows }: { rows: BrokerMembership[] }) {
   return (
-    <section>
-      <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Kanceláře
-      </h2>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-2)] px-4 py-3">
-        {rows.length === 0 ? (
-          <p className="text-sm text-[var(--color-ink-4)]">Žádná kancelář (nezávislý).</p>
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((m) => (
-              <li key={m.firm_id} className="flex items-center justify-between gap-3">
-                <span className="min-w-0 truncate text-sm text-[var(--color-ink-2)]">
-                  {m.firm_name ?? m.firm_domain ?? '—'}
-                </span>
-                <span className="flex items-center gap-2 shrink-0">
-                  {m.is_current && (
-                    <span className="text-[0.55rem] tracking-[0.1em] uppercase px-1.5 py-0.5 rounded-[var(--radius-xs)] bg-[var(--color-sage-soft)] text-[var(--color-sage)]">
-                      aktuální
-                    </span>
-                  )}
-                  <span className="text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)]">
-                    {fmtCount(m.listing_count)}
+    <Panel title="Kanceláře" count={rows.length}>
+      {rows.length === 0 ? (
+        <PanelEmpty>Žádná kancelář (nezávislý).</PanelEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((m) => (
+            <li key={m.firm_id} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate text-sm text-[var(--color-ink-2)]">
+                {m.firm_name ?? m.firm_domain ?? '—'}
+              </span>
+              <span className="flex items-center gap-2 shrink-0">
+                {m.is_current && (
+                  <span className="text-[0.55rem] tracking-[0.1em] uppercase px-1.5 py-0.5 rounded-[var(--radius-xs)] bg-[var(--color-sage-soft)] text-[var(--color-sage)]">
+                    aktuální
                   </span>
+                )}
+                <span className="text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)]">
+                  {fmtCount(m.listing_count)}
                 </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
@@ -342,32 +336,29 @@ function Inventory({
     [rows, categoryMain, categoryType],
   );
   const isFiltered = categoryMain !== null || categoryType !== null;
+  /* The count in the title bar: what the table shows, "z" what it is drawn from
+   * when that is more (a filter, or a capped read); 0 once the read says empty. */
+  const count = loading || error
+    ? null
+    : rows.length === 0
+      ? 0
+      : isFiltered
+        ? `${fmtCount(filtered.length)} z ${fmtCount(rows.length)}`
+        : rows.length < total
+          ? `${fmtCount(rows.length)} z ${fmtCount(total)}`
+          : fmtCount(total);
 
   return (
-    <section className="mt-7">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-          Inventář
-        </h2>
-        {rows.length > 0 && (
-          <span className="text-[0.7rem] text-[var(--color-ink-4)] tabular-nums">
-            {isFiltered
-              ? `${fmtCount(filtered.length)} z ${fmtCount(rows.length)}`
-              : rows.length < total
-                ? `${fmtCount(rows.length)} z ${fmtCount(total)}`
-                : fmtCount(total)}
-          </span>
-        )}
-      </div>
-
+    <Panel title="Inventář" count={count}>
       {rows.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {([
             ['Typ', CATEGORY_OPTIONS, categoryMain, onCategoryMainChange],
             ['Nabídka', OFFER_OPTIONS, categoryType, onCategoryTypeChange],
           ] as const).map(([label, options, value, onChange]) => (
             <div key={label} className="flex items-center gap-2">
-              <span id={`${captionId}-${label}`} className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-4)]">
+              {/* L4 field label (SectionLabel's type, on a span that names the bar). */}
+              <span id={`${captionId}-${label}`} className="text-[11px] leading-[14px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-3)]">
                 {label}
               </span>
               <SegmentedBar hug aria={{ 'aria-labelledby': `${captionId}-${label}` }} options={options} value={value}
@@ -377,24 +368,23 @@ function Inventory({
         </div>
       )}
 
-      <div className="mt-3 overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
-        {loading ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-3)]">Načítám inzeráty…</p>
-        ) : error ? (
-          /* The stats strip above already asserts a listing count from the
-             dossier, which now succeeds independently — so a failed inventory
-             read rendered as "Žádné inzeráty." would make the page contradict
-             itself and read as a delisted broker. */
-          <p className="px-4 py-6 text-sm text-[var(--color-brick)]">
-            Inzeráty se nepodařilo načíst: {error.message}
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-4)]">Žádné inzeráty.</p>
-        ) : filtered.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-4)]">
-            Žádné inzeráty pro zvolený filtr.
-          </p>
-        ) : (
+      {loading ? (
+        <p className="text-sm text-[var(--color-ink-3)]">Načítám inzeráty…</p>
+      ) : error ? (
+        /* The stats strip above already asserts a listing count from the
+           dossier, which now succeeds independently — so a failed inventory
+           read rendered as "Žádné inzeráty." would make the page contradict
+           itself and read as a delisted broker. */
+        <p className="text-sm text-[var(--color-brick)]">
+          Inzeráty se nepodařilo načíst: {error.message}
+        </p>
+      ) : rows.length === 0 ? (
+        <PanelEmpty>Žádné inzeráty.</PanelEmpty>
+      ) : filtered.length === 0 ? (
+        <PanelEmpty>Žádné inzeráty pro zvolený filtr.</PanelEmpty>
+      ) : (
+        /* A table that scrolls keeps its own box (C9). */
+        <div className="overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">
@@ -454,9 +444,9 @@ function Inventory({
               ))}
             </tbody>
           </table>
-        )}
-      </div>
-    </section>
+        </div>
+      )}
+    </Panel>
   );
 }
 

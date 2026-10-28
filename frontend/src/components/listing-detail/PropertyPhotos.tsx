@@ -15,7 +15,7 @@ import ErrorBanner from '@/components/ErrorBanner';
 import Spinner from '@/components/Spinner';
 import { TwoStep } from '@/components/TwoStep';
 import { PaperclipIcon } from '@/components/icons';
-import { SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import { readFailed } from '@/components/ReadFailedMark';
 import { PHOTO_DARK } from '@/components/phone/CardPhotoStrip';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
@@ -37,7 +37,9 @@ const TILE = 'relative block aspect-[4/3] w-40 overflow-hidden rounded-[var(--ra
 const BUTTON = 'inline-flex h-10 cursor-pointer items-center rounded-[var(--radius-sm)] px-3.5 text-[0.85rem] transition-colors focus-within:outline focus-within:outline-2 focus-within:outline-[var(--color-copper)]';
 const PRIMARY = `${BUTTON} bg-[var(--color-copper)] text-[var(--color-paper)] hover:bg-[var(--color-copper-2)]`;
 const OUTLINED = `${BUTTON} border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)]`;
-const QUIET = 'inline-flex h-10 items-center px-2 text-[0.85rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] disabled:opacity-40';
+/* The title bar's actions: small secondary buttons (system.md § Section cards). */
+const SMALL = 'inline-flex h-8 cursor-pointer items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-3 text-[0.8rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] focus-within:outline focus-within:outline-2 focus-within:outline-[var(--color-copper)]';
+const QUIET = 'inline-flex h-8 items-center px-2 text-[0.8rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] disabled:opacity-40';
 
 /* iOS names every camera capture "image.jpg"; a dated name tells them apart in a split's choice,
  * a share and the zip. */
@@ -159,40 +161,61 @@ export default function PropertyPhotos({
     if (list.length > 0) void add(rename ? list.map((f) => dated(f)) : list);
   };
 
+  /* Uploading: the counter where the buttons were. */
+  const status = busy ? (
+    <span role="status" className="inline-flex h-8 items-center gap-2 font-mono text-[0.8rem] tabular-nums text-[var(--color-ink-2)]">
+      <Spinner size={13} />
+      {words.uploading(progress.done + 1, progress.total)}
+    </span>
+  ) : null;
+  const select = picking ? (
+    <button type="button" onClick={stopPicking} className={QUIET}>
+      {words.done}
+    </button>
+  ) : (
+    photos.length > 0 &&
+    !busy && (
+      <button type="button" onClick={() => setPicking(true)} className={QUIET}>
+        {words.select}
+      </button>
+    )
+  );
+
+  /* A section card (C1–C10). The desktop's Nahrát and its drop line sit in the title bar (C6); the
+   * phone's camera and library are full-size buttons, the body's first block. The wrapper takes
+   * the drop, so a file dropped anywhere on the card lands. */
   return (
-    <section aria-label={words.title} className="relative" {...drop.handlers}>
-      <div className="flex items-center justify-between gap-3">
-        <SectionLabel>
-          {words.title}
-          {filesQ.isSuccess && (
-            <span className="ml-2 font-mono tabular-nums tracking-normal text-[var(--color-ink-4)]">
-              ({photos.length})
-            </span>
-          )}
-        </SectionLabel>
-        {picking ? (
-          <button type="button" onClick={stopPicking} className={QUIET}>
-            {words.done}
-          </button>
-        ) : (
-          photos.length > 0 &&
-          !busy && (
-            <button type="button" onClick={() => setPicking(true)} className={QUIET}>
-              {words.select}
-            </button>
-          )
-        )}
-      </div>
-      {!picking && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {busy ? (
-            <span role="status" className="inline-flex h-10 items-center gap-2 font-mono text-[0.8rem] tabular-nums text-[var(--color-ink-2)]">
-              <Spinner size={13} />
-              {words.uploading(progress.done + 1, progress.total)}
-            </span>
-          ) : (
-            <>
-              {camera && (
+    <div className="relative" {...drop.handlers}>
+      <Panel
+        title={words.title}
+        count={filesQ.isSuccess ? photos.length : null}
+        accessory={
+          <>
+            {!camera &&
+              !picking &&
+              (status ?? (
+                <>
+                  <label className={SMALL}>
+                    <input
+                      type="file"
+                      accept={PHOTO_ACCEPT}
+                      multiple
+                      className="sr-only"
+                      onChange={(e) => pick(e, false)}
+                    />
+                    {words.upload}
+                  </label>
+                  <span className="text-[0.8rem] text-[var(--color-ink-3)]">{words.orDrop}</span>
+                </>
+              ))}
+            {select}
+          </>
+        }
+      >
+        {camera && !picking && (
+          <div className="flex flex-wrap items-center gap-2">
+            {status ?? (
+              <>
                 <label className={PRIMARY}>
                   <input
                     type="file"
@@ -203,106 +226,105 @@ export default function PropertyPhotos({
                   />
                   {words.camera}
                 </label>
-              )}
-              <label className={OUTLINED}>
-                <input
-                  type="file"
-                  accept={PHOTO_ACCEPT}
-                  multiple
-                  className="sr-only"
-                  onChange={(e) => pick(e, false)}
-                />
-                {camera ? words.library : words.upload}
-              </label>
-              {!camera && <span className="text-[0.8rem] text-[var(--color-ink-3)]">{words.orDrop}</span>}
-            </>
-          )}
-        </div>
-      )}
-
-      <div className="mt-3">
-        {readFailed(filesQ) ? (
-          <ErrorBanner
-            flush
-            title={words.title}
-            message={words.readFailed}
-            retryLabel={words.retry}
-            onRetry={() => void filesQ.refetch()}
-          />
-        ) : filesQ.isLoading ? (
-          <div aria-hidden className="flex gap-2 overflow-hidden">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className={`${TILE} shrink-0`} />
-            ))}
+                <label className={OUTLINED}>
+                  <input
+                    type="file"
+                    accept={PHOTO_ACCEPT}
+                    multiple
+                    className="sr-only"
+                    onChange={(e) => pick(e, false)}
+                  />
+                  {words.library}
+                </label>
+              </>
+            )}
           </div>
-        ) : photos.length === 0 && pending.length === 0 ? (
-          <p className="text-sm text-[var(--color-ink-3)]">{words.empty}</p>
-        ) : (
-          <ul
-            ref={roll}
-            className="-mx-1 flex snap-x gap-2 overflow-x-auto overscroll-x-contain px-1 pb-1 [scrollbar-width:thin]"
-          >
-            {pending.map((file) => (
-              <li key={`${file.name}|${file.size}|${file.lastModified}`} className="shrink-0 snap-start">
-                <PendingTile file={file} />
-              </li>
-            ))}
-            {photos.map((a, i) => (
-              <li key={a.id} className="shrink-0 snap-start">
-                <PhotoTile
-                  propertyId={property_id}
-                  photo={a}
-                  root={roll}
-                  words={words}
-                  picking={picking}
-                  picked={picked.has(a.id)}
-                  onTap={() => (picking ? toggle(a) : setViewing(i))}
-                />
-              </li>
-            ))}
-          </ul>
         )}
-      </div>
 
-      {picking && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="font-mono text-[0.8rem] tabular-nums text-[var(--color-ink-3)]">
-            {words.picked(chosen.length)}
-          </span>
-          <button
-            type="button"
-            disabled={chosen.length === 0 || (files == null && unread.length === 0)}
-            onClick={() => {
-              if (unread.length > 0) originals.want(unread);
-              else if (files != null)
-                shareFiles(files, words.shareTitle(property_id)).catch(() => setProblems([words.shareFailed]));
-            }}
-            className={`${OUTLINED} disabled:pointer-events-none disabled:opacity-40`}
-          >
-            {unread.length > 0
-              ? words.retry
-              : chosen.length > 0 && files == null
-                ? words.preparing
-                : canShareFiles()
-                  ? words.share(chosen.length)
-                  : words.save(chosen.length)}
-          </button>
-          {chosen.length > 0 && (
-            <TwoStep
-              idle={words.remove(chosen.length)}
-              confirm={words.confirmRemove(chosen.length, chosen.some((a) => a.note_id != null))}
-              cancel={words.cancel}
-              confirming={confirming}
-              setConfirming={setConfirming}
-              pending={removing}
-              onConfirm={() => void removeChosen()}
-              touch
+        <div>
+          {readFailed(filesQ) ? (
+            <ErrorBanner
+              flush
+              title={words.title}
+              message={words.readFailed}
+              retryLabel={words.retry}
+              onRetry={() => void filesQ.refetch()}
             />
+          ) : filesQ.isLoading ? (
+            <div aria-hidden className="flex gap-2 overflow-hidden">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className={`${TILE} shrink-0`} />
+              ))}
+            </div>
+          ) : photos.length === 0 && pending.length === 0 ? (
+            <PanelEmpty>{words.empty}</PanelEmpty>
+          ) : (
+            <ul
+              ref={roll}
+              className="-mx-1 flex snap-x gap-2 overflow-x-auto overscroll-x-contain px-1 pb-1 [scrollbar-width:thin]"
+            >
+              {pending.map((file) => (
+                <li key={`${file.name}|${file.size}|${file.lastModified}`} className="shrink-0 snap-start">
+                  <PendingTile file={file} />
+                </li>
+              ))}
+              {photos.map((a, i) => (
+                <li key={a.id} className="shrink-0 snap-start">
+                  <PhotoTile
+                    propertyId={property_id}
+                    photo={a}
+                    root={roll}
+                    words={words}
+                    picking={picking}
+                    picked={picked.has(a.id)}
+                    onTap={() => (picking ? toggle(a) : setViewing(i))}
+                  />
+                </li>
+              ))}
+            </ul>
           )}
         </div>
-      )}
 
-      <FileProblems problems={problems} onDismiss={() => setProblems([])} dismissLabel={words.dismiss} />
+        {picking && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="font-mono text-[0.8rem] tabular-nums text-[var(--color-ink-3)]">
+              {words.picked(chosen.length)}
+            </span>
+            <button
+              type="button"
+              disabled={chosen.length === 0 || (files == null && unread.length === 0)}
+              onClick={() => {
+                if (unread.length > 0) originals.want(unread);
+                else if (files != null)
+                  shareFiles(files, words.shareTitle(property_id)).catch(() => setProblems([words.shareFailed]));
+              }}
+              className={`${OUTLINED} disabled:pointer-events-none disabled:opacity-40`}
+            >
+              {unread.length > 0
+                ? words.retry
+                : chosen.length > 0 && files == null
+                  ? words.preparing
+                  : canShareFiles()
+                    ? words.share(chosen.length)
+                    : words.save(chosen.length)}
+            </button>
+            {chosen.length > 0 && (
+              <TwoStep
+                idle={words.remove(chosen.length)}
+                confirm={words.confirmRemove(chosen.length, chosen.some((a) => a.note_id != null))}
+                cancel={words.cancel}
+                confirming={confirming}
+                setConfirming={setConfirming}
+                pending={removing}
+                onConfirm={() => void removeChosen()}
+                touch
+              />
+            )}
+          </div>
+        )}
+
+        <FileProblems problems={problems} onDismiss={() => setProblems([])} dismissLabel={words.dismiss} />
+      </Panel>
       {drop.over && <DropHint label={words.drop} />}
       {viewing != null && (
         <AttachmentViewer
@@ -314,7 +336,7 @@ export default function PropertyPhotos({
           lang={lang}
         />
       )}
-    </section>
+    </div>
   );
 }
 

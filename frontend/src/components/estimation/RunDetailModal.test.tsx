@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -117,7 +117,7 @@ const RUN = {
 
 /* Mounting IS opening (lib/useDialog), which is how RunBody opens it:
  * `{detailOpen && <RunDetailModal/>}`. */
-function Host() {
+function Host({ run = RUN }: { run?: EstimationRun }) {
   const [open, setOpen] = useState(false);
   // One client per host, not per render: a re-render must not discard the
   // cache and every in-flight query with it.
@@ -128,7 +128,7 @@ function Host() {
         <button type="button" onClick={() => setOpen(true)}>
           open-run-detail
         </button>
-        {open && <RunDetailModal run={RUN} onClose={() => setOpen(false)} />}
+        {open && <RunDetailModal run={run} onClose={() => setOpen(false)} />}
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -242,5 +242,51 @@ describe('<RunDetailModal>', () => {
 
     const feedback = await screen.findByRole('button', { name: /Provide feedback/ });
     expect(runDetail().contains(feedback)).toBe(true);
+  });
+
+  it('heads each section with an L3 title between its hairlines, never a section card (system.md § Section cards)', async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    await screen.findByRole('button', { name: String(COMPARABLE_LISTING_ID) });
+
+    const dialog = runDetail();
+    expect(within(dialog).getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
+      .toEqual(expect.arrayContaining(['Rent range', 'Inputs', 'Trace', 'Comparables', 'Feedback history']));
+    expect(within(dialog).queryAllByRole('region')).toHaveLength(0);
+    expect(dialog.querySelector('#feedback')).not.toBeNull();
+  });
+
+  it('opens on a normal dialog title, not a small-caps label, keeping the run id in mono', async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    await screen.findByRole('button', { name: String(COMPARABLE_LISTING_ID) });
+
+    const title = within(runDetail()).getByRole('heading', { level: 2, name: 'Estimation detail · run #77' });
+    expect(title).not.toHaveClass('uppercase');
+    expect(within(title).getByText('#77')).toHaveClass('font-mono', 'tabular-nums');
+  });
+
+  it('titles the floating feedback panels as L3 headings, not small caps', async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Provide feedback/ }));
+
+    for (const name of ['Feedback', /^Skill prompt · /]) {
+      const h = within(runDetail()).getByRole('heading', { level: 3, name });
+      expect(h).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+      expect(h).not.toHaveClass('uppercase');
+    }
+  });
+
+  it('heads the set-aside comparables with an L3 title, not small caps', async () => {
+    render(
+      <Host run={{ ...RUN, comparables_excluded: [{ sreality_id: 555, reason: 'too far' }] } as EstimationRun} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    await screen.findByRole('button', { name: String(COMPARABLE_LISTING_ID) });
+
+    const h = within(runDetail()).getByRole('heading', { level: 3, name: 'Considered and set aside' });
+    expect(h).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+    expect(h).not.toHaveClass('uppercase');
   });
 });

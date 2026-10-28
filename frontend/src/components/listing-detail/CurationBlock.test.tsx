@@ -184,17 +184,19 @@ describe('<CurationBlock> failed reads', () => {
   const banner = (subject: string) =>
     screen.findByText(subject, { selector: 'strong' }).then((s) => s.parentElement as HTMLElement);
 
-  it('says the notes failed, with no "(0)", and reads them again', async () => {
+  it('says the notes failed, with no "0", and reads them again', async () => {
     mockReads();
     vi.mocked(listPropertyNotes).mockRejectedValueOnce(new Error('HTTP 500'));
     renderWithReads();
 
     const notes = await banner('Poznámky');
-    expect(screen.getByText('(—)')).toBeInTheDocument();
-    expect(screen.queryByText('(0)')).toBeNull();
+    /* The section card's bare count (C6): a dash, never a 0 it does not know. */
+    const card = within(screen.getByRole('region', { name: 'Poznámky' }));
+    expect(card.getByText('—')).toBeInTheDocument();
+    expect(card.queryByText('0')).toBeNull();
     fireEvent.click(within(notes).getByRole('button', { name: 'Zkusit znovu' }));
     expect(await screen.findByText('Sousedi jsou hlučni.')).toBeInTheDocument();
-    expect(screen.getByText('(1)')).toBeInTheDocument();
+    expect(card.getByText('1')).toBeInTheDocument();
   });
 
   it('says the tags failed instead of offering an empty picker, and reads them again', async () => {

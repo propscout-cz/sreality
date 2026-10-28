@@ -124,7 +124,11 @@ describe('<Collections>', () => {
     expect(await screen.findByText(/shared with 2/)).toBeInTheDocument();
     // The header counts my own collections, not the API total.
     expect(screen.getByText('1 collection.')).toBeInTheDocument();
-    const section = screen.getByText('Shared with me').closest('section') as HTMLElement;
+    /* A group of the list under an L3 title (section cards ladder), named by it. */
+    const section = screen.getByRole('region', { name: 'Shared with me' });
+    expect(within(section).getByRole('heading', { level: 2, name: 'Shared with me' }))
+      .toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+    expect(within(section).getByRole('heading', { level: 2, name: 'Shared with me' })).not.toHaveClass('uppercase');
     expect(within(section).getByRole('link', { name: 'Od Petra' })).toBeInTheDocument();
     expect(within(section).getAllByText(/Shared by petr@example\.cz/)).toHaveLength(2);
     expect(within(section).queryByRole('button', { name: 'Delete' })).toBeNull();
@@ -186,7 +190,7 @@ describe('<Collections>', () => {
     const mine = await screen.findByRole('link', { name: 'Šortlist' });
     const card = await addCard();
     expect(follows(card, mine)).toBe(true);
-    expect(follows(screen.getByText('Shared with me'), card)).toBe(true);
+    expect(follows(screen.getByRole('heading', { name: 'Shared with me' }), card)).toBe(true);
   });
 
   it('points the empty state at the card below it', async () => {

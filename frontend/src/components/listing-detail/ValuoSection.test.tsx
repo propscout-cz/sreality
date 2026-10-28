@@ -545,8 +545,9 @@ describe('<ValuoSection> states', () => {
 
   it('lists the comparables Valuo sent under the card, in its order, each per-m² figure with its unit', async () => {
     renderSection(page({ history: [V3] }));
-    const label = await screen.findByText(/^Srovnávací nemovitosti/);
-    expect(label).toHaveTextContent('Srovnávací nemovitosti · 2');
+    /* A group inside the card (C7): an L3 title and its bare count, never a box. */
+    const label = await screen.findByRole('heading', { level: 3, name: 'Srovnávací nemovitosti' });
+    expect(label.nextElementSibling).toHaveTextContent(/^2$/);
     const table = screen.getByRole('table', { name: 'Srovnávací nemovitosti Valuo' });
     const rows = within(table).getAllByRole('row');
     // Short one-line headers, the layout and the area in one cell, the per-m² under its price: no sideways scroll at 1024 px.
@@ -612,7 +613,7 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText(/^Srovnávací nemovitosti/)).not.toBeInTheDocument();
   });
 
-  it('on the phone reads the latest answer on its band with no editor and no button, and nothing without one', async () => {
+  it('on the phone reads the latest answer on its band with no editor and no button, and says so without one', async () => {
     const { unmount } = renderSection(page({ history: [SALE] }), { readOnly: true });
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
@@ -620,9 +621,23 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText(/^\d+ ocenění$/)).not.toBeInTheDocument(); // one card, no count
     unmount();
 
-    const { container } = renderSection(page({ history: [] }), { readOnly: true });
-    await waitFor(() => expect(apiGet).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    /* C10: the card stays on the phone too, one line, no action there (#1760 Q10). */
+    renderSection(page({ history: [] }), { readOnly: true });
+    const card = await screen.findByRole('region', { name: 'Valuo' });
+    expect(await within(card).findByText('Zatím bez ocenění.')).toBeInTheDocument();
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  /* C9/C10 (section cards, operator ruling 2026-10-28): no answer yet is one muted line and the
+     action inside the card, never the old dashed "Zatím bez ocenění" tile. */
+  it('says "Zatím bez ocenění." in one line with its action, no dashed tile', async () => {
+    const { container } = renderSection(page({ blocking: [] }));
+    const card = await screen.findByRole('region', { name: 'Valuo' });
+    expect(card).toHaveAttribute('id', 'valuo');
+    expect(await within(card).findByText('Zatím bez ocenění.')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Ocenit přes Valuo →' })).toBeInTheDocument();
+    expect(within(card).queryByText('Ocenění Valuo')).not.toBeInTheDocument();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 });
 

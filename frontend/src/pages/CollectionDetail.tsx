@@ -51,7 +51,7 @@ import type {
   CollectionPropertyRow,
   CollectionWithProperties,
 } from '@/lib/types';
-import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
 import { useActing } from '@/lib/acting';
@@ -126,8 +126,9 @@ function CollectionDetailDesktop() {
     <Page>
       <Crumb />
       <Header collection={collection} own={own} acting={acting} />
-      <Hairline />
-      <Members collection={collection} properties={properties} editable={own} />
+      <div className="mt-6">
+        <Members collection={collection} properties={properties} editable={own} />
+      </div>
     </Page>
   );
 }
@@ -280,12 +281,9 @@ function Header({
         <p className="mt-3 text-[0.75rem] text-[var(--color-brick)]">{error}</p>
       )}
       {own && sharing && (
-        <section
-          id={panelId}
-          className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4"
-        >
-          <SharingBlock collection={collection} />
-        </section>
+        <div className="mt-5">
+          <SharingBlock collection={collection} id={panelId} />
+        </div>
       )}
     </div>
   );
@@ -519,12 +517,13 @@ function MonitorSwitch({
 
 /* Share by email, read-only (migration 610) — the one ShareBlock, without modes;
  * the panel "Sdílet · N" opens under the header. */
-function SharingBlock({ collection }: { collection: Collection }) {
+function SharingBlock({ collection, id }: { collection: Collection; id: string }) {
   const qc = useQueryClient();
   const changed = () =>
     revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
   return (
     <ShareBlock
+      id={id}
       title="Sharing"
       description="People you share with see this collection and its properties, and read the notes you mark shared. They can't change it, and alerts stay yours."
       recipients={collection.shared_with}
@@ -722,16 +721,16 @@ function PropertiesBlock({
   editable: boolean;
 }) {
   return (
-    <div>
-      <SectionLabel>Properties</SectionLabel>
+    <Panel title="Properties" count={properties.length}>
       {properties.length === 0 ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">
+        <PanelEmpty>
           {editable
             ? `No properties yet. Use the "Add to collection" picker on a listing's detail page to put something here.`
             : 'No properties in this collection yet.'}
-        </p>
+        </PanelEmpty>
       ) : (
-        <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] overflow-hidden">
+        /* A table that scrolls keeps its own box (C9). */
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
@@ -761,7 +760,7 @@ function PropertiesBlock({
           </div>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 

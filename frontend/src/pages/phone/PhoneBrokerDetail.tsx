@@ -15,6 +15,7 @@ import { useMemo, useRef, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
+import Panel from '@/components/Panel';
 import DayRule from '@/components/phone/DayRule';
 import { CardRoll } from '@/components/phone/CardRoll';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
@@ -132,33 +133,23 @@ export default function PhoneBrokerDetail() {
     <div>
       <Dossier b={b} />
       <Facts b={b} />
-      <Sec label="Působnost">
-        <Footprint shares={dossier.region_shares} />
-        <Types
-          rows={listingsQ.data ?? null}
-          loading={listingsQ.isPending}
-          error={listingsQ.isError ? (listingsQ.error as Error) : null}
-          total={b.listing_count}
-        />
-      </Sec>
-      <Sec label="Firmy" aside={dossier.memberships.length > 0 ? fmtCount(dossier.memberships.length) : null}>
-        <Firms rows={dossier.memberships} />
-      </Sec>
+      {/* Section cards like the phone property page's (operator ruling 2026-10-28). */}
+      <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
+        <Panel title="Působnost">
+          <Footprint shares={dossier.region_shares} />
+          <Types
+            rows={listingsQ.data ?? null}
+            loading={listingsQ.isPending}
+            error={listingsQ.isError ? (listingsQ.error as Error) : null}
+            total={b.listing_count}
+          />
+        </Panel>
+        <Panel title="Firmy" count={dossier.memberships.length}>
+          <Firms rows={dossier.memberships} />
+        </Panel>
+      </div>
       <Offer brokerId={brokerId} />
     </div>
-  );
-}
-
-/* The prototype's section block: a micro heading, a mono aside, a hairline above. */
-function Sec({ label, aside, children }: { label: string; aside?: string | null; children: ReactNode }) {
-  return (
-    <section aria-label={label} className="border-t border-[var(--color-rule)] p-4">
-      <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h3 className="font-sans text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">{label}</h3>
-        {aside && <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink-3)]">{aside}</span>}
-      </div>
-      {children}
-    </section>
   );
 }
 

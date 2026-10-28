@@ -89,6 +89,12 @@ toolkit work.
   new chrome plugin layout"; option B of four). Every detail-page section, the admin panels and the extension's
   panel sections become a card with a title bar (Fraunces title, count, actions); small caps stay for field labels
   only. Spec `.interface-design/system.md` § Section cards, picture `docs/design/propscout-section-cards.png`.
+- **Done (branch `feature/section-cards`): the property page.** Every section of every tab, the Poznámky card above
+  them and the phone property page's sections are `Panel` cards, 16 px apart: the count bare beside the title
+  (never in brackets or the title string), the actions in the title bar (Moje fotky's Nahrát, Valuo's Sandbox,
+  Prozkoumat okolí, Ověřit aktuálnost), Valuo's comparables and both ledgers (`RunHistory`) L3 groups. C10: Odhady,
+  Makléř, Popis, Moje fotky and Valuo keep their card with count 0 and one line ("Zatím bez ocenění." + "Ocenit
+  přes Valuo →"); no dashed tile or box-in-a-box is left (the broker's contact card is `bare` inside its card).
 - **Next (not built):** the section cards: `components/Panel.tsx` first, then the property page's tabs, the other
   detail pages, and the extension's panel (with its new layout).
 

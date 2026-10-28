@@ -797,7 +797,7 @@ function EligibilityLoss({
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-[0.68rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)] font-medium">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           By property type
         </h3>
         <div className="mt-2 overflow-x-auto">
@@ -857,7 +857,7 @@ function EligibilityLoss({
       </div>
 
       <div>
-        <h3 className="text-[0.68rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)] font-medium">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           By portal
         </h3>
         <p className="mt-1 text-[0.72rem] leading-relaxed text-[var(--color-ink-3)] max-w-[52rem]">
@@ -1331,7 +1331,7 @@ function TownStatistics({ stats }: { stats: NewDedupCandidateStats }) {
       </p>
 
       <div>
-        <h3 className="text-[0.68rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           How many towns produced how many pairs
         </h3>
         <p className="mt-1 text-[0.72rem] leading-relaxed text-[var(--color-ink-3)] max-w-[46rem]">
@@ -1376,7 +1376,7 @@ function TownStatistics({ stats }: { stats: NewDedupCandidateStats }) {
       </div>
 
       <div>
-        <h3 className="text-[0.68rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           The towns that produced the most pairs
         </h3>
         <p className="mt-1 text-[0.72rem] leading-relaxed text-[var(--color-ink-3)] max-w-[46rem]">
@@ -1418,7 +1418,7 @@ function TownStatistics({ stats }: { stats: NewDedupCandidateStats }) {
       </div>
 
       <div>
-        <h3 className="text-[0.68rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           The biggest town + disposition buckets
         </h3>
         <p className="mt-1 text-[0.72rem] leading-relaxed text-[var(--color-ink-3)] max-w-[46rem]">

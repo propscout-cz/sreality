@@ -186,7 +186,7 @@ export default function PairCard({
 
       {top.length > 0 && (
         <div>
-          <h4 className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+          <h4 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
             Co nejvíc rozhodlo v modelu
           </h4>
           <ul className="mt-1 space-y-0.5">

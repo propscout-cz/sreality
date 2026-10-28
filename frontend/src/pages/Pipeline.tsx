@@ -37,6 +37,7 @@ import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
 import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
@@ -402,9 +403,9 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
       {active != null && <ViewerLine share={active} />}
 
       {sharing && active == null && (
-        <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
+        <div className="mt-5">
           <PipelineSharing shares={shares} />
-        </section>
+        </div>
       )}
 
       {manage && !readOnly && stages.length > 0 && <StageManager stages={stages} />}
@@ -987,15 +988,16 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
     if (label) create.mutate(label);
   };
 
+  /* A section card like Sdílení (C1–C6): the stages its count. Adding a stage stays the body's last row:
+     a title bar holds buttons and links only (C6), never a field. */
   return (
-    <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
-      <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Fáze pipeline
-      </p>
-      {err && (
-        <p className="mt-2 text-xs text-[var(--color-brick)]">{err}</p>
-      )}
-      <ul className="mt-3 space-y-2">
+    <Panel
+      className="mt-5"
+      title="Fáze pipeline"
+      count={stages.length}
+    >
+      {err && <p className="text-xs text-[var(--color-brick)]">{err}</p>}
+      <ul className="space-y-2">
         {stages.map((s, i) => (
           <StageEditorRow
             key={s.id}
@@ -1009,7 +1011,7 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           />
         ))}
       </ul>
-      <div className="mt-4 flex items-center gap-2 border-t border-[var(--color-rule)] pt-3">
+      <div className="flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-3">
         <input
           aria-label="Nová fáze"
           value={newLabel}
@@ -1025,12 +1027,12 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           type="button"
           onClick={submitNew}
           disabled={!newLabel.trim() || create.isPending}
-          className="text-[0.72rem] tracking-[0.1em] uppercase px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] disabled:opacity-50"
+          className={PANEL_ACTION}
         >
           Přidat
         </button>
       </div>
-    </section>
+    </Panel>
   );
 }
 

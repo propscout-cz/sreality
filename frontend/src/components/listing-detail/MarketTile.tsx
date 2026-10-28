@@ -34,7 +34,7 @@ import type { ImagePublic } from '@/lib/types';
 import { Segmented } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import { MultiselectChips } from '@/components/filter-controls';
-import { SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import Skeleton from '@/components/Skeleton';
 import StatsChart from '@/components/stats/StatsChart';
 import { useExploreNeighbourhood, useNeighbourhoodScope } from './neighbourhoodExplore';
@@ -91,16 +91,18 @@ export default function MarketTile({
       />
     );
   } else if (!template) {
+    /* C10: one muted line and its action, never a dashed box inside the card (C9). */
     body = (
-      <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-5 text-sm text-[var(--color-ink-2)]">
-        Grafy pro tuto kartu nastavíte v Browse › Statistiky: tlačítkem „+ {PROPERTY_CARD_LABEL}“ uložíte
-        současné grafy, nebo v menu kteréhokoli svého dashboardu zvolíte „Použít jako okolí dashboard“.
-        <div className="mt-3">
-          <Link to={withQuery(ROUTES.browse.build(), { tab: 'stats' })} className="text-[var(--color-copper)] hover:underline underline-offset-2">
+      <PanelEmpty
+        action={
+          <Link to={withQuery(ROUTES.browse.build(), { tab: 'stats' })} className="text-sm text-[var(--color-copper)] hover:underline underline-offset-2">
             Otevřít Statistiky →
           </Link>
-        </div>
-      </div>
+        }
+      >
+        Grafy pro tuto kartu nastavíte v Browse › Statistiky: tlačítkem „+ {PROPERTY_CARD_LABEL}“ uložíte
+        současné grafy, nebo v menu kteréhokoli svého dashboardu zvolíte „Použít jako okolí dashboard“.
+      </PanelEmpty>
     );
   } else if (charts.length === 0) {
     body = <Quiet>Dashboard „{template.name}“ zatím nemá žádný graf.</Quiet>;
@@ -114,14 +116,13 @@ export default function MarketTile({
     );
   }
 
+  /* A section card (C1–C10); the chart cards inside it stay as the Stats tab draws them. */
   return (
-    <section
-      aria-label={PROPERTY_CARD_LABEL}
-      className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5"
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <SectionLabel>{template?.name ?? PROPERTY_CARD_LABEL}</SectionLabel>
-        {explore && (
+    <Panel
+      title={template?.name ?? PROPERTY_CARD_LABEL}
+      className="min-w-0"
+      accessory={
+        explore && (
           <button
             type="button"
             onClick={explore}
@@ -130,11 +131,11 @@ export default function MarketTile({
           >
             Prozkoumat okolí <span aria-hidden>↗</span>
           </button>
-        )}
-      </div>
-
+        )
+      }
+    >
       {hood && (
-        <div className="mt-3 space-y-3">
+        <div className="space-y-3">
           <p className="text-[0.85rem] text-[var(--color-ink-2)]">
             {kind.join(' · ')} · do {fmtRadius(scope.radiusM)}
             {hood.dropped.length > 0 && (
@@ -179,8 +180,8 @@ export default function MarketTile({
         </div>
       )}
 
-      <div className="mt-4">{body}</div>
-    </section>
+      <div className={hood ? 'pt-1' : undefined}>{body}</div>
+    </Panel>
   );
 }
 

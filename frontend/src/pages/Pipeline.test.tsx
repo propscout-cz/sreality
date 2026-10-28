@@ -830,6 +830,25 @@ describe('<Pipeline> board', () => {
     expect(create).toHaveAccessibleName('Nová fáze');
   });
 
+  /* Section cards (operator ruling 2026-10-28): the stage manager is one card like
+     Sdílení — its title the region's name, the stages its count, never a small-caps label.
+     Adding a stage stays the body's last row: a title bar holds buttons and links only (C6). */
+  it('opens the stage manager as the Fáze pipeline section card, its count the stages', async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const card = await screen.findByRole('region', { name: 'Fáze pipeline' });
+    expect(card.tagName).toBe('SECTION');
+    expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    const title = within(card).getByRole('heading', { level: 2, name: 'Fáze pipeline' });
+    expect(title).not.toHaveClass('uppercase');
+    expect(title.nextElementSibling).toHaveTextContent(String(STAGES.length));
+    const bar = title.parentElement!;
+    expect(within(bar).queryByRole('textbox', { name: 'Nová fáze' })).toBeNull();
+    expect(within(card).getByRole('textbox', { name: 'Nová fáze' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Přidat' })).not.toHaveClass('uppercase');
+    expect(within(card).getByDisplayValue('Nabídka')).toBeInTheDocument();
+  });
+
   it('trash → confirm removes the card via removePipelineCard', async () => {
     renderBoard();
     const trash = await screen.findByLabelText('Odebrat z pipeline');
@@ -1416,6 +1435,19 @@ describe('<Pipeline> shared boards', () => {
       expect(api.unsharePipeline).not.toHaveBeenCalled();
       fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
       await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
+    });
+
+    /* Section cards (operator ruling 2026-10-28): the block is one card, its
+       title the region's name and the recipients its count. */
+    it('opens as the Sdílení section card, its count the recipients', async () => {
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      const card = screen.getByRole('region', { name: 'Sdílení' });
+      expect(card.tagName).toBe('SECTION');
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+      expect(within(card).getByRole('heading', { level: 2, name: 'Sdílení' }).nextElementSibling)
+        .toHaveTextContent('1');
+      expect(card.parentElement).not.toHaveClass('border');
     });
   });
 });
