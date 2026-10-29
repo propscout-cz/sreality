@@ -65,11 +65,18 @@ class SearchArgs(SearchFilters):
         "anywhere.")
     sort: Literal[SORTS] = Field(
         "-first_seen_at", description="The order Browse's sort menu offers: a field, descending with a leading '-'; "
-        "a missing value sorts last. Ties break on property_id.")
+        "a missing value sorts last. Ties break on property_id. With exactly one portal, newest / oldest first "
+        "orders by when the property's newest ad on that portal was first seen, as Browse does.")
     limit: int = Field(PAGE_MAX, ge=1, le=PAGE_MAX, description="How many properties one page holds.")
     offset: int = Field(
         0, ge=0, le=REACH - PAGE_MAX, description=f"How many matches to skip. Only the first {REACH} are reachable; "
         "narrow the filters to reach others.")
+
+
+def _sole_portal(args: SearchArgs) -> str | None:
+    """queries.ts solePortal: the one included portal, when exactly one is."""
+    portals = set(args.portals or ())
+    return next(iter(portals)) if len(portals) == 1 else None
 
 
 def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
@@ -78,18 +85,27 @@ def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
     for fragments, more in (district_where(args.districts, "l"), bounds_where(args.bounds, "l")):
         where += fragments
         params.update(more)
+    if portal := _sole_portal(args):
+        # queries.ts applyPortalRule: redundant by the stored invariant (an ad on P <=> a date for P), it keeps the
+        # one-portal order's column non-NULL and lets P's partial index (migration 590) serve page and count alike.
+        # P is a PORTAL_OPTIONS literal.
+        where.append(f"l.newest_ad_at_{portal} IS NOT NULL")
     params["hide_dismissed"] = not args.show_dismissed
     for name in _SETS:
-        # setScope.scopeArgs: an empty side is no side.
+        # setScope.scopeArgs over a scope already in normalizeScope's form (SetScope): an empty side is no side.
         scope = getattr(args, name)
         params.update({f"{name}_set": scope.set if scope else None, f"{name}_in": (scope.in_ if scope else None) or None,
                        f"{name}_out": (scope.out if scope else None) or None})
     return f"FROM {_SOURCE} l WHERE {' AND '.join(where) or 'true'}", params
 
 
-def _order(sort: str) -> str:
-    field, way = sort.lstrip("-"), "DESC" if sort.startswith("-") else "ASC"
+def _order(args: SearchArgs) -> str:
+    field, way = args.sort.lstrip("-"), "DESC" if args.sort.startswith("-") else "ASC"
     nulls = "" if field in _NOT_NULL_SORTS else " NULLS LAST"
+    # queries.ts effectiveSort (MS19, Q49 b): with one portal P, newest / oldest first is when the property's
+    # newest ad on P was first seen, so a property advertised there again rises; never NULL (cohort's conjunct).
+    if field == "first_seen_at" and (portal := _sole_portal(args)):
+        field = f"newest_ad_at_{portal}"
     return f"l.{field} {way}{nulls}, l.property_id {way}"
 
 
@@ -103,7 +119,7 @@ def search_properties(conn: psycopg.Connection, args: SearchArgs) -> dict[str, A
     source, params = cohort(args)
     columns = ", ".join(f"l.{c}" for c in SEARCH_COLUMNS)
     with conn.cursor() as cur:
-        cur.execute(f"SELECT {columns} {source} ORDER BY {_order(args.sort)} LIMIT %(limit)s OFFSET %(offset)s",
+        cur.execute(f"SELECT {columns} {source} ORDER BY {_order(args)} LIMIT %(limit)s OFFSET %(offset)s",
                     {**params, "limit": args.limit, "offset": args.offset})
         rows = [_card(r) for r in cur.fetchall()]
         cur.execute(f"SELECT count(*) {source}", params)

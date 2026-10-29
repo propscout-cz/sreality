@@ -144,6 +144,40 @@ def test_the_order_is_keysets_a_missing_value_last_and_property_id_breaks_ties(s
     assert f"ORDER BY {order} LIMIT" in page
 
 
+@pytest.mark.parametrize("args, order, conjunct", [
+    ({"portals": ["idnes"]}, "l.newest_ad_at_idnes DESC, l.property_id DESC", True),
+    ({"portals": ["web", "web"], "sort": "first_seen_at"}, "l.newest_ad_at_web ASC, l.property_id ASC", True),
+    ({"portals": ["idnes"], "sort": "-price_czk"}, "l.price_czk DESC NULLS LAST, l.property_id DESC", True),
+    ({"portals": ["idnes", "remax"]}, "l.first_seen_at DESC, l.property_id DESC", False),
+    ({"portals_excluded": ["idnes"]}, "l.first_seen_at DESC, l.property_id DESC", False),
+], ids=["one", "one-oldest", "other-sort", "two", "excluded"])
+def test_one_portal_orders_newest_and_oldest_first_by_its_own_newest_ad_as_browse_does(
+        args: dict[str, Any], order: str, conjunct: bool) -> None:
+    """queries.ts effectiveSort + applyPortalRule (Q49 b): the order changes, never the rows."""
+    _, ((page, _), (count, _)) = _run({"category_type": "prodej", **args})
+    assert f"ORDER BY {order} LIMIT" in page
+    portal = args["portals"][0] if conjunct else None
+    assert (f"l.newest_ad_at_{portal} IS NOT NULL" in count) is conjunct
+    assert ("newest_ad_at_" in count) is conjunct
+
+
+def test_every_portals_order_column_is_on_browses_source() -> None:
+    assert {f"newest_ad_at_{o.value}" for o in fr.PORTAL_OPTIONS} <= _projection_columns()
+
+
+@pytest.mark.parametrize("scope, sides", [
+    ({"set": "out", "in": [5], "out": [6]}, ("out", None, None)),
+    ({"in": [5, 6, 5], "out": [5]}, (None, [6], [5])),
+    ({"in": [5], "out": [5]}, (None, None, [5])),
+    ({"set": "in", "in": [5]}, (None, [5], None)),
+    ({"set": None, "in": [], "out": []}, (None, None, None)),
+], ids=["out-wins-the-lists", "out-wins-an-id", "in-and-out", "an-element-supersedes-in", "empty-is-off"])
+def test_a_set_scope_reaches_the_source_in_browses_normal_form(scope: dict[str, Any], sides: tuple[Any, ...]) -> None:
+    """setScope.scopeArgs normalizes first, so a contradiction selects what Browse shows, never an empty set."""
+    _, (_, (_, params)) = _run({"category_type": "prodej", "collections": scope})
+    assert (params["collections_set"], params["collections_in"], params["collections_out"]) == sides
+
+
 def test_the_place_and_the_box_are_the_watchdogs_renderers() -> None:
     _, ((page, params), _) = _run({
         "category_type": "prodej", "bounds": {"west": 16.5, "south": 49.1, "east": 16.7, "north": 49.3},

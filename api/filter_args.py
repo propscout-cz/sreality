@@ -58,9 +58,23 @@ class CityIndexRule(Args):
 class SetScope(Args):
     # frontend/src/lib/setScope.ts SetScope; membership is judged under the reader's own login (migration 629).
     set: Literal["in", "out"] | None = Field(
-        None, description="'in' = a member of any element of the set, 'out' = of none; null = no whole-set side.")
+        None, description="'in' = a member of any element of the set, 'out' = of none (the id lists are then "
+        "ignored, as on Browse); null = no whole-set side.")
     in_: list[int] = Field([], alias="in", description="Element ids the property must be in.")
-    out: list[int] = Field([], description="Element ids the property must not be in.")
+    out: list[int] = Field([], description="Element ids the property must not be in; an id here wins over `in`.")
+
+    # setScope.normalizeScope, so a scope selects what Browse makes of it: the 'out' side empties both lists, an id
+    # on both lists is out, an element on the in side supersedes the 'in' side, and the lists are deduplicated.
+    @model_validator(mode="after")
+    def _browses_normal_form(self) -> Self:
+        if self.set == "out":
+            self.in_, self.out = [], []
+            return self
+        self.out = list(dict.fromkeys(self.out))
+        self.in_ = [i for i in dict.fromkeys(self.in_) if i not in self.out]
+        if self.in_:
+            self.set = None
+        return self
 
 
 _COMPOSITES: dict[fr.FilterType, Any] = {

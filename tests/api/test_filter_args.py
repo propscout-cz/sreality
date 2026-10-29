@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -150,6 +152,17 @@ def test_the_composites_are_strict_here_while_the_stored_watchdog_blobs_stay_len
         Browse(city_index_rules=[{"index_name": "bezpecnost", "op": "~", "value": 6}])
     with pytest.raises(ValidationError, match="all"):
         Browse(tags={"set": "in", "all": [1]})
+
+
+@pytest.mark.parametrize("scope, normal", [
+    ({"set": "out", "in": [5], "out": [6]}, {"set": "out", "in": [], "out": []}),
+    ({"in": [5, 6, 5], "out": [5, 5]}, {"set": None, "in": [6], "out": [5]}),
+    ({"set": "in", "in": [5]}, {"set": None, "in": [5], "out": []}),
+    ({"set": "in", "out": [5]}, {"set": "in", "in": [], "out": [5]}),
+])
+def test_a_set_scope_is_held_in_browses_normal_form(scope: dict[str, Any], normal: dict[str, Any]) -> None:
+    """frontend/src/lib/setScope.ts normalizeScope, rule for rule."""
+    assert filter_values(Browse(tags=scope))["tags"] == normal
 
 
 def test_filter_values_hands_a_composite_on_as_its_wire_json() -> None:

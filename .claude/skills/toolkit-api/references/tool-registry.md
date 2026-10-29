@@ -15,12 +15,16 @@ without saying whose data it reads and what it does.
 - **`effect`**: `READ`, `WRITE` (tenant only, by census), `COSTLY` (money: Valuo, an LLM) or `CODE`.
 - **`args`**: a Pydantic model on `api.filter_args.Args` (`extra="forbid"`: an unknown key is an error, never
   dropped). Filter fields are GENERATED from `toolkit/filter_registry.py` by `filter_model(name, ids,
-  consumer)`: the registry's type, vocabulary (`Literal`), description (plus its unit and basis) and `min` (as
-  `ge`), the CONSUMER's default (never `FilterDef.default`, which is Browse's), nullable exactly when that default
-  is None. The registry's `max`/`step` are slider axes and are never bounds; an integer's one ceiling is its int4
-  column. A filter the consumer has no parameter for raises at import; a consumer whose semantics differ restates
-  the text (`descriptions=`). A model holding both `max_age_days` and `lifecycle` refuses recency without
-  `lifecycle='active'`, which the cohort would drop. `filter_values(args)` hands the filters on by registry id.
+  consumer)`: the registry's type, vocabulary (`Literal`, integer vocabularies too), description (plus its unit
+  and basis) and `min` (as `ge`), the CONSUMER's default, or the registry's own `FilterDef.default` when the
+  consumer is the filter compiler (`consumer=None`, a mapping consumer: `search_properties`), nullable exactly when
+  that default is None. The composites are strict models: place chips (`Chip`), city-index rules (`CityIndexRule`)
+  and a curated-set scope (`SetScope`, held in `setScope.ts` normalizeScope's form); the stored Watchdog blobs keep
+  their lenient ones. Gemini's adapter drops an integer `enum` (its schema takes strings only); the server still
+  refuses another value. The registry's `max`/`step` are slider axes and are never bounds; an integer's one ceiling
+  is its int4 column. A filter the consumer has no parameter for raises at import; a consumer whose semantics
+  differ restates the text (`descriptions=`). A model holding both `max_age_days` and `lifecycle` refuses recency
+  without `lifecycle='active'`, which the cohort would drop. `filter_values(args)` hands the filters on by registry id.
 - **`handler(ctx, args)`**: `ctx.conn` is the one connection the tenancy picked; a handler opens none (AST
   census). A market handler returns its toolkit envelope unchanged; a tenant handler returns its module's own
   shape (at least `data`).

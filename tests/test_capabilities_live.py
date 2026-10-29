@@ -382,7 +382,8 @@ def test_search_selects_what_the_watchdog_matches_for_the_same_filters(
     if "city_index_rules" in spec:
         spec = {"city_index_rules": _city_rule(cur)}
     watched = _watched(cur, spec, seeded)
-    assert watched and watched < set(_SEEDS), (spec, watched)   # it discriminates
+    # It discriminates: the filter changes the Watchdog's own matches (the deal type widens them).
+    assert watched and watched != _watched(cur, {}, seeded), (spec, watched)
     assert _searched(cur, users["a"], {"show_dismissed": True, **spec}, seeded) == watched
 
 
@@ -427,9 +428,33 @@ def test_the_users_own_lenses_are_judged_under_their_login(
     assert _searched(cur, users["b"], {}, seeded) == everyone
     assert _searched(cur, users["a"], {"tags": {"in": [tags["a"]]}}, seeded) == {"p1"}
     assert _searched(cur, users["a"], {"tags": {"set": "out"}}, seeded) == everyone - {"p1", "p9"}
+    # Browse's normal form (setScope.normalizeScope): the 'out' side ignores the lists, an id on both is out.
+    assert _searched(cur, users["a"], {"tags": {"set": "out", "in": [tags["a"]]}}, seeded) == everyone - {"p1", "p9"}
+    assert _searched(cur, users["a"], {"tags": {"in": [tags["a"]], "out": [tags["a"]]}}, seeded) == everyone - {
+        "p1", "p9"}
     assert _searched(cur, users["b"], {"tags": {"in": [tags["a"]]}}, seeded) == set()
     assert _searched(cur, users["a"], {"with_estimates": True}, seeded) == {"p1"}
     assert _searched(cur, users["b"], {"with_estimates": True}, seeded) == {"p2"}
+
+
+def test_one_portal_orders_by_its_own_newest_ad_so_a_property_advertised_there_again_rises(
+        cur: Any, seeded: dict[str, int], users: dict[str, Any]) -> None:
+    """Q49 b (queries.ts effectiveSort): p2, first seen 20 days ago on sreality, gets an idnes ad today. With idnes
+    alone it leads newest first though p1 was first seen later; with no portal its own first sighting still orders."""
+    now, i = datetime.now(timezone.utc), list(_SEEDS).index("p2")
+    ad = _advert(cur, seeded["p2"], source="idnes", price=7_000_000, disposition="3+kk", area_m2=80,
+                 first_seen_at=now, last_seen_at=now)
+    _placed(cur, ad, (12.31 + i * 0.008, 48.95), "address_point", 10, town_code=_TOWN_A)
+    _recompute(cur, seeded["p2"])
+    sync_browse_list(cur.connection, [seeded["p2"]])
+    names = {pid: n for n, pid in seeded.items()}
+
+    def order(args: dict[str, Any]) -> list[str]:
+        out = tool_call(cur, users["a"], "search_properties", {"bounds": _BOX, "category_type": "prodej", **args})
+        return [names[r["property_id"]] for r in out["data"] if r["property_id"] in names]
+    assert order({"portals": ["idnes"]}) == ["p2", "p1", "p4"]
+    assert order({"portals": ["idnes"], "sort": "first_seen_at"}) == ["p4", "p1", "p2"]
+    assert order({}) == ["p1", "p9", "p10", "p2", "p4", "p3", "p5"]
 
 
 def test_a_page_is_browses_cards_in_its_order_with_the_total(

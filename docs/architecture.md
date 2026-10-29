@@ -2482,7 +2482,8 @@ renumber.** Navigate by area:
     cohort (`listings`, adapter `toolkit/comparables._shared_filter_where`: comparables, velocity,
     the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
     source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
-    the map box, the place chips and the reader's own lenses). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    the map box, the place chips, the reader's own lenses in `setScope.ts` normalizeScope's form and
+    the one-portal order of Q49 b). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
@@ -2571,7 +2572,8 @@ renumber.** Navigate by area:
     property's own dates, a header chip names the order and a card whose day on P differs
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant
     `newest_ad_at_<P> is not null` conjunct rides on the list, cards and count alike, so the
-    portal's partial index serves the page and the count from ONE filter chain.
+    portal's partial index serves the page and the count from ONE filter chain. The agents'
+    `search_properties` orders and narrows the same way (`api/property_search._order`, `cohort`).
     **PLACE is the same rule (W3 S3, migration 504; the street since 605): ONE code predicate,
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
@@ -4205,10 +4207,11 @@ renumber.** Navigate by area:
     label: that would copy the headline into a second column on 32k rows, leave every future
     portal to remember the rule, and make the data lie in order to spare the reader a function
     call. Live readers moved:
-    `toolkit/filter_compiler.compile_filter_where` for both of its relations (the `listings`
-    cohorts and the Watchdog's `properties_public`). The plot spelling is declared once in
-    `FilterGrain.exprs`, and is textually identical because neither relation publishes a plot
-    column.
+    `toolkit/filter_compiler.compile_filter_where` for its three relations. The two that publish
+    no plot column (the `listings` cohorts and the Watchdog's `properties_public`) spell
+    `plot_area_m2()` through `FilterGrain.exprs`, declared once per relation and textually
+    identical; Browse's own source (`browse_list`, `BROWSE_GRAIN`, read by the agents'
+    `search_properties`) reads its published `plot_area_m2` column.
 
     **On the SPA the same measure has to BE a column, and getting that wrong is a silent
     no-op** (migration 535, caught in review). `registryQueryBuilder.applyRegistryFilters` is
