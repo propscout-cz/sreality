@@ -1171,9 +1171,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
-  (a pinned plan, an interactive apply) inside a merge window, the worker's in an e9 window with the autodedup brake on,
-  then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
-  redeploys the API and the worker, which have no watch patterns (#1857).
+  (a pinned plan, an interactive apply) inside a merge window, the worker's in one the merge coordinator runs with the
+  autodedup brake on, then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A
+  `.railway/`-only merge still redeploys the API and the worker, which have no watch patterns (#1857).
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
   row reading SUCCESS, not SKIPPED.
@@ -1181,13 +1181,13 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
     CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
     then every project's pinned plan checked against its expected counts (`0:0` unless named), one result per label.
-  - `window <label> <adds> <destroys> <service>`, one e9 window, the autodedup brake on for `worker`: the gate (e9's
-    light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image` among them when the PR
-    changes an image input), the scoped pinned plan, the interactive apply, the checks before the merge, the merge at
-    once, Railway's commit statuses on the merge SHA (one per declared service), the read-only check of each public
-    service the merge redeployed (the API on every merge; vite on a `frontend/` change, `workflow-docs.json`
-    included), then drift = 0 on all three from main's file. The apply precedes the merge, so main declares nothing
-    Railway lacks for longer than the merge takes.
+  - `window <label> <adds> <destroys> <service>`, one window the merge coordinator runs, the autodedup brake on for
+    `worker`: the gate (its light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image`
+    among them when the PR changes an image input), the scoped pinned plan, the interactive apply, the checks before
+    the merge, the merge at once, Railway's commit statuses on the merge SHA (one per declared service), the read-only
+    check of each public service the merge redeployed (the API on every merge; vite on a `frontend/` change,
+    `workflow-docs.json` included), then drift = 0 on all three from main's file. The apply precedes the merge, so
+    main declares nothing Railway lacks for longer than the merge takes.
   - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from the `main`
     branch after `git pull --ff-only`, never a detached HEAD, which main's wizard refuses until #2025 merges), then
     plans all three.
