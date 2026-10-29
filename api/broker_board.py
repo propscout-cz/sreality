@@ -111,11 +111,11 @@ WITH c AS (
   FROM j GROUP BY broker_id
 )
 SELECT s.*, m.*, p.broker_id, p.properties, p.exited, p.not_exited, p.unknown
-FROM (SELECT count(*) AS cohort_properties, count(DISTINCT c.category_main) AS category_mains,
-             count(DISTINCT c.category_type) AS category_types, max(c.last_seen_at) AS data_freshness,
+FROM (SELECT count(*) AS cohort_properties, coalesce(min(c.category_main) <> max(c.category_main), false) AS mixed_main,
+             coalesce(min(c.category_type) <> max(c.category_type), false) AS mixed_type, max(c.last_seen_at) AS data_freshness,
              array_remove(ARRAY[{uncovered}]::text[], NULL) AS uncovered_portals
       FROM c) s
-CROSS JOIN (SELECT count(DISTINCT j.property_id) AS attributed_properties,
+CROSS JOIN (SELECT (SELECT count(*) FROM (SELECT property_id FROM j GROUP BY property_id) a) AS attributed_properties,
                    count(*) FILTER (WHERE j.outcome = 'exited') AS market_exited,
                    count(*) FILTER (WHERE j.outcome = 'not_exited') AS market_not_exited,
                    count(*) FILTER (WHERE j.outcome = 'unknown') AS market_unknown
@@ -133,8 +133,7 @@ def _refusal(args: BoardArgs, head: Mapping[str, Any]) -> tuple[str | None, list
     outcome = [f for f in FILTERS if f in OUTCOME and getattr(args, f) != fields[f].default]
     if outcome:
         return OUTCOME_SELECTED, outcome
-    mixed = [f for f, kinds in (("category_type", head["category_types"]), ("category_main_in", head["category_mains"]))
-             if kinds > 1]
+    mixed = [f for f, key in (("category_type", "mixed_type"), ("category_main_in", "mixed_main")) if head[key]]
     return (MIXED_CATEGORY if mixed else None), mixed
 
 

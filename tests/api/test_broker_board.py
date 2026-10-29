@@ -29,7 +29,7 @@ def is_board(sql: str) -> bool:
 
 def head(**over: Any) -> dict[str, Any]:
     """The board statement's one row with no broker: the cohort's totals."""
-    return {"cohort_properties": 0, "category_mains": 1, "category_types": 1, "data_freshness": None,
+    return {"cohort_properties": 0, "mixed_main": False, "mixed_type": False, "data_freshness": None,
             "uncovered_portals": [], "attributed_properties": 0, "market_exited": 0, "market_not_exited": 0,
             "market_unknown": 0, "broker_id": None, "properties": None, "exited": None, "not_exited": None,
             "unknown": None, **over}
@@ -79,10 +79,10 @@ def test_an_outcome_filter_refuses_speed_and_no_other_does(fid: str) -> None:
 @pytest.mark.parametrize("args, totals, refused, by", [
     ({"tom_days_max": 30, "status": "active", "portals_excluded": ["idnes"], "portals_excluded_active_only": True},
      {}, bb.OUTCOME_SELECTED, ["status", "tom_days_max", "portals_excluded_active_only"]),
-    ({"status": "active"}, {"category_types": 2}, bb.OUTCOME_SELECTED, ["status"]),
-    ({}, {"category_mains": 2}, bb.MIXED_CATEGORY, ["category_main_in"]),
-    ({}, {"category_mains": 3, "category_types": 2}, bb.MIXED_CATEGORY, ["category_type", "category_main_in"]),
-    ({}, {"category_mains": 0, "category_types": 0}, None, []),
+    ({"status": "active"}, {"mixed_type": True}, bb.OUTCOME_SELECTED, ["status"]),
+    ({}, {"mixed_main": True}, bb.MIXED_CATEGORY, ["category_main_in"]),
+    ({}, {"mixed_main": True, "mixed_type": True}, bb.MIXED_CATEGORY, ["category_type", "category_main_in"]),
+    ({}, {"mixed_main": False, "mixed_type": False}, None, []),
 ], ids=["every outcome filter set, in the agenda's order", "an outcome filter over a mixed cohort", "two property types",
         "two of each", "an empty cohort"])
 def test_a_refusal_names_the_filters_to_change_and_volume_still_answers(
