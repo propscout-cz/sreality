@@ -32,7 +32,7 @@ it (`api/`). They do not apply to the scraper.
    **An agent reaches a tool through the tool registry** (`api/capabilities/`, #2062): one `Entry` per tool
    (tenancy + effect, a generated strict argument model), one `registry.call`, one error table, structural
    truncation. Adding a tool, its census and the parity reads (#2063: search, dossier, own context, brokers, every
-   read bounded and recordable through `Caller.record`): `references/tool-registry.md`.
+   read bounded): `references/tool-registry.md`.
 3. **Every tool excludes `given_up = true` listings** from `listing_fetch_failures` by
    default. An `include_unreliable: bool = False` parameter overrides. Every cohort (`_shared_filter_where`, the listings adapter over `toolkit/filter_compiler.compile_filter_where`: comparables, velocity, the transit corridor) counts a property ONCE: its FROM is `location_data.claims_common.COHORT_LOCATION_FROM` (ruling R8, migration 636: place → the live property it locates → its canonical advert as the comparable, so price, area and snapshot_id are the canonical advert's and distance, district and place the location advert's), and `_shared_filter_where` leaves out every advert of the subject's property via `TargetSpec.exclude_listing_ids` / `TargetIn.exclude_listing_ids` (the ONE exclusion, decision 13: any advert of the subject names its whole property; the sreality-keyed `exclude_ids` is gone, a frozen spec's copy is history and never re-read).
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
@@ -223,8 +223,7 @@ it (`api/`). They do not apply to the scraper.
     gain a line when a seventh appears.
 - **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
   per call, every read recorded on the run; assistants over MCP stay masked. Built (#2063) as `get_property_brokers`, the
-  `POST /brokers/by-listings` read on the service connection, recordable through the `Caller.record` seam;
-  recording on the run arrives with #2065's loop (no caller supplies a recorder yet).
+  `POST /brokers/by-listings` read on the service connection; the run's step journal (#2065's loop) records it.
 
 ## Error contract and the transport deadline (Broker Unify W2)
 

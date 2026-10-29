@@ -1,5 +1,4 @@
-"""Every tool, declared once, and the one path to it: `call` validates, picks the connection, runs, maps, fits,
-records."""
+"""Every tool, declared once, and the one path to it: `call` validates, picks the connection, runs, maps, fits."""
 
 from __future__ import annotations
 
@@ -62,11 +61,10 @@ def _connection(caller: Caller, entry: Entry) -> Iterator[psycopg.Connection]:
 
 
 def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
-    """Run one tool; its result envelope, or a ToolError. The caller's recorder sees whichever, once."""
+    """Run one tool; its result envelope, or a ToolError."""
+    entry, args = validate(name, raw_args)
     try:
-        entry, args = validate(name, raw_args)
-        # A refusal from the connection or the tool is raised inside the `with`, so a tenant transaction rolls back
-        # before the error is mapped; a validation refusal opens none.
+        # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
         with _connection(caller, entry) as conn:
             result = entry.handler(Context(conn), args)
             # A handler that swallowed a database error answered without that read (rent_map's reference swallows
@@ -75,17 +73,9 @@ def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
                 raise busy()
             if not isinstance(result, dict) or "data" not in result:
                 raise TypeError(f"{name} returned no envelope")
-            result = fit(result)
+            return fit(result)
     except Exception as exc:
-        error = to_tool_error(exc, tool=name)
-        if caller.record is not None:
-            caller.record(name, raw_args, error.payload())
-        if error is exc:
-            raise
-        raise error from exc
-    if caller.record is not None:
-        caller.record(name, raw_args, result)
-    return result
+        raise to_tool_error(exc, tool=name) from exc
 
 
 def schemas() -> list[dict[str, Any]]:

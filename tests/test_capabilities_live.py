@@ -2,7 +2,7 @@
 as that user, acting for no one; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
 places a property we hold at its location ad and returns the toolkit's own envelope; search_properties selects, under
 the user's login, exactly the properties the Watchdog matches for the same filters (#2063); the dossier is the property
-page's read under the user's login and the brokers the page's, at most twenty people a call, each call recorded; the
+page's read under the user's login and the brokers the page's, at most twenty people a call; the
 own context is what each user reads in their own identity, a collection shared with them included (#2063). Runs in
 CI's migrations job (`TEST_DATABASE_URL`)."""
 
@@ -591,7 +591,7 @@ def _broker(cur: Any, n: int) -> tuple[int, int]:
     return broker, int(cur.fetchone()[0])
 
 
-def test_the_brokers_are_the_pages_until_the_twenty_first_person_and_the_read_is_recorded(cur: Any) -> None:
+def test_the_brokers_are_the_pages_until_the_twenty_first_person(cur: Any) -> None:
     """Asked: an ended property (its ended ad's broker, flagged), one whose canonical ad is its second live ad (that
     ad's broker first, then the other live ads' person carrying both their ads; the ended ad's broker never), and one
     with twenty live ads by twenty people. The call stops at the twenty-first person."""
@@ -611,8 +611,7 @@ def test_the_brokers_are_the_pages_until_the_twenty_first_person_and_the_read_is
     cur.execute("UPDATE properties SET repr_listing_ref_id = CASE id WHEN %s THEN %s ELSE %s END WHERE id IN (%s, %s)",
                 (two, a2, oldest, two, many))
 
-    records: list[tuple[Any, ...]] = []
-    caller = Caller(market=cur.connection, record=lambda *r: records.append(r))
+    caller = Caller(market=cur.connection)
     with pytest.raises(ToolError) as info:
         registry.call(caller, "get_property_brokers", {"property_ids": list(range(1, 22))})
     assert info.value.code is ToolErrorCode.INVALID_ARGUMENTS
@@ -628,5 +627,3 @@ def test_the_brokers_are_the_pages_until_the_twenty_first_person_and_the_read_is
         {"kept": 20, "total": 23}, [many], 23, False)
     first = out["data"][0]
     assert (first["primary_email"], first["primary_phone"]) == ("lp-0@rk.test", "+420 700 000 000")
-    assert [r[0] for r in records] == ["get_property_brokers"] * 2 and records[1] == (
-        "get_property_brokers", {"property_ids": [ended, two, many]}, out)

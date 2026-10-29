@@ -58,9 +58,9 @@ def _iso(v: Any) -> str | None:
 
 def _bounded(ids: list[int]) -> list[int]:
     """Deduped, sorted, capped. The one batch route (POST /brokers/by-listings)
-    rejects an over-cap batch outright; for the direct callers, the download and
-    get_property_brokers, which pass every ad of their properties, this slice is
-    the only bound: past MAX_BATCH ads the highest ids are dropped, unreported."""
+    rejects an over-cap batch outright and get_property_brokers reads in MAX_BATCH
+    batches; this slice is only the backstop for a direct toolkit/agent caller,
+    which must never silently spill into a huge IN."""
     return sorted({int(i) for i in ids})[:MAX_BATCH]
 
 

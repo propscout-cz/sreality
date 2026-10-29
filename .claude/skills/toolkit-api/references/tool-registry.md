@@ -64,12 +64,9 @@ whose anchor the subject lacks is REFUSED (`subject.unanchored`, shared with the
    is no other row cap: each tool bounds itself (search: pages of `property_search.PAGE_MAX` cards, sized so the
    widest fits whole, within the first `REACH` matches; 20 properties per call; the page's newest 100 runs per
    property in the dossier; the broker read stopping at the 20th person).
-5. Records, when the transport hands a recorder: `Caller.record` is optional (default None), and when set,
-   `call` hands it `(name, raw_args, payload)` exactly once per call, with the fitted envelope or, on any refusal
-   or failure (a validation refusal included), the ToolError's payload. Today no caller supplies one (the
-   `scripts/capabilities_demo.py` adapter passes none), so nothing is recorded yet: #2065's loop supplies the run's
-   recorder and #2070's ledger plugs in here. No tool keeps a ledger of its own (the broker read included), so an
-   adapter that must record (an agent run, ADR-0002) passes its recorder; the registry never records by itself.
+5. Records nothing: the transport that calls a tool records it. #2065's loop journals each tool step's raw
+   arguments and what the model got back (the fitted envelope, or the ToolError's payload on any refusal), which is
+   where ADR-0002's recorded broker read lives; `scripts/capabilities_demo.py` records nothing.
 
 `schemas()` renders each `args` through `schema.portable`: `$ref` inlined, `X | None` as X plus `nullable: true`,
 no titles, no null defaults (Gemini's client refuses `$ref`, type arrays and exclusive bounds; the census builds

@@ -91,7 +91,7 @@ def script(props: dict[int, tuple[Any, ...]] = PROPS, runs: list[tuple[Any, ...]
     ])
 
 
-def run(name: str, args: object, conn: ScriptConn | None = None, record: Any = None) -> dict[str, Any]:
+def run(name: str, args: object, conn: ScriptConn | None = None) -> dict[str, Any]:
     """`name` through the one call path, either tenancy reading `conn`."""
     conn = conn or script()
 
@@ -101,7 +101,7 @@ def run(name: str, args: object, conn: ScriptConn | None = None, record: Any = N
         yield conn
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(registry.tenant_pool, "tenant_transaction", own)
-        return registry.call(Caller(market=conn, claims={"sub": "a"}, record=record), name, args)
+        return registry.call(Caller(market=conn, claims={"sub": "a"}), name, args)
 
 
 # --- the page's columns -----------------------------------------------------------------------------------------
@@ -225,11 +225,11 @@ _REFUSED = [{"property_ids": list(range(1, 22))}, {"property_ids": [0]}, {"prope
                                         for a in [{"property_ids": []}, *_REFUSED]]
                          + [("get_my_property_context", a) for a in _REFUSED])
 def test_up_to_twenty_property_ids_and_nothing_else_or_no_database_is_touched(name: str, args: dict[str, Any]) -> None:
-    conn, records = ScriptConn([]), []
+    conn = ScriptConn([])
     with pytest.raises(ToolError) as info:
-        run(name, args, conn, record=lambda *r: records.append(r))
+        run(name, args, conn)
     assert info.value.code is ToolErrorCode.INVALID_ARGUMENTS
-    assert not conn.executed and records == [(name, args, info.value.payload())]
+    assert not conn.executed
 
 
 # --- the user's own context -------------------------------------------------------------------------------------
@@ -317,10 +317,9 @@ def _broker(listing_id: int, broker_id: int) -> dict[str, Any]:
             "primary_phone": f"+420 777 000 {broker_id:03d}"}
 
 
-def test_brokers_are_the_pages_the_canonical_ads_first_contacts_shown_and_the_call_recorded() -> None:
-    records: list[tuple[Any, ...]] = []
+def test_brokers_are_the_pages_the_canonical_ads_first_and_contacts_shown() -> None:
     out = run("get_property_brokers", {"property_ids": [9, 7]}, script(brokers=[
-        _broker(71, 1), _broker(72, 2), _broker(81, 3)]), record=lambda *r: records.append(r))
+        _broker(71, 1), _broker(72, 2), _broker(81, 3)]))
     assert out["data"] == [
         {"property_id": 8, "broker_id": 3, "broker_display_name": "B3", "broker_firm_label": "RK",
          "primary_phone": "+420 777 000 003", "primary_email": "b3@rk.cz", "from_inactive": False,
@@ -333,7 +332,14 @@ def test_brokers_are_the_pages_the_canonical_ads_first_contacts_shown_and_the_ca
     meta = out["metadata"]
     assert (meta["tool"], meta["pii_masked"], meta["result_count"], meta["brokers"], meta["unlisted_property_ids"],
             meta["resolved"]) == ("get_property_brokers", False, 2, {"kept": 2, "total": 2}, [], {9: 8})
-    assert records == [("get_property_brokers", {"property_ids": [9, 7]}, out)]
+
+
+def test_brokers_are_read_in_the_toolkits_batches_so_no_ad_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    whole = run("get_property_brokers", {"property_ids": [9, 7]}, script(brokers=[_broker(71, 1), _broker(81, 3)]))
+    monkeypatch.setattr(pr.brokers, "MAX_BATCH", 2)
+    conn = script(brokers=[_broker(71, 1), _broker(81, 3)])
+    assert run("get_property_brokers", {"property_ids": [9, 7]}, conn)["data"] == whole["data"]
+    assert [p for sql, p in conn.executed if "listing_broker_public" in sql] == [([71, 81],), ([72],)]
 
 
 def test_a_call_stops_at_the_first_row_of_the_twenty_first_person() -> None:

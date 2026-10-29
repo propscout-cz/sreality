@@ -9,7 +9,7 @@ from typing import Any
 import psycopg
 import pytest
 from fastapi import HTTPException
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from api import tenant_pool
 from api.capabilities import registry, truncate
@@ -251,44 +251,6 @@ def test_the_payload_is_what_a_model_reads() -> None:
     err = ToolError(ToolErrorCode.BUSY, "retry", details=[{"loc": ["n"]}])
     assert err.payload() == {"error": {"code": "busy", "message": "retry", "retryable": True,
                                        "details": [{"loc": ["n"]}]}}
-
-
-# --- the run's record -------------------------------------------------------------------------------------------
-
-def _recorded() -> tuple[list[tuple[str, object, dict[str, Any]]], Any]:
-    records: list[tuple[str, object, dict[str, Any]]] = []
-    return records, lambda *record: records.append(record)
-
-
-def test_the_run_records_what_the_model_reads_once(probe: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(truncate, "RESULT_BUDGET", 1_000)
-    probe(lambda ctx, a: {"data": _rows(100), "metadata": {"tool": "probe"}})
-    records, record = _recorded()
-    raw = {"n": "2"}
-    out = registry.call(Caller(market=ScriptConn([]), record=record), "probe", raw)
-    assert records == [("probe", raw, out)] and records[0][1] is raw
-    assert out["metadata"]["truncated"]   # the fitted envelope, not the handler's whole one
-
-
-@pytest.mark.parametrize("name, args", [("probe", {"n": 0}), ("probe", [1]), ("no_such_tool", {})])
-def test_a_refusal_before_any_database_is_recorded_once(probe: Any, name: str, args: object) -> None:
-    probe(lambda ctx, a: pytest.fail("handler ran"))
-    records, record = _recorded()
-    conn = ScriptConn([])
-    err = _error(name, args, Caller(market=conn, record=record))
-    assert records == [(name, args, err.payload())] and not conn.executed
-    assert isinstance(err.__cause__, ValidationError) is (err.code is ToolErrorCode.INVALID_ARGUMENTS)   # kept
-
-
-@pytest.mark.parametrize("tenancy", [Tenancy.MARKET, Tenancy.TENANT])
-def test_a_failure_inside_the_call_is_recorded_once(probe: Any, tenancy: Tenancy) -> None:
-    def handler(ctx: Context, a: _Probe) -> dict[str, Any]:
-        raise KeyError("cols")
-    probe(handler, tenancy=tenancy)
-    records, record = _recorded()
-    err = _error("probe", {}, Caller(market=ScriptConn([]), record=record))   # a tenant tool: FORBIDDEN, no login
-    assert err.code is (ToolErrorCode.INTERNAL if tenancy is Tenancy.MARKET else ToolErrorCode.FORBIDDEN)
-    assert records == [("probe", {}, err.payload())]
 
 
 # --- schemas ----------------------------------------------------------------------------------------------------

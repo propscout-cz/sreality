@@ -4,6 +4,7 @@ broker list (on the service connection, as the page's broker read), the extensio
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -217,9 +218,11 @@ def property_brokers(conn: psycopg.Connection, args: PropertyIds) -> dict[str, A
     ids, followed = _survivors(conn, args.property_ids)
     canonical = {p["property_id"]: p["listing_id"] for p in properties(conn, ids)}
     ads = sources(conn, ids)
-    # POST /brokers/by-listings' own read: every signed-in user sees these contacts (operator ruling 2026-10-18).
-    listed = brokers.apply_pii_policy(brokers.listing_brokers(conn, [a["id"] for a in ads]), include_pii=True)
-    by_listing = {r["listing_id"]: r for r in listed["data"]}
+    # POST /brokers/by-listings' own read: every signed-in user sees these contacts (operator ruling 2026-10-18). In
+    # its batches, as twenty properties can hold more ads than one (136 on the largest, 2026-10-29).
+    listed = [brokers.apply_pii_policy(brokers.listing_brokers(conn, list(batch)), include_pii=True)
+              for batch in itertools.batched((a["id"] for a in ads), brokers.MAX_BATCH)]
+    by_listing = {r["listing_id"]: r for batch in listed for r in batch["data"]}
     rows = []
     for pid in (i for i in ids if i in canonical):
         shown, from_inactive = brokers.property_brokers(
@@ -231,7 +234,7 @@ def property_brokers(conn: psycopg.Connection, args: PropertyIds) -> dict[str, A
     rank = {b: n for n, b in enumerate(dict.fromkeys(r["broker_id"] for r in rows))}
     cut = next((n for n, r in enumerate(rows) if rank[r["broker_id"]] >= BROKERS_MAX), len(rows))
     return _envelope(
-        "get_property_brokers", args, rows[:cut], len(rows), None, pii_masked=listed["metadata"]["pii_masked"],
+        "get_property_brokers", args, rows[:cut], len(rows), None, pii_masked=any(batch["metadata"]["pii_masked"] for batch in listed),
         brokers={"kept": min(len(rank), BROKERS_MAX), "total": len(rank)},
         unlisted_property_ids=list(dict.fromkeys(r["property_id"] for r in rows[cut:])), **followed)
 

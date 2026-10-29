@@ -66,7 +66,7 @@ def scoped(
 def tool_call(cur: Any, sub: uuid.UUID, name: str, raw_args: object) -> dict[str, Any]:
     """Tool `name` as tenant `sub` inside the caller's transaction, so it reads the test's uncommitted seeds: its
     arguments validated as `registry.call` validates them, its handler run under the user's RLS. The bound, the error
-    mapping, the fit and the recorder are the call path's own, pinned by tests/test_capabilities_live.py."""
+    mapping and the fit are the call path's own, pinned by tests/test_capabilities_live.py."""
     from api.capabilities import registry
     from api.capabilities.entry import Context
 
