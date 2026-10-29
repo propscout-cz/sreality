@@ -143,15 +143,42 @@ def test_every_read_is_one_statement_over_the_survivors_or_their_ads() -> None:
                      ("(select", ([71, 81, 72],)), ("estimation_runs", ([71, 81, 72],))]
     points = next(sql for sql, _ in conn.executed if "lag(price_czk)" in sql)
     assert "partition by listing_id order by scraped_at, id" in points and "description" not in points
-    assert "order by created_at desc, id desc" in next(sql for sql, _ in conn.executed if "estimation_runs" in sql)
+    runs = next(sql for sql, _ in conn.executed if "estimation_runs" in sql)
+    # The page's [own, SYSTEM] (deps.account_scope): never the admin-only runs of a deleted account.
+    assert "and account_id is not null order by created_at desc, id desc" in runs
 
 
-def test_a_property_shows_the_newest_runs_the_page_lists() -> None:
-    """The handler's own row; a hundred runs outgrow the result budget whole (production holds at most five)."""
-    many = [_row(pr.RUN_COLS, id=n, created_at=_at(-n), input_listing_id=71) for n in range(1, 131)]
+def _many_runs(n: int) -> list[tuple[Any, ...]]:
+    return [_row(pr.RUN_COLS, id=i, created_at=_at(-i), input_listing_id=71) for i in range(1, n + 1)]
+
+
+def test_a_property_shows_the_newest_runs_the_page_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page's cap, with room for a hundred runs (production holds at most five)."""
+    monkeypatch.setattr(truncate, "RESULT_BUDGET", 10**6)
     args = registry.validate("get_property_dossier", {"property_ids": [7]})[1]
-    seven = pr.dossier(script(runs=many), args)["data"][0]
-    assert [r["id"] for r in seven["estimates"]] == list(range(1, 101))
+    seven = pr.dossier(script(runs=_many_runs(130)), args)["data"][0]
+    assert [r["id"] for r in seven["estimates"]] == list(range(1, 101)) and "estimates_cut" not in seven
+
+
+def test_a_property_too_large_alone_keeps_its_newest_runs_that_fit_and_says_so() -> None:
+    """Dropped whole, it could never be read: asked again, it would come back empty again."""
+    out = run("get_property_dossier", {"property_ids": [7, 9]}, script(runs=_many_runs(130)))
+    seven = out["data"][0]
+    kept = seven["estimates_cut"]["kept"]
+    assert 0 < kept < 100 and seven["estimates_cut"] == {"kept": kept, "total": 100}
+    assert [r["id"] for r in seven["estimates"]] == list(range(1, kept + 1))
+    assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
+    # Left out whole beside the trimmed 7, 8 is named to ask again for; alone, it fits as it is.
+    assert out["metadata"]["truncated"] == {"data": {"kept": 1, "total": 2}}
+    eight = run("get_property_dossier", {"property_ids": [9]}, script(runs=_many_runs(130)))["data"][0]
+    assert "estimates_cut" not in eight
+
+
+def test_a_property_too_large_without_its_runs_is_refused_by_name() -> None:
+    huge = {7: _row(pr.PROPERTY_COLS, property_id=7, listing_id=71, description="x" * truncate.RESULT_BUDGET)}
+    with pytest.raises(ToolError) as info:
+        run("get_property_dossier", {"property_ids": [7]}, script(props=huge))
+    assert info.value.code is ToolErrorCode.RESULT_TOO_LARGE and "property 7 " in info.value.message
 
 
 def test_nothing_found_reads_no_relation_past_the_survivors() -> None:
@@ -174,7 +201,8 @@ def test_an_oversized_dossier_drops_trailing_properties_whole() -> None:
 
 
 @pytest.mark.parametrize("args", [{"property_ids": []}, {"property_ids": list(range(1, 22))},
-                                  {"property_ids": [0]}, {"property_ids": [7], "listing_ids": [71]}])
+                                  {"property_ids": [0]}, {"property_ids": [2**63]},
+                                  {"property_ids": [7], "listing_ids": [71]}])
 @pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers"])
 def test_up_to_twenty_property_ids_and_nothing_else_or_no_database_is_touched(name: str, args: dict[str, Any]) -> None:
     conn, records = ScriptConn([]), []

@@ -65,6 +65,14 @@ def test_an_unknown_property_is_404_and_reads_no_snapshot(serve) -> None:
     assert len(conn.executed) == 1
 
 
+@pytest.mark.parametrize("pid", [2**63, -(2**63) - 1])
+def test_an_id_outside_bigint_is_404_and_reads_nothing(serve, pid: int) -> None:
+    """Bound as an array, it would fail the statement's ::bigint[] cast (a 500); it names nothing we hold."""
+    conn = serve([AD])
+    res = TestClient(api_main.app).get(f"/properties/{pid}/price-history", headers=AUTH)
+    assert res.status_code == 404 and not conn.executed
+
+
 def test_reads_the_spas_columns_from_the_public_views_only(serve) -> None:
     """The whole statement: the SPA's columns, one view and no join, the key, the order, no cap."""
     spa = _QUERIES.read_text(encoding="utf-8")

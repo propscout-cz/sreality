@@ -48,13 +48,15 @@ ENTRIES = (
     Entry(
         name="get_property_dossier",
         description=f"Up to {PROPERTIES_MAX} properties as their page shows them, read as the user reads it, one row "
-        "each in the order asked: the facts (its canonical ad's: price, areas, layout, floor, building, condition, "
-        "equipment, description), the place (label, point, town code), the per-m² price with its basis, MF gross "
-        "yield, price changes and time on market; every ad (listing_id, portal, URL, the advertiser's reference, "
-        "live or ended, the canonical one marked, deal type, price, its own per-m² price with its basis and the "
-        "points where its price changed); and the user's own estimation runs on its ads, newest first. No broker: "
-        "get_property_brokers lists them. When metadata.truncated is present, ask again for the properties left "
-        "out.",
+        "each in the order asked: the facts (price, area, layout, condition, floor and description are its "
+        "canonical ad's; building, ownership, energy rating and the other areas the first known across its ads, "
+        "canonical first; an amenity is yes when any ad says so), the place (label, point, town code), the per-m² "
+        "price with its basis, MF gross yield, price changes and time on market; every ad (listing_id, portal, URL, "
+        "the advertiser's reference, live or ended, the canonical one marked, deal type, price, its own per-m² price "
+        "with its basis and the points where its price changed); and the estimation runs its page lists on its ads, "
+        "the user's and the platform's alike, newest first (a property too large to return whole keeps its newest "
+        "runs, estimates_cut saying how many). No broker: get_property_brokers lists them. When metadata.truncated "
+        "is present, ask again for the properties left out.",
         args=PropertyIds, handler=_dossier, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )

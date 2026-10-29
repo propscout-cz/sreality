@@ -12,6 +12,8 @@ from typing import Annotated, Any
 import psycopg
 from pydantic import Field
 
+from api.capabilities import truncate
+from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
 from toolkit import _max_last_seen, _now_iso, brokers
 from toolkit.property_identity import resolve_active_property_ids
@@ -55,17 +57,23 @@ _PRICE_POINTS_SQL = (
     "distinct from lag(price_czk) over (partition by listing_id order by scraped_at, id) as moved from ("
     f"{_SNAPSHOTS}) s) s where moved order by listing_id, scraped_at, id"
 )
+# The runs the page lists: the user's and SYSTEM's (deps.account_scope). RLS also shows a platform admin the runs of a
+# deleted account (account_id NULL), which the page leaves out (api/estimation_runs.py list_estimation_runs).
 _RUNS_SQL = (f"select {', '.join(RUN_COLS)} from estimation_runs where input_listing_id {_ANY}"
-             " order by created_at desc, id desc")
+             " and account_id is not null order by created_at desc, id desc")
+# An id outside bigint names nothing we hold; bound as one, it would fail the statement's cast.
+_BIGINT = range(-(2**63), 2**63)
 PROPERTIES_MAX = 20
 BROKERS_MAX = 20
 # The page lists a property's newest 100 runs (queries.ts fetchEstimationsForListings).
 _PAGE_RUNS = 100
+# truncate.fit's note of a cut dossier at its widest, which a row kept alone must leave room for.
+_CUT_NOTE = len(',"truncated":{"data":{"kept":20,"total":20}}')
 _BROKER = ("broker_id", "broker_display_name", "broker_firm_label", "primary_phone", "primary_email")
 
 
 class PropertyIds(Args):
-    property_ids: list[Annotated[int, Field(ge=1)]] = Field(
+    property_ids: list[Annotated[int, Field(ge=1, le=_BIGINT.stop - 1)]] = Field(
         min_length=1, max_length=PROPERTIES_MAX, description=f"Properties we hold (property ids), 1 to "
         f"{PROPERTIES_MAX}, answered in this order. A merged-away id follows its survivor (metadata.resolved); an id "
         "we do not hold is listed in metadata.missing.")
@@ -83,6 +91,7 @@ def jsonable(value: Any) -> Any:
 
 
 def _select(conn: psycopg.Connection, sql: str, ids: Sequence[int], columns: tuple[str, ...]) -> list[dict[str, Any]]:
+    ids = [i for i in ids if i in _BIGINT]
     if not ids:
         return []
     with conn.cursor() as cur:
@@ -144,6 +153,28 @@ def _ad(ad: dict[str, Any], measure: dict[str, Any], prices: list[dict[str, Any]
             "prices": [{"scraped_at": p["scraped_at"], "price_czk": p["price_czk"]} for p in prices]}
 
 
+def _alone(row: dict[str, Any], room: int) -> dict[str, Any]:
+    """`row` whole when it fits `room`, else with the newest of its runs that fit and `estimates_cut` saying how many:
+    truncate.fit drops a row whole, so one that no result can hold would be left out of every answer."""
+    runs = row["estimates"]
+
+    def cut(n: int) -> dict[str, Any]:
+        return {**row, "estimates": runs[:n], "estimates_cut": {"kept": n, "total": len(runs)}}
+
+    def fits(r: dict[str, Any]) -> bool:
+        return len(truncate.encode(r)) <= room
+    if fits(row):
+        return row
+    lo, hi = 0, len(runs)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        lo, hi = (mid, hi) if fits(cut(mid)) else (lo, mid - 1)
+    if not fits(cut(lo)):
+        raise ToolError(ToolErrorCode.RESULT_TOO_LARGE,
+                        f"property {row['property_id']} is too large to return even without its estimation runs")
+    return cut(lo)
+
+
 def dossier(conn: psycopg.Connection, args: PropertyIds) -> dict[str, Any]:
     """One self-contained row per property, in the asked order: its page's facts, every ad, the runs on its ads."""
     ids, followed = _survivors(conn, args.property_ids)
@@ -164,7 +195,9 @@ def dossier(conn: psycopg.Connection, args: PropertyIds) -> dict[str, Any]:
             "ads": [_ad(a, measures.get(a["id"], {}), points.get(a["id"], []), prop["listing_id"]) for a in own],
             "estimates": [r for r in estimates if r["input_listing_id"] in mine][:_PAGE_RUNS],
         }))
-    return _envelope("get_property_dossier", args, rows, len(rows), _max_last_seen(rows), **followed)
+    out = _envelope("get_property_dossier", args, [], len(rows), _max_last_seen(rows), **followed)
+    room = truncate.RESULT_BUDGET - len(truncate.encode(out)) - _CUT_NOTE
+    return {**out, "data": [_alone(r, room) for r in rows]}
 
 
 def property_brokers(conn: psycopg.Connection, args: PropertyIds) -> dict[str, Any]:

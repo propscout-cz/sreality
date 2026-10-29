@@ -20,6 +20,7 @@ from api import tenant_pool
 from api.capabilities import registry, subject
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode
+from api.dependencies import SYSTEM_ACCOUNT_ID
 from api.filter_args import Args
 from api.notifications import WatchdogFilterSpec, _build_match_clauses
 from api.property_search import PAGE_MAX
@@ -473,7 +474,7 @@ def test_a_page_is_browses_cards_in_its_order_with_the_total(
 
 # --- the property page's reads: its dossier under the user's login, its brokers as it shows them -----------------
 
-def _run(cur: Any, account: uuid.UUID, ad: int) -> int:
+def _run(cur: Any, account: uuid.UUID | str | None, ad: int) -> int:
     cur.execute("INSERT INTO estimation_runs (account_id, source, mode, status, input_spec, input_listing_id) "
                 "VALUES (%s, 'api', 'deterministic', 'success', '{}'::jsonb, %s) RETURNING id", (account, ad))
     return int(cur.fetchone()[0])
@@ -481,7 +482,8 @@ def _run(cur: Any, account: uuid.UUID, ad: int) -> int:
 
 def test_the_dossier_is_the_property_pages_read_under_the_users_login(cur: Any, users: dict[str, Any]) -> None:
     """A merged-away id follows its survivor; the place is the location ad's; an ad's price points are where its price
-    moved (a content change at the same price is no point); each user sees only their own runs on its ads."""
+    moved (a content change at the same price is no point); each user sees the runs the page lists on its ads, their
+    own and SYSTEM's, and never a deleted account's (account_id NULL), which RLS shows a platform admin."""
     from toolkit.measures import SALE_CAPITAL_CZK_M2
     pid, ring = _held_property(cur)
     cur.execute("SELECT id FROM listings WHERE property_id = %s AND id <> %s", (pid, ring))
@@ -490,7 +492,10 @@ def test_the_dossier_is_the_property_pages_read_under_the_users_login(cur: Any, 
         _snapshot(cur, ring, price, hours)
     gone = _property(cur)
     cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s WHERE id = %s", (pid, gone))
-    runs = {"a": _run(cur, users["a_acc"], ring), "b": _run(cur, users["b_acc"], point)}
+    runs = {"a": _run(cur, users["a_acc"], ring), "b": _run(cur, users["b_acc"], point),
+            "system": _run(cur, SYSTEM_ACCOUNT_ID, ring)}
+    _run(cur, None, ring)
+    cur.execute("INSERT INTO admins (user_id) VALUES (%s)", (users["a"],))
     # Production's PostGIS lives in `extensions`, where `authenticated` may run it (the page reads lat/lng so); the
     # replay's lives in `public`, where migration 299 revoked PUBLIC's EXECUTE. The grant rolls back with the test.
     cur.execute("GRANT EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) TO authenticated")
@@ -503,9 +508,10 @@ def test_the_dossier_is_the_property_pages_read_under_the_users_login(cur: Any, 
     assert (ads[ring]["canonical"], ads[point]["canonical"], ads[point]["is_active"]) == (True, False, False)
     assert (ads[ring]["category_type"], ads[ring]["price_per_m2_basis"]) == ("prodej", SALE_CAPITAL_CZK_M2)
     assert [p["price_czk"] for p in ads[ring]["prices"]] == [8_000_000, 7_500_000] and ads[point]["prices"] == []
-    assert [r["id"] for r in row["estimates"]] == [runs["a"]]
+    # One transaction stamps every run's created_at alike, so the newest-first order falls to the id.
+    assert [r["id"] for r in row["estimates"]] == [runs["system"], runs["a"]]
     theirs = tool_call(cur, users["b"], "get_property_dossier", {"property_ids": [pid]})["data"][0]["estimates"]
-    assert [r["id"] for r in theirs] == [runs["b"]]
+    assert [r["id"] for r in theirs] == [runs["system"], runs["b"]]
 
 
 def _broker(cur: Any, n: int) -> tuple[int, int]:

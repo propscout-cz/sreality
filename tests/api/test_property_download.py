@@ -227,6 +227,11 @@ def test_unknown_or_merged_away_property_is_404(client, sheet, conn):
     assert client.get("/properties/7/download.zip").status_code == 404
 
 
+def test_an_id_outside_bigint_is_404_and_reads_nothing(client, sheet, conn):
+    assert client.get(f"/properties/{2**63}/download.zip").status_code == 404
+    assert conn.statements == []
+
+
 def test_fails_whole_when_a_photo_cannot_be_read(client, fake_r2, sheet, conn):
     """A half-filled zip would pass for the full set — fail loudly instead."""
     conn.keys = ["42/0001.jpg", "42/0002.jpg"]

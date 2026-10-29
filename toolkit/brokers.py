@@ -57,9 +57,10 @@ def _iso(v: Any) -> str | None:
 
 
 def _bounded(ids: list[int]) -> list[int]:
-    """Deduped, sorted, capped. The HTTP layer rejects an over-cap batch outright
-    (both batch routes bound the input); this slice is only the backstop for a
-    direct toolkit/agent caller, which must never silently spill into a huge IN."""
+    """Deduped, sorted, capped. The one batch route (POST /brokers/by-listings)
+    rejects an over-cap batch outright; for the direct callers, the download and
+    get_property_brokers, which pass every ad of their properties, this slice is
+    the only bound: past MAX_BATCH ads the highest ids are dropped, unreported."""
     return sorted({int(i) for i in ids})[:MAX_BATCH]
 
 
