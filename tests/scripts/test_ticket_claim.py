@@ -177,25 +177,43 @@ def test_the_session_comes_from_as_then_the_sessions_file(home: Path) -> None:
     home.write_text(json.dumps({"name": "sreality-82", "sessionId": "81a8cddd-f73f-4868-bd34-8958ac350b5d"}))
     assert tc.session(None) == tc.Session("sreality-82", "81a8cddd")
     assert tc.session("sreality-0f") == tc.Session("sreality-0f")
-    assert tc.session("Not A Name") is None
+    assert tc.session("Not A Name") == tc.Session("not-a-name")
+    assert tc.session("!!!") is None
     home.write_text(json.dumps({"name": "sreality-82"}))
     assert tc.session(None) == tc.Session("sreality-82")
-    home.write_text(json.dumps({"name": "Bad Name", "sessionId": "81a8cddd"}))
+    home.write_text(json.dumps({"name": "Github migration sprint", "sessionId": "4c3c569a-ed2d-49b7-8e48-bafb566d112b"}))
+    assert tc.session(None) == tc.Session("github-migration-sprint", "4c3c569a")
+    home.write_text(json.dumps({"name": "***", "sessionId": "81a8cddd"}))
     assert tc.session(None) is None
     for text in ("not json", "[]"):
         home.write_text(text)
         assert tc.session(None) is None
 
 
-def test_an_unknown_session_exits_2_before_any_github_call(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unknown_session_exits_2_before_any_github_call(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
     def no_gh(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
         raise AssertionError(args)
 
     monkeypatch.setattr(tc, "_run", no_gh)
     assert tc.main(["claim", "5"]) == tc.USAGE
+    assert "no session name found: pass --as <name>" in capsys.readouterr().err
     assert tc.main(["release", "5"]) == tc.USAGE
     assert tc.main(["status", "--mine"]) == tc.USAGE
-    assert tc.main(["claim", "5", "--as", "Bad Name"]) == tc.USAGE
+    assert tc.main(["claim", "5", "--as", "!!!"]) == tc.USAGE
+
+
+def test_a_session_name_is_slugified_only_when_a_marker_rejects_it(
+    home: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert tc.slug("Příprava -- Sprint 2/B") == "priprava-sprint-2-b"
+    assert tc.slug("x" * 50) == "x" * 40
+    assert tc.claim_name("a--b") == "a--b"
+    assert tc.claim_name("Github migration sprint") == "github-migration-sprint"
+    home.write_text(json.dumps({"name": "日本", "sessionId": "81a8cddd"}))
+    assert tc.main(["claim", "5"]) == tc.USAGE
+    assert "session name '日本' slugs to ''" in capsys.readouterr().err
 
 
 class FakeGitHub:
