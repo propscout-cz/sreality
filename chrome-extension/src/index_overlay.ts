@@ -29,7 +29,7 @@
 import { APP_NAME } from '../../frontend/src/lib/brand';
 import { fmtCzk, fmtPct } from '../../frontend/src/lib/format';
 // The MF result's ONE shape rule and its yield text, shared with the SPA.
-import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
+import { mfShape, mfYieldLine } from '../../frontend/src/lib/mfReference';
 import {
   API_NOT_CONFIGURED_DETAIL,
   EXTENSION_RELOADED_DETAIL,
@@ -540,8 +540,8 @@ function badgeFor(listing: PortalListing): BadgeView | null {
   } else if (shape.kind !== 'none' && shape.note != null) {
     title = shape.note;
   }
-  const mfYield = mfYieldText(listing.mf_gross_yield_pct, listing.mf_reference_rent);
-  if (mfYield != null) return { kind: 'yield', text: `Výnos MF ${mfYield}`, title };
+  const mfYield = mfYieldLine(listing.mf_gross_yield_pct, listing.mf_reference_rent);
+  if (mfYield != null) return { kind: 'yield', text: mfYield, title };
   if (listing.latest_estimation?.gross_yield_pct != null) {
     return { kind: 'est', text: `Odhad ${fmtPct(listing.latest_estimation.gross_yield_pct)}`, title };
   }

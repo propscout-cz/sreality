@@ -61,7 +61,7 @@ describe('MfReferenceCard', () => {
   it('renders a stored breakdown with no status as a value, with the property yield', () => {
     const { container } = render(<MfReferenceCard refRent={STORED} yieldPct={5.25} />);
     expect(container).toHaveTextContent('17 700 Kč/měs');
-    expect(container).toHaveTextContent('hrubý výnos 5,25 %');
+    expect(container).toHaveTextContent('hrubý výnos 5,3 %');
     expect(container).toHaveTextContent('Nájemné referenčního bytu184 Kč/m²/měs');
     expect(container).toHaveTextContent('+ výtah+47 Kč/m²/měs');
     expect(container).toHaveTextContent('Celkem za m²236 Kč/m²/měs');
@@ -88,7 +88,7 @@ describe('MfReferenceCard', () => {
     expect(container).toHaveTextContent('+ balkón+5 Kč/m²/měs');
     expect(container).toHaveTextContent('Celkem za m²208–237 Kč/m²/měs');
     expect(container).toHaveTextContent('× plocha 75 m²15 600–17 775 Kč');
-    expect(container).toHaveTextContent('hrubý výnos 3,60–4,10 %');
+    expect(container).toHaveTextContent('hrubý výnos 3,6–4,1 %');
     // The range carries its own yields; the value yield is not borrowed.
     expect(container).not.toHaveTextContent('9,99');
     const hint = screen.getByRole('img', { name: NOTE_COARSE });

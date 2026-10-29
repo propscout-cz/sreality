@@ -237,7 +237,7 @@ describe('phone pipeline', () => {
     const card = link.closest('article')!;
     expect(within(card).getByText(/^−5\s%$/)).toBeInTheDocument();
     expect(within(card).getByText(/^11\sdní ve fázi$/)).toBeInTheDocument();
-    expect(within(card).getByText(/^MF 4,3\s%$/)).toBeInTheDocument();
+    expect(within(card).getByText(/^Výnos MF 4,3\s%$/)).toBeInTheDocument();
 
     /* A rent reads per month, a missing place says so, a delisted ad is marked. */
     const rent = within(interest).getByRole('link', { name: /^31\s000\sKč \/měs/ }).closest('article')!;

@@ -7,9 +7,10 @@
  * It holds no reason text of its own; the notes come from the SQL. */
 import EstimateCard, { CardRow as Row, PerMonth } from '@/components/estimation/EstimateCard';
 import { InfoHint } from '@/components/settings/SectionChrome';
-import { fmtCount, fmtCzk, fmtMeasuredPricePerM2, fmtPct } from '@/lib/format';
+import { fmtCount, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
 import {
   mfShape,
+  mfYieldText,
   type ReferenceRent,
   type ReferenceRentAdjustment,
 } from '@/lib/mfReference';
@@ -38,6 +39,7 @@ export function MfReferenceCard({
 }) {
   const shape = mfShape(refRent);
   if (shape.kind === 'none') return null;
+  const yieldText = mfYieldText(yieldPct, refRent);
   if (shape.kind === 'note') {
     return (
       <EstimateCard eyebrow={EYEBROW} tone="absent">
@@ -50,8 +52,6 @@ export function MfReferenceCard({
   const adjustments = ref.adjustments ?? [];
   if (shape.kind === 'range') {
     const { range, note } = shape;
-    const yieldMin = range.yield_min_pct ?? null;
-    const yieldMax = range.yield_max_pct ?? null;
     return (
       <EstimateCard eyebrow={EYEBROW}>
         <div className="mt-1 flex items-baseline justify-between gap-3">
@@ -62,11 +62,7 @@ export function MfReferenceCard({
             </span>
             {note && <InfoHint text={note} className="self-center" />}
           </span>
-          {yieldMin != null && yieldMax != null && (
-            <YieldFigure>
-              {fmtPct(yieldMin, { digits: 2, unit: false })}–{fmtPct(yieldMax, { digits: 2 })}
-            </YieldFigure>
-          )}
+          {yieldText != null && <YieldFigure>{yieldText}</YieldFigure>}
         </div>
         <dl className="mt-2 space-y-0.5 text-[0.72rem] tabular-nums">
           <AdjustmentRows adjustments={adjustments} />
@@ -91,7 +87,7 @@ export function MfReferenceCard({
           {fmtCzk(ref.monthly_rent_czk)}
           <PerMonth />
         </span>
-        {yieldPct != null && <YieldFigure>{fmtPct(yieldPct, { digits: 2 })}</YieldFigure>}
+        {yieldText != null && <YieldFigure>{yieldText}</YieldFigure>}
       </div>
       <dl className="mt-2 space-y-0.5 text-[0.72rem] tabular-nums">
         <Row label={`Nájemné referenčního bytu${ref.is_novostavba ? ' (novostavba)' : ''}`}>
@@ -108,7 +104,7 @@ export function MfReferenceCard({
   );
 }
 
-/* "hrubý výnos 4,60 %" beside a card's headline figure — the MF card's and
+/* "hrubý výnos 4,6 %" beside a card's headline figure — the MF card's and
  * our estimate's. */
 export function YieldFigure({ children }: { children: React.ReactNode }) {
   return (
