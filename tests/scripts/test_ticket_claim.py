@@ -190,12 +190,15 @@ def test_the_session_comes_from_as_then_the_sessions_file(home: Path) -> None:
         assert tc.session(None) is None
 
 
-def test_an_unknown_session_exits_2_before_any_github_call(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unknown_session_exits_2_before_any_github_call(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
     def no_gh(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
         raise AssertionError(args)
 
     monkeypatch.setattr(tc, "_run", no_gh)
     assert tc.main(["claim", "5"]) == tc.USAGE
+    assert "no session name found: pass --as <name>" in capsys.readouterr().err
     assert tc.main(["release", "5"]) == tc.USAGE
     assert tc.main(["status", "--mine"]) == tc.USAGE
     assert tc.main(["claim", "5", "--as", "!!!"]) == tc.USAGE

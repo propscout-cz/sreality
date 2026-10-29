@@ -54,7 +54,7 @@ Every session posts as the same GitHub account, so an assignee cannot tell sessi
 - **A claim lapses 4 hours after the ticket's last activity**: a claim or renewal, a commit naming `#<n>`, a PR that closes `#<n>`. An open PR that closes the ticket holds it, so open the draft PR early. On that PR's branch, `claim` makes a ticket nobody holds yours.
 - **A PR says `Closes #<n>` only for tickets you hold.** Before opening one that closes several (the `/implement-spec` integration PR), claim each of them.
 - **Release when you stop without finishing**: `python3 -m scripts.ticket_claim release <n> --reason "<why>"`. Closing a ticket ends its claim; a reopened ticket is claimed afresh.
-- **A claim belongs to the session id**: subagents share it, so the orchestrating session claims each ticket before handing it over, and a resumed session keeps it under its new name (a name with spaces or capitals is slugified). `--as <name>` acts by name alone, for a session the script cannot identify (exit 2) or to take over a ticket at the user's word.
+- **A claim belongs to the session id**: subagents share it, so the orchestrating session claims each ticket before handing it over, and a resumed session keeps it under its new name. `--as <name>` acts by name alone, for a session the script cannot identify (exit 2) or to take over a ticket at the user's word. Any name, `--as` included, is slugified when it has spaces or capitals.
 - The script alone writes claim comments; leave them as written and the assignee empty.
 - `status` shows who holds what (`--help`).
 

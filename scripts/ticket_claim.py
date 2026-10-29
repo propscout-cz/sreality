@@ -453,8 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     me = session(args.session)
     if me is None and (args.cmd != "status" or args.mine or args.session is not None):
         raw = args.session if args.session is not None else (harness_session() or (None, ""))[0]
-        why = f"session name {raw!r} slugs to {slug(raw)!r}" if raw is not None else "no session name found"
-        print(f"{why}, not a claim name: pass --as <name> (a-z, 0-9 and '-', at most 40)", file=sys.stderr)
+        why = "no session name found" if raw is None else f"session name {raw!r} slugs to {slug(raw)!r}, not a claim name"
+        print(f"{why}: pass --as <name> (a-z, 0-9 and '-', at most 40)", file=sys.stderr)
         return USAGE
     if args.cmd == "status" and not (args.numbers or args.mine or args.frontier):
         p.error("status needs ticket numbers, --mine or --frontier")
