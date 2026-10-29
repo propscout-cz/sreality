@@ -227,8 +227,9 @@ Every component below exists because one of these agents or surfaces needs it.
 Three consequences. **Composite tools beat chatty ones:** get_property_dossier returns detail, canonical ad, location,
 price history, yield and masked brokers in one call (as built in #2063: under the user's login with the runs the page
 lists, and no broker; the brokers are their own market read, get_property_brokers, unmasked as the page shows them,
-AR13 re-taken). All of these are market facts; the user's own notes, cards and
-collections on that property come from a second call, get_my_property_context, so each entry keeps one tenancy class.
+AR13 re-taken). The dossier is the property page's own read under the user's login, the user's runs included; the
+user's own notes, cards and collections on that property come from a second call, get_my_property_context (the
+extension's state read), so each entry is one screen's reader.
 **Most analyst "code" is a template:** the model, the memo and the
 drawing render from a structured spec through git templates (tier 1), so AI-written code is off the critical path.
 **The assistant is a peer surface:** a skill "runs in a user's assistant or inside the platform" (GLOSSARY).
@@ -272,7 +273,7 @@ deletes `_FCR_OVERRIDE_FIELDS` (F26).
   `compute_reference_rent`; one Valuo valuation (costly, over `new_valuation`).
 - Four curation writes: add to a collection, create a note, attach a tag, set a pipeline card.
 - New: search_properties over `compile_filter_where` with the served and published predicates (Watchdog semantics,
-  AR7); get_property_dossier (market); get_my_property_context (tenant); a sold_comps adapter; start_run, get_run,
+  AR7); get_property_dossier (tenant); get_my_property_context (tenant); a sold_comps adapter; start_run, get_run,
   get_run_output and cancel_run.
 
 **Surfaces (D17, D18).** The SPA keeps its PostgREST reads under RLS, because RLS and the SQL functions are already the
@@ -504,8 +505,8 @@ budget. No chat table; a lazy-loaded panel that the Phone app frames for free (F
 - No token is stored, forwarded or refreshed: Supabase refresh tokens are single-use, so forwarding one would sign the
   user out (RESEARCH §6.3).
 - In agent-worker, **one claims builder** turns the stamped columns into {"sub": principal, "role": "authenticated",
-  "run_id": id} for each tenant transaction, READ ONLY for reads, as acting reads are today (F20, F21), and sets two
-  settings (GUCs): request.agent_run = true and request.account_id = the run's account.
+  "run_id": id} for each tenant transaction, READ ONLY for reads, as every GET/HEAD tenant read is today (F20,
+  F21), and sets two settings (GUCs): request.agent_run = true and request.account_id = the run's account.
 - **Two narrowing-only changes to the identity functions ship in W2.** `is_platform_admin()` returns false whenever
   request.agent_run is set, so a run started by an admin never carries admin powers (no SYSTEM or NULL arms, no
   shared-table writes such as `manual_rental_estimates`, no admin-gated DEFINER functions). `current_account_ids()`

@@ -61,11 +61,15 @@ whose anchor the subject lacks is REFUSED (`subject.unanchored`, shared with the
 4. `truncate.fit`: a result within `RESULT_BUDGET` (20 000 chars of `encode`) is returned as is; else the lists
    under `data` keep their longest whole-row heads (smaller lists whole first) and `metadata.truncated` records
    `{path: {kept, total}}`; metadata is never cut. What cannot fit with every list empty is RESULT_TOO_LARGE. There
-   is no other row cap: each tool caps its own input (a search page of `property_search.PAGE_MAX` cards, sized so
-   the widest fits whole; 20 properties; 20 broker people).
-5. Records: `caller.record(name, raw_args, payload)` exactly once per call, with the fitted envelope or, on any
-   refusal or failure (a validation refusal included), the ToolError's payload. A `Caller` is the run context:
-   #2065's loop and #2070's ledger plug in here, and no tool keeps a ledger of its own (the broker read included).
+   is no other row cap: each tool bounds itself (search: pages of `property_search.PAGE_MAX` cards, sized so the
+   widest fits whole, within the first `REACH` matches; 20 properties per call; the page's newest 100 runs per
+   property in the dossier; the broker read stopping at the 20th person).
+5. Records, when the transport hands a recorder: `Caller.record` is optional (default None), and when set,
+   `call` hands it `(name, raw_args, payload)` exactly once per call, with the fitted envelope or, on any refusal
+   or failure (a validation refusal included), the ToolError's payload. Today no caller supplies one (the
+   `scripts/capabilities_demo.py` adapter passes none), so nothing is recorded yet: #2065's loop supplies the run's
+   recorder and #2070's ledger plugs in here. No tool keeps a ledger of its own (the broker read included), so an
+   adapter that must record (an agent run, ADR-0002) passes its recorder; the registry never records by itself.
 
 `schemas()` renders each `args` through `schema.portable`: `$ref` inlined, `X | None` as X plus `nullable: true`,
 no titles, no null defaults (Gemini's client refuses `$ref`, type arrays and exclusive bounds; the census builds
@@ -80,8 +84,9 @@ through ONE server-side reader per screen. A new reader of these relations calls
   tag, collection and pipeline scope judged under their RLS), the registry's `Agenda.BROWSE` filters (no Search
   agenda; `location` gives way to `bounds` + `districts`) compiled by `compile_filter_where` over `BROWSE_GRAIN`
   (rule 16), Browse's sort menu and one-portal order, the card allowlist `SEARCH_COLUMNS`, a page plus the total.
-  `category_type` is required but nullable: it decides the per-m² unit. Browse's broker scope, market growth and
-  centre + radius live outside the registry and are not offered (#2172).
+  `category_type` is required but nullable: it decides the per-m² unit. A centre + radius pick is covered: Browse
+  filters on the square around the circle (`filters.ts` `effectiveBbox`), which is a `bounds` box. Browse's broker
+  scope and market growth live outside the registry and are not offered (#2172).
 - `get_property_dossier` (TENANT): `api/property_read.py`, the property page's own relations and allowlists
   (`properties_public`, `property_sources_public`, `listings_public`, `listing_snapshots_public`, and the runs the
   page lists from `estimation_runs` under RLS), which the extension's price chart and the PDF download read through
@@ -95,9 +100,11 @@ through ONE server-side reader per screen. A new reader of these relations calls
 
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
 `property_read.*_COLS`) is disjoint from `forbidden_columns()`, derived from the registry (rule 14's retired
-levels, rule 17's city-quality columns), and names no broker; the reader modules name no relation that holds those,
-a broker or a stored place, nor one that reads as nothing under the login (base `listings`, `canonical_advert`, …);
-each read, run on a fixture, returns no forbidden key at any depth and every per-m² figure with its basis.
+levels, rule 17's city-quality columns), and names no broker; `api/property_search.py` and `api/property_read.py`
+name no relation that holds those, a broker or a stored place, nor one that reads as nothing under the login (base
+`listings`, `canonical_advert`, …); the dossier, broker and own-context reads, each run on a fixture, return no
+forbidden key at any depth and every per-m² figure with its basis. Not covered: `api/curation.py`'s relations (only
+its `STATE_COLS` allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH_COLUMNS`).
 
 ## Adding a tool
 
