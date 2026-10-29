@@ -11,7 +11,8 @@ set -uo pipefail
 BASE="${1:?usage: docs-staleness-check.sh <base-ref> [head-ref]}"
 HEAD="${2:-HEAD}"
 
-changed=$(git diff --name-only "${BASE}...${HEAD}" 2>/dev/null || git diff --name-only "${BASE}" "${HEAD}")
+# --no-renames: a moved file lists under both paths, so moving one a doc names still matches its old path.
+changed=$(git diff --name-only --no-renames "${BASE}...${HEAD}" 2>/dev/null || git diff --name-only --no-renames "${BASE}" "${HEAD}")
 if [[ -z "$changed" ]]; then
   exit 0
 fi
@@ -42,6 +43,8 @@ warn_if_stale '^scripts/verify_pipeline\.py$|^scripts/checks/|^toolkit/system_al
 design_files=$(git show "${HEAD}:.interface-design/system.md" 2>/dev/null | grep -oE '`[A-Za-z0-9_./-]+\.(tsx?|css)`' | tr -d '`' | sed 's/\./\\./g' | sort -u | paste -sd'|')
 if [[ -n "$design_files" ]]; then
   warn_if_stale "(^|/)(${design_files})\$" .interface-design/system.md "a file .interface-design/system.md names"
+else
+  echo "::notice::.interface-design/system.md is missing or names no .ts/.tsx/.css file in backticks: its staleness arm is off."
 fi
 
 exit 0
