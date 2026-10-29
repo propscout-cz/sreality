@@ -10,9 +10,12 @@
 #   scripts/local_pg.sh lanes          # a private copy + every pytest lane of the CI job, in CI's order
 #   scripts/local_pg.sh db <name>      # a long-lived copy named <name>; prints its TEST_DATABASE_URL
 #   scripts/local_pg.sh drop <name>    # drop such a copy
-#   scripts/local_pg.sh start|stop|status
+#   scripts/local_pg.sh psql [db] [psql args]   # psql as the script's user into db (default: the template)
+#   scripts/local_pg.sh start|stop|status       # status also prints the template's stamp and the copies
 # Several sessions share one cluster: every run gets its own database, and replay (which rebuilds the
 # cluster, as roles are cluster-wide) refuses while any other copy exists; pass --force to override.
+# replay stamps the template with the migrations it applied; a copy is refused while the template lacks
+# one of the calling worktree's migrations/ (replay, or STALE_OK=1 to run against it anyway).
 set -euo pipefail
 
 OPT="$HOME/.local/opt"
@@ -86,6 +89,49 @@ copies() {
   psql_q -At -d postgres -c "select datname from pg_database where not datistemplate and datname <> 'postgres'"
 }
 
+# Every copy a replay would refuse over (a dead run's ci_<pid> it drops itself), with its age, on one line.
+blocking_copies() {
+  local db age
+  while IFS='|' read -r db age; do
+    [[ "$db" =~ ^ci_[0-9]+$ ]] && ! kill -0 "${db#ci_}" 2>/dev/null && continue
+    echo "$db (${age:-age unknown})"
+  done < <(psql_q -At -d postgres -c "select datname, date_trunc('minute', now()
+             - (pg_stat_file('base/' || oid || '/PG_VERSION', true)).modification) || ' old'
+           from pg_database where not datistemplate and datname <> 'postgres' order by datname") \
+    | paste -sd, - | sed 's/,/, /g'
+}
+
+migration_names() { (cd "$REPO/migrations" && ls -- *.sql | LC_ALL=C sort); }
+template_names() {
+  psql_q -At -d postgres -c "select shobj_description(oid, 'pg_database') from pg_database where datname = 'replay'"
+}
+stamp_of() { [[ -n "$1" ]] && echo "$(grep -c . <<<"$1") $(tail -1 <<<"$1")" || echo unstamped; }
+# The migrations of $2 that $1 lacks, as "<count> (first <name>)"; nothing when none.
+lacking() {
+  local names
+  names=$(LC_ALL=C comm -13 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | grep . || true)
+  [[ -z "$names" ]] || echo "$(grep -c . <<<"$names") (first $(head -1 <<<"$names"))"
+}
+
+# A template that lacks a migration of this worktree would hide its schema change behind unrelated failures.
+require_current_template() {
+  local have want missing blockers
+  have=$(template_names)
+  want=$(migration_names)
+  missing=$(lacking "$have" "$want")
+  [[ -n "$have" && -z "$missing" ]] && return
+  local msg="template stale ($(stamp_of "$have") vs $(stamp_of "$want")): run scripts/local_pg.sh replay"
+  if [[ "${STALE_OK:-}" == 1 ]]; then
+    echo "local_pg: STALE_OK=1, running anyway: $msg" >&2
+    return
+  fi
+  blockers=$(blocking_copies)
+  [[ -n "$have" ]] && missing="it lacks $missing of this worktree's migrations" || missing="it was replayed before stamps"
+  die "$msg
+  $missing; copies that block a replay: ${blockers:-none}
+  (ask their owners, or replay --force; STALE_OK=1 runs against the stale template)"
+}
+
 drop_stale_runs() {
   local db
   for db in $(copies | grep -E '^ci_[0-9]+$' || true); do
@@ -125,22 +171,41 @@ replay() {
   psql_q -c "select 'listings'::regclass, 'properties_public'::regclass, 'image_clip_embeddings'::regclass" >/dev/null
   psql_q -f migrations/656_notifications_w6_prune.sql >/dev/null
   psql_q -d postgres -c "alter database replay is_template true"
-  echo "replayed $(ls migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s (last: $(ls migrations/*.sql | LC_ALL=C sort | tail -1))"
+  # psql interpolates :'var' only in commands it reads from stdin, not from -c.
+  local applied
+  applied=$(migration_names)
+  psql_q -d postgres -v applied="$applied" <<<"comment on database replay is :'applied'"
+  echo "replayed $(grep -c . <<<"$applied") migrations in $((SECONDS - started)) s (last: $(tail -1 <<<"$applied"))"
 }
 
 copy_of_template() {
   ensure_server
   psql_q -At -d postgres -c "select 1 from pg_database where datname = 'replay' and datistemplate" | grep -q 1 \
     || die "no replayed template; run: scripts/local_pg.sh replay"
+  require_current_template
   psql_q -d postgres -c "set client_min_messages = warning" -c "drop database if exists $1 with (force)" -c "create database $1 template replay"
 }
 
 # This run's private copy, dropped when the script exits (a crashed run's copy is dropped by the next replay).
 RUN_DB="ci_$$"
 fresh() {
-  drop_stale_runs
   copy_of_template "$RUN_DB"
   trap 'psql_q -d postgres -c "drop database if exists $RUN_DB with (force)" >/dev/null 2>&1 || true' EXIT
+  drop_stale_runs
+}
+
+status() {
+  pg_ctl -D "$DATA/data" status || return
+  local have want verdict missing copies
+  have=$(template_names)
+  want=$(migration_names)
+  missing=$(lacking "$have" "$want")
+  if [[ -z "$have" ]]; then verdict="replay to stamp it"
+  elif [[ -n "$missing" ]]; then verdict="stale, it lacks $missing"
+  else verdict="current"; fi
+  echo "template: $(stamp_of "$have"); this worktree: $(stamp_of "$want"); $verdict"
+  copies=$(blocking_copies)
+  echo "copies: ${copies:-none}"
 }
 
 run_pytest() {
@@ -176,7 +241,10 @@ case "${1:-}" in
   lanes) lanes ;;
   start) ensure_server; echo "running on port $PORT" ;;
   stop) pg_ctl -D "$DATA/data" -m fast stop ;;
-  status) pg_ctl -D "$DATA/data" status ;;
+  status) status ;;
+  psql) shift; ensure_server; db=replay
+        [[ $# -gt 0 && "$1" != -* ]] && { db=$1; shift; }
+        exec psql -X -d "$db" "$@" ;;
   db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: db <name> (lowercase, not replay/postgres)"
       copy_of_template "$2"; url_for "$2" ;;
   drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: drop <name>"
