@@ -22,7 +22,7 @@ import { useCardPhotos } from '@/lib/hydration';
 import type { CoverTag } from '@/lib/imageTags';
 import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf, plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
-import { mfYieldText } from '@/lib/mfReference';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { portalShort } from '@/lib/portals';
 import type { CardRow } from '@/lib/queries';
 
@@ -91,14 +91,6 @@ export function feedPortals(r: Pick<CardRow, 'active_sources' | 'all_sources'>):
 export const portalsWord = (n: number): string =>
   `${n}${NBSP}${czPlural(n, 'portál', 'portály', 'portálů')}`;
 
-/* MF gross yield, sale flats only (the column is null elsewhere; the gate says so). */
-export function feedMfYield(
-  r: Pick<CardRow, 'mf_gross_yield_pct' | 'category_main' | 'category_type'>,
-): string | null {
-  const text = mfYieldText(r.mf_gross_yield_pct);
-  return text == null || r.category_main !== 'byt' || r.category_type !== 'prodej' ? null : `MF ${text}`;
-}
-
 export const feedDays = (tomDays: number | null): string | null =>
   tomDays == null || tomDays < 0 ? null : tomDays === 0 ? 'dnes' : fmtTomDays(tomDays);
 
@@ -113,7 +105,7 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
   const portals = feedPortals(r);
   const days = feedDays(r.tom_days);
   const delta = feedDelta(r.total_price_change_pct);
-  const mf = feedMfYield(r);
+  const mf = mfYieldLine(r.mf_gross_yield_pct);
   const priceLabel = price.text ? `${price.text}${price.perMonth ? ' /měs' : ''}` : 'Cena na vyžádání';
 
   return (
@@ -179,7 +171,7 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
           )}
           {mf && (
             <span
-              title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)"
+              title={MF_YIELD_TITLE}
               className="inline-flex h-5 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 font-mono text-[11px] tabular-nums text-[var(--color-ink-2)]"
             >
               {mf}

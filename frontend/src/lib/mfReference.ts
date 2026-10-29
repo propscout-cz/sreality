@@ -94,3 +94,17 @@ export function mfYieldText(
   }
   return yieldPct != null ? fmtPct(yieldPct) : null;
 }
+
+/* The yield's label and tooltip wherever it stands on its own. Inside an MF card,
+ * whose heading already names MF, the figure reads "hrubý výnos" instead. */
+export const MF_YIELD_LABEL = 'Výnos MF';
+export const MF_YIELD_TITLE = 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)';
+
+/* "Výnos MF 4,6 %", or null when mfYieldText has no figure. */
+export function mfYieldLine(
+  yieldPct: number | null | undefined,
+  ref?: ReferenceRent | null,
+): string | null {
+  const text = mfYieldText(yieldPct, ref);
+  return text == null ? null : `${MF_YIELD_LABEL} ${text}`;
+}
