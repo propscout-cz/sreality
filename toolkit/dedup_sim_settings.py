@@ -5,9 +5,7 @@ exist, their type/category/constraints, and their plain-language
 explanation — the design's non-negotiable "every settings-panel knob
 carries a plain-language blurb" (docs/design/new-dedup/PROGRAM.md).
 `dedup_sim.settings` (migration 372) stores operator OVERRIDES only; a
-missing row means "use the registry default," the same split
-`toolkit/filter_registry.py` + `filter_visibility` (migration 059)
-already uses in this codebase. Adding a setting a later wave needs is a
+missing row means "use the registry default." Adding a setting a later wave needs is a
 registry-only PR — no new migration, since the override table doesn't
 need a row until someone actually changes the value.
 

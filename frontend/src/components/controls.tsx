@@ -338,8 +338,8 @@ export function PickButton({
 
 /* -------------------------------------------------------------------------- */
 /* Switch — pill on/off toggle. One implementation shared by every boolean    */
-/* control in the app (filter-visibility cells, region-priority toggles, the  */
-/* NEW DEDUP boolean settings) instead of each screen redrawing its own pill. */
+/* control in the app (region-priority toggles, the NEW DEDUP boolean         */
+/* settings) instead of each screen redrawing its own pill.                   */
 /* -------------------------------------------------------------------------- */
 
 export function Switch({

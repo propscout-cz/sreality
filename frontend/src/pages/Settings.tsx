@@ -33,8 +33,6 @@ import {
   updateConditionScoringRegions,
   getClipTaggingRegions,
   updateClipTaggingRegions,
-  getFilterSchema,
-  setFilterVisibility,
   getRentMapStatus,
   listRentMapRevisions,
   uploadRentMapFile,
@@ -43,8 +41,6 @@ import {
   type AppSetting,
   type AgentTool,
   type SkillUpdate,
-  type Agenda,
-  type FilterSchemaEntry,
   type RentMapRevision,
   type RentMapIngestResult,
   type ConditionScoringRegionsPayload,
@@ -151,19 +147,8 @@ export default function Settings() {
       </CollapsibleSection>
 
       <CollapsibleSection
-        id="filter-availability"
-        index={7}
-        eyebrow="Filters"
-        title="Filter availability"
-        infoExpanded={infoExpanded}
-        description="One row per filter from the canonical registry; columns are the agendas (Browse, Watchdog, agent tools, …) where that filter can apply. Toggle a cell off to hide the filter from that surface — backend matchers and UI forms both respect the matrix. Default is on everywhere a filter is declared."
-      >
-        <FilterVisibilitySection infoExpanded={infoExpanded} />
-      </CollapsibleSection>
-
-      <CollapsibleSection
         id="workflows"
-        index={8}
+        index={7}
         eyebrow="Workflows"
         title="GitHub Actions"
         infoExpanded={infoExpanded}
@@ -182,7 +167,7 @@ export default function Settings() {
         <WorkflowsSection infoExpanded={infoExpanded} />
       </CollapsibleSection>
 
-      <CollapsibleSection id="appearance" index={9} eyebrow="Theme" title="Appearance" infoExpanded={infoExpanded}>
+      <CollapsibleSection id="appearance" index={8} eyebrow="Theme" title="Appearance" infoExpanded={infoExpanded}>
         <ThemeToggle />
       </CollapsibleSection>
     </div>
@@ -1211,169 +1196,5 @@ function WorkflowDetail({ doc }: { doc: WorkflowDoc }) {
         </a>
       </div>
     </div>
-  );
-}
-
-/* -------------------------------------------------------------------- */
-/* Filter availability (PR 1 / migration 059)                            */
-/* -------------------------------------------------------------------- */
-
-const FILTER_SCHEMA_KEY = ['admin', 'filter-schema'] as const;
-
-function FilterVisibilitySection({ infoExpanded }: { infoExpanded: boolean }) {
-  const schemaQ = useQuery({
-    queryKey: FILTER_SCHEMA_KEY,
-    queryFn: getFilterSchema,
-  });
-
-  /* Optimistic, pending per switch. No onError: a refused toggle snaps back
-   * AND says why through the global toast. */
-  const mut = useOptimisticWrite({
-    mutationKey: ['write', 'admin', 'filter-visibility'],
-    mutationFn: ({
-      agenda, filterId, enabled,
-    }: {
-      agenda: Agenda;
-      filterId: string;
-      enabled: boolean;
-    }) => setFilterVisibility(agenda, filterId, enabled),
-    patch: ({ agenda, filterId, enabled }) => [
-      cachePatch<typeof schemaQ.data>({ queryKey: FILTER_SCHEMA_KEY, exact: true }, (prev) =>
-        prev && {
-          ...prev,
-          filters: prev.filters.map((f) =>
-            f.id === filterId
-              ? { ...f, visibility: { ...f.visibility, [agenda]: enabled } }
-              : f,
-          ),
-        },
-      ),
-    ],
-    revalidate: [FILTER_SCHEMA_KEY],
-    pendingKey: ({ agenda, filterId }) => `${agenda}|${filterId}`,
-  });
-
-  if (schemaQ.error) return <ErrorBanner message={schemaQ.error.message} flush />;
-  if (!schemaQ.data) {
-    return <p className="text-sm text-[var(--color-ink-3)]">Loading filter registry…</p>;
-  }
-
-  const { agendas, categories, filters } = schemaQ.data;
-  const filtersByCategory = new Map<string, FilterSchemaEntry[]>();
-  for (const f of filters) {
-    const list = filtersByCategory.get(f.category) ?? [];
-    list.push(f);
-    filtersByCategory.set(f.category, list);
-  }
-
-  return (
-    <div className="border border-[var(--color-rule)] rounded-[var(--radius-sm)] overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-ink-2)] sticky left-0 bg-[var(--color-paper-2)]">
-                Filter
-              </th>
-              {agendas.map((a) => (
-                <th
-                  key={a}
-                  className="text-center px-2 py-2 font-medium text-[0.65rem] tracking-[0.16em] uppercase text-[var(--color-ink-3)] min-w-[6rem]"
-                >
-                  {a}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {categories
-              .filter((c) => filtersByCategory.has(c))
-              .map((category) => (
-                <FilterCategoryRows
-                  key={category}
-                  category={category}
-                  filters={filtersByCategory.get(category)!}
-                  agendas={agendas}
-                  pendingFor={mut.pendingFor}
-                  infoExpanded={infoExpanded}
-                  onToggle={(agenda, filterId, enabled) =>
-                    mut.mutate({ agenda, filterId, enabled })
-                  }
-                />
-              ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="px-3 py-2 text-[0.7rem] text-[var(--color-ink-4)] border-t border-[var(--color-rule)] bg-[var(--color-paper-2)]/50">
-        A dash (—) means the filter doesn't apply to that agenda — the
-        registry doesn't declare it there, so there's nothing to toggle.
-      </p>
-    </div>
-  );
-}
-
-function FilterCategoryRows({
-  category,
-  filters,
-  agendas,
-  pendingFor,
-  infoExpanded,
-  onToggle,
-}: {
-  category: string;
-  filters: FilterSchemaEntry[];
-  agendas: Agenda[];
-  pendingFor: (key: string) => boolean;
-  infoExpanded: boolean;
-  onToggle: (agenda: Agenda, filterId: string, enabled: boolean) => void;
-}) {
-  return (
-    <>
-      <tr className="bg-[var(--color-paper)]/60 border-b border-[var(--color-rule-soft)]">
-        <td
-          colSpan={agendas.length + 1}
-          className="px-3 py-1.5 text-[0.65rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium"
-        >
-          {category}
-        </td>
-      </tr>
-      {filters.map((f) => (
-        <tr key={f.id} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
-          <td className="px-3 py-2 align-top sticky left-0 bg-[var(--color-paper)]">
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[0.78rem] text-[var(--color-ink)]">{f.id}</span>
-              {!infoExpanded && <InfoHint text={f.description} />}
-            </div>
-            {infoExpanded && (
-              <div className="mt-0.5 text-[0.7rem] text-[var(--color-ink-3)] max-w-[28rem] leading-snug">
-                {f.description}
-              </div>
-            )}
-          </td>
-          {agendas.map((a) => {
-            const declared = a in f.visibility;
-            if (!declared) {
-              return (
-                <td key={a} className="text-center text-[var(--color-ink-4)] px-2 py-2">
-                  —
-                </td>
-              );
-            }
-            const enabled = f.visibility[a];
-            const isPending = pendingFor(`${a}|${f.id}`);
-            return (
-              <td key={a} className="text-center px-2 py-2">
-                <Switch
-                  on={enabled}
-                  pending={isPending}
-                  onChange={(next) => onToggle(a, f.id, next)}
-                  ariaLabel={`${f.id} on ${a}`}
-                />
-              </td>
-            );
-          })}
-        </tr>
-      ))}
-    </>
   );
 }
