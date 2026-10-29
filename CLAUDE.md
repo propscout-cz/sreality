@@ -93,7 +93,7 @@ operator can watch, and work to completion.
   send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).
 ## Fetching live state (fetch, don't ask)
 
-Dynamic state lives outside Git — don't ask, fetch it:
+Dynamic state lives outside Git:
 - Migrations on disk → `ls migrations/ | tail -5`; Actions runs → `gh run list --limit 10`.
 - **DB reads (counts, freshness, schema, verification SELECTs) → `psql "$SUPABASE_DB_URL" -c "…" | head`**,
   NOT the Supabase MCP (its verbose output persists in context) — but when `psql` or that env
@@ -103,7 +103,7 @@ Dynamic state lives outside Git — don't ask, fetch it:
 
 `ROADMAP.md` is a **byte-capped index**; phase content lives in `roadmap/<track>.md` and completed
 work in `roadmap/archive.md`. **Read the index only; open a track file only to edit it.** After
-shipping meaningful work, in the SAME PR update **only** the relevant `roadmap/<track>.md` (move a
+shipping meaningful work, in the SAME PR update **only** the track file its index row links (move a
 bullet to done, add new "next" items) + the index's status cell if the track's status changed.
 ## Context discipline
 
@@ -254,7 +254,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `docs/architecture.md`).
 ## Coding conventions
 
-- Type hints on every signature (CI's ruff ANN check enforces it outside tests and the 20 autodedup `DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
+- Type hints on every signature (CI's ruff ANN check enforces it outside tests and `autodedup.incremental.DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
 - No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
@@ -271,7 +271,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
