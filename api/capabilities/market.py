@@ -43,8 +43,8 @@ VelocityFilters = filter_model(
     tuple(i for i in agenda_ids(Agenda.VELOCITY) if i not in ("max_age_days", "lifecycle")), ComparableFilters,
 )
 VelocityLifecycle = filter_model("VelocityLifecycle", ("lifecycle",), compute_market_velocity)
-# describe_neighborhood reads these four; the NEIGHBORHOOD agenda also lists attribute filters it never applies. Its
-# recency window needs no lifecycle, unlike a cohort's.
+# describe_neighborhood reads these four filters and applies no area, layout or floor. Its recency window needs no
+# lifecycle, unlike a cohort's.
 NeighbourhoodFilters = filter_model(
     "NeighbourhoodFilters", ("radius_m", "max_age_days", "category_main", "category_type"), describe_neighborhood,
     descriptions={"max_age_days": "Leave out ads last seen more than N days ago."},
