@@ -57,6 +57,17 @@ Every session posts as the same GitHub account, so an assignee cannot tell sessi
 - **A claim belongs to the session id**: subagents share it, so the orchestrating session claims each ticket before handing it over, and a resumed session keeps it under its new name. `--as <name>` acts by name alone, for a session the script cannot identify (exit 2) or to take over a ticket at the user's word.
 - The script alone writes claim comments; leave them as written and the assignee empty.
 - `status` shows who holds what (`--help`).
+- **A comment carrying a ruling for a ticket you don't hold** goes to its holder (`python3 -m scripts.ticket_claim status <n>` names it) or to the operator.
+
+## Merging: the merge light
+
+Railway deploys every merge to `main`, so merges go one PR at a time, each on its own light from the **merge coordinator**. That is a role, not a name: the session that owns the autodedup engine and runs merge windows. Its session name changes on every resume, so find it with `ListAgents` or ask the operator; never message a remembered name.
+
+- **Ask for the light** ("green light #<n>") with the PR number, the head SHA, its CI state, and whether the PR adds a migration or touches `autodedup.incremental.DECISION_MODULES`, the apply scope (`app_settings.autodedup_apply_scope`), `.railway/` or the worker's config. Those need an engine pause, which the coordinator runs.
+- **Claim a migration number** with the coordinator before writing the file, and never apply a migration without telling it.
+- **Windows:** the coordinator may close backend merge windows, since every backend path rebuilds the job-runner. Don't assume a slot.
+- **On the light**, merge current `origin/main` into the branch and wait for CI green on that head (`scripts/ci_wait.sh <pr>` where main has it, else `gh pr view <n> --json headRefOid,statusCheckRollup`, every check on that SHA). Then merge with `gh pr merge <n> --merge --match-head-commit <sha>` as a standalone command: inside a compound command it can fall to the permission classifier. Send the coordinator the merge SHA and wait for its "live" before the next merge.
+- **If the permission check refuses the merge**, tell the operator in your own session. Never ask another session to merge for you.
 
 ## Post-merge gates are their own tickets
 
