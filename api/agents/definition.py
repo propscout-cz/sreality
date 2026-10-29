@@ -16,6 +16,7 @@ from jsonschema.exceptions import SchemaError
 
 from api import dependencies
 from api.capabilities import registry
+from api.capabilities.schema import PORTABLE_KEYWORDS, nodes
 from api.providers import CompletionProvider
 
 SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
@@ -122,9 +123,18 @@ def _schema(value: Any, label: str) -> dict[str, Any]:
         Draft202012Validator.check_schema(value)
     except SchemaError as exc:
         raise DefinitionError(f"{label} is not a valid JSON Schema: {exc.message}") from None
-    if value.get("type") != "object" or value.get("additionalProperties") is not False:
-        raise DefinitionError(f"{label} must be an object that refuses unknown keys "
-                              "(type: object, additionalProperties: false)")
+    if value.get("type") != "object":
+        raise DefinitionError(f"{label} must be an object (type: object)")
+    for node in nodes(value):
+        if unportable := sorted(set(node) - PORTABLE_KEYWORDS):
+            raise DefinitionError(f"{label} uses {unportable}, which not every provider accepts; "
+                                  f"use only {sorted(PORTABLE_KEYWORDS)}")
+        if not isinstance(node.get("type"), str):
+            raise DefinitionError(f"{label}: every schema names one type (for null, add nullable: true)")
+        if not all(isinstance(v, str) for v in node.get("enum", ())):
+            raise DefinitionError(f"{label}: enum values are strings (Gemini refuses others)")
+        if node["type"] == "object" and node.get("additionalProperties") is not False:
+            raise DefinitionError(f"{label}: every object refuses unknown keys (additionalProperties: false)")
     return value
 
 
@@ -143,6 +153,8 @@ def _split(raw: str) -> tuple[Any, str]:
 
 
 def _parse(folder: Path) -> Definition:
+    if links := sorted(p.relative_to(folder.parent).as_posix() for p in [folder, *folder.rglob("*")] if p.is_symlink()):
+        raise DefinitionError(f"an agent folder holds its own files, not links: {links}")
     files = sorted(p for p in folder.rglob("*") if p.is_file())
     paths = [p.relative_to(folder).as_posix() for p in files]
     stray = [p for p in paths if p != "SKILL.md" and not p.startswith("references/")]

@@ -84,6 +84,16 @@ _SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}}
     ({"input": {"type": "object", "properties": {"a": {"type": "nonsense"}}}}, "not a valid JSON Schema"),
     ({"input": {"type": "object", "properties": {}}}, "refuses unknown keys"),
     ({"output": {"type": "array"}}, "output must be an object"),
+    ({"input": {"type": "object", "additionalProperties": False, "properties": {"town": {"$ref": "file:///etc/passwd"}}}},
+     r"uses \['\$ref'\]"),
+    ({"output": {"type": "object", "additionalProperties": False, "properties": {"a": {"const": 1}}}},
+     r"uses \['const'\]"),
+    ({"output": {"type": "object", "additionalProperties": False, "properties": {"a": {"type": ["number", "null"]}}}},
+     "names one type"),
+    ({"output": {"type": "object", "additionalProperties": False, "properties": {"a": {"type": "integer", "enum": [1]}}}},
+     "enum values are strings"),
+    ({"output": {"type": "object", "additionalProperties": False,
+                 "properties": {"a": {"type": "object", "properties": {}}}}}, "every object refuses unknown keys"),
     ({"description": " "}, "description must be a non-empty string"),
 ])
 def test_a_malformed_frontmatter_fails_with_what_to_fix(
@@ -102,12 +112,21 @@ def test_a_malformed_frontmatter_fails_with_what_to_fix(
     (lambda f: (f / "SKILL.md").write_text("---\n- a\n---\nbody\n", encoding="utf-8"), "must be a mapping"),
     (lambda f: (f / "run.py").write_text("x = 1\n", encoding="utf-8"), r"not \['run.py'\]"),
     (lambda f: (f / "references").mkdir() or (f / "references" / "a.md").write_bytes(b"\xff"), "UTF-8"),
+    (lambda f: (f / "references").mkdir() or (f / "references" / "a.md").symlink_to("/etc/hostname"), "not links"),
 ])
 def test_a_malformed_folder_fails_with_what_to_fix(probes: None, tmp_path: Path, make: Any, match: str) -> None:
     folder = write_folder(tmp_path)
     make(folder)
     with pytest.raises(d.DefinitionError, match=match):
         d.load(folder)
+
+
+def test_a_linked_folder_is_refused(probes: None, tmp_path: Path) -> None:
+    real = write_folder(tmp_path / "real")
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "probe_scout_v1").symlink_to(real, target_is_directory=True)
+    with pytest.raises(d.DefinitionError, match="not links"):
+        d.load_all(tmp_path / "skills")
 
 
 def test_an_empty_body_is_no_skill(probes: None, tmp_path: Path) -> None:
@@ -171,8 +190,14 @@ def test_submit_result_builds_with_the_gemini_sdk(probes: None, tmp_path: Path) 
     """Gemini's client refuses what the other providers take silently; an agent's output schema reaches it."""
     types = pytest.importorskip("google.genai.types")
     from api.providers.gemini import _schema_for_gemini
-    output = {"type": "object", "additionalProperties": False,
-              "properties": {"rank": {"type": "integer", "minimum": 1, "description": "1 is best."}}}
+    output = {"type": "object", "additionalProperties": False, "required": ["rank"], "properties": {
+        "rank": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1, "nullable": True, "description": "Best 1."},
+        "why": {"type": "string", "minLength": 1, "maxLength": 300, "pattern": "^.+$", "format": "text",
+                "description": "One line."},
+        "verdicts": {"type": "array", "minItems": 1, "maxItems": 20, "description": "One per property.",
+                     "items": {"type": "string", "enum": ["under", "fair", "over"], "description": "One."}},
+    }}
+    assert set().union(*[set(n) for n in d.nodes(output)]) == d.PORTABLE_KEYWORDS
     agent = d.load(write_folder(tmp_path, meta=frontmatter("probe_scout_v1", output=output)))
     shown = terminator.schema(agent)
     types.FunctionDeclaration(name=shown["name"], description=shown["description"],

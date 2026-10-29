@@ -2,7 +2,7 @@
 
 The CI replay builds rental_estimator_full_v1's prompt from migration 076 (638 touches another bullet), so the
 replayed outcome is fixed: 645's two 076-era blocks must each occur in 076's prompt exactly once, and replacing them
-must leave no mention of the parked condition levels. The canonical SKILL.md carries the same new text.
+must leave no mention of the parked condition levels.
 """
 
 from __future__ import annotations

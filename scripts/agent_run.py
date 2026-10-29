@@ -50,21 +50,29 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     provider = opts.provider or next(iter(definition.models))
+    if provider not in definition.models:
+        print(f"{definition.name} runs on {sorted(definition.models)}, not {provider}", file=sys.stderr)
+        return 2
+    model = definition.models[provider]
+    providers = dependencies.get_providers()
     steps: list[loop.Step] = []
+    outcome: loop.Outcome | None = None
 
     def record(step: loop.Step) -> None:
         steps.append(step)
         print(f"#{step.n} {step.kind} {step.name} {step.duration_ms} ms ${step.cost_usd:.4f}", file=sys.stderr)
 
-    with db.connect() as conn:
-        caller = Caller(market=conn, claims={"sub": str(opts.user), "role": "authenticated"})
-        llm = LLMClient(conn, providers=dependencies.get_providers())
-        outcome = loop.run(definition, value, provider=provider, llm=llm, record=record,
-                           call_tool=lambda name, args: registry.call(caller, name, args))
-    if opts.record:
-        model = definition.models[provider]
-        cassette.dump(opts.record, definition=definition, provider=provider, model=model,
-                      price=llm.provider(provider).price_for(model), value=value, steps=steps, outcome=outcome)
+    try:
+        with db.connect() as conn:
+            caller = Caller(market=conn, claims={"sub": str(opts.user), "role": "authenticated"})
+            llm = LLMClient(conn, providers=providers)
+            outcome = loop.run(definition, value, provider=provider, llm=llm, record=record,
+                               call_tool=lambda name, args: registry.call(caller, name, args))
+    finally:
+        # A run that raised (a provider error) keeps the steps it paid for; its cassette has no outcome.
+        if opts.record and steps:
+            cassette.dump(opts.record, definition=definition, provider=provider, model=model,
+                          price=providers[provider].price_for(model), value=value, steps=steps, outcome=outcome)
     print(f"{outcome.stop_reason} after {outcome.model_calls} model calls, ${outcome.cost_usd:.4f}", file=sys.stderr)
     if outcome.answer is None:
         return 1

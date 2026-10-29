@@ -19,9 +19,11 @@ from api.llm_client import LLMClient
 from api.providers import Message, ModelPrice, TextBlock, ToolResultBlock, ToolUseBlock
 
 CALLED_FOR = "agent_run"
-MAX_REPLY_TOKENS = 4096
-# A budget that buys a shorter reply than this ends the run: such a reply cannot carry a tool call worth its price.
-MIN_REPLY_TOKENS = 256
+# A reply's limit covers the model's thinking too (Opus/Sonnet 5.5 always think): the ceiling is the non-streaming
+# size Anthropic recommends, and a budget that buys less than the floor ends the run rather than pay for a reply
+# likely to be cut off.
+MAX_REPLY_TOKENS = 16_000
+MIN_REPLY_TOKENS = 4_096
 
 StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "end_turn", "max_tokens"]
 
@@ -127,11 +129,10 @@ def run(
             "usage": asdict(completion.usage),
             "model": completion.model,
         }, started, response.cost_usd, response.llm_call_id)
-        # A reply cut at its limit may carry a half-written call; nothing in it runs.
-        if completion.stop_reason == "max_tokens":
-            return outcome("max_tokens")
-        if not completion.tool_calls:
-            return outcome("end_turn")
+        # A turn's calls run only when the model ended it on them: one cut at its limit or stopped by a refusal may
+        # carry a half-written call, and nothing in it runs.
+        if completion.stop_reason != "tool_use" or not completion.tool_calls:
+            return outcome("max_tokens" if completion.stop_reason == "max_tokens" else "end_turn")
 
         messages.append(Message(role="assistant", content=[
             *(TextBlock(text=t) for t in completion.text_blocks if t),
@@ -139,8 +140,6 @@ def run(
         ]))
         results: list[ToolResultBlock] = []
         for call in completion.tool_calls:
-            if clock() >= deadline:
-                return outcome("timeout")
             started = clock()
             try:
                 if call.name == terminator.NAME:
@@ -151,6 +150,9 @@ def run(
                     return outcome("submit_result", answer)
                 if call.name not in callable_names:
                     raise ToolError(ToolErrorCode.UNKNOWN_TOOL, f"{call.name!r} is not one of this agent's tools")
+                # An answer already paid for is checked even past the deadline; a tool call is not started.
+                if started >= deadline:
+                    return outcome("timeout")
                 result = call_tool(call.name, call.input)
                 seen |= terminator.property_ids(result)
                 error = False

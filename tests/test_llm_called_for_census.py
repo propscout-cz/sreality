@@ -14,13 +14,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 _TREES = ("api", "toolkit", "scraper", "scripts", "autodedup", "location_data")
 _SENT = re.compile(r"""\b_?CALLED_FOR\s*(?::[^=\n]+)?=\s*["']([a-z_]+)["']|\bcalled_for\s*=\s*["']([a-z_]+)["']""")
-_CHECK = re.compile(r"add constraint llm_calls_called_for_check\s+check \(called_for in \((.*?)\)\)", re.S | re.I)
+_ADD = re.compile(r"add\s+constraint\s+llm_calls_called_for_check\b", re.I)
+# Both shapes the history uses: `called_for in ('a', ...)` and `called_for = any (array['a', ...])`.
+_CHECK = re.compile(r"add\s+constraint\s+llm_calls_called_for_check\s+check\s*\(\s*called_for\s*"
+                    r"(?:in\s*\(|=\s*any\s*\(\s*array\s*\[)([^)\]]*)", re.S | re.I)
 
 
 def _admitted() -> set[str]:
-    statements = [m for path in sorted((ROOT / "migrations").glob("*.sql"))
-                  for m in _CHECK.findall(path.read_text(encoding="utf-8"))]
-    return set(re.findall(r"'([a-z_]+)'", statements[-1]))
+    restated = []
+    for path in (ROOT / "migrations").glob("*.sql"):
+        sql = path.read_text(encoding="utf-8")
+        lists = _CHECK.findall(sql)
+        assert len(lists) == len(_ADD.findall(sql)), f"{path.name} restates the CHECK in a shape this census cannot read"
+        restated += [((int(path.name.split("_", 1)[0]), i), values) for i, values in enumerate(lists)]
+    return set(re.findall(r"'([a-z_]+)'", max(restated, key=lambda r: r[0])[1]))
 
 
 def _sent() -> dict[str, str]:

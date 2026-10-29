@@ -94,7 +94,19 @@ def test_every_tool_result_goes_back_to_the_model_as_the_registry_shaped_it() ->
                results={"probe_a": refusal, "probe_b": {"data": [1]}})
     sent = run.tool_results(2)
     assert [(r.is_error, json.loads(r.content)) for r in sent] == [(True, refusal.payload()), (False, {"data": [1]})]
-    assert run.steps[1].output == refusal.payload()
+
+
+def test_a_tool_step_keeps_what_the_model_asked_and_what_it_was_sent() -> None:
+    """The run's own record of every read (#2063: broker contacts are recorded on the run), refusals included."""
+    refusal = ToolError(ToolErrorCode.INVALID_ARGUMENTS, "q must be positive")
+    brokers = {"data": [{"property_id": 7, "broker": {"name": "Jana", "phone": "+420 600 000 000"}}]}
+    run = _Run(reply(("probe_a", {"q": -1}), ("probe_b", {"q": 7}), ("probe_x", {})), reply(),
+               results={"probe_a": refusal, "probe_b": brokers})
+    assert [(s.name, s.input, s.output) for s in run.steps if s.kind == "tool"] == [
+        ("probe_a", {"q": -1}, refusal.payload()),
+        ("probe_b", {"q": 7}, brokers),
+        ("probe_x", {}, ToolError(ToolErrorCode.UNKNOWN_TOOL, "'probe_x' is not one of this agent's tools").payload()),
+    ]
 
 
 # --- the caps --------------------------------------------------------------------------------------------------------
@@ -113,13 +125,18 @@ def test_the_wall_clock_stops_a_run_between_calls_even_mid_turn() -> None:
 
 
 def test_the_cost_cap_bounds_each_reply_so_its_worst_case_fits_what_is_left() -> None:
-    price = ModelPrice(10.0, 10.0)
-    run = _Run(reply(("probe_a", {}), usage=(1_000, 3_000)), reply(("probe_a", {})),
-               price=price, agent=_agent(limits=Limits(6, 0.05, 60.0)))
+    price = ModelPrice(10.0, 20.0)
+    run = _Run(reply(("probe_a", {}), usage=(1_000, 8_000)), reply(("probe_a", {})),
+               price=price, agent=_agent(limits=Limits(6, 0.2, 60.0)))
     assert (run.outcome.stop_reason, run.outcome.model_calls) == ("max_cost", 1)
     granted = run.provider.calls[0]["max_tokens"]
     assert loop.MIN_REPLY_TOKENS <= granted < loop.MAX_REPLY_TOKENS
-    assert run.outcome.cost_usd <= 0.05
+    assert run.outcome.cost_usd <= 0.2
+
+
+def test_a_budget_that_buys_no_full_reply_spends_nothing() -> None:
+    run = _Run(reply(("probe_a", {})), price=ModelPrice(10.0, 20.0), agent=_agent(limits=Limits(6, 0.05, 60.0)))
+    assert (run.outcome.stop_reason, run.outcome.model_calls, run.provider.calls) == ("max_cost", 0, [])
 
 
 def test_the_reply_bound_prices_the_prompt_at_its_dearest_rate() -> None:
@@ -133,6 +150,19 @@ def test_the_reply_bound_prices_the_prompt_at_its_dearest_rate() -> None:
 def test_a_reply_cut_at_its_limit_runs_nothing() -> None:
     run = _Run(reply(("probe_a", {}), stop="max_tokens"))
     assert run.outcome.stop_reason == "max_tokens" and run.dispatched == []
+
+
+def test_a_turn_that_did_not_end_on_its_calls_runs_nothing() -> None:
+    """Anthropic reports a refusal or a context-window stop as end_turn, possibly over a half-written call."""
+    run = _Run(reply(("probe_a", {}), stop="end_turn"))
+    assert run.outcome.stop_reason == "end_turn" and run.dispatched == []
+
+
+def test_an_answer_that_arrives_after_the_deadline_is_still_checked() -> None:
+    ticks = itertools.count(0, 10)
+    run = _Run(reply((SUBMIT, {"markdown": "Late but whole."})), agent=_agent(limits=Limits(6, 1.0, 25.0)),
+               clock=lambda: next(ticks))
+    assert (run.outcome.stop_reason, run.outcome.answer.markdown) == ("submit_result", "Late but whole.")
 
 
 def test_a_reply_without_a_call_ends_the_run_without_an_answer() -> None:

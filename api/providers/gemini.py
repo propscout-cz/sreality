@@ -255,10 +255,12 @@ def _extract_gemini_usage(raw: Any) -> Usage:
         return Usage()
     def _g(name: str) -> int:
         return int(getattr(meta, name, 0) or 0)
+    cached = _g("cached_content_token_count")
     return Usage(
-        input_tokens=_g("prompt_token_count"),
-        output_tokens=_g("candidates_token_count"),
-        cache_read_tokens=_g("cached_content_token_count"),
+        # prompt_token_count includes the cached part (Usage keeps them disjoint); thinking is billed as output.
+        input_tokens=max(_g("prompt_token_count") - cached, 0),
+        output_tokens=_g("candidates_token_count") + _g("thoughts_token_count"),
+        cache_read_tokens=cached,
         cache_write_tokens=0,
     )
 

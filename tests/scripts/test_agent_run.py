@@ -90,3 +90,22 @@ def test_a_bad_input_spends_nothing(world: dict[str, Any], tmp_path: Path, capsy
     assert code == 2
     assert "town: 5 is not of type 'string'" in capsys.readouterr().err
     assert world["provider"].calls == [] and world["calls"] == []
+
+
+def test_a_run_that_raises_keeps_its_paid_steps(world: dict[str, Any], tmp_path: Path) -> None:
+    folder = write_folder(tmp_path)
+    world["provider"]._queue[1:] = []  # the second model call finds no reply: the provider raises
+    recording = tmp_path / "run.json"
+    with pytest.raises(RuntimeError, match="exhausted"):
+        agent_run.main([str(folder), "--user", str(USER), "--input", '{"town": "Brno"}', "--record", str(recording)])
+    document = cassette.load(recording)
+    assert [s["kind"] for s in document["steps"]] == ["model", "tool"] and document["outcome"] is None
+    with pytest.raises(ValueError, match="incomplete cassette"):
+        replay(document, load(folder))
+
+
+def test_a_provider_the_agent_does_not_name_spends_nothing(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code = agent_run.main([str(write_folder(tmp_path)), "--user", str(USER), "--input", '{"town": "Brno"}',
+                           "--provider", "gemini"])
+    assert code == 2 and "not gemini" in capsys.readouterr().err and world["provider"].calls == []

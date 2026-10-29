@@ -22,8 +22,9 @@ def plain(value: Any) -> Any:
 
 
 def dump(path: Path, *, definition: Definition, provider: str, model: str, price: ModelPrice,
-         value: Mapping[str, Any], steps: Iterable[Step], outcome: Outcome) -> None:
-    """Write the cassette: the definition it ran, the model and its price, the input, every step, the outcome."""
+         value: Mapping[str, Any], steps: Iterable[Step], outcome: Outcome | None) -> None:
+    """Write the cassette: the definition it ran, the model and its price, the input, every step, and the outcome
+    (None for a run that raised: an incomplete cassette, kept for reading, never replayed)."""
     document = {
         "version": VERSION,
         "agent": definition.name,
@@ -33,7 +34,7 @@ def dump(path: Path, *, definition: Definition, provider: str, model: str, price
         "price": asdict(price),
         "input": value,
         "steps": [asdict(step) for step in steps],
-        "outcome": asdict(outcome),
+        "outcome": asdict(outcome) if outcome is not None else None,
     }
     path.write_text(json.dumps(plain(document), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 

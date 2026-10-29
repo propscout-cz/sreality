@@ -34,10 +34,12 @@ can wait for its text. The folder's sha covers every file and is recorded with e
 2. It sends the input to the model as JSON in the opening message.
 3. Each tool call goes through `registry.call` under the run's user, and each model call and each tool call is
    one journal step.
-4. A run stops when it reaches `max_iterations`, `max_cost_usd` or the wall clock. A reply cut off at its output
-   limit also ends the run; nothing in it is executed.
-5. Before each model call, the reply's token limit is lowered until even the worst case fits the money left.
-   When that leaves fewer than 256 tokens, the run stops on `max_cost`.
+4. A run stops when it reaches `max_iterations`, `max_cost_usd` or the wall clock (checked before each model and
+   tool call; an answer that arrives late is still checked). A reply that did not end on its tool calls (cut off at
+   its limit, or a refusal) also ends the run; nothing in it is executed.
+5. Before each model call, the reply's token limit (16,000 at most; it includes the model's thinking) is lowered
+   until even the worst case fits the money left. When that leaves fewer than 4,096 tokens, the run stops on
+   `max_cost`.
 
 A run ends successfully only on `submit_result`, which carries `markdown`, `cited_property_ids` and `files`.
 `proposed_actions` (`{entry, args}`) appears only for an agent that lists a write tool, and `output` only for one

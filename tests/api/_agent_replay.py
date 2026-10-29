@@ -36,6 +36,8 @@ def _ran_in_the_registry(step: dict[str, Any]) -> bool:
 
 
 def replay(document: dict[str, Any], definition: Definition) -> Outcome:
+    if document["outcome"] is None:
+        raise ValueError("an incomplete cassette (its run raised) is for reading, not replay")
     steps = document["steps"]
     provider = _ScriptedProvider(
         document["provider"],

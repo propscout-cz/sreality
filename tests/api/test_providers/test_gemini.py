@@ -75,10 +75,12 @@ class _FakeGenerateConfig:
 
 
 class _FakeUsageMeta:
-    def __init__(self, prompt_token_count: int, candidates_token_count: int, cached_content_token_count: int = 0) -> None:
+    def __init__(self, prompt_token_count: int, candidates_token_count: int, cached_content_token_count: int = 0,
+                 thoughts_token_count: int = 0) -> None:
         self.prompt_token_count = prompt_token_count
         self.candidates_token_count = candidates_token_count
         self.cached_content_token_count = cached_content_token_count
+        self.thoughts_token_count = thoughts_token_count
 
 
 class _FakeCandidate:
@@ -205,6 +207,18 @@ def test_a_call_cut_at_the_output_limit_reports_max_tokens(patch_gemini):
         system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="gemini-2.5-pro",
     )
     assert out.tool_calls and out.stop_reason == "max_tokens"
+
+
+def test_usage_counts_every_billed_token_once(patch_gemini):
+    """The cached part sits inside prompt_token_count; thinking is billed at the output rate apart from candidates."""
+    response = _text_response("ok")
+    response.usage_metadata = _FakeUsageMeta(prompt_token_count=1_000, candidates_token_count=50,
+                                             cached_content_token_count=600, thoughts_token_count=400)
+    patch_gemini(response)
+    out = GeminiProvider().complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="gemini-2.5-pro",
+    )
+    assert (out.usage.input_tokens, out.usage.cache_read_tokens, out.usage.output_tokens) == (400, 600, 450)
 
 
 def test_function_call_extracted(patch_gemini):
