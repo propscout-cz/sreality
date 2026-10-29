@@ -232,7 +232,8 @@ def test_both_scrubs_blank_a_third_party_credential_and_keep_its_length(markup, 
 
 
 def test_no_committed_fixture_carries_a_third_party_credential():
-    """RED by: a fixture committed without the scrub; run `--scrub-contacts` (or anonymize) over it."""
+    """RED by: a fixture committed without the scrub; run `--scrub-contacts` (or anonymize) over it. It sees
+    only what the scrub's own regex knows; for the rest CI's `secrets` job runs `scripts/gitleaks.sh dir tests/fixtures`."""
     fixtures = Path(__file__).parent.parent / "fixtures"
     carrying = [p.relative_to(fixtures).as_posix() for p in sorted(fixtures.rglob("*"))
                 if p.is_file() and p.suffix in {".html", ".json", ".js"}
