@@ -237,6 +237,14 @@ def test_every_filter_with_a_pg_column_is_visible_in_some_user_agenda() -> None:
 # --- JSON serialisation ---------------------------------------------------
 
 
+def test_every_filter_category_is_one_a_grouped_form_draws() -> None:
+    """A grouped `<FilterForm>` (the Watchdog editor) draws only the listed categories, so a filter whose
+    category is missing from the list never renders there."""
+    drawn = fr.registry_to_json()["categories"]
+    assert len(drawn) == len(set(drawn))
+    assert {f.category for f in fr.REGISTRY.values()} <= set(drawn)
+
+
 def test_registry_to_json_roundtrip_is_stable() -> None:
     """Calling twice produces identical output (no nondeterministic
     ordering)."""
@@ -249,16 +257,6 @@ def test_registry_to_json_includes_every_filter() -> None:
     payload = fr.registry_to_json()
     ids_in_json = {f["id"] for f in payload["filters"]}
     assert ids_in_json == set(fr.REGISTRY.keys())
-
-
-def test_visibility_argument_attaches_per_filter_visibility() -> None:
-    payload = fr.registry_to_json(
-        visibility={("browse", "min_price_czk"): False},
-    )
-    by_id = {f["id"]: f for f in payload["filters"]}
-    assert by_id["min_price_czk"]["visibility"]["browse"] is False
-    # Other agendas for the same filter stay enabled (the default).
-    assert by_id["min_price_czk"]["visibility"]["watchdog"] is True
 
 
 # --- min/max pair invariants ---------------------------------------------
@@ -348,7 +346,7 @@ def test_to_jsonschema_property_list_filter_has_items() -> None:
     assert "1+kk" in prop["items"]["enum"]
 
 
-def test_to_jsonschema_properties_returns_visible_filters_for_agenda() -> None:
+def test_to_jsonschema_properties_returns_every_filter_of_the_agenda() -> None:
     props = fr.to_jsonschema_properties(fr.Agenda.COMPARABLES)
     # Every COMPARABLES filter appears, except the composite LOCATION.
     for fid in [
@@ -643,7 +641,7 @@ def test_every_pg_backed_numeric_filter_declares_a_unit() -> None:
     with no declaration, i.e. the restriction was load-bearing for green rather
     than principled. It would also have exempted the case that matters most:
     a derived per-m² bound served from an RPC rather than a column, which would
-    reach `GET /admin/filter-schema` with no unit and no basis at all.
+    reach the generated SPA registry with no unit and no basis at all.
     """
     numeric = [
         f
@@ -709,8 +707,8 @@ def test_per_m2_filters_declare_a_basis() -> None:
 
 
 def test_basis_reaches_the_generated_payload() -> None:
-    """The SPA and `GET /admin/filter-schema` read the serialised registry, so a
-    field that stops at the dataclass boundary labels nothing."""
+    """The SPA reads the serialised registry (the generated TS), so a field that
+    stops at the dataclass boundary labels nothing."""
     payload = fr.registry_to_json()
     by_id = {f["id"]: f for f in payload["filters"]}
     assert by_id["min_price_per_m2"]["basis"] == fr.BASIS_DEPENDS_ON_CATEGORY
