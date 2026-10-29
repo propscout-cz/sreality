@@ -14,7 +14,6 @@ import uuid
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
-import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -45,6 +44,7 @@ from api.building_runs import (
 from api import attachments as attachments_module
 from api import feedback as feedback_module
 from api import refiner as refiner_module
+from api.filter_args import filter_values
 from api.estimation_runs import (
     create_estimation_run,
     estimation_run_owned,
@@ -203,21 +203,6 @@ if _cors_origins:
     )
 
 
-# The database's "busy right now" error classes: a read cancelled by
-# statement_timeout (57014 — how a lock-blocked reader dies after 120 s, the
-# 2026-09-30 Brokers outage), a lock refused outright (55P03), a deadlock
-# victim (40P01). Retrying CAN help these, so they answer 503 + Retry-After —
-# the one signal the SPA's transient-only retry predicate acts on. Everything
-# else is deterministic and answers 500. Routes that already catch these and
-# refuse with their own contract (toolkit/property_split's structured 409)
-# never reach this handler.
-_DB_BUSY_ERRORS = (
-    psycopg.errors.QueryCanceled,
-    psycopg.errors.LockNotAvailable,
-    psycopg.errors.DeadlockDetected,
-)
-
-
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "JSONResponse":
     origin = request.headers.get("origin")
@@ -226,7 +211,7 @@ async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "J
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
 
-    if isinstance(exc, _DB_BUSY_ERRORS):
+    if isinstance(exc, deps.DB_BUSY_ERRORS):
         logging.warning(
             "DB busy (%s) on %s %s", type(exc).__name__, request.method, request.url.path
         )
@@ -426,6 +411,11 @@ def post_maps_resolve(
         name=body.name,
         regional_structure=[e.model_dump() for e in body.regional_structure],
     )
+
+
+def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:
+    """The body's target, and its cohort filters by registry id (every one it declares reaches the cohort)."""
+    return TargetSpec(**body.target.model_dump()), ComparableFilters(**filter_values(body))
 
 
 @app.post("/tools/find_comparables")
@@ -1555,49 +1545,3 @@ def decide_skill_refinement(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _build_comparables_inputs(
-    body: s.FindComparablesIn,
-) -> tuple[TargetSpec, ComparableFilters]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        max_age_days=body.max_age_days,
-        lifecycle=body.lifecycle,
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    return target, filters

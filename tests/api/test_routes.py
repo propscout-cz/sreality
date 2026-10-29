@@ -52,6 +52,7 @@ def test_find_comparables_passes_target_and_filters(client, monkeypatch):
             "target": {"lat": 50.087, "lng": 14.42, "disposition": "2+kk"},
             "radius_m": 1500,
             "max_age_days": 14,
+            "lifecycle": "active",
             "has_lift": True,
             "category_main": "byt",
             "category_type": "pronajem",
@@ -102,6 +103,50 @@ def test_find_comparables_non_byt_category_flows_through(client, monkeypatch):
     assert res.status_code == 200
     assert captured["filters"].category_main == "dum"
     assert captured["filters"].category_type == "prodej"
+
+
+_CATS = {"category_main": "byt", "category_type": "prodej"}
+
+
+def test_find_comparables_hands_every_declared_filter_to_the_cohort(client, monkeypatch):
+    """The body is generated from the registry, so a filter it declares reaches ComparableFilters:
+    the seen-window filters were declared and silently dropped, ppm2 and garden had no field."""
+    captured = {}
+    monkeypatch.setattr(api_main, "find_comparables",
+                        lambda conn, target, filters: captured.setdefault("f", filters) and {"data": {}})
+    sent = {"last_seen_min_days": 2, "last_seen_max_days": 9, "first_seen_min_days": 3,
+            "first_seen_max_days": 30, "min_price_per_m2": 80_000.0, "max_garden_area": 400.0,
+            "furnished": "ano", "max_price_czk": 9_000_000}
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **sent})
+    assert res.status_code == 200
+    assert {k: getattr(captured["f"], k) for k in sent} == {**sent, "furnished": ["ano"]}
+
+
+@pytest.mark.parametrize("bad", [
+    {"price_min": 1},                      # an unknown key was ignored: now it is named
+    {"category_main": "byty"},             # off-vocabulary was a silently empty 200
+    {"portals": ["sreality.cz"]},
+    {"radius_m": 50},                      # below the registry floor
+    {"min_price_czk": -1},
+    {"max_age_days": 14},                  # recency without the active gate was dropped by the cohort
+    {"target": {"lat": 50.0, "lng": 14.0, "exclude_ids": [1]}},       # the retired key was ignored
+    {"target": {"lat": 50.0, "lng": 14.0, "disposition": "2kk"}},     # off-vocabulary matched nothing
+    {"target": {"lat": 91.0, "lng": 14.0}},
+    {"target": {"lat": 50.0, "lng": 14.0}, "floor_band": 1},         # a band with no floor was dropped
+])
+def test_find_comparables_refuses_what_it_used_to_drop(client, monkeypatch, bad):
+    monkeypatch.setattr(api_main, "find_comparables", lambda *a: pytest.fail("reached the cohort"))
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **bad})
+    assert res.status_code == 422, res.text
+
+
+def test_find_comparables_still_leaves_out_the_subjects_own_property(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api_main, "find_comparables",
+                        lambda conn, target, filters: captured.setdefault("t", target) and {"data": {}})
+    res = client.post("/tools/find_comparables", json={
+        "target": {"lat": 50.0, "lng": 14.0, "floor": 3, "exclude_listing_ids": [7]}, **_CATS, "floor_band": 1})
+    assert res.status_code == 200 and captured["t"].exclude_listing_ids == [7] and captured["t"].floor == 3
 
 
 def test_verify_listing_freshness_passes_args(client, monkeypatch):

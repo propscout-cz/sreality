@@ -14,7 +14,8 @@ data access exists only under the explicit `SET LOCAL ROLE authenticated`,
 so a code path that forgets the switch fails closed, never leaks.
 
 `tenant_transaction` is the same scoped transaction as a plain context manager,
-for the one route that must not hold it across slow service-role work.
+for the route that must not hold it across slow service-role work and for the
+tool registry's tenant tools (api/capabilities/registry.py).
 
 Delegation (migration 641): the transaction also carries the request's method and,
 when the caller sent `X-Act-As`, that header, as the GUCs PostgREST sets itself
