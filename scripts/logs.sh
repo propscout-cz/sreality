@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 # Fetch GitHub Actions logs for a run, pre-filtered so only relevant lines enter context.
 # Usage: scripts/logs.sh <run-id> [grep-pattern]
-#   no pattern -> each failed job's last 100 lines up to its last ##[error]; with pattern -> grep the full log.
+#   no pattern -> each failed job's last 100 lines up to its last ##[error]; with pattern -> grep every job's log.
 #   A run still in progress works too: its finished jobs are listed on stderr and read one by one.
 set -uo pipefail
 run_id="${1:?usage: scripts/logs.sh <run-id> [grep-pattern]}"
 pattern="${2:-}"
 status=$(gh run view "$run_id" --json status -q .status) || exit 1
-if [ -n "$pattern" ] && [ "$status" = completed ]; then
-  gh run view "$run_id" --log | grep -E "$pattern" | tail -100
-  exit
-fi
-
-# No run log exists before the run completes, and gh's --log-failed can print nothing for current log archives,
-# so jobs are read through the per-job logs endpoint, each line prefixed with its job.
+# Every job is read through the per-job logs endpoint (it works mid-run), each line prefixed with its job.
 jobs=$(gh run view "$run_id" --json jobs \
   -q '.jobs[] | select(.status == "completed") | "\(.databaseId)\t\(.conclusion)\t\(.name)"') || exit 1
 if [ "$status" != completed ]; then
