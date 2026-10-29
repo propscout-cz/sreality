@@ -507,7 +507,7 @@ def type_label_cs(category_main: str | None, subtype: str | None) -> str:
 
 
 # --- category constants ---------------------------------------------------
-# Stable category names used in the registry. Settings UI groups
+# Stable category names used in the registry. `<FilterForm>` groups
 # filters by these.
 
 
@@ -519,6 +519,11 @@ CATEGORY_STATUS = "Status"
 CATEGORY_CURATION = "Curation"
 CATEGORY_COHORT = "Cohort tuning"
 CATEGORY_CITY_QUALITY = "City quality"
+# The order a grouped `<FilterForm>` draws them in; a category missing here never renders there.
+CATEGORIES = (
+    CATEGORY_SPATIAL, CATEGORY_PROPERTY, CATEGORY_AMENITY, CATEGORY_CITY_QUALITY,
+    CATEGORY_VELOCITY, CATEGORY_STATUS, CATEGORY_CURATION, CATEGORY_COHORT,
+)
 
 
 # Every agenda over the LISTINGS vocabulary. Agenda.SOLD is deliberately NOT a
@@ -2116,11 +2121,7 @@ def registry_to_json(
         filters_payload.append(entry)
     return {
         "agendas": [str(a) for a in Agenda],
-        "categories": [
-            CATEGORY_SPATIAL, CATEGORY_PROPERTY, CATEGORY_AMENITY,
-            CATEGORY_VELOCITY, CATEGORY_STATUS, CATEGORY_CURATION,
-            CATEGORY_COHORT,
-        ],
+        "categories": list(CATEGORIES),
         "ui_controls": [str(u) for u in UiControl],
         "filters": filters_payload,
     }

@@ -35,6 +35,18 @@ function expectJoined(buttons: HTMLElement[]) {
 }
 
 describe('<FilterForm>', () => {
+  it('draws the City quality group when grouped, as the Watchdog editor does', () => {
+    render(
+      <FilterForm
+        scope="watchdog"
+        state={{}}
+        onChange={vi.fn()}
+        includeOnly={['near_pop_5km_min']}
+      />,
+    );
+    expect(screen.getByText('City quality')).toBeInTheDocument();
+  });
+
   it('renders filters declared for the scope', () => {
     render(
       <FilterForm

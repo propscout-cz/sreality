@@ -251,6 +251,14 @@ def test_registry_to_json_includes_every_filter() -> None:
     assert ids_in_json == set(fr.REGISTRY.keys())
 
 
+def test_every_filter_category_is_one_a_grouped_form_draws() -> None:
+    """A grouped `<FilterForm>` (the Watchdog editor) draws only the listed categories, so a filter whose
+    category is missing from the list never renders there."""
+    drawn = fr.registry_to_json()["categories"]
+    assert len(drawn) == len(set(drawn))
+    assert {f.category for f in fr.REGISTRY.values()} <= set(drawn)
+
+
 def test_visibility_argument_attaches_per_filter_visibility() -> None:
     payload = fr.registry_to_json(
         visibility={("browse", "min_price_czk"): False},

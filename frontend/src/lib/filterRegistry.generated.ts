@@ -98,6 +98,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     "Spatial",
     "Property",
     "Amenity",
+    "City quality",
     "Velocity",
     "Status",
     "Curation",
