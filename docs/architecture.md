@@ -1171,9 +1171,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
-  (a pinned plan, an interactive apply) inside a merge window, the worker's in one the merge coordinator runs with the
-  autodedup brake on, then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A
-  `.railway/`-only merge still redeploys the API and the worker, which have no watch patterns (#1857).
+  (a pinned plan, an interactive apply) inside a merge window (for the worker, with the autodedup brake on), then
+  `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
+  redeploys the API and the worker, which have no watch patterns (#1857).
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
   row reading SUCCESS, not SKIPPED.
