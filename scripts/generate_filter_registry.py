@@ -39,9 +39,7 @@ HEADER = """\
 // Regenerate with: python scripts/generate_filter_registry.py
 //
 // CI runs `--check` and fails on drift, so any registry edit must
-// be paired with a fresh regen in the same commit. The shape mirrors
-// the JSON served by `GET /admin/filter-schema` so runtime fetches
-// and the codegen are interchangeable.
+// be paired with a fresh regen in the same commit.
 """
 
 
@@ -104,17 +102,7 @@ def _ts_union(values: list[str]) -> str:
 
 
 def _render_payload(payload: dict[str, Any]) -> str:
-    # Strip the per-filter `visibility` map — the static codegen
-    # captures the registry-declared agendas only; visibility comes
-    # from the runtime endpoint.
-    sanitised = {
-        **payload,
-        "filters": [
-            {k: v for k, v in f.items() if k != "visibility"}
-            for f in payload["filters"]
-        ],
-    }
-    body = json.dumps(sanitised, indent=2, ensure_ascii=False)
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
     return f"export const FILTER_REGISTRY: FilterRegistryPayload = {body};\n"
 
 
@@ -173,7 +161,7 @@ def _render_constants() -> str:
 
 
 def generate() -> str:
-    payload = fr.registry_to_json(visibility=None)
+    payload = fr.registry_to_json()
     types = TS_TYPES.format(
         agenda_union=_ts_union(payload["agendas"]),
         ui_control_union=_ts_union(payload["ui_controls"]),

@@ -464,7 +464,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         measure="ppm2",
         kind=KIND_LABELS,
         why="The `unit` string on min_price_per_m2 and max_price_per_m2 — the "
-        "agent-facing label, read verbatim through GET /admin/filter-schema. "
+        "label the generated registry carries to every filter form. "
         "Both rows also carry `basis=BASIS_DEPENDS_ON_CATEGORY`, because the "
         "unit alone is ~300x ambiguous between a sale and a rental cohort.",
     ),
