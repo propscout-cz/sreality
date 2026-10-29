@@ -137,9 +137,8 @@ it (`api/`). They do not apply to the scraper.
    `listing_broker_public`, so `POST /brokers/by-listings` answers identity AND contact in
    one row and the SPA no longer chains a second, serialized `GET /brokers?ids=` to fetch
    what the first read's join had already touched. Its contact pair is unmasked for every
-   signed-in caller (the 2026-10-18 exception above). `GET /brokers?ids=` itself stays, for the agent
-   and other non-SPA consumers; and
-   the client treats 404 as an answer only when the body carries this module's own
+   signed-in caller (the 2026-10-18 exception above). `GET /brokers?ids=` itself is deleted (#2063: no
+   reader, no traffic); and the client treats 404 as an answer only when the body carries this module's own
    `broker not found` detail — any other 404 (edge, stale base URL, renamed route) must
    surface as an error, not as "no broker". One per-ad read: `POST /brokers/by-listings`.
    **The static key is gone (2026-10-13)**: `API_TOKEN`, extractable from the shipped SPA bundle via

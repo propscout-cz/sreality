@@ -21,7 +21,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import attachments
 from api import dependencies as deps
 from api import main as api_main
-from api import tenant_pool
+from api import property_read, tenant_pool
 from api.routes import images as images_route
 from api.routes import property_download
 from scraper import image_storage
@@ -43,6 +43,11 @@ BROKER_ROWS = [
 ]
 
 
+def _row(seed: dict[str, Any], columns: tuple[str, ...]) -> tuple[Any, ...]:
+    """A seed as the shared reader's statement returns it: its columns, in order."""
+    return tuple(seed.get(c) for c in columns)
+
+
 class _Cursor:
     def __init__(self, conn: _Conn) -> None:
         self.conn = conn
@@ -57,18 +62,18 @@ class _Cursor:
     def execute(self, sql: str, params: tuple) -> None:
         self.conn.statements.append((" ".join(sql.split()), params))
         if "from properties_public" in sql:
-            self.result = [self.conn.prop] if self.conn.prop else []
+            self.result = [_row(self.conn.prop, property_read.PROPERTY_COLS)] if self.conn.prop else []
         elif "from property_sources_public" in sql:
-            self.result = self.conn.ads
+            self.result = [_row(ad, property_read.SOURCE_COLS) for ad in self.conn.ads]
         elif "from images" in sql:
             self.result = [{"storage_path": k} for k in self.conn.keys]
         else:
             raise AssertionError(f"unexpected SQL: {sql}")
 
-    def fetchone(self) -> dict[str, Any] | None:
+    def fetchone(self) -> Any:
         return self.result[0] if self.result else None
 
-    def fetchall(self) -> list[dict[str, Any]]:
+    def fetchall(self) -> list[Any]:
         return self.result
 
 
@@ -261,9 +266,13 @@ def test_an_admin_gets_the_contact_values(client, sheet, conn, claims):
     assert sheet[0]["brokers"][0]["primary_phone"] == "420777000222"
 
 
-def test_never_reads_the_unmasked_broker_columns_of_properties_public():
+def test_never_reads_the_unmasked_broker_columns_of_properties_public(client, sheet, conn):
     """properties_public carries broker_email / broker_phone, which bypass the PII policy."""
-    assert "broker" not in property_download._PROPERTY_COLS
+    client.get("/properties/7/download.zip")
+    (prop_sql, _), (ads_sql, _) = conn.statements[:2]
+    assert prop_sql.startswith("select property_id, listing_id,") and "broker" not in prop_sql
+    assert "from property_sources_public" in ads_sql
+    assert set(sheet[0]["prop"]) == set(property_read.PROPERTY_COLS)
 
 
 def test_requires_a_signed_in_user(client):

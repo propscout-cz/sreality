@@ -149,7 +149,7 @@ def test_listing_brokers_dedupes_and_skips_the_query_when_empty() -> None:
 
 def test_batch_reads_are_bounded() -> None:
     conn = _Conn()
-    brokers.brokers_by_ids(conn, list(range(5000)))
+    brokers.listing_brokers(conn, list(range(5000)))
     assert len(conn.cur.seen[0][1][0]) == 1000
 
 

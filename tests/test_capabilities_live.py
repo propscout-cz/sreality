@@ -1,8 +1,9 @@
 """The tool registry against the replayed schema (#2062): a tenant tool runs in the caller's own RLS transaction
 and sees only their account's rows; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
 places a property we hold at its location ad and returns the toolkit's own envelope; search_properties selects, under
-the user's login, exactly the properties the Watchdog matches for the same filters (#2063). Runs in CI's migrations
-job (`TEST_DATABASE_URL`)."""
+the user's login, exactly the properties the Watchdog matches for the same filters (#2063); the dossier is the property
+page's read under the user's login and the brokers the page's, at most twenty people a call, each call recorded
+(#2063). Runs in CI's migrations job (`TEST_DATABASE_URL`)."""
 
 from __future__ import annotations
 
@@ -468,3 +469,91 @@ def test_a_page_is_browses_cards_in_its_order_with_the_total(
     assert (row["property_id"], row["price_per_m2_basis"]) == (seeded["p9"], "sale_capital_czk_m2")
     assert out["metadata"]["price_per_m2_basis"] == "sale_capital_czk_m2"
     assert "building_condition_level" not in row and "home_obec_pop" not in row
+
+
+# --- the property page's reads: its dossier under the user's login, its brokers as it shows them -----------------
+
+def _run(cur: Any, account: uuid.UUID, ad: int) -> int:
+    cur.execute("INSERT INTO estimation_runs (account_id, source, mode, status, input_spec, input_listing_id) "
+                "VALUES (%s, 'api', 'deterministic', 'success', '{}'::jsonb, %s) RETURNING id", (account, ad))
+    return int(cur.fetchone()[0])
+
+
+def test_the_dossier_is_the_property_pages_read_under_the_users_login(cur: Any, users: dict[str, Any]) -> None:
+    """A merged-away id follows its survivor; the place is the location ad's; an ad's price points are where its price
+    moved (a content change at the same price is no point); each user sees only their own runs on its ads."""
+    from toolkit.measures import SALE_CAPITAL_CZK_M2
+    pid, ring = _held_property(cur)
+    cur.execute("SELECT id FROM listings WHERE property_id = %s AND id <> %s", (pid, ring))
+    point = cur.fetchone()[0]
+    for price, hours in ((8_000_000, 48), (8_000_000, 24), (7_500_000, 1)):
+        _snapshot(cur, ring, price, hours)
+    gone = _property(cur)
+    cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s WHERE id = %s", (pid, gone))
+    runs = {"a": _run(cur, users["a_acc"], ring), "b": _run(cur, users["b_acc"], point)}
+    # Production's PostGIS lives in `extensions`, where `authenticated` may run it (the page reads lat/lng so); the
+    # replay's lives in `public`, where migration 299 revoked PUBLIC's EXECUTE. The grant rolls back with the test.
+    cur.execute("GRANT EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) TO authenticated")
+    out = tool_call(cur, users["a"], "get_property_dossier", {"property_ids": [gone, 2**62]})
+    [row] = out["data"]
+    assert (out["metadata"]["resolved"], out["metadata"]["missing"]) == ({gone: pid}, [2**62])
+    assert (row["property_id"], row["listing_id"]) == (pid, ring)
+    assert (row["lng"], row["lat"]) == pytest.approx(POINT) and row["display_label"]
+    ads = {ad["listing_id"]: ad for ad in row["ads"]}
+    assert (ads[ring]["canonical"], ads[point]["canonical"], ads[point]["is_active"]) == (True, False, False)
+    assert (ads[ring]["category_type"], ads[ring]["price_per_m2_basis"]) == ("prodej", SALE_CAPITAL_CZK_M2)
+    assert [p["price_czk"] for p in ads[ring]["prices"]] == [8_000_000, 7_500_000] and ads[point]["prices"] == []
+    assert [r["id"] for r in row["estimates"]] == [runs["a"]]
+    theirs = tool_call(cur, users["b"], "get_property_dossier", {"property_ids": [pid]})["data"][0]["estimates"]
+    assert [r["id"] for r in theirs] == [runs["b"]]
+
+
+def _broker(cur: Any, n: int) -> tuple[int, int]:
+    """A broker person with a phone and an e-mail, and their one portal identity."""
+    cur.execute("INSERT INTO brokers (display_name, primary_email, primary_phone) VALUES (%s, %s, %s) RETURNING id",
+                (f"lp broker {n}", f"lp-{n}@rk.test", f"+420 700 000 {n:03d}"))
+    broker = int(cur.fetchone()[0])
+    cur.execute("INSERT INTO broker_identities (source, source_broker_id_native, broker_id) "
+                "VALUES ('sreality', %s, %s) RETURNING id", (f"lp-{uuid.uuid4()}", broker))
+    return broker, int(cur.fetchone()[0])
+
+
+def test_the_brokers_are_the_pages_until_the_twenty_first_person_and_the_read_is_recorded(cur: Any) -> None:
+    """Asked: an ended property (its ended ad's broker, flagged), one whose canonical ad is its second live ad (that
+    ad's broker first, then the other live ads' person carrying both their ads; the ended ad's broker never), and one
+    with twenty live ads by twenty people. The call stops at the twenty-first person."""
+    now = datetime.now(timezone.utc)
+    people = [_broker(cur, n) for n in range(24)]
+    ended = _property(cur)
+    gone = _advert(cur, ended, source="sreality", active=False, broker_identity_id=people[0][1])
+    two = _property(cur)
+    a1, a2, a3 = (_advert(cur, two, source="sreality", broker_identity_id=people[n][1],
+                          first_seen_at=now - timedelta(days=d)) for n, d in ((1, 3), (2, 2), (1, 1)))
+    _advert(cur, two, source="idnes", active=False, broker_identity_id=people[3][1])
+    many = _property(cur)
+    oldest = [_advert(cur, many, source="idnes", broker_identity_id=people[n][1],
+                      first_seen_at=now - timedelta(hours=n)) for n in range(4, 24)][-1]
+    for pid in (ended, two, many):
+        _recompute(cur, pid)
+    cur.execute("UPDATE properties SET repr_listing_ref_id = CASE id WHEN %s THEN %s ELSE %s END WHERE id IN (%s, %s)",
+                (two, a2, oldest, two, many))
+
+    records: list[tuple[Any, ...]] = []
+    caller = Caller(market=cur.connection, record=lambda *r: records.append(r))
+    with pytest.raises(ToolError) as info:
+        registry.call(caller, "get_property_brokers", {"property_ids": list(range(1, 22))})
+    assert info.value.code is ToolErrorCode.INVALID_ARGUMENTS
+    out = registry.call(caller, "get_property_brokers", {"property_ids": [ended, two, many]})
+    broker = {b: n for n, (b, _) in enumerate(people)}
+    rows = [(r["property_id"], broker[r["broker_id"]], [a["listing_id"] for a in r["ads"]], r["from_inactive"])
+            for r in out["data"]]
+    # `many`'s ads oldest first, its canonical the oldest: person 23, then 22, and on.
+    assert rows[:3] == [(ended, 0, [gone], True), (two, 2, [a2], False), (two, 1, [a1, a3], False)]
+    assert [n for p, n, _, _ in rows[3:]] == list(range(23, 6, -1)) and {p for p, *_ in rows[3:]} == {many}
+    meta = out["metadata"]
+    assert (meta["brokers"], meta["unlisted_property_ids"], meta["result_count"], meta["pii_masked"]) == (
+        {"kept": 20, "total": 23}, [many], 23, False)
+    first = out["data"][0]
+    assert (first["primary_email"], first["primary_phone"]) == ("lp-0@rk.test", "+420 700 000 000")
+    assert [r[0] for r in records] == ["get_property_brokers"] * 2 and records[1] == (
+        "get_property_brokers", {"property_ids": [ended, two, many]}, out)

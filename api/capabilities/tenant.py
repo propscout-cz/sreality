@@ -7,6 +7,7 @@ from typing import Any
 from api import pipeline
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.filter_args import Args
+from api.property_read import PROPERTIES_MAX, PropertyIds, dossier
 from api.property_search import PAGE_MAX, SearchArgs, search_properties
 
 
@@ -20,6 +21,10 @@ def _list_pipeline_stages(ctx: Context, args: NoArgs) -> dict[str, Any]:
 
 def _search_properties(ctx: Context, args: SearchArgs) -> dict[str, Any]:
     return search_properties(ctx.conn, args)
+
+
+def _dossier(ctx: Context, args: PropertyIds) -> dict[str, Any]:
+    return dossier(ctx.conn, args)
 
 
 ENTRIES = (
@@ -39,5 +44,17 @@ ENTRIES = (
         "present, continue from offset plus the rows kept. category_type is required (null = every deal type) and "
         "decides the per-m² unit: a price_per_m2_basis of 'mixed' or 'unknown' means the page has no single unit.",
         args=SearchArgs, handler=_search_properties, tenancy=Tenancy.TENANT, effect=Effect.READ,
+    ),
+    Entry(
+        name="get_property_dossier",
+        description=f"Up to {PROPERTIES_MAX} properties as their page shows them, read as the user reads it, one row "
+        "each in the order asked: the facts (its canonical ad's: price, areas, layout, floor, building, condition, "
+        "equipment, description), the place (label, point, town code), the per-m² price with its basis, MF gross "
+        "yield, price changes and time on market; every ad (listing_id, portal, URL, the advertiser's reference, "
+        "live or ended, the canonical one marked, deal type, price, its own per-m² price with its basis and the "
+        "points where its price changed); and the user's own estimation runs on its ads, newest first. No broker: "
+        "get_property_brokers lists them. When metadata.truncated is present, ask again for the properties left "
+        "out.",
+        args=PropertyIds, handler=_dossier, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )

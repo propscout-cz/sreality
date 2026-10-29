@@ -15,7 +15,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
-from api.routes import property_price_history as ph
+from api import property_read as pr
 from tests.api._jwt import mint
 from tests.api._script_conn import ScriptConn
 from tests.api.test_admin_route_coverage import _bucket, _collect
@@ -36,8 +36,8 @@ SNAPSHOT = {"id": 3, "listing_id": 11, "scraped_at": _TS, "price_czk": 5_000_000
 def serve():
     def _serve(ads: list[dict[str, Any]], snapshots: list[dict[str, Any]] = ()) -> ScriptConn:
         conn = ScriptConn([
-            (lambda sql: "property_sources_public" in sql, ads),
-            (lambda sql: "listing_snapshots_public" in sql, list(snapshots)),
+            (lambda sql: "property_sources_public" in sql, [tuple(a[c] for c in pr.SOURCE_COLS) for a in ads]),
+            (lambda sql: "listing_snapshots_public" in sql, [tuple(s[c] for c in pr.SNAPSHOT_COLS) for s in snapshots]),
         ])
         api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
         return conn
@@ -54,7 +54,7 @@ def test_serves_every_ad_and_their_snapshots_whole_in_order(serve) -> None:
     assert [a["id"] for a in data["sources"]] == [11, 12]
     # FastAPI writes an aware timestamp with `Z` (the lookup's `_clean` writes +00:00): parse, never compare.
     assert data["snapshots"] == [{**SNAPSHOT, "scraped_at": "2026-10-01T08:00:00Z"}]
-    assert [params for _, params in conn.executed] == [(7,), ([11, 12],)]
+    assert [params for _, params in conn.executed] == [([7],), ([11, 12],)]
 
 
 def test_an_unknown_property_is_404_and_reads_no_snapshot(serve) -> None:
@@ -65,17 +65,17 @@ def test_an_unknown_property_is_404_and_reads_no_snapshot(serve) -> None:
     assert len(conn.executed) == 1
 
 
-def test_reads_the_spas_columns_from_the_public_views_only() -> None:
+def test_reads_the_spas_columns_from_the_public_views_only(serve) -> None:
     """The whole statement: the SPA's columns, one view and no join, the key, the order, no cap."""
     spa = _QUERIES.read_text(encoding="utf-8")
     ad_cols = re.search(r"PROPERTY_SOURCE_COLS =\s*'([^']+)'", spa).group(1)
     snap_cols = re.search(r"from\('listing_snapshots_public'\)\s*\.select\('([^']+)'", spa).group(1)
-    for sql, cols, rest in (
-        (ph._SOURCES_SQL, ad_cols,
-         ("property_sources_public", "property_id = %s", "first_seen_at, id")),
-        (ph._SNAPSHOTS_SQL, snap_cols,
-         ("listing_snapshots_public", "listing_id = any(%s::bigint[])", "scraped_at, id")),
-    ):
+    conn = serve([AD], [SNAPSHOT])
+    TestClient(api_main.app).get(_URL, headers=AUTH)
+    for (sql, _), cols, rest in zip(conn.executed, (ad_cols, snap_cols), (
+        ("property_sources_public", "property_id = any(%s::bigint[])", "first_seen_at, id"),
+        ("listing_snapshots_public", "listing_id = any(%s::bigint[])", "scraped_at, id"),
+    ), strict=True):
         shape = re.fullmatch(r"select (.+?) from (\w+) where (.+?) order by (.+)", sql)
         assert shape, sql
         assert shape.group(1).replace(" ", "") == cols

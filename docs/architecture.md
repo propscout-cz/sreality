@@ -3829,7 +3829,7 @@ renumber.** Navigate by area:
     statement re-read heap pages the first had in hand (measured on the 48 live board ids: 518
     buffers for step 1, then 207 execution + 436 planning buffers for step 2) and paid a second
     Railway round trip's ~270–410 ms floor to do it, serialized behind the first because its
-    `broker_id`s came out of that response. The route itself stays for non-SPA consumers.
+    `broker_id`s came out of that response. The route itself is deleted too (#2063: no reader, no traffic).
     `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
     route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
     values on the property page and the board card; the leaderboard, search and broker dossier still

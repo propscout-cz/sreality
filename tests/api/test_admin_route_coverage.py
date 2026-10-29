@@ -185,9 +185,9 @@ def test_no_route_is_unauthenticated_by_accident() -> None:
 #
 # SCOPE, stated honestly. The subject is routes reaching `tenant_pool.tenant_conn`.
 # `_bucket` says "tenant" for anything reaching `verify_jwt`, which also covers the
-# twelve `/brokers/*` + `POST /estimations` routes — those run on the service-role
+# `/brokers/*` + `POST /estimations` routes — those run on the service-role
 # `get_db_conn`, where `verify_jwt` is authentication only and RLS is not the scope.
-# They are EXCLUDED structurally, not by twelve copies of one sentence: an allowlist
+# They are EXCLUDED structurally, not by a copy of one sentence each: an allowlist
 # that doubles in size for a class it cannot judge is a gate that cries wolf, and a
 # gate that cries wolf gets disabled. The account each of them resolves by hand is
 # the subject of the second arm of `tests/api/test_account_scope_census.py`.

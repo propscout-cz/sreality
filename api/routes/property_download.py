@@ -25,22 +25,12 @@ from psycopg.rows import dict_row
 
 from api import attachments
 from api import dependencies as deps
-from api import tenant_pool
+from api import property_read, tenant_pool
 from api.property_sheet import render_property_sheet
 from api.routes.images import r2_client
 from toolkit import brokers
 
 router = APIRouter(tags=["properties"])
-
-# properties_public also carries broker_name / broker_email / broker_phone: never read them
-# here — brokers come through listing_broker_public and the PII policy below.
-_PROPERTY_COLS = (
-    "property_id, listing_id, is_active, last_seen_at, category_main, category_type,"
-    " price_czk, price_unit, area_m2, disposition, subtype, display_label, lat, lng,"
-    " floor, total_floors, has_balcony, terrace, has_lift, cellar, garage, has_parking,"
-    " parking_lots, building_type, condition, energy_rating, estate_area, garden_area,"
-    " ownership, furnished, description"
-)
 
 # Parallel R2 reads: a 40-photo listing fetched serially spends seconds on round trips alone.
 _ZIP_FETCH_WORKERS = 8
@@ -67,29 +57,6 @@ def _fetch_all(fetch: Any, keys: list[str]) -> list[bytes]:
         ) from exc
 
 
-def property_brokers(
-    ads: list[dict[str, Any]], by_listing: dict[int, dict[str, Any]], canonical_id: int
-) -> tuple[list[dict[str, Any]], bool]:
-    """lib/brokers.propertyBrokers: the brokers of the active ads, one per person carrying
-    the ads that person advertises (`ads`), the canonical ad's first; with no active ad,
-    those of all its ads, flagged."""
-    active = [a for a in ads if a["is_active"]]
-    pool = active or ads
-    ordered = sorted(pool, key=lambda a: a["id"] != canonical_id)
-    seen: dict[int, dict[str, Any]] = {}
-    out: list[dict[str, Any]] = []
-    for ad in ordered:
-        b = by_listing.get(ad["id"])
-        if b is None:
-            continue
-        row = seen.get(b["broker_id"])
-        if row is None:
-            row = seen[b["broker_id"]] = {**b, "ads": []}
-            out.append(row)
-        row["ads"].append(ad)
-    return out, not active
-
-
 @router.get("/properties/{property_id}/download.zip")
 def get_property_download(
     property_id: int,
@@ -97,21 +64,13 @@ def get_property_download(
     claims: dict = Depends(deps.verify_jwt),
     tconn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
+    # The page's own reads (its brokers come through the PII policy below, never properties_public).
+    found = property_read.properties(conn, [property_id])
+    if not found:
+        raise HTTPException(status_code=404, detail="Property not found")
+    prop = found[0]
+    ads = property_read.sources(conn, [property_id])
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            f"select {_PROPERTY_COLS} from properties_public where property_id = %s",
-            (property_id,),
-        )
-        prop = cur.fetchone()
-        if prop is None:
-            raise HTTPException(status_code=404, detail="Property not found")
-        cur.execute(
-            "select id, source, source_url, ad_reference, is_active, price_czk, first_seen_at"
-            " from property_sources_public where property_id = %s"
-            " order by first_seen_at, id",
-            (property_id,),
-        )
-        ads = cur.fetchall()
         cur.execute(
             "select storage_path from images"
             " where listing_id = %s and storage_path is not null"
@@ -124,7 +83,7 @@ def get_property_download(
     rows = brokers.apply_pii_policy(
         brokers.listing_brokers(conn, ad_ids), include_pii=deps.is_admin(claims)
     )["data"]
-    shown, from_inactive = property_brokers(
+    shown, from_inactive = brokers.property_brokers(
         ads, {r["listing_id"]: r for r in rows}, prop["listing_id"]
     )
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import dataclasses
+import importlib
 import re
 from pathlib import Path
 from typing import Any
@@ -100,7 +101,8 @@ def test_a_market_tool_takes_no_id_but_a_property_or_an_ad_and_never_forces_a_re
         fields = {d.rsplit(".", 1)[-1] for d, _ in _walk(entry.input_schema)}
         assert "force_refresh" not in fields, name
         if entry.tenancy is Tenancy.MARKET:
-            assert {f for f in fields if f.endswith("_id")} <= {"property_id", "listing_id"}, name
+            ids = {f for f in fields if f.endswith(("_id", "_ids"))}
+            assert ids <= {"property_id", "listing_id", "property_ids", "listing_ids"}, name
 
 
 # --- 4. portable shape ------------------------------------------------------------------------------------------
@@ -280,10 +282,72 @@ def test_the_forbidden_set_names_what_the_read_models_still_publish() -> None:
             "near_overall_15km"} <= forbidden_columns()
 
 
-@pytest.mark.parametrize("columns", ["api.property_search.SEARCH_COLUMNS"])
+_READERS = ("api.property_search", "api.property_read")
+# Each tool reader's column allowlists: search's and every *_COLS of the property page's reader.
+_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS"] + [
+    f"api.property_read.{n}" for n in sorted(vars(importlib.import_module("api.property_read"))) if n.endswith("_COLS")]
+
+
+def test_the_census_sees_every_allowlist_of_the_property_reader() -> None:
+    assert {"PROPERTY_COLS", "SOURCE_COLS", "AD_MEASURE_COLS", "SNAPSHOT_COLS", "RUN_COLS"} <= {
+        a.rsplit(".", 1)[1] for a in _ALLOWLISTS}
+
+
+@pytest.mark.parametrize("columns", _ALLOWLISTS)
 def test_no_tool_column_allowlist_names_a_forbidden_column_or_a_broker(columns: str) -> None:
-    import importlib
     module, name = columns.rsplit(".", 1)
     allowed = set(getattr(importlib.import_module(module), name))
     assert not allowed & forbidden_columns(), columns
     assert not [c for c in allowed if c.startswith("broker")], columns
+
+
+# Where a parked level, a city index, a broker or a listing's own stored place lives (the place reaches a reader only
+# through the read models' location-ad columns, rule 25); the reader modules name none of them.
+_FORBIDDEN_RELATIONS = re.compile(
+    r"\b(curated_cities\w*|city_index_\w+|city_population|listing_condition_scores|listing_broker_public|"
+    r"listing_location)\b")
+
+
+@pytest.mark.parametrize("module", _READERS)
+def test_no_tool_reader_names_a_relation_that_holds_what_no_surface_may_show(module: str) -> None:
+    source = Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+    assert not _FORBIDDEN_RELATIONS.findall(source), module
+
+
+# What the user's login reads as nothing, silently (RLS on and no policy, or the service role's alone): a tenant
+# reader that named one would answer "none" where the page shows something.
+_DARK_UNDER_LOGIN = re.compile(
+    r"\b(?:from|join)\s+(?:public\.)?(?:listings|listing_snapshots)\b|\bproperty_canonical_listings\b|"
+    r"\bcanonical_advert\b|\bsubject_mf_facts\b|\bmatch_listing\b", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("module", _READERS)
+def test_no_tool_reader_reads_a_relation_dark_under_the_users_login(module: str) -> None:
+    source = Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+    assert not _DARK_UNDER_LOGIN.findall(source), module
+    assert _DARK_UNDER_LOGIN.findall("select 1 from listings l join listing_snapshots s on true")
+
+
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [d for v in value for d in _dicts(v)]
+    if not isinstance(value, dict):
+        return []
+    return [value] + [d for v in value.values() for d in _dicts(v)]
+
+
+def test_the_relation_pattern_sees_what_it_bans() -> None:
+    assert _FORBIDDEN_RELATIONS.findall("from curated_cities_matching(x) join city_index_values v on listing_location")
+
+
+@pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers"])
+def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis(name: str) -> None:
+    from tests.api.test_property_read import _broker, run, script
+    from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
+    out = run(name, {"property_ids": [7, 9]}, script(brokers=[_broker(71, 1), _broker(81, 3)]))
+    rows = _dicts(out["data"])
+    assert rows and not {k for d in rows for k in d} & forbidden_columns(), name
+    priced = [d for d in rows if d.get(PPM2_VALUE_KEY) is not None]
+    assert all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced), name
+    if name == "get_property_dossier":
+        assert len(priced) >= 3 and not [k for d in rows for k in d if k.startswith("broker")]

@@ -3,8 +3,6 @@ login, compiled by the one filter compiler (rule 16), so Browse, the Watchdog an
 
 from __future__ import annotations
 
-from datetime import datetime
-from decimal import Decimal
 from typing import Any, Literal
 
 import psycopg
@@ -12,6 +10,7 @@ from pydantic import Field
 
 from api.filter_args import Box, agenda_ids, filter_model, filter_values
 from api.location_filter import bounds_where, district_where
+from api.property_read import jsonable
 from toolkit import _max_last_seen, _now_iso
 from toolkit.filter_compiler import BROWSE_GRAIN, compile_filter_where
 from toolkit.filter_registry import Agenda
@@ -110,8 +109,7 @@ def _order(args: SearchArgs) -> str:
 
 
 def _card(row: tuple[Any, ...]) -> dict[str, Any]:
-    return {c: v.isoformat() if isinstance(v, datetime) else float(v) if isinstance(v, Decimal) else v
-            for c, v in zip(SEARCH_COLUMNS, row, strict=True)}
+    return jsonable(dict(zip(SEARCH_COLUMNS, row, strict=True)))
 
 
 def search_properties(conn: psycopg.Connection, args: SearchArgs) -> dict[str, Any]:
