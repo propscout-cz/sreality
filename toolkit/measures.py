@@ -63,9 +63,8 @@ PPM2_BASES: tuple[str, ...] = (
 # ways a set of rows can fail to have one, and both must be rendered as a gap.
 #   mixed   — the rows disagree; one blanket unit would be a lie (rule 22: the
 #             default Browse cohort is sale+rent).
-#   unknown — nothing said. Client-supplied rows (POST /tools/analyze_distribution
-#             takes caller-provided listings) carry no basis at all; the honest
-#             answer is "unknown", never a default of sale.
+#   unknown — nothing said: rows that carry no basis label; the honest answer
+#             is "unknown", never a default of sale.
 BASIS_MIXED = "mixed"
 BASIS_UNKNOWN = "unknown"
 

@@ -32,9 +32,8 @@ tests/              pytest suite
   content hash changes; mark unseen listings `is_active=false`.
 - Image bytes mirrored to Cloudflare R2 (originally deferred; live since v1.5)
   so listings retain their photos after sreality's CDN expires them.
-- Analytical toolkit (`find_comparables`, `analyze_distribution`,
-  `verify_listing_freshness`, `compare_snapshots`) exposed as a FastAPI
-  service with a composite `/estimate_yield` endpoint, gated by the
+- Analytical toolkit (`find_comparables`, `verify_listing_freshness`,
+  `compare_snapshots`, …) exposed as a FastAPI service, gated by the
   caller's Supabase JWT (one credential; `API_AUTH_OPTIONAL=1` for local dev only).
 - Browser UI (`frontend/`) reads directly from the `*_public` views with
   the Supabase anon key. Four pages: Browse (filters + map / stats),

@@ -397,8 +397,7 @@ def test_the_parked_condition_levels_reach_no_surface() -> None:
         assert not _PARKED_CONDITION_LEVELS & set(tool.input_schema.get("properties", {})), name
     assert not _PARKED_CONDITION_LEVELS & {name for name, _ in _FCR_OVERRIDE_FIELDS}
     assert not _PARKED_CONDITION_LEVELS & {f.name for f in dataclass_fields(ComparableFilters)}
-    for model in (schemas.FindComparablesIn, schemas.ComputeMarketVelocityIn,
-                  schemas.CreateEstimationIn, schemas.EstimateYieldIn):
+    for model in (schemas.FindComparablesIn, schemas.CreateEstimationIn):
         assert not _PARKED_CONDITION_LEVELS & set(model.model_fields), model.__name__
     spa = Path(__file__).resolve().parents[2] / "frontend" / "src"
     for rel in ("lib/filterRegistry.generated.ts", "lib/filters.ts", "lib/queries.ts",

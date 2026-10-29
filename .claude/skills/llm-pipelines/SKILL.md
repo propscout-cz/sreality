@@ -122,7 +122,7 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   jsonb). LANGUAGE sql, inlined into the caller's LEFT JOIN LATERAL (no `SET`/STRICT — CI plan
   test). It reads ONLY the matview `rent_map_cells` (latest revision as `ku`/`obec`/`town` cells
   with the adjustments as columns), never geometry. Nothing WRITES MF any more (the hourly job
-  and the merge/detach recompute are gone); estimations and `/estimate_yield` call the measure.
+  and the merge/detach recompute are gone); estimations call the measure.
 - **Serving, after 567 applies:** `browse_projection` / `properties_public` call the measure in
   their property lateral with the representative's `ll.obec_kod` + `ll.katastr_kod` (566, FILL
   v5.4: the single KÚ of the bound entity, never a pin). Until 567 applies they read the
