@@ -14,8 +14,9 @@ remax's churn does not exist within one: three fetches eight seconds apart are
 byte-identical, and the tokens only re-roll for the next session. The live drain is
 a fresh process per run, so cross-session is what production measures.
 
-TWO edits to those bytes, both deliberate. The trim above, and a contact scrub:
-this repo is PUBLIC, so the brokers' phone numbers, e-mail addresses and names
+THREE edits to those bytes, all deliberate. The trim above, a contact scrub, and the same-length
+blanking of the third-party keys the pages embed (#2035). The contact scrub:
+git history is permanent, so the brokers' phone numbers, e-mail addresses and names
 were replaced with the house placeholders (`+420 XXX XXX XXX`, `agent@example.cz`,
 `Jan Novák`) by `scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`. It is
 contact-scoped rather than that script's blanket 9-digit sweep, which would have
@@ -296,7 +297,7 @@ def test_a_malformed_selector_does_not_degrade_a_real_body_to_raw() -> None:
 
 
 def test_no_committed_fixture_carries_contact_details() -> None:
-    """This repo is PUBLIC and these are real portal pages: a broker's mobile
+    """These are real portal pages and git history is permanent: a broker's mobile
     number or work e-mail committed here would be published permanently, with no
     takedown short of a history rewrite. The scrub that produced these files
     (`--scrub-contacts`, see the module docstring) is idempotent, so this gate is

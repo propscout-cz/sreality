@@ -543,8 +543,8 @@ is a no-op on repetition: `ON CONFLICT` on the open signature, `coalesce` on
 over one state changing nothing.
 
 **Replay rail.** `tests/toolkit/test_system_alerts_replay.py` feeds 14 days of real results
-(run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: the repo
-is public) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
+(run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: git
+history is permanent) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
 cadence + 18 h on GitHub), and its fixture has held the surviving keys only since wave 4, which
@@ -1782,7 +1782,7 @@ is filed (#1860).
 
 **Replay rails (Health dashboard sprint wave 6).** `tests/scripts/test_checks_quality_replay.py` feeds the
 four checks' inputs through the real ladder from fixtures under `tests/fixtures/health_quality_*.csv`,
-exported read-only from production (counts only: the repo is public), each export's SQL and time in the test's
+exported read-only from production (counts only: git history is permanent), each export's SQL and time in the test's
 header. `pipeline_check_results` keeps 35 days (Q5), so the fixtures come from that window (the legacy checks'
 runs and stored medians) and from durable stores: churn per portal per day over 28 d from `listing_snapshots`,
 the 7-day and stock gaps over 28 d and the weekly stock medians over 6 weeks, as the measure view computes them, the active no-town counts per portal (current only:
