@@ -262,7 +262,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 
 - **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `ruff check .` and `pytest -q` (or `pytest tests/path -q`).
   Interpreter is `python3`. `scripts/test-summary.sh` runs quiet pytest + prints only failures.
-- **CI:** every PR and `main` push runs `test.yml` — open the draft PR early, then wait with `scripts/ci_wait.sh <pr>` (logs: `scripts/logs.sh <run-id> [pattern]`). Its DB lanes run locally too: `scripts/local_pg.sh`.
+- **CI:** every PR + `main` push runs `test.yml` — open the draft PR early, wait with `gh pr checks <pr> --watch --fail-fast -i 30` (logs: `scripts/logs.sh <run-id> [pattern]`). DB lanes run locally: `scripts/local_pg.sh`.
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
