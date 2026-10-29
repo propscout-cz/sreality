@@ -107,10 +107,11 @@ toolkit work.
   cards (operator rulings 2026-10-28, X1): full height on the right, folding to a tab, a header, "Vývoj ceny" (one
   step line per ad), "Moje" (pipeline step bar + "Uzavřít ▾", collections, tags, notes), "AI agenti" (the Výnos
   estimate, three agents "Brzy", a chat box with no backend). The old floating panel is deleted.
+- **Done 2026-10-28 (branch `cleanup/lookup-old-panel-fields`): the lookup drops what only the old panel read** —
+  `kind_label`, `sreality_id` and the ad's `subtype` / `last_seen_at`.
 - **Next (not built):** the section cards on `components/Panel.tsx` first, then the property page's tabs and the
-  other detail pages. Owed by the sheet: the chat and the three agents need their backends (agent platform); the
-  lookup's `kind_label`, `sreality_id` and the ad's `subtype` / `last_seen_at` are no longer read by the extension
-  (the API cleanup PR); `dist/content.js` grew 199,330 → 300,721 B unminified (+51 %), 82,669 B of it
+  other detail pages. Owed by the sheet: the chat and the three agents need their backends (agent platform);
+  `dist/content.js` grew 199,330 → 300,721 B unminified (+51 %), 82,669 B of it
   `filterRegistry.generated.ts`, which `lib/portals.ts` (via `priceHistory`) and `lib/enums.ts` both evaluate at
   load, on every portal page — either a small generated labels-only module both read instead of the registry, or
   accept it and rely on the minified store build already owed (`chrome-extension/README.md` § Chrome Web Store
