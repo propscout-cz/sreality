@@ -186,7 +186,7 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
    github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
    watch `job/<name>` on Health. Green means asked, not done.
 
-## Runner-only operations outside the merge coordinator's windows (#2025-R2, ruled by it 2026-10-26)
+## Runner-only operations outside the merge coordinator's windows (#2025-R2, ruled 2026-10-26)
 
 The merge coordinator is a role (`docs/agents/issue-tracker.md` § Merging). Once W-1 has shown `sreality`'s
 deployment id unchanged by the job-runner apply, three kinds may run outside its windows: (a) an apply whose every
