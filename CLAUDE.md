@@ -101,10 +101,10 @@ Dynamic state lives outside Git:
   question. Both recipes + the reserved-for-migrations MCP policy: the `database` skill.
 ## Roadmap maintenance
 
-`ROADMAP.md` is a **byte-capped index**; phase content lives in `roadmap/<track>.md` and completed
-work in `roadmap/archive.md`. **Read the index only; open a track file only to edit it.** After
-shipping meaningful work, in the SAME PR update **only** the track file its index row links (move a
-bullet to done, add new "next" items) + the index's status cell if the track's status changed.
+`ROADMAP.md` is a **byte-capped index**; completed work lives in `roadmap/archive.md`. **Read the
+index only; open a track file only to edit it.** After shipping meaningful work, in the SAME PR
+update **only** the track file its index row links (move a bullet to done, add new "next" items) +
+the index's status cell if the track's status changed.
 ## Context discipline
 
 - Prefer `grep` / targeted line-range reads over whole-file reads for files >500 lines (this file,
