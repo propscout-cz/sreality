@@ -1,13 +1,15 @@
 """The tool registry against the replayed schema (#2062): a tenant tool runs in the caller's own RLS transaction
 and sees only their account's rows; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
-places a property we hold at its location ad and returns the toolkit's own envelope. Runs in CI's migrations job
-(`TEST_DATABASE_URL`)."""
+places a property we hold at its location ad and returns the toolkit's own envelope; search_properties selects, under
+the user's login, exactly the properties the Watchdog matches for the same filters (#2063). Runs in CI's migrations
+job (`TEST_DATABASE_URL`)."""
 
 from __future__ import annotations
 
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
@@ -18,9 +20,13 @@ from api.capabilities import registry, subject
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url
+from api.notifications import WatchdogFilterSpec, _build_match_clauses
+from api.property_search import PAGE_MAX
+from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, _snapshot, _tag, db_url
+from tests._tenant_scope import tool_call
 from tests.test_location_ad_readers_live import POINT, RING, _placed
 from toolkit import ComparableFilters, TargetSpec, find_comparables_relaxed
+from toolkit.browse_read_model import sync_browse_list
 
 pytestmark = REQUIRED_DB
 
@@ -237,3 +243,203 @@ def test_a_market_tool_returns_the_toolkits_envelope_without_the_subjects_own_pr
     assert out == direct
     ids = {row["listing_id"] for row in out["data"]["listings"]}
     assert neighbour in ids and ring not in ids
+
+
+# --- search: Browse's list under the user's login, the Watchdog's matches for the same spec ----------------------
+
+_TOWN_A, _TOWN_B = 990_001, 990_002
+_BOX = {"west": 12.30, "south": 48.90, "east": 12.40, "north": 49.00}
+# name: the property's ads (the first canonical), where it stands, and how many days ago it was first seen. Every ad
+# is a byt for sale of 70 m² unless it says otherwise; `unplaced` has no location, `unsettled` is not yet published.
+_SEEDS: dict[str, dict[str, Any]] = {
+    "p1": {"town": _TOWN_A, "days": 2, "ads": [dict(source="idnes", price=4_000_000, disposition="2+kk", area_m2=55,
+           has_balcony=True, furnished="ano", building_type="cihla", energy_rating="B", ownership="osobni")]},
+    "p2": {"town": _TOWN_A, "days": 20, "ads": [dict(source="sreality", price=7_000_000, disposition="3+kk",
+           area_m2=80, has_balcony=False, furnished="ne", building_type="panel", energy_rating="C")]},
+    "p3": {"town": _TOWN_B, "days": 40, "ads": [dict(source="bazos", price=None, active=False, disposition="2+kk",
+           area_m2=60, building_type="skelet")]},
+    "p4": {"town": _TOWN_B, "days": 25, "ads": [
+        dict(source="idnes", price=2_500_000, disposition="1+kk", area_m2=30, furnished="castecne"),
+        dict(source="sreality", price=2_600_000, active=False, disposition="1+kk", area_m2=30)]},
+    "p5": {"town": _TOWN_A, "days": 60, "ads": [dict(source="remax", price=9_000_000, category_main="dum",
+           subtype="rodinny_dum", area_m2=150, estate_area=600)]},
+    "p6": {"town": _TOWN_B, "days": 3, "ads": [dict(source="idnes", price=20_000, category_type="pronajem",
+           disposition="2+kk", area_m2=50)]},
+    "p7": {"town": None, "days": 2, "ads": [dict(source="sreality", price=4_000_000, disposition="2+kk")]},
+    "p8": {"town": _TOWN_A, "days": 0, "unsettled": True, "ads": [dict(source="idnes", disposition="2+kk")]},
+    "p9": {"town": _TOWN_A, "days": 5, "ads": [dict(source="mmreality", price=12_000_000, disposition="4+kk",
+           area_m2=100, has_lift=True)]},
+    "p10": {"town": _TOWN_B, "days": 8, "ads": [dict(source="sreality", price=3_000_000, disposition="2+kk",
+            area_m2=45, ownership="druzstevni")]},
+}
+_SERVED = {n for n, seed in _SEEDS.items() if seed["town"] and not seed.get("unsettled")}
+
+
+def _seed_search(cur: Any) -> dict[str, int]:
+    """The seeds, published into Browse's read model; p2's price fell from 8.0 to 7.0 M Kč an hour ago."""
+    ids: dict[str, int] = {}
+    now = datetime.now(timezone.utc)
+    for i, (name, seed) in enumerate(_SEEDS.items()):
+        if seed.get("unsettled"):
+            cur.execute("INSERT INTO properties DEFAULT VALUES RETURNING id")
+            pid = int(cur.fetchone()[0])
+        else:
+            pid = _property(cur)
+        ads = []
+        for facts in seed["ads"]:
+            active = facts.get("active", True)
+            ad = _advert(cur, pid, **facts, first_seen_at=now - timedelta(days=seed["days"]),
+                         last_seen_at=now if active else now - timedelta(days=seed["days"] - 1))
+            ads.append(ad)
+            if seed["town"]:
+                _placed(cur, ad, (12.31 + i * 0.008, 48.95), "address_point", 10, town_code=seed["town"])
+        if name == "p2":
+            _snapshot(cur, ads[0], 8_000_000, 48)
+            _snapshot(cur, ads[0], 7_000_000, 1)
+        _recompute(cur, pid)
+        ids[name] = pid
+    sync_browse_list(cur.connection, ids.values())
+    return ids
+
+
+@pytest.fixture()
+def seeded(cur: Any) -> dict[str, int]:
+    return _seed_search(cur)
+
+
+def _searched(cur: Any, user: uuid.UUID, args: dict[str, Any], ids: dict[str, int]) -> set[str]:
+    """Every page of search_properties as `user`, within the seeds' box, by seed name."""
+    names = {pid: n for n, pid in ids.items()}
+    found: set[str] = set()
+    offset = 0
+    while True:
+        out = tool_call(cur, user, "search_properties", {
+            "bounds": _BOX, "category_type": "prodej", **args, "limit": PAGE_MAX, "offset": offset})
+        found |= {names[r["property_id"]] for r in out["data"] if r["property_id"] in names}
+        offset += len(out["data"])
+        if not out["data"] or offset >= out["metadata"]["result_count"]:
+            return found
+
+
+def _watched(cur: Any, spec: dict[str, Any], ids: dict[str, int]) -> set[str]:
+    """What the Watchdog matches over properties_public for the same filters, among the seeds, by seed name."""
+    where, params = _build_match_clauses(WatchdogFilterSpec(**{"category_type": "prodej", **spec}))
+    cur.execute(f"SELECT l.property_id FROM properties_public l WHERE {' AND '.join(where)} "
+                "AND l.property_id = ANY(%(seeds)s)", {**params, "seeds": list(ids.values())})
+    names = {pid: n for n, pid in ids.items()}
+    return {names[r[0]] for r in cur.fetchall()}
+
+
+def _city_rule(cur: Any) -> list[dict[str, Any]]:
+    """Town A as a curated city whose made-up index is 8: the rule `>= 6` selects it, and only it."""
+    index = f"lp_{uuid.uuid4().hex[:8]}"
+    cur.execute("INSERT INTO admin_boundaries (id, level, name, geom) VALUES (%s, 'obec', 'Lp A', "
+                "ST_Multi(ST_MakeEnvelope(12.2, 48.8, 12.5, 49.1, 4326))::geography)", (_TOWN_A,))
+    cur.execute("INSERT INTO curated_cities (name, kraj_name, centroid, admin_boundary_id) VALUES "
+                "(%s, 'Lp', ST_SetSRID(ST_MakePoint(12.35, 48.95), 4326)::geography, %s) RETURNING id",
+                (index, _TOWN_A))
+    city = cur.fetchone()[0]
+    cur.execute("INSERT INTO city_index_revisions (source_filename, row_count, raw_rows) VALUES ('lp.csv', 1, "
+                "'[]'::jsonb) RETURNING source_revision")
+    cur.execute("INSERT INTO city_index_values (city_id, source_revision, index_name, value) VALUES (%s, %s, %s, 8)",
+                (city, cur.fetchone()[0], index))
+    return [{"index_name": index, "op": ">=", "value": 6}]
+
+
+# One per sql_kind, each shared hook and the portal rule's sides, the map box and the place chips.
+_PARITY: list[tuple[str, dict[str, Any]]] = [
+    ("eq", {"has_balcony": True}),
+    ("eq-deal", {"category_type": None}),
+    ("any-one", {"dispositions": ["2+kk"]}),
+    ("any", {"dispositions": ["2+kk", "3+kk"]}),
+    ("any-category", {"category_main_in": ["dum"]}),
+    ("gte", {"min_area_m2": 70}),
+    ("lte", {"max_area_m2": 50}),
+    ("gte-measure", {"min_price_per_m2": 80_000}),
+    ("lte-plot", {"max_estate_area": 1000}),
+    ("enum-one", {"furnished": ["ano"]}),
+    ("enum-unknown", {"furnished": ["ne", "__unknown__"]}),
+    ("enum-many", {"ownership": ["druzstevni", "osobni"]}),
+    ("price", {"min_price_czk": 5_000_000}),
+    ("price-or-none", {"max_price_czk": 3_000_000, "include_no_price": True}),
+    ("material", {"building_material": ["panel"]}),
+    ("energy", {"energy_rating_match": ["B"]}),
+    ("price-changes", {"price_change_count_min": 1, "price_change_window_days": 30}),
+    ("price-fell", {"total_price_change_pct": -5}),
+    ("portal", {"portals": ["sreality"]}),
+    ("portal-excluded", {"portals_excluded": ["idnes"]}),
+    ("portal-excluded-live", {"portals_excluded": ["sreality"], "portals_excluded_active_only": True}),
+    ("box", {"bounds": {"west": 12.30, "south": 48.90, "east": 12.325, "north": 49.00}}),
+    ("place", {"districts": [{"name": "Lp B", "level": "obec", "id": _TOWN_B}]}),
+    ("place-excluded", {"districts": [{"name": "Lp A", "level": "obec", "id": _TOWN_A, "excluded": True}]}),
+    ("city-rule", {"city_index_rules": None}),
+]
+
+
+@pytest.mark.parametrize("spec", [s for _, s in _PARITY], ids=[n for n, _ in _PARITY])
+def test_search_selects_what_the_watchdog_matches_for_the_same_filters(
+        cur: Any, seeded: dict[str, int], users: dict[str, Any], spec: dict[str, Any]) -> None:
+    if "city_index_rules" in spec:
+        spec = {"city_index_rules": _city_rule(cur)}
+    watched = _watched(cur, spec, seeded)
+    assert watched and watched < set(_SEEDS), (spec, watched)   # it discriminates
+    assert _searched(cur, users["a"], {"show_dismissed": True, **spec}, seeded) == watched
+
+
+@pytest.mark.parametrize("args, expected", [
+    ({}, _SERVED - {"p6"}),
+    ({"status": "active"}, _SERVED - {"p3", "p6"}),
+    ({"status": "inactive"}, {"p3"}),
+    # Under `active` a portal asks for an ACTIVE ad there: p4's sreality ad ended.
+    ({"status": "active", "portals": ["sreality"]}, {"p2", "p10"}),
+    ({"status": "inactive", "portals": ["bazos"]}, {"p3"}),
+    ({"recently_added_days": 3}, {"p1"}),
+    ({"recently_changed_days": 1}, {"p2"}),
+    ({"tom_days_min": 15, "tom_days_max": 30}, {"p2", "p4"}),
+], ids=["any", "active", "inactive", "active-portal", "inactive-portal", "added", "changed", "tom"])
+def test_status_recency_and_time_on_market_select_browses_rows(
+        cur: Any, seeded: dict[str, int], users: dict[str, Any], args: dict[str, Any], expected: set[str]) -> None:
+    assert _searched(cur, users["a"], args, seeded) == expected
+
+
+def test_observed_tom_reads_the_published_flag(cur: Any, seeded: dict[str, int], users: dict[str, Any]) -> None:
+    cur.execute("UPDATE browse_list SET tom_observed = (property_id <> %s) WHERE property_id = ANY(%s)",
+                (seeded["p1"], list(seeded.values())))
+    assert _searched(cur, users["a"], {"tom_observed_only": True}, seeded) == _SERVED - {"p1", "p6"}
+
+
+def test_the_users_own_lenses_are_judged_under_their_login(
+        cur: Any, seeded: dict[str, int], users: dict[str, Any]) -> None:
+    """A's dismissal hides p9 from A only; A's tag and A's estimate select for A, B's for B."""
+    cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)",
+                (users["a_acc"], seeded["p9"]))
+    tags = {who: _tag(cur, users[f"{who}_acc"]) for who in ("a", "b")}
+    cur.execute("INSERT INTO property_tags (account_id, property_id, tag_id) VALUES (%s, %s, %s), (%s, %s, %s)",
+                (users["a_acc"], seeded["p1"], tags["a"], users["b_acc"], seeded["p2"], tags["b"]))
+    for who, name in (("a", "p1"), ("b", "p2")):
+        cur.execute("SELECT id FROM listings WHERE property_id = %s", (seeded[name],))
+        cur.execute("INSERT INTO estimation_runs (account_id, source, mode, status, input_spec, input_listing_id) "
+                    "VALUES (%s, 'api', 'deterministic', 'success', '{}'::jsonb, %s)",
+                    (users[f"{who}_acc"], cur.fetchone()[0]))
+    everyone = _SERVED - {"p6"}
+    assert _searched(cur, users["a"], {}, seeded) == everyone - {"p9"}
+    assert _searched(cur, users["a"], {"show_dismissed": True}, seeded) == everyone
+    assert _searched(cur, users["b"], {}, seeded) == everyone
+    assert _searched(cur, users["a"], {"tags": {"in": [tags["a"]]}}, seeded) == {"p1"}
+    assert _searched(cur, users["a"], {"tags": {"set": "out"}}, seeded) == everyone - {"p1", "p9"}
+    assert _searched(cur, users["b"], {"tags": {"in": [tags["a"]]}}, seeded) == set()
+    assert _searched(cur, users["a"], {"with_estimates": True}, seeded) == {"p1"}
+    assert _searched(cur, users["b"], {"with_estimates": True}, seeded) == {"p2"}
+
+
+def test_a_page_is_browses_cards_in_its_order_with_the_total(
+        cur: Any, seeded: dict[str, int], users: dict[str, Any]) -> None:
+    out = tool_call(cur, users["a"], "search_properties",
+                    {"bounds": _BOX, "category_type": "prodej", "sort": "-price_czk", "limit": 3})
+    prices = [r["price_czk"] for r in out["data"]]
+    assert prices == sorted(prices, reverse=True) and prices[0] == 12_000_000
+    assert out["metadata"]["result_count"] == len(_SERVED - {"p6"})
+    row = out["data"][0]
+    assert (row["property_id"], row["price_per_m2_basis"]) == (seeded["p9"], "sale_capital_czk_m2")
+    assert out["metadata"]["price_per_m2_basis"] == "sale_capital_czk_m2"
+    assert "building_condition_level" not in row and "home_obec_pop" not in row

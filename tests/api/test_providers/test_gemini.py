@@ -307,3 +307,14 @@ def test_schema_for_gemini_strips_additional_properties_recursively():
     assert clean["properties"]["rooms"]["items"]["properties"]["index"] == {"type": "integer"}
     # the original is not mutated (pure)
     assert dirty["additionalProperties"] is False
+
+
+def test_schema_for_gemini_drops_an_integer_vocabulary_and_keeps_a_string_one():
+    """Gemini's Schema.enum is a list of strings; the server still refuses an off-vocabulary integer."""
+    from api.providers.gemini import _schema_for_gemini
+
+    days = {"type": "integer", "enum": [1, 3, 7], "description": "Days.", "nullable": True}
+    status = {"type": "string", "enum": ["any", "active"]}
+    clean = _schema_for_gemini({"type": "object", "properties": {"days": days, "status": status}})
+    assert clean["properties"] == {"days": {"type": "integer", "description": "Days.", "nullable": True},
+                                   "status": status}

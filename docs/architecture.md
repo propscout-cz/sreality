@@ -2474,12 +2474,15 @@ renumber.** Navigate by area:
 16. **Watchdog and Browse share one definition of "matches."** Saved watchdog filters live
     in `notification_subscriptions` (migration 056). The definition is the filter registry,
     rendered per relation. `toolkit/filter_compiler.compile_filter_where` compiles every
-    column-backed FilterDef from its derived `sql_kind` and every irregular one from ONE hook
-    table. It does this for the Watchdog matcher (`properties_public`, adapter
-    `api/notifications._build_match_clauses`, which adds the served predicate, the published rule,
-    the map box and the place chips) and for every estimation cohort (`listings`, adapter
-    `toolkit/comparables._shared_filter_where`: comparables, velocity, the transit corridor).
-    Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    column-backed FilterDef from its derived `sql_kind` (a one-element list as an equality, the
+    planner rule Browse follows) and every irregular one from ONE hook: the relation's own
+    (`FilterGrain.hooks`, e.g. the portal rule) or the shared table. It does this for the Watchdog
+    matcher (`properties_public`, adapter `api/notifications._build_match_clauses`, which adds the
+    served predicate, the published rule, the map box and the place chips), for every estimation
+    cohort (`listings`, adapter `toolkit/comparables._shared_filter_where`: comparables, velocity,
+    the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
+    source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
+    the map box, the place chips and the reader's own lenses). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
@@ -2543,9 +2546,9 @@ renumber.** Navigate by area:
     in the switch's status: `toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`),
     so broker + portal means one ad satisfies both, while the status stays the property's. ONE SQL
     function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
-    defaulted; two independent conjuncts since 657), is read by both aggregate RPCs; the Watchdog
-    compiles its `any` arm and the exclusion
-    (`PROPERTIES_GRAIN.clauses` + the `portals_excluded` hook; it has no status filter); the SPA
+    defaulted; two independent conjuncts since 657), is read by both aggregate RPCs and, inlined,
+    by both property grains' one `portals` hook (the Watchdog's `any` arm, as it has no status
+    filter, and the agents' search with Browse's status); the SPA
     renders it on PostgREST (`queries.ts applyPortalRule`: `ov` / `not.ov` on the two lists, a
     property-id allowlist under a broker). All three renderings are pinned to one table,
     `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's migrations lane,

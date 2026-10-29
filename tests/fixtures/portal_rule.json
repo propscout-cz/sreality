@@ -7,8 +7,9 @@
   "ended ads); several portals = any of them. AND it has no ad on any EXCLUDED portal: any ad, live",
   "or ended (all_sources), or only live ones when excluded_active_only (active_sources); independent",
   "of the status switch and of a broker. tests/test_portal_rule.py runs `cases` through",
-  "public.portal_status_matches, both aggregate RPCs and, for the `any` rows, the Watchdog's",
-  "compiled clauses; queries.test.ts runs them through applyPortalRule. `broker_cases` put the",
+  "public.portal_status_matches, both aggregate RPCs and both property grains' compiled portal",
+  "rule (the Watchdog's and the agents' search); queries.test.ts runs them through",
+  "applyPortalRule. `broker_cases` put the",
   "portal side on ONE broker's ads (portal and broker together = one ad) while the status stays the",
   "property's: the DB lane seeds the ads, runs the broker lookup and the property's status. An",
   "exclusion stays on the property under a broker, so it has no broker case."

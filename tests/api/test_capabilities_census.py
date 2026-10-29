@@ -1,9 +1,11 @@
 """Census of the tool registry (#2062): every tool declares its tenancy and effect, no input schema names an
-identity, every schema is portable, only the registry opens a connection, and no declared filter is dropped."""
+identity, every schema is portable, only the registry opens a connection, no declared filter is dropped, and no
+tool's columns name a parked condition level, a city index or a broker (#2063)."""
 
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
 import re
 from pathlib import Path
@@ -178,6 +180,10 @@ _POINT = {"lat": 50.08, "lng": 14.42, "area_m2": 60.0, "disposition": "2+kk", "f
 # compute_listing_velocity reads its subject first: is_active, disposition, lat, lng, categories, id, tom_days.
 _VELOCITY_SUBJECT = (lambda sql: "AS tom_days" in sql and "l.is_active, l.disposition" in sql,
                      [(True, "2+kk", 50.08, 14.42, "byt", "prodej", 70, 12)])
+_COUNT = (lambda sql: sql.startswith("SELECT count(*)"), [(0,)])
+# A filter that only modifies another renders only beside it: the baseline sets the one it modifies.
+_PARTNERS = {"include_no_price": {"min_price_czk": 1_000_000}, "portals_excluded_active_only": {"portals_excluded": ["bazos"]},
+             "price_change_window_days": {"price_change_count_min": 2}}
 
 
 def _point_fields(entry: Entry) -> tuple[str, ...]:
@@ -198,36 +204,48 @@ def _baseline(entry: Entry) -> dict[str, Any]:
         args["lifecycle"] = "active"   # max_age_days renders only with a lifecycle gate
     if "floor_band" in fields:
         args["floor_band"] = 2         # the point's floor renders only inside a floor band
+    for modifier, partner in _PARTNERS.items():
+        if modifier in fields:
+            args.update(partner)
     return args
 
 
 def _distinct(prop: dict[str, Any], current: Any) -> Any:
-    """A valid value for `prop` that is not `current`."""
+    """A valid value for `prop` that is not `current`; a composite is built from its own properties."""
     if prop.get("type") == "array":
-        return [prop["items"]["enum"][0]] if "enum" in prop["items"] else ["x"]
+        return [_distinct(prop["items"], None)]
+    if prop.get("type") == "object":
+        return {k: _distinct(sub, None) for k, sub in prop["properties"].items()}
     if "enum" in prop:
         return next(v for v in prop["enum"] if v != current)
     floor = prop.get("minimum", 0)
-    return {"integer": floor + 7, "number": floor + 0.37, "boolean": not current}[prop["type"]]
+    return {"integer": floor + 7, "number": floor + 0.37, "boolean": not current, "string": "x"}[prop["type"]]
 
 
-def _statements(name: str, args: dict[str, Any]) -> list[tuple[str, Any]]:
-    conn = ScriptConn([_VELOCITY_SUBJECT])
-    registry.call(Caller(market=conn), name, args)
+def _statements(name: str, args: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT])
+
+    @contextlib.contextmanager
+    def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:
+        yield conn
+    monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", own)
+    registry.call(Caller(market=conn, claims={"sub": "census"}), name, args)
     return conn.executed
 
 
 @pytest.mark.parametrize("name", sorted(n for n, e in ENTRIES.items()
                                         if any(f in fr.REGISTRY for f in e.args.model_fields)))
-def test_every_filter_a_tool_declares_changes_the_statement_it_runs(name: str) -> None:
+def test_every_filter_a_tool_declares_changes_the_statement_it_runs(
+        name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Either tenancy, a composite filter included: the census builds a valid value from the schema itself."""
     entry = ENTRIES[name]
     base = _baseline(entry)
-    before = _statements(name, base)
+    before = _statements(name, base, monkeypatch)
     props = entry.input_schema["properties"]
     dropped = []
     for fid in (f for f in entry.args.model_fields if f in fr.REGISTRY):
         current = base.get(fid, entry.args.model_fields[fid].default)
-        if _statements(name, {**base, fid: _distinct(props[fid], current)}) == before:
+        if _statements(name, {**base, fid: _distinct(props[fid], current)}, monkeypatch) == before:
             dropped.append(fid)
     assert not dropped, f"{name} declares filters that never reach its SQL: {dropped}"
 
@@ -236,10 +254,36 @@ _OTHER_POINT = {"lat": 50.09, "lng": 14.43, "area_m2": 90.0, "disposition": "3+k
 
 
 @pytest.mark.parametrize("name", sorted(n for n, e in ENTRIES.items() if "point" in e.args.model_fields))
-def test_every_point_attribute_a_tool_accepts_changes_the_statement_it_runs(name: str) -> None:
+def test_every_point_attribute_a_tool_accepts_changes_the_statement_it_runs(
+        name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     entry = ENTRIES[name]
     base = _baseline(entry)
-    before = _statements(name, base)
+    before = _statements(name, base, monkeypatch)
     dropped = [f for f in _point_fields(entry)
-               if _statements(name, {**base, "point": {**base["point"], f: _OTHER_POINT[f]}}) == before]
+               if _statements(name, {**base, "point": {**base["point"], f: _OTHER_POINT[f]}}, monkeypatch) == before]
     assert not dropped, f"{name} accepts point attributes it never applies: {dropped}"
+
+
+# --- 8. no tool reads what no surface may show ------------------------------------------------------------------
+
+def forbidden_columns() -> frozenset[str]:
+    """Derived from the registry: rule 14's parked levels (the columns of the retired level bounds) and every rule 17
+    city-quality column; a tool's column allowlist is disjoint from it and names no broker."""
+    from toolkit.filter_compiler import RETIRED_FILTERS
+    levels = {fid.rsplit("_", 1)[0] for fid in RETIRED_FILTERS if fid.endswith(("_min", "_max"))}
+    city = {f.pg_column for f in fr.all_filters() if f.category == fr.CATEGORY_CITY_QUALITY and f.pg_column}
+    return frozenset(levels | city)
+
+
+def test_the_forbidden_set_names_what_the_read_models_still_publish() -> None:
+    assert {"building_condition_level", "apartment_condition_level", "home_obec_pop", "near_pop_5km",
+            "near_overall_15km"} <= forbidden_columns()
+
+
+@pytest.mark.parametrize("columns", ["api.property_search.SEARCH_COLUMNS"])
+def test_no_tool_column_allowlist_names_a_forbidden_column_or_a_broker(columns: str) -> None:
+    import importlib
+    module, name = columns.rsplit(".", 1)
+    allowed = set(getattr(importlib.import_module(module), name))
+    assert not allowed & forbidden_columns(), columns
+    assert not [c for c in allowed if c.startswith("broker")], columns

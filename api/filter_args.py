@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model, model_validator
 
+from api.location_filter import DistrictChip, MapBounds
 from toolkit import filter_registry as fr
 
 _SCALARS: dict[fr.FilterType, type] = {
@@ -38,18 +39,53 @@ class _GatedRecency(Args):
         return self
 
 
+# The composite filters, strict: the stored Watchdog blobs keep parsing through the lenient models they extend.
+class Chip(DistrictChip):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Box(MapBounds):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CityIndexRule(Args):
+    index_name: str = Field(description="A city index slug, e.g. bezpecnost or celkove_hodnoceni.")
+    # Exactly the operators curated_cities_matching evaluates (migration 436).
+    op: Literal[">=", "<=", ">", "<", "==", "!="] = Field(description="How the city's index value compares.")
+    value: float = Field(description="The value the city's index is compared with.")
+
+
+class SetScope(Args):
+    # frontend/src/lib/setScope.ts SetScope; membership is judged under the reader's own login (migration 629).
+    set: Literal["in", "out"] | None = Field(
+        None, description="'in' = a member of any element of the set, 'out' = of none; null = no whole-set side.")
+    in_: list[int] = Field([], alias="in", description="Element ids the property must be in.")
+    out: list[int] = Field([], description="Element ids the property must not be in.")
+
+
+_COMPOSITES: dict[fr.FilterType, Any] = {
+    fr.FilterType.DISTRICT_CHIP_LIST: list[Chip], fr.FilterType.CITY_INDEX_RULE_LIST: list[CityIndexRule],
+    fr.FilterType.SET_SCOPE: SetScope,
+}
+
+
 def agenda_ids(agenda: fr.Agenda) -> tuple[str, ...]:
     """The agenda's filter ids, in registry order."""
     return tuple(f.id for f in fr.REGISTRY.values() if agenda in f.agendas)
 
 
+def _vocabulary(f: fr.FilterDef) -> tuple[Any, ...]:
+    return tuple((f.constraints or {}).get("enum") or (e.value for e in f.enum_values or ()))
+
+
 def _annotation(f: fr.FilterDef) -> Any:
-    vocabulary = tuple((f.constraints or {}).get("enum") or (e.value for e in f.enum_values or ()))
+    vocabulary = _vocabulary(f)
     if f.type is fr.FilterType.STRING_LIST:
         return list[Literal[vocabulary]] if vocabulary else list[str]
-    if f.type is fr.FilterType.STRING and vocabulary:
+    if f.type in (fr.FilterType.STRING, fr.FilterType.INT) and vocabulary:
         return Literal[vocabulary]
-    return _SCALARS[f.type]  # KeyError: a composite filter (place, chips, rules, set scope) has no scalar form
+    # KeyError: LOCATION has no wire form (a tool takes `bounds` and `districts` instead).
+    return _COMPOSITES.get(f.type) or _SCALARS[f.type]
 
 
 def _description(f: fr.FilterDef, text: str) -> str:
@@ -58,18 +94,19 @@ def _description(f: fr.FilterDef, text: str) -> str:
 
 
 def filter_model(
-    name: str, ids: Iterable[str], consumer: Callable[..., Any], *, required: Set[str] = frozenset(),
+    name: str, ids: Iterable[str], consumer: Callable[..., Any] | None, *, required: Set[str] = frozenset(),
     descriptions: Mapping[str, str] = MappingProxyType({}),
 ) -> type[Args]:
-    """Args whose fields are these registry filters, each defaulted as `consumer` defaults it."""
-    params = inspect.signature(consumer).parameters
+    """Args whose fields are these registry filters, each defaulted as `consumer` defaults it; a mapping consumer
+    (None, the filter compiler) takes the registry's own defaults."""
+    params = inspect.signature(consumer).parameters if consumer is not None else None
     ids = tuple(ids)
     fields: dict[str, Any] = {}
     for fid in ids:
         f = fr.REGISTRY[fid]
-        if fid not in params:  # a filter the consumer takes no parameter for could never reach it
+        if params is not None and fid not in params:  # a filter the consumer takes no parameter for could never reach it
             raise KeyError(f"{getattr(consumer, '__name__', consumer)} takes no {fid}")
-        default = params[fid].default
+        default = params[fid].default if params is not None else f.default
         annotation = _annotation(f)
         if default is None or fid in required:
             annotation = annotation | None
@@ -78,7 +115,7 @@ def filter_model(
         # Only the registry's `min` is a domain floor; its `max`/`step` are slider axes (price ≤ 100 000 Kč for
         # a sale, plots ≤ 5 000 m²) and would refuse real values. An integer's one ceiling is its int4 column.
         bounds = {"ge": (f.constraints or {}).get("min")}
-        if f.type is fr.FilterType.INT:
+        if f.type is fr.FilterType.INT and not _vocabulary(f):
             bounds["le"] = _INT4_MAX
         fields[fid] = (annotation, Field(... if fid in required else default,
                                          description=_description(f, descriptions.get(fid, f.description)),
@@ -88,5 +125,6 @@ def filter_model(
 
 
 def filter_values(model: BaseModel) -> dict[str, Any]:
-    """The model's registry-filter fields by id; subject and tool options are no registry id."""
-    return {k: getattr(model, k) for k in type(model).model_fields if k in fr.REGISTRY}
+    """The model's registry-filter fields by id, a composite as its wire JSON; subject and tool options are no
+    registry id."""
+    return model.model_dump(include={k for k in type(model).model_fields if k in fr.REGISTRY}, by_alias=True)

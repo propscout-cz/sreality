@@ -1,14 +1,16 @@
 """The one place a registry FilterDef becomes a WHERE predicate (rule 16), per relation.
 
 A column-backed filter compiles from its derived `filter_registry.sql_kind` (the same value
-codegen hands Browse's TS auto-dispatch); an irregular one from ONE entry in `_HOOKS`. A
-`FilterGrain` names the agenda that grants filters on a relation, the spellings that
-relation needs where it lacks a column (rule 23), the filters it spells in its own shape
-(the portal rule on properties, MS19), and the keys its adapter renders itself.
-Every relation is aliased `l`. The two adapters keep only what is not a filter:
-`toolkit/comparables._shared_filter_where` (`listings`: the target-relative clauses and the
-cohort invariants) and `api/notifications._build_match_clauses` (`properties_public`: the
-served predicate, the map box and the place chips).
+codegen hands Browse's TS auto-dispatch); an irregular one from ONE hook: the grain's own
+(`FilterGrain.hooks`, a filter that relation spells in its own shape: the portal rule on a
+property relation, MS19) or else the shared one in `_HOOKS`. A `FilterGrain` names the agenda
+that grants filters on a relation, the spellings that relation needs where it lacks a column
+(rule 23), its own hooks, and the keys its adapter renders itself. Every relation is aliased
+`l`. The three adapters keep only what is not a filter: `toolkit/comparables._shared_filter_where`
+(`listings`: the target-relative clauses and the cohort invariants),
+`api/notifications._build_match_clauses` (`properties_public`: the served and published
+predicates, the map box and the place chips) and `api/property_search` (Browse's own source,
+`browse_list_visible`: the map box, the place chips and the caller's own lenses).
 """
 
 from __future__ import annotations
@@ -43,31 +45,7 @@ class FilterGrain:
     agenda: Agenda                  # the single grant: a set filter it does not declare raises
     exprs: Mapping[str, str]        # pg_column -> expression where the relation lacks the column (rule 23)
     caller_renders: frozenset[str]  # keys the adapter renders itself; the compiler skips them
-    clauses: Mapping[str, str] = MappingProxyType({})  # filter id -> this relation's whole clause
-
-
-# `listings` has no price_per_m2 or tom_days column, so each measure is its function call there
-# (tom_days is not in the Watchdog's agenda); the read model PUBLISHES them, so `l.price_per_m2`
-# is the measure on `properties_public`. Neither
-# relation publishes a plot column, so both call plot_area_m2() (migration 534). A portal is
-# the canonical ad's own on `listings` (estimation comparables) and any of the property's ads
-# on `properties_public` (MS19, the `any` arm of portal_status_matches: the Watchdog has no
-# status filter); the exclusion side is `_portals_excluded`.
-LISTINGS_GRAIN = FilterGrain(
-    agenda=Agenda.COMPARABLES,
-    exprs=MappingProxyType({
-        "price_per_m2": per_m2_sql("l"), "plot_area_m2": plot_area_sql("l"),
-        "tom_days": tom_days_sql("l"),
-    }),
-    caller_renders=frozenset({"radius_m", "area_band_pct", "disposition_match", "floor_band",
-                              "lifecycle", "max_age_days", "include_unreliable"}),
-)
-PROPERTIES_GRAIN = FilterGrain(
-    agenda=Agenda.WATCHDOG,
-    exprs=MappingProxyType({"plot_area_m2": plot_area_sql("l")}),
-    caller_renders=frozenset({"location", "bounds", "districts"}),
-    clauses=MappingProxyType({"portals": "l.all_sources && %({id})s::text[]"}),
-)
+    hooks: Mapping[str, Hook] = MappingProxyType({})  # this relation's own hooks, before `_HOOKS`
 
 # Kept on the models so an old saved blob still deserialises; any value raises, because a
 # retired filter silently ignored WIDENS what a watchdog or a cohort matches.
@@ -93,7 +71,9 @@ RETIRED_FILTERS: Mapping[str, str] = MappingProxyType({
 })
 
 # One template per sql_kind; `enum_or_unknown` is `_enum_or_unknown_clause`. Pinned to
-# tests/fixtures/filter_sql_kinds.json, the table Browse's TS dispatch is tested against.
+# tests/fixtures/filter_sql_kinds.json, the table Browse's TS dispatch is tested against. A
+# one-element list is an `eq`: a ScalarArrayOp in a btree's equality prefix costs the index
+# its order (the planner rule in frontend/src/lib/registryQueryBuilder.ts).
 _KIND_SQL: Mapping[str, str | None] = MappingProxyType({
     "eq": "{expr} = %({id})s",
     "any": "{expr} = ANY(%({id})s)",
@@ -109,6 +89,9 @@ _SEEN_DAYS: Mapping[str, tuple[str, str]] = MappingProxyType({
     "last_seen_min_days": ("last_seen_at", "<="),
     "first_seen_max_days": ("first_seen_at", ">="),
     "first_seen_min_days": ("first_seen_at", "<="),
+    # Browse's two recency presets: within the last N days (queries.ts applyFilters).
+    "recently_added_days": ("first_seen_at", ">="),
+    "recently_changed_days": ("last_change_at", ">="),
 })
 
 
@@ -125,13 +108,13 @@ def _enum_or_unknown_clause(
     params: dict[str, Any],
 ) -> str | None:
     """WHERE fragment for a multi-select enum that may carry the `__unknown__`
-    sentinel. Real values match by `= ANY(...)`; `__unknown__` matches NULL or
+    sentinel. Real values match by `= ANY(...)` (one by `=`); `__unknown__` matches NULL or
     any value outside the canonical set. Returns None when nothing to filter."""
     reals = [v for v in values if v != UNKNOWN_FILTER_VALUE]
     parts: list[str] = []
     if reals:
-        parts.append(f"{col} = ANY(%({pname})s)")
-        params[pname] = reals
+        parts.append(f"{col} = %({pname})s" if len(reals) == 1 else f"{col} = ANY(%({pname})s)")
+        params[pname] = reals[0] if len(reals) == 1 else reals
     if UNKNOWN_FILTER_VALUE in values:
         parts.append(f"({col} IS NULL OR NOT ({col} = ANY(%({pname}_canon)s)))")
         params[f"{pname}_canon"] = list(canonical)
@@ -140,7 +123,7 @@ def _enum_or_unknown_clause(
     return "(" + " OR ".join(parts) + ")"
 
 
-# --- the hooks: every irregular filter, one entry each ---------------------------------
+# --- the hooks: every irregular filter, one hook per grain ------------------------------
 
 
 def _price_bound(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
@@ -155,13 +138,16 @@ def _price_bound(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, 
     return [f"l.price_czk {op} %({fid})s"]
 
 
-def _only(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
-    """A BOOL "only" filter: true narrows to the measure, false or None is no constraint."""
-    return [tom_observed_sql("l")] if v else []
+def _only(expr: str) -> Hook:
+    """A BOOL "only" filter over `expr`: true narrows to it, false or None is no constraint."""
+    def hook(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
+        return [expr] if v else []
+    return hook
 
 
 def _modifier(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
-    """include_no_price / price_change_window_days: read by the hook they modify."""
+    """include_no_price / price_change_window_days / the portal rule's modifiers: read by the
+    hook they modify."""
     return []
 
 
@@ -218,16 +204,30 @@ def _city_index_rules(
     return [f"l.obec_id = ANY (ARRAY(SELECT curated_cities_matching(%({fid})s::jsonb)))"]
 
 
-def _portals_excluded(
+def _portal_rule(
     fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any],
 ) -> list[str]:
-    """The portal rule's second side (migration 597): no ad on an excluded portal — any ad,
-    or only active ones under `portals_excluded_active_only`."""
-    if not v:
+    """THE portal rule on a property relation (MS19; migrations 590, 597, 657): the status is
+    the property's own, a portal asks for an ad there in that status, and no ad on an excluded
+    portal. One SQL function owns it (inlined: sql, immutable); the Watchdog sets no status,
+    its `any` arm."""
+    status, excluded = values.get("status"), values.get("portals_excluded")
+    if status in (None, "any") and not _is_set(v) and not _is_set(excluded):
         return []
-    params[fid] = list(v)
-    ads = "active_sources" if values.get("portals_excluded_active_only") else "all_sources"
-    return [f"not (l.{ads} && %({fid})s::text[])"]
+    params.update({
+        fid: list(v) if v else None, "status": status,
+        "portals_excluded": list(excluded) if excluded else None,
+        "portals_excluded_active_only": bool(values.get("portals_excluded_active_only")),
+    })
+    return [f"portal_status_matches(l.is_active, l.all_sources, l.active_sources, %({fid})s::text[], "
+            "%(status)s::text, %(portals_excluded)s::text[], %(portals_excluded_active_only)s)"]
+
+
+def _with_estimates(
+    fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any],
+) -> list[str]:
+    """Browse's prefilter relation (queries.ts resolveEstimatesPrefilter), under the reader's own login."""
+    return ["EXISTS (SELECT 1 FROM property_estimates_public e WHERE e.property_id = l.property_id)"] if v else []
 
 
 def _building_material(
@@ -243,16 +243,55 @@ _HOOKS: Mapping[str, Hook] = MappingProxyType({
     "min_price_czk": _price_bound,
     "max_price_czk": _price_bound,
     "include_no_price": _modifier,
-    "tom_observed_only": _only,
     "price_change_window_days": _modifier,
-    "portals_excluded_active_only": _modifier,
     **{fid: _seen_days for fid in _SEEN_DAYS},
     "price_change_count_min": _price_change_count,
     "total_price_change_pct": _total_price_change,
     "city_index_rules": _city_index_rules,
     "building_material": _building_material,
-    "portals_excluded": _portals_excluded,
+    "with_estimates": _with_estimates,
 })
+
+
+# --- the grains ------------------------------------------------------------------------
+
+
+# `listings` has no price_per_m2 or tom_days column, so each measure is its function call there;
+# the read models PUBLISH them, so `l.price_per_m2` is the measure on `properties_public` and
+# `browse_list`. `properties_public` publishes no plot column, so it calls plot_area_m2()
+# (migration 534); `browse_list` publishes it. A portal is the canonical ad's own on `listings`
+# (estimation comparables) and the portal rule on a property relation; observed TOM is the
+# measure over an ad on `listings` and the property's published flag on `browse_list`
+# (migration 625: its EARLIEST ad with a category).
+_PORTAL_RULE: Mapping[str, Hook] = MappingProxyType({
+    "portals": _portal_rule,
+    "portals_excluded": _modifier,
+    "portals_excluded_active_only": _modifier,
+})
+LISTINGS_GRAIN = FilterGrain(
+    agenda=Agenda.COMPARABLES,
+    exprs=MappingProxyType({
+        "price_per_m2": per_m2_sql("l"), "plot_area_m2": plot_area_sql("l"),
+        "tom_days": tom_days_sql("l"),
+    }),
+    caller_renders=frozenset({"radius_m", "area_band_pct", "disposition_match", "floor_band",
+                              "lifecycle", "max_age_days", "include_unreliable"}),
+    hooks=MappingProxyType({"tom_observed_only": _only(tom_observed_sql("l"))}),
+)
+PROPERTIES_GRAIN = FilterGrain(
+    agenda=Agenda.WATCHDOG,
+    exprs=MappingProxyType({"plot_area_m2": plot_area_sql("l")}),
+    caller_renders=frozenset({"location", "bounds", "districts"}),
+    hooks=_PORTAL_RULE,
+)
+BROWSE_GRAIN = FilterGrain(
+    agenda=Agenda.BROWSE,
+    exprs=MappingProxyType({}),
+    caller_renders=frozenset({"location", "bounds", "districts", "tags", "collections", "pipeline",
+                              "show_dismissed"}),
+    hooks=MappingProxyType({**_PORTAL_RULE, "status": _modifier,
+                            "tom_observed_only": _only("l.tom_observed")}),
+)
 
 
 # --- the compile -----------------------------------------------------------------------
@@ -297,16 +336,11 @@ def compile_filter_where(
     where: list[str] = []
     params: dict[str, Any] = {}
     for f in all_filters():
-        if f.id in grain.caller_renders or f.id not in values:
+        if f.id in grain.caller_renders:
             continue
-        value = values[f.id]
-        clause = grain.clauses.get(f.id)
-        if clause is not None:
-            if _is_set(value):
-                where.append(clause.format(id=f.id))
-                params[f.id] = list(value)
-            continue
-        hook = _HOOKS.get(f.id)
+        value = values.get(f.id)
+        # A hook runs unset too: the rule one id owns may be set through its modifiers alone.
+        hook = grain.hooks.get(f.id, _HOOKS.get(f.id))
         if hook is not None:
             where.extend(hook(f.id, value, values, params))
             continue
@@ -324,11 +358,14 @@ def compile_filter_where(
             if clause:
                 where.append(clause)
             continue
+        if kind == "any":
+            template, value = (_KIND_SQL["eq"], value[0]) if len(value) == 1 else (template, list(value))
         where.append(template.format(expr=expr, id=f.id))
-        params[f.id] = list(value) if kind == "any" else value
+        params[f.id] = value
     return where, params
 
 
 __all__ = [
-    "FilterGrain", "LISTINGS_GRAIN", "PROPERTIES_GRAIN", "RETIRED_FILTERS", "compile_filter_where",
+    "BROWSE_GRAIN", "FilterGrain", "LISTINGS_GRAIN", "PROPERTIES_GRAIN", "RETIRED_FILTERS",
+    "compile_filter_where",
 ]

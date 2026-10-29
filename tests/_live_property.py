@@ -40,15 +40,16 @@ def _property(cur: Any) -> int:
     return int(cur.fetchone()[0])
 
 
-def _advert(cur: Any, pid: int, *, source: str, price: int = 5_000_000, active: bool = True,
-            condition: str | None = None, levels: tuple[Any, Any] = (None, None)) -> int:
+def _advert(cur: Any, pid: int, *, source: str, price: int | None = 5_000_000, active: bool = True,
+            condition: str | None = None, levels: tuple[Any, Any] = (None, None), **facts: Any) -> int:
+    """A byt for sale, 70 m², unless `facts` (more `listings` columns) say otherwise."""
+    row = {"sreality_id": next(_SREALITY_IDS) if source == "sreality" else None, "source": source,
+           "source_id_native": f"lp-{uuid.uuid4()}", "category_main": "byt", "category_type": "prodej",
+           "price_czk": price, "area_m2": 70, "is_active": active, "property_id": pid, "condition": condition,
+           "building_condition_level": levels[0], "apartment_condition_level": levels[1], **facts}
     cur.execute(
-        "INSERT INTO listings (sreality_id, source, source_id_native, raw_json, "
-        "category_main, category_type, price_czk, area_m2, is_active, property_id, condition, "
-        "building_condition_level, apartment_condition_level) "
-        "VALUES (%s, %s, %s, '{}'::jsonb, 'byt', 'prodej', %s, 70, %s, %s, %s, %s, %s) RETURNING id",
-        (next(_SREALITY_IDS) if source == "sreality" else None, source,
-         f"lp-{uuid.uuid4()}", price, active, pid, condition, *levels),
+        f"INSERT INTO listings (raw_json, {', '.join(row)}) VALUES ('{{}}'::jsonb, {', '.join(['%s'] * len(row))}) "
+        "RETURNING id", list(row.values()),
     )
     return int(cur.fetchone()[0])
 

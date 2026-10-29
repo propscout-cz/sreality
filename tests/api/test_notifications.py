@@ -70,8 +70,9 @@ def test_build_clauses_migrates_legacy_scalar_category_main() -> None:
     spec = WatchdogFilterSpec(**{"category_main": "dum"})
     assert spec.category_main_in == ["dum"]
     where, params = _build_match_clauses(spec)
-    assert "l.category_main = ANY(%(category_main_in)s)" in where
-    assert params["category_main_in"] == ["dum"]
+    # A one-element list is an equality (the planner rule Browse follows).
+    assert "l.category_main = %(category_main_in)s" in where
+    assert params["category_main_in"] == "dum"
 
 
 def test_build_clauses_skips_unset_box() -> None:
@@ -477,9 +478,9 @@ def test_build_clauses_enumerated_columns() -> None:
     assert spec.furnished == ["ano"]
     where, params = _build_match_clauses(spec)
     clauses = " ".join(where)
-    assert "l.furnished = ANY(%(furnished)s)" in clauses
+    assert "l.furnished = %(furnished)s" in clauses
     assert "l.ownership = ANY(%(ownership)s)" in clauses
-    assert params["furnished"] == ["ano"]
+    assert params["furnished"] == "ano"
     assert params["ownership"] == ["osobni", "druzstevni"]
 
 
@@ -511,9 +512,9 @@ def test_build_clauses_condition_unknown_sentinel() -> None:
     spec = WatchdogFilterSpec(condition_match=["novostavba", "__unknown__"])
     where, params = _build_match_clauses(spec)
     clauses = " ".join(where)
-    assert ("l.condition = ANY(%(condition_match)s) OR "
+    assert ("l.condition = %(condition_match)s OR "
             "(l.condition IS NULL OR NOT (l.condition = ANY(%(condition_match_canon)s)))") in clauses
-    assert params["condition_match"] == ["novostavba"]
+    assert params["condition_match"] == "novostavba"
     assert params["condition_match_canon"] == list(COLUMN_CANONICAL_VALUES["condition"])
 
 
@@ -763,7 +764,7 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
     assert params["new_window"] == "24 hours" and params["active_since"] == since
     assert params["subscription_id"] == str(sub_id)
     # The spec made it through the one compiler (rule 16).
-    assert params["category_main_in"] == ["byt"]
+    assert params["category_main_in"] == "byt"
     assert params["category_type"] == "pronajem"
     assert params["district_codes_obec"] == [554782]
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql

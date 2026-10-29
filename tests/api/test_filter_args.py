@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from api.filter_args import Args, agenda_ids, as_str_list, filter_model, filter_values
+from api.filter_args import Args, Box, Chip, agenda_ids, as_str_list, filter_model, filter_values
+from api.location_filter import DistrictChip, MapBounds
 from toolkit import ComparableFilters
 from toolkit import filter_registry as fr
 from toolkit.neighborhoods import describe_neighborhood
@@ -115,3 +116,47 @@ def test_filter_values_leaves_out_fields_that_are_no_filter() -> None:
     class WithOption(Cohort):
         min_results: int = 5
     assert "min_results" not in filter_values(WithOption())
+
+
+# --- a mapping consumer, integer vocabularies and the composites (#2063) ------------------------------------------
+
+Browse = filter_model("Browse", tuple(i for i in agenda_ids(fr.Agenda.BROWSE) if i != "location"), None)
+
+
+def test_a_mapping_consumer_takes_the_registrys_own_defaults() -> None:
+    m = Browse()
+    assert (m.status, m.show_dismissed, m.category_type, m.tags) == ("any", False, "pronajem", None)
+
+
+def test_an_integer_vocabulary_is_enforced_so_the_compiler_never_meets_another_value() -> None:
+    for fid, bad in (("price_change_window_days", 45), ("recently_added_days", 2), ("recently_changed_days", 0)):
+        with pytest.raises(ValidationError, match=fid):
+            Browse(**{fid: bad})
+    assert Browse(price_change_window_days=90, recently_added_days=7).price_change_window_days == 90
+    schema = Browse.model_json_schema()["properties"]["recently_added_days"]["anyOf"][0]
+    assert schema == {"enum": [1, 3, 7, 14, 30], "type": "integer"}
+
+
+def test_the_composites_are_strict_here_while_the_stored_watchdog_blobs_stay_lenient() -> None:
+    chip = {"name": "Brno", "level": "obec", "id": 582786, "legacy": True}
+    with pytest.raises(ValidationError, match="legacy"):
+        Browse(districts=[chip])
+    assert DistrictChip.model_validate(chip).id == 582786 and issubclass(Chip, DistrictChip)
+    box = {"west": 14.0, "south": 50.0, "east": 15.0, "north": 51.0, "zoom": 9}
+    with pytest.raises(ValidationError, match="zoom"):
+        Box.model_validate(box)
+    assert MapBounds.model_validate(box).north == 51.0
+    with pytest.raises(ValidationError, match="op"):
+        Browse(city_index_rules=[{"index_name": "bezpecnost", "op": "~", "value": 6}])
+    with pytest.raises(ValidationError, match="all"):
+        Browse(tags={"set": "in", "all": [1]})
+
+
+def test_filter_values_hands_a_composite_on_as_its_wire_json() -> None:
+    m = Browse(tags={"in": [3]}, city_index_rules=[{"index_name": "bezpecnost", "op": ">=", "value": 6}],
+               districts=[{"name": "Brno", "level": "obec", "id": 582786}])
+    values = filter_values(m)
+    assert values["tags"] == {"set": None, "in": [3], "out": []}
+    assert values["city_index_rules"] == [{"index_name": "bezpecnost", "op": ">=", "value": 6.0}]
+    assert values["districts"][0] == {"name": "Brno", "context": None, "excluded": False, "level": "obec",
+                                      "id": 582786}
