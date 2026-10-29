@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -164,10 +165,19 @@ def fold(events: list[Event], now: datetime, closing: list[ClosingPr]) -> Verdic
     return v
 
 
-def session(explicit: str | None) -> Session | None:
-    """--as NAME (matched by name alone), else this Claude Code session's name and id; None unless the name is valid."""
-    if explicit is not None:
-        return Session(explicit) if SESSION_RE.fullmatch(explicit) else None
+def slug(name: str) -> str:
+    """A name in the marker's alphabet: accents dropped, lowercased, each run of other characters one '-', at most 40."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", folded).strip("-")[:40]
+
+
+def claim_name(name: str) -> str | None:
+    """The name when a marker accepts it, else its slug (a /rename like 'Github migration sprint'), else None."""
+    return next((n for n in (name, slug(name)) if SESSION_RE.fullmatch(n)), None)
+
+
+def harness_session() -> tuple[str, str] | None:
+    """This Claude Code session's raw name and 8-char id prefix, from its sessions file."""
     pid = os.environ.get("CLAUDE_PID", "")
     if not pid.isdigit():
         return None
@@ -176,9 +186,19 @@ def session(explicit: str | None) -> Session | None:
         name, sid = data.get("name"), str(data.get("sessionId") or "")[:8]
     except (OSError, ValueError, AttributeError):
         return None
-    if not isinstance(name, str) or not SESSION_RE.fullmatch(name):
+    return (name, sid) if isinstance(name, str) else None
+
+
+def session(explicit: str | None) -> Session | None:
+    """--as NAME (matched by name alone), else this Claude Code session's name and id; None when no claim name results."""
+    if explicit is not None:
+        name = claim_name(explicit)
+        return Session(name) if name else None
+    found = harness_session()
+    name = claim_name(found[0]) if found else None
+    if found is None or name is None:
         return None
-    return Session(name, sid if SID_RE.fullmatch(sid) else None)
+    return Session(name, found[1] if SID_RE.fullmatch(found[1]) else None)
 
 
 def current_branch() -> str:
@@ -432,7 +452,9 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     me = session(args.session)
     if me is None and (args.cmd != "status" or args.mine or args.session is not None):
-        print("unknown session name: pass --as <name> (ListAgents prints it)", file=sys.stderr)
+        raw = args.session if args.session is not None else (harness_session() or (None, ""))[0]
+        why = f"session name {raw!r} slugs to {slug(raw)!r}" if raw is not None else "no session name found"
+        print(f"{why}, not a claim name: pass --as <name> (a-z, 0-9 and '-', at most 40)", file=sys.stderr)
         return USAGE
     if args.cmd == "status" and not (args.numbers or args.mine or args.frontier):
         p.error("status needs ticket numbers, --mine or --frontier")
