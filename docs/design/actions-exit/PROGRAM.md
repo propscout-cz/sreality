@@ -196,9 +196,11 @@ production.
   per category in the same transaction as `bump_index_pages`. A cut walk resumes as part of **one cycle**: the
   resumed run skips scope groups whose reached-end is newer than the cycle's anchor (the first fragment's
   start), siblings stay adjacent, and the orphan-nomination step runs only in the fragment that closes the
-  cycle over all of the portal's scopes with `last_seen_at >= anchor` as "seen" (rule 3 intact). Source of
-  truth: the existing `portal_index_slices` ledger lifted into `portal_runner`; idnes's own `_slice_order`
-  is deleted.
+  cycle over all of the portal's scopes with `last_seen_at >= anchor` as "seen" (rule 3 intact). A run that
+  walks its whole plan ends the cycle, short when a group failed; groups go least recently walked first (idnes's
+  rule) and a cycle resumes only within the walk timeout of its anchor, so no group can starve the rest.
+  Source of truth (operator ruling 2026-10-29, #2020): `scrape_runs.by_category`, whose entries carry each
+  unit's scope and cycle anchor; idnes's `_slice_order` and `portal_index_slices` are deleted (migration 689).
 - **Secrets**: Railway's service variables are the store of record for runtime (the runner references the
   worker's: `SUPABASE_DB_URL`, ruling #2025-R3, and the R2 set, by reference (#2032); a shared variable would be per
   project, `ctx.shared.NAME`, a second place to rotate);

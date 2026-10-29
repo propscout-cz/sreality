@@ -43,6 +43,22 @@ def _portal(**kw: Any) -> IdnesPortal:
     return IdnesPortal(_config(), **kw)
 
 
+def _slice_outcomes(monkeypatch, after: Any = None) -> dict[str, str]:
+    """Each top-level slice's numeric outcome, as `_walk_slice` hands it back (`after` runs once it has)."""
+    outcomes: dict[str, str] = {}
+    real = IdnesPortal._walk_slice
+
+    def spy(self: IdnesPortal, *a: Any, **k: Any) -> Any:
+        result = real(self, *a, **k)
+        outcomes[result.slice_key] = result.outcome
+        if after is not None:
+            after()
+        return result
+
+    monkeypatch.setattr(IdnesPortal, "_walk_slice", spy)
+    return outcomes
+
+
 class _Limiter:
     def acquire(self) -> None:
         pass
@@ -197,7 +213,7 @@ def test_walk_category_classifies_new_changed_unchanged(monkeypatch):
 def test_the_numeric_verdict_still_pins_the_coverage_triggers():
     # Since 2026-09-08 this arithmetic no longer gates the nomination (that is
     # the structural `stop`) — but it is still what decides whether a slice
-    # descends, whether it is resampled, and what the ledger records, so its bar
+    # descends and whether it is resampled, so its bar
     # (portal.INDEX_MIN_COMPLETENESS=0.995, tolerating mid-walk churn) has to
     # keep meaning exactly what it means today.
     assert portal_mod.walk_is_complete(100, 100) is True
@@ -256,7 +272,6 @@ def test_walk_category_deadline_stops_walk_and_suppresses_complete(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 1)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice", lambda *a, **k: None)
     # The budget expires after a handful of deadline checks, mid-slice-list.
     checks = {"n": 0}
 
@@ -298,9 +313,7 @@ def test_walk_category_walks_all_fifteen_slices(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _Spy)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 1)
-    recorded: list[str] = []
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: recorded.append(k["slice_key"]))
+    recorded = _slice_outcomes(monkeypatch)
 
     _portal().walk_category(
         {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(), None)
@@ -335,48 +348,13 @@ def test_one_unfinished_slice_forces_the_whole_category_incomplete(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _Flaky)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 1)
-    outcomes: dict[str, str] = {}
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: outcomes.__setitem__(k["slice_key"], k["outcome"]))
+    outcomes = _slice_outcomes(monkeypatch)
 
     _seen, _c, _n, _p, complete = _portal().walk_category(
         {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(), None)
     assert complete is False
     assert outcomes["zlinsky-kraj"] == "error"
     assert outcomes["praha"] == "exhausted"
-
-
-def test_a_never_walked_slice_goes_first(monkeypatch):
-    """The starvation guard. A slice with no ledger row must sort as infinitely
-    stale, not as fresh — treating unknown as 0 hours would put exactly the
-    never-walked slices LAST, which is the behaviour the ledger exists to end."""
-    portal = _portal()
-    portal._staleness = {
-        ("byt", "prodej", k): 1.0 for k in portal.SLICES if k != "zlinsky-kraj"
-    }
-    portal._staleness[("byt", "prodej", "praha")] = 99.0
-    order = portal._slice_order("byt", "prodej")
-    assert order[0] == "zlinsky-kraj"   # never walked
-    assert order[1] == "praha"          # then the stalest known
-
-
-def test_the_stalest_category_is_walked_first(monkeypatch):
-    """Slice ordering alone is not enough: the runner walks categories in order,
-    so a category that eats the whole budget every run starves the rest however
-    its own slices are sorted. That is what left 8 of 10 idnes categories never
-    walked at all."""
-    cfg = PortalConfig(
-        source="idnes", supports_complete_walk=True,
-        categories=[{"sale_type": "prodej", "category": "byty"},
-                    {"sale_type": "pronajem", "category": "domy"}],
-        split_threshold=None,
-    )
-    portal = IdnesPortal(cfg)
-    # byty/prodej fully walked an hour ago; domy/pronajem missing one slice.
-    portal._staleness = {("byt", "prodej", k): 1.0 for k in portal.SLICES}
-    portal._staleness.update(
-        {("dum", "pronajem", k): 0.5 for k in portal.SLICES if k != "praha"})
-    assert portal.categories()[0]["sale_type"] == "pronajem"
 
 
 def test_the_page_capped_probe_keeps_the_flat_national_walk(monkeypatch):
@@ -401,8 +379,6 @@ def test_the_page_capped_probe_keeps_the_flat_national_walk(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _Spy)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 1)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: pytest.fail("a probe must not write the ledger"))
 
     portal = _portal()
     portal.set_index_page_cap(2)
@@ -536,9 +512,7 @@ def _walk_with(monkeypatch, page_for, national_total=0):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    outcomes: dict[str, str] = {}
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: outcomes.__setitem__(k["slice_key"], k["outcome"]))
+    outcomes = _slice_outcomes(monkeypatch)
     result = _portal().walk_category(
         {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(), None)
     return outcomes, result
@@ -725,7 +699,6 @@ def test_a_category_whose_slices_never_started_is_not_an_end(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice", lambda *a, **k: None)
     monkeypatch.setattr(portal_mod, "time", SimpleNamespace(monotonic=lambda: 999.0))
 
     _seen, _c, _n, _p, complete = _portal().walk_category(
@@ -750,15 +723,13 @@ def test_a_deadline_mid_page_suppresses_the_category(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    stops: list[str] = []
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: stops.append(k["outcome"]))
+    stops = _slice_outcomes(monkeypatch)
 
     _seen, _c, _n, _p, complete = _portal().walk_category(
         {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(),
         50.0)
     assert complete is False
-    assert stops[:1] == ["deadline"]
+    assert list(stops.values())[:1] == ["deadline"]
 
 
 def test_a_deadline_inside_the_last_slice_suppresses_the_category(monkeypatch):
@@ -766,9 +737,8 @@ def test_a_deadline_inside_the_last_slice_suppresses_the_category(monkeypatch):
     progressively almost always dies in a LATE slice, where the list of results is
     full and every recorded stop is a portal end — so walk_category needs a
     deadline term of its own."""
-    # The budget expires the moment the LAST slice finishes (its ledger write is
-    # the last thing that happens inside the loop), so the loop never breaks and
-    # every recorded stop is a portal end.
+    # The budget expires the moment the LAST slice finishes, so the loop never
+    # breaks and every recorded stop is a portal end.
     expired: list[int] = []
     monkeypatch.setattr(idnes_main, "deadline_reached", lambda _d: bool(expired))
     monkeypatch.setattr(idnes_main, "parse_index",
@@ -776,8 +746,7 @@ def test_a_deadline_inside_the_last_slice_suppresses_the_category(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: expired.append(1))
+    _slice_outcomes(monkeypatch, after=lambda: expired.append(1))
     portal = _portal()
     portal.SLICES = ("praha",)
     _seen, _c, _n, _p, complete = portal.walk_category(
@@ -872,9 +841,7 @@ def _descend_walk(monkeypatch, children=("praha-1", "praha-2")):
                         lambda html, s, c, exclude=(): (list(children), []))
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    outcomes: dict[str, str] = {}
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: outcomes.__setitem__(k["slice_key"], k["outcome"]))
+    outcomes = _slice_outcomes(monkeypatch)
     portal = _portal()
     portal.SLICES = ("praha",)
     result = portal.walk_category(
@@ -905,7 +872,7 @@ def test_a_slice_short_of_its_count_still_reached_the_end(monkeypatch):
 
     This slice pages to idnes's own last page and comes up short of the declared
     total, with nothing to descend into. It stays honestly `incomplete` — that
-    is what drives the descent and what the ledger records — but it DID reach the
+    is what drives the descent — but it DID reach the
     end of what idnes offered, so the category may nominate the rows it did not
     see for a page check. Under the old numeric gate one such slice held a whole
     category open forever, and the drain never got to decide anything.
@@ -935,7 +902,6 @@ def test_a_descent_child_that_fails_vetoes_the_slice(monkeypatch):
                         lambda html, s, c, exclude=(): (["praha-1", "praha-2"], []))
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice", lambda *a, **k: None)
     portal = _portal()
     portal.SLICES = ("praha",)
     _seen, _c, _n, _p, complete = portal.walk_category(
@@ -987,9 +953,7 @@ def _refusing_walk(monkeypatch, slices, refused):
                         lambda html, *a, **k: descended.append(html) or ([], []))
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    outcomes: dict[str, str] = {}
-    monkeypatch.setattr(idnes_main.db, "record_index_slice",
-                        lambda *a, **k: outcomes.__setitem__(k["slice_key"], k["outcome"]))
+    outcomes = _slice_outcomes(monkeypatch)
     portal = _portal()
     portal.SLICES = tuple(slices)
     _seen, _c, _n, _p, complete = portal.walk_category(
@@ -1052,7 +1016,6 @@ def test_an_exhausted_slice_never_descends(monkeypatch):
     monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
     monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
     monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
-    monkeypatch.setattr(idnes_main.db, "record_index_slice", lambda *a, **k: None)
     _portal().walk_category(
         {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(), None)
 

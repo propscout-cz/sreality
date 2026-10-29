@@ -95,8 +95,7 @@ class SliceWalk:
     """One slice's two verdicts, which answer different questions.
 
     `outcome` is the NUMERIC one — `exhausted` means the slice collected its own
-    declared total — and it stays the trigger for the descent, the resample and
-    idnes's own `portal_index_slices` rows, which `slice_staleness` orders the next walk by.
+    declared total — and it stays the trigger for the descent and the resample.
 
     `stop` is WHY the page loop ended, and it is what the nomination gate reads
     (rule #3): a slice that paged to idnes's last page reached the end even if
@@ -136,10 +135,6 @@ class IdnesPortal(portal_runner.PortalDefaults):
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
         self.price_change_min_pct = config.limits.price_change_min_pct
-        # Read once in connect_index, before the runner asks for categories.
-        # Empty = every slice sorts as never-walked, which is the safe default:
-        # it walks everything rather than skipping on stale bookkeeping.
-        self._staleness: dict[tuple[str, str, str], float] = {}
 
     # --- index-walk seams ---
     def set_index_page_cap(self, pages: int | None) -> None:
@@ -148,31 +143,7 @@ class IdnesPortal(portal_runner.PortalDefaults):
         self._max_pages = pages
 
     def categories(self) -> list[dict[str, Any]]:
-        """Stalest category first.
-
-        Slice ordering alone is not enough. The runner walks categories in
-        order, so if the first one exhausts the budget every run, the later ones
-        starve no matter how their own slices are sorted — which is exactly what
-        happened: 8 of 10 idnes categories were never walked at all. Ranking a
-        category by its STALEST slice means the one that just consumed the
-        budget goes last next time, and the rotation covers the portal.
-        """
-        cats = list(self._categories)
-        if not self._staleness:
-            return cats
-
-        def worst(category: dict[str, Any]) -> float:
-            cm, ct = self.category_labels(category)
-            if cm is None or ct is None:
-                return float("inf")
-            # A slice with no row is "never walked" = infinitely stale, so a
-            # category holding one always outranks a fully-walked category.
-            return max(
-                self._staleness.get((cm, ct, key), float("inf"))
-                for key in self.SLICES
-            )
-
-        return sorted(cats, key=worst, reverse=True)
+        return list(self._categories)
 
     def category_labels(self, category: dict[str, Any]) -> tuple[str | None, str | None]:
         return (
@@ -180,25 +151,16 @@ class IdnesPortal(portal_runner.PortalDefaults):
             SALE_TYPE.get(category.get("sale_type")),
         )
 
-    def connect_index(self) -> Any:
-        conn = db.connect()
-        # The runner calls this BEFORE categories(), which is what lets both the
-        # category order and the slice order come from one ledger read.
-        self._staleness = db.slice_staleness(conn, SOURCE)
-        return conn
-
     # --- the sliced walk ---
     #
     # Why this is not a single loop over ?page=N any more: idnes has no
     # pagination cap (page 1,052 of prodej/byty serves the declared tail and
-    # 1,060 404s), so the catalogue is fully REACHABLE. It was not being reached
-    # because a walk that runs out of budget restarts at the first category's
-    # first page next time, so the same head got re-walked while 8 of 10
-    # categories were never touched at all. Cutting each category into the 14
-    # kraje plus the abroad bucket gives units that (a) finish inside any
-    # plausible budget, (b) each declare their own total, so "did we reach the
-    # end" is answerable 15 times instead of once, and (c) can be REMEMBERED
-    # between runs (portal_index_slices, migration 454) so coverage accumulates.
+    # 1,060 404s), so the catalogue is fully REACHABLE. Cutting each category
+    # into the 14 kraje plus the abroad bucket gives units that (a) each declare
+    # their own total, so "did we reach the end" is answerable 15 times instead
+    # of once, and (b) let the descent narrow just the place that came up
+    # short. Which category goes first is the runner's walk cycle: stalest
+    # reached-end first, and a cut walk resumes where it stopped.
     SLICES: tuple[str, ...] = CZ_KRAJ_SLUGS + (ABROAD_SLICE,)
 
     def _place(self, slice_key: str) -> tuple[str | None, str | None]:
@@ -557,7 +519,7 @@ class IdnesPortal(portal_runner.PortalDefaults):
             LOG.warning("NATIONAL probe failed cm=%s ct=%s: %s", cat, sale_type, exc)
         pages = 1 if national is not None else 0
 
-        order = self._slice_order(cm, ct)
+        order = self.SLICES
         collected: dict[str, tuple[str, int | None]] = {}
         results: list[SliceWalk] = []
         # A budget that expires anywhere in the category poisons the WHOLE
@@ -570,8 +532,7 @@ class IdnesPortal(portal_runner.PortalDefaults):
             if deadline_reached(deadline):
                 deadline_hit = True
                 LOG.info("CATEGORY cm=%s ct=%s stopped at the budget with %d/%d "
-                         "slices walked; the rest keep their staleness and go "
-                         "first next run", cat, sale_type, len(results), len(order))
+                         "slices walked", cat, sale_type, len(results), len(order))
                 break
             result = self._walk_slice(
                 client, sale_type, cat, slice_key, deadline=deadline)
@@ -579,13 +540,6 @@ class IdnesPortal(portal_runner.PortalDefaults):
             pages += result.pages
             for nid, ref, price in result.rows:
                 collected[nid] = (ref, price)
-            if conn is not None and cm and ct:
-                db.record_index_slice(
-                    conn, source=SOURCE, category_main=cm, category_type=ct,
-                    slice_key=slice_key, outcome=result.outcome,
-                    declared_total=result.declared_total,
-                    collected=len(result.rows), pages=result.pages,
-                )
 
         seen = set(collected)
         # THE GATE (rule #3): every slice was walked AND every one of them ended
@@ -594,8 +548,8 @@ class IdnesPortal(portal_runner.PortalDefaults):
         # even if the counts come up a row short, and holding a 20,000-row
         # category open over that gap is how a category comes to nominate
         # nothing for days. The count is EVIDENCE beside it, never a veto: the
-        # numeric `outcome` still drives the descent, the resample and the
-        # ledger, and the runner logs the coverage gap on every nomination.
+        # numeric `outcome` still drives the descent and the resample, and the
+        # runner logs the coverage gap on every nomination.
         #
         # Seeded from the CONFIGURED slices, not the walked ones: `all()` over an
         # empty list is True, so a category whose slices never started would
@@ -611,7 +565,7 @@ class IdnesPortal(portal_runner.PortalDefaults):
             portal_end=all(ends),
             our_stop=deadline_hit or any(not e for e in ends),
         )
-        all_positive = all(r.outcome == db.SLICE_OUTCOME_POSITIVE for r in results)
+        all_positive = all(r.outcome == "exhausted" for r in results)
         LOG.info(
             "CATEGORY cm=%s ct=%s slices=%d/%d stops=%s deadline=%s positive=%s "
             "national=%s collected=%d pages=%d complete=%s",
@@ -621,21 +575,6 @@ class IdnesPortal(portal_runner.PortalDefaults):
         counts = portal_runner.reconcile_sightings(
             conn, SOURCE, collected, min_change_pct=self.price_change_min_pct)
         return seen, counts, national, pages, complete
-
-    def _slice_order(self, cm: str | None, ct: str | None) -> list[str]:
-        """Least-recently-walked first, never-walked before everything.
-
-        A slice with no ledger row sorts to infinity, not to zero: treating an
-        unknown slice as fresh would sort exactly the never-walked ones LAST,
-        which is the starvation the ledger exists to end.
-        """
-        stale = self._staleness
-        if not stale or cm is None or ct is None:
-            return list(self.SLICES)
-        return sorted(
-            self.SLICES,
-            key=lambda k: -stale.get((cm, ct, k), float("inf")),
-        )
 
     def _walk_flat(
         self, client: IdnesClient, sale_type: str, cat: str, conn: Any,

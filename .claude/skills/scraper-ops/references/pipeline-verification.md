@@ -1084,7 +1084,7 @@ counts; with fewer than 10 gaps, the slowest portal's G).
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
-| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end; `<portal>/walks/orphans` is the entry with no labels, the orphan scope's (rule 3, 2026-10-22: written only when every unit reached the end, short of it when the orphan query failed; web's whole agenda) | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
+| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end; `<portal>/walks/orphans` is the entry with no labels, the orphan scope's (rule 3, 2026-10-22: written by the run that ends a walk cycle, reached when every group reached the end since its anchor (2026-10-29), short of it otherwise or when the orphan query failed; web's whole agenda) | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
 | `<portal>/walks` | for every portal of `claims_common.SOURCES`, on every pass: the hours since the START of its newest finished walk, with the units its walks of the last 30 d recorded (facts `finished_at`, `units`) | never: its units' own cells judge them | no walk in 30 d recorded a unit (no walk at all, or none finished), so a portal never drops out: it keeps its inflow, fetch-error and unnominated cells, and this cell's incident recovers on a measured OK |
 | `<portal>/inflow` | ads discovered in the trailing 24 h — ads first seen in it, plus NEW-priority queue rows enqueued in it that have no listings row — against the median of the same 24 h 7, 14, 21 and 28 d earlier (ads only: those queue rows are gone by then) | below 50 % (`scraping_inflow_warn_share`), or above 300 % (`scraping_inflow_spike_share`) | below 20 % (`scraping_inflow_fail_share`) |
 | `<portal>/fetch_errors` | of the ids attempted in 24 h (terminal `detail_queue_completions` plus live queue rows with `attempts > 0` claimed or enqueued in the window), the share with a failed attempt, judged on its Wilson lower bound | above 2 % (`scraping_fetch_err_warn`) | above 10 % (`scraping_fetch_err_fail`) |
@@ -1240,8 +1240,8 @@ bound ~15.5 %), so its precision cell may open Problem on 10-20/21: the blink ta
 rule (#1858) addresses, told truthfully, not suppressed.
 
 Known limits: the stuck limit uses the portal-level walk gap, which understates portals whose units
-rotate (idnes walks stalest-first; units sharing a scope nominate once per walk: realitymix's
-slices, remax's and maxima's agendas); deferrals are judged per portal, because a shared scope files
+rotate (every walk goes stalest-first, and the run that resumes a cut cycle counts as a walk too, 2026-10-29;
+units sharing a scope nominate once per walk: realitymix's slices, remax's and maxima's agendas); deferrals are judged per portal, because a shared scope files
 its deferrals on its last unit and the orphans (rule 3, 2026-10-22) on a NULL-label entry, and a walk counts
 there when any unit reached the end (coverage's portal-level walk needs every unit to: each answers
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
@@ -1261,7 +1261,7 @@ condition, told once when it first reads Problem and then once a day.
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
 | `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell); a residual needs a declared total, so the orphans' entry (no labels) has none | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
-| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
+| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the anchor of the portal's newest walk cycle that reached the end of every group, its end entry's `cycle_started_at`, 2026-10-29), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
 true or absent is Not measured with its reason, the one cell that says so. Unnominated is the walks' own predicate
