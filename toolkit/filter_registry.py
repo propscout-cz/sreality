@@ -496,7 +496,7 @@ def type_label_cs(category_main: str | None, subtype: str | None) -> str:
 
 
 # --- category constants ---------------------------------------------------
-# Stable category names used in the registry. Settings UI groups
+# Stable category names used in the registry. `<FilterForm>` groups
 # filters by these.
 
 

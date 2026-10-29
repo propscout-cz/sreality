@@ -6,8 +6,7 @@ frontend imports for:
 
 - `<FilterForm>` widget dispatch (uses `ui_control`),
 - URL serialisation in `lib/filters.ts` (uses `id` + `type`),
-- enum option labels (Czech + English),
-- the Settings page's agenda × filter matrix.
+- enum option labels (Czech + English).
 
 Run modes:
 
