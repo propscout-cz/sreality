@@ -38,7 +38,8 @@ to `/thumbs/XXX/YY/e/`, silently corrupting the only data a media test can asser
 
 **Never commit an unscrubbed portal page — git history is permanent.** A live detail page carries the
 broker's mobile, work e-mail and name (personal data), and a portal's own map and widget keys, which the
-scrub blanks so the secret scan stays quiet. For a fixture
+scrub blanks so the secret scan stays quiet (check a scrub with `scripts/gitleaks.sh dir tests/fixtures`, as CI
+does). For a fixture
 kept for its **bytes** rather than its visible text (the payload-normaliser set,
 `tests/fixtures/location_w2a_refetch/`), the blanket sweep is the wrong tool — masking *every*
 9-digit run rewrites `data-gps-lat`, JSON-escaped photo ids, Tailwind custom properties. Use:

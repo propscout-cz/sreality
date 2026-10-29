@@ -2,17 +2,17 @@
 # A local Postgres that matches CI's schema-and-sql job (.github/workflows/migrations.yml):
 # PostgreSQL 17 + PostGIS + pgvector — no sudo, no Docker. Linux: conda-forge via micromamba under
 # ~/.local/opt. macOS: Homebrew (conda-forge has no PostGIS for PG17 on macOS; Homebrew's builds for postgresql@17).
-# The replayed schema is kept as a template database; every test run gets a fresh copy.
+# The replayed schema is kept as a template database named after the worktree's migrations and recipe (tpl_<checksum>),
+# built in the running cluster the first time a run needs it (~10 s); every test run gets a fresh copy.
 #
 #   scripts/local_pg.sh install        # one-time: Postgres 17 + PostGIS + pgvector (~550 MB on Linux)
-#   scripts/local_pg.sh replay         # start the server, replay every migration into the template
 #   scripts/local_pg.sh test <args>    # a private copy (ci_<pid>, dropped on exit) + pytest <args>
 #   scripts/local_pg.sh lanes          # a private copy + every pytest lane of the CI job, in CI's order
 #   scripts/local_pg.sh db <name>      # a long-lived copy named <name>; prints its TEST_DATABASE_URL
 #   scripts/local_pg.sh drop <name>    # drop such a copy
-#   scripts/local_pg.sh start|stop|status
-# Several sessions share one cluster: every run gets its own database, and replay (which rebuilds the
-# cluster, as roles are cluster-wide) refuses while any other copy exists; pass --force to override.
+#   scripts/local_pg.sh start|stop|status   # status lists the templates and copies, with size and age
+# Several sessions share one cluster: every run gets its own copy and every migration set its own template;
+# a run drops the copies and template builds of dead runs, and all but the newest five other templates.
 set -euo pipefail
 
 OPT="$HOME/.local/opt"
@@ -81,66 +81,81 @@ CONF
 }
 
 psql_q() { psql -X -v ON_ERROR_STOP=1 -q "$@"; }
+has_db() { [[ -n "$(psql_q -At -d postgres -c "select 1 from pg_database where datname = '$1'")" ]]; }
 
-copies() {
-  psql_q -At -d postgres -c "select datname from pg_database where not datistemplate and datname <> 'postgres'"
-}
-
+# Copies and template builds whose run is gone, and every template but this worktree's and the newest five.
 drop_stale_runs() {
   local db
-  for db in $(copies | grep -E '^ci_[0-9]+$' || true); do
-    kill -0 "${db#ci_}" 2>/dev/null || psql_q -d postgres -c "drop database if exists $db with (force)"
+  for db in $(psql_q -At -d postgres -c "select datname from pg_database where datname ~ '^(ci|tpl_[0-9]+)_[0-9]+$'"); do
+    kill -0 "${db##*_}" 2>/dev/null || psql_q -d postgres -c "drop database if exists $db with (force)"
+  done
+  # Another run may be dropping the same template; its error is printed and left to that run.
+  for db in $(psql_q -At -d postgres -c "select datname from pg_database
+                where datname ~ '^tpl_[0-9]+$' and datname <> '$TEMPLATE' order by oid desc offset 5"); do
+    psql_q -d postgres -c "alter database $db is_template false" -c "drop database $db with (force)" || true
   done
 }
 
-replay() {
-  # A fresh cluster, as CI's fresh container: roles are cluster-wide, so the bootstrap cannot re-run on an old one.
-  if [[ "${1:-}" != --force ]] && pg_ctl -D "$DATA/data" status >/dev/null 2>&1; then
-    drop_stale_runs
-    local others
-    others=$(copies | tr '\n' ' ')
-    [[ -z "$others" ]] || die "other copies live on this cluster (${others% }); a replay deletes them. Ask their owners, or: replay --force"
+# Replays into <template>_<pid> and renames that into place once complete, so a build that dies never passes
+# for a template; when another session built the same set first, its template stays and this build is dropped.
+build_template() {
+  local build="${TEMPLATE}_$$" started=$SECONDS
+  echo "local_pg: building $TEMPLATE, this worktree's migrations" >&2
+  psql_q -d postgres -c "create database $build"
+  (
+    cd "$REPO"
+    export PGDATABASE=$build PGOPTIONS="-c client_min_messages=warning"
+    # The postgis/postgis image creates these in its default database before CI's bootstrap runs.
+    psql_q -c "create extension if not exists postgis; create extension if not exists postgis_topology;
+               create extension if not exists fuzzystrmatch; create extension if not exists postgis_tiger_geocoder;"
+    psql_q -f scripts/ci_db_bootstrap.sql
+    # CI's runner sorts in C.UTF-8, i.e. byte order; pin it so a machine's locale cannot reorder the replay.
+    for f in $(ls migrations/*.sql | LC_ALL=C sort); do
+      case "$(basename "$f")" in
+        295_*) psql_q -c "insert into auth.users (email) values ('ci-operator@replay.local');" ;;
+        510_*) continue ;;  # retired by 513; see migrations.yml
+      esac
+      psql_q -f "$f" >/dev/null || die "build failed at $f"
+    done
+    psql_q -c "select 'listings'::regclass, 'properties_public'::regclass, 'image_clip_embeddings'::regclass" >/dev/null
+    psql_q -f migrations/656_notifications_w6_prune.sql >/dev/null
+  ) >&2
+  if psql_q -d postgres -c "alter database $build rename to $TEMPLATE"; then
+    psql_q -d postgres -c "alter database $TEMPLATE is_template true"
+    echo "local_pg: built $TEMPLATE from $(ls "$REPO"/migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s" >&2
+  else
+    psql_q -d postgres -c "drop database $build with (force)"
   fi
-  if [[ -f "$DATA/data/PG_VERSION" ]]; then
-    pg_ctl -D "$DATA/data" status >/dev/null 2>&1 && pg_ctl -D "$DATA/data" -m fast stop >/dev/null
-    rm -rf "$DATA/data"
-  fi
-  ensure_server
-  cd "$REPO"
-  psql_q -d postgres -c "create database replay"
-  export PGDATABASE=replay PGOPTIONS="-c client_min_messages=warning"
-  # The postgis/postgis image creates these in its default database before CI's bootstrap runs.
-  psql_q -c "create extension if not exists postgis; create extension if not exists postgis_topology;
-             create extension if not exists fuzzystrmatch; create extension if not exists postgis_tiger_geocoder;"
-  psql_q -f scripts/ci_db_bootstrap.sql
-  local started=$SECONDS
-  # CI's runner sorts in C.UTF-8, i.e. byte order; pin it so a machine's locale cannot reorder the replay.
-  for f in $(ls migrations/*.sql | LC_ALL=C sort); do
-    case "$(basename "$f")" in
-      295_*) psql_q -c "insert into auth.users (email) values ('ci-operator@replay.local');" ;;
-      510_*) continue ;;  # retired by 513; see migrations.yml
-    esac
-    psql_q -f "$f" >/dev/null || die "replay failed at $f"
-  done
-  psql_q -c "select 'listings'::regclass, 'properties_public'::regclass, 'image_clip_embeddings'::regclass" >/dev/null
-  psql_q -f migrations/656_notifications_w6_prune.sql >/dev/null
-  psql_q -d postgres -c "alter database replay is_template true"
-  echo "replayed $(ls migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s (last: $(ls migrations/*.sql | LC_ALL=C sort | tail -1))"
 }
 
 copy_of_template() {
   ensure_server
-  psql_q -At -d postgres -c "select 1 from pg_database where datname = 'replay' and datistemplate" | grep -q 1 \
-    || die "no replayed template; run: scripts/local_pg.sh replay"
-  psql_q -d postgres -c "set client_min_messages = warning" -c "drop database if exists $1 with (force)" -c "create database $1 template replay"
+  has_db "$TEMPLATE" || build_template
+  psql_q -d postgres -c "set client_min_messages = warning" -c "drop database if exists $1 with (force)"
+  # Another worktree's run can drop the template between the check and the copy: build it again, once.
+  if ! psql_q -d postgres -c "create database $1 template $TEMPLATE"; then
+    has_db "$TEMPLATE" && die "cannot copy $TEMPLATE into $1"
+    build_template
+    psql_q -d postgres -c "create database $1 template $TEMPLATE"
+  fi
 }
 
-# This run's private copy, dropped when the script exits (a crashed run's copy is dropped by the next replay).
+# This run's private copy, dropped when the script exits (a crashed run's copy by a later run).
 RUN_DB="ci_$$"
 fresh() {
-  drop_stale_runs
   copy_of_template "$RUN_DB"
   trap 'psql_q -d postgres -c "drop database if exists $RUN_DB with (force)" >/dev/null 2>&1 || true' EXIT
+  drop_stale_runs
+}
+
+status() {
+  pg_ctl -D "$DATA/data" status || return
+  psql_q -d postgres -c "select datname as database, case when datname = '$TEMPLATE' then 'this worktree''s template'
+      when datistemplate then 'template' when datname ~ '^tpl_' then 'template build' else 'copy' end as kind,
+      pg_size_pretty(pg_database_size(oid)) as size,
+      date_trunc('minute', now() - (pg_stat_file('base/' || oid || '/PG_VERSION', true)).modification) as age
+    from pg_database where datname not in ('postgres', 'template0', 'template1') order by datistemplate desc, oid"
+  has_db "$TEMPLATE" || echo "this worktree's template, $TEMPLATE, is built by its first run"
 }
 
 run_pytest() {
@@ -169,17 +184,19 @@ PY
   return 1
 }
 
+# Hashes the migrations, the bootstrap and build_template's code (declare -f drops comments): a run copies only its own schema.
+TEMPLATE="tpl_$( { cd "$REPO" && cksum migrations/*.sql scripts/ci_db_bootstrap.sql | LC_ALL=C sort; declare -f build_template; } | cksum | cut -d' ' -f1)"
+RESERVED='^(replay|postgres|ci_[0-9]+|tpl_[0-9_]+)$'
 case "${1:-}" in
   install) install ;;
-  replay) replay "${2:-}" ;;
   test) shift; fresh; run_pytest "$@" ;;
   lanes) lanes ;;
   start) ensure_server; echo "running on port $PORT" ;;
   stop) pg_ctl -D "$DATA/data" -m fast stop ;;
-  status) pg_ctl -D "$DATA/data" status ;;
-  db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: db <name> (lowercase, not replay/postgres)"
+  status) status ;;
+  db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && ! "$2" =~ $RESERVED ]] || die "usage: db <name> (lowercase, not replay/postgres/a run's ci_N or tpl_N)"
       copy_of_template "$2"; url_for "$2" ;;
-  drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: drop <name>"
+  drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && ! "$2" =~ $RESERVED ]] || die "usage: drop <name>"
         ensure_server; psql_q -d postgres -c "drop database if exists $2 with (force)" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;
 esac
