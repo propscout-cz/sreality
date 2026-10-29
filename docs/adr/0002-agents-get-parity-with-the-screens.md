@@ -16,3 +16,9 @@ A screen capability an agent lacks is a bug. Two edges were ruled with it: city 
 but never a price estimate (rule 17 amended), and agents see broker contacts as the user sees them, at most 20 per
 call and every read recorded on the run, while assistants connected through MCP stay masked. Operator ruling Q8/Q14, Q20,
 Q29 of 2026-10-25 (`docs/design/agent-platform/MVP.md` § 4).
+
+*Amended 2026-10-29 (#2063, operator ruling of that day):* the property page's broker read is the second
+service-connection read. The broker relations are the API's alone (Phase 0 A6), so no login reads them;
+`get_property_brokers` reads them as `POST /brokers/by-listings` does, unmasked as the page shows every signed-in
+user, at most 20 people per call, each call recorded on the run, bounded like every market read (READ ONLY, 8 s). The
+dossier carries no broker.

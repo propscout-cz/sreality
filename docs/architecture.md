@@ -3222,7 +3222,9 @@ renumber.** Navigate by area:
     `current_account_ids()`, the caller IS the owner: an `edit` share reads and writes all eleven;
     a `read` share reads the board only — the three pipeline tables, whose policies pass
     `acting_account_ids(true)` (ruling 2) — and only on GET/HEAD (`request.method`, set by
-    PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs an acting GET READ ONLY). Without the header the two functions agree; a header
+    PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs every GET/HEAD READ ONLY under
+    `authenticated`'s 8 s `statement_timeout`, acting or not, as PostgREST does: `tenant_pool.bound_read`, since
+    `SET ROLE` applies no role setting). Without the header the two functions agree; a header
     naming no live share yields an EMPTY identity (fail closed). Every other table — billing,
     estimations, watchdog, presets, notifications, dashboards, the share tables — stays the caller's own. A
     tenant write route declares which account it writes: `tenant_pool.require_acting_account_id`
@@ -3833,7 +3835,9 @@ renumber.** Navigate by area:
     `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
     route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
     values on the property page and the board card; the leaderboard, search and broker dossier still
-    swap them for `has_email` / `has_phone` for a non-admin. **Migration 398 settles that for good:**
+    swap them for `has_email` / `has_phone` for a non-admin. The agents' `get_property_brokers` (#2063) is the
+    same read on the service connection, unmasked the same way (ADR-0002: at most 20 people per call, each call
+    recorded; MCP stays masked). **Migration 398 settles that for good:**
     `listings_public`/`properties_public` still carry `broker_email`/`broker_phone` as columns
     (so PostgREST answers `?select=` with nulls instead of a 400, and the five matviews depending
     on `listings_public` survive) but project them as `null::text` — they were owner-rights views

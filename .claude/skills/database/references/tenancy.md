@@ -318,9 +318,10 @@ empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credentia
 
 **Named exception — the tool registry (`api/capabilities/registry._connection`, #2062).** A TENANT tool runs
 inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's verified claims, never acting
-as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise. The handler, the envelope check
-and the result's fit all run inside it, so any refusal rolls a write back. It is the only place a tool's connection
-is opened (an AST census); market tools take the service connection the transport hands in.
+as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
+every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
+back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection
+the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`).
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens

@@ -225,7 +225,9 @@ Every component below exists because one of these agents or surfaces needs it.
 | Assistant over MCP | the user's Claude or ChatGPT | the same registry | structured results, links to artifacts | per tool; writes become approvals in our app |
 
 Three consequences. **Composite tools beat chatty ones:** get_property_dossier returns detail, canonical ad, location,
-price history, yield and masked brokers in one call. All of these are market facts; the user's own notes, cards and
+price history, yield and masked brokers in one call (as built in #2063: under the user's login with the runs the page
+lists, and no broker; the brokers are their own market read, get_property_brokers, unmasked as the page shows them,
+AR13 re-taken). All of these are market facts; the user's own notes, cards and
 collections on that property come from a second call, get_my_property_context, so each entry keeps one tenancy class.
 **Most analyst "code" is a template:** the model, the memo and the
 drawing render from a structured spec through git templates (tier 1), so AI-written code is off the critical path.
@@ -512,7 +514,8 @@ budget. No chat table; a lazy-loaded panel that the Phone app frames for free (F
   and with them unset both functions behave exactly as today (a census and live tests pin that).
 - Under act-as the builder sets the acting identity exactly as the X-Act-As header does, so the existing
   `delegated_edits` trigger stamps every delegated write; it gains the run id from the claims (additive).
-- `include_pii` is fixed to false in agent and MCP ctx: no run sees unmasked broker contacts (AR13).
+- Broker contacts: a run sees them as the page shows its user, at most 20 people per call, every call recorded; MCP
+  stays masked (AR13 re-taken 2026-10-25, ADR-0002; built in #2063 as get_property_brokers).
 - `current_account_ids()` is evaluated live, so a revoked membership takes effect at the next tool call. A NULL
   principal fails closed (§ 3.4).
 
@@ -531,7 +534,7 @@ the step.
 
 | Class | Examples | User-started run | Scheduled or event run | In the agent file |
 |---|---|---|---|---|
-| read_market | comparables, velocity, yield, masked broker reads | allow | allow | n/a |
+| read_market | comparables, velocity, yield, broker reads (unmasked, ≤ 20 people per call; AR13 re-taken) | allow | allow | n/a |
 | market_cache | summaries, the OSM mirror, transit lines, freshness (the six, § 3.1) | allow, metered; a live portal fetch is rate-limited per run and per account | allow, metered; **no live portal fetch** | n/a |
 | read_tenant | collections, notes, the pipeline board, watchdogs, run inputs | allow | allow | n/a |
 | own_collection | adding to a collection the run itself created; rows carry the run id for one-click undo | allow | allow | can only be tightened |
@@ -654,7 +657,8 @@ paying tenants, a second operator, or any agent-worker incident.
   each call stays under Claude's 240 s; a run id is re-authorised against the caller's account on every call. Results
   are a summary, structured content and an authenticated link to the artifact proxy. write_tenant tools come later;
   costly and external tools only create pending approvals that the user confirms in our app; admin tools are never
-  exported. `POST /brokers/by-listings` stays off agents and MCP (AR13).
+  exported. `POST /brokers/by-listings`' read stays off MCP (AR13 re-taken: agents read it as get_property_brokers;
+  MCP stays masked).
 - **Ledger and limits:** every call made outside a run appends a capability_calls row (account, user, surface, client
   id, capability, argument hash, outcome, cost, duration). That one ledger gives the spec's rate limit (a count over 60
   s per cost class, checked under the same per-account advisory lock as admission, so concurrent calls cannot all pass

@@ -93,7 +93,8 @@ tenant-scoped:
   the row just written. `verify_jwt` is authentication; `tenant_conn` (via RLS) is
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
-  `TENANT_POOL_DB_URL` raises.
+  `TENANT_POOL_DB_URL` raises. A GET/HEAD runs `bound_read` first: READ ONLY at `authenticated`'s 8 s
+  `statement_timeout`, as PostgREST does (`SET ROLE` applies no role setting).
   `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for two named
   callers (`references/tenancy.md`): the feedback route and the tool registry's tenant tools.
 
