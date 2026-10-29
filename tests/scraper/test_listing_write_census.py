@@ -72,9 +72,12 @@ LEDGER: dict[str, Site] = {
         1, "heal", "raw_json.broker via jsonb_set", "sweep:daily broker sweep"),
     "toolkit/condition_scoring.py": Site(
         2, "condition", "rule 14's two derived levels (lane paused)", "gap:rule-14 paused"),
-    "toolkit/broker_sources.py": Site(1, "attribution", "broker_identity_id FK", "n/a"),
+    "toolkit/broker_sources.py": Site(
+        1, "attribution", "broker_identity_id FK: the broker book keys on it (migration 691)",
+        "same-statement"),
     "scripts/resolve_brokers.py": Site(
-        2, "attribution", "broker_identity_id FK (and its comment)", "n/a"),
+        2, "attribution", "broker_firm_id FK (and its comment): no property rollup reads it",
+        "n/a"),
     "scripts/refresh_stale_image_urls.py": Site(
         1, "bookkeeping", "images_refreshed_at cooldown stamp", "n/a"),
     "toolkit/property_identity.py": Site(

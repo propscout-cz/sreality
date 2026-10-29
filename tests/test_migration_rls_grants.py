@@ -76,6 +76,8 @@ _BROKER_A6_SURFACES = frozenset({
     # default ACL at CREATE time, not from any grant statement, so it survived the
     # sweep and stayed live until migration 395 revoked it.
     "firms_public",
+    # The broker book (migration 691): its views and its table, the API's alone.
+    "property_broker_spell_projection", "property_broker_spells", "broker_book",
 })
 
 

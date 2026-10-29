@@ -171,6 +171,17 @@ def tom_observed_sql(alias: str) -> str:
     )
 
 
+def exit_within_sql(spell: str, prop: str, days: str) -> str:
+    """THE "left the market within N days" measure (migration 691) over a
+    `property_broker_spells`-shaped alias and its `properties`-shaped alias; `days` is an SQL
+    expression (a literal or a bound parameter). 'exited' | 'not_exited' | 'unknown', NULL when
+    the spell is not followed (left-censored, before the end gate, or its window not over)."""
+    return (
+        f"measure_exit_within({spell}.tom_observed, {spell}.started_at, {spell}.ended_at, "
+        f"{prop}.is_active, {prop}.last_seen_at, {days})"
+    )
+
+
 # --- the Python mirror ----------------------------------------------------
 
 

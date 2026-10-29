@@ -8,7 +8,8 @@ source-agnostic. Four statement SHAPES cover every portal —
      own broker id),
   2. upsert the email contact,
   3. upsert the phone contact,
-  4. point `listings.broker_identity_id` at the identity —
+  4. point `listings.broker_identity_id` at the identity, dirtying the advert's
+     property (rule 20: the broker book keys on the identity) —
 
 and what actually differs between portals is a handful of JSON keys plus three
 quirks (phone shape, phone normalisation, chunk materialisation). Onboarding a
@@ -122,13 +123,23 @@ _PHONE_SCALAR_FROM = """FROM listings l
     AND length(regexp_replace(coalesce(l.raw_json->'{block}'->>'{phone_key}', ''), '[^0-9]', '', 'g')) >= 9
     AND {{sel}}"""
 
+# The link dirties each re-attributed advert's property in the SAME statement (rule 20): the
+# broker book (`property_broker_spells`, migration 691) keys on the identity, so the mark cannot
+# outlive a rolled-back link. A new advert has no property yet; its birth stores its spells.
 _LINK_TEMPLATE = """
+WITH linked AS (
 UPDATE listings l SET broker_identity_id = bi.id
 FROM broker_identities bi
 WHERE bi.source = '{source}' AND bi.source_broker_id_native = (l.raw_json->'{block}'->>'{id_key}')
   AND l.source = '{source}' AND l.raw_json ? '{block}'
   AND (l.raw_json->'{block}'->>'{id_key}') IS NOT NULL
   AND l.broker_identity_id IS DISTINCT FROM bi.id AND {{sel}}
+RETURNING l.property_id
+)
+INSERT INTO dirty_properties (property_id)
+SELECT DISTINCT property_id FROM linked WHERE property_id IS NOT NULL
+ORDER BY 1
+ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
 """
 
 _SCALAR_DIGITS = "regexp_replace(l.raw_json->'{block}'->>'{phone_key}', '[^0-9]', '', 'g')"

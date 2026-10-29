@@ -2131,7 +2131,7 @@ renumber.** Navigate by area:
     letter before the click);
     an engine merge rules nothing. Then
     `properties_changed` (`scripts/recompute_property_stats.py`, the dirty drain's own
-    after-step: the scoped rollup, the Browse row, the broker queue) runs ONCE over the survivor
+    after-step: the scoped rollup, the broker book, the Browse row, the broker queue) runs ONCE over the survivor
     and the retired, so `brokers.property_count` follows on the broker drain's cadence, not at
     the daily broker sweep. `detach_listings` is the ONE split and the ONE undo, set-shaped: one
     transaction locks every property its steps will lock, up front in id order, then re-plans
@@ -3451,7 +3451,9 @@ renumber.** Navigate by area:
 20. **Property maintenance is dirty-set incremental (Phase 3), not a full-table recompute.**
     The writers that change a property's children — `listing_write.write_listings` (a content
     change, or a revival, or a write under an inactive property), `mark_listing_inactive`
-    (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`) — enqueue the affected `property_id` into `dirty_properties`
+    (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`),
+    and the broker attribution link (`toolkit/broker_sources.py`: a changed `listings.broker_identity_id`, in the same
+    statement; a new advert has no property yet) — enqueue the affected `property_id` into `dirty_properties`
     (migration 106) with a cheap set-based `INSERT ... ON CONFLICT DO UPDATE SET marked_at`.
     The realtime worker's maintenance lane (`recompute_property_stats.run_incremental_pass`, every
     30 s; its only runtime since Actions-exit W0, #2010, deleted `property_maintenance.yml`) attaches
@@ -3462,16 +3464,19 @@ renumber.** Navigate by area:
     and the pass is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
-    the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
-    and the broker queue for their attributed adverts) in ONE transaction under the 10-min
-    ceiling, then dequeues — so a change usually no longer waits for the `*/15`
+    the ids it recomputed — each slice runs `properties_changed` (recompute, the broker book,
+    `sync_browse_list`, and the broker queue for their attributed adverts) in ONE transaction under
+    the 10-min ceiling, then dequeues — so a change usually no longer waits for the `*/15`
     wholesale rebuild — which was a measured mean of 11.7 min, worst 36.6 (94 rebuilds / 24 h,
     2026-09-21). A fast path, not a guarantee: the rebuild snapshots `browse_projection` at its
     start and renames the new table in at its end, so a patch committed inside that window is
     superseded silently, and a rebuild is in flight ~26 % of wall-clock (283 runs / 72 h, mean
     237 s against a 900 s cadence). The drain is race-free +
-    terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
-    since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
+    terminating: it claims rows dirtied at/before a run cutoff and deletes each only while it
+    still carries the `marked_at` it was claimed with (a compare-and-set, 2026-10-29), so a mid-run
+    re-dirty survives — even one stamped at/before the cutoff by a writer whose transaction began
+    before it and committed after the slice read its adverts (an attribution chunk is one long
+    transaction); it is claimed again once committed.
     The incremental pass then ends with `_settle_fresh`, which stamps `settled_at` (rule 16's
     publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
@@ -3509,8 +3514,19 @@ renumber.** Navigate by area:
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
     that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
     second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
-    own after-step: scoped recompute, Browse patch, broker queue) directly, and never enqueue
-    `dirty_properties`.
+    own after-step: scoped recompute, broker book, Browse patch, broker queue) directly, and never
+    enqueue `dirty_properties`.
+    **The pass also keeps the broker book** (`property_broker_spells`, migration 691; broker board
+    W1, read by nothing yet): one SPELL per (property, broker identity), stored from its one view
+    `property_broker_spell_projection` (start = the identity's first ad's `first_seen_at`, end =
+    NULL while one of its ads runs, else the last one's last sighting, `tom_observed` of its first
+    ad in `browse_projection`'s order). `properties_changed` upserts the view's rows for its ids,
+    rewriting only a row that differs, and deletes the spells the view no longer holds (an identity
+    writer passes both sides, so the side an advert left loses its spell); each full-sweep batch
+    does the same over its id range in the batch's transaction, the book under its own 2-min
+    ceiling so one attempt (10 + 2 min) stays inside the 15-min lease. It is keyed on the identity,
+    so a broker merge (it re-points `broker_identities.broker_id`) changes no row and dirties
+    nothing; a re-attribution dirties the property (above). `docs/design/broker-board.md`.
     A residual of removing the
     inline singleton rollup: a crawler change confined to unhashed columns (`area_basis`,
     `published_at`, `source_url`) reaches its property only at the daily sweep, and an
@@ -4386,15 +4402,17 @@ renumber.** Navigate by area:
     job checks view = emitter = function on one row. Its
     limits are the doc comment's, stated so a panel does not oversell it: an ACTIVE row is its age
     so far (a lower bound, right-censored), an INACTIVE row its closed run, so a cohort that mixes
-    both mixes two things; and the anchor is OUR first sighting, because no portal supplies a
-    usable listing date (5 of 9 carry none, sreality's is the last edit, ceskereality's lags a
+    both mixes two things; and the anchor is `first_seen_at`, which is the drain's first WRITE of
+    the ad, not the walk's sighting (migration 444: the two differ by the detail queue's wait, once
+    nine days; the sighting is `discovered_at`, which nothing reads yet), because no portal supplies
+    a usable listing date (5 of 9 carry none, sreality's is the last edit, ceskereality's lags a
     median 26 days), so an ad active before its portal was first walked reads younger than it is.
     `tom_days_min/max` is a column filter on every read model, applied to the Browse list, count,
     pins, Stats and map counts alike (before 2026-10-17 it reached only the last two).
 
-    **Its second half — "newly listed" (2026-10-18, migration 625).** A TOM counts from OUR first
-    sighting, which is the ad's start only when the walk saw it appear. In a SWEEP (a portal
-    category's first walk, or a catch-up after a gap) the walk discovers the existing stock in one
+    **Its second half — "newly listed" (2026-10-18, migration 625).** A TOM counts from our first
+    write of the ad (`first_seen_at`), which is the ad's start only when the walk saw it appear. In
+    a SWEEP (a portal category's first walk, or a catch-up after a gap) the walk discovers the existing stock in one
     day, and every ad in it reads younger than it is; the two portals that publish a listing date
     measure the gap at a median 0.6 d on ordinary days against 16 d (bazos) / 77 d (ceskereality)
     on sweep days. Sweeps are not one go-live date per portal (sreality's largest was a land
@@ -4416,6 +4434,19 @@ renumber.** Navigate by area:
     ~1.1k ads, 0.1 % of the corpus); the flag of an ad first seen TODAY can flip when the hour's
     refresh learns the day was a sweep; mixing active and inactive ads (the first half) is
     unchanged and the operator's to live with.
+
+    **Its third — "left the market within N days" (2026-10-29, migration 691, broker board W1).**
+    `public.measure_exit_within(observed, started_at, ended_at, property_active, property_last_seen,
+    days)` judges one broker SPELL (`property_broker_spells`: an identity's ads on a property, from
+    the first one's `first_seen_at` to the last one's last sighting, NULL while one runs; rule 20's
+    pass keeps it) against its property: NULL = not followed (not `tom_observed`, started before the
+    2026-09-08 structural end gate of rule 3, or its window N + 7 days not yet closed); `exited` =
+    the spell ended by day N, the property left the market and nothing ran on more than 7 days past
+    it; `unknown` = flagged live but unseen since before day N; else `not_exited`. Inlinable like
+    617's; Python face `toolkit.measures.exit_within_sql`; the case table, one definer and one face
+    are `tests/test_measure_tom_days.py`'s. A spell's `tom_observed` is a stored copy of 625's flag
+    for its first ad, so it can lag a re-learned sweep day by up to one daily sweep, harmless because
+    no spell is read before its N + 7-day window closes. `docs/design/broker-board.md`.
 
     **The Stats dashboard reads the measure, never re-derives it (migration 626).** Its `ppm2` measure
     and its per-m² bands read `browse_list.price_per_m2`; a band's step follows the payload's `basis`

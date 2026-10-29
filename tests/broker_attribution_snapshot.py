@@ -8,9 +8,9 @@ compares the WHOLE statement text against it, so any edit to a template — a
 dropped predicate, a swapped JSON key, a lost `IS DISTINCT FROM` — fails loudly
 instead of slipping past a substring check.
 
-Nine of the sixteen statements are reproduced byte-for-byte (after whitespace
-normalisation). The seven that are not are frozen separately in `REGISTRY_DELTAS`
-— the registry's own rendered text — and each is explained by one of the three
+Three of the sixteen statements are reproduced byte-for-byte (after whitespace
+normalisation). The thirteen that are not are frozen separately in `REGISTRY_DELTAS`
+— the registry's own rendered text — and each is explained by one of the five
 documented, verified-equivalent deviations in the test module's docstring.
 """
 
@@ -303,7 +303,7 @@ WHERE bi.source = 'remax' AND bi.source_broker_id_native = (l.raw_json->'broker'
 """,
 }
 
-# The registry's rendered text for the seven statements that are NOT byte-identical
+# The registry's rendered text for the statements that are NOT byte-identical
 # to the pre-registry family above. Frozen so a template mutation cannot hide here
 # either; the deviations themselves are pinned by name in the test module.
 REGISTRY_DELTAS: dict[tuple[str, str], str] = {
@@ -730,4 +730,29 @@ ON CONFLICT (source, source_broker_id_native) DO UPDATE SET
   last_seen_at  = greatest(broker_identities.last_seen_at, EXCLUDED.last_seen_at),
   attrs_computed_at = now()
 """,
+})
+
+
+# --- Broker board W1: the link dirties its property (deviation 5) ------------
+# Every link statement is its pre-registry UPDATE, verbatim, plus `RETURNING
+# l.property_id`, wrapped in the repo's one same-statement dirty enqueue (rule
+# 20; scripts/reparse.py, scraper/listing_write.py): the broker book
+# (property_broker_spells, migration 691) keys on the identity, so a
+# re-attributed advert's property must be recomputed. Purely additive: the
+# UPDATE writes exactly what it wrote; the wrapper only reads its RETURNING.
+# Derived from the frozen pre-image with a frozen wrapper (`.replace`, not
+# `.format`, so `{sel}` survives), which pins both halves.
+_LINK_DIRTY_WRAP = """
+WITH linked AS (
+<update>RETURNING l.property_id
+)
+INSERT INTO dirty_properties (property_id)
+SELECT DISTINCT property_id FROM linked WHERE property_id IS NOT NULL
+ORDER BY 1
+ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
+"""
+REGISTRY_DELTAS.update({
+    (source, "link"): _LINK_DIRTY_WRAP.replace(
+        "<update>", PRE_REGISTRY_SQL[(source, "link")].lstrip("\n"))
+    for source in ("sreality", "idnes", "ceskereality", "realitymix", "remax")
 })

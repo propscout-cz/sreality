@@ -207,8 +207,8 @@ def test_attach_is_bounded_and_browse_syncs_its_births(monkeypatch: Any) -> None
 
 def test_attach_brings_its_births_current_through_properties_changed(monkeypatch: Any) -> None:
     """A birth's after-step is THE after-step of the drain and the identity writers (recompute,
-    Browse patch, broker queue), never a hand-rolled copy: it runs once over the born ids, inside
-    the birth's transaction and under the batch ceiling the attach has always had."""
+    broker book, Browse patch, broker queue), never a hand-rolled copy: it runs once over the born
+    ids, inside the birth's transaction and under the batch ceiling the attach has always had."""
     import scripts.recompute_property_stats as rps
 
     calls: list[list[int]] = []
@@ -246,7 +246,7 @@ class _DrainCur:
         s = " ".join(sql.split())
         self._conn.executed.append((s, params))
         if s.startswith("DELETE FROM dirty_properties"):
-            self._conn.deleted.append((params["ids"], params["cutoff"]))
+            self._conn.deleted.append((params["ids"], params["marks"]))
             self._rows = []
         elif "SELECT property_id, marked_at FROM dirty_properties" in s:
             self._rows = self._conn.batches.pop(0) if self._conn.batches else []
@@ -285,9 +285,10 @@ class _DrainConn:
 
 
 # One drain slice, in order: the after-step inside ONE bounded transaction under the drain's own
-# lock-wait ceiling (the Browse patch in its own savepoint), then the dequeue outside it.
+# lock-wait ceiling (the rollup, the broker book, the Browse patch in its own savepoint), then the
+# dequeue outside it.
 _SLICE = ("BEGIN", "SET LOCAL statement_timeout", "SET LOCAL lock_timeout", "WITH batch AS",
-          "BEGIN", "DELETE FROM browse_list", "INSERT INTO browse_list", "COMMIT",
+          "WITH spells AS", "BEGIN", "DELETE FROM browse_list", "INSERT INTO browse_list", "COMMIT",
           "INSERT INTO dirty_broker_listings", "COMMIT", "DELETE FROM dirty_properties")
 
 
@@ -301,10 +302,10 @@ def test_drain_dirty_recomputes_each_batch_then_terminates():
     total = _drain_dirty(conn, batch_size=2, cutoff="CUTOFF")
     assert total == 3
     assert conn.recomputed == [[7, 8], [9]]
-    # deletes are scoped to the claimed ids and the run cutoff
-    assert conn.deleted == [([7, 8], "CUTOFF"), ([9], "CUTOFF")]
-    # each slice: recompute under the raised ceiling and the 5 s lock wait, Browse patch, broker
-    # queue, then dequeue
+    # each dequeue is a compare-and-set on the marks the slice claimed, never the run cutoff
+    assert conn.deleted == [([7, 8], ["t1", "t1"]), ([9], ["t2"])]
+    # each slice: recompute and broker book under the raised ceiling and the 5 s lock wait, Browse
+    # patch, broker queue, then dequeue
     assert _steps(conn.executed) == list(_SLICE) * 2
     assert "SET LOCAL lock_timeout = '5s'" in _sqls(conn)
     assert [p for s, p in conn.executed if s.startswith("INSERT INTO dirty_broker_listings")] == [
@@ -318,11 +319,11 @@ def test_properties_changed_recomputes_then_patches_then_queues_brokers():
     nests in the caller's transaction and inherits the caller's timeouts."""
     conn = _FakeConn()
     properties_changed(conn, [9, 3, None, 9, 3])
-    assert _steps(conn.executed) == ["WITH batch AS", "DELETE FROM browse_list",
+    assert _steps(conn.executed) == ["WITH batch AS", "WITH spells AS", "DELETE FROM browse_list",
                                      "INSERT INTO browse_list", "INSERT INTO dirty_broker_listings"]
-    assert len(conn.executed) == 4
-    assert [p for _s, p in conn.executed] == [{"ids": [3, 9]}, ([3, 9],), ([3, 9],),
-                                               {"ids": [3, 9]}]
+    assert len(conn.executed) == 5
+    assert [p for _s, p in conn.executed] == [{"ids": [3, 9]}, {"ids": [3, 9]}, ([3, 9],),
+                                               ([3, 9],), {"ids": [3, 9]}]
     assert not any("statement_timeout" in s or "lock_timeout" in s or "dirty_properties" in s
                    for s in _sqls(conn))
 
@@ -695,10 +696,16 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
     assert not _find(conn, "property_sweep_last_complete")
     # every recompute statement runs under the raised per-statement ceiling
-    # (the pooler's ~2-min default killed the first post-#971 batch at 3.5min)
-    ceilings = [s for s, _ in conn.executed if "SET LOCAL statement_timeout" in s]
-    recomputes = [s for s, _ in conn.executed if "WITH batch AS" in s]
-    assert len(ceilings) == len(recomputes) == 2
+    # (the pooler's ~2-min default killed the first post-#971 batch at 3.5min), and the broker
+    # book after it, in the same batch transaction, under its own (the lease-renew invariant)
+    import scripts.recompute_property_stats as rps
+
+    one = (f"SET LOCAL statement_timeout = '{rps._BATCH_STATEMENT_TIMEOUT}'", "WITH batch AS",
+           f"SET LOCAL statement_timeout = '{rps._BOOK_STATEMENT_TIMEOUT}'", "WITH spells AS")
+    assert [next(p for p in one if s.startswith(p)) for s in _sqls(conn)
+            if s.startswith(one)] == list(one) * 2
+    assert [p for s, p in conn.executed if s.startswith("WITH spells AS")] == [
+        {"lo": 1, "hi": 2001}, {"lo": 2001, "hi": 4001}]
     # ...and keeps the session's lock wait: only the drain slice bounds its own
     assert not any("lock_timeout" in s for s in _sqls(conn))
 
@@ -1318,12 +1325,14 @@ def test_workflow_timeout_covers_the_budget_ceiling() -> None:
     # raising _BATCH_STATEMENT_TIMEOUT to 30min left this guard passing while the
     # real worst case (9720s) had already outgrown the 7800s backstop — a SIGKILL
     # mid-sweep, reported by GH as `cancelled`, emailing nobody.
-    batch_ceiling_s = _interval_seconds(rps._BATCH_STATEMENT_TIMEOUT)
+    # A batch is two statements since migration 691: the rollup, then the broker book.
+    batch_ceiling_s = (_interval_seconds(rps._BATCH_STATEMENT_TIMEOUT)
+                       + _interval_seconds(rps._BOOK_STATEMENT_TIMEOUT))
     in_flight_batch_s = batch_ceiling_s * rps._BATCH_RESILIENT_ATTEMPTS
     assert timeout_s >= rps._MAX_BUDGET_SECONDS + in_flight_batch_s + 120
     # The module's other, previously unguarded invariant (see the comment above
     # _BATCH_STATEMENT_TIMEOUT): renewal fires as the first statement of each
-    # batch ATTEMPT, so one statement's ceiling is the longest possible renewal
+    # batch ATTEMPT, so one batch's ceilings are the longest possible renewal
     # gap and must stay comfortably under the lease TTL.
     assert batch_ceiling_s < _interval_seconds(rps._LEASE_TTL)
 

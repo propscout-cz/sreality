@@ -22,7 +22,9 @@
    LOCATION advert changes (a property reset to no ads gaining one included), so the hourly city
    job recomputes the figures from the location advert's point (an advert without one keeps the
    earlier figures until it gains one: the job reads only a point); the job's own UPDATE refuses
-   a row whose location advert moved while it ran (migration 636).
+   a row whose location advert moved while it ran (migration 636). The broker book
+   (`property_broker_spells`, migration 691: one spell per property and broker identity) is
+   stored from its one view beside every rollup, in the same transaction.
 3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
    property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
    migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`).
@@ -304,11 +306,42 @@ _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
     "SELECT id FROM properties WHERE id = ANY(%(ids)s)",
 )
 
+# The broker book (migration 691): the view's spells of the batch's properties, stored. The view
+# is the one spelling of a spell; the scope is a qual on its grouping column, so it applies below
+# the aggregate. A spell the view no longer holds (its ads moved by a merge or a detach, or
+# re-attributed) is deleted, and only a row that differs is rewritten, so a quiescent batch writes
+# nothing. Scoped exactly like the rollup above, and derived from its range form the same way.
+_BROKER_BOOK_BATCH_SQL = """
+    WITH spells AS (
+      SELECT property_id, broker_identity_id, started_at, ended_at, tom_observed
+      FROM property_broker_spell_projection
+      WHERE property_id >= %(lo)s AND property_id < %(hi)s
+    ), gone AS (
+      DELETE FROM property_broker_spells s
+      WHERE property_id >= %(lo)s AND property_id < %(hi)s
+        AND NOT EXISTS (SELECT 1 FROM spells v WHERE v.property_id = s.property_id
+                          AND v.broker_identity_id = s.broker_identity_id)
+    )
+    INSERT INTO property_broker_spells AS s
+      (property_id, broker_identity_id, started_at, ended_at, tom_observed)
+    SELECT * FROM spells
+    ORDER BY property_id, broker_identity_id
+    ON CONFLICT (property_id, broker_identity_id) DO UPDATE
+      SET started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at,
+          tom_observed = EXCLUDED.tom_observed
+      WHERE (s.started_at, s.ended_at, s.tom_observed)
+            IS DISTINCT FROM (EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed)
+"""
+_BROKER_BOOK_SCOPED_SQL = _BROKER_BOOK_BATCH_SQL.replace(
+    "property_id >= %(lo)s AND property_id < %(hi)s", "property_id = ANY(%(ids)s)")
+
 # Claim a marked_at-ordered slice of the dirty queue, but only rows dirtied at or
 # before a run-start cutoff. A property re-dirtied DURING the run gets a fresh
-# marked_at (> cutoff, via the writers' ON CONFLICT DO UPDATE), so it is neither
-# claimed here nor deleted below -- it survives for the next pass. That makes the
-# working set finite + strictly shrinking, so the drain loop always terminates.
+# marked_at (via the writers' ON CONFLICT DO UPDATE), so it is not deleted below --
+# it survives, claimed again by this run if the stamp is at or before the cutoff,
+# else by the next pass. A stamp is never later than the statement writing it, so only
+# a transaction begun before the cutoff can stamp at or before it: the working set is
+# finite and the drain loop always terminates.
 _CLAIM_DIRTY_SQL = """
     SELECT property_id, marked_at FROM dirty_properties
     WHERE marked_at <= %(cutoff)s
@@ -316,10 +349,16 @@ _CLAIM_DIRTY_SQL = """
     LIMIT %(limit)s
 """
 
-# Delete only the claimed ids that have NOT been re-dirtied since the cutoff.
+# Dequeue a claimed row only while it carries the mark it was claimed with (compare-and-set):
+# any re-stamp since the claim survives. Not `marked_at <= cutoff`: a writer whose transaction
+# began before the cutoff but committed after the slice read its adverts re-stamps with its
+# START, at or before the cutoff -- the dequeue would wait on its row lock, re-check the new
+# stamp and drop it, leaving the property recomputed from the state before that write until the
+# daily sweep (an attribution chunk is one transaction over every portal: resolve_brokers).
 _DELETE_DIRTY_SQL = """
-    DELETE FROM dirty_properties
-    WHERE property_id = ANY(%(ids)s) AND marked_at <= %(cutoff)s
+    DELETE FROM dirty_properties d
+    USING unnest(%(ids)s::bigint[], %(marks)s::timestamptz[]) AS c(property_id, marked_at)
+    WHERE d.property_id = c.property_id AND d.marked_at = c.marked_at
 """
 
 # The full sweep's one dirty clear: rows queued at or before the run's start (anything dirtied
@@ -408,14 +447,15 @@ _MIRROR_BROKER_DIRTY_SQL = (
 
 def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     """Make what is derived from these properties true now, inside the caller's transaction: the
-    rollup (the sweep's own body, scoped), their Browse rows, and their attributed adverts queued
-    for the broker drain. THE after-step of the dirty drain, of both identity writers
-    (`toolkit.property_identity`) and of every birth (`_attach_stragglers`, under `_bounded`); it
-    opens no transaction, sets no ceiling and never enqueues
+    rollup and the broker book (the sweep's own bodies, scoped), their Browse rows, and their
+    attributed adverts queued for the broker drain. THE after-step of the dirty drain, of both
+    identity writers (`toolkit.property_identity`) and of every birth (`_attach_stragglers`, under
+    `_bounded`); it opens no transaction, sets no ceiling and never enqueues
     `dirty_properties` (the drain calls it on ids it is about to dequeue).
 
     The order is load-bearing: `browse_projection` reads the recomputed `properties` row, and the
-    broker mirror selects adverts by their property AFTER the writer moved them. The Browse patch
+    book and the broker mirror select adverts by their property AFTER the writer moved them (an
+    identity writer passes both sides, so the side an advert left loses its spell). The Browse patch
     is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
     without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
     rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
@@ -434,6 +474,7 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
         return
     with conn.cursor() as cur:
         cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": ids})
+        cur.execute(_BROKER_BOOK_SCOPED_SQL, {"ids": ids})
     sync_browse_list(conn, ids)
     with conn.cursor() as cur:
         cur.execute(_MIRROR_BROKER_DIRTY_SQL, {"ids": ids})
@@ -448,12 +489,17 @@ def _bounded(conn: Any) -> Iterator[None]:
         yield
 
 
-def _run_recompute_statement(conn: Any, sql: str, params: dict[str, Any]) -> int:
-    """One recompute statement in its own `_bounded` transaction, so each batch still commits
-    independently (a killed sweep keeps every finished batch); returns the properties it wrote."""
+def _recompute_batch(conn: Any, lo: int, hi: int) -> int:
+    """One sweep batch, [lo, hi), in its own `_bounded` transaction, so each batch still commits
+    independently (a killed sweep keeps every finished batch): the rollup, then the broker book
+    under `_BOOK_STATEMENT_TIMEOUT`; returns the properties the rollup wrote."""
+    params = {"lo": lo, "hi": hi}
     with _bounded(conn), conn.cursor() as cur:
-        cur.execute(sql, params)
-        return cur.rowcount or 0
+        cur.execute(_RECOMPUTE_BATCH_SQL, params)
+        recomputed = cur.rowcount or 0
+        cur.execute(f"SET LOCAL statement_timeout = '{_BOOK_STATEMENT_TIMEOUT}'")
+        cur.execute(_BROKER_BOOK_BATCH_SQL, params)
+        return recomputed
 
 
 def _reconcile_childless(conn: Any) -> int:
@@ -504,11 +550,11 @@ def _drain_dirty(
 ) -> int:
     """Bring every property queued at/before `cutoff` current, one claimed slice at a time.
 
-    Each slice runs `properties_changed` (recompute, Browse patch, broker queue) in ONE
-    `_bounded` transaction under `_DRAIN_LOCK_TIMEOUT`, then dequeues: a crash between the two
-    replays the slice, and every statement is idempotent. Always terminates -- only rows with
-    marked_at <= cutoff are claimable, the delete removes the claimed ones, and a row re-dirtied
-    mid-run moves past the cutoff.
+    Each slice runs `properties_changed` in ONE `_bounded` transaction under
+    `_DRAIN_LOCK_TIMEOUT`, then dequeues the rows it claimed, each only while it still carries its
+    claimed mark: a crash between the two replays the slice, every statement is idempotent, and a
+    row re-dirtied mid-run survives. Always terminates -- only rows with marked_at <= cutoff are
+    claimable, and only a transaction begun before the cutoff can stamp one (`_CLAIM_DIRTY_SQL`).
 
     `renew` (a zero-arg callable) is invoked once per claimed slice so a long
     drain — e.g. the backlog after a maintenance freeze, or the nine-portal
@@ -530,7 +576,7 @@ def _drain_dirty(
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
             properties_changed(conn, ids)
         with conn.cursor() as cur:
-            cur.execute(_DELETE_DIRTY_SQL, {"ids": ids, "cutoff": cutoff})
+            cur.execute(_DELETE_DIRTY_SQL, {"ids": ids, "marks": [r[1] for r in claimed]})
         total += len(ids)
     return total
 
@@ -667,10 +713,11 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
 # 15-minute TTL and re-grants it (the `holder = %(holder)s` arm below, the
 # notification matcher's sticky-holder pattern from migration 366) between
 # batches, so a kill at ANY point strands the row for at most 15 minutes.
-# Renewal only runs between statements on this autocommit connection, so the
-# TTL must comfortably exceed one statement's worst case — recompute
-# statements run under the explicit _BATCH_STATEMENT_TIMEOUT (10 min) ceiling
-# — 15 min is that margin, not a renewal cadence.
+# Renewal only runs between transactions on this autocommit connection, so the
+# TTL must comfortably exceed one batch's worst case — a sweep batch is the
+# rollup under the explicit _BATCH_STATEMENT_TIMEOUT (10 min) ceiling plus the
+# broker book under _BOOK_STATEMENT_TIMEOUT (2 min) — 15 min is that margin,
+# not a renewal cadence.
 _LEASE_TTL = "15 minutes"
 _LEASE_RETRY_SECONDS = 10.0
 # A dispatched sweep that cannot get the lease within this budget fails RED
@@ -702,12 +749,17 @@ _MAX_BUDGET_SECONDS = 6000.0
 # proved too tight for the post-#971 batch SQL on deep-history batches: the
 # 2026-08-06 10:09Z run's FIRST batch (ids 1-2001, the oldest sreality
 # listings) was killed at ~3.5 min while later-id batches run in seconds.
-# MUST stay comfortably under _LEASE_TTL (15 min): renewal fires as the first
-# statement of each batch attempt, so ONE statement's worst case is the longest
+# Together with _BOOK_STATEMENT_TIMEOUT it MUST stay comfortably under _LEASE_TTL
+# (15 min): renewal fires as the first statement of each batch attempt, so ONE
+# batch's worst case (its two statements, `_recompute_batch`) is the longest
 # possible renewal gap. (Per ATTEMPT, deliberately — see
 # _BATCH_RESILIENT_ATTEMPTS: renewing only once per loop iteration would let a
 # retried batch outlive its own lease.)
 _BATCH_STATEMENT_TIMEOUT = "10min"
+# The broker book's ceiling inside the same batch transaction (migration 691). Its
+# statement reads only the batch's attributed adverts; the ceiling exists to keep one
+# attempt (rollup + book) under the lease TTL. Broker board W0 measures its real cost.
+_BOOK_STATEMENT_TIMEOUT = "2min"
 
 # Retry budget for ONE recompute batch (db.run_resilient defaults to 4). A batch
 # runs under the 10-min ceiling above, so four attempts could burn 40 minutes
@@ -715,11 +767,12 @@ _BATCH_STATEMENT_TIMEOUT = "10min"
 # BOUNDARY, so that would sail past the workflow's outer timeout and re-create
 # the silent `cancelled` this script exists to eliminate. Two attempts keeps the
 # useful part of the budget (a dropped connection or a passing lock wait replays
-# once) and bounds the in-flight worst case at 2 x _BATCH_STATEMENT_TIMEOUT,
-# which is what the workflow's timeout-minutes is sized for. A range that times
-# out twice is the poisoned range the error log names, not a blip. 20 min also
-# exceeds _LEASE_TTL, which is why the lease renewal runs INSIDE the retried op
-# (main()'s _renew_and_recompute) rather than once per loop iteration.
+# once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
+# _BOOK_STATEMENT_TIMEOUT), which is what the workflow's timeout-minutes is sized
+# for. A range that times out twice is the poisoned range the error log names,
+# not a blip. 24 min also exceeds _LEASE_TTL, which is why the lease renewal runs
+# INSIDE the retried op (main()'s _renew_and_recompute) rather than once per loop
+# iteration.
 _BATCH_RESILIENT_ATTEMPTS = 2
 
 _TRY_LEASE_SQL = """
@@ -837,7 +890,7 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
     maintenance lane: attach new stragglers, then bring the dirty set current through
-    `properties_changed` (recompute, `browse_list` patch, broker queue), so a change reaches
+    `properties_changed` (recompute, broker book, `browse_list` patch, broker queue), so a change reaches
     Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle
     the fresh properties the pipeline is done with (`_settle_fresh`).
     Serialized by the maintenance lease; a caller that
@@ -1057,9 +1110,9 @@ def main() -> int:
                     break
                 # Renewal is the FIRST statement of the retried op, not a
                 # separate step before it. _BATCH_RESILIENT_ATTEMPTS lets one
-                # batch occupy up to 2 x _BATCH_STATEMENT_TIMEOUT (20 min),
+                # batch occupy two attempts (24 min with the book's ceiling),
                 # which would blow past the 15-min _LEASE_TTL and break this
-                # module's invariant that one statement's worst case is the
+                # module's invariant that one attempt's worst case is the
                 # longest possible renewal gap — another writer would take the
                 # lease mid-batch and the next renewal would red the sweep.
                 # Re-asserting per attempt also re-takes the lease on the FRESH
@@ -1068,8 +1121,7 @@ def main() -> int:
                 # re-raises immediately (not an OperationalError -> not transient).
                 def _renew_and_recompute(c: Any, lo: int = lo, hi: int = hi) -> int:
                     _renew_lease(c, holder)
-                    return _run_recompute_statement(
-                        c, _RECOMPUTE_BATCH_SQL, {"lo": lo, "hi": hi})
+                    return _recompute_batch(c, lo, hi)
 
                 try:
                     recomputed += step(_renew_and_recompute, "sweep.batch",
