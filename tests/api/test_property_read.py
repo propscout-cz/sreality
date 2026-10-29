@@ -293,6 +293,22 @@ def test_a_cut_drops_whole_notes_oldest_first_and_keeps_the_rest_whole() -> None
     assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
 
 
+def test_a_vocabulary_cut_beside_properties_lifts_with_no_property_ids() -> None:
+    """The tool's advice: the vocabularies do not depend on the properties asked, so with none they have the room."""
+    notes = [(100 + n, 7, "x" * 800, False, _at(-n), _at(-n), None, None, None, None) for n in range(8)]
+    collections = [(10 + n, f"C{n}", "y" * 200, _at(0), _at(1), 1, True, True, None, []) for n in range(40)]
+
+    def conn() -> ScriptConn:
+        c = script(notes=notes)
+        c.script[9] = (lambda sql: "FROM collections c ORDER BY" in sql, collections)
+        return c
+
+    asked = run("get_my_property_context", {"property_ids": [7, 9]}, conn())
+    assert list(asked["metadata"]["truncated"]) == ["data.collections"]
+    alone = run("get_my_property_context", {"property_ids": []}, conn())
+    assert len(alone["data"]["collections"]) == 40 and "truncated" not in alone["metadata"]
+
+
 # --- the brokers ------------------------------------------------------------------------------------------------
 
 def _broker(listing_id: int, broker_id: int) -> dict[str, Any]:

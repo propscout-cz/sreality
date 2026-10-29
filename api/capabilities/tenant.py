@@ -55,8 +55,10 @@ ENTRIES = (
         "notes they may read on them, newest first (their own, and a colleague's marked shared on a property in a "
         "collection shared between them, owner_email naming that colleague); and their vocabularies: collections (one "
         "shared with them names its owner in owner_email), tags and pipeline stages, the ids search_properties' tags, "
-        "collections and pipeline filters take. With no property ids, the vocabularies alone. When metadata.truncated "
-        "is present, ask again for fewer properties.",
+        "collections and pipeline filters take. With no property ids, the vocabularies alone. metadata.truncated names "
+        "each list cut to its head: properties and notes reach further with fewer properties asked (notes newest "
+        "first, down to one property); the vocabularies do not depend on the properties asked, so ask with no "
+        "property ids to read the most of them.",
         args=ContextIds, handler=_own_context, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )
