@@ -955,25 +955,36 @@ def presence_candidates(
     see, oldest sighting first, plus the scope's active row count (rule #3: absence NOMINATES,
     the page decides, so the query carries no rail -- a wrong nomination costs one fetch).
 
-    `seen_key` names what the seen set holds: `source_id_native` strings (every crawler) or
-    sreality's integer `sreality_id`s. Returns (native_id, detail_ref, price) triples: the price
-    rides along so the re-enqueue does not blank the queue's observed price.
+    `seen_key` names what the seen set holds and the column the queue keys on: `source_id_native`
+    strings (every crawler) or sreality's integer `sreality_id`s. Returns (native_id, detail_ref,
+    price) triples: the price rides along so the re-enqueue does not blank the queue's observed price.
     """
-    return _nominate(conn, source, *scope_sql(scope), seen, seen_key)
+    key_col = _key_col(seen_key)
+    bound = [int(x) if seen_key == "sreality_id" else str(x) for x in seen if x is not None]
+    if not bound:
+        # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
+        raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
+    return _nominate(conn, source, *scope_sql(scope), f"l.{key_col} <> ALL(%s)", bound, key_col)
 
 
 def orphan_candidates(
     conn: psycopg.Connection,
     source: str,
     scopes: Sequence[Mapping[str, Any]],
-    seen: set[Any] | None,
+    unseen_since: datetime,
     *,
     seen_key: str = "native",
 ) -> tuple[list[tuple[str, str | None, int | None]], int]:
     """presence_candidates for the active rows in NO walked scope (a label no unit walks: a
-    NULL, an auction type the portal's walk does not ask for). `seen` is the whole walk's;
-    None nominates without an exclusion, for an indexless portal only (its walk sees nothing)."""
-    return _nominate(conn, source, *orphan_sql(scopes), seen, seen_key)
+    NULL, an auction type the portal's walk does not ask for) that nothing sighted since
+    `unseen_since`, the anchor of a walk cycle every scope reached the end in (rule #4: only a
+    sighting or a successful fetch moves last_seen_at)."""
+    return _nominate(conn, source, *orphan_sql(scopes),
+                     "(l.last_seen_at IS NULL OR l.last_seen_at < %s)", unseen_since, _key_col(seen_key))
+
+
+def _key_col(seen_key: str) -> str:
+    return "sreality_id" if seen_key == "sreality_id" else "source_id_native"
 
 
 def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any]) -> int:
@@ -994,16 +1005,8 @@ def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any])
 
 def _nominate(
     conn: psycopg.Connection, source: str, where: str, params: list[Any],
-    seen: set[Any] | None, seen_key: str,
+    unseen: str, unseen_param: Any, key_col: str,
 ) -> tuple[list[tuple[str, str | None, int | None]], int]:
-    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
-    unseen, ids = "", ()
-    if seen is not None:
-        bound = [int(x) if seen_key == "sreality_id" else str(x) for x in seen if x is not None]
-        if not bound:
-            # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
-            raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
-        unseen, ids = f"\n              AND l.{key_col} <> ALL(%s)", (bound,)
     active_rows = _count(conn, source, where, params)
     with conn.cursor() as cur:
         cur.execute(
@@ -1012,11 +1015,12 @@ def _nominate(
             FROM listings l
             WHERE l.is_active = true
               AND l.source = %s
-              AND {where}{unseen}
+              AND {where}
+              AND {unseen}
               AND {NOMINABLE_PREDICATE}
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
-            (source, *params, *ids),
+            (source, *params, unseen_param),
         )
         rows = cur.fetchall()
     return (
@@ -1598,85 +1602,34 @@ def scrape_run_finalize(
         )
 
 
-# --- the index-slice ledger (migration 454) ----------------------------------
-#
-# An index walk starts at the first category's first page every time. When the
-# budget runs out the next run starts from the same place, so a catalogue bigger
-# than one budget does not get walked slowly -- the same HEAD gets walked over
-# and over while the tail is never reached. These two functions are the memory
-# that turns that into monotonic progress: record what each slice reached, then
-# order the next run by what is stalest.
-
-SLICE_OUTCOME_POSITIVE = "exhausted"
-
-
-def record_index_slice(
-    conn: psycopg.Connection,
-    *,
-    source: str,
-    category_main: str,
-    category_type: str,
-    slice_key: str,
-    outcome: str,
-    declared_total: int | None,
-    collected: int,
-    pages: int,
-) -> None:
-    """Latest-wins upsert of one slice's outcome. Best-effort: bookkeeping must
-    never break a walk, and a walk that fails to record simply looks stale next
-    run -- which errs toward walking it again, the safe direction."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO portal_index_slices
-                    (source, category_main, category_type, slice_key, walked_at,
-                     outcome, declared_total, collected, pages)
-                VALUES (%s, %s, %s, %s, now(), %s, %s, %s, %s)
-                ON CONFLICT (source, category_main, category_type, slice_key)
-                DO UPDATE SET walked_at = now(),
-                              outcome = EXCLUDED.outcome,
-                              declared_total = EXCLUDED.declared_total,
-                              collected = EXCLUDED.collected,
-                              pages = EXCLUDED.pages
-                """,
-                (source, category_main, category_type, slice_key, outcome,
-                 declared_total, collected, pages),
-            )
-    except Exception as exc:  # noqa: BLE001 - never let the ledger break the walk
-        LOG.warning("slice ledger: could not record %s/%s/%s/%s: %s",
-                    source, category_main, category_type, slice_key, exc)
-
-
-def slice_staleness(
-    conn: psycopg.Connection, source: str,
-) -> dict[tuple[str, str, str], float]:
-    """Hours since each slice of this source was last walked.
-
-    A slice with no row is ABSENT from the result, and callers must read that as
-    "never walked, walk it first" -- not as "fresh". Returning 0.0 for an unknown
-    slice would sort the never-walked ones LAST, which is precisely the starvation
-    this ledger exists to end.
-    """
-    out: dict[tuple[str, str, str], float] = {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT category_main, category_type, slice_key,
-                       extract(epoch FROM (now() - walked_at)) / 3600.0
-                  FROM portal_index_slices
-                 WHERE source = %s
-                """,
-                (source,),
-            )
-            for cm, ct, key, hours in cur.fetchall():
-                out[(cm, ct, key)] = float(hours)
-    except Exception as exc:  # noqa: BLE001 - an unreadable ledger means "walk everything"
-        LOG.warning("slice ledger: unreadable for %s (%s); treating all slices "
-                    "as never walked", source, exc)
-        return {}
-    return out
+def walk_ledger(
+    conn: psycopg.Connection, source: str, run_id: int | None, days: int,
+) -> tuple[datetime, list[tuple[datetime, list[dict[str, Any]]]]]:
+    """The walk cycle's ledger, read from scrape_runs.by_category: this run's start (now() when it has no row) and
+    every other index run of `source` started in the last `days`, oldest first, with each entry's scope, verdict and
+    collected count. Each entry is persisted as its unit ends (`bump_index_progress`), so a killed walk keeps them;
+    an entry with no `scope` predates the cycle and is left out."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT coalesce((SELECT started_at FROM scrape_runs WHERE id = %s), now())", (run_id,))
+        start = cur.fetchone()[0]
+        cur.execute(
+            """
+            SELECT r.started_at,
+                   coalesce(jsonb_agg(jsonb_build_object(
+                       'scope', e -> 'scope', 'reached', e -> 'walk_reached_end', 'collected', e -> 'collected'))
+                       FILTER (WHERE e ? 'scope'), '[]'::jsonb)
+              FROM scrape_runs r
+              LEFT JOIN LATERAL jsonb_array_elements(
+                    CASE WHEN jsonb_typeof(r.by_category) = 'array' THEN r.by_category ELSE '[]'::jsonb END) AS e
+                ON true
+             WHERE r.run_type = 'index' AND r.source = %s AND r.id IS DISTINCT FROM %s
+               AND r.started_at > now() - make_interval(days => %s)
+             GROUP BY r.id, r.started_at
+             ORDER BY r.started_at, r.id
+            """,
+            (source, run_id, days),
+        )
+        return start, [(started, list(entries)) for started, entries in cur.fetchall()]
 
 
 def bump_index_progress(conn: psycopg.Connection, run_id: int, pages: int, entry: dict[str, Any]) -> None:

@@ -351,6 +351,13 @@ One property type and deal that a portal lists, such as flats for sale, as a wal
 may reach the end of one unit and not of another.
 _Avoid_: category pair, category (alone); a slice or scope is one part of a unit, never a unit
 
+**Walk cycle**:
+One pass over every unit of a portal, which a deploy or a time limit may split into several walks: the
+walk after a cut picks up the units not yet finished, stalest first. The cycle starts with its first
+walk (its anchor) and ends with the first walk that gets through all it set out to do; only a cycle in
+which every unit reached the end may nominate the ads no unit covers.
+_Avoid_: round, full walk, fragment (alone)
+
 **Declared total**:
 The number of ads a portal itself says a unit holds, read from its own pages during a walk. Where a
 portal shows no such number, the count of ads the walk saw stands in for it and is never read as one.

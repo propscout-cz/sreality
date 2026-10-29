@@ -13,6 +13,7 @@ import ast
 import dataclasses
 import importlib
 import inspect
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -100,10 +101,13 @@ def test_the_sighting_diff_makes_no_http_request(monkeypatch: pytest.MonkeyPatch
     assert out == {"found_new": 1, "enqueued": 2}
     fake = SimpleNamespace(source="remax")
     scope = {"category_main": "byt", "category_type": "prodej"}
-    groups = {portal_runner._scope_key(scope): portal_runner._ScopeGroup(left=1)}
-    assert portal_runner._queue_presence_checks(
-        fake, object(), {"category_main": "byt"}, scope, groups, {"a"}, "byt", "prodej") == (1, 0)
-    assert portal_runner._queue_orphan_checks(fake, object(), [scope], {"a"}) == (1, 0)
+    group = portal_runner._ScopeGroup(seen={"a"})
+    assert portal_runner._queue_presence_checks(fake, object(), scope, group, "byt", "prodej") == (1, 0)
+    cycle = portal_runner._Cycle(datetime(2026, 10, 29, tzinfo=timezone.utc), {}, resumed=False)
+    entry, failed = portal_runner._end_cycle(
+        fake, object(), cycle, [("byt", scope)], {portal_runner._scope_key(scope): 1},
+        total_is_count=False, upper_bound=False)
+    assert (entry["listings_to_verify"], failed) == (1, False)
 
 
 def _client_calls_without_limiter(tree: ast.AST) -> list[str]:

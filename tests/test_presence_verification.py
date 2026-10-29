@@ -13,7 +13,7 @@ operator override still lifting it, the deferral recorded).
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -127,32 +127,33 @@ def test_an_agenda_scope_leaves_the_category_open():
     assert conn.executed[0][1] == ("remax", "prodej")
 
 
-def test_orphans_are_the_rows_in_no_walked_scope():
-    """Rule #3 made total: the complement of the walked scopes, NULL labels included (`=` on a
-    NULL is NULL, so the union is coalesced), excluding everything the walk saw."""
+def test_orphans_are_the_rows_in_no_walked_scope_nothing_sighted_since_the_anchor():
+    """Rule #3 made total over a walk cycle: the complement of the walked scopes, NULL labels
+    included (`=` on a NULL is NULL, so the union is coalesced), excluding every row sighted since
+    the cycle's anchor (a row never sighted is unseen)."""
+    anchor = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
     conn = _Conn(rows=[("o1", "https://p/o1", None)], active_rows=2)
     cands, active = db.orphan_candidates(
         conn, "ceskereality", [_BYT_PRODEJ, {"category_main": "dum", "category_type": "prodej"}],
-        {"s1"})
+        anchor)
     assert (cands, active) == ([("o1", "https://p/o1", None)], 2)
     count_sql, count_params = conn.executed[0]
     assert ("AND NOT coalesce((l.category_main = %s AND l.category_type = %s) OR "
             "(l.category_main = %s AND l.category_type = %s), false)") in count_sql
     assert count_params == ("ceskereality", "byt", "prodej", "dum", "prodej")
     select_sql, select_params = conn.executed[1]
-    assert "l.source_id_native <> ALL(%s)" in select_sql
-    assert select_params[-1] == ["s1"]
+    assert "(l.last_seen_at IS NULL OR l.last_seen_at < %s)" in select_sql and "<> ALL" not in select_sql
+    assert select_params[-1] == anchor
 
 
 def test_an_indexless_portals_orphans_are_its_whole_agenda():
-    """`web`: no scope, no seen set: every active row, and no `<> ALL` to bind."""
+    """`web`: no scope: every active row nothing sighted since the anchor."""
+    anchor = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
     conn = _Conn(rows=[], active_rows=5)
-    db.orphan_candidates(conn, "web", [], None)
+    db.orphan_candidates(conn, "web", [], anchor)
     select_sql, select_params = conn.executed[1]
-    assert "AND NOT coalesce(false, false)" in select_sql and "<> ALL" not in select_sql
-    assert select_params == ("web",)
-    with pytest.raises(ValueError):
-        db.orphan_candidates(_Conn(), "ceskereality", [_BYT_PRODEJ], set())
+    assert "AND NOT coalesce(false, false)" in select_sql
+    assert select_params == ("web", anchor)
 
 
 def test_a_units_active_count_is_its_nomination_scopes():

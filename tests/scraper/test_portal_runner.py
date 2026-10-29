@@ -135,6 +135,17 @@ class _FakePortal:
 
 # --- run_index_walk ---------------------------------------------------------
 
+START = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def ledger(monkeypatch):
+    """The cycle ledger every walk reads first (db.walk_ledger): empty unless a test adds runs, so each walk starts
+    a fresh cycle anchored at START."""
+    runs: list[tuple[datetime, list[dict[str, Any]]]] = []
+    monkeypatch.setattr(portal_runner.db, "walk_ledger", lambda conn, source, run_id, days: (START, list(runs)))
+    return runs
+
 
 def _nominations(monkeypatch):
     """Capture what the runner nominates for a page check (rule #3, 2026-09-07:
@@ -146,8 +157,8 @@ def _nominations(monkeypatch):
         cap["candidates"].append((scope.get("category_main"), set(seen), seen_key))
         return ([("7", "https://x/7", None), ("8", "https://x/8", None)], 9)
 
-    def fake_orphans(conn, source, scopes, seen, *, seen_key="native"):
-        cap["orphans"].append(([dict(sc) for sc in scopes], seen))
+    def fake_orphans(conn, source, scopes, unseen_since, *, seen_key="native"):
+        cap["orphans"].append(([dict(sc) for sc in scopes], unseen_since))
         return cap.get("orphan_rows", ([], 0))
 
     def fake_enqueue(conn, source, cm, ct, candidates, *, active_rows, subtype=None):
@@ -193,8 +204,9 @@ def test_index_walk_nominates_nothing_when_our_own_stop_fired(monkeypatch):
     p = _FakePortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert cap["candidates"] == [] and cap["queued"] == []
+    # the run walked its whole plan, so the cycle ends here, short of the end: its entry says so
     assert [(c["walk_reached_end"], c["collected"], c[portal_runner.DECLARED_TOTAL_KEY])
-            for c in agg["by_category"]] == [(False, 2, 2), (False, 2, 2)]
+            for c in agg["by_category"]] == [(False, 2, 2), (False, 2, 2), (False, 0, 0)]
 
 
 def test_index_walk_nominates_a_short_count_and_alarms_on_it(monkeypatch, caplog):
@@ -250,7 +262,7 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
     p = _ReconcilingPortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert [(c["listings_found_new"], c["listings_enqueued"]) for c in agg["by_category"]] == [
-        (2, 2), (2, 3),
+        (2, 2), (2, 3), (0, 0),
     ]
     assert agg["listings_found_new"] == 4
 
@@ -268,7 +280,7 @@ def test_a_declared_scope_reaches_the_query_and_the_throttle(monkeypatch):
     cap2 = _nominations(monkeypatch)
     portal_runner.run_index_walk(p2, dry_run=False)
     assert cap2["scopes"] == [(None, "t", None)]           # one agenda: one nomination
-    assert cap2["orphans"] == [([{"category_type": "t"}], {1, 2})]
+    assert cap2["orphans"] == [([{"category_type": "t"}], START)]
 
 
 def test_index_walk_that_saw_nothing_nominates_nothing(monkeypatch):
@@ -295,13 +307,13 @@ def _indexless(reached_end: bool = True) -> _FakePortal:
 def test_an_indexless_portals_ads_are_all_orphans_of_its_empty_walk(monkeypatch, caplog):
     """`web` has no index: its walk sees nothing BY CONSTRUCTION, so the empty-seen refusal
     would mean its ads are never re-checked and never delisted. Its unit has no scope, so every
-    active ad is an orphan, nominated with no seen set (the query's empty-array guard stays)."""
+    active ad nothing sighted since the cycle's anchor is an orphan."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("https://a.example/1", "https://a.example/1", None)], 1)
     with caplog.at_level("WARNING", logger="scraper.portal_runner"):
         rc, agg = portal_runner.run_index_walk(_indexless(), dry_run=False)
     assert rc == 0 and cap["candidates"] == []
-    assert cap["orphans"] == [([], None)]
+    assert cap["orphans"] == [([], START)]
     assert cap["queued"] == [(None, ["https://a.example/1"], 1)]
     assert cap["scopes"] == [(None, "", None)]
     assert agg["by_category"][0]["walk_reached_end"] is True
@@ -367,11 +379,13 @@ class _SlicedPortal(_FakePortal):
 
 def test_slices_sharing_a_scope_nominate_once_with_their_union(monkeypatch):
     """Nominating from ONE slice's seen set would nominate its sibling's whole population every
-    walk: the scope nominates once, on its last slice, excluding every id its slices saw."""
+    walk: the scope nominates once, on its last slice, excluding every id its slices saw. Siblings
+    are walked together, so a cut leaves at most one group half-walked."""
     cap = _nominations(monkeypatch)
-    _rc, agg = portal_runner.run_index_walk(
-        _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}}), dry_run=False)
-    assert cap["candidates"] == [("B", {"b"}, "native"), ("A", {"a", "c"}, "native")]
+    p = _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}})
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A1", "A2", "B1"]
+    assert cap["candidates"] == [("A", {"a", "c"}, "native"), ("B", {"b"}, "native")]
     assert [c["listings_to_verify"] for c in agg["by_category"]] == [0, 2, 2, 0]   # + orphans
 
 
@@ -404,20 +418,20 @@ def test_an_all_null_seen_set_takes_the_saw_nothing_branch(monkeypatch, caplog):
                for m in caplog.messages)
     assert any(m.startswith("VERIFY skipped cm=A ct=t: the walk saw no listings")
                for m in caplog.messages)
-    assert "VERIFY orphans skipped: the walk saw no listings" in caplog.messages
+    assert "VERIFY orphans skipped: the cycle saw no listings" in caplog.messages
 
 
 def test_a_whole_end_reached_walk_nominates_the_ads_no_unit_covers(monkeypatch, caplog):
     """Rule #3 made total. A sighting is label-blind, a unit's nomination is not: an active ad
     whose label no unit walks (a NULL, an auction) is nominated once every unit reached the end,
-    against every id the walk saw, at the flip cap of a scope with no category."""
+    against what nothing sighted since the cycle's anchor, at the flip cap of a scope with no category."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
     with caplog.at_level("INFO", logger="scraper.portal_runner"):
         _rc, agg = portal_runner.run_index_walk(_FakePortal(reached_end=True), dry_run=False)
     assert cap["orphans"] == [(
         [{"category_main": "A", "category_type": "t"}, {"category_main": "B", "category_type": "t"}],
-        {1, 2})]
+        START)]
     assert cap["queued"][-1] == (None, ["9"], 3) and cap["scopes"][-1] == (None, "", None)
     assert "VERIFY orphans candidates=1 queued=1 deferred=0 active=3" in caplog.messages
     # Recorded as one more by_category entry, NULL-labelled (an indexless unit's shape), so the
@@ -471,6 +485,167 @@ def test_null_ids_are_dropped_before_nomination(monkeypatch):
     p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: ({"a", None}, {"found_new": 0, "enqueued": 0}, 2, 1, True)
     portal_runner.run_index_walk(p, dry_run=False)
     assert [seen for _cm, seen, _key in cap["candidates"]] == [{"a"}]
+
+
+# --- the walk cycle (#2020): a cut walk resumes as one cycle -----------------------------------------------------
+
+
+def _ledgered(agg: dict[str, Any]) -> list[dict[str, Any]]:
+    """A run's by_category as db.walk_ledger reads it back."""
+    return [{"scope": e["scope"], "reached": e["walk_reached_end"], "collected": e["collected"]}
+            for e in agg["by_category"]]
+
+
+def _unit(cat: str, reached: bool = True) -> dict[str, Any]:
+    return {"scope": {"category_main": cat, "category_type": "t"}, "reached": reached, "collected": 2}
+
+
+_END = {"scope": {}, "reached": True, "collected": 0}
+_T1, _T2 = START - timedelta(hours=12), START - timedelta(hours=6)
+
+
+class _CutPortal(_FakePortal):
+    """The stop signal arrives inside `cut_at`, seen as a page loop sees it: the category returns short of the end."""
+
+    def __init__(self, cut_at: str | None, categories: list[str] | None = None) -> None:
+        super().__init__(categories=categories or ["A", "B", "C"])
+        self._cut_at = cut_at
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        if c != self._cut_at:
+            return super().walk_category(c, conn, dry_run, limiter, deadline)
+        self.calls["walk"].append(c)
+        stop.EVENT.set()
+        return ({1}, {"found_new": 1, "enqueued": 1}, self._result_size, 1, False)
+
+
+def test_the_next_fragment_starts_at_the_stalest_group(monkeypatch, ledger):
+    """Stalest end-reached walk first, a group never reached before every other: the unit that ate the budget last
+    time goes last, so the rotation covers the portal (idnes once walked 2 of 10 categories, run after run)."""
+    _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _unit("C"), _END]),
+               (_T2, [_unit("B"), _unit("C"), _unit("A", reached=False), dict(_END, reached=False)])]
+    p = _FakePortal(categories=["A", "B", "C", "D"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["D", "A", "B", "C"]
+
+
+def test_a_fragment_that_does_not_close_the_cycle_nominates_no_orphans(monkeypatch):
+    """Cut by a deploy in B: A's group nominated (it reached the end), B's nominates nothing, and the cycle stays open:
+    no orphans and no cycle-end entry, so the next run resumes it."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, agg = portal_runner.run_index_walk(_CutPortal("B"), dry_run=False)
+    assert [cm for cm, *_ in cap["queued"]] == ["A"]
+    assert cap["orphans"] == []
+    assert [(e["category_main"], e["walk_reached_end"], e["cycle_started_at"]) for e in agg["by_category"]] == [
+        ("A", True, START.isoformat()), ("B", False, START.isoformat())]
+
+
+def test_the_closing_fragment_resumes_the_cycle_and_nominates_over_all_scopes(monkeypatch, ledger):
+    """The run after the cut skips the groups that reached the end since the anchor, walks the rest, and closes the
+    cycle: the orphans are judged over every scope, against what nothing sighted since the cycle's first run began."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, first = portal_runner.run_index_walk(_CutPortal("B"), dry_run=False)
+    stop.reset()
+    ledger.append((START, _ledgered(first)))
+    monkeypatch.setattr(portal_runner.db, "walk_ledger",
+                        lambda conn, source, run_id, days: (START + timedelta(minutes=40), list(ledger)))
+    p = _FakePortal(categories=["A", "B", "C"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["B", "C"]
+    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "ABC"], START)]
+    assert [(e["category_main"], e["scope"], e["walk_reached_end"], e["cycle_started_at"])
+            for e in agg["by_category"]][-1] == (None, {}, True, START.isoformat())
+
+
+def test_nominations_per_cycle_match_an_uncut_walk(monkeypatch, ledger):
+    """Two cuts and a closing run nominate what one uncut walk does: each group once, the orphans once."""
+    uncut = _nominations(monkeypatch)
+    uncut["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, whole = portal_runner.run_index_walk(_FakePortal(categories=["A", "B", "C"]), dry_run=False)
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    fragments = []
+    for i, cut_at in enumerate(["B", "C", None]):
+        at = START + timedelta(minutes=30 * i)
+        monkeypatch.setattr(portal_runner.db, "walk_ledger",
+                            lambda conn, source, run_id, days, at=at: (at, list(ledger)))
+        _rc, agg = portal_runner.run_index_walk(_CutPortal(cut_at), dry_run=False)
+        stop.reset()
+        ledger.append((at, _ledgered(agg)))
+        fragments.append(agg)
+    def per_cycle(aggs: list[dict[str, Any]]) -> int:
+        return sum(e["listings_to_verify"] for agg in aggs for e in agg["by_category"])
+    assert per_cycle(fragments) == per_cycle([whole]) == 7
+    assert sorted(cm or "" for cm, *_ in cap["queued"]) == sorted(cm or "" for cm, *_ in uncut["queued"])
+    assert {e["cycle_started_at"] for agg in fragments for e in agg["by_category"]} == {START.isoformat()}
+
+
+def test_a_cycle_ended_short_starts_the_next_run_afresh(monkeypatch, ledger):
+    """A run that walked its whole plan ends the cycle even with a group short of the end (a portal error, not our
+    stop): no orphans, and the next run walks every group, so one failing category cannot starve the other nine."""
+    cap = _nominations(monkeypatch)
+    _rc, first = portal_runner.run_index_walk(_FakePortal(categories=["A", "B"], walk_fails={"A"}), dry_run=False)
+    assert cap["orphans"] == []
+    assert first["by_category"][-1]["scope"] == {} and first["by_category"][-1]["walk_reached_end"] is False
+    ledger.append((_T2, _ledgered(first)))
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"] and cap["orphans"][-1][1] == START
+
+
+def test_a_cycle_whose_last_run_died_after_its_plan_closes_on_the_next(monkeypatch, ledger):
+    """A kill between the last unit and the cycle's end leaves every group reached and no end: the next run has
+    nothing left to walk and closes the cycle at its original anchor."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A"), _unit("B")])]
+    p = _FakePortal(categories=["A", "B"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == []
+    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "AB"], _T2)]
+    assert [e["scope"] for e in agg["by_category"]] == [{}]
+
+
+def test_a_run_that_recorded_nothing_adds_nothing_to_the_cycle(monkeypatch, ledger):
+    """Runs from before the cycle (their entries carry no scope, so the ledger leaves them out) or killed before
+    their first unit ended hold no entry: they open no cycle, so the run anchors a fresh one at its own start."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, []), (_T2, [])]
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"][-1][1] == START
+
+
+def test_an_unreadable_ledger_walks_every_group_and_nominates_no_orphans(monkeypatch, caplog):
+    cap = _nominations(monkeypatch)
+
+    def broken(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(portal_runner.db, "walk_ledger", broken)
+    p = _FakePortal(categories=["A", "B"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"] and [cm for cm, *_ in cap["queued"]] == ["A", "B"]
+    assert cap["orphans"] == [] and [e["scope"] for e in agg["by_category"]] == [
+        {"category_main": "A", "category_type": "t"}, {"category_main": "B", "category_type": "t"}]
+    assert any(m.startswith("CYCLE ledger unreadable for fake") for m in caplog.messages)
+
+
+def test_a_narrowed_dispatch_walks_its_subset_whole_and_ends_no_cycle(monkeypatch, ledger):
+    """bazos --sale-type: the operator asked for those units, so none is skipped, and a subset proves nothing about
+    the rest of the portal, so the cycle stays as it was."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A")])]
+    p = _FakePortal(categories=["A", "B"])
+    p.narrowed = True
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["B", "A"]
+    assert cap["orphans"] == [] and {}  not in [e["scope"] for e in agg["by_category"]]
 
 
 def test_index_walk_dry_run_uses_no_connection(monkeypatch):
@@ -583,7 +758,7 @@ def test_every_by_category_entry_says_how_its_declared_total_reads(monkeypatch):
     _rc, agg = portal_runner.run_index_walk(counted, dry_run=False)
     # the failed category's entry carries them too
     assert [(c["total_is_count"], c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
-        (True, True), (True, True)]
+        (True, True), (True, True), (True, True)]                    # and the cycle's end
 
 
 def test_an_upper_bound_denominator_logs_its_coverage_gap_at_info(monkeypatch, caplog):

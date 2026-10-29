@@ -7,6 +7,7 @@ portal ad becomes that portal's ad; and one host is asked at most once per 10 s.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -75,7 +76,8 @@ def test_the_config_is_one_agenda_with_the_shared_limiter() -> None:
 
 def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(monkeypatch) -> None:
     """Every active web ad due a check is nominated, a NULL category included: its one unit has
-    no scope, so the whole agenda is the runner's orphan scope, with no seen set to exclude."""
+    no scope, so the whole agenda is the runner's orphan scope, less what was sighted since the
+    cycle's anchor (a fresh cycle: this run's start)."""
     rows = [("https://a.example/1", "https://a.example/1", 4_500_000),
             ("https://b.example/x?id=2", "https://b.example/x?id=2", None)]
     conn = _Conn(rows=rows, active=5)
@@ -83,6 +85,8 @@ def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(mon
     monkeypatch.setattr(portal_runner.db, "enqueue_presence_checks",
                         lambda c, src, cm, ct, cands, *, active_rows, subtype=None:
                         queued.append((src, cm, ct, cands, active_rows)) or (len(cands), 0))
+    anchor = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(portal_runner.db, "walk_ledger", lambda *_a: (anchor, []))
     portal = _portal()
     monkeypatch.setattr(portal, "connect_index", lambda: conn)
     rc, agg = portal_runner.run_index_walk(portal, dry_run=False)
@@ -94,7 +98,7 @@ def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(mon
     assert (unit["listings_to_verify"], orphans["listings_to_verify"]) == (0, 2)
     presence_sql, params = conn.executed[-1]
     assert "category_main" not in presence_sql and "<> ALL" not in presence_sql
-    assert params == (SOURCE,) and db.NOMINABLE_PREDICATE in presence_sql
+    assert params == (SOURCE, anchor) and db.NOMINABLE_PREDICATE in presence_sql
 
 
 def test_a_walk_whose_budget_is_already_spent_nominates_nothing(monkeypatch) -> None:
