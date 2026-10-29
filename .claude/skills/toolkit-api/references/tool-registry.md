@@ -63,7 +63,9 @@ whose anchor the subject lacks is REFUSED (`subject.unanchored`, shared with the
    `{path: {kept, total}}`; metadata is never cut. What cannot fit with every list empty is RESULT_TOO_LARGE. There
    is no other row cap: each tool bounds itself (search: pages of `property_search.PAGE_MAX` cards, sized so the
    widest fits whole, within the first `REACH` matches; 20 properties per call; the page's newest 100 runs per
-   property in the dossier; the broker read stopping at the 20th person).
+   property in the dossier, where a property no result can hold whole keeps the heads of its ads (canonical, live,
+   ended, newest first) and runs that fit by `truncate.heads`, the same rule, its own `truncated` naming each cut;
+   the broker read stopping at the 20th person).
 5. Records nothing: the transport that calls a tool records it. #2065's loop journals each tool step's raw
    arguments and what the model got back (the fitted envelope, or the ToolError's payload on any refusal), which is
    where ADR-0002's recorded broker read lives; `scripts/capabilities_demo.py` records nothing.
@@ -98,8 +100,11 @@ through ONE server-side reader per screen. A new reader of these relations calls
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
 `property_read.*_COLS`) is disjoint from `forbidden_columns()`, derived from the registry (rule 14's retired
 levels, rule 17's city-quality columns), and names no broker; `api/property_search.py` and `api/property_read.py`
-name no relation that holds those, a broker or a stored place, nor one that reads as nothing under the login (base
-`listings`, `canonical_advert`, …); the dossier, broker and own-context reads, each run on a fixture, return no
+name none of the relations those values are stored in (`curated_cities*`, `city_index_*`, `city_population`,
+`listing_condition_scores`, `listing_broker_public`, `listing_location`), nor one that reads as nothing under the
+login (base `listings`, `canonical_advert`, …). The read models they do read (`browse_list_visible`,
+`properties_public`) still publish parked levels, city-quality and (`properties_public`, #2174) broker columns, which
+only the allowlists keep out; the dossier, broker and own-context reads, each run on a fixture, return no
 forbidden key at any depth and every per-m² figure with its basis. Not covered: `api/curation.py`'s relations (only
 its `STATE_COLS` allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH_COLUMNS`).
 

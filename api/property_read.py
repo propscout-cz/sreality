@@ -166,25 +166,23 @@ def _ad(ad: dict[str, Any], measure: dict[str, Any], prices: list[dict[str, Any]
 
 
 def _alone(row: dict[str, Any], room: int) -> dict[str, Any]:
-    """`row` whole when it fits `room`, else with the newest of its runs that fit and `estimates_cut` saying how many:
-    truncate.fit drops a row whole, so one that no result can hold would be left out of every answer."""
-    runs = row["estimates"]
+    """`row` whole when it fits `room`, else its ads and runs cut as truncate.fit cuts a result, each cut named in its
+    `truncated`: truncate.fit drops a row whole, so one that no result can hold would be left out of every answer."""
+    lists = {k: row[k] for k in ("ads", "estimates")}
 
-    def cut(n: int) -> dict[str, Any]:
-        return {**row, "estimates": runs[:n], "estimates_cut": {"kept": n, "total": len(runs)}}
+    def cut(kept: dict[str, int]) -> dict[str, Any]:
+        truncated = {k: {"kept": n, "total": len(lists[k])} for k, n in kept.items() if n < len(lists[k])}
+        return {**row, **{k: v[:kept[k]] for k, v in lists.items()}, **({"truncated": truncated} if truncated else {})}
 
-    def fits(r: dict[str, Any]) -> bool:
-        return len(truncate.encode(r)) <= room
-    if fits(row):
+    def fits(kept: dict[str, int]) -> bool:
+        return len(truncate.encode(cut(kept))) <= room
+    if fits({k: len(v) for k, v in lists.items()}):
         return row
-    lo, hi = 0, len(runs)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        lo, hi = (mid, hi) if fits(cut(mid)) else (lo, mid - 1)
-    if not fits(cut(lo)):
+    kept = truncate.heads(lists, fits)
+    if kept is None:
         raise ToolError(ToolErrorCode.RESULT_TOO_LARGE,
-                        f"property {row['property_id']} is too large to return even without its estimation runs")
-    return cut(lo)
+                        f"property {row['property_id']} is too large to return even without its ads and runs")
+    return cut(kept)
 
 
 def dossier(conn: psycopg.Connection, args: PropertyIds) -> dict[str, Any]:
@@ -200,7 +198,10 @@ def dossier(conn: psycopg.Connection, args: PropertyIds) -> dict[str, Any]:
     estimates = runs(conn, ad_ids)
     rows = []
     for prop in (found[i] for i in ids if i in found):
-        own = [a for a in ads if a["property_id"] == prop["property_id"]]
+        # The canonical ad, then the live, then the ended, newest first: the head a cut row keeps (sources are oldest
+        # first).
+        own = sorted((a for a in reversed(ads) if a["property_id"] == prop["property_id"]),
+                     key=lambda a: (a["id"] != prop["listing_id"], not a["is_active"]))
         mine = {a["id"] for a in own}
         rows.append(jsonable({
             **prop,

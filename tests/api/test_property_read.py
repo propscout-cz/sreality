@@ -174,21 +174,38 @@ def test_a_property_shows_the_newest_runs_the_page_lists(monkeypatch: pytest.Mon
     monkeypatch.setattr(truncate, "RESULT_BUDGET", 10**6)
     args = registry.validate("get_property_dossier", {"property_ids": [7]})[1]
     seven = pr.dossier(script(runs=_many_runs(130)), args)["data"][0]
-    assert [r["id"] for r in seven["estimates"]] == list(range(1, 101)) and "estimates_cut" not in seven
+    assert [r["id"] for r in seven["estimates"]] == list(range(1, 101)) and "truncated" not in seven
 
 
 def test_a_property_too_large_alone_keeps_its_newest_runs_that_fit_and_says_so() -> None:
     """Dropped whole, it could never be read: asked again, it would come back empty again."""
     out = run("get_property_dossier", {"property_ids": [7, 9]}, script(runs=_many_runs(130)))
     seven = out["data"][0]
-    kept = seven["estimates_cut"]["kept"]
-    assert 0 < kept < 100 and seven["estimates_cut"] == {"kept": kept, "total": 100}
+    kept = seven["truncated"]["estimates"]["kept"]
+    assert 0 < kept < 100 and seven["truncated"] == {"estimates": {"kept": kept, "total": 100}}   # its ads whole
     assert [r["id"] for r in seven["estimates"]] == list(range(1, kept + 1))
     assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
     # Left out whole beside the trimmed 7, 8 is named to ask again for; alone, it fits as it is.
     assert out["metadata"]["truncated"] == {"data": {"kept": 1, "total": 2}}
     eight = run("get_property_dossier", {"property_ids": [9]}, script(runs=_many_runs(130)))["data"][0]
-    assert "estimates_cut" not in eight
+    assert "truncated" not in eight
+
+
+def test_a_property_with_more_ads_than_a_result_holds_keeps_the_canonical_then_the_live_newest_first() -> None:
+    """136 ads on the largest property (2026-10-29): its ads are cut, never the whole call."""
+    ads = [_row(pr.SOURCE_COLS, id=71, property_id=7, source="sreality", is_active=True, first_seen_at=_at(0))] + [
+        _row(pr.SOURCE_COLS, id=1000 + n, property_id=7, source="idnes", is_active=n % 2 == 0, first_seen_at=_at(n),
+             source_url=f"https://reality.idnes.cz/detail/{n:0>40}") for n in range(1, 136)]
+    conn = script()
+    conn.script[2] = (lambda sql: "from property_sources_public" in sql, ads)
+    out = run("get_property_dossier", {"property_ids": [7]}, conn)
+    assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
+    seven = out["data"][0]
+    kept = seven["truncated"]["ads"]["kept"]
+    assert 0 < kept < 136 and seven["truncated"] == {"ads": {"kept": kept, "total": 136}}   # its one run whole
+    live = [1000 + n for n in range(134, 0, -2)]
+    ended = [1000 + n for n in range(135, 0, -2)]
+    assert [a["listing_id"] for a in seven["ads"]] == ([71] + live + ended)[:kept]
 
 
 def test_a_property_too_large_without_its_runs_is_refused_by_name() -> None:
