@@ -59,7 +59,7 @@ Independent of the analytical, UI, and map tracks.
   `portal_factory.canonical_category_count` and `_config_for` — with ceskereality's `_record_slices`
   and mmreality's `_record_slice` + `SLICE_KEY`, the slice writes only it read. It had been a no-op
   since every scraper portal's flag came back true (its newest evaluation is from 2026-09-13). idnes's
-  slice ledger went on 2026-10-29 (#2020): every walk now goes stalest end-reached group first and a
+  slice ledger went on 2026-10-29 (#2020): every walk now goes least recently walked group first and a
   cut walk resumes as one cycle, from `scrape_runs.by_category`; migration 689 drops `portal_index_slices`.
 - **Left after Health wave 9** (migration 643 dropped `portal_coverage_gate`; wave 9 as built did
   not drop the other three, so this track owns them; the third, `portal_index_slices`, goes with

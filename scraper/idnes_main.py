@@ -548,7 +548,8 @@ class IdnesPortal(portal_runner.PortalDefaults):
         # even if the counts come up a row short, and holding a 20,000-row
         # category open over that gap is how a category comes to nominate
         # nothing for days. The count is EVIDENCE beside it, never a veto: the
-        # numeric `outcome` still drives the descent and the resample, and the runner logs the coverage gap on every nomination.
+        # numeric `outcome` still drives the descent and the resample, and the
+        # runner logs the coverage gap on every nomination.
         #
         # Seeded from the CONFIGURED slices, not the walked ones: `all()` over an
         # empty list is True, so a category whose slices never started would

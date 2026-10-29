@@ -157,8 +157,8 @@ class Portal(Protocol):
     #   nothing). bazos narrows to its section's subtype, remax/maxima widen to the
     #   agenda ({"category_type": ...}). Units with one scope nominate once, on the
     #   last, with their union; an active ad in no scope is an orphan (rule #3).
-    # narrowed (bool, default False): a dispatch walks a subset of the portal's units
-    #   (bazos --sale-type/--category), so an ad in none of them is no orphan.
+    # narrowed (bool, default False): a dispatch walks a subset of the portal (bazos --sale-type/--category/
+    #   --locality/--radius-km), so an ad outside it is no orphan and the run ends no walk cycle.
     # live_categories(limiter) -> (live, configured) | None: the portal's own
     #   category vocabulary as it lists it right now vs as configured; the runner
     #   records any difference in portal_category_drift (alarm, not gate).
@@ -300,7 +300,7 @@ ScopeKey = tuple[tuple[str, Any], ...]
 GroupKey = ScopeKey | None
 Unit = tuple[Any, Scope | None]
 
-# How far back a walk reads its cycle ledger: a group with no end-reached walk in it goes first.
+# How far back a walk reads its cycle ledger: a group with no walk in it goes first.
 CYCLE_LEDGER_DAYS = 14
 
 
@@ -310,7 +310,12 @@ class _ScopeGroup:
 
     left: int = 0
     seen: set[Any] = field(default_factory=set)
-    ended: bool = True
+    all_reached: bool = True
+
+    @property
+    def reached(self) -> bool:
+        """Every unit of the group walked this run, each to the portal's end."""
+        return not self.left and self.all_reached
 
 
 @dataclass(frozen=True)
@@ -340,6 +345,14 @@ def _group_key(scope: Scope | None) -> GroupKey:
     return None if scope is None else _scope_key(scope)
 
 
+def _groups(units: list[Unit]) -> dict[GroupKey, list[Unit]]:
+    """The portal's units by scope group, groups and units in configured order."""
+    groups: dict[GroupKey, list[Unit]] = {}
+    for category, scope in units:
+        groups.setdefault(_group_key(scope), []).append((category, scope))
+    return groups
+
+
 def _named(seen: set[Any], cm: str | None, ct: str | None) -> set[Any]:
     nulls = sum(1 for x in seen if x is None)
     if nulls:
@@ -347,67 +360,63 @@ def _named(seen: set[Any], cm: str | None, ct: str | None) -> set[Any]:
     return {x for x in seen if x is not None}
 
 
-def _run_reached(entries: list[dict[str, Any]], sizes: Mapping[GroupKey, int]) -> tuple[dict[GroupKey, int], bool]:
-    """One ledger run: the groups every unit of which reached the end in it (with what they collected), and whether
-    it ended a cycle (the orphans' entry, scope {})."""
+def _read_run(entries: list[dict[str, Any]], sizes: Mapping[GroupKey, int],
+              ) -> tuple[set[GroupKey], dict[GroupKey, int], bool]:
+    """One ledger run: the groups it walked, those every unit of which reached the end in it (with what they
+    collected), and whether it ended a cycle (the orphans' entry, scope {})."""
     walked: dict[GroupKey, list[tuple[bool, int]]] = {}
-    ended = False
+    closes = False
     for e in entries:
         if e["scope"] == {}:
-            ended = True
+            closes = True
             continue
-        key = _group_key(e["scope"])
-        walked.setdefault(key, []).append((bool(e["reached"]), int(e["collected"] or 0)))
+        walked.setdefault(_group_key(e["scope"]), []).append((bool(e["reached"]), int(e["collected"] or 0)))
     reached = {key: sum(c for _, c in units) for key, units in walked.items()
                if len(units) == sizes.get(key) and all(r for r, _ in units)}
-    return reached, ended
+    return set(walked), reached, closes
 
 
-def _cycle(portal: Portal, conn: Any, run_id: int | None,
-           units: list[Unit]) -> tuple[_Cycle | None, dict[GroupKey, datetime]]:
-    """The cycle this run walks in, and each group's newest end-reached walk start (rule #3 across fragments).
-
-    The open cycle is the runs after the newest cycle end; its anchor is the first one's start. With no such run the
-    run starts a fresh cycle at its own start. A run that recorded no entry (killed before its first unit ended, or
-    from before the cycle) adds nothing. Any anchor is sound for the orphans (every group reached the end since it,
-    and an ad still listed was sighted since it); the partition only decides how much a resumed run re-walks. No
-    connection (a dry run) or an unreadable ledger: no cycle, so the run walks every group and nominates no orphans."""
+def _cycle(portal: Portal, conn: Any, run_id: int | None, groups: Mapping[GroupKey, list[Unit]],
+           ) -> tuple[_Cycle | None, dict[GroupKey, datetime]]:
+    """The cycle this run walks in, and each group's newest walk start (rule #3 across a cut): the runs after the
+    newest cycle end form the open cycle, anchored at the first one's start, which the run resumes while it is
+    younger than the portal's walk timeout; else it starts a fresh one at its own start. A run that recorded no entry
+    adds nothing. Any anchor is sound for the orphans, as every group reached the end since it and an ad still listed
+    was sighted since it. No connection (a dry run) or an unreadable ledger: no cycle, so no orphans."""
     if conn is None:
         return None, {}
-    sizes: dict[GroupKey, int] = {}
-    for _, scope in units:
-        sizes[_group_key(scope)] = sizes.get(_group_key(scope), 0) + 1
+    sizes = {key: len(units) for key, units in groups.items()}
     try:
         start, runs = db.walk_ledger(conn, portal.source, run_id, CYCLE_LEDGER_DAYS)
     except Exception as exc:  # noqa: BLE001 - bookkeeping must not stop a walk
         LOG.warning("CYCLE ledger unreadable for %s (%s): walking every group, no orphans this run", portal.source, exc)
         return None, {}
-    newest: dict[GroupKey, datetime] = {}
+    last_walked: dict[GroupKey, datetime] = {}
     anchor: datetime | None = None
     reached: dict[GroupKey, int] = {}
     for started, entries in runs:
         if not entries:
             continue
-        run_reached, ended = _run_reached(entries, sizes)
-        newest.update(dict.fromkeys(run_reached, started))
+        run_walked, run_reached, closes = _read_run(entries, sizes)
+        last_walked.update(dict.fromkeys(run_walked, started))
         anchor = started if anchor is None else anchor
         reached.update(run_reached)
-        if ended:
+        if closes:
             anchor, reached = None, {}
-    if anchor is None:
-        return _Cycle(start, {}, resumed=False), newest
-    return _Cycle(anchor, reached, resumed=True), newest
+    if anchor is not None and (start - anchor).total_seconds() < portal.walk_timeout_s:
+        return _Cycle(anchor, reached, resumed=True), last_walked
+    if anchor is not None:
+        LOG.info("CYCLE the open cycle from %s outlived the %ss walk timeout; a fresh one starts",
+                 anchor.isoformat(), portal.walk_timeout_s)
+    return _Cycle(start, {}, resumed=False), last_walked
 
 
-def _plan(units: list[Unit], newest: Mapping[GroupKey, datetime], skip: Collection[GroupKey]) -> list[Unit]:
-    """The run's units: group by group, stalest end-reached walk first (never reached before all), siblings together
-    and in configured order, without the groups in `skip`."""
-    order: dict[GroupKey, list[Unit]] = {}
-    for unit in units:
-        order.setdefault(_group_key(unit[1]), []).append(unit)
-    keys = sorted((k for k in order if k not in skip),
-                  key=lambda k: (k in newest, newest.get(k, datetime.min.replace(tzinfo=timezone.utc))))
-    return [unit for key in keys for unit in order[key]]
+def _plan(groups: Mapping[GroupKey, list[Unit]], last_walked: Mapping[GroupKey, datetime],
+          skip: Collection[GroupKey]) -> list[GroupKey]:
+    """The run's groups, least recently walked first (never walked before all, so a group a run could not finish
+    goes after the rest next time), without the groups in `skip`."""
+    never = datetime.min.replace(tzinfo=timezone.utc)
+    return sorted((k for k in groups if k not in skip), key=lambda k: (k in last_walked, last_walked.get(k, never)))
 
 
 def _queue_presence_checks(
@@ -445,26 +454,23 @@ def _queue_presence_checks(
 
 
 def _end_cycle(
-    portal: Portal, conn: Any, cycle: _Cycle, units: list[Unit], reached_now: Mapping[GroupKey, int],
-    **entry: Any,
+    portal: Portal, conn: Any, cycle: _Cycle, keys: Collection[GroupKey], reached_now: Mapping[GroupKey, int],
+    *, total_is_count: bool, upper_bound: bool,
 ) -> tuple[dict[str, Any], bool]:
-    """The entry that ends the cycle (scope {}, the complement of every scope): rule #3 made total over the cycle's
-    runs. When every group reached the end since the anchor it also nominates the active ads in no scope (a NULL
-    label, an auction the walk does not ask for) that nothing sighted since the anchor: a sighting is label-blind and
-    a group's nomination is not, so without this an ad no unit covers is never checked once it leaves the index. An
-    indexless portal's units cover nothing and its walk sees nothing: this is its whole nomination. Otherwise a cycle
-    that collected nothing nominates nothing, as a group does. Returns (entry, the orphan query failed)."""
+    """The entry that ends the cycle (scope {}) and whether its orphan query failed: rule #3 made total, so when every
+    group reached the end since the anchor it nominates the active ads in no scope that nothing sighted since it (a
+    sighting is label-blind, a group's nomination is not; an indexless portal's whole nomination)."""
     reached = {**cycle.reached, **reached_now}
-    keys = list(dict.fromkeys(_group_key(s) for _, s in units))
     short = [k for k in keys if k not in reached]
-    ended = functools.partial(_entry, None, None, scope={}, cycle=cycle.anchor, **entry)
+    end_entry = functools.partial(_entry, None, None, scope={}, cycle=cycle.anchor,
+                                  total_is_count=total_is_count, upper_bound=upper_bound)
     if short:
         LOG.warning("VERIFY orphans skipped: %d scope group(s) did not reach the end in the cycle from %s",
                     len(short), cycle.anchor.isoformat())
-        return ended(declared=0, collected=0, reached=False), False
+        return end_entry(declared=0, collected=0, reached=False), False
     if not sum(reached[k] for k in keys) and not getattr(portal, "indexless", False):
         LOG.warning("VERIFY orphans skipped: the cycle saw no listings")
-        return ended(declared=0, collected=0, reached=False), False
+        return end_entry(declared=0, collected=0, reached=False), False
     try:
         candidates, active_rows = db.orphan_candidates(
             conn, portal.source, [dict(k) for k in keys if k is not None], cycle.anchor,
@@ -472,8 +478,8 @@ def _end_cycle(
         verified = _enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans")
     except Exception as exc:  # noqa: BLE001 - a nomination failure is not a walk failure
         LOG.exception("VERIFY orphans failed: %s -- nothing nominated this cycle", exc)
-        return ended(declared=None, collected=0, reached=False), True
-    return ended(declared=0, collected=0, reached=True, verified=verified), False
+        return end_entry(declared=None, collected=0, reached=False), True
+    return end_entry(declared=0, collected=0, reached=True, verified=verified), False
 
 
 def _enqueue_nominated(
@@ -497,9 +503,9 @@ def _entry(
     declared: int | None, collected: int, reached: bool, total_is_count: bool, upper_bound: bool,
     counts: Mapping[str, int] | None = None, verified: tuple[int, int] = (0, 0),
 ) -> dict[str, Any]:
-    """One scrape_runs.by_category entry: a walked unit's, or the one that ends its cycle (NULL labels, the shape an
-    indexless unit has always had, so the checks read both the same way; scope {}). `scope` is the unit's nomination
-    scope (None: it nominates nothing) and `cycle_started_at` its cycle's anchor: the ledger the next run plans from."""
+    """One scrape_runs.by_category entry: a walked unit's (`scope`: its nomination scope, None if it nominates
+    nothing), or the one that ends its cycle (NULL labels, an indexless unit's shape; scope {}). `cycle_started_at`
+    is its cycle's anchor: Health dates the orphans by the end entry's, and a per-cycle measure groups by it."""
     counts = counts or {}
     return {
         "category_main":        cm,
@@ -571,13 +577,10 @@ def run_index_walk(
 ) -> tuple[int, dict[str, Any]]:
     """Walk the portal's scope groups, touch + enqueue new/price-changed ids, and nominate
     what an end-reached group did not see (rule #3). No detail fetch — the drain consumes the queue.
-
-    A run is one fragment of a CYCLE, one pass over every scope group (`_cycle`): groups go
-    stalest end-reached walk first, siblings together, and a run after a cut one skips the
-    groups that reached the end since the cycle's anchor, so a deploy costs the walk in hand,
-    not the pass. The first run that walks its whole plan ends the cycle; only when every
-    group reached the end since the anchor does it nominate the orphans, and its entry marks
-    the end either way. A narrowed dispatch walks its subset whole and ends nothing.
+    A run is one fragment of a walk CYCLE (`_cycle`): least recently walked group first, siblings
+    together, and a run after a cut one skips the groups that reached the end since the anchor.
+    The first run that walks its whole plan ends the cycle (`_end_cycle`). A narrowed dispatch
+    walks its subset whole and ends nothing.
 
     When run_id is supplied, each unit's entry is committed with its pages as it ends
     (`db.bump_index_progress`), so Health liveness and the cycle's ledger survive a SIGKILL
@@ -594,28 +597,24 @@ def run_index_walk(
     category_aggregates: list[dict[str, Any]] = []
     limiter = build_rate_limiter(
         portal.source, portal.index_rate, getattr(portal, "shared_rate_limiter", False))
-    flags = {"total_is_count": bool(getattr(portal, "total_is_count", False)),
-             "upper_bound": bool(getattr(portal, "coverage_denominator_is_upper_bound", False))}
+    total_is_count = bool(getattr(portal, "total_is_count", False))
+    upper_bound = bool(getattr(portal, "coverage_denominator_is_upper_bound", False))
     narrowed = bool(getattr(portal, "narrowed", False))
     conn = None if dry_run else portal.connect_index()
 
     try:
         _record_category_drift(portal, conn, limiter)
-        categories = portal.categories()
-        units = [(c, _scope(portal, c)) for c in categories]
-        cycle, newest = _cycle(portal, conn, run_id, units)
-        plan = _plan(units, newest, () if cycle is None or narrowed else cycle.reached)
+        by_group = _groups([(c, _scope(portal, c)) for c in portal.categories()])
+        cycle, last_walked = _cycle(portal, conn, run_id, by_group)
+        plan = _plan(by_group, last_walked, () if cycle is None or narrowed else cycle.reached)
         anchor = None if cycle is None else cycle.anchor
         if cycle is not None:
-            LOG.info("CYCLE source=%s anchor=%s resumed=%s groups=%d skipped=%d",
-                     portal.source, anchor.isoformat(), cycle.resumed, len({_group_key(s) for _, s in units}),
-                     0 if narrowed else len(cycle.reached))
-        groups: dict[GroupKey, _ScopeGroup] = {}
-        for _, scope in plan:
-            groups.setdefault(_group_key(scope), _ScopeGroup()).left += 1
+            LOG.info("CYCLE source=%s anchor=%s resumed=%s groups=%d skipped=%d", portal.source,
+                     anchor.isoformat(), cycle.resumed, len(by_group), len(by_group) - len(plan))
+        groups = {key: _ScopeGroup(left=len(by_group[key])) for key in plan}
         reached_now: dict[GroupKey, int] = {}
         cut = False
-        for category, scope in plan:
+        for category, scope in (unit for key in plan for unit in by_group[key]):
             if deadline_reached(deadline):
                 LOG.info(
                     "INDEX %s; stopping cleanly before the next category (%d walked so far)",
@@ -658,7 +657,7 @@ def run_index_walk(
             key = _group_key(scope)
             group = groups[key]
             group.left -= 1
-            group.ended = group.ended and bool(reached_end)
+            group.all_reached = group.all_reached and bool(reached_end)
             to_verify = deferred = 0
             if conn is not None and reached_end:
                 group.seen |= _named(seen_ids, cm_text, ct_text)
@@ -669,7 +668,7 @@ def run_index_walk(
                     # trip this on every category of every walk, and an alarm that is
                     # on by construction is not an alarm. Those portals emit their own
                     # scoped one; declared and collected are recorded in by_category either way.
-                    emit = LOG.info if flags["upper_bound"] else LOG.warning
+                    emit = LOG.info if upper_bound else LOG.warning
                     emit(
                         "COVERAGE cm=%s ct=%s: the walk reached the portal's end but "
                         "collected %d of %s (coverage=%s) -- the gap is nominated, "
@@ -678,7 +677,7 @@ def run_index_walk(
                     )
                 if scope is None:
                     LOG.info("VERIFY skipped cm=%s ct=%s: the category has no nomination scope", cm_text, ct_text)
-                elif not group.left and group.ended:
+                elif group.reached:
                     try:
                         to_verify, deferred = _queue_presence_checks(
                             portal, conn, scope, group, cm_text, ct_text)
@@ -699,7 +698,7 @@ def run_index_walk(
                     "-- an unfinished walk nominates nothing (rule #3)",
                     cm_text, ct_text, len(seen_ids), cat_result_size, coverage,
                 )
-            if not group.left and group.ended:
+            if group.reached:
                 reached_now[key] = len(group.seen)
 
             active_db: int | None = None
@@ -717,8 +716,8 @@ def run_index_walk(
 
             category_aggregates.append(_entry(
                 cm_text, ct_text, scope=scope, cycle=anchor, declared=cat_result_size,
-                collected=len(seen_ids), reached=bool(reached_end), counts=cat_counts,
-                verified=(to_verify, deferred), **flags))
+                collected=len(seen_ids), reached=bool(reached_end), total_is_count=total_is_count,
+                upper_bound=upper_bound, counts=cat_counts, verified=(to_verify, deferred)))
             if conn is not None and run_id is not None:
                 db.bump_index_progress(conn, run_id, cat_pages, category_aggregates[-1])
         unit_entries, unit_failures = len(category_aggregates), failed_categories
@@ -726,14 +725,15 @@ def run_index_walk(
         # The run walked its whole plan: the cycle ends here, closed or short. Its entry is recorded
         # like a unit's (a failed orphan query is an error and an entry short of the end), so the walks
         # check ages it instead of a log line, and the next run plans from it.
-        if cycle is not None and units and not cut and not narrowed:
-            ended, failed = _end_cycle(portal, conn, cycle, units, reached_now, **flags)
+        if cycle is not None and by_group and not cut and not narrowed:
+            end, failed = _end_cycle(portal, conn, cycle, by_group.keys(), reached_now,
+                                     total_is_count=total_is_count, upper_bound=upper_bound)
             failed_categories += failed
-            category_aggregates.append(ended)
+            category_aggregates.append(end)
             LOG.info("CYCLE ended source=%s anchor=%s closed=%s",
-                     portal.source, cycle.anchor.isoformat(), ended["walk_reached_end"])
+                     portal.source, cycle.anchor.isoformat(), end["walk_reached_end"])
             if run_id is not None:
-                db.bump_index_progress(conn, run_id, 0, ended)
+                db.bump_index_progress(conn, run_id, 0, end)
 
         LOG.info(
             "INDEX total=%d pages=%d enqueued=%d",

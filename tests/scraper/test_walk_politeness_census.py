@@ -104,9 +104,9 @@ def test_the_sighting_diff_makes_no_http_request(monkeypatch: pytest.MonkeyPatch
     group = portal_runner._ScopeGroup(seen={"a"})
     assert portal_runner._queue_presence_checks(fake, object(), scope, group, "byt", "prodej") == (1, 0)
     cycle = portal_runner._Cycle(datetime(2026, 10, 29, tzinfo=timezone.utc), {}, resumed=False)
+    key = portal_runner._scope_key(scope)
     entry, failed = portal_runner._end_cycle(
-        fake, object(), cycle, [("byt", scope)], {portal_runner._scope_key(scope): 1},
-        total_is_count=False, upper_bound=False)
+        fake, object(), cycle, [key], {key: 1}, total_is_count=False, upper_bound=False)
     assert (entry["listings_to_verify"], failed) == (1, False)
 
 

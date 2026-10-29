@@ -53,6 +53,7 @@ def _is_drop(exc: BaseException) -> bool:
 class _FakePortal:
     source = "fake"
     index_rate = 1.0
+    walk_timeout_s = 3600
 
     def __init__(self, *, categories=None, reached_end=True,
                  result_size=2, fetch_kinds=None, walk_fails=None, conn_close_error=None,
@@ -501,7 +502,8 @@ def _unit(cat: str, reached: bool = True) -> dict[str, Any]:
 
 
 _END = {"scope": {}, "reached": True, "collected": 0}
-_T1, _T2 = START - timedelta(hours=12), START - timedelta(hours=6)
+# _T1 and _T2 lie outside the fake's one-hour walk timeout; _OPEN inside it.
+_T1, _T2, _OPEN = START - timedelta(hours=12), START - timedelta(hours=6), START - timedelta(minutes=30)
 
 
 class _CutPortal(_FakePortal):
@@ -520,14 +522,36 @@ class _CutPortal(_FakePortal):
 
 
 def test_the_next_fragment_starts_at_the_stalest_group(monkeypatch, ledger):
-    """Stalest end-reached walk first, a group never reached before every other: the unit that ate the budget last
-    time goes last, so the rotation covers the portal (idnes once walked 2 of 10 categories, run after run)."""
+    """Least recently walked first, a group never walked before every other, whatever the outcome: the group that
+    ate the budget last time goes last, so the rotation covers the portal (idnes once walked 2 of 10 categories, run
+    after run), and a group that cannot finish in one run never starves the rest."""
     _nominations(monkeypatch)
     ledger += [(_T1, [_unit("A"), _unit("B"), _unit("C"), _END]),
-               (_T2, [_unit("B"), _unit("C"), _unit("A", reached=False), dict(_END, reached=False)])]
+               (_T2, [_unit("B", reached=False), dict(_END, reached=False)])]
     p = _FakePortal(categories=["A", "B", "C", "D"])
     portal_runner.run_index_walk(p, dry_run=False)
-    assert p.calls["walk"] == ["D", "A", "B", "C"]
+    assert p.calls["walk"] == ["D", "A", "C", "B"]
+
+
+def test_a_resumed_fragment_walks_what_the_cycle_has_not_reached_least_recently_walked_first(monkeypatch, ledger):
+    """Cut in B: the run after it skips A (it reached the end since the anchor) and walks C and D, last walked in
+    the cycle before, ahead of B, which it walked just now."""
+    _nominations(monkeypatch)
+    ledger += [(_T1, [_unit(c) for c in "ABCD"] + [_END]), (_OPEN, [_unit("A"), _unit("B", reached=False)])]
+    p = _FakePortal(categories=["A", "B", "C", "D"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["C", "D", "B"]
+
+
+def test_a_cycle_older_than_the_walk_timeout_is_not_resumed(monkeypatch, ledger):
+    """A cycle is one walk's work: past the portal's walk timeout from its anchor it is left open, and the run
+    starts a fresh one, so a group no run can finish cannot hold the portal's cycle open for ever."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A"), _unit("B", reached=False)])]
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"][-1][1] == START
 
 
 def test_a_fragment_that_does_not_close_the_cycle_nominates_no_orphans(monkeypatch):
@@ -543,8 +567,9 @@ def test_a_fragment_that_does_not_close_the_cycle_nominates_no_orphans(monkeypat
 
 
 def test_the_closing_fragment_resumes_the_cycle_and_nominates_over_all_scopes(monkeypatch, ledger):
-    """The run after the cut skips the groups that reached the end since the anchor, walks the rest, and closes the
-    cycle: the orphans are judged over every scope, against what nothing sighted since the cycle's first run began."""
+    """The run after the cut skips the groups that reached the end since the anchor, walks the rest (C, not yet
+    walked, before the B it cut) and closes the cycle: the orphans are judged over every scope, against what nothing
+    sighted since the cycle's first run began."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
     _rc, first = portal_runner.run_index_walk(_CutPortal("B"), dry_run=False)
@@ -554,7 +579,7 @@ def test_the_closing_fragment_resumes_the_cycle_and_nominates_over_all_scopes(mo
                         lambda conn, source, run_id, days: (START + timedelta(minutes=40), list(ledger)))
     p = _FakePortal(categories=["A", "B", "C"])
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
-    assert p.calls["walk"] == ["B", "C"]
+    assert p.calls["walk"] == ["C", "B"]
     assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "ABC"], START)]
     assert [(e["category_main"], e["scope"], e["walk_reached_end"], e["cycle_started_at"])
             for e in agg["by_category"]][-1] == (None, {}, True, START.isoformat())
@@ -569,7 +594,7 @@ def test_nominations_per_cycle_match_an_uncut_walk(monkeypatch, ledger):
     cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
     fragments = []
     for i, cut_at in enumerate(["B", "C", None]):
-        at = START + timedelta(minutes=30 * i)
+        at = START + timedelta(minutes=20 * i)
         monkeypatch.setattr(portal_runner.db, "walk_ledger",
                             lambda conn, source, run_id, days, at=at: (at, list(ledger)))
         _rc, agg = portal_runner.run_index_walk(_CutPortal(cut_at), dry_run=False)
@@ -602,11 +627,11 @@ def test_a_cycle_whose_last_run_died_after_its_plan_closes_on_the_next(monkeypat
     nothing left to walk and closes the cycle at its original anchor."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
-    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A"), _unit("B")])]
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_OPEN, [_unit("A"), _unit("B")])]
     p = _FakePortal(categories=["A", "B"])
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert p.calls["walk"] == []
-    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "AB"], _T2)]
+    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "AB"], _OPEN)]
     assert [e["scope"] for e in agg["by_category"]] == [{}]
 
 
@@ -640,7 +665,7 @@ def test_a_narrowed_dispatch_walks_its_subset_whole_and_ends_no_cycle(monkeypatc
     """bazos --sale-type: the operator asked for those units, so none is skipped, and a subset proves nothing about
     the rest of the portal, so the cycle stays as it was."""
     cap = _nominations(monkeypatch)
-    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A")])]
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_OPEN, [_unit("A")])]
     p = _FakePortal(categories=["A", "B"])
     p.narrowed = True
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)

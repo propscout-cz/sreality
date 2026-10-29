@@ -353,9 +353,9 @@ _Avoid_: category pair, category (alone); a slice or scope is one part of a unit
 
 **Walk cycle**:
 One pass over every unit of a portal, which a deploy or a time limit may split into several walks: the
-walk after a cut picks up the units not yet finished, stalest first. The cycle starts with its first
-walk (its anchor) and ends with the first walk that gets through all it set out to do; only a cycle in
-which every unit reached the end may nominate the ads no unit covers.
+walk after a cut picks up the units not yet finished, least recently walked first, for as long as one walk
+may run. The cycle starts with its first walk (its anchor) and ends with the first walk that gets through
+all it set out to do; only a cycle in which every unit reached the end may nominate the ads no unit covers.
 _Avoid_: round, full walk, fragment (alone)
 
 **Declared total**:

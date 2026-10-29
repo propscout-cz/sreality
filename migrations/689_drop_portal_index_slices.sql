@@ -4,10 +4,10 @@
 -- portal_index_slices (migration 454) remembered when each idnes slice was last walked, so a walk
 -- cut by its budget began next time where coverage was oldest. That memory is now the runner's,
 -- for every portal: each walked unit's by_category entry, persisted as the unit ends in the same
--- statement as its page count, carries its nomination scope, its reached-end verdict and its walk
--- cycle's anchor, and scraper/portal_runner orders the next run stalest end-reached group first
--- and resumes a cut cycle from it. Health's walks checks already read the same entries. Two
--- records of "this unit reached the end" could disagree; one cannot.
+-- statement as its page count, carries its nomination scope and its reached-end verdict, and
+-- scraper/portal_runner orders the next run least recently walked group first and resumes a cut
+-- walk cycle from it. Health's walks checks already read the same entries. Two records of "this
+-- unit reached the end" could disagree; one cannot.
 --
 -- Live on 2026-10-29: 300 rows (idnes 150, written until this PR; ceskereality 140 and mmreality
 -- 10, unread since 2026-10-19). No function, view or materialized view names the table.

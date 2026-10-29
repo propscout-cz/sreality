@@ -265,7 +265,7 @@ every `/zahranici/` spelling 404s). That last slice is not a nicety: the kraj sl
 14 slices, zero overlap and zero gap), and `kraj_sum + abroad` equals the national declared total
 on all 10 categories. Slicing here is **not** a workaround for a pagination cap — idnes has none
 — it is what makes coverage *provable* (15 declared totals to check instead of one). Which
-category goes first is the runner's walk cycle (rule 3, 2026-10-29): stalest end-reached first,
+category goes first is the runner's walk cycle (rule 3, 2026-10-29): least recently walked first,
 and a cut walk resumes where it stopped. That cures the defect idnes's own slice ledger
 (`portal_index_slices`, migration 454; dropped by migration 689) was built for, which was amnesia
 rather than speed — a walk that runs out of budget used to restart at the first category's first
@@ -1399,18 +1399,22 @@ renumber.** Navigate by area:
    **2026-10-29 — a cut walk resumes as one CYCLE** (#2020, Actions exit W1; `portal_runner._cycle`).
    A cycle is one pass over every scope group; its anchor is its first run's start. Each run
    reads the ledger, `scrape_runs.by_category` (every unit's entry carries its `scope`, its
-   verdict and `cycle_started_at`, persisted as the unit ends), and walks group by group,
-   stalest end-reached walk first, never-reached first of all, siblings together. A run cut by
-   our stop (a signal, the deadline, a kill) leaves the cycle open; the next run skips the groups
-   that reached the end since the anchor. The first run that walks its whole plan ends the cycle:
+   verdict and `cycle_started_at`, persisted as the unit ends), and walks group by group, least
+   recently walked first whatever the outcome (idnes's slice ledger's rule, lifted), a group never
+   walked first of all, siblings together, so a group no run can finish goes after the rest next
+   time. A run cut by our stop (a signal, the deadline, a kill) leaves the cycle open; the next run
+   skips the groups that reached the end since the anchor, while the cycle is younger than the
+   portal's `walk_timeout_s` (a cycle is one walk's work; past it a fresh one starts). The first run that walks its whole plan ends the cycle:
    it nominates the orphans only when every group reached the end since the anchor, otherwise its
    end entry reads `walk_reached_end: false` and the next run starts a fresh cycle, so one failing
    category cannot starve the others. Per-group nominations stay inside the run (its seen set,
    which also re-fetches an ad the portal moved to another category). A narrowed dispatch walks
    its subset whole and ends nothing; an unreadable ledger walks everything and nominates no
    orphans. Any anchor is sound (every group reached the end since it, and an ad still listed was
-   sighted since it); the partition only decides how much a resumed run re-walks. On GitHub a cut
-   run resumes at its next scheduled slot; the job runner re-runs an interrupted job at once.
+   sighted since it); the partition only decides how much a resumed run re-walks. Health dates the
+   end entry, and so the orphans and the portal's every-unit walk, at the cycle's anchor
+   (`scripts/checks/scraping.py`). On GitHub the next scheduled walk lies past the timeout and starts
+   afresh, as before; the job runner re-runs an interrupted job at once, inside the cycle.
 
    **2026-09-08 — the nomination gate became STRUCTURAL; the count stopped voting.** Until this
    date the 5th element of `walk_category` was arithmetic: `walk_is_complete(collected,

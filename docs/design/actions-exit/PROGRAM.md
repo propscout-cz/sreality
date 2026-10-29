@@ -197,7 +197,8 @@ production.
   resumed run skips scope groups whose reached-end is newer than the cycle's anchor (the first fragment's
   start), siblings stay adjacent, and the orphan-nomination step runs only in the fragment that closes the
   cycle over all of the portal's scopes with `last_seen_at >= anchor` as "seen" (rule 3 intact). A run that
-  walks its whole plan ends the cycle, short when a group failed, so one failing group cannot starve the rest.
+  walks its whole plan ends the cycle, short when a group failed; groups go least recently walked first (idnes's
+  rule) and a cycle resumes only within the walk timeout of its anchor, so no group can starve the rest.
   Source of truth (operator ruling 2026-10-29, #2020): `scrape_runs.by_category`, whose entries carry each
   unit's scope and cycle anchor; idnes's `_slice_order` and `portal_index_slices` are deleted (migration 689).
 - **Secrets**: Railway's service variables are the store of record for runtime (the runner references the

@@ -197,18 +197,22 @@ checks read the same entries. (`portal_index_slices`, migration 454, idnes's own
 slice ledger, went with migration 689.)
 
 - A **cycle** is one pass over every scope group; its anchor is its first run's
-  start. A run walks group by group, **stalest end-reached walk first**, a group
-  never reached first of all (unknown is never "fresh": that is the starvation
-  that once left 8 of 10 idnes categories unwalked), siblings together.
+  start. A run walks group by group, **least recently walked first** whatever the
+  outcome (idnes's slice-ledger rule, lifted), a group never walked first of all
+  (unknown is never "fresh": that is the starvation that once left 8 of 10 idnes
+  categories unwalked), siblings together; the group that ate the budget goes
+  last next time, so one no run can finish never starves the rest.
 - A run **cut by our stop** (a signal, the deadline, a kill) leaves the cycle open,
   so it writes no end; the next run skips the groups that reached the end since
-  the anchor (`CYCLE … resumed=True skipped=N`).
+  the anchor (`CYCLE … resumed=True skipped=N`), while the cycle is younger than
+  the portal's `walk_timeout_s`. Past it the cycle is left (`CYCLE the open cycle
+  from … outlived …`) and a fresh one starts: on GitHub, the next scheduled walk.
 - The first run that walks its **whole plan ends the cycle**: the orphans are
   nominated only when every group reached the end since the anchor, against what
   nothing sighted since it (`last_seen_at < anchor`). Otherwise the end entry reads
   `walk_reached_end: false` and the next run starts afresh, so one failing
   category cannot starve the rest. The end entry is the NULL-labelled orphans
-  entry with `scope: {}`.
+  entry with `scope: {}`; Health dates it at the anchor (`unnominated`).
 - Group nominations stay inside the run (its seen set). A narrowed dispatch walks
   its subset whole and ends nothing; an unreadable ledger walks everything and
   nominates no orphans. Any anchor is sound; the partition only decides how much a
