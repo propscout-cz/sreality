@@ -43,7 +43,7 @@ import {
   stageLook,
 } from './glyphs';
 import { COLLECTION_SAVE_LABEL } from '../../frontend/src/lib/collectionRules';
-import { stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
+import { REMOVE_QUESTION, removeWarning, stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
 import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
 import { isLiveDeal, type Curation, type ListKind, type Pending, type Store } from './store';
 import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
@@ -825,15 +825,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
      * deleted and re-adding restamps them — so it asks, in the app's words,
      * and points at the closed stages, which keep the deal's record. */
     const confirm = h('div', 'confirm');
-    confirm.appendChild(h('p', 'confirm-q', 'Odebrat z pipeline?'));
-    confirm.appendChild(h(
-      'p', 'confirm-d',
-      'Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po '
-        + 'opětovném přidání se počítají znovu.'
-        + ((stages ?? []).some((s) => s.is_terminal)
-          ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.'
-          : ''),
-    ));
+    confirm.appendChild(h('p', 'confirm-q', REMOVE_QUESTION));
+    confirm.appendChild(h('p', 'confirm-d', removeWarning(stages ?? [])));
     const actions = h('div', 'confirm-actions');
     const yes = h('button', 'yes', 'Odebrat');
     yes.dataset.key = 'confirm-yes';
