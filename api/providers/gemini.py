@@ -197,10 +197,13 @@ _GEMINI_UNSUPPORTED_SCHEMA_KEYS = frozenset({"additionalProperties", "$schema"})
 def _schema_for_gemini(node: Any) -> Any:
     """Recursively strip JSON-Schema keys Gemini's schema parser rejects."""
     if isinstance(node, dict):
+        # Gemini's Schema.enum is strings only: an integer vocabulary (recently_added_days' 1, 3, 7, 14, 30) is
+        # dropped here, its values stay in the description and the server still refuses any other.
+        numeric = node.get("type") in ("integer", "number")
         return {
             k: _schema_for_gemini(v)
             for k, v in node.items()
-            if k not in _GEMINI_UNSUPPORTED_SCHEMA_KEYS
+            if k not in _GEMINI_UNSUPPORTED_SCHEMA_KEYS and not (numeric and k == "enum")
         }
     if isinstance(node, list):
         return [_schema_for_gemini(x) for x in node]

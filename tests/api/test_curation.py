@@ -882,14 +882,14 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     out = curation.list_notes(conn, 99)
     assert [n["property_id"] for n in out["data"]] == [42]
     reads = [p for q, p in conn.executed if "FROM property_notes" in q]
-    assert reads == [(42,)]
+    assert reads == [([42],)]
 
 
 def test_list_notes_unresolvable_id_reads_its_own_id():
     conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert curation.list_notes(conn, 7) == {"data": []}
     reads = [p for q, p in conn.executed if "FROM property_notes" in q]
-    assert reads == [(7,)]
+    assert reads == [([7],)]
 
 
 def test_delete_note_redirects_merged_away_to_survivor():

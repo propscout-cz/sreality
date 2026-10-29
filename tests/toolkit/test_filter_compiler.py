@@ -1,8 +1,9 @@
 """The one filter compiler (C4, rule 16), tested at its interface.
 
 `compile_filter_where(values, grain)` is the only place a registry FilterDef becomes a
-WHERE predicate for the Watchdog (`PROPERTIES_GRAIN`) and every estimation cohort
-(`LISTINGS_GRAIN`). Per-filter output is pinned by the golden
+WHERE predicate for the Watchdog (`PROPERTIES_GRAIN`), every estimation cohort
+(`LISTINGS_GRAIN`) and the agents' search over Browse's own source (`BROWSE_GRAIN`).
+Per-filter output is pinned by the golden
 (`tests/toolkit/test_filter_compiler_golden.py`); this file pins the module's contracts:
 the kind templates, each hook, that every filter has exactly one implementation, the
 agenda gate (rules 16 + 17), the retired-filter raise, and the text guards that keep the
@@ -23,15 +24,18 @@ from psycopg.types.json import Jsonb
 import toolkit.filter_registry as fr
 from toolkit import filter_compiler as fc
 from toolkit.filter_compiler import (
+    BROWSE_GRAIN,
     LISTINGS_GRAIN,
     PROPERTIES_GRAIN,
     RETIRED_FILTERS,
     compile_filter_where,
 )
-from toolkit.measures import per_m2_sql, plot_area_sql, tom_days_sql
+from toolkit.measures import per_m2_sql, plot_area_sql, tom_days_sql, tom_observed_sql
 
 _ROOT = Path(__file__).resolve().parents[2]
-_GRAINS = (LISTINGS_GRAIN, PROPERTIES_GRAIN)
+_GRAINS = (LISTINGS_GRAIN, PROPERTIES_GRAIN, BROWSE_GRAIN)
+_PROPERTY_GRAINS = (PROPERTIES_GRAIN, BROWSE_GRAIN)
+_KINDS = json.loads((_ROOT / "tests" / "fixtures" / "filter_sql_kinds.json").read_text())
 
 
 def _ids(agenda: fr.Agenda) -> set[str]:
@@ -63,10 +67,16 @@ def test_each_kind_renders_its_template(grain: fc.FilterGrain) -> None:
          {"min_usable_area": 10}),
         ({"max_usable_area": 0}, "l.usable_area <= %(max_usable_area)s",
          {"max_usable_area": 0}),
-        ({"furnished": ["ano", fr.UNKNOWN_FILTER_VALUE]},
+        ({"furnished": ["ano", "ne", fr.UNKNOWN_FILTER_VALUE]},
          "(l.furnished = ANY(%(furnished)s) OR "
          "(l.furnished IS NULL OR NOT (l.furnished = ANY(%(furnished_canon)s))))",
-         {"furnished": ["ano"], "furnished_canon": list(fr.FURNISHED_CANONICAL)}),
+         {"furnished": ["ano", "ne"], "furnished_canon": list(fr.FURNISHED_CANONICAL)}),
+        ({"furnished": ["ano", fr.UNKNOWN_FILTER_VALUE]},
+         "(l.furnished = %(furnished)s OR "
+         "(l.furnished IS NULL OR NOT (l.furnished = ANY(%(furnished_canon)s))))",
+         {"furnished": "ano", "furnished_canon": list(fr.FURNISHED_CANONICAL)}),
+        ({"energy_rating_match": ["A", "B"]}, "l.energy_rating = ANY(%(energy_rating_match)s)",
+         {"energy_rating_match": ["A", "B"]}),
         ({"ownership": [fr.UNKNOWN_FILTER_VALUE]},
          "((l.ownership IS NULL OR NOT (l.ownership = ANY(%(ownership_canon)s))))",
          {"ownership_canon": list(fr.OWNERSHIP_CANONICAL)}),
@@ -75,11 +85,26 @@ def test_each_kind_renders_its_template(grain: fc.FilterGrain) -> None:
         assert compile_filter_where(values, grain) == ([clause], params), values
 
 
-def test_the_property_grain_clauses_are_the_shared_table() -> None:
-    """Browse hand-codes the same ids (registryQueryBuilder.test.ts reads this table)."""
-    table = json.loads((_ROOT / "tests" / "fixtures" / "filter_sql_kinds.json").read_text())
-    assert set(PROPERTIES_GRAIN.clauses) == set(table["property_grain_clauses"])
-    assert dict(LISTINGS_GRAIN.clauses) == {}
+def test_the_property_grains_own_spellings_are_the_shared_table() -> None:
+    """Browse hand-codes the same ids (registryQueryBuilder.test.ts reads this table): the
+    column-backed filters a property relation spells in its own shape, by ONE portal rule."""
+    for grain in _PROPERTY_GRAINS:
+        own = {fid for fid in grain.hooks if fr.sql_kind(fr.REGISTRY[fid]) is not None}
+        assert own == set(_KINDS["property_grain_clauses"]), grain.agenda
+    assert PROPERTIES_GRAIN.hooks["portals"] is BROWSE_GRAIN.hooks["portals"]
+    assert not {fid for fid in LISTINGS_GRAIN.hooks if fr.sql_kind(fr.REGISTRY[fid]) is not None}
+
+
+@pytest.mark.parametrize("grain", _GRAINS, ids=lambda g: str(g.agenda))
+def test_a_one_element_list_is_an_equality(grain: fc.FilterGrain) -> None:
+    """The planner rule Browse follows (`postgrest_single`): a ScalarArrayOp in a btree's
+    equality prefix costs the index its order."""
+    single = _KINDS["kinds"]["any"]["sql_single"]
+    assert single == fc._KIND_SQL["eq"]
+    assert compile_filter_where({"energy_rating_match": ["A"]}, grain) == (
+        [single.format(expr="l.energy_rating", id="energy_rating_match")], {"energy_rating_match": "A"})
+    for kind, row in _KINDS["kinds"].items():
+        assert row["sql_single"] == (single if kind == "any" else row["sql"]), kind
 
 
 def test_the_rule_23_measures_resolve_per_relation() -> None:
@@ -92,6 +117,9 @@ def test_the_rule_23_measures_resolve_per_relation() -> None:
         "l.price_per_m2 >= %(min_price_per_m2)s",
         f"{plot_area_sql('l')} <= %(max_estate_area)s",
     ]
+    assert compile_filter_where(values, BROWSE_GRAIN)[0] == [
+        "l.price_per_m2 >= %(min_price_per_m2)s", "l.plot_area_m2 <= %(max_estate_area)s",
+    ]
 
 
 @pytest.mark.parametrize("grain", _GRAINS, ids=lambda g: str(g.agenda))
@@ -103,18 +131,19 @@ def test_an_unset_value_renders_nothing(grain: fc.FilterGrain, unset: Any) -> No
 
 def test_the_kind_templates_are_the_shared_table() -> None:
     """The same table Browse's TS dispatch is tested against (registryQueryBuilder.test.ts)."""
-    table = json.loads((_ROOT / "tests" / "fixtures" / "filter_sql_kinds.json").read_text())
-    assert dict(fc._KIND_SQL) == {k: v["sql"] for k, v in table["kinds"].items()}
+    assert dict(fc._KIND_SQL) == {k: v["sql"] for k, v in _KINDS["kinds"].items()}
     kinds = {fr.sql_kind(f) for f in fr.all_filters()} - {None}
-    assert kinds == set(table["kinds"])
+    assert kinds == set(_KINDS["kinds"])
 
 
 # --- the hooks, called directly --------------------------------------------------------
 
 
-def _hook(fid: str, value: Any, values: dict[str, Any] | None = None) -> tuple[list[str], dict]:
+def _hook(fid: str, value: Any, values: dict[str, Any] | None = None,
+          grain: fc.FilterGrain | None = None) -> tuple[list[str], dict]:
     params: dict[str, Any] = {}
-    return fc._HOOKS[fid](fid, value, {fid: value, **(values or {})}, params), params
+    hook = (grain.hooks if grain else fc._HOOKS)[fid]
+    return hook(fid, value, {fid: value, **(values or {})}, params), params
 
 
 def test_price_bounds_keep_no_price_rows_only_when_asked() -> None:
@@ -153,13 +182,38 @@ def test_seen_days_bounds_are_inverted_against_their_affix() -> None:
         "l.first_seen_at <= now() - make_interval(days => %(first_seen_min_days)s)"]
 
 
+def test_browses_recency_presets_are_within_the_last_n_days_of_its_own_columns() -> None:
+    """queries.ts applyFilters: added = first_seen_at, changed = last_change_at, both `>=`."""
+    assert compile_filter_where({"recently_added_days": 3, "recently_changed_days": 7}, BROWSE_GRAIN) == (
+        ["l.first_seen_at >= now() - make_interval(days => %(recently_added_days)s)",
+         "l.last_change_at >= now() - make_interval(days => %(recently_changed_days)s)"],
+        {"recently_added_days": 3, "recently_changed_days": 7})
+
+
+def test_with_estimates_is_browses_prefilter_relation_and_false_is_no_constraint() -> None:
+    assert _hook("with_estimates", True) == (
+        ["EXISTS (SELECT 1 FROM property_estimates_public e WHERE e.property_id = l.property_id)"], {})
+    assert _hook("with_estimates", False) == _hook("with_estimates", None) == ([], {})
+
+
+def test_observed_tom_is_the_measure_over_an_ad_and_the_published_flag_on_browse() -> None:
+    """Browse's flag is the property's EARLIEST ad's (migration 625), not the row's own measure."""
+    assert compile_filter_where({"tom_observed_only": True}, LISTINGS_GRAIN)[0] == [tom_observed_sql("l")]
+    assert compile_filter_where({"tom_observed_only": True}, BROWSE_GRAIN)[0] == ["l.tom_observed"]
+    for grain in (LISTINGS_GRAIN, BROWSE_GRAIN):
+        assert compile_filter_where({"tom_observed_only": False}, grain) == ([], {})
+
+
 def test_tom_bounds_read_the_tom_measure_spelled_over_listings() -> None:
     """`listings` has no tom_days column, so the measure is spelled over it (the same split as
-    plot_area_m2); the Watchdog agenda does not declare the bounds at all."""
+    plot_area_m2); Browse's read model publishes it; the Watchdog agenda does not declare the
+    bounds at all."""
     values = {"tom_days_min": 5, "tom_days_max": 9}
     assert compile_filter_where(values, LISTINGS_GRAIN) == (
         [f"{tom_days_sql('l')} >= %(tom_days_min)s", f"{tom_days_sql('l')} <= %(tom_days_max)s"],
         values)
+    assert compile_filter_where(values, BROWSE_GRAIN)[0] == [
+        "l.tom_days >= %(tom_days_min)s", "l.tom_days <= %(tom_days_max)s"]
     with pytest.raises(ValueError, match="agenda violation"):
         compile_filter_where(values, PROPERTIES_GRAIN)
 
@@ -186,6 +240,32 @@ def test_city_index_rules_is_one_obec_predicate_with_a_jsonb_param() -> None:
     assert _hook("city_index_rules", []) == ([], {})
 
 
+# --- the portal rule, one on both property grains --------------------------------------
+
+
+_RULE = ("portal_status_matches(l.is_active, l.all_sources, l.active_sources, %(portals)s::text[], "
+         "%(status)s::text, %(portals_excluded)s::text[], %(portals_excluded_active_only)s)")
+
+
+@pytest.mark.parametrize("grain", _PROPERTY_GRAINS, ids=lambda g: str(g.agenda))
+def test_the_portal_rule_renders_once_whichever_side_is_set(grain: fc.FilterGrain) -> None:
+    """A modifier alone still renders it (the hook runs unset); the Watchdog's arm is a NULL status."""
+    assert compile_filter_where({"portals": ["idnes"]}, grain) == ([_RULE], {
+        "portals": ["idnes"], "status": None, "portals_excluded": None, "portals_excluded_active_only": False})
+    assert compile_filter_where({"portals_excluded": ["bazos"], "portals_excluded_active_only": True}, grain) == (
+        [_RULE], {"portals": None, "status": None, "portals_excluded": ["bazos"],
+                  "portals_excluded_active_only": True})
+    assert compile_filter_where({"portals_excluded_active_only": True}, grain) == ([], {})
+
+
+def test_the_status_is_browses_and_any_is_no_constraint() -> None:
+    assert compile_filter_where({"status": "inactive"}, BROWSE_GRAIN) == ([_RULE], {
+        "portals": None, "status": "inactive", "portals_excluded": None, "portals_excluded_active_only": False})
+    assert compile_filter_where({"status": "any"}, BROWSE_GRAIN) == ([], {})
+    with pytest.raises(ValueError, match="agenda violation: status"):
+        compile_filter_where({"status": "active"}, PROPERTIES_GRAIN)
+
+
 # --- one implementation per filter -----------------------------------------------------
 
 
@@ -193,19 +273,22 @@ def test_city_index_rules_is_one_obec_predicate_with_a_jsonb_param() -> None:
 def test_every_filter_on_a_grain_has_exactly_one_implementation(grain: fc.FilterGrain) -> None:
     for f in fr.filters_for_agenda(grain.agenda):
         homes = [
-            fr.sql_kind(f) is not None and f.id not in fc._HOOKS and f.id not in grain.clauses,
-            f.id in fc._HOOKS,
+            fr.sql_kind(f) is not None and f.id not in fc._HOOKS and f.id not in grain.hooks,
+            f.id in fc._HOOKS and f.id not in grain.hooks,
             f.id in grain.caller_renders,
-            f.id in grain.clauses,
+            f.id in grain.hooks,
         ]
-        assert sum(homes) == 1, f"{f.id}: {homes} (kind, hook, caller-rendered, clause)"
+        assert sum(homes) == 1, f"{f.id}: {homes} (kind, shared hook, caller-rendered, own hook)"
 
 
-def test_the_hooks_are_exactly_the_irregular_filters_no_adapter_renders() -> None:
-    both = _ids(fr.Agenda.COMPARABLES) | _ids(fr.Agenda.WATCHDOG)
-    irregular = {fid for fid in both if fr.sql_kind(fr.REGISTRY[fid]) is None}
-    rendered = LISTINGS_GRAIN.caller_renders | PROPERTIES_GRAIN.caller_renders
-    assert set(fc._HOOKS) == irregular - rendered
+def test_every_hook_serves_a_filter_a_grain_declares_and_renders() -> None:
+    """No dead hook: a shared one serves some grain that neither renders the id itself nor
+    spells it in its own hook; a grain's own hook, a filter that grain declares."""
+    for fid in fc._HOOKS:
+        assert any(fid in _ids(g.agenda) and fid not in g.caller_renders and fid not in g.hooks
+                   for g in _GRAINS), fid
+    for g in _GRAINS:
+        assert set(g.hooks) <= _ids(g.agenda) - g.caller_renders, g.agenda
 
 
 def test_every_model_field_is_partitioned() -> None:
@@ -301,7 +384,7 @@ def test_basis_is_inseparable_from_the_measure() -> None:
     assert based
     for f in based:
         assert LISTINGS_GRAIN.exprs[f.pg_column] == per_m2_sql("l"), f.id
-        assert f.pg_column not in PROPERTIES_GRAIN.exprs, f.id
+        assert f.pg_column not in PROPERTIES_GRAIN.exprs and f.pg_column not in BROWSE_GRAIN.exprs, f.id
 
 
 @pytest.mark.parametrize("grain", _GRAINS, ids=lambda g: str(g.agenda))
@@ -325,6 +408,9 @@ def test_compiled_param_keys_are_disjoint_from_every_caller_key() -> None:
         "bbox_west", "bbox_south", "bbox_east", "bbox_north",
         "disposition_loose", "area_min", "area_max", "floor_min", "floor_max",
         "exclude_listing_ids",
+        # api/property_search: Browse's source arguments and the page.
+        "hide_dismissed", "limit", "offset",
+        *(f"{s}_{side}" for s in ("tags", "collections", "pipeline") for side in ("set", "in", "out")),
     }
     assert not emitted & callers
     assert not {k for k in emitted if k.startswith("district_codes")}
@@ -344,6 +430,7 @@ def test_the_module_text_stays_out_of_the_spatial_and_measure_rails() -> None:
     text = (_ROOT / "toolkit" / "filter_compiler.py").read_text(encoding="utf-8")
     code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
     assert "ll.geom" not in code
-    assert "dismiss" not in code.lower()
+    # It only names Browse's lens as a key its adapter renders, never renders one.
+    assert "dismiss" not in code.lower().replace('"show_dismissed"', "")
     assert not re.search(r"K[čc]\s*/\s*m", code)
     assert not _HAND_TYPED_DIVISION.search(code)

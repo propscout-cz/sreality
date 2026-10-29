@@ -1,10 +1,13 @@
 """Census of the tool registry (#2062): every tool declares its tenancy and effect, no input schema names an
-identity, every schema is portable, only the registry opens a connection, and no declared filter is dropped."""
+identity, every schema is portable, only the registry opens a connection, no declared filter is dropped, and no
+tool's columns name a parked condition level, a city index or a broker (#2063)."""
 
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
+import importlib
 import re
 from pathlib import Path
 from typing import Any
@@ -14,7 +17,7 @@ from pydantic import BaseModel
 
 from api.capabilities import registry
 from api.capabilities.entry import Caller, Effect, Entry, Tenancy
-from api.capabilities.schema import portable
+from api.capabilities.schema import PORTABLE_KEYWORDS, nodes, portable
 from tests.api._script_conn import ScriptConn
 from toolkit import filter_registry as fr
 
@@ -51,10 +54,11 @@ def test_a_tool_cannot_be_declared_without_tenancy_or_effect() -> None:
         Entry(name="x", description="x", args=BaseModel, handler=lambda c, a: {}, tenancy=Tenancy.MARKET)
 
 
-def test_a_write_is_only_ever_to_the_users_own_data() -> None:
+def test_a_market_tool_only_reads_so_a_write_is_only_ever_to_the_users_own_data() -> None:
+    """The service connection is bounded READ ONLY (registry._connection): a market tool that wrote would fail."""
     for entry in ENTRIES.values():
-        if entry.effect is Effect.WRITE:
-            assert entry.tenancy is Tenancy.TENANT, entry.name
+        if entry.tenancy is Tenancy.MARKET:
+            assert entry.effect is Effect.READ, entry.name
 
 
 # --- 2-3. no identity in any input schema -----------------------------------------------------------------------
@@ -97,31 +101,18 @@ def test_a_market_tool_takes_no_id_but_a_property_or_an_ad_and_never_forces_a_re
         fields = {d.rsplit(".", 1)[-1] for d, _ in _walk(entry.input_schema)}
         assert "force_refresh" not in fields, name
         if entry.tenancy is Tenancy.MARKET:
-            assert {f for f in fields if f.endswith("_id")} <= {"property_id", "listing_id"}, name
+            ids = {f for f in fields if f.endswith(("_id", "_ids"))}
+            assert ids <= {"property_id", "listing_id", "property_ids", "listing_ids"}, name
 
 
 # --- 4. portable shape ------------------------------------------------------------------------------------------
-
-_UNPORTABLE = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "title", "const", "exclusiveMinimum", "exclusiveMaximum"}
-
-
-def _nodes(node: Any) -> list[dict[str, Any]]:
-    if isinstance(node, list):
-        return [n for x in node for n in _nodes(x)]
-    if not isinstance(node, dict):
-        return []
-    out = [node]
-    for key, value in node.items():
-        out += [n for sub in value.values() for n in _nodes(sub)] if key == "properties" else _nodes(value)
-    return out
-
 
 def test_every_input_schema_is_portable_to_every_provider() -> None:
     for name, entry in ENTRIES.items():
         schema = entry.input_schema
         assert schema["type"] == "object", name
-        for node in _nodes(schema):
-            assert not _UNPORTABLE & set(node), (name, _UNPORTABLE & set(node))
+        for node in nodes(schema):
+            assert set(node) <= PORTABLE_KEYWORDS, (name, set(node) - PORTABLE_KEYWORDS)
             assert not isinstance(node.get("type"), list), name
             if node.get("type") == "object":
                 assert node.get("additionalProperties") is False, name
@@ -177,6 +168,10 @@ _POINT = {"lat": 50.08, "lng": 14.42, "area_m2": 60.0, "disposition": "2+kk", "f
 # compute_listing_velocity reads its subject first: is_active, disposition, lat, lng, categories, id, tom_days.
 _VELOCITY_SUBJECT = (lambda sql: "AS tom_days" in sql and "l.is_active, l.disposition" in sql,
                      [(True, "2+kk", 50.08, 14.42, "byt", "prodej", 70, 12)])
+_COUNT = (lambda sql: sql.startswith("SELECT count(*)"), [(0,)])
+# A filter that only modifies another renders only beside it: the baseline sets the one it modifies.
+_PARTNERS = {"include_no_price": {"min_price_czk": 1_000_000}, "portals_excluded_active_only": {"portals_excluded": ["bazos"]},
+             "price_change_window_days": {"price_change_count_min": 2}}
 
 
 def _point_fields(entry: Entry) -> tuple[str, ...]:
@@ -197,36 +192,48 @@ def _baseline(entry: Entry) -> dict[str, Any]:
         args["lifecycle"] = "active"   # max_age_days renders only with a lifecycle gate
     if "floor_band" in fields:
         args["floor_band"] = 2         # the point's floor renders only inside a floor band
+    for modifier, partner in _PARTNERS.items():
+        if modifier in fields:
+            args.update(partner)
     return args
 
 
 def _distinct(prop: dict[str, Any], current: Any) -> Any:
-    """A valid value for `prop` that is not `current`."""
+    """A valid value for `prop` that is not `current`; a composite is built from its own properties."""
     if prop.get("type") == "array":
-        return [prop["items"]["enum"][0]] if "enum" in prop["items"] else ["x"]
+        return [_distinct(prop["items"], None)]
+    if prop.get("type") == "object":
+        return {k: _distinct(sub, None) for k, sub in prop["properties"].items()}
     if "enum" in prop:
         return next(v for v in prop["enum"] if v != current)
     floor = prop.get("minimum", 0)
-    return {"integer": floor + 7, "number": floor + 0.37, "boolean": not current}[prop["type"]]
+    return {"integer": floor + 7, "number": floor + 0.37, "boolean": not current, "string": "x"}[prop["type"]]
 
 
-def _statements(name: str, args: dict[str, Any]) -> list[tuple[str, Any]]:
-    conn = ScriptConn([_VELOCITY_SUBJECT])
-    registry.call(Caller(market=conn), name, args)
+def _statements(name: str, args: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT])
+
+    @contextlib.contextmanager
+    def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:
+        yield conn
+    monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", own)
+    registry.call(Caller(market=conn, claims={"sub": "census"}), name, args)
     return conn.executed
 
 
 @pytest.mark.parametrize("name", sorted(n for n, e in ENTRIES.items()
                                         if any(f in fr.REGISTRY for f in e.args.model_fields)))
-def test_every_filter_a_tool_declares_changes_the_statement_it_runs(name: str) -> None:
+def test_every_filter_a_tool_declares_changes_the_statement_it_runs(
+        name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Either tenancy, a composite filter included: the census builds a valid value from the schema itself."""
     entry = ENTRIES[name]
     base = _baseline(entry)
-    before = _statements(name, base)
+    before = _statements(name, base, monkeypatch)
     props = entry.input_schema["properties"]
     dropped = []
     for fid in (f for f in entry.args.model_fields if f in fr.REGISTRY):
         current = base.get(fid, entry.args.model_fields[fid].default)
-        if _statements(name, {**base, fid: _distinct(props[fid], current)}) == before:
+        if _statements(name, {**base, fid: _distinct(props[fid], current)}, monkeypatch) == before:
             dropped.append(fid)
     assert not dropped, f"{name} declares filters that never reach its SQL: {dropped}"
 
@@ -235,10 +242,100 @@ _OTHER_POINT = {"lat": 50.09, "lng": 14.43, "area_m2": 90.0, "disposition": "3+k
 
 
 @pytest.mark.parametrize("name", sorted(n for n, e in ENTRIES.items() if "point" in e.args.model_fields))
-def test_every_point_attribute_a_tool_accepts_changes_the_statement_it_runs(name: str) -> None:
+def test_every_point_attribute_a_tool_accepts_changes_the_statement_it_runs(
+        name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     entry = ENTRIES[name]
     base = _baseline(entry)
-    before = _statements(name, base)
+    before = _statements(name, base, monkeypatch)
     dropped = [f for f in _point_fields(entry)
-               if _statements(name, {**base, "point": {**base["point"], f: _OTHER_POINT[f]}}) == before]
+               if _statements(name, {**base, "point": {**base["point"], f: _OTHER_POINT[f]}}, monkeypatch) == before]
     assert not dropped, f"{name} accepts point attributes it never applies: {dropped}"
+
+
+# --- 8. no tool reads what no surface may show ------------------------------------------------------------------
+
+def forbidden_columns() -> frozenset[str]:
+    """Derived from the registry: rule 14's parked levels (the columns of the retired level bounds) and every rule 17
+    city-quality column; a tool's column allowlist is disjoint from it and names no broker."""
+    from toolkit.filter_compiler import RETIRED_FILTERS
+    levels = {fid.rsplit("_", 1)[0] for fid in RETIRED_FILTERS if fid.endswith(("_min", "_max"))}
+    city = {f.pg_column for f in fr.all_filters() if f.category == fr.CATEGORY_CITY_QUALITY and f.pg_column}
+    return frozenset(levels | city)
+
+
+def test_the_forbidden_set_names_what_the_read_models_still_publish() -> None:
+    assert {"building_condition_level", "apartment_condition_level", "home_obec_pop", "near_pop_5km",
+            "near_overall_15km"} <= forbidden_columns()
+
+
+_READERS = ("api.property_search", "api.property_read")
+# Each tool reader's column allowlists: search's, the property state's and every *_COLS of the property page's reader.
+_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS", "api.curation.STATE_COLS"] + [
+    f"api.property_read.{n}" for n in sorted(vars(importlib.import_module("api.property_read"))) if n.endswith("_COLS")]
+
+
+def test_the_census_sees_every_allowlist_of_the_property_reader() -> None:
+    assert {"PROPERTY_COLS", "SOURCE_COLS", "AD_MEASURE_COLS", "SNAPSHOT_COLS", "RUN_COLS"} <= {
+        a.rsplit(".", 1)[1] for a in _ALLOWLISTS}
+
+
+@pytest.mark.parametrize("columns", _ALLOWLISTS)
+def test_no_tool_column_allowlist_names_a_forbidden_column_or_a_broker(columns: str) -> None:
+    module, name = columns.rsplit(".", 1)
+    allowed = set(getattr(importlib.import_module(module), name))
+    assert not allowed & forbidden_columns(), columns
+    assert not [c for c in allowed if c.startswith("broker")], columns
+
+
+# Where a parked level, a city index, a broker or a listing's own stored place lives (the place reaches a reader only
+# through the read models' location-ad columns, rule 25); the reader modules name none of them.
+_FORBIDDEN_RELATIONS = re.compile(
+    r"\b(curated_cities\w*|city_index_\w+|city_population|listing_condition_scores|listing_broker_public|"
+    r"listing_location)\b")
+
+
+@pytest.mark.parametrize("module", _READERS)
+def test_no_tool_reader_names_a_relation_that_holds_what_no_surface_may_show(module: str) -> None:
+    source = Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+    assert not _FORBIDDEN_RELATIONS.findall(source), module
+
+
+# What the user's login reads as nothing, silently (RLS on and no policy, or the service role's alone): a tenant
+# reader that named one would answer "none" where the page shows something.
+_DARK_UNDER_LOGIN = re.compile(
+    r"\b(?:from|join)\s+(?:public\.)?(?:listings|listing_snapshots)\b|\bproperty_canonical_listings\b|"
+    r"\bcanonical_advert\b|\bsubject_mf_facts\b|\bmatch_listing\b", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("module", _READERS)
+def test_no_tool_reader_reads_a_relation_dark_under_the_users_login(module: str) -> None:
+    source = Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+    assert not _DARK_UNDER_LOGIN.findall(source), module
+    assert _DARK_UNDER_LOGIN.findall("select 1 from listings l join listing_snapshots s on true")
+
+
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [d for v in value for d in _dicts(v)]
+    if not isinstance(value, dict):
+        return []
+    return [value] + [d for v in value.values() for d in _dicts(v)]
+
+
+def test_the_relation_pattern_sees_what_it_bans() -> None:
+    assert _FORBIDDEN_RELATIONS.findall("from curated_cities_matching(x) join city_index_values v on listing_location")
+
+
+@pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers", "get_my_property_context"])
+def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis(name: str) -> None:
+    from tests.api.test_property_read import _broker, run, script
+    from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
+    out = run(name, {"property_ids": [7, 9]}, script(brokers=[_broker(71, 1), _broker(81, 3)]))
+    rows = _dicts(out["data"])
+    assert rows and not {k for d in rows for k in d} & forbidden_columns(), name
+    priced = [d for d in rows if d.get(PPM2_VALUE_KEY) is not None]
+    assert all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced), name
+    if name != "get_property_brokers":
+        assert not [k for d in rows for k in d if k.startswith("broker")], name
+    if name == "get_property_dossier":
+        assert len(priced) >= 3

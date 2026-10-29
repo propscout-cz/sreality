@@ -6,8 +6,9 @@ returns dict rows (the real query uses psycopg's dict_row factory); the route
 tests exercise the bearer gate, request validation, and delegation.
 
 Since W3 the read is RLS-only: it takes no account argument and its SQL carries
-no account predicate, so `current_account_ids()` is the single definition of
-membership shared with the SPA.
+no account predicate, so RLS is the single definition of membership shared with
+the SPA. The property's state is `curation.property_state`, the read an agent's
+own context makes too (#2063).
 """
 
 from __future__ import annotations
@@ -23,11 +24,13 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
+from api import curation
 from api import dependencies as deps
 from api import main as api_main
 from api import portal_lookup as pl
 from api import schemas as s
 from api import tenant_pool
+from tests.api._script_conn import ScriptConn
 from tests.test_sql_placeholders import _invalid_placeholder
 from toolkit.measures import plot_area_sql
 
@@ -62,22 +65,26 @@ def _mk_market_row(source: str, source_id: str, found: bool, **cols: Any) -> dic
     return row
 
 
-def _mk_account_row(listing_id: int, **cols: Any) -> dict[str, Any]:
-    """One account-query dict row (tenant conn, RLS-scoped) per found listing."""
-    row: dict[str, Any] = {
-        "listing_id": listing_id,
-        "estimation_id": None, "estimation_kind": None, "estimation_yield": None,
-        "in_pipeline": False, "pipeline_stage_id": None,
-        "pipeline_stage_key": None, "pipeline_stage_label": None,
-        "pipeline_entered_stage_at": None,
-        # The SQL coalesces to an empty array (never NULL); the Python layer
-        # nulls it for no-property rows.
-        "collection_ids": [],
-        "tag_ids": [],
-        "dismissed": False,
-    }
-    row.update(cols)
-    return row
+def _mk_estimate_row(listing_id: int, **cols: Any) -> dict[str, Any]:
+    """One estimation dict row (tenant conn, RLS-scoped) per found listing with a successful run."""
+    return {"listing_id": listing_id, "estimation_id": None, "estimation_kind": None,
+            "estimation_yield": None, **cols}
+
+
+def _mk_state_row(property_id: int, **cols: Any) -> tuple[Any, ...]:
+    """One curation.property_state row (tenant conn, RLS-scoped) per found property."""
+    # The SQL coalesces the id lists to an empty array (never NULL); the Python
+    # layer nulls them for no-property rows.
+    row = {"property_id": property_id, "collection_ids": [], "tag_ids": [], "dismissed": False, **cols}
+    return tuple(row.get(c) for c in curation.STATE_COLS)
+
+
+def _tenant(estimates: list[dict[str, Any]] = (), states: list[tuple[Any, ...]] = ()) -> ScriptConn:
+    """The tenant connection: each found ad's latest estimate, then its property's state."""
+    return ScriptConn([
+        (lambda q: "FROM estimation_runs" in q, list(estimates)),
+        (lambda q: "FROM property_pipeline" in q, list(states)),
+    ])
 
 
 class _FakeCursor:
@@ -132,19 +139,17 @@ def test_lookup_maps_rows_with_mf_and_estimation() -> None:
         # idnes: not found
         _mk_market_row("idnes", "deadbeef", False),
     ]
-    account_rows = [
-        # sreality listing: successful estimation + bookmarked + in collections
-        _mk_account_row(9001, estimation_id=99, estimation_kind="rent",
-                        estimation_yield=Decimal("5.46"),
-                        in_pipeline=True, pipeline_stage_id=3,
-                        pipeline_stage_key="interested", pipeline_stage_label="Zájem",
-                        pipeline_entered_stage_at=_TS,
-                        collection_ids=[7, 9], tag_ids=[3]),
-        # bazos listing: nothing account-side but a dismissal
-        _mk_account_row(9002, dismissed=True),
-    ]
+    # sreality listing: successful estimation + bookmarked + in collections
+    tenant = _tenant(
+        [_mk_estimate_row(9001, estimation_id=99, estimation_kind="rent",
+                          estimation_yield=Decimal("5.46"))],
+        [_mk_state_row(501, stage_id=3, stage_key="interested", stage_label="Zájem",
+                       entered_stage_at=_TS, collection_ids=[7, 9], tag_ids=[3]),
+         # bazos listing: nothing account-side but a dismissal
+         _mk_state_row(777, dismissed=True)],
+    )
     out = pl.lookup_portal_listings(
-        _FakeConn(market_rows), _FakeConn(account_rows),
+        _FakeConn(market_rows), tenant,
         _items(("sreality", "1184977484"), ("bazos", "220291221"),
                ("idnes", "deadbeef")),
     )
@@ -152,6 +157,9 @@ def test_lookup_maps_rows_with_mf_and_estimation() -> None:
     assert [d["source"] for d in data] == ["sreality", "bazos", "idnes"]
 
     sr = data[0]
+    # The extension's contract, key for key and in order.
+    assert list(sr) == ["source", "source_id", "found", *pl._LISTING_COLS, "fond_per_m2_czk_default",
+                        "latest_estimation", "pipeline", "collection_ids", "tag_ids", "dismissed"]
     assert sr["found"] is True
     assert sr["property_id"] == 501
     assert sr["area_m2"] == 65.0  # Decimal → float
@@ -223,7 +231,7 @@ def test_lookup_serves_the_property_mf_result_and_none_before_attach() -> None:
                        property_id=None, category_main="byt", category_type="prodej"),
     ]
     out = pl.lookup_portal_listings(
-        _FakeConn(market_rows), _FakeConn([]),
+        _FakeConn(market_rows), _tenant(),
         _items(("bezrealitky", "attached"), ("bezrealitky", "fresh")),
     )
     attached, fresh = out["data"]
@@ -268,7 +276,7 @@ def test_lookup_serves_the_property_facts_beside_the_adverts_own_status() -> Non
                        category_main="dum", category_type="prodej"),
     ]
     merged, fresh = pl.lookup_portal_listings(
-        _FakeConn(market_rows), _FakeConn([]), _items(("idnes", "merged"), ("idnes", "fresh")),
+        _FakeConn(market_rows), _tenant(), _items(("idnes", "merged"), ("idnes", "fresh")),
     )["data"]
     assert merged["canonical_listing_id"] == 40
     assert (merged["is_active"], merged["property_is_active"]) == (False, True)
@@ -295,7 +303,7 @@ def test_lookup_reads_the_property_facts_off_pp_and_the_plot_measure() -> None:
 
 
 def test_lookup_binds_one_value_pair_per_item() -> None:
-    market_conn, tenant_conn = _FakeConn([]), _FakeConn([])
+    market_conn, tenant_conn = _FakeConn([]), _tenant()
     pl.lookup_portal_listings(
         market_conn, tenant_conn, _items(("sreality", "1"), ("idnes", "abc")),
     )
@@ -304,33 +312,37 @@ def test_lookup_binds_one_value_pair_per_item() -> None:
     assert params == ["sreality", "1", "idnes", "abc"]
     assert sql.count("%s") == 4
     # no found rows → the tenant conn is never queried at all
-    assert tenant_conn.cur.executed is None
+    assert tenant_conn.executed == []
 
 
-def test_lookup_account_query_targets_only_found_listings() -> None:
+def test_lookup_tenant_reads_target_only_found_ads_and_bind_no_account() -> None:
     market_rows = [
         _mk_market_row("sreality", "a", True, listing_id=11, property_id=100,
                        category_main="byt", category_type="prodej", is_active=True),
+        # A second ad of the same property, and one not yet attached to any.
+        _mk_market_row("idnes", "b", True, listing_id=13, property_id=100,
+                       category_main="byt", category_type="prodej", is_active=True),
+        _mk_market_row("bazos", "c", True, listing_id=12,
+                       category_main="byt", category_type="prodej", is_active=True),
         _mk_market_row("idnes", "miss", False),
     ]
-    market_conn = _FakeConn(market_rows)
-    tenant_conn = _FakeConn([_mk_account_row(11)])
+    tenant = _tenant()
     pl.lookup_portal_listings(
-        market_conn, tenant_conn, _items(("sreality", "a"), ("idnes", "miss")),
+        _FakeConn(market_rows), tenant,
+        _items(("sreality", "a"), ("idnes", "b"), ("bazos", "c"), ("idnes", "miss")),
     )
-    sql, params = tenant_conn.cur.executed
-    # One (listing_id, property_id) tuple — the miss is excluded —
-    # and NOTHING else: no account is bound, because none is taken.
-    assert params == [11, 100]
-    assert sql.count("%s") == len(params)  # nothing else CAN be bound
+    # Each found ad's estimate, each held property's state once — the miss
+    # excluded — and NOTHING else: no account is bound, because none is taken.
+    (est_sql, est_params), (state_sql, state_params) = tenant.executed
+    assert (est_params, state_params) == (([11, 13, 12],), ([100],))
+    assert est_sql.count("%s") == state_sql.count("%s") == 1  # nothing else CAN be bound
     # RLS-only by construction. Not "the predicate binds the right value" but
     # "there is no predicate left to bind wrong" — the shape #917 broke is gone.
     # `account_id` survives ONLY as the LATERAL's deterministic tiebreak.
-    code = "\n".join(line.split("--")[0] for line in sql.splitlines())
-    assert "IS NOT DISTINCT FROM" not in code
-    assert "account_id" not in code.replace(
-        "ORDER BY pp.updated_at DESC, pp.account_id", "",
-    )
+    for sql in (pl._ESTIMATION_SQL, curation._PROPERTY_STATE_SQL):
+        code = "\n".join(line.split("--")[0] for line in sql.splitlines())
+        assert "IS NOT DISTINCT FROM" not in code
+        assert "account_id" not in code.replace("ORDER BY pp.updated_at DESC, pp.account_id", "")
 
 
 def test_lookup_preserves_request_order_even_if_db_reorders() -> None:
@@ -341,7 +353,7 @@ def test_lookup_preserves_request_order_even_if_db_reorders() -> None:
                        category_main="byt", category_type="prodej", is_active=True),
     ]
     out = pl.lookup_portal_listings(
-        _FakeConn(rows), _FakeConn([]), _items(("sreality", "a"), ("idnes", "b")),
+        _FakeConn(rows), _tenant(), _items(("sreality", "a"), ("idnes", "b")),
     )
     assert [d["source_id"] for d in out["data"]] == ["a", "b"]
 
@@ -374,7 +386,7 @@ def test_fond_default_is_withheld_wherever_the_denominator_is_a_parcel() -> None
         _mk_market_row("idnes", "unknown", False),
     ]
     out = pl.lookup_portal_listings(
-        _FakeConn(rows), _FakeConn([]),
+        _FakeConn(rows), _tenant(),
         _items(("sreality", "flat"), ("sreality", "plot"),
                ("sreality", "plot-rent"), ("idnes", "unknown")),
     )
@@ -387,7 +399,7 @@ def test_fond_default_is_served_for_an_item_with_no_row_at_all() -> None:
     """The panel seeds its fond field from this key alone (it holds no literal),
     so the defensive no-row shape must carry it too or the field goes blank."""
     out = pl.lookup_portal_listings(
-        _FakeConn([]), _FakeConn([]), _items(("sreality", "nothing")),
+        _FakeConn([]), _tenant(), _items(("sreality", "nothing")),
     )
     assert out["data"][0]["fond_per_m2_czk_default"] == s.DEFAULT_FOND_CZK_PER_M2
 
@@ -395,15 +407,18 @@ def test_fond_default_is_served_for_an_item_with_no_row_at_all() -> None:
 def test_the_card_stage_stamp_rides_the_pipeline_lateral() -> None:
     """The panel's "ve fázi od" reads the caller's card row, the same LATERAL that
     picks the stage (a stamp off another account's card would date the wrong move)."""
-    lateral = pl._ACCOUNT_SQL.split("LEFT JOIN LATERAL")[1]
+    head, lateral = curation._PROPERTY_STATE_SQL.split("LEFT JOIN LATERAL")
     assert "pp.entered_stage_at" in lateral
-    assert "pc.entered_stage_at AS pipeline_entered_stage_at" in pl._ACCOUNT_SQL
+    assert "pc.stage_id, pc.key, pc.label, pc.code, pc.color, pc.entered_stage_at" in head
+    assert curation.STATE_COLS[1:7] == ("stage_id", "stage_key", "stage_label", "stage_code",
+                                        "stage_color", "entered_stage_at")
 
 
 def test_lookup_takes_no_account_argument() -> None:
     """The assertable form of "this read has no second definition of membership":
     there is no parameter an account could be passed to, so none can be dropped."""
     assert "account_id" not in inspect.signature(pl.lookup_portal_listings).parameters
+    assert "account_id" not in inspect.signature(curation.property_state).parameters
 
 
 def test_lookup_never_multiplies_rows_for_a_multi_membership_caller() -> None:
@@ -415,16 +430,14 @@ def test_lookup_never_multiplies_rows_for_a_multi_membership_caller() -> None:
                        property_id=100, category_main="byt",
                        category_type="prodej", is_active=True),
     ]
-    # Two rows for listing 11 — what an un-collapsed plural join would return.
-    account_rows = [
-        _mk_account_row(11, in_pipeline=True, pipeline_stage_id=3,
-                        pipeline_stage_key="interested", pipeline_stage_label="Zájem"),
-        _mk_account_row(11, in_pipeline=True, pipeline_stage_id=8,
-                        pipeline_stage_key="offer", pipeline_stage_label="Nabídka"),
+    # Two rows for property 100 — what an un-collapsed plural join would return.
+    states = [
+        _mk_state_row(100, stage_id=3, stage_key="interested", stage_label="Zájem"),
+        _mk_state_row(100, stage_id=8, stage_key="offer", stage_label="Nabídka"),
     ]
     items = _items(("sreality", "a"))
     out = pl.lookup_portal_listings(
-        _FakeConn(market_rows), _FakeConn(account_rows), items,
+        _FakeConn(market_rows), _tenant(states=states), items,
     )
     assert len(out["data"]) == len(items)
     assert out["data"][0]["pipeline"]["in_pipeline"] is True

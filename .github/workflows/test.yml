@@ -98,8 +98,8 @@ jobs:
 
   secrets:
     # gitleaks over exactly the commits this PR (or this push to main) adds, a merge by what it changed beyond the
-    # automatic merge, through the one pinned binary the .githooks run too (#2035). GitHub's own secret scanning stops
-    # when the repository goes private.
+    # automatic merge, then over the fixtures as they stand, through the one pinned binary the .githooks run too
+    # (#2035). GitHub's own secret scanning stops when the repository goes private.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -119,3 +119,8 @@ jobs:
         env:
           RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
         run: scripts/gitleaks.sh git --log-opts="--remerge-diff $RANGE"
+
+      # The commit scan never re-reads a fixture line a scrub left alone, and the fixture census judges the scrub by
+      # the scrub's own regex: an independent detector over today's tree catches a key shape both miss.
+      - name: The committed fixtures carry no credential
+        run: scripts/gitleaks.sh dir tests/fixtures

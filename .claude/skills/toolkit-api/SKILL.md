@@ -31,7 +31,8 @@ it (`api/`). They do not apply to the scraper.
    ```
    **An agent reaches a tool through the tool registry** (`api/capabilities/`, #2062): one `Entry` per tool
    (tenancy + effect, a generated strict argument model), one `registry.call`, one error table, structural
-   truncation. Adding a tool and its census: `references/tool-registry.md`.
+   truncation. Adding a tool, its census and the parity reads (#2063: search, dossier, own context, brokers, every
+   read bounded): `references/tool-registry.md`.
 3. **Every tool excludes `given_up = true` listings** from `listing_fetch_failures` by
    default. An `include_unreliable: bool = False` parameter overrides. Every cohort (`_shared_filter_where`, the listings adapter over `toolkit/filter_compiler.compile_filter_where`: comparables, velocity, the transit corridor) counts a property ONCE: its FROM is `location_data.claims_common.COHORT_LOCATION_FROM` (ruling R8, migration 636: place → the live property it locates → its canonical advert as the comparable, so price, area and snapshot_id are the canonical advert's and distance, district and place the location advert's), and `_shared_filter_where` leaves out every advert of the subject's property via `TargetSpec.exclude_listing_ids` / `TargetIn.exclude_listing_ids` (the ONE exclusion, decision 13: any advert of the subject names its whole property; the sreality-keyed `exclude_ids` is gone, a frozen spec's copy is history and never re-read).
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
@@ -137,9 +138,8 @@ it (`api/`). They do not apply to the scraper.
    `listing_broker_public`, so `POST /brokers/by-listings` answers identity AND contact in
    one row and the SPA no longer chains a second, serialized `GET /brokers?ids=` to fetch
    what the first read's join had already touched. Its contact pair is unmasked for every
-   signed-in caller (the 2026-10-18 exception above). `GET /brokers?ids=` itself stays, for the agent
-   and other non-SPA consumers; and
-   the client treats 404 as an answer only when the body carries this module's own
+   signed-in caller (the 2026-10-18 exception above). `GET /brokers?ids=` itself is deleted (#2063: no
+   reader, no traffic); and the client treats 404 as an answer only when the body carries this module's own
    `broker not found` detail — any other 404 (edge, stale base URL, renamed route) must
    surface as an error, not as "no broker". One per-ad read: `POST /brokers/by-listings`.
    **The static key is gone (2026-10-13)**: `API_TOKEN`, extractable from the shipped SPA bundle via
@@ -219,7 +219,8 @@ it (`api/`). They do not apply to the scraper.
     sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
 - **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
-  per call, every read recorded on the run; assistants over MCP stay masked.
+  per call, every read recorded on the run; assistants over MCP stay masked. Built (#2063) as `get_property_brokers`, the
+  `POST /brokers/by-listings` read on the service connection; the run's step journal (#2065's loop) records it.
 
 ## Error contract and the transport deadline (Broker Unify W2)
 
@@ -276,7 +277,7 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   account"`): EVERY curation write declares it (`/pipeline/*` writes incl. stages, `POST /collections` `/tags`
   `/properties/{id}/notes` `/attachments` `/dismissals`, `PUT .../artifact-link`), and `tests/api/test_acting_routes_census.py`
   pins that it writes only the eleven curation tables. `tenant_conn` reads `X-Act-As` (400 unless a uuid) and
-  sets it + the method as PostgREST's GUCs (an acting GET/HEAD runs READ ONLY, as PostgREST does). Reads take neither dependency, and an UPDATE/DELETE *by id*
+  sets it + the method as PostgREST's GUCs (every GET/HEAD runs READ ONLY at `authenticated`'s 8 s, acting or not, as PostgREST does: `bound_read`). Reads take neither dependency, and an UPDATE/DELETE *by id*
   none either (its policy's USING clause is the scope). It replaced three
   postures: notifications' 400, curation's `SYSTEM` fallback (290 has no SYSTEM arm → a 500), pipeline's `None`.
 

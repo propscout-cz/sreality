@@ -436,9 +436,9 @@ def test_furnished_and_ownership_multiselect_filters():
         ComparableFilters(furnished=["ano", "castecne"], ownership=["osobni"]),
     )
     assert "l.furnished = ANY(%(furnished)s)" in sql
-    assert "l.ownership = ANY(%(ownership)s)" in sql
+    assert "l.ownership = %(ownership)s" in sql   # a one-element list is an equality
     assert params["furnished"] == ["ano", "castecne"]
-    assert params["ownership"] == ["osobni"]
+    assert params["ownership"] == "osobni"
     # No __unknown__ selected -> no NULL/non-canonical branch.
     assert "furnished_canon" not in params
 
@@ -448,9 +448,9 @@ def test_furnished_unknown_sentinel_matches_null_or_noncanonical():
         TargetSpec(lat=50.0, lng=14.0),
         ComparableFilters(furnished=["ano", "__unknown__"]),
     )
-    assert "l.furnished = ANY(%(furnished)s)" in sql
+    assert "l.furnished = %(furnished)s" in sql
     assert "l.furnished IS NULL OR NOT (l.furnished = ANY(%(furnished_canon)s))" in sql
-    assert params["furnished"] == ["ano"]
+    assert params["furnished"] == "ano"
     assert params["furnished_canon"] == ["ano", "ne", "castecne"]
 
 

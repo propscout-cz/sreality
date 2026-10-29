@@ -17,6 +17,9 @@ so a code path that forgets the switch fails closed, never leaks.
 for the route that must not hold it across slow service-role work and for the
 tool registry's tenant tools (api/capabilities/registry.py).
 
+A GET/HEAD transaction is a bounded read, as PostgREST runs the SPA's own (`bound_read`):
+READ ONLY, so a write there fails loudly, and under `authenticated`'s 8 s statement budget.
+
 Delegation (migration 641): the transaction also carries the request's method and,
 when the caller sent `X-Act-As`, that header, as the GUCs PostgREST sets itself
 (`request.method`, `request.headers`), so `acting_account_ids()` reads one shape on
@@ -40,6 +43,17 @@ from api import dependencies as deps
 
 _TENANT_POOL_ENV = "TENANT_POOL_DB_URL"
 
+# PostgREST runs a signed-in GET/HEAD READ ONLY under `authenticated`'s own statement_timeout (8 s, that
+# role's pg_db_role_setting in production). SET ROLE never applies a role's settings, so without this the
+# API's reads ran on the 120 s server default. A constant, not a lookup: the CI replay's roles carry no settings.
+READ_BOUND = ("SET TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '8s'")
+
+
+def bound_read(cur: psycopg.Cursor) -> None:
+    """Make the open transaction a bounded read; both settings end with it."""
+    for statement in READ_BOUND:
+        cur.execute(statement)
+
 
 @contextlib.contextmanager
 def tenant_transaction(
@@ -58,10 +72,10 @@ def tenant_transaction(
     try:
         with conn.transaction():
             with conn.cursor() as cur:
-                # The database grants a read share on GET/HEAD alone, whatever the statement does;
-                # PostgREST runs those READ ONLY, so an acting GET here does too and a write fails loudly.
-                if act_as is not None and method in ("GET", "HEAD"):
-                    cur.execute("SET TRANSACTION READ ONLY")
+                # The database grants a read share on GET/HEAD alone, whatever the statement does, so a
+                # write there must fail loudly; first, before anything else runs in the transaction.
+                if method in ("GET", "HEAD"):
+                    bound_read(cur)
                 cur.execute("SET LOCAL ROLE authenticated")
                 # set_config(), NOT "SET LOCAL ... = %s": SET takes only a
                 # literal (a bind parameter is a syntax error), and f-string

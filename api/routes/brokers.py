@@ -38,15 +38,6 @@ def _policy(envelope: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
     return brokers.apply_pii_policy(envelope, include_pii=deps.is_admin(claims))
 
 
-@router.get("")
-def get_brokers_by_ids(
-    ids: list[int] = Query(default=[], max_length=brokers.MAX_BATCH),
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.verify_jwt),
-) -> dict[str, Any]:
-    return _policy(brokers.brokers_by_ids(conn, ids), claims)
-
-
 def _districts(
     request: Request,
     districts: list[str] = Query(default=[]),

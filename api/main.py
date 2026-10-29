@@ -867,10 +867,11 @@ def post_listings_lookup(
     (listings/properties are RLS-enabled-with-zero-policies — broker PII, the
     A5 correction), per-account joins on the tenant conn. RLS-ONLY BY DESIGN:
     no account is resolved here, because membership must be the same answer the
-    SPA gets, and the SPA reads property_pipeline_public under the plural
-    `current_account_ids()`. A second definition is what broke this route from
-    2026-07-23 to 2026-09-11. Wave 5's route census lists it on the explicit
-    RLS-only allowlist for exactly that reason."""
+    SPA gets: the SPA's property_pipeline_public read and the per-caller state
+    read here, `curation.property_state`, both answer through RLS under
+    `acting_account_ids()` (migration 641). A second definition is what broke
+    this route from 2026-07-23 to 2026-09-11. Wave 5's route census lists it on
+    the explicit RLS-only allowlist for exactly that reason."""
     return lookup_portal_listings(market_conn, conn, body.items)
 
 

@@ -31,8 +31,9 @@ psql "$SUPABASE_DB_URL" -c "\d listings" | head -60
   disable the server via `/mcp`.
 - **When there is no `psql` on PATH and no `SUPABASE_DB_URL`** — a cloud-only session, or any
   shell that never sourced `.env` — the command above silently cannot run and MCP
-  `execute_sql` is the only read path. The preference for `psql` was about CONTEXT COST, not
-  correctness, so carry that intent across: **one aggregate row per question**, never a wide
+  `execute_sql` is the only read path. Production is project_id `erlvtprrmrylhznfyaih` (`.env.example`):
+  pass it straight to `mcp__supabase__execute_sql`, no `list_projects`. The preference for `psql` was
+  about CONTEXT COST, not correctness, so carry that intent across: **one aggregate row per question**, never a wide
   result set. `count(*) FILTER (WHERE …)` for several counts in one row; `string_agg(name, ',')`
   to list what exists; `md5(string_agg(col, ',' ORDER BY ordinal_position))` to compare a long
   column list against something you computed locally **without printing either**. Migrations
@@ -93,7 +94,7 @@ tenant-scoped:
   the row just written. `verify_jwt` is authentication; `tenant_conn` (via RLS) is
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
-  `TENANT_POOL_DB_URL` raises.
+  `TENANT_POOL_DB_URL` raises. A GET/HEAD is READ ONLY, 8 s.
   `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for two named
   callers (`references/tenancy.md`): the feedback route and the tool registry's tenant tools.
 
@@ -128,8 +129,9 @@ corresponding migration file silently breaks the codebase — future sessions or
 rebuilds will be missing the change. "Append-only" means **never rewrite migration
 history** (never edit an existing numbered file); it does **not** trap us into keeping
 dead schema — prune an unused table/column by writing a *new* forward migration that
-drops it (a destructive change — see the policy below). **Confirm the next free number at
-apply time** — parallel branches carry in-flight migrations; two genuine collisions
+drops it (a destructive change — see the policy below). **Claim the next free number with the
+merge coordinator (`docs/agents/issue-tracker.md` § Merging) and confirm it at apply time** —
+parallel branches carry in-flight migrations; two genuine collisions
 already exist on disk (`276_browse_read_model.sql` / `276_listings_geo_cell_key.sql`,
 `277_browse_read_model_refresh.sql` / `277_candidates_archive_engine_columns.sql`) —
 both pairs coexist harmlessly because the runner orders by filename, not the numeric

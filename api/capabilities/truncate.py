@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from api.capabilities.errors import ToolError, ToolErrorCode
@@ -40,23 +41,28 @@ def _fits(result: dict[str, Any]) -> bool:
     return len(encode(result)) <= RESULT_BUDGET
 
 
-def fit(result: dict[str, Any]) -> dict[str, Any]:
-    """`result` itself when it fits, else its lists under `data` cut to their longest fitting whole-row heads."""
-    # Smaller lists are kept whole first; each cut is recorded in metadata.truncated and result_count stays the true
-    # total. A row is never split, so every per-m² figure keeps its basis (rule 23).
-    if _fits(result):
-        return result
-    lists = _lists(result)
-    heads = {path: 0 for path in lists}
-    if not _fits(_with_heads(result, heads)):
-        raise ToolError(ToolErrorCode.RESULT_TOO_LARGE, "the result is too large even without its rows; narrow the request")
+def heads(lists: dict[str, list[Any]], fits: Callable[[dict[str, int]], bool]) -> dict[str, int] | None:
+    """The longest whole-row heads of `lists` that `fits` takes, smaller lists kept whole first; None when nothing
+    fits even with every list empty."""
+    out = {path: 0 for path in lists}
+    if not fits(out):
+        return None
     for path in sorted(lists, key=lambda p: len(encode(lists[p]))):
         lo, hi = 0, len(lists[path])
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if _fits(_with_heads(result, {**heads, path: mid})):
-                lo = mid
-            else:
-                hi = mid - 1
-        heads[path] = lo
-    return _with_heads(result, heads)
+            lo, hi = (mid, hi) if fits({**out, path: mid}) else (lo, mid - 1)
+        out[path] = lo
+    return out
+
+
+def fit(result: dict[str, Any]) -> dict[str, Any]:
+    """`result` itself when it fits, else its lists under `data` cut to their longest fitting whole-row heads."""
+    # Each cut is recorded in metadata.truncated and result_count stays the true total. A row is never split, so every
+    # per-m² figure keeps its basis (rule 23).
+    if _fits(result):
+        return result
+    kept = heads(_lists(result), lambda h: _fits(_with_heads(result, h)))
+    if kept is None:
+        raise ToolError(ToolErrorCode.RESULT_TOO_LARGE, "the result is too large even without its rows; narrow the request")
+    return _with_heads(result, kept)

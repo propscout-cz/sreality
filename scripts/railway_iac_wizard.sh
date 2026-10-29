@@ -197,7 +197,8 @@ finish() {
 #       read-only, no window: install the pinned CLI, log in, plan all three projects and check each plan against
 #       its expected counts (0:0 unless named), scoped to <service> when one is named
 #   scripts/railway_iac_wizard.sh window <label> <adds> <destroys> <service>
-#       one e9 window: apply that project's pinned plan at the pull request head, merge at once, drift = 0 on main
+#       one window the merge coordinator runs: apply that project's pinned plan at the pull request head, merge at
+#       once, drift = 0 on main
 #   scripts/railway_iac_wizard.sh drift
 #       read-only, from a main checkout: does Railway still match main's .railway/railway.ts?
 #   scripts/railway_iac_wizard.sh runner-list
@@ -269,9 +270,9 @@ stop() {
   printf '\n  %s✗ STOP: %s%s\n' "$RED" "$1" "$RESET"
   note "Nothing else runs. Send the agent this message; the outputs are in $OUT."
   if [[ "$MODE" == window && "${BRAKE_ASKED:-0}" == 1 ]]; then
-    warn "Tell e9 the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
+    warn "Tell the merge coordinator the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
   elif [[ "$MODE" == window ]]; then
-    warn "Tell e9 the window stopped here."
+    warn "Tell the merge coordinator the window stopped here."
   fi
   exit 1
 }
@@ -439,7 +440,7 @@ checkout_is_pr_head() {
 
 window_gate() {
   local required=""
-  gate "Did e9 give its green light for THIS window? (a heads-up alone is not enough)"
+  gate "Did the merge coordinator give its green light for THIS window? (a heads-up alone is not enough)"
   open_url "https://status.railway.com"
   gate "Does status.railway.com show no incident?"
   checkout_is_pr_head
@@ -594,13 +595,14 @@ mode_window() {
   ensure_cli
   ensure_login
   require_branch
-  # Everything that can fail on our side runs before e9 is asked for the brake, so a stop here wastes no brake.
+  # Everything that can fail on our side runs before the merge coordinator is asked for the brake, so a stop here
+  # wastes no brake.
   window_gate
   pause
 
   stage "Brake"
   if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then
-    gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
+    gate "Has the merge coordinator now set realtime_autodedup_interval_seconds to 0 (the brake)?"
     BRAKE_ASKED=1
     agent_reports "autodedup.rt_lease is empty (one SQL read)"
   elif [[ "$label" == worker ]]; then
@@ -645,7 +647,7 @@ request body's pre-merge checks; the deployment ids of $project's other services
   pause
 
   stage "Ready and merge, as one step"
-  say "The agent marks pull request #$PR_NUMBER ready; then merge it at once (or e9 does, on its light)."
+  say "The agent marks pull request #$PR_NUMBER ready; then merge it at once (or the merge coordinator does, on its light)."
   open_url "$PR_URL"
   pause "Press Enter once the pull request is MERGED."
   local merge_sha slug i l s rc=3 contexts=()
@@ -708,9 +710,9 @@ and heartbeats)"
   finish
   say "Window done. Tell the agent to post the evidence (outputs in $OUT)."
   if [[ "$label" == worker ]]; then
-    say "Tell e9: rollout done; e9 restores realtime_autodedup_interval_seconds."
+    say "Tell the merge coordinator: rollout done; it restores realtime_autodedup_interval_seconds."
   else
-    say "Tell e9: rollout done."
+    say "Tell the merge coordinator: rollout done."
   fi
 }
 

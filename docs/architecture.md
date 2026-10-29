@@ -1171,8 +1171,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
-  (a pinned plan, an interactive apply) inside a merge window, the worker's in an e9 window with the autodedup brake on,
-  then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
+  (a pinned plan, an interactive apply) inside a merge window (for the worker, with the autodedup brake on), then
+  `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
   redeploys the API and the worker, which have no watch patterns (#1857).
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
@@ -1181,13 +1181,13 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
     CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
     then every project's pinned plan checked against its expected counts (`0:0` unless named), one result per label.
-  - `window <label> <adds> <destroys> <service>`, one e9 window, the autodedup brake on for `worker`: the gate (e9's
-    light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image` among them when the PR
-    changes an image input), the scoped pinned plan, the interactive apply, the checks before the merge, the merge at
-    once, Railway's commit statuses on the merge SHA (one per declared service), the read-only check of each public
-    service the merge redeployed (the API on every merge; vite on a `frontend/` change, `workflow-docs.json`
-    included), then drift = 0 on all three from main's file. The apply precedes the merge, so main declares nothing
-    Railway lacks for longer than the merge takes.
+  - `window <label> <adds> <destroys> <service>`, one window the merge coordinator runs, the autodedup brake on for
+    `worker`: the gate (its light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image`
+    among them when the PR changes an image input), the scoped pinned plan, the interactive apply, the checks before
+    the merge, the merge at once, Railway's commit statuses on the merge SHA (one per declared service), the read-only
+    check of each public service the merge redeployed (the API on every merge; vite on a `frontend/` change,
+    `workflow-docs.json` included), then drift = 0 on all three from main's file. The apply precedes the merge, so
+    main declares nothing Railway lacks for longer than the merge takes.
   - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from the `main`
     branch after `git pull --ff-only`, never a detached HEAD, which main's wizard refuses until #2025 merges), then
     plans all three.
@@ -2495,12 +2495,16 @@ renumber.** Navigate by area:
 16. **Watchdog and Browse share one definition of "matches."** Saved watchdog filters live
     in `notification_subscriptions` (migration 056). The definition is the filter registry,
     rendered per relation. `toolkit/filter_compiler.compile_filter_where` compiles every
-    column-backed FilterDef from its derived `sql_kind` and every irregular one from ONE hook
-    table. It does this for the Watchdog matcher (`properties_public`, adapter
-    `api/notifications._build_match_clauses`, which adds the served predicate, the published rule,
-    the map box and the place chips) and for every estimation cohort (`listings`, adapter
-    `toolkit/comparables._shared_filter_where`: comparables, velocity, the transit corridor).
-    Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    column-backed FilterDef from its derived `sql_kind` (a one-element list as an equality, the
+    planner rule Browse follows) and every irregular one from ONE hook: the relation's own
+    (`FilterGrain.hooks`, e.g. the portal rule) or the shared table. It does this for the Watchdog
+    matcher (`properties_public`, adapter `api/notifications._build_match_clauses`, which adds the
+    served predicate, the published rule, the map box and the place chips), for every estimation
+    cohort (`listings`, adapter `toolkit/comparables._shared_filter_where`: comparables, velocity,
+    the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
+    source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
+    the map box, the place chips, the reader's own lenses in `setScope.ts` normalizeScope's form and
+    the one-portal order of Q49 b). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
@@ -2564,9 +2568,9 @@ renumber.** Navigate by area:
     in the switch's status: `toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`),
     so broker + portal means one ad satisfies both, while the status stays the property's. ONE SQL
     function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
-    defaulted; two independent conjuncts since 657), is read by both aggregate RPCs; the Watchdog
-    compiles its `any` arm and the exclusion
-    (`PROPERTIES_GRAIN.clauses` + the `portals_excluded` hook; it has no status filter); the SPA
+    defaulted; two independent conjuncts since 657), is read by both aggregate RPCs and, inlined,
+    by both property grains' one `portals` hook (the Watchdog's `any` arm, as it has no status
+    filter, and the agents' search with Browse's status); the SPA
     renders it on PostgREST (`queries.ts applyPortalRule`: `ov` / `not.ov` on the two lists, a
     property-id allowlist under a broker). All three renderings are pinned to one table,
     `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's migrations lane,
@@ -2589,7 +2593,8 @@ renumber.** Navigate by area:
     property's own dates, a header chip names the order and a card whose day on P differs
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant
     `newest_ad_at_<P> is not null` conjunct rides on the list, cards and count alike, so the
-    portal's partial index serves the page and the count from ONE filter chain.
+    portal's partial index serves the page and the count from ONE filter chain. The agents'
+    `search_properties` orders and narrows the same way (`api/property_search._order`, `cohort`).
     **PLACE is the same rule (W3 S3, migration 504; the street since 605): ONE code predicate,
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
@@ -3238,7 +3243,9 @@ renumber.** Navigate by area:
     `current_account_ids()`, the caller IS the owner: an `edit` share reads and writes all eleven;
     a `read` share reads the board only — the three pipeline tables, whose policies pass
     `acting_account_ids(true)` (ruling 2) — and only on GET/HEAD (`request.method`, set by
-    PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs an acting GET READ ONLY). Without the header the two functions agree; a header
+    PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs every GET/HEAD READ ONLY under
+    `authenticated`'s 8 s `statement_timeout`, acting or not, as PostgREST does: `tenant_pool.bound_read`, since
+    `SET ROLE` applies no role setting). Without the header the two functions agree; a header
     naming no live share yields an EMPTY identity (fail closed). Every other table — billing,
     estimations, watchdog, presets, notifications, dashboards, the share tables — stays the caller's own. A
     tenant write route declares which account it writes: `tenant_pool.require_acting_account_id`
@@ -3845,11 +3852,13 @@ renumber.** Navigate by area:
     statement re-read heap pages the first had in hand (measured on the 48 live board ids: 518
     buffers for step 1, then 207 execution + 436 planning buffers for step 2) and paid a second
     Railway round trip's ~270–410 ms floor to do it, serialized behind the first because its
-    `broker_id`s came out of that response. The route itself stays for non-SPA consumers.
+    `broker_id`s came out of that response. The route itself is deleted too (#2063: no reader, no traffic).
     `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
     route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
     values on the property page and the board card; the leaderboard, search and broker dossier still
-    swap them for `has_email` / `has_phone` for a non-admin. **Migration 398 settles that for good:**
+    swap them for `has_email` / `has_phone` for a non-admin. The agents' `get_property_brokers` (#2063) is the
+    same read on the service connection, unmasked the same way (ADR-0002: at most 20 people per call, each call
+    recorded; MCP stays masked). **Migration 398 settles that for good:**
     `listings_public`/`properties_public` still carry `broker_email`/`broker_phone` as columns
     (so PostgREST answers `?select=` with nulls instead of a 400, and the five matviews depending
     on `listings_public` survive) but project them as `null::text` — they were owner-rights views
@@ -4223,10 +4232,11 @@ renumber.** Navigate by area:
     label: that would copy the headline into a second column on 32k rows, leave every future
     portal to remember the rule, and make the data lie in order to spare the reader a function
     call. Live readers moved:
-    `toolkit/filter_compiler.compile_filter_where` for both of its relations (the `listings`
-    cohorts and the Watchdog's `properties_public`). The plot spelling is declared once in
-    `FilterGrain.exprs`, and is textually identical because neither relation publishes a plot
-    column.
+    `toolkit/filter_compiler.compile_filter_where` for its three relations. The two that publish
+    no plot column (the `listings` cohorts and the Watchdog's `properties_public`) spell
+    `plot_area_m2()` through `FilterGrain.exprs`, declared once per relation and textually
+    identical; Browse's own source (`browse_list`, `BROWSE_GRAIN`, read by the agents'
+    `search_properties`) reads its published `plot_area_m2` column.
 
     **On the SPA the same measure has to BE a column, and getting that wrong is a silent
     no-op** (migration 535, caught in review). `registryQueryBuilder.applyRegistryFilters` is
@@ -5460,7 +5470,7 @@ rendered blank in production.
 | Cached LLM analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
-| Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |
+| Roadmap / sequencing | `ROADMAP.md` + the track file its row links |
 | Map reference overlays (metro, flood zones, kraje; the tile path) | `docs/design/map-overlays.md` |
 
 **Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agents**, one folder each, loaded

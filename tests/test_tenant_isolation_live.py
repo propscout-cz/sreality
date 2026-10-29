@@ -23,6 +23,7 @@ import pytest
 
 from tests._admin_gate_registry import ADMIN_ONLY_RELATIONS, UNGATED, live_allowlist
 from tests._admin_gate_shape import gate_is_sound
+from tests._live_property import signups
 from tests._tenant_registry import BROWSER_WRITE_COLUMNS, TENANT_TABLES
 from tests._tenant_scope import scoped
 
@@ -146,31 +147,10 @@ def svc() -> "Iterator[Any]":
 
 @pytest.fixture(scope="module")
 def tenants(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
-    """Two auth users, each born through the real signup trigger (migration 612:
-    the account, its owner membership, the default board, the monitoring
-    collection and the trial), so every check here runs against what a signup
-    actually produces."""
-    a_user, b_user = uuid.uuid4(), uuid.uuid4()
-    with svc.cursor() as cur:
-        cur.execute(
-            "INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
-            (
-                a_user, f"iso-a-{a_user.hex[:8]}@test.local",
-                b_user, f"iso-b-{b_user.hex[:8]}@test.local",
-            ),
-        )
-        cur.execute(
-            "SELECT user_id, account_id FROM account_members WHERE user_id IN (%s, %s)",
-            (a_user, b_user),
-        )
-        account_of = {row[0]: row[1] for row in cur.fetchall()}
-    a_acc, b_acc = account_of[a_user], account_of[b_user]
-    try:
-        yield {"a_user": a_user, "b_user": b_user, "a_acc": a_acc, "b_acc": b_acc}
-    finally:
-        with svc.cursor() as cur:
-            cur.execute("DELETE FROM accounts WHERE id IN (%s, %s)", (a_acc, b_acc))
-            cur.execute("DELETE FROM auth.users WHERE id IN (%s, %s)", (a_user, b_user))
+    """Two auth users, each born through the real signup trigger, so every check here runs against
+    what a signup actually produces."""
+    with signups(svc, "iso", "a", "b") as made:
+        yield {"a_user": made["a"], "b_user": made["b"], "a_acc": made["a_acc"], "b_acc": made["b_acc"]}
 
 
 def test_signup_seeds_the_default_board(
@@ -827,10 +807,11 @@ def test_portal_lookup_membership_is_rls_only(
     seeded_lookup_listing: tuple[int, str, str],
 ) -> None:
     """The assertion nothing else in this repo can make: `lookup_portal_listings`
-    takes NO account and still answers per-caller, because `current_account_ids()`
-    is the only membership definition left. `_ACCOUNT_SQL` is a `{values}` format
-    template, so the PREPARE sweep skips it — and PREPARE could not evaluate a
-    bind value anyway. Only a live, role-switched connection proves this."""
+    takes NO account and still answers per-caller, because RLS is the only
+    membership definition left (`acting_account_ids()` since migration 641 on the
+    card, read by `curation.property_state`). The PREPARE sweep sees that
+    statement but cannot evaluate a bind value: only a live, role-switched
+    connection proves this."""
     from api import schemas as api_schemas
     from api.portal_lookup import lookup_portal_listings
 

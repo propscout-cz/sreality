@@ -67,6 +67,12 @@ def invalid_arguments(exc: ValidationError) -> ToolError:
     return ToolError(ToolErrorCode.INVALID_ARGUMENTS, f"invalid arguments: {where}", details=details)
 
 
+def busy() -> ToolError:
+    """The database did not answer in time; a retry or a narrower request may succeed."""
+    return ToolError(ToolErrorCode.BUSY,
+                     "the database is busy or the query ran past its time limit; retry or narrow the request")
+
+
 def _http_message(detail: Any) -> str:
     if isinstance(detail, Mapping):
         return str(detail.get("message") or detail.get("code") or "refused")
@@ -82,8 +88,7 @@ def to_tool_error(exc: Exception, *, tool: str) -> ToolError:
         if code is not None:
             return ToolError(code, _http_message(exc.detail))
     elif isinstance(exc, DB_BUSY_ERRORS):
-        return ToolError(ToolErrorCode.BUSY,
-                         "the database is busy or the query ran past its time limit; retry or narrow the request")
+        return busy()
     elif isinstance(exc, psycopg.errors.DataError):
         # SQLSTATE class 22: a value the database cannot apply (an interval or a number out of its range).
         LOG.warning("tool %s refused a value the database cannot apply: %s", tool, exc)

@@ -33,13 +33,15 @@ An agent is added by adding files, never Python, when these hold:
    truncates. The loop, later MCP and later REST are adapters at this seam, which already has two adapters today.
 2. **Parity (ADR-0002).** Every database function the screens call (Browse search over all its filters, the stats
    dashboard, map counts and overlays, sold comparables, collections, pipeline, notes, brokers) is a registry entry
-   run under the user's own login through `tenant_transaction`. One exception stands until the narrow database
+   run under the user's own login through `tenant_transaction`. Two exceptions stand until the narrow database
    logins arrive: the toolkit's market-wide analytics (comparables, velocity, distribution) keep reading base tables on
-   the service connection, as today, and return market facts only; every entry that touches a user's own data runs
-   under the user's login. Regional datapoints, including the curated city
-   indexes, are readable by agents that rank; no price estimate reads them (rule 17, amended). Broker contacts are
-   what the user sees, at most 20 per call, every read recorded on the run. A screen capability an agent lacks is a
-   bug. **Typed operations only (ADR-0003):** no model-written SQL; the forms cover what the screens do.
+   the service connection, as today, and return market facts only; and the property page's broker read
+   (`get_property_brokers`, ADR-0002 amended 2026-10-29) runs there too, because the broker relations are the API's
+   alone (Phase 0 A6) and no login reads them. Every entry that touches a user's own data runs under the user's
+   login. Regional datapoints, including the curated city indexes, are readable by agents that rank; no price
+   estimate reads them (rule 17, amended). Broker contacts are what the user sees, at most 20 per call, every read
+   recorded on the run. A screen capability an agent lacks is a bug. **Typed operations only (ADR-0003):** no
+   model-written SQL; the forms cover what the screens do.
 3. **Handlers take explicit arguments** (a property id, an ad id, a point, filter ids); the estimator's hidden
    `target`, `base_filters` and `last_cohort` become arguments or a run-scoped ctx.scratch. `_dispatch_tool` and
    `_FCR_OVERRIDE_FIELDS` are deleted.
@@ -72,10 +74,11 @@ rebuilt estimator are two definitions over it; the drafter is a third agent on t
 
 | Entry (new unless marked) | What it answers |
 |---|---|
-| search_properties (Search agenda = every Browse filter, incl. status, recency, time on market) | find properties matching X, with card facts and per-m² figures with their basis |
+| search_properties (every Browse filter, incl. status, recency, time on market; as built, the Browse agenda over Browse's own list, no Search agenda: ruling 2026-10-29) | find properties matching X, with card facts and per-m² figures with their basis |
 | aggregate_properties (over the stats dashboard's own function) | median price per m² and counts by cohort: new build, renovated panel flat 40–50 m², disposition, locality level |
 | market_evidence | prices achieved: ads that went inactive after **2–60 days on market by default** (the agent may widen the window with a stated reason, e.g. luxury segments), last price before delisting as the proxy, labelled as a proxy; plus the reas.cz registered sales we hold |
-| get_property_dossier | everything we know about ≤ 20 properties: canonical ad, location, history, estimates, sources, brokers as the user sees them |
+| get_property_dossier | everything we know about ≤ 20 properties: canonical ad, location, history, estimates, sources (as built, no broker: ruling 2026-10-29) |
+| get_property_brokers (market) | each property's brokers as its page shows them, contacts included, ≤ 20 people per call, every call recorded |
 | get_my_property_context | the user's collections, notes, tags and pipeline card for those properties |
 | assess_property_visuals (ADR-0007) | a structured report from the ad's photos and floor plan: view, neighbourhood as seen, shared spaces, kitchen, bathrooms, equipment, finish quality, lighting, styling; a score and a one-line evidence note per facet; cached per photo set and prompt version; ≤ 10 properties per run; facet list v1 drafted by Claude from the operator's brief, edited by the operator in `references/`; first 30 properties run on Opus 5.5 and Sonnet 5.5, the cheaper kept if they agree |
 | `find_comparables_relaxed`, `analyze_distribution`, `compute_market_velocity`, `compute_listing_velocity`, `estimate_yield`, `compute_reference_rent`, `describe_neighborhood`, map overlays and counts (wraps) | the analytics the screens show or never show |
@@ -93,8 +96,9 @@ contract unchanged first (the website and the Chrome extension keep working), th
 confidence, verdict, evidence list) with their screens; the `skills` table, the Settings editor, `AGENT_TOOLS`, the
 realtime-worker estimation lane and the `BackgroundTasks` path are deleted when the gate passes.
 
-**Drafter (M3).** Proposes a draft (subject, body, broker) from the dossier, the user's notes and the pipeline card;
-the user sees the draft with an "open in my mail" link and sends it; no thread tracking until PROGRAM §3.8's mail stage 1 (the inbound reply subdomain).
+**Drafter (M3).** Proposes a draft (subject, body, broker) from the dossier, `get_property_brokers` (the dossier
+carries no broker), the user's notes and the pipeline card; the user sees the draft with an "open in my mail" link
+and sends it; no thread tracking until PROGRAM §3.8's mail stage 1 (the inbound reply subdomain).
 
 ## 3. Sequence
 
@@ -144,10 +148,11 @@ Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 | Tenant pool password | 2026-10-27 | psycopg as tenant_pool; new API GET /pipeline/stages 200 |
 
 **M1, about 3.5 weeks: the spine, agent-worker, parity, code and files, the scout in production.**
-- *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (the Search agenda in `filter_registry`, the stats
+- *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (search over the Browse agenda, the stats
   mapper with a census that every dashboard parameter is mapped, market_evidence, the dossier and context reads,
-  the broker reads with the 20-contact cap); the read-only helper (`tenant_transaction` with a read_only flag, 8 s
-  statement timeout, row cap); the skills loader; the generic loop and submit_result; the Anthropic provider
+  the broker read with the 20-person cap); the bounded read (no flag: every GET/HEAD tenant transaction and every
+  market tool runs READ ONLY at `authenticated`'s 8 s, as PostgREST runs the SPA's; each tool caps its own rows;
+  ruling 2026-10-29); the skills loader; the generic loop and submit_result; the Anthropic provider
   carries the hosted code tool and the Files API; skills/regional_scout_v1/ with `references/` slots;
   scripts/agent_run.py with a record mode, run locally against production data read-only. The operator grades 10
   shortlists on Opus 5.5 and, where no code is needed, on gpt-5.6-luna. Below 7 of 10, change the skill, not the spine.
@@ -280,4 +285,5 @@ start runs, what agent search means, and model-written SQL.
 | #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | run to stage 13 on 2026-10-27, the database by hand; removed the same day at the operator's request (rotations run in a Claude session) |
 | #2062 prep: REST twins retired | the seven REST routes with no traffic (Railway: 0 requests to each of the seven in the 168 h to 2026-10-28, and no caller in the repo) and their request bodies, which the M1a tools replace; the estimator never called them (it calls the toolkit in-process); source kept at the tag named under § 3, M2 | nothing |
 | #2062 M1a tool registry | `api/capabilities/`: one `Entry` per tool (tenancy, effect, a strict generated argument model), one `registry.call` (validate → connection by tenancy → handler → one error table → structural truncation); 8 market tools (comparables, distribution, outliers, market and listing velocity, yield, reference rent, neighbourhood) over property id, ad id or point, and `list_pipeline_stages` in the caller's RLS transaction; argument models AND the REST cohort body generated from the filter registry (`api/filter_args.py`: the dropped seen-window filters now apply, an unknown or off-vocabulary key is a 422); the estimator's subject statements moved to `toolkit/subject.py`; census `tests/api/test_capabilities_census.py`, live `tests/test_capabilities_live.py`; how-to `.claude/skills/toolkit-api/references/tool-registry.md` | nothing (the Settings filter-availability matrix, which switched nothing, goes in #2165 by the 2026-10-29 ruling) |
+| #2063 M1a parity reads | the bound: every GET/HEAD tenant transaction (routes and tools, acting or not) and every market tool runs READ ONLY at `authenticated`'s 8 s (`tenant_pool.bound_read`; before, only an acting GET was read only and every tenant read ran on the 120 s default), a cancel is a retryable BUSY even where a handler swallowed it; `search_properties` over Browse's own list and the Browse agenda through the one filter compiler (`BROWSE_GRAIN`; per-grain hooks give both property grains ONE portal rule); `get_property_dossier` and `get_my_property_context` under the user's login through the page's own readers (`api/property_read.py`, which the price-history and download routes now read through; `curation.property_state`, moved out of `/listings/lookup`, its response unchanged); `get_property_brokers` on the service connection, unmasked as the page shows it, ≤ 20 people per call, its read recorded by #2065's step journal (ADR-0002 amended); deleted: the list_pipeline_stages tool, `GET /brokers?ids=` and `toolkit.brokers.brokers_by_ids` (no reader, no traffic); a census of the columns no tool may read, derived from the registry (rules 14, 17); how-to `.claude/skills/toolkit-api/references/tool-registry.md` § The parity reads | after deploy, a day of Railway's API GET 5xx (a read-only refusal or a cancel past 8 s; the 7-day p99 of every tenant GET route was under 3 s); follow-ups #2172 (Browse's broker scope and market growth in search; a centre + radius pick is already the `bounds` square Browse filters on), #2173 (Agenda.ESTIMATION), #2174 (`properties_public`'s parked levels and dead broker columns), #2175 (the PDF's broker mask) |
 | #2065 M1a skills loader, loop, terminator, runner | `api/agents/`: an agent is a `skills/<name>/` folder (frontmatter: priced model per provider, registry tools, limits, input/output JSON Schema via `jsonschema`; body + `references/`), loaded and checked by `definition.load` (CI loads every folder; the image copies `skills/`); one `loop.run` (input check, registry dispatch, a journal step per model and tool call, caps on model calls, wall clock and cost, each reply's `max_tokens` bounded so its worst case fits what is left); `submit_result` accepted only when every cited `property_id` came from this run's tool results, every file was produced by the run and every proposal names a write tool the agent lists and passes its schema; a cassette is the journal saved (`tests/api/_agent_replay.py` replays it); `scripts/agent_run.py` runs a folder as one user, read-only, model spend in `llm_calls` as `agent_run` (migration 690). Removed: the four legacy `skills/` copies (now `legacy-skills/`), the fail-open skill-check globals, the drifted `CalledFor` literal (a census checks every `called_for` against the newest CHECK) | migration 690 applied before merge; the Railway `/skills/**` watch pattern reaches the services with the operator's next IaC wizard apply |

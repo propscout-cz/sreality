@@ -1,9 +1,9 @@
 """Read-only broker intelligence queries (leaderboard, detail, contacts, listings).
 
-Mirrors the browser read layer (frontend/src/lib/brokers.ts) server-side so the
-agent, API consumers, and outreach (Phase 4) all hit the SAME public views +
-broker_leaderboard RPC — one definition of "who has what". Identity-gated routes
-live in api/routes/brokers.py. A broker's full contact set is NOT exposed by the
+The server side of the browser read layer (frontend/src/lib/brokers.ts): the
+/brokers/* routes (api/routes/brokers.py), the property download and an agent's
+get_property_brokers all hit the SAME public views + broker_leaderboard RPC — one
+definition of "who has what". A broker's full contact set is NOT exposed by the
 anon public views (PII), so broker_contacts here is the only path to it —
 `apply_pii_policy` is what the route layer runs over every other envelope so a
 non-admin caller gets has_email / has_phone flags instead of the values.
@@ -57,9 +57,10 @@ def _iso(v: Any) -> str | None:
 
 
 def _bounded(ids: list[int]) -> list[int]:
-    """Deduped, sorted, capped. The HTTP layer rejects an over-cap batch outright
-    (both batch routes bound the input); this slice is only the backstop for a
-    direct toolkit/agent caller, which must never silently spill into a huge IN."""
+    """Deduped, sorted, capped. The one batch route (POST /brokers/by-listings)
+    rejects an over-cap batch outright and get_property_brokers reads in MAX_BATCH
+    batches; this slice is only the backstop for a direct toolkit/agent caller,
+    which must never silently spill into a huge IN."""
     return sorted({int(i) for i in ids})[:MAX_BATCH]
 
 
@@ -390,19 +391,27 @@ def listing_brokers(conn: Any, listing_ids: list[int]) -> dict[str, Any]:
     return _envelope("listing_brokers", rows, {"listing_ids": ids}, len(rows), None)
 
 
-def brokers_by_ids(conn: Any, broker_ids: list[int]) -> dict[str, Any]:
-    """Canonical broker rows for an explicit id set (the contact-box hydration
-    pair to listing_brokers)."""
-    ids = _bounded(broker_ids)
-    rows: list[dict[str, Any]] = []
-    if ids:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT * FROM brokers_public WHERE broker_id = ANY(%s)", (ids,))
-            rows = cur.fetchall()
-    fresh = max((r["last_seen_at"] for r in rows if r.get("last_seen_at")), default=None)
-    for r in rows:
-        r["first_seen_at"], r["last_seen_at"] = _iso(r.get("first_seen_at")), _iso(r.get("last_seen_at"))
-    return _envelope("brokers_by_ids", rows, {"broker_ids": ids}, len(rows), _iso(fresh))
+def property_brokers(
+    ads: list[dict[str, Any]], by_listing: dict[int, dict[str, Any]], canonical_id: int
+) -> tuple[list[dict[str, Any]], bool]:
+    """lib/brokers.propertyBrokers (MS7): the brokers of the active ads, one per person carrying
+    the ads that person advertises (`ads`), the canonical ad's first; with no active ad,
+    those of all its ads, flagged."""
+    active = [a for a in ads if a["is_active"]]
+    pool = active or ads
+    ordered = sorted(pool, key=lambda a: a["id"] != canonical_id)
+    seen: dict[int, dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for ad in ordered:
+        b = by_listing.get(ad["id"])
+        if b is None:
+            continue
+        row = seen.get(b["broker_id"])
+        if row is None:
+            row = seen[b["broker_id"]] = {**b, "ads": []}
+            out.append(row)
+        row["ads"].append(ad)
+    return out, not active
 
 
 def geo_options(conn: Any, *, geo_level: str | None = None) -> dict[str, Any]:

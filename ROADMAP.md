@@ -2,15 +2,13 @@
 
 The long-term plan for this project. Each phase builds on the previous; tools within a
 phase are independent. **CLAUDE.md is the authoritative source for active rules; ROADMAP
-is for sequencing.** This file is an index — the actual phase content lives in one file
-per track under `roadmap/`, with completed work in `roadmap/archive.md`.
+is for sequencing.** This file is an index — the phase content lives in the file each
+track's row links, with completed work in `roadmap/archive.md`.
 
 ## How this roadmap is maintained
 
-- One file per track under `roadmap/`; `roadmap/archive.md` holds completed work (the old
-  `## Done` block).
-- After shipping meaningful work, in the SAME PR update **only** the relevant
-  `roadmap/<track>.md` (move a bullet to done, add new "next" items) **and** this index's
+- After shipping meaningful work, in the SAME PR update **only** the track file its index
+  row links (move a bullet to done, add new "next" items) **and** this index's
   status cell if the track's status changed. Don't defer roadmap updates to a follow-up.
 - **Never open all track files to make one edit** — go straight to the track you shipped in.
 - A large ROADMAP restructure is its own PR (see CLAUDE.md § Git workflow).
@@ -51,7 +49,7 @@ simulation-first rebuild (see the table below).
 | Building decomposition | 🟡 no live entry (ruling owed) | Paste-a-building unit extraction + fan-out; the paste entry (`POST /buildings/from_url`) retired 2026-10-20 with the URL parser, so nothing leaves `pending` until the operator gives it a new entry or retires it; B3 business-case tab proposed | [roadmap/building-decomposition-track.md](roadmap/building-decomposition-track.md) |
 | Skill refinement | 🟡 active | Phase AI — feedback-driven estimation-skill refinement | [roadmap/skill-refinement-track.md](roadmap/skill-refinement-track.md) |
 | Summarize | ✅ done | summarize-1 removed 2026-10-19 with the Stats dashboard (626/627) | [roadmap/summarize-track.md](roadmap/summarize-track.md) |
-| Agent platform | 🟡 M1a building (ruled 2026-10-25, ADRs 0001–0007; M0 owes #2061; #2062 tool registry; build log: MVP.md § 8) | Agent-first, multi-tenant platform: one capability registry with parity to the screens; propose-then-apply writes; a run ledger beside estimation_runs; agent-worker after the Railway IaC move; agent Python on Claude hosted code execution with files in Supabase Storage; a structured photo assessment; scout → rebuilt estimator → drafter. M0 also closes live holes and meets the Railway Config-as-Code cutoff of 2026-12-01 | [docs/design/agent-platform/MVP.md](docs/design/agent-platform/MVP.md) (reference design: PROGRAM.md) |
+| Agent platform | 🟡 M1a building (ruled 2026-10-25, ADRs 0001–0007; M0 owes #2061; #2062 tool registry, #2063 parity reads; build log: MVP.md § 8) | Agent-first, multi-tenant platform: one capability registry with parity to the screens; propose-then-apply writes; a run ledger beside estimation_runs; agent-worker after the Railway IaC move; agent Python on Claude hosted code execution with files in Supabase Storage; a structured photo assessment; scout → rebuilt estimator → drafter. M0 also closes live holes and meets the Railway Config-as-Code cutoff of 2026-12-01 | [docs/design/agent-platform/MVP.md](docs/design/agent-platform/MVP.md) (reference design: PROGRAM.md) |
 | Public release | 🟡 active | Accounts, multi-tenancy (RLS), admin gating, Stripe — see `docs/design/public-release-program.md` | [roadmap/public-release-track.md](roadmap/public-release-track.md) |
 | Sold comps | 🟢 shipped, lane on | Registered sales as their own account-less fact (`sold_transactions`, migs 542–545) — reas.cz only, per-obec cells, never a listing row and never mixed with asking prices. W0–W3 shipped: shared table primitives, store + pure parser, the fetch lane (`realtime_sold_comps_interval_seconds`, on at 3600 since 09-21), the read surface + `Agenda.SOLD` + the listing-page block. `POST /tools/find_comparables` stays (operator ruling) | [roadmap/sold-comps.md](roadmap/sold-comps.md) |
 | Listing identity | 🟡 active | Retire the `sreality_id` smart key; Phase 0/R1/natural-key/URL cutover shipped, R2→PK-swap in progress per `docs/design/listing-identity-r2-pk-swap-runbook.md` | [roadmap/listing-identity-track.md](roadmap/listing-identity-track.md) |
