@@ -3,8 +3,9 @@ executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
 `public.portal_status_matches`, through both aggregate RPCs (Stats and, since migration 630,
-the map cells over `browse_list`) and, for the `any` rows, through the Watchdog's
-compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
+the map cells over `browse_list`) and through both property grains' compiled rule
+(`toolkit.filter_compiler.PROPERTIES_GRAIN`, the Watchdog's, and `BROWSE_GRAIN`, the agents'
+search over Browse's source); every broker case seeds its
 ads, runs the broker lookup (`toolkit.brokers.broker_property_ids`, the portal side on the
 broker's ads) and keeps the property's own status beside it, as Browse does. The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
@@ -99,20 +100,33 @@ def test_the_function_answers_the_table(conn, case: dict[str, Any]) -> None:
         assert cur.fetchone()[0] is case["expected"]
 
 
-@live
-@pytest.mark.parametrize("case", [c for c in CASES if c["status"] == "any"],
-                         ids=_ids([c for c in CASES if c["status"] == "any"]))
-def test_the_watchdogs_clauses_are_the_any_arm(conn, case: dict[str, Any]) -> None:
-    from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
+def _compiled(grain_name: str, case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    from toolkit import filter_compiler as fc
 
-    where, params = compile_filter_where(
-        {"portals": case["portals"], "portals_excluded": case["excluded"],
-         "portals_excluded_active_only": case["excluded_active_only"]}, PROPERTIES_GRAIN)
+    grain = getattr(fc, grain_name)
+    values = {"portals": case["portals"], "status": case["status"], "portals_excluded": case["excluded"],
+              "portals_excluded_active_only": case["excluded_active_only"]}
+    if grain is fc.PROPERTIES_GRAIN:
+        # The Watchdog takes no status (its agenda refuses one): its `any` rows compile, every
+        # other row reaches the grain's own portal rule directly.
+        if case["status"] == "any":
+            return fc.compile_filter_where({**values, "status": None}, grain)
+        params: dict[str, Any] = {}
+        return grain.hooks["portals"]("portals", case["portals"], values, params), params
+    return fc.compile_filter_where(values, grain)
+
+
+@live
+@pytest.mark.parametrize("grain", ["PROPERTIES_GRAIN", "BROWSE_GRAIN"])
+@pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
+def test_both_property_grains_compile_the_table(conn, case: dict[str, Any], grain: str) -> None:
+    where, params = _compiled(grain, case)
     with conn.cursor() as cur:
         cur.execute(
-            "select count(*) from (values (%(all)s::text[], %(active)s::text[])) "
-            f"as l(all_sources, active_sources) where {' and '.join(where) or 'true'}",
-            {**params, "all": case["all_sources"], "active": case["active_sources"]})
+            "select count(*) from (values (%(is_active)s, %(all)s::text[], %(active)s::text[])) "
+            f"as l(is_active, all_sources, active_sources) where {' and '.join(where) or 'true'}",
+            {**params, "is_active": case["is_active"], "all": case["all_sources"],
+             "active": case["active_sources"]})
         assert cur.fetchone()[0] == int(case["expected"])
 
 

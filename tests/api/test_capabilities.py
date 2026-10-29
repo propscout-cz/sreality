@@ -11,12 +11,12 @@ import pytest
 from fastapi import HTTPException
 from pydantic import Field
 
+from api import tenant_pool
 from api.capabilities import registry, truncate
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
-
-MARKET_CONN = object()
+from tests.api._script_conn import ScriptConn
 
 
 class _Probe(Args):
@@ -37,7 +37,7 @@ def probe(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 def _error(name: str, args: object, caller: Caller | None = None) -> ToolError:
     with pytest.raises(ToolError) as info:
-        registry.call(caller or Caller(market=MARKET_CONN), name, args)
+        registry.call(caller or Caller(market=ScriptConn([])), name, args)
     return info.value
 
 
@@ -64,22 +64,25 @@ def test_invalid_arguments_never_reach_the_handler(probe: Any, args: object, loc
 def test_strings_parse_the_way_a_model_sends_them(probe: Any) -> None:
     seen: dict[str, Any] = {}
     probe(lambda ctx, a: seen.setdefault("a", a) and {"data": []})
-    registry.call(Caller(market=MARKET_CONN), "probe", {"flag": "false", "n": "3"})
+    registry.call(Caller(market=ScriptConn([])), "probe", {"flag": "false", "n": "3"})
     assert (seen["a"].flag, seen["a"].n) == (False, 3)
 
 
 # --- connection by tenancy --------------------------------------------------------------------------------------
 
-def test_a_market_tool_runs_on_the_service_connection_and_returns_the_handlers_envelope(probe: Any) -> None:
+def test_a_market_tool_reads_in_its_own_bounded_transaction_on_the_service_connection(probe: Any) -> None:
     envelope = {"data": {"rows": []}, "metadata": {"tool": "probe"}}
-    seen: dict[str, Any] = {}
+    conn, seen = ScriptConn([]), {}
 
     def handler(ctx: Context, a: _Probe) -> dict[str, Any]:
         seen["conn"] = ctx.conn
+        with ctx.conn.cursor() as cur:
+            cur.execute("SELECT 1")
         return envelope
     probe(handler)
-    assert registry.call(Caller(market=MARKET_CONN, claims=None), "probe", {}) is envelope
-    assert seen["conn"] is MARKET_CONN
+    assert registry.call(Caller(market=conn, claims=None), "probe", {}) is envelope
+    assert seen["conn"] is conn and conn.tx == ["commit"]
+    assert [sql for sql, _ in conn.executed] == [*tenant_pool.READ_BOUND, "SELECT 1"]
 
 
 def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden_before_any_connection(probe: Any, monkeypatch) -> None:
@@ -93,7 +96,7 @@ def test_a_tenant_tool_runs_in_the_callers_own_transaction_never_acting_as_anyon
     probe: Any, monkeypatch: pytest.MonkeyPatch, effect: Effect, method: str,
 ) -> None:
     opened: list[tuple[dict, Any, str]] = []
-    tenant_conn = object()
+    tenant_conn = ScriptConn([])
 
     @contextlib.contextmanager
     def fake_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
@@ -103,8 +106,25 @@ def test_a_tenant_tool_runs_in_the_callers_own_transaction_never_acting_as_anyon
     seen: dict[str, Any] = {}
     probe(lambda ctx, a: seen.setdefault("conn", ctx.conn) and {"data": []}, tenancy=Tenancy.TENANT, effect=effect)
     claims = {"sub": "a", "role": "authenticated"}
-    registry.call(Caller(market=MARKET_CONN, claims=claims), "probe", {})
-    assert opened == [(claims, None, method)] and seen["conn"] is tenant_conn
+    market = ScriptConn([])
+    registry.call(Caller(market=market, claims=claims), "probe", {})
+    assert opened == [(claims, None, method)] and seen["conn"] is tenant_conn and not market.executed
+
+
+@pytest.mark.parametrize("method, bounded", [("GET", True), ("HEAD", True), ("POST", False), ("PATCH", False)])
+def test_a_tenant_read_is_bounded_before_its_role_and_claims_are_issued(
+    monkeypatch: pytest.MonkeyPatch, method: str, bounded: bool,
+) -> None:
+    """What every signed-in GET/HEAD gets, a tenant READ tool's included: PostgREST's READ ONLY + 8 s."""
+    conn = ScriptConn([])
+    conn.close = lambda: None
+    monkeypatch.setenv("TENANT_POOL_DB_URL", "postgresql://tenant-pool")
+    monkeypatch.setattr(tenant_pool.psycopg, "connect", lambda *a, **k: conn)
+    with tenant_pool.tenant_transaction({"sub": "a"}, act_as=None, method=method):
+        pass
+    bound = list(tenant_pool.READ_BOUND) if bounded else []
+    assert [sql for sql, _ in conn.executed][: len(bound) + 1] == [*bound, "SET LOCAL ROLE authenticated"]
+    assert conn.tx == ["commit"]
 
 
 def test_a_tenant_tools_error_leaves_the_transaction_before_it_is_mapped(probe: Any, monkeypatch) -> None:
@@ -113,7 +133,7 @@ def test_a_tenant_tools_error_leaves_the_transaction_before_it_is_mapped(probe: 
     @contextlib.contextmanager
     def fake_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
         try:
-            yield object()
+            yield ScriptConn([])
         except Exception:
             states.append("rolled back")
             raise
@@ -122,7 +142,7 @@ def test_a_tenant_tools_error_leaves_the_transaction_before_it_is_mapped(probe: 
     def handler(ctx: Context, a: _Probe) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="stage is not empty")
     probe(handler, tenancy=Tenancy.TENANT)
-    err = _error("probe", {}, Caller(market=MARKET_CONN, claims={"sub": "a"}))
+    err = _error("probe", {}, Caller(market=ScriptConn([]), claims={"sub": "a"}))
     assert (err.code, err.message, states) == (ToolErrorCode.CONFLICT, "stage is not empty", ["rolled back"])
 
 
@@ -162,6 +182,37 @@ def test_every_error_maps_through_the_one_table(probe: Any, raised: Exception, c
         assert str(raised) not in err.message
 
 
+_CANCELLED = (lambda sql: sql == "SELECT pg_sleep(9)",
+              psycopg.errors.QueryCanceled("canceling statement due to statement timeout"))
+
+
+@pytest.mark.parametrize("swallowed", [False, True])
+@pytest.mark.parametrize("tenancy", [Tenancy.MARKET, Tenancy.TENANT])
+def test_a_read_cancelled_at_its_time_limit_is_busy_and_rolled_back_even_when_the_handler_swallows_it(
+    probe: Any, monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy, swallowed: bool,
+) -> None:
+    """rent_map's reference swallows any database error: answered after a cancel, it would say "no reference"."""
+    conn = ScriptConn([_CANCELLED])
+
+    @contextlib.contextmanager
+    def fake_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
+        with conn.transaction():
+            yield conn
+    monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", fake_transaction)
+
+    def handler(ctx: Context, a: _Probe) -> dict[str, Any]:
+        try:
+            with ctx.conn.cursor() as cur:
+                cur.execute("SELECT pg_sleep(9)")
+        except psycopg.errors.QueryCanceled:
+            if not swallowed:
+                raise
+        return {"data": []}
+    probe(handler, tenancy=tenancy)
+    err = _error("probe", {}, Caller(market=conn, claims={"sub": "a"}))
+    assert (err.code, err.retryable, conn.tx) == (ToolErrorCode.BUSY, True, ["rollback"])
+
+
 @pytest.mark.parametrize("raised", [KeyError("cols"), TypeError("x"), RuntimeError("SELECT secret FROM t"),
                                     HTTPException(status_code=500, detail="SELECT secret")])
 def test_anything_else_is_internal_with_a_reference_and_no_text(probe: Any, raised: Exception, caplog) -> None:
@@ -179,7 +230,7 @@ def test_a_tenant_result_refused_for_its_size_rolls_the_transaction_back(probe: 
     @contextlib.contextmanager
     def fake_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
         try:
-            yield object()
+            yield ScriptConn([])
             states.append("committed")
         except Exception:
             states.append("rolled back")
@@ -187,7 +238,7 @@ def test_a_tenant_result_refused_for_its_size_rolls_the_transaction_back(probe: 
     monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", fake_transaction)
     monkeypatch.setattr(truncate, "RESULT_BUDGET", 100)
     probe(lambda ctx, a: {"data": "x" * 500}, tenancy=Tenancy.TENANT, effect=Effect.WRITE)
-    err = _error("probe", {}, Caller(market=MARKET_CONN, claims={"sub": "a"}))
+    err = _error("probe", {}, Caller(market=ScriptConn([]), claims={"sub": "a"}))
     assert (err.code, states) == (ToolErrorCode.RESULT_TOO_LARGE, ["rolled back"])
 
 

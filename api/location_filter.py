@@ -53,21 +53,21 @@ LEVEL_COLUMN: dict[ChipLevel, str] = dict(zip(
 class DistrictChip(BaseModel):
     """One location-filter entry: the SPA's `DistrictChip` and its `districts*` URL params."""
 
-    name: str
+    name: str = Field(description="The unit's name, for display only; never a predicate.")
     # Display only: the obec a část obce or a street sits in. Never a predicate.
-    context: str | None = None
-    excluded: bool = False
-    level: ChipLevel
-    id: int = Field(gt=0)
+    context: str | None = Field(None, description="The town a district or street sits in, for display only.")
+    excluded: bool = Field(False, description="True subtracts this unit from the result instead of adding it.")
+    level: ChipLevel = Field(description="The level the unit was picked at; a street filters at its street.")
+    id: int = Field(ge=1, description="The unit's RÚIAN code at that level.")
 
 
 class MapBounds(BaseModel):
     """The map box: WGS84 degrees, west < east and south < north (the SPA's `parseBounds` rule)."""
 
-    west: float = Field(ge=-180, le=180)
-    south: float = Field(ge=-90, le=90)
-    east: float = Field(ge=-180, le=180)
-    north: float = Field(ge=-90, le=90)
+    west: float = Field(ge=-180, le=180, description="Western edge, longitude (WGS84).")
+    south: float = Field(ge=-90, le=90, description="Southern edge, latitude (WGS84).")
+    east: float = Field(ge=-180, le=180, description="Eastern edge, longitude (WGS84).")
+    north: float = Field(ge=-90, le=90, description="Northern edge, latitude (WGS84).")
 
     @model_validator(mode="after")
     def _ordered(self) -> "MapBounds":

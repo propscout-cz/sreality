@@ -18,6 +18,7 @@ from api.capabilities.subject import (
 )
 from api.estimate_yield import estimate_yield
 from api.filter_args import Args, agenda_ids, filter_model, filter_values
+from api.property_read import BROKERS_MAX, PropertyIds, property_brokers
 from toolkit import (
     ComparableFilters,
     analyze_distribution,
@@ -163,6 +164,10 @@ def _neighbourhood(ctx: Context, a: NeighbourhoodArgs) -> dict[str, Any]:
     return describe_neighborhood(ctx.conn, lat=target.lat, lng=target.lng, **values)
 
 
+def _brokers(ctx: Context, a: PropertyIds) -> dict[str, Any]:
+    return property_brokers(ctx.conn, a)
+
+
 def _subject(args: type[Args]) -> str:
     """The subject sentence, naming only the categories `args` declares."""
     declared = [c for c in CATEGORIES if c in args.model_fields]
@@ -215,4 +220,13 @@ ENTRIES = (
           f"condition mix, price statistics by disposition, the trend, and how old the data is. "
           f"{_subject(NeighbourhoodArgs)} A point is a place only (lat and lng).",
           NeighbourhoodArgs, _neighbourhood),
+    # The page's broker read (POST /brokers/by-listings): the broker relations are the API's alone (A6), never the
+    # user's login, so this is the market's connection, unmasked as the page shows every signed-in user.
+    _read("get_property_brokers",
+          f"Each property's brokers as its page lists them, in the order asked: the brokers of its live ads (of all "
+          f"its ads when none is live, then from_inactive is true), one row per person, its canonical ad's broker "
+          f"first, with name, agency, phone, e-mail and the ads they advertise there. A call lists at most "
+          f"{BROKERS_MAX} people and stops at the next: metadata.brokers says how many of how many, and "
+          f"metadata.unlisted_property_ids the properties to ask for again. A merged-away id follows its survivor.",
+          PropertyIds, _brokers),
 )

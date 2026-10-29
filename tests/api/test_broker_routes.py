@@ -309,36 +309,16 @@ def test_the_broker_listing_id_route_is_gone(client):
     assert client.get("/brokers/1/listing-ids").status_code == 404
 
 
-def test_brokers_by_ids_repeated_query_params(client, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(broker_routes.brokers, "brokers_by_ids",
-                        lambda conn, ids: captured.update(ids=ids)
-                        or {"data": [dict(_LEADER_ROW)], "metadata": {}})
-    res = client.get("/brokers", params=[("ids", 1), ("ids", 2)])
-    assert res.status_code == 200
-    assert captured["ids"] == [1, 2]
-    assert "primary_email" not in res.json()["data"][0]
-
-
-def test_brokers_by_ids_rejects_an_unbounded_batch(client):
-    """The GET batch and its POST sibling must agree: an over-cap batch is a 422,
-    never a silently truncated 200 that drops the highest ids as if they were
-    brokers that don't exist."""
-    over = [("ids", i) for i in range(brokers_toolkit.MAX_BATCH + 1)]
-    assert client.get("/brokers", params=over).status_code == 422
-
-
-def test_brokers_by_ids_rejects_a_non_numeric_id(client):
-    assert client.get("/brokers", params=[("ids", "abc")]).status_code == 422
-
-
-def test_batch_routes_accept_an_empty_selection(client, monkeypatch):
-    monkeypatch.setattr(broker_routes.brokers, "brokers_by_ids",
-                        lambda conn, ids: {"data": [], "metadata": {}})
+def test_the_batch_route_accepts_an_empty_selection(client, monkeypatch):
     monkeypatch.setattr(broker_routes.brokers, "listing_brokers",
                         lambda conn, ids: {"data": [], "metadata": {}})
-    assert client.get("/brokers").json()["data"] == []
     assert client.post("/brokers/by-listings", json={"listing_ids": []}).json()["data"] == []
+
+
+def test_the_broker_by_id_batch_route_is_gone(client):
+    """No reader since W6 (migration 419) and none in 7 days of Railway traffic (#2063): a by-broker contact read
+    would exceed what the page shows a user, which is the brokers of the ads they look at."""
+    assert client.get("/brokers", params=[("ids", 1)]).status_code == 404
 
 
 def test_search_masks_contacts_for_a_plain_user(client, monkeypatch):
@@ -442,7 +422,6 @@ _SENTINEL = {"data": [{"broker_id": 1, "display_name": "leak@rk.cz",
 # (method, route template, concrete URL, JSON body) for every non-admin /brokers
 # route. `test_the_pii_gate_covers_every_non_admin_broker_route` keeps it honest.
 _NON_ADMIN_CALLS = [
-    ("GET", "/brokers", "/brokers?ids=1", None),
     ("GET", "/brokers/leaderboard", "/brokers/leaderboard", None),
     ("GET", "/brokers/search", "/brokers/search?q=a", None),
     ("GET", "/brokers/geo-options", "/brokers/geo-options", None),
@@ -458,7 +437,7 @@ _UNMASKED_CALLS = [
     ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
 ]
 
-_TOOLKIT_READS = ("brokers_by_ids", "leaderboard", "search", "geo_options", "firm_options",
+_TOOLKIT_READS = ("leaderboard", "search", "geo_options", "firm_options",
                   "listing_brokers", "get_broker", "broker_listings", "broker_property_ids")
 
 

@@ -1,12 +1,15 @@
 """Shared setup for the live property-identity tests: the `REQUIRED_DB` guard, `db_url()`, and seed
 helpers for properties, adverts, accounts and the operator's property-anchored state. Every seed lands
-inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back."""
+inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back;
+only `signups` commits, and deletes what it made."""
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -40,15 +43,16 @@ def _property(cur: Any) -> int:
     return int(cur.fetchone()[0])
 
 
-def _advert(cur: Any, pid: int, *, source: str, price: int = 5_000_000, active: bool = True,
-            condition: str | None = None, levels: tuple[Any, Any] = (None, None)) -> int:
+def _advert(cur: Any, pid: int, *, source: str, price: int | None = 5_000_000, active: bool = True,
+            condition: str | None = None, levels: tuple[Any, Any] = (None, None), **facts: Any) -> int:
+    """A byt for sale, 70 m², unless `facts` (more `listings` columns) say otherwise."""
+    row = {"sreality_id": next(_SREALITY_IDS) if source == "sreality" else None, "source": source,
+           "source_id_native": f"lp-{uuid.uuid4()}", "category_main": "byt", "category_type": "prodej",
+           "price_czk": price, "area_m2": 70, "is_active": active, "property_id": pid, "condition": condition,
+           "building_condition_level": levels[0], "apartment_condition_level": levels[1], **facts}
     cur.execute(
-        "INSERT INTO listings (sreality_id, source, source_id_native, raw_json, "
-        "category_main, category_type, price_czk, area_m2, is_active, property_id, condition, "
-        "building_condition_level, apartment_condition_level) "
-        "VALUES (%s, %s, %s, '{}'::jsonb, 'byt', 'prodej', %s, 70, %s, %s, %s, %s, %s) RETURNING id",
-        (next(_SREALITY_IDS) if source == "sreality" else None, source,
-         f"lp-{uuid.uuid4()}", price, active, pid, condition, *levels),
+        f"INSERT INTO listings (raw_json, {', '.join(row)}) VALUES ('{{}}'::jsonb, {', '.join(['%s'] * len(row))}) "
+        "RETURNING id", list(row.values()),
     )
     return int(cur.fetchone()[0])
 
@@ -101,3 +105,23 @@ def _tag(cur: Any, acc: uuid.UUID) -> int:
         (acc, f"lp-{uuid.uuid4().hex[:12]}"),
     )
     return int(cur.fetchone()[0])
+
+
+@contextlib.contextmanager
+def signups(svc: Any, prefix: str, *keys: str) -> Iterator[dict[str, Any]]:
+    """One user per key signed up through the real trigger (migration 612: the account, its owner membership, the
+    default board, the monitoring collection and the trial), committed on the autocommit `svc` so a connection of
+    its own sees them: `key` is the user, `key_acc` their account. Deleted on exit."""
+    users = {key: uuid.uuid4() for key in keys}
+    with svc.cursor() as cur:
+        for key, user in users.items():
+            cur.execute("INSERT INTO auth.users (id, email) VALUES (%s, %s)",
+                        (user, f"{prefix}-{key}-{user.hex[:8]}@test.local"))
+        cur.execute("SELECT user_id, account_id FROM account_members WHERE user_id = ANY(%s)", (list(users.values()),))
+        account = dict(cur.fetchall())
+    try:
+        yield {**users, **{f"{key}_acc": account[user] for key, user in users.items()}}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM accounts WHERE id = ANY(%s)", (list(account.values()),))
+            cur.execute("DELETE FROM auth.users WHERE id = ANY(%s)", (list(users.values()),))

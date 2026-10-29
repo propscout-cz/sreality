@@ -400,8 +400,8 @@ export function propertyBrokers<A extends BrokerAd>(
  * primary_email / primary_phone itself, so both former callers — the pipeline board
  * and the property page — read the contact off the row they already have. Re-adding
  * a by-broker_id contact fetcher would recreate the
- * serialized second round trip this wave removed; the route itself stays for
- * non-SPA consumers (the agent, ClickUp). */
+ * serialized second round trip this wave removed; the route itself is deleted
+ * too (#2063: no reader, no traffic). */
 
 export async function fetchBrokerDossier(
   brokerId: number,

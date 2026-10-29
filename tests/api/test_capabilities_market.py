@@ -9,10 +9,11 @@ import pytest
 from api.capabilities import market, registry, subject
 from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
+from tests.api._script_conn import ScriptConn
 from toolkit import ComparableFilters, TargetSpec
 from toolkit.measures import RENT_MONTHLY_CZK_M2
 
-CONN = object()
+CONN = ScriptConn([])
 CATS = {"category_main": "byt", "category_type": "prodej"}
 POINT = {"lat": 50.08, "lng": 14.42, "area_m2": 60.0, "disposition": "2+kk", "floor": 3}
 SPEC = {"lat": 49.2, "lng": 16.6, "area_m2": 75.0, "disposition": "3+1", "floor": 2}

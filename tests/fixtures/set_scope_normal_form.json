@@ -1,0 +1,106 @@
+{
+ "_why": [
+  "A set scope's normal form (frontend/src/lib/setScope.ts normalizeScope), one table read by both languages:",
+  "Browse normalizes a scope before it asks browse_list_visible, and search_properties holds its scope arguments in",
+  "the same form (api/filter_args.py SetScope), so both select the same properties. 'out' empties both lists; an",
+  "element on the in side supersedes 'in'; an element sits on one list only (out wins); lists are deduplicated.",
+  "An all-empty scope is off (TS null), pinned in setScope.test.ts alone."
+ ],
+ "cases": [
+  {
+   "scope": {
+    "set": "out",
+    "in": [
+     1
+    ],
+    "out": [
+     2
+    ]
+   },
+   "normal": {
+    "set": "out",
+    "in": [],
+    "out": []
+   }
+  },
+  {
+   "scope": {
+    "set": "in",
+    "in": [
+     1
+    ],
+    "out": [
+     2
+    ]
+   },
+   "normal": {
+    "set": null,
+    "in": [
+     1
+    ],
+    "out": [
+     2
+    ]
+   }
+  },
+  {
+   "scope": {
+    "set": "in",
+    "in": [],
+    "out": [
+     2
+    ]
+   },
+   "normal": {
+    "set": "in",
+    "in": [],
+    "out": [
+     2
+    ]
+   }
+  },
+  {
+   "scope": {
+    "set": null,
+    "in": [
+     1,
+     1,
+     2
+    ],
+    "out": [
+     2,
+     3,
+     3
+    ]
+   },
+   "normal": {
+    "set": null,
+    "in": [
+     1
+    ],
+    "out": [
+     2,
+     3
+    ]
+   }
+  },
+  {
+   "scope": {
+    "set": null,
+    "in": [
+     4
+    ],
+    "out": [
+     4
+    ]
+   },
+   "normal": {
+    "set": null,
+    "in": [],
+    "out": [
+     4
+    ]
+   }
+  }
+ ]
+}

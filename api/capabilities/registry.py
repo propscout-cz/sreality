@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from api import tenant_pool
 from api.capabilities import market, tenant
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
-from api.capabilities.errors import ToolError, ToolErrorCode, invalid_arguments, to_tool_error
+from api.capabilities.errors import ToolError, ToolErrorCode, busy, invalid_arguments, to_tool_error
 from api.capabilities.truncate import fit
 from api.filter_args import Args
 
@@ -45,7 +45,12 @@ def validate(name: str, raw_args: object) -> tuple[Entry, Args]:
 def _connection(caller: Caller, entry: Entry) -> Iterator[psycopg.Connection]:
     """The one place a tool's connection is chosen: the market's, or the caller's own RLS transaction."""
     if entry.tenancy is Tenancy.MARKET:
-        yield caller.market
+        # A market tool only reads: bounded like a tenant GET, in its own transaction on the autocommit service
+        # connection, so the SET LOCALs end at its COMMIT or ROLLBACK and never outlive the call.
+        with caller.market.transaction():
+            with caller.market.cursor() as cur:
+                tenant_pool.bound_read(cur)
+            yield caller.market
         return
     if caller.claims is None:
         raise ToolError(ToolErrorCode.FORBIDDEN, f"{entry.name} reads the signed-in user's own data")
@@ -62,6 +67,10 @@ def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
         # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
         with _connection(caller, entry) as conn:
             result = entry.handler(Context(conn), args)
+            # A handler that swallowed a database error answered without that read (rent_map's reference swallows
+            # any, a time-limit cancel included). The usual cause is that cancel, hence its retryable BUSY.
+            if conn.info.transaction_status is psycopg.pq.TransactionStatus.INERROR:
+                raise busy()
             if not isinstance(result, dict) or "data" not in result:
                 raise TypeError(f"{name} returned no envelope")
             return fit(result)
