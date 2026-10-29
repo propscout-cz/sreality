@@ -131,8 +131,8 @@ def _schema(value: Any, label: str) -> dict[str, Any]:
                                   f"use only {sorted(PORTABLE_KEYWORDS)}")
         if not isinstance(node.get("type"), str):
             raise DefinitionError(f"{label}: every schema names one type (for null, add nullable: true)")
-        if not all(isinstance(v, str) for v in node.get("enum", ())):
-            raise DefinitionError(f"{label}: enum values are strings (Gemini refuses others)")
+        if "enum" in node and (node["type"] != "string" or not all(isinstance(v, str) for v in node["enum"])):
+            raise DefinitionError(f"{label}: enum belongs on a string field, with string values (Gemini refuses others)")
         if node["type"] == "object" and node.get("additionalProperties") is not False:
             raise DefinitionError(f"{label}: every object refuses unknown keys (additionalProperties: false)")
     return value
