@@ -2,7 +2,7 @@
 # A local Postgres that matches CI's schema-and-sql job (.github/workflows/migrations.yml):
 # PostgreSQL 17 + PostGIS + pgvector — no sudo, no Docker. Linux: conda-forge via micromamba under
 # ~/.local/opt. macOS: Homebrew (conda-forge has no PostGIS for PG17 on macOS; Homebrew's builds for postgresql@17).
-# The replayed schema is kept as a template database named after the worktree's migrations (tpl_<checksum>),
+# The replayed schema is kept as a template database named after the worktree's migrations and recipe (tpl_<checksum>),
 # built in the running cluster the first time a run needs it (~10 s); every test run gets a fresh copy.
 #
 #   scripts/local_pg.sh install        # one-time: Postgres 17 + PostGIS + pgvector (~550 MB on Linux)
@@ -21,8 +21,6 @@ ENV_DIR="$OPT/sreality-pg17"
 DATA="$HOME/.local/share/sreality-pg17"
 PORT=54329
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Named after every migration's and the bootstrap's content, so a worktree only ever copies its own schema.
-TEMPLATE="tpl_$(cd "$REPO" && cksum migrations/*.sql scripts/ci_db_bootstrap.sql | LC_ALL=C sort | cksum | cut -d' ' -f1)"
 if [[ "$(uname -s)" == Darwin ]]; then
   PG_BIN="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/postgresql@17/bin"
   LIBC_LOCALE=en_US.UTF-8
@@ -186,6 +184,9 @@ PY
   return 1
 }
 
+# Hashes the migrations, the bootstrap and build_template's code (declare -f drops comments): a run copies only its own schema.
+TEMPLATE="tpl_$( { cd "$REPO" && cksum migrations/*.sql scripts/ci_db_bootstrap.sql | LC_ALL=C sort; declare -f build_template; } | cksum | cut -d' ' -f1)"
+RESERVED='^(replay|postgres|ci_[0-9]+|tpl_[0-9_]+)$'
 case "${1:-}" in
   install) install ;;
   test) shift; fresh; run_pytest "$@" ;;
@@ -193,9 +194,9 @@ case "${1:-}" in
   start) ensure_server; echo "running on port $PORT" ;;
   stop) pg_ctl -D "$DATA/data" -m fast stop ;;
   status) status ;;
-  db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: db <name> (lowercase, not replay/postgres)"
+  db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && ! "$2" =~ $RESERVED ]] || die "usage: db <name> (lowercase, not replay/postgres/a run's ci_N or tpl_N)"
       copy_of_template "$2"; url_for "$2" ;;
-  drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: drop <name>"
+  drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && ! "$2" =~ $RESERVED ]] || die "usage: drop <name>"
         ensure_server; psql_q -d postgres -c "drop database if exists $2 with (force)" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;
 esac
