@@ -237,6 +237,14 @@ def test_every_filter_with_a_pg_column_is_visible_in_some_user_agenda() -> None:
 # --- JSON serialisation ---------------------------------------------------
 
 
+def test_every_filter_category_is_one_a_grouped_form_draws() -> None:
+    """A grouped `<FilterForm>` (the Watchdog editor) draws only the listed categories, so a filter whose
+    category is missing from the list never renders there."""
+    drawn = fr.registry_to_json()["categories"]
+    assert len(drawn) == len(set(drawn))
+    assert {f.category for f in fr.REGISTRY.values()} <= set(drawn)
+
+
 def test_registry_to_json_roundtrip_is_stable() -> None:
     """Calling twice produces identical output (no nondeterministic
     ordering)."""
