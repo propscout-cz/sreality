@@ -111,7 +111,7 @@ describe('EstimationsBlock MF card', () => {
       property({ mf_reference_rent: FROZEN_REF, mf_gross_yield_pct: 4.6 }),
     );
     await waitFor(() => expect(container).toHaveTextContent('13 800 Kč/měs'));
-    expect(container).toHaveTextContent('hrubý výnos 4,60 %');
+    expect(container).toHaveTextContent('hrubý výnos 4,6 %');
   });
 
   it('shows the property reason as its note, in place of any placeholder', async () => {

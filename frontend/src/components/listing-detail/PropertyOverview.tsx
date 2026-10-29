@@ -30,7 +30,7 @@ import {
   fmtTomDays,
 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
-import { mfShape } from '@/lib/mfReference';
+import { mfShape, mfYieldText } from '@/lib/mfReference';
 import { portalLabel } from '@/lib/portals';
 import { buildPriceSeries, lastMoveByTrack, type PriceAdvert, type PriceSeries } from '@/lib/priceHistory';
 import {
@@ -240,7 +240,8 @@ function ValueCard({
           : 'Zatím nemáme vlastní odhad ani ocenění Valuo.';
 
   const mf = mfShape(property.mf_reference_rent);
-  const yieldHint = property.mf_gross_yield_pct != null ? `hrubý výnos ${fmtPct(property.mf_gross_yield_pct)}` : undefined;
+  const yieldText = mfYieldText(property.mf_gross_yield_pct, property.mf_reference_rent);
+  const yieldHint = yieldText != null ? `hrubý výnos ${yieldText}` : undefined;
 
   return (
     <Card title="Je cena v pořádku?" action="Cena a hodnota" onAction={onOpen}>
