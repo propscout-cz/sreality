@@ -33,6 +33,5 @@ warn_if_stale '^(toolkit|api)/'                                  toolkit-api    
 warn_if_stale '^api/llm_client\.py$|^api/providers/'             llm-pipelines  "the LLM provider/client layer"
 warn_if_stale '^scraper/|^\.github/workflows/.*index_walk' scraper-ops "scraper/ or an index-walk workflow"
 warn_if_stale '^scripts/verify_pipeline\.py$|^scripts/checks/|^toolkit/system_alerts\.py$|^scripts/health_canary\.py$|^scripts/record_workflow_failures\.py$|^scripts/failure_signature\.py$|^\.github/workflows/verify_pipeline\.yml$' scraper-ops "the health check harness, its ladder, the canary or its workflow"
-warn_if_stale '^frontend/'                                       interface-design "frontend/"
 
 exit 0

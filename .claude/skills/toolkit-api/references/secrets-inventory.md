@@ -60,7 +60,7 @@ it signs every session and never leaves Supabase. Revoked 2026-10-27.
 
 Make each new credential while the old one still works, stage it on Railway without deploying, set the GitHub
 secret (the operator runs `gh secret set NAME < file`; Claude's auto mode refuses it), deploy each service once with
-sreality-e9's dedup brake (every worker deploy restarts the dedup lease), check, and only then revoke the old one.
+the autodedup brake (every worker deploy restarts the dedup lease), check, and only then revoke the old one.
 Values never enter a chat: generate or hold them in a private scratch file and hand them over with `clip.exe`. The
 database goes last (Supabase keeps one postgres password, so there is no overlap): shared pooler
 `aws-0-eu-west-1.pooler.supabase.com`, 6543 for `SUPABASE_DB_URL` and `TENANT_POOL_DB_URL`, 5432 for
@@ -75,7 +75,7 @@ cache, not a bad password: do not reset twice.
   `RUNPOD_API_KEY`, the Cloudflare API token. `VAPID_PRIVATE_KEY` was created after the incident and stays.
 - `SCRAPER_PROXY_URL` (GH + worker; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
   read through `scraper/portal_base.py` `PROXY_ENV` by idnes, mmreality, ceskereality): rotated 2026-10-27 by operator
-  ruling. The plan page's ↻ regenerates the password with no overlap, so take sreality-e9's brake first, then
+  ruling. The plan page's ↻ regenerates the password with no overlap, so take the autodedup brake first, then
   regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
   A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /

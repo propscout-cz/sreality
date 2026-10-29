@@ -407,8 +407,8 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
 
 
 def test_a_runner_only_window_asks_no_brake() -> None:
-    """#2025-R2 (a), ruled by e9 on 2026-10-26: a change that targets only job-runner needs no autodedup brake, so
-    its window asks none (#2032's R2 references, W3's and W4's variables). The merge stays on e9's light."""
+    """#2025-R2 (a), ruled 2026-10-26: a change that targets only job-runner needs no autodedup brake, so
+    its window asks none (#2032's R2 references, W3's and W4's variables). The merge stays on the merge light."""
     wizard = WIZARD.read_text(encoding="utf-8")
     assert re.search(r"^RUNNER=job-runner\b", wizard, re.M)
     window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]

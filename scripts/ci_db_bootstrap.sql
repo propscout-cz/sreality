@@ -1,4 +1,4 @@
--- CI-only bootstrap for the migration smoke-test (.github/workflows/migrations.yml).
+-- Bootstrap for the migration smoke-test (.github/workflows/migrations.yml, scripts/local_pg.sh).
 -- NOT part of the tracked schema. It provisions what Supabase provides in
 -- production but a vanilla postgis/postgis container does not, so the full
 -- migrations/ chain applies cleanly:
@@ -6,15 +6,19 @@
 --   * the pg_trgm extension that migrations 067 / 074 rely on for trigram
 --     indexes but never `create`. (postgis is already enabled by the container
 --     image; we create both idempotently here for good measure.)
--- The service container is fresh on every run, so these are safe.
+-- Roles are cluster-wide and local_pg.sh builds one template per migration set in one
+-- cluster, so each is created only when absent (the guard migration 293 uses).
 create extension if not exists postgis;
 create extension if not exists pg_trgm;
 
-create role anon nologin;
-create role authenticated nologin;
-create role service_role nologin bypassrls;
--- PostgREST's connection role: migration 394 pins pgrst.db_max_rows on it.
-create role authenticator nologin;
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
+  -- PostgREST's connection role: migration 394 pins pgrst.db_max_rows on it.
+  if not exists (select 1 from pg_roles where rolname = 'authenticator') then create role authenticator nologin; end if;
+end $$;
 
 -- Supabase's public-schema DEFAULT ACL, which a vanilla container has NOT got.
 -- In production `pg_default_acl` carries a postgres/public/TABLES entry, so every
