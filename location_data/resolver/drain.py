@@ -1037,8 +1037,8 @@ def main(argv: list[str] | None = None) -> int:
         # success that enqueued nothing (run 34482389394).
         if args.full_sweep:
             enqueue_full_sweep(conn, window=args.sweep_window)
-        with job_lease.held(conn, JOB_NAME, cadence="15 minutes") as acquired:
-            if not acquired:
+        with job_lease.held(conn, JOB_NAME, cadence="15 minutes") as hold:
+            if hold is None:
                 LOG.info(
                     "DRAIN skipped: another run holds the %s lease%s", JOB_NAME,
                     " (the sweep above is enqueued; that holder drains it)"

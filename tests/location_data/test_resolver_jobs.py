@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import psycopg
@@ -66,6 +67,8 @@ class _FakeCursor:
 
 
 class _FakeConn:
+    info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)  # an autocommit connection between calls
+
     def __init__(self, state: dict[str, Any]) -> None:
         self.state = state
 
