@@ -71,8 +71,8 @@ from scripts.checks.common import (
     oneline,
     previous_result,
     result,
-    wilson_lower,
 )
+from toolkit.measures import wilson_lower
 from toolkit.property_identity import BIRTH_REASONS
 
 _KEY = "dedup"

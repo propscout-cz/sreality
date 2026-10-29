@@ -553,7 +553,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
   const [firstMin, firstMax] = parseRange(sp.get('first'));
   const [tomMin, tomMax] = parseRange(sp.get('tom'));
   const portalsExcluded = splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v));
-  return {
+  return floored({
     /* Absent `cat` = the default cohort (['byt']); an empty `cat=` token =
      * the deliberate "all categories" ([]). Otherwise CSV, filtered to the
      * known set (so an old ?cat=dum still parses, and junk is dropped). */
@@ -647,7 +647,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     nearOverall5kmMin: parseFloatOrNull(sp.get('no5')),
     nearOverall15kmMin: parseFloatOrNull(sp.get('no15')),
     priceGrowthRules: parsePriceGrowthRules(sp.get('pg')),
-  };
+  });
 };
 
 /* `cq_rules` URL shape: `indexName:value[:op],indexName:value[:op]`.
@@ -1300,6 +1300,21 @@ const boolNullableToTri = (v: unknown): TriState => {
   return v ? 'yes' : 'no';
 };
 
+/* The registry's `min` is a domain floor every read that validates the
+ * registry refuses below (api/filter_args renders it as `ge`; its `max` is a
+ * slider axis, never a bound): a value under it, typed or linked, is held at
+ * it, so Browse and those reads (the broker board, a watchdog) judge one cohort. */
+const atFloor = (id: string, value: unknown): unknown => {
+  const floor = filterById(id)?.constraints?.min;
+  return typeof value === 'number' && typeof floor === 'number' && value < floor ? floor : value;
+};
+
+const floored = (f: ListingFilters): ListingFilters => {
+  const out: Record<string, unknown> = { ...f };
+  for (const [id, key] of Object.entries(REGISTRY_KEY_MAP)) out[key] = atFloor(id, out[key]);
+  return out as unknown as ListingFilters;
+};
+
 /** Project a `ListingFilters` onto the snake_case shape that
  *  `<FilterForm>` reads. Tri-state amenities convert to `bool | null`;
  *  an empty list becomes `null` (the registry's "no constraint"). */
@@ -1336,7 +1351,7 @@ export function applyRegistryUpdate(
   if (Array.isArray(DEFAULT_FILTERS[key])) {
     return { ...filters, [key]: value ?? [] } as ListingFilters;
   }
-  return { ...filters, [key]: value } as ListingFilters;
+  return { ...filters, [key]: atFloor(id, value) } as ListingFilters;
 }
 
 /** Apply a batch of `<FilterForm>` updates atomically. Loops

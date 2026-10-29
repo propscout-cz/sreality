@@ -294,7 +294,10 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
     ("browse_list", "property_id"):
         "a read model rebuilt wholesale (migration 276); the writers patch it per property",
     ("property_broker_spells", "property_id"):
-        "derived: the broker book (migration 691), recomputed from its view by properties_changed, "
+        "derived: W1's identity-grain broker book (migration 691), written by nothing since 692 "
+        "and dropped in the destructive batch",
+    ("broker_book", "property_id"):
+        "derived: the broker book (migration 692), recomputed from its view by properties_changed, "
         "which every merge and detach runs over both sides",
     ("autodedup.clusters", "property_id"): _AUTODEDUP_HISTORY,
     ("autodedup.merges", "survivor_property_id"): _AUTODEDUP_HISTORY,

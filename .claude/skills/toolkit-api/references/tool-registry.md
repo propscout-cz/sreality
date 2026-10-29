@@ -96,6 +96,8 @@ through ONE server-side reader per screen. A new reader of these relations calls
 - `get_property_brokers` (MARKET): the page's `POST /brokers/by-listings` read (`toolkit.brokers.listing_brokers`,
   unmasked as the page shows every signed-in user), grouped as the page groups them (`brokers.property_brokers`,
   MS7), stopping at 20 people per call. MCP stays masked (AR13): an MCP export leaves it out or masks it.
+- `rank_brokers` (MARKET): Browse's Makléři tab (`api/broker_board.board`) less `firm_ids` and `broker_id`, at most 50
+  brokers, masked as a non-admin's tab (`docs/design/broker-board.md`).
 
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
 `property_read.*_COLS`) is disjoint from `forbidden_columns()`, derived from the registry (rule 14's retired

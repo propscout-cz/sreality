@@ -26,6 +26,7 @@ from scripts.checks import quality as qc
 from tests.scripts.test_checks_platform import _Conn
 from tests.scripts.test_checks_platform_replay import _incidents, _told
 from toolkit import description_extraction as text_lane
+from toolkit.measures import wilson_lower
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 19, 14, 0, tzinfo=_UTC)
@@ -556,7 +557,7 @@ def test_the_flow_is_judged_on_the_lower_bound_of_new_ads_unread(unread: int,
     out, _ = _text([("bazos", 700, 700 - unread, 0, 30.0)])
     cell = _cells(out)["flow/bazos"]
     assert cell["status"] == status
-    assert cell["facts"]["lower_bound"] == round(common.wilson_lower(unread, 700), 4)
+    assert cell["facts"]["lower_bound"] == round(wilson_lower(unread, 700), 4)
 
 
 def test_given_up_ads_count_as_unread_and_are_named() -> None:
@@ -591,7 +592,7 @@ def test_the_flow_judges_from_thirty_arrivals(arrived: int, read: int, status: s
         assert cell["message"] == (f"Not measured: {arrived} active ads with a description first "
                                    "written 1-24 h ago, under the 30 this arm needs")
         assert "lower_bound" not in cell["facts"]
-        low = common.wilson_lower(arrived, arrived)
+        low = wilson_lower(arrived, arrived)
         assert common.graded(low, T["text_extraction_flow_warn"],
                              T["text_extraction_flow_fail"]) == "fail", "what the gate spares"
 

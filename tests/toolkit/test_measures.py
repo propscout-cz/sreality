@@ -38,6 +38,7 @@ from toolkit.measures import (
     require_scalable_basis,
     spec_ppm2_basis,
     unit_label,
+    wilson_lower,
 )
 
 _MIGRATION = (
@@ -315,3 +316,20 @@ def test_alias_is_required_so_a_unit_blind_call_cannot_be_written():
         per_m2_sql()  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         per_m2_basis_sql()  # type: ignore[call-arg]
+
+
+# ---- a share's lower bound (the broker board's rank, the health checks' gauges) ----
+
+
+@pytest.mark.parametrize("hits, n, lower", [
+    (0, 10, 0.0), (5, 10, 0.23659), (10, 10, 0.72246), (1, 100, 0.001767),
+    # The live sreality cohorts the delisting precision arm meets at ship (2026-10-19).
+    (173, 2004, 0.074809), (215, 1231, 0.154466),
+])
+def test_wilson_lower_matches_the_textbook_interval(hits: int, n: int, lower: float) -> None:
+    assert wilson_lower(hits, n) == pytest.approx(lower, abs=1e-6)
+
+
+def test_wilson_lower_of_nothing_counted_is_none_and_a_wider_z_is_more_cautious() -> None:
+    assert wilson_lower(0, 0) is None
+    assert wilson_lower(5, 10, z=2.576) < wilson_lower(5, 10)

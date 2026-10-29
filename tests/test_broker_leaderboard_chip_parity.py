@@ -8,8 +8,8 @@ estimated like 580's id lists were. Three rails:
 
   * offline — five include arms and five exclude arms, one per `LEVEL_COLUMN` level, in
     order, each reading that level's codes with the right flag, and the exclude wrapper;
-  * DB lane — the blocks, bound through `api.location_filter.district_arrays` (what
-    toolkit/brokers.py and api/outreach.py send), select exactly the rows the shared table
+  * DB lane — the blocks, bound as the four parallel chip arguments Browse's chip-taking
+    RPCs take, select exactly the rows the shared table
     `tests/fixtures/district_chip_plan.json` says match — the rows `district_where` is held
     to in tests/test_filter_compiler_rows_live.py, so a NULL code under an exclude is kept
     and a street chip never widens to its town;
@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from api.location_filter import LEVEL_COLUMN, LEVEL_ORDER, DistrictChip, district_arrays
+from api.location_filter import LEVEL_COLUMN, LEVEL_ORDER, DistrictChip
 from tests.migration_defs import MIGRATIONS, latest_definition
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -124,8 +124,9 @@ def test_the_chip_table_rows_match_in_the_leaderboard_too(conn, case: dict[str, 
             params[f"row{i}_{column}"] = r["row"].get(LEVEL_COLUMN[level])
             cells.append(f"%(row{i}_{column})s::bigint")
         values.append(f"({', '.join(cells)})")
-    names, excluded, levels, ids = district_arrays([DistrictChip(**c) for c in case["chips"]])
-    params.update(names=names, excluded=excluded, levels=levels, ids=ids)
+    chips = [DistrictChip(**c) for c in case["chips"]]  # one entry per chip in each, all NULL for none
+    params.update({k: [getattr(c, attr) for c in chips] or None
+                   for k, attr in (("names", "name"), ("excluded", "excluded"), ("levels", "level"), ("ids", "id"))})
     sql = (
         f"SELECT ll.idx FROM (VALUES {', '.join(values)}) AS ll(idx, {', '.join(columns)}) "
         f"WHERE true\n{_bound_predicate()}"

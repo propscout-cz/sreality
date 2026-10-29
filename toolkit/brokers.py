@@ -1,12 +1,12 @@
-"""Read-only broker intelligence queries (leaderboard, detail, contacts, listings).
+"""Read-only broker intelligence queries (detail, contacts, listings, Browse's broker scope).
 
 The server side of the browser read layer (frontend/src/lib/brokers.ts): the
 /brokers/* routes (api/routes/brokers.py), the property download and an agent's
-get_property_brokers all hit the SAME public views + broker_leaderboard RPC — one
-definition of "who has what". A broker's full contact set is NOT exposed by the
-anon public views (PII), so broker_contacts here is the only path to it —
-`apply_pii_policy` is what the route layer runs over every other envelope so a
-non-admin caller gets has_email / has_phone flags instead of the values.
+get_property_brokers all hit the SAME public views — one definition of "who has
+what". A broker's full contact set is NOT exposed by the anon public views (PII),
+so broker_contacts here is the only path to it — `apply_pii_policy` is what the
+route layer runs over every other envelope so a non-admin caller gets has_email /
+has_phone flags instead of the values.
 
 Read-only — no toolkit write exception (rule #5) is added.
 """
@@ -21,16 +21,6 @@ from psycopg.rows import dict_row
 
 from toolkit import _now_iso
 
-_VALID_METRICS = {
-    "active_property_count", "property_count", "listing_count", "active_listing_count",
-}
-GEO_LEVELS = ("region", "okres")
-# A chip-taking RPC's four parallel arguments — names, excluded flags, levels, codes —
-# as `api.location_filter.district_arrays` builds them; all None = no chips.
-ChipArrays = tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]
-NO_CHIPS: ChipArrays = (None, None, None, None)
-# The chip levels broker_region_type_stats has cells for, in migration 609's fast-gate order.
-COUNT_BOOK_LEVELS = ("kraj", "okres", "obec")
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
 _EMAIL_RE = re.compile(r"[^@\s<>,;()\[\]\"']+@[^@\s<>,;()\[\]\"']+\.[a-z]{2,}",
@@ -158,84 +148,6 @@ def _mask(value: Any) -> Any:
     return out
 
 
-def leaderboard(conn: Any, *, districts: ChipArrays = NO_CHIPS,
-                category_main: str | None = None, category_type: str | None = None,
-                metric: str = "active_property_count", limit: int = 100,
-                firm_ids: list[int] | None = None, min_price_czk: int | None = None,
-                include_unpriced: bool = False, subtypes: list[str] | None = None,
-                include_unknown_subtype: bool = False) -> dict[str, Any]:
-    """Top brokers by a chosen metric, optionally scoped to location chips (Browse's
-    five-level predicate, migration 609) + category + one or more companies
-    (firm_ids, migration 410) + a minimum property value (min_price_czk, migration
-    448) + property subtypes (subtypes, migration 469).
-
-    Thin wrapper over the broker_leaderboard RPC, so every caller (this page and
-    api/outreach.select_targets) ranks brokers identically. `districts` is the four
-    chip arrays (`api.location_filter.district_arrays`; no chips = national); empty
-    firm_ids = every company.
-
-    `min_price_czk` reads `listings.price_czk` directly — same column, same ">="
-    semantics as Browse's own min_price_czk filter (toolkit.comparables), unit-for-unit
-    (total price for a sale, monthly rent for a rental; migration 448's header has the
-    full rationale for why this is a live query rather than a precomputed one).
-    `include_unpriced` only has an effect once `min_price_czk` is set — it decides
-    whether a listing with no price ("cena na vyžádání", i.e. price_czk IS NULL) counts
-    as meeting the threshold. Defaults to excluding it: an unknown value should not be
-    assumed to clear a numeric floor.
-
-    `subtypes` are the portal-agnostic `listings.subtype` slugs from the shared filter
-    registry (toolkit.filter_registry SUBTYPE_OPTIONS — the same vocabulary Browse and
-    the watchdog use), meaningful only for category_main in (dum, komercni).
-    `include_unknown_subtype` is its `include_unpriced` twin, and it matters more than
-    that name suggests: subtype coverage is a PORTAL gap (sreality 0% null, ceskereality
-    / realitymix / mmreality 100% null), so excluding unlabelled rows ranks by "who
-    lists on the portals that publish a subtype" as much as by inventory. Migration
-    469's header carries the measured per-portal table; the Brokers page states the
-    caveat inline whenever the filter is on.
-
-    An EMPTY list means "no filter", not "match nothing" — `subtypes or None` below,
-    mirroring how firm_ids is threaded. That conversion is load-bearing here rather than
-    cosmetic: the SQL gates its live branch on `p_subtypes is not null`, so passing `[]`
-    through would route to the live branch with a predicate matching no row at all.
-    """
-    if metric not in _VALID_METRICS:
-        metric = "active_property_count"
-    limit = max(1, min(int(limit), 2000))
-    names, excluded, levels, ids = districts
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM broker_leaderboard("
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (names, excluded, levels, ids,
-             category_main, category_type, metric, limit, firm_ids or None,
-             min_price_czk, include_unpriced, subtypes or None,
-             include_unknown_subtype))
-        rows = cur.fetchall()
-        # W4: the fast branch answers from the matview, so its freshness IS the
-        # registry stamp (hourly-if-stale drain republish); a price/subtype call,
-        # or a chip the matview has no cell for, reads listings live and stays
-        # un-stamped (None = "as of now").
-        freshness = None
-        if (min_price_czk is None and not subtypes and not any(excluded or ())
-                and set(levels or ()) <= set(COUNT_BOOK_LEVELS)):
-            cur.execute(
-                "SELECT last_succeeded_at FROM derived_artifacts "
-                "WHERE name = 'broker_region_type_stats'")
-            stamp = cur.fetchone() or {}
-            freshness = _iso(stamp.get("last_succeeded_at")) if stamp.get(
-                "last_succeeded_at") else None
-    return _envelope(
-        "broker_leaderboard", rows,
-        {"districts": [{"name": n, "excluded": x, "level": lv, "id": i} for n, x, lv, i
-                       in zip(names or [], excluded or [], levels or [], ids or [])],
-         "category_main": category_main,
-         "category_type": category_type, "metric": metric, "limit": limit,
-         "firm_ids": firm_ids or [], "min_price_czk": min_price_czk,
-         "include_unpriced": include_unpriced, "subtypes": subtypes or [],
-         "include_unknown_subtype": include_unknown_subtype},
-        len(rows), freshness)
-
-
 def firm_options(conn: Any, *, q: str | None = None, limit: int = 20) -> dict[str, Any]:
     """Companies matching `q` (name or domain), busiest first; an empty query
     browses the top firms instead of returning nothing."""
@@ -342,18 +254,20 @@ def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str,
                      len(rows), _iso(fresh))
 
 
-# The portal side of the portal rule (MS19, 657) over the broker's own ads, so "broker + portal"
-# means ONE ad satisfies both: one of THIS broker's ads on a selected portal (any, with none) in
-# the status switch's status. The status itself is the property's, applied by the caller beside
-# this allowlist. No listing_location join: browse_list serves a property only when its
-# canonical ad is placed (rule 25), and that is the read this allowlist narrows.
-_BROKER_PROPERTY_IDS_SQL = """
-    SELECT DISTINCT l.property_id FROM listings l
-    JOIN broker_identities bi ON bi.id = l.broker_identity_id
-    WHERE bi.broker_id = %(broker_id)s AND l.property_id IS NOT NULL
-      AND (cardinality(%(portals)s::text[]) = 0 OR l.source = ANY(%(portals)s::text[]))
-      AND (%(status)s = 'any' OR l.is_active = (%(status)s = 'active'))
-    ORDER BY l.property_id LIMIT %(limit)s
+def book_rule_sql(alias: str) -> str:
+    """MS19's broker side, THE one rendering: the portal rule (migration 657) over a `broker_book` row (692), so
+    "broker + portal" means ONE ad of the broker on `%(portals)s` (any, with none) in `%(status)s`, the names the
+    property side binds. The property's own status and every exclusion are the caller's."""
+    return (f"portal_status_matches({alias}.is_active, {alias}.all_sources, {alias}.active_sources, "
+            "%(portals)s::text[], %(status)s::text)")
+
+
+# No listing_location join: browse_list serves a property only when its canonical ad is placed (rule 25), and that is
+# the read this allowlist narrows.
+_BROKER_PROPERTY_IDS_SQL = f"""
+    SELECT b.property_id FROM broker_book b
+    WHERE b.broker_id = %(broker_id)s AND {book_rule_sql("b")}
+    ORDER BY b.property_id LIMIT %(limit)s
 """
 
 
@@ -412,28 +326,6 @@ def property_brokers(
             out.append(row)
         row["ads"].append(ad)
     return out, not active
-
-
-def geo_options(conn: Any, *, geo_level: str | None = None) -> dict[str, Any]:
-    """Region / okres picker metadata with per-area broker counts.
-
-    Not PII, but broker_geo_options is dark to anon AND authenticated (migration
-    361), so the server-side route is the only way a browser COULD read it — no
-    browser caller exists today: BrokerDetail's region-name map went away when the
-    dossier started joining region_shares[].name, and the leaderboard page scopes
-    itself through the shared LocationTypeahead. Kept as the capability, not as a
-    live SPA path. An unrecognized level raises rather than falling back to "no
-    filter" — silently answering `geo_level=obec` with every region AND okres is
-    worse than a 422."""
-    if geo_level is not None and geo_level not in GEO_LEVELS:
-        raise ValueError(f"geo_level must be one of {sorted(GEO_LEVELS)}")
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT geo_level, geo_id, name, parent_id, broker_count "
-            "FROM broker_geo_options WHERE (%s::text IS NULL OR geo_level = %s) "
-            "ORDER BY geo_level, name", (geo_level, geo_level))
-        rows = cur.fetchall()
-    return _envelope("broker_geo_options", rows, {"geo_level": geo_level}, len(rows), None)
 
 
 def broker_contacts(conn: Any, broker_id: int) -> dict[str, Any]:

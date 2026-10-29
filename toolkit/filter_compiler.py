@@ -10,7 +10,8 @@ that grants filters on a relation, the spellings that relation needs where it la
 (`listings`: the target-relative clauses and the cohort invariants),
 `api/notifications._build_match_clauses` (`properties_public`: the served and published
 predicates, the map box and the place chips) and `api/property_search` (Browse's own source,
-`browse_list_visible`: the map box, the place chips and the caller's own lenses).
+`browse_list_visible`: the map box, the place chips and the caller's own lenses; its `cohort_where`, without the
+lenses, is the broker board's cohort over `browse_list`).
 """
 
 from __future__ import annotations

@@ -32,8 +32,8 @@ it may explain:
   4. Broker Unify W4: every identity statement captures agency_name.
   5. Broker board W1 (migration 691): every link statement is its pre-registry
      UPDATE verbatim, RETURNING the advert's property into the repo's one
-     same-statement `dirty_properties` enqueue (rule 20) — the broker book keys
-     on the identity, so a re-attributed advert's property must be recomputed.
+     same-statement `dirty_properties` enqueue (rule 20) — the broker book folds
+     the identity to its broker, so a re-attributed advert's property must be recomputed.
 
 Portals onboarded AFTER the refactor (mmreality, D3) have no pre-registry SQL, so
 the transcript cannot speak for them: they are held to the properties every
@@ -56,6 +56,7 @@ from toolkit.broker_sources import (
     BROKER_FINGERPRINT_KEYS,
     BROKER_SOURCE_NAMES,
     BROKER_SOURCES,
+    IDENTITY_REPOINT_DIRTY_SQL,
     BrokerSource,
     attribution_statements,
 )
@@ -181,6 +182,14 @@ def test_every_link_dirties_its_property_in_the_same_statement(source: str) -> N
         "ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
     assert _norm(_DIRTY_PROPERTIES_SQL).endswith(
         "ORDER BY 1 ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
+
+
+def test_a_broker_re_point_dirties_like_the_link() -> None:
+    """The re-point's enqueue (migration 692): its adverts locked in id order (listing_write's lock order) before the
+    unborn are skipped, and the link's re-stamp, so a re-point committed after a drain slice read survives the dequeue."""
+    sql = _norm(IDENTITY_REPOINT_DIRTY_SQL)
+    assert "ORDER BY l.id FOR SHARE OF l )" in sql
+    assert sql.endswith("WHERE property_id IS NOT NULL ORDER BY 1 ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
 
 
 @pytest.mark.parametrize(("source", "kind"), sorted(_DELTA_NULL_COLUMNS))

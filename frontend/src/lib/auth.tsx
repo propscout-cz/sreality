@@ -49,15 +49,24 @@ const appearanceProfile: AppearanceProfile = {
   save: (appearance) => supabase.auth.updateUser({ data: { appearance } }),
 };
 
-/* THE notifications gate: the bell, the feed's nav entry, the unread poll and
- * push (lib/push `setPushGate`) all follow it. Admins, unconfigured local dev
- * and a plan read that failed (null: shown rather than blanked over a hiccup)
- * pass; otherwise the plan's `notifications` agenda decides. */
+/* THE agenda gate (Settings › Tiers): admins, unconfigured local dev and a plan
+ * read that failed (null: shown rather than blanked over a hiccup) pass;
+ * otherwise the plan's agenda decides. UX only — routes carry the security gates. */
+export function agendaVisible(
+  isAdmin: boolean,
+  agendas: Record<string, boolean> | null,
+  agenda: string,
+): boolean {
+  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas[agenda] === true;
+}
+
+/* The notifications gate: the bell, the feed's nav entry, the unread poll and
+ * push (lib/push `setPushGate`) all follow it. */
 export function notificationsVisible(
   isAdmin: boolean,
   agendas: Record<string, boolean> | null,
 ): boolean {
-  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+  return agendaVisible(isAdmin, agendas, 'notifications');
 }
 
 /* Cache key for the session's plan agendas. Deliberately NOT under any

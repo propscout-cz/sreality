@@ -1,82 +1,50 @@
-/* Makléři on the phone (#1769, #1760 Q12): a reduced leaderboard — place,
- * category and offer, metric — plus the name search, over the desktop page's
- * own reads in lib/brokers.ts (`fetchBrokerLeaderboard`, `searchBrokersByName`,
- * both on the caller's JWT, contacts masked server-side).
+/* Makléři on the phone (#1769): the broker board (lib/brokerBoard) over the
+ * URL's Browse filters, edited in the Filtry sheet's own body (FilterSheetBody)
+ * — the same request the desktop's Makléři tab sends — plus the name search.
  *
  * The roll is a ruled notebook page: the rank sits in the left margin behind a
- * hairline, like line numbers, the person and the firm in the body, the ranked
- * figure in mono at the right edge. Typing a name swaps the roll for the search
- * results in place (a dropdown has no room on a phone, and the keyboard covers
- * half the screen); clearing the field brings the roll back. */
+ * hairline, like line numbers, the person and the firm in the body, the volume
+ * in mono at the right edge with the speed under it. Typing a name swaps the
+ * roll for the search results in place (a dropdown has no room on a phone, and
+ * the keyboard covers half the screen); clearing the field brings it back. */
 
-import { useRef, useState, type ReactNode } from 'react';
+import { Suspense, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 
+import { CoverageLine, IgnoredNote, MarketLine, RefusalLine, SpeedLegend, sharePct } from '@/components/brokers/BoardNotes';
 import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { SegmentedBar } from '@/components/controls';
-import { CHIP, CHIP_MD, CHIP_ROW, chipState } from '@/components/phone/chips';
-import { ChevronIcon, ClearIcon, PinIcon, SearchIcon } from '@/components/phone/phoneIcons';
+import { CHIP, CHIP_MD, CHIP_ROW, NO_FOCUS_ZOOM, chipState } from '@/components/phone/chips';
+import { filtersBeyond } from '@/components/phone/filterRows';
+import { ChevronIcon, ClearIcon, SearchIcon, SlidersIcon } from '@/components/phone/phoneIcons';
 import { placeLabelOf } from '@/components/phone/placeLabel';
-import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
-import {
-  LEADER_METRIC_OPTIONS,
-  fetchBrokerLeaderboard,
-  searchBrokersByName,
-  type BrokerLeaderRow,
-  type LeaderMetric,
-} from '@/lib/brokers';
-import { districtChipKey } from '@/lib/districtCodes';
-import type { DistrictChip } from '@/lib/filters';
+import { BOARD_HORIZONS, shownSort, speedOf, useBrokerBoard, type BoardSort } from '@/lib/brokerBoard';
+import { searchBrokersByName } from '@/lib/brokers';
+import { useUrlBrowseState, type BrowseViewState } from '@/lib/browseState';
+import { categoryMainLabelPlural, categoryTypeLabel } from '@/lib/enums';
+import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import { czPlural, fmtCount } from '@/lib/format';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { ROUTES } from '@/lib/routes';
 import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
 
-/* The phone's category and offer bars: the two the operator works (Q12). Each
- * is deselectable — the lit segment tapped again lets go, lighting nothing: no
- * constraint, the desktop's "Vše". */
-const CATEGORIES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'byt', label: 'Byty' },
-  { value: 'dum', label: 'Domy' },
-];
-const OFFERS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'prodej', label: 'Prodej' },
-  { value: 'pronajem', label: 'Pronájem' },
-];
-const LIMIT = 100;
+const FilterSheetBody = lazyChunk(() =>
+  import('@/components/phone/FilterSheet').then((m) => ({ default: m.FilterSheetBody })),
+);
+
+const HORIZON_OPTIONS = BOARD_HORIZONS.map((h) => ({ value: h, label: `${h} dní` }));
 /* A bar's equal columns are minmax(0, 1fr), so the sideways-scrolling chip row
  * could squeeze it below its labels; the slot keeps it whole, as a chip is. */
 const BAR_SLOT = 'flex shrink-0';
+const NOTE = 'px-4 pb-2 text-[12px] leading-[1.45] text-[var(--color-ink-3)]';
 
-const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
-const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
-
-type Noun = readonly [one: string, few: string, many: string];
-const PROPERTY_NOUN: Noun = ['nemovitost', 'nemovitosti', 'nemovitostí'];
-const AD_NOUN: Noun = ['inzerát', 'inzeráty', 'inzerátů'];
-
-/* The ranked figure and its noun: active properties, or every ad ever. One
- * branch serves the row figures and the head over them, so they cannot part. */
-function rankedBy(metric: LeaderMetric): { pick: (r: BrokerLeaderRow) => number; noun: Noun } {
-  return metric === 'listing_count'
-    ? { pick: (r) => r.listing_count, noun: AD_NOUN }
-    : { pick: (r) => r.active_property_count, noun: PROPERTY_NOUN };
-}
-
-export function metricFigure(r: BrokerLeaderRow, metric: LeaderMetric): { value: number; unit: string } {
-  const { pick, noun } = rankedBy(metric);
-  const value = pick(r);
-  return { value, unit: czPlural(value, ...noun) };
-}
-
-/* The unit said once over a column of figures (P28): the noun's "many" form. */
-export function metricUnitHead(metric: LeaderMetric): string {
-  return rankedBy(metric).noun[2];
-}
+const PROPERTY_NOUN = ['nemovitost', 'nemovitosti', 'nemovitostí'] as const;
 
 export default function PhoneBrokers() {
+  const view = useUrlBrowseState();
   const [q, debounced, setQ] = useDebouncedTerm();
   const searching = q.trim().length > 0;
 
@@ -84,10 +52,10 @@ export default function PhoneBrokers() {
     <div className="pt-3">
       <SearchField value={q} onChange={setQ} />
       {searching && <SearchResults typed={q.trim()} term={debounced} />}
-      {/* Hidden, not unmounted, while a name is typed: the place, category and
-        * metric the operator set are still there when the search is cleared. */}
+      {/* Hidden, not unmounted, while a name is typed: the board is still there
+        * when the search is cleared. */}
       <div hidden={searching}>
-        <Leaderboard />
+        <Board view={view} />
       </div>
     </div>
   );
@@ -203,84 +171,61 @@ function UnitHead({ unit }: { unit: string }) {
   );
 }
 
-function Leaderboard() {
-  const [districts, setDistricts] = useState<DistrictChip[]>([]);
-  const [categoryMain, setCategoryMain] = useState<string | null>('byt');
-  const [categoryType, setCategoryType] = useState<string | null>('prodej');
-  const [metric, setMetric] = useState<LeaderMetric>('active_property_count');
-  const [placeOpen, setPlaceOpen] = useState(false);
+/* "Celá ČR · byty · prodej": the place and the kind the board counts; the
+ * Filtry chip's count says what else is set. */
+function caption(f: ListingFilters): string {
+  const kinds = f.categoryMain.map((c) => categoryMainLabelPlural(c).toLocaleLowerCase('cs-CZ')).join(' + ');
+  const deal = f.categoryType && categoryTypeLabel(f.categoryType).toLocaleLowerCase('cs-CZ');
+  return [placeLabelOf(f.districts), kinds, deal].filter(Boolean).join(' · ');
+}
 
-  const placeLabel = placeLabelOf(districts);
-
-  const boardQ = useQuery<{ rows: BrokerLeaderRow[]; caption: string }>({
-    queryKey: [
-      'broker-leaderboard-phone',
-      districts.map((d) => [districtChipKey(d), d.excluded === true]),
-      categoryMain, categoryType, metric, LIMIT,
-    ],
-    /* The caption travels with the rows it was fetched under, so the previous
-     * filter's rows (kept on screen while the next load runs) are never labelled
-     * with the new filter's words. */
-    queryFn: ({ signal }) => {
-      const caption = [placeLabel, categoryMain && CATEGORY_WORD[categoryMain], categoryType && OFFER_WORD[categoryType]]
-        .filter(Boolean)
-        .join(' · ');
-      return fetchBrokerLeaderboard({ districts, categoryMain, categoryType, metric, limit: LIMIT }, signal).then(
-        (rows) => ({ rows, caption }),
-      );
-    },
-    staleTime: 60_000,
-    placeholderData: keepPreviousData,
-  });
-  const rows = boardQ.data?.rows ?? [];
-
-  const pill = (on: boolean) => `${CHIP} ${CHIP_MD} ${chipState(on)}`;
-  const placeOn = districts.length > 0;
+function Board({ view }: { view: BrowseViewState }) {
+  const { filters, board } = view;
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const boardQ = useBrokerBoard(filters, board);
+  const beyond = filtersBeyond(filters, DEFAULT_FILTERS);
+  const result = boardQ.data;
+  const sortOptions: ReadonlyArray<{ value: BoardSort; label: string; disabled?: boolean }> = [
+    { value: 'properties', label: 'Nemovitosti' },
+    { value: 'speed', label: 'Rychlost', disabled: result?.meta.speed_refused != null },
+  ];
 
   return (
     <>
       <div className={`${CHIP_ROW} mt-3`} role="group" aria-label="Výběr">
         <button
           type="button"
-          onClick={() => setPlaceOpen(true)}
+          onClick={() => setSheetOpen(true)}
           aria-haspopup="dialog"
-          aria-label={`Místo: ${placeLabel}`}
-          className={`${pill(placeOn)} max-w-[60vw]`}
+          aria-label={beyond > 0 ? `Filtry (${beyond} navíc)` : 'Filtry'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(beyond > 0)}`}
         >
-          <PinIcon className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{placeLabel}</span>
+          <SlidersIcon className="h-3.5 w-3.5" />
+          Filtry
+          {beyond > 0 && <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{beyond}</span>}
         </button>
         <div className={BAR_SLOT}>
-          <SegmentedBar<string | null>
+          <SegmentedBar
             tone="phone"
-            deselectable
-            label="Typ"
-            options={CATEGORIES}
-            value={categoryMain}
-            onChange={setCategoryMain}
+            label="Řadit dle"
+            options={sortOptions}
+            value={shownSort(board, result?.meta)}
+            onChange={(sort) => view.setBoard({ sort })}
           />
         </div>
         <div className={BAR_SLOT}>
-          <SegmentedBar<string | null>
+          <SegmentedBar
             tone="phone"
-            deselectable
-            label="Nabídka"
-            options={OFFERS}
-            value={categoryType}
-            onChange={setCategoryType}
+            label="Opustilo trh do (dní)"
+            options={HORIZON_OPTIONS}
+            value={board.horizonDays}
+            onChange={(horizonDays) => view.setBoard({ horizonDays })}
           />
-        </div>
-      </div>
-      <div className={`${CHIP_ROW} mt-2 items-center`}>
-        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
-          Řadit
-        </span>
-        <div className={BAR_SLOT}>
-          <SegmentedBar tone="phone" label="Řadit dle" options={LEADER_METRIC_OPTIONS} value={metric} onChange={setMetric} />
         </div>
       </div>
 
-      <DayRule label={boardQ.data?.caption ?? placeLabel} />
+      <DayRule label={caption(filters)} />
+      <IgnoredNote filters={filters} className={NOTE} />
 
       {boardQ.isPending ? (
         <RowsSkeleton />
@@ -290,61 +235,119 @@ function Leaderboard() {
           detail={boardQ.error.message}
           action={{ label: 'Zkusit znovu', onClick: () => void boardQ.refetch() }}
         />
-      ) : rows.length === 0 ? (
-        <RollEmpty
-          title="Pro tento výběr nikdo."
-          detail="Zkuste jiné místo, nebo typ či nabídku pusťte."
-        />
       ) : (
         <>
-          <UnitHead unit={metricUnitHead(metric)} />
-          <ol
-            aria-label="Žebříček makléřů"
-            aria-busy={boardQ.isPlaceholderData || undefined}
-            className={`border-b border-[var(--color-rule)] transition-opacity ${boardQ.isPlaceholderData ? 'opacity-60' : ''}`}
-          >
-            {rows.map((r, i) => {
-              const fig = metricFigure(r, metric);
-              return (
-                <li key={r.broker_id}>
-                  <BrokerRow
-                    id={r.broker_id}
-                    lead={
-                      <span className="font-mono text-[12px] tabular-nums text-[var(--color-ink-3)]">{i + 1}</span>
-                    }
-                    name={r.display_name}
-                    firm={r.firm_name ?? r.firm_domain}
-                    value={fig.value}
-                    unit={fig.unit}
-                  />
-                </li>
-              );
-            })}
-          </ol>
+          <CoverageLine meta={boardQ.data.meta} filters={filters} className={NOTE} />
+          <MarketLine meta={boardQ.data.meta} className={NOTE} />
+          <RefusalLine meta={boardQ.data.meta} className={`${NOTE} text-[var(--color-ink-2)]`} />
+          {boardQ.data.rows.length === 0 ? (
+            <RollEmpty title="Pro tento výběr nikdo." detail="Zkuste ve Filtrech širší výběr." />
+          ) : (
+            <>
+              <UnitHead unit={PROPERTY_NOUN[2]} />
+              <ol
+                aria-label="Žebříček makléřů"
+                aria-busy={boardQ.isPlaceholderData || undefined}
+                className={`border-b border-[var(--color-rule)] transition-opacity ${boardQ.isPlaceholderData ? 'opacity-60' : ''}`}
+              >
+                {boardQ.data.rows.map((r, i) => {
+                  const s = speedOf(r, boardQ.data.meta);
+                  return (
+                    <li key={r.broker_id}>
+                      <BrokerRow
+                        id={r.broker_id}
+                        lead={
+                          <span className="font-mono text-[12px] tabular-nums text-[var(--color-ink-3)]">{i + 1}</span>
+                        }
+                        name={r.display_name}
+                        firm={r.firm_name ?? r.firm_domain}
+                        value={r.properties}
+                        unit={czPlural(r.properties, ...PROPERTY_NOUN)}
+                        speed={
+                          s.kind === 'share' ? (
+                            <>
+                              {fmtCount(s.exited)} z {fmtCount(s.n)} · {sharePct(s.share)}
+                            </>
+                          ) : s.kind === 'small' && s.n > 0 ? (
+                            <>n = {fmtCount(s.n)}</>
+                          ) : null
+                        }
+                      />
+                    </li>
+                  );
+                })}
+              </ol>
+              <p className="py-5 text-center text-[0.75rem] tabular-nums text-[var(--color-ink-3)]">
+                {boardQ.data.rows.length >= board.limit
+                  ? `Prvních ${fmtCount(board.limit)} makléřů.`
+                  : 'Konec žebříčku.'}
+              </p>
+            </>
+          )}
+          <SpeedLegend meta={boardQ.data.meta} className={`${NOTE} pb-5`} />
         </>
       )}
-      {!boardQ.isPending && !boardQ.isError && rows.length > 0 && (
-        <p className="py-5 text-center text-[0.75rem] tabular-nums text-[var(--color-ink-4)]">
-          {rows.length >= LIMIT ? `Prvních ${fmtCount(LIMIT)} makléřů.` : 'Konec žebříčku.'}
-        </p>
-      )}
 
-      {placeOpen && (
-        <BottomSheet label="Místo" onClose={() => setPlaceOpen(false)}>
-          <div className="min-h-[70dvh] px-4 pt-3">
-            <LocationTypeahead label="Místo" value={districts} onChange={(next) => setDistricts(next ?? [])} />
-            <p className="mt-3 text-[12px] text-[var(--color-ink-3)]">
-              Kraj, okres, obec, část obce nebo ulice; bez místa platí celá ČR.
-            </p>
-          </div>
-        </BottomSheet>
+      {sheetOpen && (
+        <BoardFilterSheet filters={filters} onApply={view.setFilters} onClose={() => setSheetOpen(false)} />
       )}
     </>
   );
 }
 
+/* Browse's whole filter set over a draft: "Zobrazit makléře" applies it to the
+ * URL, "Zavřít" lets it go. The order and the presets are the Feed's. */
+function BoardFilterSheet({
+  filters,
+  onApply,
+  onClose,
+}: {
+  filters: ListingFilters;
+  onApply: (next: ListingFilters) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(filters);
+  const footer = (
+    <div className="flex items-center gap-2 px-4">
+      <button
+        type="button"
+        onClick={() => setDraft(DEFAULT_FILTERS)}
+        disabled={filtersBeyond(draft, DEFAULT_FILTERS) === 0}
+        className="h-11 shrink-0 px-1 text-[15px] text-[var(--color-ink-2)] disabled:text-[var(--color-ink-4)]"
+      >
+        Vymazat
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onApply(draft);
+          onClose();
+        }}
+        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
+      >
+        Zobrazit makléře
+      </button>
+    </div>
+  );
+  return (
+    <BottomSheet label="Filtry" closeLabel="Zavřít" onClose={onClose} footer={footer}>
+      <div className={`pb-6 ${NO_FOCUS_ZOOM}`}>
+        <Suspense
+          fallback={
+            <p role="status" className="px-4 py-3 text-[14px] text-[var(--color-ink-3)]">
+              Načítám filtry…
+            </p>
+          }
+        >
+          <FilterSheetBody draft={draft} setDraft={setDraft} />
+        </Suspense>
+      </div>
+    </BottomSheet>
+  );
+}
+
 /* One line of the ledger: the margin (rank or initials), the person and the
- * firm, the figure. */
+ * firm, the figure, and on the board the speed under it ("k z n · share"). */
 function BrokerRow({
   id,
   lead,
@@ -352,6 +355,7 @@ function BrokerRow({
   firm,
   value,
   unit,
+  speed,
 }: {
   id: number;
   lead: ReactNode;
@@ -359,6 +363,7 @@ function BrokerRow({
   firm: string | null;
   value: number;
   unit: string;
+  speed?: ReactNode;
 }) {
   return (
     <Link
@@ -380,6 +385,12 @@ function BrokerRow({
             {fmtCount(value)}
             <span className="sr-only"> {unit}</span>
           </span>
+          {speed && (
+            <span className="mt-0.5 block font-mono text-[11px] tabular-nums text-[var(--color-ink-3)]">
+              <span className="sr-only">opustilo trh: </span>
+              {speed}
+            </span>
+          )}
         </span>
         <ChevronIcon className="h-4 w-4 shrink-0 text-[var(--color-ink-4)]" />
       </span>

@@ -1,6 +1,7 @@
-/* The Browse "experience": the filter sidebar + Map/Stats tabs + the
- * map-overlay layers, with all data fetching and transient view-state (hover
- * sync, growth pickers, resizable columns, merge mode, on-card estimates).
+/* The Browse "experience": the filter sidebar + the Nemovitosti / Statistiky /
+ * Makléři tabs + the map-overlay layers, with all data fetching and transient
+ * view-state (hover sync, growth pickers, resizable columns, merge mode,
+ * on-card estimates).
  *
  * Lifted out of pages/Browse.tsx so the SAME experience powers both the Browse
  * page (URL-backed via useUrlBrowseState) and the "Explore area" modal
@@ -40,6 +41,7 @@ import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
  * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
+const BrokerBoard = lazyChunk(() => import('@/components/brokers/BrokerBoard'));
 import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
@@ -62,6 +64,7 @@ import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
 import type { FilterPreset } from '@/lib/types';
 import { isApiConfigured } from '@/lib/api';
+import { agendaVisible, useAuth } from '@/lib/auth';
 import { useCardEstimates } from '@/lib/useCardEstimates';
 import { pushToast } from '@/lib/toast';
 import { browseKeys } from '@/lib/browseKeys';
@@ -111,8 +114,9 @@ export interface BrowseFeatures {
    * own fixed cohort and has no sidebar-driven filter for the operator to
    * change. Page and the area-explore modal both keep it shown. */
   sidebar?: boolean;
-  /* The Stats tab — hidden by the broker-explore modal, a read-only scoped
-   * view. Stats itself carries the broker scope (property_ids_filter, MS19). */
+  /* The cohort's aggregate tabs, Statistiky and Makléři — hidden by the
+   * broker-explore modal, a read-only scoped view. Both carry the broker scope
+   * (Stats as property_ids_filter, the board as broker_id; MS19). */
   stats?: boolean;
 }
 
@@ -142,7 +146,11 @@ export default function BrowseExperience({
   const f = { ...DEFAULT_FEATURES, ...features };
   const isModal = layout === 'modal';
   const newProperty = useNewPropertyDialog();
-  const { filters, sort, tab, overlay, activePresetId } = view;
+  const { filters, sort, overlay, activePresetId } = view;
+  /* The Makléři tab follows the plan's `brokers` agenda, as its nav entry does. */
+  const { isAdmin, agendas } = useAuth();
+  const brokersTab = f.stats && agendaVisible(isAdmin, agendas, 'brokers');
+  const tab: TabKey = view.tab === 'brokers' && !brokersTab ? 'map' : view.tab;
 
   // Browser-tab title reflects the active filters ("2+kk · 60–90 m² · Praha")
   // so multiple Browse tabs are distinguishable. Skipped in the Explore-area
@@ -480,6 +488,7 @@ export default function BrowseExperience({
   const tabs: ReadonlyArray<Tab<TabKey>> = [
     { key: 'map', label: 'Nemovitosti', count: cohortTotal?.toLocaleString('cs-CZ') },
     ...(f.stats ? [{ key: 'stats', label: 'Statistiky' } as Tab<TabKey>] : []),
+    ...(brokersTab ? [{ key: 'brokers', label: 'Makléři' } as Tab<TabKey>] : []),
   ];
 
   /* The listings PANEL's error drives the page banner. On the map tab that's the
@@ -755,6 +764,19 @@ export default function BrowseExperience({
                 small={{ value: view.statsSmall, set: view.setStatsSmall }}
                 onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
+            </Suspense>
+          </div>
+        )}
+
+        {tab === 'brokers' && (
+          <div
+            role="tabpanel"
+            id={`${tabIds}panel-brokers`}
+            aria-labelledby={`${tabIds}tab-brokers`}
+            className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}
+          >
+            <Suspense fallback={<Skeleton height={320} className="my-8" />}>
+              <BrokerBoard filters={filters} board={view.board} onBoardChange={view.setBoard} />
             </Suspense>
           </div>
         )}

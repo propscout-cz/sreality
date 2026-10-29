@@ -12,7 +12,7 @@
  *   - useMemoryBrowseState() — plain useState (the modal). Precedent: WatchdogEdit
  *                             already runs the registry FilterForm URL-free.
  */
-import { ROUTES } from './routes';
+import { ROUTES, type RoutePath } from './routes';
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -41,11 +41,26 @@ import {
 } from '@/lib/mapOverlays';
 import type { FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
 import { isStatsMarket, type StatsMarket } from '@/lib/statsMarket';
+import {
+  BOARD_URL_KEYS,
+  DEFAULT_BOARD,
+  boardFromSearchParams,
+  writeBoard,
+  type BoardOptions,
+} from '@/lib/brokerBoard';
 
-export type TabKey = 'map' | 'stats';
+export type TabKey = 'map' | 'stats' | 'brokers';
 
 /* `?tab=` as a TabKey; anything else (an old `?tab=table` link) opens the map, never a blank page. */
-export const parseTab = (raw: string | null): TabKey => (raw === 'stats' ? 'stats' : 'map');
+export const parseTab = (raw: string | null): TabKey =>
+  raw === 'stats' || raw === 'brokers' ? raw : 'map';
+
+/* The Makléři tab, with the filters and options `from` carries: where /brokers sends a desktop visit. */
+export const brokerBoardPath = (from?: URLSearchParams): RoutePath => {
+  const sp = new URLSearchParams(from);
+  sp.set('tab', 'brokers' satisfies TabKey);
+  return `${ROUTES.browse.build()}?${sp}` as RoutePath;
+};
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint
  * layers (city pins, the price-growth choropleth, reference overlays).
@@ -147,6 +162,10 @@ export interface BrowseViewState {
   statsSmall: boolean;
   setStatsSmall: (on: boolean) => void;
   loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
+  /* The Makléři tab's options (lib/brokerBoard), a view knob like the map's:
+   * URL-serialised, carried through filtering, outside preset identity. */
+  board: BoardOptions;
+  setBoard: (patch: Partial<BoardOptions>) => void;
 }
 
 /* The legacy spellings of a `layers` selection — `kraje` and the rent map's
@@ -155,7 +174,7 @@ export interface BrowseViewState {
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
-  'dashboard', 'market', 'small',
+  'dashboard', 'market', 'small', ...BOARD_URL_KEYS,
 ];
 
 /* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
@@ -205,6 +224,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const marketParam = searchParams.get('market');
   const statsMarket: StatsMarket = isStatsMarket(marketParam) ? marketParam : 'filter';
   const statsSmall = searchParams.get('small') === '1';
+  const board = useMemo(() => boardFromSearchParams(searchParams), [searchParams]);
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -324,6 +344,12 @@ export function useUrlBrowseState(): BrowseViewState {
     },
     [searchParams, setSearchParams],
   );
+  const setBoard = useCallback(
+    (patch: Partial<BoardOptions>) => {
+      setSearchParams(writeBoard(new URLSearchParams(searchParams), { ...board, ...patch }), { replace: true });
+    },
+    [board, searchParams, setSearchParams],
+  );
 
   /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
    * Without one the filters stay and only the id moves, replaced like the
@@ -363,6 +389,7 @@ export function useUrlBrowseState(): BrowseViewState {
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
     loadPipelineView, resetFilters,
     activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket, statsSmall, setStatsSmall,
+    board, setBoard,
   };
 }
 
@@ -388,6 +415,7 @@ export function useMemoryBrowseState(init: {
   const [activeDashboardId, setActiveDashboardId] = useState<string | null>(init.dashboard ?? null);
   const [statsMarket, setStatsMarket] = useState<StatsMarket>(init.market ?? 'filter');
   const [statsSmall, setStatsSmall] = useState<boolean>(init.small ?? false);
+  const [board, setBoardState] = useState<BoardOptions>(DEFAULT_BOARD);
 
   return useMemo<BrowseViewState>(
     () => ({
@@ -433,8 +461,10 @@ export function useMemoryBrowseState(init: {
       setStatsMarket,
       statsSmall,
       setStatsSmall,
+      board,
+      setBoard: (patch) => setBoardState((b) => ({ ...b, ...patch })),
     }),
-    [filters, sort, tab, overlay, activePresetId, activeDashboardId, statsMarket, statsSmall],
+    [filters, sort, tab, overlay, activePresetId, activeDashboardId, statsMarket, statsSmall, board],
   );
 }
 
@@ -497,6 +527,7 @@ export const browseUrlFromState = (s: {
   activeDashboardId?: string | null;
   statsMarket?: StatsMarket;
   statsSmall?: boolean;
+  board?: BoardOptions;
 }): string => {
   const sp = toSearchParams(s.filters);
   if (sortToParam(s.sort) !== sortToParam(DEFAULT_SORT)) sp.set('sort', sortToParam(s.sort));
@@ -510,6 +541,7 @@ export const browseUrlFromState = (s: {
   if (s.activeDashboardId) sp.set('dashboard', s.activeDashboardId);
   if (s.statsMarket && s.statsMarket !== 'filter') sp.set('market', s.statsMarket);
   if (s.statsSmall) sp.set('small', '1');
+  if (s.board) writeBoard(sp, s.board);
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may
   // one day carry a repeated key, which a Record round-trip would collapse.

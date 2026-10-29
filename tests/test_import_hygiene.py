@@ -60,7 +60,7 @@ _PROBE = textwrap.dedent(
     # heavy top-level import anywhere in the eager closure would fail here.
     import toolkit  # noqa: F401
     from toolkit.broker_sources import BROKER_SOURCE_NAMES  # noqa: F401
-    from toolkit.brokers import leaderboard  # noqa: F401
+    from toolkit.brokers import broker_property_ids  # noqa: F401
 
     print("OK")
     """
@@ -98,8 +98,8 @@ def test_boto3_specifically_is_not_import_time() -> None:
 
 
 def test_toolkit_brokers_needs_no_api_stack() -> None:
-    """toolkit/ sits below api/: the leaderboard takes the four chip arrays the API
-    compiles (migration 609), so importing it pulls in neither pydantic nor fastapi."""
+    """toolkit/ sits below api/: the broker reads take plain values (the board's argument models live in
+    api/broker_board.py), so importing them pulls in neither pydantic nor fastapi."""
     result = _run_probe(("pydantic", "fastapi"))
     assert result.returncode == 0, (
         "toolkit.brokers imports the API stack again — keep `api.location_filter` on the "

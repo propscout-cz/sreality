@@ -1,17 +1,10 @@
 """Offline contracts W4 must not break (migrations 435, 469, 609).
 
-Load-bearing things about the broker leaderboard, invisible in the normal test suite, and
-each would fail only in production:
+Load-bearing things about the broker leaderboard function, invisible in the normal test suite, and
+each would fail only in production. Nothing calls it since the broker board (api/broker_board.py); these rails
+hold its body until the post-deploy PR drops it.
 
-  * `api/outreach.py` calls the function with EIGHT positional arguments — the four chip
-    arrays, the two categories, the metric and its 2000 cap — however many parameters it
-    has grown to. That is legal only because every parameter after those (410's
-    `p_firm_ids`, 448's `p_min_price_czk`/`p_include_unpriced`, 469's
-    `p_subtypes`/`p_include_unknown_subtype`) is TRAILING and carries a DEFAULT. 609 is the
-    one re-signing that touched the leading positions (three id lists became four chip
-    arrays), so it moved this call from seven to eight in the same change; dropping a
-    default, or inserting a parameter anywhere but the end, breaks the call at runtime with
-    CI green — the fake cursors in tests/api/test_outreach_routes.py cannot see a signature.
+  * Every parameter carries a DEFAULT, and the four chip parameters lead in Browse's names and order.
   * `CREATE OR REPLACE` preserves a function's ACL; `DROP` + `CREATE` resets it to the
     default, `EXECUTE TO PUBLIC`. Since this function returns `primary_email` and
     `primary_phone`, that default silently re-exposes broker PII to `anon` — undoing
@@ -67,45 +60,14 @@ def _latest_migration_defining(fn: str) -> Path:
 
 
 _FN_MIGRATION = _latest_migration_defining("broker_leaderboard")
-_OUTREACH = _ROOT / "api" / "outreach.py"
 
 
 def _sql(path: Path) -> str:
     return _strip_comments(path.read_text())
 
 
-# --- the outreach contract -------------------------------------------------
-
-
-def _leaderboard_call_args(source: str) -> str:
-    """The text INSIDE `broker_leaderboard(` ... `)` in outreach's SQL literal.
-
-    Counting `%s` across the whole statement gives 11 and proves nothing — 8 function
-    arguments plus two campaign_id binds plus the LIMIT. Count the wrapper, not the name.
-    """
-    start = source.index("broker_leaderboard(")
-    i = start + len("broker_leaderboard(")
-    depth = 1
-    while depth:
-        if source[i] == "(":
-            depth += 1
-        elif source[i] == ")":
-            depth -= 1
-        i += 1
-    return source[start + len("broker_leaderboard(") : i - 1]
-
-
-def test_outreach_passes_eight_positional_args():
-    """RED by: changing the call to 9 placeholders, or re-signing the function."""
-    args = _leaderboard_call_args(_OUTREACH.read_text())
-    assert args.count("%s") == 8, (
-        f"api/outreach.py passes {args.count('%s')} arguments to broker_leaderboard, "
-        f"expected 8: {args!r}"
-    )
-
-
 def test_every_function_parameter_carries_a_default():
-    """The actual invariant that keeps an 8-argument call against 13 parameters legal.
+    """Every one of the 13 parameters is defaulted.
 
     Anchored on the CREATE (not the file's leading DROP, which names the OLD 8-param
     signature it is retiring) — `body.index("broker_leaderboard(")` alone would find that
@@ -121,31 +83,12 @@ def test_every_function_parameter_carries_a_default():
     assert len(lines) == 13, f"expected 13 parameters, found {len(lines)}: {lines}"
     missing = [p for p in lines if "default" not in p.lower()]
     assert not missing, (
-        "every broker_leaderboard parameter must carry a DEFAULT — api/outreach.py "
-        f"passes only 8 of 13 positionally: {missing}"
+        f"every broker_leaderboard parameter must carry a DEFAULT: {missing}"
     )
-    # Browse's chip parameters, Browse's names and order (605): toolkit/brokers.py and
-    # api/outreach.py both pass `api.location_filter.district_arrays` into these four.
+    # Browse's chip parameters, Browse's names and order (605).
     assert [p.split()[0] for p in lines[:4]] == [
         "districts_filter", "districts_excluded_filter", "districts_levels", "districts_ids",
     ]
-
-
-def test_outreach_filters_by_email_after_the_rpc_not_inside_it():
-    """Top-N by metric first, email filter second — the ordering the campaign depends on.
-
-    RED by: hoisting `primary_email IS NOT NULL` into the RPC (which would change which
-    2,000 brokers are considered), or changing the 7th bound argument away from 2000.
-    """
-    source = _OUTREACH.read_text()
-    call_end = source.index("broker_leaderboard(")
-    email_filter = source.index("lb.primary_email IS NOT NULL")
-    assert email_filter > call_end, (
-        "the email filter must apply AFTER broker_leaderboard's top-N, not inside it"
-    )
-    assert "metric, 2000," in source, (
-        "outreach must request the top 2000 from the RPC before filtering by email"
-    )
 
 
 # --- the grant posture -----------------------------------------------------
@@ -430,20 +373,6 @@ def _negated(atom: str) -> str:
     if " is not distinct from " in atom:
         return atom.replace(" is not distinct from ", " is distinct from ")
     return f"not {atom}"
-
-
-def test_the_count_book_levels_are_the_fast_gates_and_the_derived_lists():
-    """toolkit.brokers stamps freshness only when the count book answers, judged from the
-    same levels the SQL gate names. RED by: a level added to one side only — the stamp
-    would then claim matview freshness for a live read, or the reverse."""
-    from toolkit.brokers import COUNT_BOOK_LEVELS
-
-    assert f"<@ '{{{','.join(COUNT_BOOK_LEVELS)}}}'" in _FAST_GATE
-    fast, _ = _branches(_fn_body())
-    derived = re.findall(
-        r"district_level_codes\(districts_levels, districts_ids, districts_excluded_filter, "
-        r"'(\w+)', false\)", fast)
-    assert derived == list(COUNT_BOOK_LEVELS)
 
 
 def test_the_precondition_names_the_live_body_and_this_files_own():

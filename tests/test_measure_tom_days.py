@@ -203,6 +203,17 @@ def test_exit_within_has_one_definition_and_one_python_face() -> None:
         "measure_exit_within(s.tom_observed, s.started_at, s.ended_at, p.is_active, p.last_seen_at, %(days)s)")
 
 
+def test_the_python_faces_constants_are_the_functions_own() -> None:
+    """The board reports E0 and M (clean_exits_since, margin_days) from toolkit.measures; they are the body's."""
+    from toolkit.measures import EXIT_CLEAN_SINCE, EXIT_MARGIN_DAYS
+
+    sql = (_ROOT / "migrations" / "691_property_broker_spells.sql").read_text()
+    body = sql[sql.index("create or replace function public.measure_exit_within("):].split("$function$")[1]
+    assert f"p_started_at >= timestamptz '{EXIT_CLEAN_SINCE} 00:00:00+00'" in body
+    assert f"now() - (p_days + {EXIT_MARGIN_DAYS}) * interval '24 hours'" in body
+    assert f"p_property_last_seen <= p_ended_at + {EXIT_MARGIN_DAYS} * interval '24 hours'" in body
+
+
 _E0 = "timestamptz '2026-09-08 00:00:00+00'"
 # Followed for every N <= 30 from 2026-10-16 on (E0 + 1 day + N + M), whatever day CI runs.
 _FOLLOWED = f"{_E0} + interval '24 hours'"
@@ -272,7 +283,7 @@ def test_exit_within_inlines(cur: Any) -> None:
 
     cur.execute(
         "EXPLAIN (VERBOSE, COSTS OFF) "
-        f"SELECT {exit_within_sql('s', 'p', '30')} FROM property_broker_spells s JOIN properties p ON p.id = s.property_id"
+        f"SELECT {exit_within_sql('s', 'p', '30')} FROM broker_book s JOIN properties p ON p.id = s.property_id"
     )
     plan = "\n".join(r[0] for r in cur.fetchall())
     assert "measure_exit_within" not in plan, plan

@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useAuth } from '@/lib/auth';
+import { agendaVisible, useAuth } from '@/lib/auth';
 import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { NewEstimationProvider } from './NewEstimationModal';
@@ -218,15 +218,7 @@ function TopBar() {
   // Unconfigured local dev has no session (so no is_admin claim) — show the
   // full nav there, mirroring the guards' allow-through posture.
   const showAdmin = isAdmin || !isSupabaseConfigured();
-  const items = navItems.filter((item) => {
-    // Plan agenda gating (non-admins only). agendas === null means the
-    // billing read hasn't resolved / failed — show everything rather than
-    // blank the nav over a read hiccup; admins always bypass.
-    if (!showAdmin && agendas !== null && item.agenda && agendas[item.agenda] !== true) {
-      return false;
-    }
-    return true;
-  });
+  const items = navItems.filter((item) => !item.agenda || agendaVisible(isAdmin, agendas, item.agenda));
   const ownerTo = activeNavTo(location.pathname, items.map((i) => i.to));
   /* From any other page, "Browse" is the way back to the view that was left, with
    * its filters; ON Browse the same click is the reset, the bare page. */

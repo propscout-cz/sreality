@@ -737,7 +737,7 @@ ON CONFLICT (source, source_broker_id_native) DO UPDATE SET
 # Every link statement is its pre-registry UPDATE, verbatim, plus `RETURNING
 # l.property_id`, wrapped in the repo's one same-statement dirty enqueue (rule
 # 20; scripts/reparse.py, scraper/listing_write.py): the broker book
-# (property_broker_spells, migration 691) keys on the identity, so a
+# (broker_book, migration 692) folds the advert's identity to its broker, so a
 # re-attributed advert's property must be recomputed. Purely additive: the
 # UPDATE writes exactly what it wrote; the wrapper only reads its RETURNING.
 # Derived from the frozen pre-image with a frozen wrapper (`.replace`, not

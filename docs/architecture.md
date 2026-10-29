@@ -2504,7 +2504,7 @@ renumber.** Navigate by area:
     the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
     source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
     the map box, the place chips, the reader's own lenses in `setScope.ts` normalizeScope's form and
-    the one-portal order of Q49 b). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    the one-portal order of Q49 b; without the lenses, `cohort_where`, the broker board's cohort). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
@@ -2565,9 +2565,9 @@ renumber.** Navigate by area:
     UI because it sharpens as the AUTODEDUP scope grows (measured 2026-10-13: outside the apply
     scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
     twin). A broker filter moves the portal side onto that broker's ads only (one of its ads on P
-    in the switch's status: `toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`),
-    so broker + portal means one ad satisfies both, while the status stays the property's. ONE SQL
-    function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
+    in the switch's status, over the broker's `broker_book` row: `toolkit/brokers.book_rule_sql`, read by
+    `broker_property_ids` and the broker board), so broker + portal means one ad satisfies both, while the status stays the
+    property's. ONE SQL function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
     defaulted; two independent conjuncts since 657), is read by both aggregate RPCs and, inlined,
     by both property grains' one `portals` hook (the Watchdog's `any` arm, as it has no status
     filter, and the agents' search with Browse's status); the SPA
@@ -2600,8 +2600,8 @@ renumber.** Navigate by area:
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
     `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
     (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
-    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
-    Outreach, in the per-level `= any(district_level_codes(…))` form, the SQL twin of `district_where`
+    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard`, unread since the broker board — in the per-level
+    `= any(district_level_codes(…))` form, the SQL twin of `district_where`
     over `listing_location`'s `*_kod`, which the planner folds to constants) all compile the same plan; the shared table
     `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
     `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
@@ -3452,8 +3452,10 @@ renumber.** Navigate by area:
     The writers that change a property's children — `listing_write.write_listings` (a content
     change, or a revival, or a write under an inactive property), `mark_listing_inactive`
     (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`),
-    and the broker attribution link (`toolkit/broker_sources.py`: a changed `listings.broker_identity_id`, in the same
-    statement; a new advert has no property yet) — enqueue the affected `property_id` into `dirty_properties`
+    the broker attribution link (`toolkit/broker_sources.py`: a changed `listings.broker_identity_id`, in the same
+    statement; a new advert has no property yet) and every broker re-point (a changed `broker_identities.broker_id`,
+    through `broker_sources.dirty_repointed` in its transaction: `docs/design/broker-board.md`) — enqueue the
+    affected `property_id` into `dirty_properties`
     (migration 106) with a cheap set-based `INSERT ... ON CONFLICT DO UPDATE SET marked_at`.
     The realtime worker's maintenance lane (`recompute_property_stats.run_incremental_pass`, every
     30 s; its only runtime since Actions-exit W0, #2010, deleted `property_maintenance.yml`) attaches
@@ -3516,17 +3518,13 @@ renumber.** Navigate by area:
     second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
     own after-step: scoped recompute, broker book, Browse patch, broker queue) directly, and never
     enqueue `dirty_properties`.
-    **The pass also keeps the broker book** (`property_broker_spells`, migration 691; broker board
-    W1, read by nothing yet): one SPELL per (property, broker identity), stored from its one view
-    `property_broker_spell_projection` (start = the identity's first ad's `first_seen_at`, end =
-    NULL while one of its ads runs, else the last one's last sighting, `tom_observed` of its first
-    ad in `browse_projection`'s order). `properties_changed` upserts the view's rows for its ids,
-    rewriting only a row that differs, and deletes the spells the view no longer holds (an identity
-    writer passes both sides, so the side an advert left loses its spell); each full-sweep batch
-    does the same over its id range in the batch's transaction, the book under its own 2-min
-    ceiling so one attempt (10 + 2 min) stays inside the 15-min lease. It is keyed on the identity,
-    so a broker merge (it re-points `broker_identities.broker_id`) changes no row and dirties
-    nothing; a re-attribution dirties the property (above). `docs/design/broker-board.md`.
+    **The pass also keeps the broker book** (`broker_book`, migration 692): one row per (property,
+    canonical broker), stored from its one view `broker_book_projection`. `properties_changed` upserts
+    the view's rows for its ids, rewriting only a row that differs, and deletes the rows the view no
+    longer holds (an identity writer passes both sides, so the side an advert left loses its row);
+    each full-sweep batch does the same over its id range in the batch's transaction, the book under
+    its own 2-min ceiling so one attempt (10 + 2 min) stays inside the 15-min lease. Its columns, and
+    why the fold is at write time: `docs/design/broker-board.md`.
     A residual of removing the
     inline singleton rollup: a crawler change confined to unhashed columns (`area_basis`,
     `published_at`, `source_url`) reaches its property only at the daily sweep, and an
@@ -3871,7 +3869,7 @@ renumber.** Navigate by area:
     `broker_id`s came out of that response. The route itself is deleted too (#2063: no reader, no traffic).
     `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
     route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
-    values on the property page and the board card; the leaderboard, search and broker dossier still
+    values on the property page and the board card; the broker board, search and broker dossier still
     swap them for `has_email` / `has_phone` for a non-admin. The agents' `get_property_brokers` (#2063) is the
     same read on the service connection, unmasked the same way (ADR-0002: at most 20 people per call, each call
     recorded; MCP stays masked). **Migration 398 settles that for good:**
@@ -4437,9 +4435,8 @@ renumber.** Navigate by area:
 
     **Its third — "left the market within N days" (2026-10-29, migration 691, broker board W1).**
     `public.measure_exit_within(observed, started_at, ended_at, property_active, property_last_seen,
-    days)` judges one broker SPELL (`property_broker_spells`: an identity's ads on a property, from
-    the first one's `first_seen_at` to the last one's last sighting, NULL while one runs; rule 20's
-    pass keeps it) against its property: NULL = not followed (not `tom_observed`, started before the
+    days)` judges one broker SPELL (a `broker_book` row: a canonical broker's ads on a property, from
+    the first one's `first_seen_at` to the last one's last sighting, NULL while one runs) against its property: NULL = not followed (not `tom_observed`, started before the
     2026-09-08 structural end gate of rule 3, or its window N + 7 days not yet closed); `exited` =
     the spell ended by day N, the property left the market and nothing ran on more than 7 days past
     it; `unknown` = flagged live but unseen since before day N; else `not_exited`. Inlinable like

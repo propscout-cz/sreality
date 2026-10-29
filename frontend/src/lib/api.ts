@@ -49,6 +49,7 @@ import type {
   FilterPreset,
   FilterPresetGroup,
 } from './types';
+import type { BoardRow } from './brokerBoard';
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import type { SavedSetLayout } from './savedSetLayout';
@@ -3439,11 +3440,11 @@ export const runPriceStatDataset = (
  * MANUALLY (mailto/copy) then marks it sent. No automated email send in v1.
  * All endpoints are bearer-gated (PII). */
 
+/* The campaign's cohort: its place, category and deal type, live properties (api/outreach CampaignTarget). */
 export interface OutreachTargetSpec {
   districts?: DistrictChip[];
   category_main?: string | null;
   category_type?: string | null;
-  metric?: string;
 }
 
 export interface OutreachCampaign {
@@ -3486,16 +3487,8 @@ export interface OutreachMessage {
   notes: string | null;
 }
 
-export interface OutreachTarget {
-  broker_id: number;
-  display_name: string | null;
-  primary_email: string | null;
-  primary_phone: string | null;
-  firm_name: string | null;
-  firm_domain: string | null;
-  active_property_count: number;
-  property_count: number;
-}
+/* A campaign's candidate: a broker board row (api/outreach select_targets), contacts unmasked. */
+export type OutreachTarget = BoardRow;
 
 export interface OutreachSuppression {
   broker_id: number;

@@ -21,6 +21,11 @@ import { ExploreAreaProvider, useExploreAreaModal } from './ExploreAreaModal';
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
 }));
+/* The experience asks who is signed in (the Makléři tab's agenda gate). */
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  useAuth: () => ({ isAdmin: false, agendas: null }),
+}));
 
 function Opener() {
   const { open } = useExploreAreaModal();

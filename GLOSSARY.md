@@ -89,9 +89,9 @@ An ad first seen on an ordinary day, not in a sweep, so its time on market count
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
 **Broker spell**:
-The time one broker identity's ads ran on one property: from the first of them being first seen until the last of
-them was last seen, and open while one still runs. The broker book holds one per property and identity, kept by
-property maintenance.
+The time one broker's ads ran on one property, on every portal the broker is on: from the first of them being first
+seen until the last of them was last seen, and open while one still runs. The broker book holds one per property and
+canonical broker, kept by property maintenance; an ad whose portal account is not yet resolved to a broker has none.
 _Avoid_: listing period, mandate, tenure
 
 **Left the market within N days** (UI: "Opustilo trh do N dní"):
