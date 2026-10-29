@@ -185,8 +185,8 @@ class FakeLedger:
         self.due_names = [n for n in self.due_names if n != name]
         self._run_id += 1
         args, by = self.requests.pop(name, (None, None))
-        return job_lease.Lease(name, "H", self._run_id, job_lease.TTL_S, args, by,
-                               self.clock() + job_lease.TTL_S - job_lease.FENCE_MARGIN_S, due_slot=by is None)
+        return job_lease.Lease(name, "H", job_lease.TTL_S, self.clock() + job_lease.TTL_S - job_lease.FENCE_MARGIN_S,
+                               run_id=self._run_id, args=args, requested_by=by, due_slot=by is None)
 
     def renew(self, lease: job_lease.Lease) -> bool | None:
         self._record("renew", lease.job_name)
@@ -531,7 +531,7 @@ def test_a_release_the_database_refuses_on_content_is_sent_again_bare(monkeypatc
 
     monkeypatch.setattr(job_lease, "release", release)
     ledger = job_runner.PgLedger(FakeConn, holder="H")  # type: ignore[arg-type]
-    lease = job_lease.Lease("a", "H", 7, 180, None, None, 0.0)
+    lease = job_lease.Lease("a", "H", 180, 0.0, run_id=7, args=None, requested_by=None)
     done = Finished(lease, "failed", "backoff", "exit 3", 3, 80, "tail \udcff text")
     ledger.begin(stopping=False)
     assert ledger.release(done) is None and done.bare and ledger.up

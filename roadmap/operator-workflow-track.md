@@ -1035,6 +1035,10 @@ Phase U-NOTIFY-PUSH, ruling R10)*.
   through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
   `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
   `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
+- ✅ Filter availability matrix removed (2026-10-29 ruling, cleanup/filter-availability-matrix): no
+  surface read `filter_visibility`, so the Settings section, its three `/admin` routes and the two
+  agendas only it showed (NEIGHBORHOOD, DEFAULTS) are gone; migration 688 drops the table once that
+  PR is live, with the operator's OK and a backup.
 
 **Next (filter definition, tracked from C4)**
 
@@ -1045,7 +1049,6 @@ Phase U-NOTIFY-PUSH, ruling R10)*.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated
   dispatch).
-- The NEIGHBORHOOD agenda over-declares ~30 filters `toolkit/neighborhoods.py` never reads.
 
 **What's deferred**
 

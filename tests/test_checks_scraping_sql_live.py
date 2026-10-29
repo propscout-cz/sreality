@@ -136,6 +136,12 @@ def _entry(main: str | None, kind: str | None = "prodej", *, reached: bool = Tru
     return entry
 
 
+def _end(anchor: _dt.datetime, *, reached: bool = True) -> dict[str, Any]:
+    """The entry that ends a walk cycle (scope {}, NULL labels), keyed as portal_runner writes it."""
+    return {**_entry(None, None, reached=reached, declared=0, collected=0), "scope": {},
+            "cycle_started_at": anchor.isoformat()}
+
+
 def _walks(conn: Any, *sources: str) -> dict[tuple[str, str | None, str | None], dict[str, Any]]:
     """_WALKS_SQL as the check sends it: these portals' rows by (portal, category_main, category_type)."""
     rows = [dict(zip(_WALK_COLUMNS, row, strict=True))
@@ -186,8 +192,7 @@ def test_a_run_is_a_finished_walk_only_when_it_ended_with_categories(seed: _Seed
 
 def test_a_unit_reached_the_end_only_when_every_entry_of_its_label_did(seed: _Seed) -> None:
     """Labels repeat across a walk's entries: one entry short of the end, or recording no verdict, leaves the
-    unit's newest end-reached walk (and the totals read with it) at the older walk; the portal's walk is
-    the newest in which every unit reached the end."""
+    unit's newest end-reached walk (and the totals read with it) at the older walk."""
     s = seed.portal("labels")
     seed.walk(s, 8, [_entry("dum", declared=800), _entry("dum", declared=150), _entry("byt", declared=4_900)])
     newest = [_entry("dum", declared=900), _entry("dum", reached=False, declared=100),
@@ -199,7 +204,22 @@ def test_a_unit_reached_the_end_only_when_every_entry_of_its_label_did(seed: _Se
     got = {key[1]: (r["walked_at"], r["end_at"], r["declared"], r["entries"]) for key, r in walks.items()}
     assert got == {"dum": (seed.ago(2), seed.ago(8), 950, 2), "byt": (seed.ago(2), seed.ago(2), 5_000, 1),
                    "pozemek": (seed.ago(2), None, None, 0)}
-    assert {r["all_reached_at"] for r in walks.values()} == {seed.ago(8)}
+
+
+def test_a_cycle_end_is_dated_at_its_anchor_and_the_newest_closed_one_is_the_portals_walk(seed: _Seed) -> None:
+    """A walk cycle cut once ends in the run that finished it (11 h ago); its orphans were judged against its
+    anchor (12 h ago), so that dates the end entry's unit and the portal's every-unit walk. A cycle that ended
+    short, or a run whose entries all reached the end without ending a cycle, dates neither."""
+    s = seed.portal("cycles")
+    seed.walk(s, 30, [_entry("byt"), _end(seed.ago(30))])
+    seed.walk(s, 12, [_entry("byt")])
+    seed.walk(s, 11, [_entry("dum"), _end(seed.ago(12))])
+    seed.walk(s, 4, [_entry("byt"), _entry("dum", reached=False), _end(seed.ago(4), reached=False)])
+    seed.walk(s, 2, [_entry("byt"), _entry("dum")])
+
+    walks = _walks(seed.conn, s)
+    assert {r["all_reached_at"] for r in walks.values()} == {seed.ago(12)}
+    assert (walks[(s, None, None)]["walked_at"], walks[(s, None, None)]["end_at"]) == (seed.ago(4), seed.ago(12))
 
 
 def test_the_walk_gap_is_the_median_start_gap_of_finished_walks_in_the_stale_window(seed: _Seed) -> None:
@@ -326,15 +346,15 @@ def test_held_counts_active_ads_per_unit_and_those_in_dwell_once_each(seed: _See
 
 def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_queued_nor_checked(
         seed: _Seed) -> None:
-    """byt's newest end-reached walk started 10 h ago, dum's 30 h ago (also the portal's every-unit walk,
-    which dates the categories no end-reached walk covers). Counted: a1 (last seen 12 h ago), a7 (last seen
-    50 h ago, checked 40 h ago: after its sighting but over 24 h before the walk, which nominated it), b1
-    (35 h), c1 and p1 (40 h, unwalked). Not: a2 seen since, a3 queued, a4 and a5 checked inside the 24 h
+    """byt's newest end-reached walk started 10 h ago, dum's 30 h ago (also the portal's every-unit walk, which
+    dates the categories no end-reached walk covers, and its cycle's end, which dates the NULL labels). Counted:
+    a1 (last seen 12 h ago), a7 (last seen 50 h ago, checked 40 h ago: after its sighting but over 24 h before
+    the walk, which nominated it), b1 (35 h), c1 (40 h) and p1 (40 h, unwalked). Not: a2 seen since, a3 queued, a4 and a5 checked inside the 24 h
     before the walk (11 h and 13 h ago, after and before their sighting: the walk's throttle skipped both),
     a6 inactive, b2 and c2 seen since; and nothing of a portal no walk reached the end of (sent with no
     start, as every portal without a walk is)."""
     s, idle = seed.portal("unnominated"), seed.portal("idle")
-    seed.walk(s, 30, [_entry("byt", deferred=5), _entry("dum")])
+    seed.walk(s, 30, [_entry("byt", deferred=5), _entry("dum"), _end(seed.ago(30))])
     seed.walk(s, 10, [_entry("byt", deferred=2), _entry("dum", reached=False),
                       _entry("pozemek", reached=False)])
     for native, hours in (("a1", 12), ("a2", 5), ("a3", 12), ("a4", 12), ("a5", 12)):
@@ -354,12 +374,13 @@ def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_
 
     reached = [r for r in _walks(seed.conn, s).values() if r["end_at"] is not None]
     assert {r["category_main"]: (r["end_at"], r["deferred"]) for r in reached} == {
-        "byt": (seed.ago(10), 2), "dum": (seed.ago(30), 0)}, "deferrals: the newest end-reached walk's"
+        "byt": (seed.ago(10), 2), "dum": (seed.ago(30), 0), None: (seed.ago(30), 0)}, \
+        "deferrals: the newest end-reached walk's"
     rows = seed.conn.execute(sc._UNNOMINATED_SQL, {  # as scraping._unnominated_cells sends them
         "sources": [r["source"] for r in reached], "mains": [r["category_main"] for r in reached],
         "types": [r["category_type"] for r in reached], "starts": [r["end_at"] for r in reached],
         "portal_sources": [s, idle], "portal_starts": [reached[0]["all_reached_at"], None]}).fetchall()
-    assert rows == [(s, 5, 2, seed.ago(50))]
+    assert rows == [(s, 5, 1, seed.ago(50))]
 
 
 def test_the_trend_rolls_from_the_newest_measured_result_and_looks_back_for_a_missing_one(

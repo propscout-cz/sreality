@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 from psycopg.types.json import Jsonb
 
-from scraper import portal_factory
+from scraper import job_lease, portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
 
@@ -1370,7 +1370,7 @@ def _patch_resolver(
         captured["conn"] = c
         captured["job_name"] = job_name
         captured.update(kwargs)
-        yield acquired
+        yield job_lease.Hold(job_name, "test-holder", 60, 0.0) if acquired else None
 
     def default_run(
             c: Any, *, batch_size: int, max_seconds: int, workers: int) -> Any:

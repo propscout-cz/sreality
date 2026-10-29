@@ -1,6 +1,6 @@
 /* FilterForm — registry-driven filter renderer.
  *
- * Single component that any consumer (Watchdog, Browse, Settings preview)
+ * Single component that any consumer (Watchdog, Browse, sold comps)
  * can drop in to render the operator's filter controls. It reads
  * `FILTER_REGISTRY` from the generated TS file and dispatches on each
  * filter's `ui_control` to one of the shared widget primitives.
@@ -9,7 +9,6 @@
  *     scope="watchdog"
  *     state={spec}
  *     onChange={(id, val) => setSpec({ ...spec, [id]: val })}
- *     visibility={schema?.filters}            // optional matrix override
  *     exclude={['location', 'tags']}          // optional: skip filters
  *   />
  *
@@ -81,16 +80,12 @@ interface FilterFormProps {
    *  min and max sides together. The parent must always treat the
    *  array as one transaction against the current filter state. */
   onChange: (updates: ReadonlyArray<FilterUpdate>) => void;
-  /** Optional visibility override. When supplied, only filters with
-   *  `visibility[scope] === true` render. When omitted, every filter
-   *  the registry declares for `scope` renders (the all-on default). */
-  visibility?: ReadonlyArray<{ id: string; visibility: Record<string, boolean> }>;
   /** Ids to skip even if the registry declares them. Use sparingly —
    *  for now, only when the host page renders its own widget for that
    *  filter (e.g. Watchdog's spatial-center inputs). */
   exclude?: ReadonlyArray<string>;
-  /** When set, render *only* the listed filter ids (after agenda /
-   *  visibility filtering). Lets a host page slice the registry into
+  /** When set, render *only* the listed filter ids (after agenda
+   *  filtering). Lets a host page slice the registry into
    *  its existing section layout. Min/max pairing still applies — pass
    *  either side of a pair and the matching sibling is auto-included. */
   includeOnly?: ReadonlyArray<string>;
@@ -136,23 +131,15 @@ export interface FormRow {
 export function formRows(
   scope: Agenda,
   {
-    visibility,
     exclude,
     includeOnly,
-  }: Pick<FilterFormProps, 'visibility' | 'exclude' | 'includeOnly'> = {},
+  }: Pick<FilterFormProps, 'exclude' | 'includeOnly'> = {},
 ): FormRow[] {
   const excludeSet = new Set(exclude ?? []);
-  const visibilityById = new Map(
-    (visibility ?? []).map((v) => [v.id, v.visibility]),
-  );
 
   let visibleFilters = FILTER_REGISTRY.filters.filter((f) => {
     if (!f.agendas.includes(scope)) return false;
     if (excludeSet.has(f.id)) return false;
-    if (visibilityById.size > 0) {
-      const cell = visibilityById.get(f.id);
-      if (cell && cell[scope] === false) return false;
-    }
     return true;
   });
 
@@ -194,7 +181,6 @@ export function FilterForm({
   scope,
   state,
   onChange,
-  visibility,
   exclude,
   includeOnly,
   labels,
@@ -203,7 +189,7 @@ export function FilterForm({
   customWidgets,
   bare,
 }: FilterFormProps) {
-  const rows = formRows(scope, { visibility, exclude, includeOnly });
+  const rows = formRows(scope, { exclude, includeOnly });
 
   const renderRow = ({ def: f, maxDef }: FormRow) => {
     const custom = customWidgets?.[f.id];

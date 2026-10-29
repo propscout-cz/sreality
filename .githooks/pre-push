@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Secret scan of every commit this push sends that no remote holds yet, rebased and cherry-picked ones included, a merge
+# by what it changed beyond the automatic merge (#2035).
+set -euo pipefail
+tips=()
+while read -r _ local_sha _ _; do
+  [[ "$local_sha" =~ ^0+$ ]] || tips+=("$local_sha")  # an all-zero sha deletes a branch: nothing to send
+done
+(( ${#tips[@]} )) || exit 0
+exec "$(git rev-parse --show-toplevel)/scripts/gitleaks.sh" git --log-opts="--remerge-diff ${tips[*]} --not --remotes"

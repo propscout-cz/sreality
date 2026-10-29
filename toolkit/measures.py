@@ -63,9 +63,8 @@ PPM2_BASES: tuple[str, ...] = (
 # ways a set of rows can fail to have one, and both must be rendered as a gap.
 #   mixed   — the rows disagree; one blanket unit would be a lie (rule 22: the
 #             default Browse cohort is sale+rent).
-#   unknown — nothing said. Client-supplied rows (POST /tools/analyze_distribution
-#             takes caller-provided listings) carry no basis at all; the honest
-#             answer is "unknown", never a default of sale.
+#   unknown — nothing said: rows that carry no basis label; the honest answer
+#             is "unknown", never a default of sale.
 BASIS_MIXED = "mixed"
 BASIS_UNKNOWN = "unknown"
 
@@ -464,7 +463,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         measure="ppm2",
         kind=KIND_LABELS,
         why="The `unit` string on min_price_per_m2 and max_price_per_m2 — the "
-        "agent-facing label, read verbatim through GET /admin/filter-schema. "
+        "label the generated registry carries to every filter form. "
         "Both rows also carry `basis=BASIS_DEPENDS_ON_CATEGORY`, because the "
         "unit alone is ~300x ambiguous between a sale and a rental cohort.",
     ),

@@ -18,18 +18,13 @@ consumer needs:
 
 Adding a new filter is a single PR that touches this file, the consumer
 models of its agendas (ComparableFilters / WatchdogFilterSpec) and (if it
-needs a DB column) a migration. Every downstream surface — Pydantic
-schemas, agent tool JSON, Watchdog matcher, React FilterForm, browse
-URL serialiser — is generated from the registry, compiled from it
+needs a DB column) a migration. Every downstream surface — the REST and
+tool-registry argument models (`api/filter_args.py`), agent tool JSON,
+Watchdog matcher, React FilterForm, browse URL serialiser — is generated
+from the registry, compiled from it
 (`toolkit/filter_compiler.py`), or pinned to it by a coverage test; the
 model fields are pinned in both directions, so a filter missing from a
 model fails CI rather than being silently dropped.
-
-The `filter_visibility` table (migration 059) lets the operator turn
-individual (agenda, filter) pairs off from Settings. Use
-`effective_for(agenda, conn)` to get the visible subset for a given
-surface; `effective_for(agenda)` without a connection returns every
-filter declared for that agenda (the default-on superset).
 """
 
 from __future__ import annotations
@@ -37,12 +32,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from toolkit.measures import PPM2_BASES
-
-if TYPE_CHECKING:
-    import psycopg
 
 
 # --- enums ----------------------------------------------------------------
@@ -56,10 +48,8 @@ class Agenda(StrEnum):
     BROWSE = "browse"             # frontend Browse sidebar
     WATCHDOG = "watchdog"         # WatchdogFilterSpec + matcher
     COMPARABLES = "comparables"   # toolkit.find_comparables_* + agent tools
-    ESTIMATION = "estimation"     # CreateEstimationIn / EstimateYieldIn
+    ESTIMATION = "estimation"     # CreateEstimationIn
     VELOCITY = "velocity"         # compute_market_velocity
-    NEIGHBORHOOD = "neighborhood" # describe_neighborhood
-    DEFAULTS = "defaults"         # Settings → app_settings tunables
     SOLD = "sold"                 # ListingDetail sold-comps block (sold_comparables)
 
 
@@ -616,11 +606,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION,
-                Agenda.VELOCITY, Agenda.NEIGHBORHOOD,
-                Agenda.DEFAULTS,
-            }),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             constraints={"min": 100, "max": 10000},
             unit="m",
         ),
@@ -639,10 +625,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION,
-                Agenda.VELOCITY, Agenda.DEFAULTS,
-            }),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             constraints={"min": 0.05, "max": 0.6, "step": 0.05},
             unit="%",
         ),
@@ -659,10 +642,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION,
-                Agenda.VELOCITY, Agenda.DEFAULTS,
-            }),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             constraints={"enum": ["exact", "loose", "any"]},
             enum_values=DISPOSITION_MATCH_OPTIONS,
         ),
@@ -696,11 +676,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION,
-                Agenda.VELOCITY, Agenda.NEIGHBORHOOD,
-                Agenda.DEFAULTS,
-            }),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             constraints={"min": 1, "max": 365},
             unit="days",
         ),
@@ -746,10 +722,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_STATUS,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION,
-                Agenda.VELOCITY, Agenda.DEFAULTS,
-            }),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             constraints={"enum": ["active", "delisted", "all"]},
             enum_values=LIFECYCLE_OPTIONS,
         ),
@@ -2007,31 +1980,8 @@ def description(filter_id: str) -> str:
 
 
 def filters_for_agenda(agenda: Agenda) -> list[FilterDef]:
-    """Every filter declared for the agenda, ignoring visibility overrides."""
+    """Every filter declared for the agenda."""
     return [f for f in REGISTRY.values() if agenda in f.agendas]
-
-
-def visibility_map(
-    conn: "psycopg.Connection | None" = None,
-) -> dict[tuple[str, str], bool]:
-    """Read the `filter_visibility` table.
-
-    Returns `{(agenda, filter_id): enabled}`. When `conn` is None or
-    the table is missing (e.g. running pre-migration), returns an
-    empty dict — `effective_for` then treats every (agenda, filter)
-    pair as enabled (the all-on default).
-    """
-    if conn is None:
-        return {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT agenda, filter_id, enabled FROM filter_visibility"
-            )
-            rows = cur.fetchall()
-    except Exception:
-        return {}
-    return {(r[0], r[1]): bool(r[2]) for r in rows}
 
 
 # Canonical window → precomputed-count-column mapping for the merged
@@ -2047,27 +1997,7 @@ PRICE_CHANGE_COUNT_COLUMNS: dict[int | None, str] = {
 }
 
 
-def effective_for(
-    agenda: Agenda,
-    conn: "psycopg.Connection | None" = None,
-) -> list[FilterDef]:
-    """Filters available for `agenda` AFTER the visibility matrix.
-
-    Missing rows in `filter_visibility` are treated as enabled, so a
-    fresh deploy with the seed migration but no operator edits behaves
-    exactly like a deploy without the table.
-    """
-    visibility = visibility_map(conn)
-    out: list[FilterDef] = []
-    for f in REGISTRY.values():
-        if agenda not in f.agendas:
-            continue
-        if visibility.get((str(agenda), f.id), True):
-            out.append(f)
-    return out
-
-
-# --- JSON dump (used by /admin/filter-schema + scripts/generate_…) -------
+# --- JSON dump (used by scripts/generate_filter_registry.py) -------------
 
 
 def enum_to_json(e: EnumOption) -> dict[str, Any]:
@@ -2100,30 +2030,13 @@ def _filter_to_json(f: FilterDef) -> dict[str, Any]:
     }
 
 
-def registry_to_json(
-    visibility: dict[tuple[str, str], bool] | None = None,
-) -> dict[str, Any]:
-    """Serialise the registry to a JSON-friendly dict.
-
-    When `visibility` is provided, each filter entry gets an extra
-    `visibility` map of `{agenda: enabled}` for the agendas it
-    declares — convenient for the Settings UI which renders the
-    agenda × filter matrix.
-    """
-    vis = visibility or {}
-    filters_payload: list[dict[str, Any]] = []
-    for f in REGISTRY.values():
-        entry = _filter_to_json(f)
-        entry["visibility"] = {
-            str(a): vis.get((str(a), f.id), True)
-            for a in sorted(f.agendas)
-        }
-        filters_payload.append(entry)
+def registry_to_json() -> dict[str, Any]:
+    """Serialise the registry to a JSON-friendly dict."""
     return {
         "agendas": [str(a) for a in Agenda],
         "categories": list(CATEGORIES),
         "ui_controls": [str(u) for u in UiControl],
-        "filters": filters_payload,
+        "filters": [_filter_to_json(f) for f in REGISTRY.values()],
     }
 
 
@@ -2167,13 +2080,9 @@ def to_jsonschema_property(f: FilterDef) -> dict[str, Any]:
     return prop
 
 
-def to_jsonschema_properties(
-    agenda: Agenda,
-    *,
-    conn: "psycopg.Connection | None" = None,
-) -> dict[str, dict[str, Any]]:
-    """Render every (visible) filter of an agent agenda as a `properties` dict."""
-    return {f.id: to_jsonschema_property(f) for f in effective_for(agenda, conn)}
+def to_jsonschema_properties(agenda: Agenda) -> dict[str, dict[str, Any]]:
+    """Render every filter of an agent agenda as a `properties` dict."""
+    return {f.id: to_jsonschema_property(f) for f in filters_for_agenda(agenda)}
 
 
 __all__ = [
@@ -2187,8 +2096,6 @@ __all__ = [
     "by_id",
     "description",
     "filters_for_agenda",
-    "effective_for",
-    "visibility_map",
     "registry_to_json",
     "to_jsonschema_property",
     "to_jsonschema_properties",

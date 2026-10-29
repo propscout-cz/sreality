@@ -280,6 +280,17 @@ def resolve_active_property_id(
     return resolve_active_property_ids(conn, [property_id]).get(property_id)
 
 
+def canonical_advert(conn: "psycopg.Connection", property_id: int) -> int | None:
+    """The canonical ad of the property's live survivor (a merged-away id follows its survivor), or None."""
+    survivor = resolve_active_property_id(conn, property_id)
+    if survivor is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(_CANONICAL_ADVERTS_SQL, {"ids": [survivor]})
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
 def lock_properties(conn: psycopg.Connection, ids: list[int]) -> dict[int, tuple[str, int | None]]:
     """Row-lock these properties in id order, the order every writer locks in; (status,
     merged_into) per id. The notification-events lock comes first (property_carriers): a merge or a

@@ -11,7 +11,8 @@ from its derived `sql_kind` (toolkit/filter_compiler.py, and Browse's TS auto-di
 else needs one `_HOOKS` entry there. Add the field to the consumer model (ComparableFilters /
 WatchdogFilterSpec) and to `_filters_used`. tests/toolkit/test_filter_registry.py pins each
 model's fields EQUAL to its agendas (WatchdogFilterSpec == WATCHDOG; ComparableFilters ==
-COMPARABLES|ESTIMATION|VELOCITY), so a missing field fails CI instead of being dropped.
+COMPARABLES|ESTIMATION|VELOCITY), so a missing field fails CI instead of being dropped. The REST
+cohort body and the registry's tools are generated from the agenda (api/filter_args.py): no edit.
 """
 
 from __future__ import annotations

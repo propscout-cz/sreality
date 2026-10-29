@@ -46,27 +46,34 @@ export type FactRow = Pick<
   PortalListing, 'category_main' | 'floor' | 'total_floors' | 'condition' | 'ownership' | 'property_subtype' | 'plot_area_m2'
 >;
 
+/* A chip's text, and the longer wording its tooltip carries when it has one. */
+export interface Fact {
+  text: string;
+  title?: string;
+}
+
 export interface FactFormat {
-  floor: (floor: number, totalFloors: number | null) => string | null;
+  floor: (floor: number, totalFloors: number | null) => Fact | null;
   /* An enum column's Czech label. */
   label: (column: 'condition' | 'ownership' | 'subtype', slug: string) => string | null;
   plot: (m2: number) => string;
 }
 
 /* Values only, in the type's order; a fact the property lacks is left out, never "—". */
-export function factChips(row: FactRow, fmt: FactFormat): string[] {
-  const value = (key: FactKey): string | null => {
+export function factChips(row: FactRow, fmt: FactFormat): Fact[] {
+  const fact = (text: string | null): Fact | null => (text ? { text } : null);
+  const value = (key: FactKey): Fact | null => {
     switch (key) {
       case 'floor': return row.floor == null ? null : fmt.floor(row.floor, row.total_floors);
-      case 'condition': return row.condition ? fmt.label('condition', row.condition) : null;
-      case 'ownership': return row.ownership ? fmt.label('ownership', row.ownership) : null;
-      case 'subtype': return row.property_subtype ? fmt.label('subtype', row.property_subtype) : null;
-      case 'plot': return row.plot_area_m2 == null ? null : fmt.plot(row.plot_area_m2);
+      case 'condition': return row.condition ? fact(fmt.label('condition', row.condition)) : null;
+      case 'ownership': return row.ownership ? fact(fmt.label('ownership', row.ownership)) : null;
+      case 'subtype': return row.property_subtype ? fact(fmt.label('subtype', row.property_subtype)) : null;
+      case 'plot': return row.plot_area_m2 == null ? null : fact(fmt.plot(row.plot_area_m2));
     }
   };
   return (FACTS[row.category_main ?? ''] ?? [])
     .map(value)
-    .filter((v): v is string => v != null && v !== '');
+    .filter((v): v is Fact => v != null && v.text !== '');
 }
 
 /* A day as the panel prints it: "24. 10. 2026" (a note, "ve fázi od", the chart's since). */

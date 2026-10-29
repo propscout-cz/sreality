@@ -1576,8 +1576,8 @@ def _location_resolve_sync() -> dict[str, Any]:
                 cadence="15 minutes",
                 runner="railway-realtime-worker",
                 ttl_s=_location_resolve_lease_ttl(max_seconds, batch_size),
-            ) as acquired:
-                if not acquired:
+            ) as hold:
+                if hold is None:
                     if not _RESOLVE_LEASE_BUSY_LOGGED:
                         _RESOLVE_LEASE_BUSY_LOGGED = True
                         # Never says WHY: a lease held by location_resolve.yml

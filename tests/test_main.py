@@ -193,9 +193,14 @@ def patched_db(monkeypatch):
             or ([], 0)
         ),
     )
+    # A fresh cycle each walk: the run anchors it at its own start.
+    monkeypatch.setattr(
+        scraper_main.db, "walk_ledger",
+        lambda _conn, _source, _run_id, _days: (datetime(2026, 10, 29, tzinfo=timezone.utc), []),
+    )
     monkeypatch.setattr(
         scraper_main.db, "orphan_candidates",
-        lambda _conn, source, scopes, ids, *, seen_key="native": (
+        lambda _conn, source, scopes, unseen_since, *, seen_key="native": (
             calls["orphans"].append((len(scopes), seen_key)) or ([], 0)
         ),
     )

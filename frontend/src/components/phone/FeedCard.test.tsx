@@ -209,7 +209,7 @@ describe('<FeedCard> — the lines', () => {
     expect(screen.getByText('3 portály')).toBeInTheDocument();
     expect(screen.getByText('12 dní')).toBeInTheDocument();
     expect(screen.getByText('−5 %')).toBeInTheDocument();
-    expect(screen.getByText('MF 4,1 %')).toBeInTheDocument();
+    expect(screen.getByText('Výnos MF 4,1 %')).toBeInTheDocument();
   });
 
   it('keeps the MF badge to sale flats and says "dnes" for a fresh ad', () => {

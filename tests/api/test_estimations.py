@@ -20,6 +20,7 @@ from api import estimate_yield as ey
 from api import estimation_runs as er
 from api import main as api_main
 from api import tenant_pool
+from toolkit import subject
 
 SYSTEM_ACCOUNT = deps.SYSTEM_ACCOUNT_ID
 _ACCT = "22222222-2222-2222-2222-222222222222"
@@ -219,7 +220,7 @@ def _patch_subject(
         }
 
     monkeypatch.setattr(er, "_subject_listing_id", fake_listing_id)
-    monkeypatch.setattr(er, "_match_listing", fake_match)
+    monkeypatch.setattr(er, "match_listing", fake_match)
     return asked
 
 
@@ -1166,7 +1167,7 @@ def test_match_listing_keys_on_listings_id_and_casts_numerics():
            Decimal("6299000"), "prodej")
     conn = _FakeConn(results=[row])
 
-    matched = er._match_listing(conn, 501)
+    matched = subject.match_listing(conn, 501)
 
     sql, params = conn.executions[0]
     assert "WHERE l.id = %(id)s" in sql and params == {"id": 501}
@@ -1182,13 +1183,13 @@ def test_match_listing_keys_on_listings_id_and_casts_numerics():
 
 def test_match_listing_unlocated_ad_has_no_point():
     row = (501, "remax", "123", None, None, None, None, "2+kk", 3, None, "prodej")
-    matched = er._match_listing(_FakeConn(results=[row]), 501)
+    matched = subject.match_listing(_FakeConn(results=[row]), 501)
     assert matched is not None
     assert matched["spec"]["lat"] is None and matched["spec"]["area_m2"] is None
 
 
 def test_match_listing_missing_ad_is_none():
-    assert er._match_listing(_FakeConn(results=[None]), 501) is None
+    assert subject.match_listing(_FakeConn(results=[None]), 501) is None
 
 
 def test_subject_listing_id_resolves_a_sreality_body_to_its_ad():

@@ -469,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     portal.index_rate = limits.index_rate
     portal.shared_rate_limiter = limits.shared_rate_limiter
     portal.price_change_min_pct = limits.price_change_min_pct
-    portal.narrowed = bool(args.sale_type or args.category)
+    portal.narrowed = bool(args.sale_type or args.category or args.locality or args.radius_km is not None)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else limits.detail_workers

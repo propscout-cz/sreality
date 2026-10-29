@@ -208,6 +208,14 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_tenant_isolation_live.py tests/test_tenant_ids_identity_live.py -q
 
+      # The tool registry (#2062): a tenant tool runs in the caller's own RLS transaction and returns only their
+      # account's rows; a market tool places a property at its location ad and returns the toolkit's envelope.
+      - name: Tool registry runs tenant tools in the caller's transaction (#2062)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_capabilities_live.py -q
+
       # Collection sharing (migration 610) widens READS only, through four FOR SELECT policies,
       # a party policy and a SECURITY DEFINER label function. Only a real schema under the
       # `authenticated` role can show that a recipient reads but never writes, that a bystander

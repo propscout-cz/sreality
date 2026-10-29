@@ -3,9 +3,7 @@
 // Regenerate with: python scripts/generate_filter_registry.py
 //
 // CI runs `--check` and fails on drift, so any registry edit must
-// be paired with a fresh regen in the same commit. The shape mirrors
-// the JSON served by `GET /admin/filter-schema` so runtime fetches
-// and the codegen are interchangeable.
+// be paired with a fresh regen in the same commit.
 
 export type Agenda =
   | "browse"
@@ -13,8 +11,6 @@ export type Agenda =
   | "comparables"
   | "estimation"
   | "velocity"
-  | "neighborhood"
-  | "defaults"
   | "sold";
 
 export type UiControl =
@@ -90,8 +86,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     "comparables",
     "estimation",
     "velocity",
-    "neighborhood",
-    "defaults",
     "sold"
   ],
   "categories": [
@@ -168,9 +162,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "number_input",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity"
       ],
       "constraints": {
@@ -194,7 +186,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "number_input",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
         "velocity"
       ],
@@ -220,7 +211,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "single_select",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
         "velocity"
       ],
@@ -288,9 +278,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "number_input",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity"
       ],
       "constraints": {
@@ -336,7 +324,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "single_select",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
         "velocity"
       ],
@@ -686,9 +673,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "ui_control": "pill_group",
       "agendas": [
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity"
       ],
       "constraints": {
@@ -791,9 +776,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -844,9 +827,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1122,9 +1103,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1289,9 +1268,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1557,9 +1534,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1603,9 +1578,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1654,9 +1627,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1681,9 +1652,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1708,9 +1677,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1735,9 +1702,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1760,9 +1725,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1785,9 +1748,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1810,9 +1771,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1840,9 +1799,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1872,9 +1829,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1926,9 +1881,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -1958,9 +1911,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -2100,9 +2051,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -2131,9 +2080,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -2162,9 +2109,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "sold",
         "velocity",
         "watchdog"
@@ -2194,9 +2139,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "sold",
         "velocity",
         "watchdog"
@@ -2226,9 +2169,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],
@@ -2255,9 +2196,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "agendas": [
         "browse",
         "comparables",
-        "defaults",
         "estimation",
-        "neighborhood",
         "velocity",
         "watchdog"
       ],

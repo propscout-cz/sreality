@@ -8,7 +8,6 @@
  *   - paired ranges with full bounds render the slider; without
  *     bounds, they render paired inputs
  *   - customWidgets overrides the dispatcher
- *   - visibility[scope] = false hides a filter even when scoped in
  *
  * Skips the composite LOCATION control — it pulls maplibre-gl, which
  * doesn't initialise cleanly in jsdom and isn't part of the FilterForm
@@ -342,25 +341,6 @@ describe('<FilterForm>', () => {
     );
     expect(screen.getByText('custom-rendered')).toBeInTheDocument();
     expect(CustomWidget).toHaveBeenCalled();
-  });
-
-  it('hides filters where visibility[scope] is false', () => {
-    render(
-      <FilterForm
-        scope="browse"
-        state={{ category_type: 'pronajem' }}
-        onChange={vi.fn()}
-        includeOnly={['category_type']}
-        visibility={[
-          {
-            id: 'category_type',
-            visibility: { browse: false, watchdog: true },
-          },
-        ]}
-        flat
-      />,
-    );
-    expect(screen.queryByRole('button', { name: 'Pronájem' })).not.toBeInTheDocument();
   });
 
   /* Stateful harness mirroring how Browse / WatchdogEdit feed updates

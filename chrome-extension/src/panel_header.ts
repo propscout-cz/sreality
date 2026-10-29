@@ -6,17 +6,15 @@
 
 import { categoryMainLabel, categoryTypeLabel, enumLabel, subtypeLabel } from '../../frontend/src/lib/enums';
 import {
-  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2, fmtPct, fmtTomDays,
+  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2, fmtPct, fmtTomDays,
 } from '../../frontend/src/lib/format';
 import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/src/lib/measure';
-import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
+import { MF_YIELD_LABEL, MF_YIELD_TITLE, mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
 import type { PipelineStage } from '../../frontend/src/lib/types';
 import { h } from './dom';
 import { codeBadge, lineIcon, stageLook } from './glyphs';
 import { factChips, tabMarkList } from './panel_logic';
 import type { PortalListing } from './types';
-
-const MF_TITLE = 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)';
 
 /* This ad's last price move, by magnitude with its arrow (a cut is good news here: sage). */
 export function moveBadge(pct: number): HTMLElement {
@@ -28,7 +26,7 @@ export function moveBadge(pct: number): HTMLElement {
 
 function mfTitle(l: PortalListing): string {
   const shape = mfShape(l.mf_reference_rent);
-  return shape.kind === 'range' && shape.note != null ? `${MF_TITLE} — ${shape.note}` : MF_TITLE;
+  return shape.kind === 'range' && shape.note != null ? `${MF_YIELD_TITLE} — ${shape.note}` : MF_YIELD_TITLE;
 }
 
 /* "Byt 3+kk, 78 m²": the type, the disposition when there is one, the headline
@@ -71,13 +69,17 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
   }
 
   const facts = factChips(l, {
-    floor: fmtFloor,
+    floor: fmtFloorTag,
     label: (column, slug) => (column === 'subtype' ? subtypeLabel(slug) : enumLabel(column, slug)),
     plot: (m2) => fmtArea(m2, 'plot'),
   });
   if (facts.length > 0) {
     const row = h('div', 'facts');
-    for (const f of facts) row.appendChild(h('span', 'fact', f));
+    for (const f of facts) {
+      const chip = h('span', 'fact', f.text);
+      if (f.title != null && f.title !== f.text) chip.title = f.title;
+      row.appendChild(chip);
+    }
     ident.appendChild(row);
   }
   head.appendChild(ident);
@@ -98,7 +100,7 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
   if (mf != null) {
     const box = h('div', 'mf');
     box.title = mfTitle(l);
-    box.append(h('p', 'l4', 'Výnos MF'), h('p', 'mono mf-val', mf), h('p', 'meta', 'hrubý'));
+    box.append(h('p', 'l4', MF_YIELD_LABEL), h('p', 'mono mf-val', mf), h('p', 'meta', 'hrubý'));
     pricing.appendChild(box);
   }
   head.appendChild(pricing);
@@ -117,7 +119,7 @@ export function tabMarks(
   let box: HTMLElement | null = null;
   if (mf != null) {
     box = h('span', 'tab-mf');
-    box.title = MF_TITLE;
+    box.title = MF_YIELD_TITLE;
     box.append(h('span', 'l4', 'MF'), h('span', 'mono', mf));
   }
   return tabMarkList<Node>(code, move, box, moveBadge);

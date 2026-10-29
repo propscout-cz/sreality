@@ -257,7 +257,7 @@ describe('the phone property page', () => {
     /* Rule 23: the server's measure, under the sale basis's unit. */
     expect(head.getByText((_, el) => plain(el?.textContent) === '138 704 Kč/m²' && el?.tagName === 'SPAN'))
       .toBeInTheDocument();
-    expect(head.getByText(/MF 4,1/)).toBeInTheDocument();
+    expect(head.getByText(/^Výnos MF 4,1\s%$/)).toBeInTheDocument();
     expect(head.getByText((_, el) => plain(el?.textContent) === '2+kk · 54 m² · Freyova, Praha 9 – Vysočany' && el?.tagName === 'P'))
       .toBeInTheDocument();
 

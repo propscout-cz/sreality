@@ -204,3 +204,37 @@ def test_scrub_contacts_leaves_a_hex_run_that_is_not_a_cfemail_payload():
 
     assert "deadbeefcafe" in out
     assert "0123456789abcdef" in out
+
+
+# A third-party credential's shape, assembled here so this file carries none for a scanner to find.
+_GOOGLE = "AIza" + "Sy" + "Q7v3kL9mN2pR8tW4xZ1aB6cD0eF5gH3jK"
+_TOKEN = "8c1f" * 10
+_MAP_KEY = "Zq" + "8kV2n" + "Wx3zY5tB7m" + "Lp4"
+
+
+@pytest.mark.parametrize("markup, kept", [
+    (f'<iframe src="https://www.google.com/maps/embed/v1/place?key={_GOOGLE}&q=50.1,14.4">', "&q=50.1,14.4"),
+    (f'<div data-gm-api-key="{_GOOGLE}">', "data-gm-api-key="),
+    (f'<script src="https://cc.dalten.cz/ccJsNoD/?token={_TOKEN}"></script>', "?token="),
+    (f'"style": "https://api.maptiler.com/maps/hybrid/style.json?key={_MAP_KEY}",', "style.json?key="),
+    (f'"mtMapKey": "{_MAP_KEY}",', '"mtMapKey": "'),
+    (f'\\"mtMapKey\\":\\"{_MAP_KEY}\\"', '\\"mtMapKey\\":\\"'),
+    (f"'sitekey': '{_TOKEN}'", "'sitekey': '"),
+])
+def test_both_scrubs_blank_a_third_party_credential_and_keep_its_length(markup, kept):
+    for scrub in (faaf.anonymize, faaf.anonymize_contacts):
+        out = scrub(markup)
+        body = out[out.index("-->\n") + 4:]
+        assert len(body) == len(markup), "no byte offset in the page moves"
+        assert kept in body
+        assert _GOOGLE not in body and _TOKEN not in body and _MAP_KEY not in body
+        assert scrub(body).endswith(body), "a second pass changes nothing"
+
+
+def test_no_committed_fixture_carries_a_third_party_credential():
+    """RED by: a fixture committed without the scrub; run `--scrub-contacts` (or anonymize) over it."""
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    carrying = [p.relative_to(fixtures).as_posix() for p in sorted(fixtures.rglob("*"))
+                if p.is_file() and p.suffix in {".html", ".json", ".js"}
+                and faaf.redact_credentials(text := p.read_text(encoding="utf-8", errors="replace")) != text]
+    assert carrying == []

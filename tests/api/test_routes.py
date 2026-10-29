@@ -52,6 +52,7 @@ def test_find_comparables_passes_target_and_filters(client, monkeypatch):
             "target": {"lat": 50.087, "lng": 14.42, "disposition": "2+kk"},
             "radius_m": 1500,
             "max_age_days": 14,
+            "lifecycle": "active",
             "has_lift": True,
             "category_main": "byt",
             "category_type": "pronajem",
@@ -104,27 +105,48 @@ def test_find_comparables_non_byt_category_flows_through(client, monkeypatch):
     assert captured["filters"].category_type == "prodej"
 
 
-def test_analyze_distribution_passes_listings(client, monkeypatch):
-    captured = {}
-    def fake(listings, field):
-        captured["listings"] = listings
-        captured["field"] = field
-        return {"data": {"n": len(listings)}, "metadata": {"tool": "analyze_distribution"}}
-    monkeypatch.setattr(api_main, "analyze_distribution", fake)
+_CATS = {"category_main": "byt", "category_type": "prodej"}
 
-    res = client.post(
-        "/tools/analyze_distribution",
-        json={
-            "listings": [
-                {"sreality_id": 1, "price_per_m2": 400.0},
-                {"sreality_id": 2, "price_per_m2": 420.0},
-            ],
-            "field": "price_per_m2",
-        },
-    )
+
+def test_find_comparables_hands_every_declared_filter_to_the_cohort(client, monkeypatch):
+    """The body is generated from the registry, so a filter it declares reaches ComparableFilters:
+    the seen-window filters were declared and silently dropped, ppm2 and garden had no field."""
+    captured = {}
+    monkeypatch.setattr(api_main, "find_comparables",
+                        lambda conn, target, filters: captured.setdefault("f", filters) and {"data": {}})
+    sent = {"last_seen_min_days": 2, "last_seen_max_days": 9, "first_seen_min_days": 3,
+            "first_seen_max_days": 30, "min_price_per_m2": 80_000.0, "max_garden_area": 400.0,
+            "furnished": "ano", "max_price_czk": 9_000_000}
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **sent})
     assert res.status_code == 200
-    assert captured["field"] == "price_per_m2"
-    assert len(captured["listings"]) == 2
+    assert {k: getattr(captured["f"], k) for k in sent} == {**sent, "furnished": ["ano"]}
+
+
+@pytest.mark.parametrize("bad", [
+    {"price_min": 1},                      # an unknown key was ignored: now it is named
+    {"category_main": "byty"},             # off-vocabulary was a silently empty 200
+    {"portals": ["sreality.cz"]},
+    {"radius_m": 50},                      # below the registry floor
+    {"min_price_czk": -1},
+    {"max_age_days": 14},                  # recency without the active gate was dropped by the cohort
+    {"target": {"lat": 50.0, "lng": 14.0, "exclude_ids": [1]}},       # the retired key was ignored
+    {"target": {"lat": 50.0, "lng": 14.0, "disposition": "2kk"}},     # off-vocabulary matched nothing
+    {"target": {"lat": 91.0, "lng": 14.0}},
+    {"target": {"lat": 50.0, "lng": 14.0}, "floor_band": 1},         # a band with no floor was dropped
+])
+def test_find_comparables_refuses_what_it_used_to_drop(client, monkeypatch, bad):
+    monkeypatch.setattr(api_main, "find_comparables", lambda *a: pytest.fail("reached the cohort"))
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **bad})
+    assert res.status_code == 422, res.text
+
+
+def test_find_comparables_still_leaves_out_the_subjects_own_property(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api_main, "find_comparables",
+                        lambda conn, target, filters: captured.setdefault("t", target) and {"data": {}})
+    res = client.post("/tools/find_comparables", json={
+        "target": {"lat": 50.0, "lng": 14.0, "floor": 3, "exclude_listing_ids": [7]}, **_CATS, "floor_band": 1})
+    assert res.status_code == 200 and captured["t"].exclude_listing_ids == [7] and captured["t"].floor == 3
 
 
 def test_verify_listing_freshness_passes_args(client, monkeypatch):
@@ -177,213 +199,6 @@ def test_compare_snapshots_none_since_passes_none(client, monkeypatch):
     )
     assert res.status_code == 200
     assert captured["since"] is None
-
-
-def test_describe_neighborhood_passes_args(client, monkeypatch):
-    captured = {}
-    def fake(conn, *, lat, lng, radius_m, max_age_days, category_main, category_type):
-        captured["lat"] = lat
-        captured["lng"] = lng
-        captured["radius_m"] = radius_m
-        captured["max_age_days"] = max_age_days
-        captured["category_main"] = category_main
-        captured["category_type"] = category_type
-        return {
-            "data": {"active_listing_count": 0},
-            "metadata": {"tool": "describe_neighborhood"},
-        }
-    monkeypatch.setattr(api_main, "describe_neighborhood", fake)
-
-    res = client.post(
-        "/tools/describe_neighborhood",
-        json={
-            "lat": 50.087, "lng": 14.42,
-            "radius_m": 1500, "max_age_days": 14,
-            "category_main": "byt", "category_type": "pronajem",
-        },
-    )
-    assert res.status_code == 200
-    assert captured["lat"] == 50.087
-    assert captured["radius_m"] == 1500
-    assert captured["max_age_days"] == 14
-
-
-def test_describe_neighborhood_uses_defaults(client, monkeypatch):
-    captured = {}
-    def fake(conn, *, lat, lng, radius_m, max_age_days, category_main, category_type):
-        captured["radius_m"] = radius_m
-        captured["max_age_days"] = max_age_days
-        captured["category_main"] = category_main
-        captured["category_type"] = category_type
-        return {"data": {}, "metadata": {"tool": "describe_neighborhood"}}
-    monkeypatch.setattr(api_main, "describe_neighborhood", fake)
-
-    res = client.post(
-        "/tools/describe_neighborhood",
-        json={
-            "lat": 50.087, "lng": 14.42,
-            "category_main": "byt", "category_type": "pronajem",
-        },
-    )
-    assert res.status_code == 200
-    assert captured["radius_m"] == 1000
-    # Freshness gate is no longer implicit; callers pass max_age_days
-    # explicitly when they want one.
-    assert captured["max_age_days"] is None
-    assert captured["category_main"] == "byt"
-    assert captured["category_type"] == "pronajem"
-
-
-def test_find_distribution_outliers_passes_args(client, monkeypatch):
-    captured = {}
-    def fake(conn, listings, *, field, iqr_multiplier, investigate_history):
-        captured["listings"] = listings
-        captured["field"] = field
-        captured["iqr_multiplier"] = iqr_multiplier
-        captured["investigate_history"] = investigate_history
-        return {
-            "data": {"outliers": []},
-            "metadata": {"tool": "find_distribution_outliers"},
-        }
-    monkeypatch.setattr(api_main, "find_distribution_outliers", fake)
-
-    res = client.post(
-        "/tools/find_distribution_outliers",
-        json={
-            "listings": [
-                {"sreality_id": 1, "price_per_m2": 400.0},
-                {"sreality_id": 2, "price_per_m2": 420.0},
-            ],
-            "field": "price_per_m2",
-            "iqr_multiplier": 2.0,
-            "investigate_history": False,
-        },
-    )
-    assert res.status_code == 200
-    assert len(captured["listings"]) == 2
-    assert captured["field"] == "price_per_m2"
-    assert captured["iqr_multiplier"] == 2.0
-    assert captured["investigate_history"] is False
-
-
-def test_find_distribution_outliers_uses_defaults(client, monkeypatch):
-    captured = {}
-    def fake(conn, listings, *, field, iqr_multiplier, investigate_history):
-        captured["field"] = field
-        captured["iqr_multiplier"] = iqr_multiplier
-        captured["investigate_history"] = investigate_history
-        return {"data": {"outliers": []}, "metadata": {"tool": "find_distribution_outliers"}}
-    monkeypatch.setattr(api_main, "find_distribution_outliers", fake)
-
-    res = client.post(
-        "/tools/find_distribution_outliers",
-        json={"listings": []},
-    )
-    assert res.status_code == 200
-    assert captured["field"] == "price_per_m2"
-    assert captured["iqr_multiplier"] == 1.5
-    assert captured["investigate_history"] is True
-
-
-def test_compute_market_velocity_passes_target_and_filters(client, monkeypatch):
-    captured = {}
-    def fake(conn, target, filters, lifecycle, trend_split_days):
-        captured["target"] = target
-        captured["filters"] = filters
-        captured["lifecycle"] = lifecycle
-        captured["trend_split_days"] = trend_split_days
-        return {"data": {"cohort_size": 0}, "metadata": {"tool": "compute_market_velocity"}}
-    monkeypatch.setattr(api_main, "compute_market_velocity", fake)
-
-    res = client.post(
-        "/tools/compute_market_velocity",
-        json={
-            "target": {"lat": 50.087, "lng": 14.42, "disposition": "2+kk"},
-            "radius_m": 1500,
-            "lifecycle": "active",
-            "trend_split_days": 14,
-            "category_main": "komercni",
-            "category_type": "prodej",
-        },
-    )
-    assert res.status_code == 200
-    assert captured["target"].lat == 50.087
-    assert captured["target"].disposition == "2+kk"
-    assert captured["filters"].radius_m == 1500
-    # Endpoint leaves the cohort filters' lifecycle unset; the velocity
-    # `lifecycle` arg drives the is_active gate instead.
-    assert captured["filters"].lifecycle is None
-    assert captured["filters"].category_main == "komercni"
-    assert captured["filters"].category_type == "prodej"
-    assert captured["lifecycle"] == "active"
-    assert captured["trend_split_days"] == 14
-
-
-def test_compute_market_velocity_uses_defaults(client, monkeypatch):
-    captured = {}
-    def fake(conn, target, filters, lifecycle, trend_split_days):
-        captured["lifecycle"] = lifecycle
-        captured["trend_split_days"] = trend_split_days
-        captured["radius_m"] = filters.radius_m
-        return {"data": {}, "metadata": {"tool": "compute_market_velocity"}}
-    monkeypatch.setattr(api_main, "compute_market_velocity", fake)
-
-    res = client.post(
-        "/tools/compute_market_velocity",
-        json={
-            "target": {"lat": 50.0, "lng": 14.0},
-            "category_main": "byt", "category_type": "pronajem",
-        },
-    )
-    assert res.status_code == 200
-    assert captured["lifecycle"] == "all"
-    assert captured["trend_split_days"] == 7
-    assert captured["radius_m"] == 1000
-
-
-def test_compute_listing_velocity_passes_args(client, monkeypatch):
-    captured = {}
-    def fake(conn, sreality_id, *, radius_m, disposition_match, lifecycle):
-        captured["sreality_id"] = sreality_id
-        captured["radius_m"] = radius_m
-        captured["disposition_match"] = disposition_match
-        captured["lifecycle"] = lifecycle
-        return {"data": {"sreality_id": sreality_id, "found": True}, "metadata": {"tool": "compute_listing_velocity"}}
-    monkeypatch.setattr(api_main, "compute_listing_velocity", fake)
-
-    res = client.post(
-        "/tools/compute_listing_velocity",
-        json={
-            "sreality_id": 12345,
-            "radius_m": 2000,
-            "disposition_match": "loose",
-            "lifecycle": "delisted",
-        },
-    )
-    assert res.status_code == 200
-    assert captured["sreality_id"] == 12345
-    assert captured["radius_m"] == 2000
-    assert captured["disposition_match"] == "loose"
-    assert captured["lifecycle"] == "delisted"
-
-
-def test_compute_listing_velocity_uses_defaults(client, monkeypatch):
-    captured = {}
-    def fake(conn, sreality_id, *, radius_m, disposition_match, lifecycle):
-        captured["radius_m"] = radius_m
-        captured["disposition_match"] = disposition_match
-        captured["lifecycle"] = lifecycle
-        return {"data": {"sreality_id": sreality_id, "found": True}, "metadata": {"tool": "compute_listing_velocity"}}
-    monkeypatch.setattr(api_main, "compute_listing_velocity", fake)
-
-    res = client.post(
-        "/tools/compute_listing_velocity",
-        json={"sreality_id": 1},
-    )
-    assert res.status_code == 200
-    assert captured["radius_m"] == 1000
-    assert captured["disposition_match"] == "exact"
-    assert captured["lifecycle"] == "all"
 
 
 def test_find_anchor_amenities_passes_args(client, monkeypatch):

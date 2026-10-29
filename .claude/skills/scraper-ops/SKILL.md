@@ -36,8 +36,9 @@ that the phone regex (any 9 consecutive digits) rewrote realitymix photo ids to
 `nab_+420 XXX XXX XXX.jpg` and the street regex rewrote idnes CDN shard paths `/thumbs/1/6/e/`
 to `/thumbs/XXX/YY/e/`, silently corrupting the only data a media test can assert on.
 
-**Never commit an unscrubbed portal page — this repo is PUBLIC.** A live detail page carries the
-broker's mobile, work e-mail and name, and merging one publishes them permanently. For a fixture
+**Never commit an unscrubbed portal page — git history is permanent.** A live detail page carries the
+broker's mobile, work e-mail and name (personal data), and a portal's own map and widget keys, which the
+scrub blanks so the secret scan stays quiet. For a fixture
 kept for its **bytes** rather than its visible text (the payload-normaliser set,
 `tests/fixtures/location_w2a_refetch/`), the blanket sweep is the wrong tool — masking *every*
 9-digit run rewrites `data-gps-lat`, JSON-escaped photo ids, Tailwind custom properties. Use:
@@ -142,9 +143,8 @@ scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
 `idnes_index_walk.yml` ("Scraping: iDNES Reality index walk", `idnes_main --index-only`, cron
 `15 */6`) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since
-2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad, each slice's outcome
-in `portal_index_slices` (454), read back to walk the stalest slice first (the gate that re-earned the flag retired in wave 4).
-**Parked flags, the slice ledger and the retired gate: `references/coverage-and-delisting.md`.**
+2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad (the gate that re-earned the flag retired in wave 4).
+**Parked flags, the walk cycle and the retired gate: `references/coverage-and-delisting.md`.**
 The properties track runs the worker's maintenance lane (**dirty-set incremental, every 30 s** — attaches new stragglers as
 singletons + recomputes only changed properties; rule #20) and
 `recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
@@ -244,7 +244,7 @@ from the slow "download each ad" write:
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
 walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked, each page loop out
 on a portal terminator, no stop of ours) nominates every active row of each unit's scope it did not see (`VERIFY cm=…
-candidates=… queued=… deferred=…`), and once EVERY unit did, the orphans in no scope (`VERIFY orphans …`, 2026-10-22); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
+candidates=… queued=… deferred=…`), and once a CYCLE's every group did, the orphans unseen since its anchor (`VERIFY orphans …`, #2020); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
 "no longer active" text → `ListingGoneError`) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
 an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health: the `delisting` check) — effectively 24 h, as a walk re-nominates no ad checked within `RECHECK_THROTTLE` (24 h); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
 nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip_cap` throttles per
@@ -465,7 +465,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `RECONCILE cm=... ct=... sreality=... collected=... active=...` — portal-reported total vs
   collected vs our active DB count (`active=` lives in this log line only; the `scraping` check's missing arm and the
   `coverage` gauge judge the gaps)
-- `INDEX total=N pages=M enqueued=K` once at end of the walk
+- `CYCLE … anchor=… resumed=… skipped=…` first; at the end `CYCLE ended … closed=…`, `INDEX total=N pages=M enqueued=K`
 - `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories)
 
 **Detail drain** (the worker's drain lane, or an ad-hoc `--drain-only` / flagless run):
