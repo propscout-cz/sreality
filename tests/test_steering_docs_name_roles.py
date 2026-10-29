@@ -15,7 +15,7 @@ SESSION_NAME = re.compile(r"\bsreality-[0-9a-f]{2}\b")
 
 
 def _steering_docs() -> list[Path]:
-    return [REPO / "CLAUDE.md", *sorted((REPO / "docs/agents").rglob("*.md")),
+    return [REPO / "CLAUDE.md", REPO / "docs/architecture.md", *sorted((REPO / "docs/agents").rglob("*.md")),
             *sorted((REPO / ".claude/skills").rglob("*.md"))]
 
 
