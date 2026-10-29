@@ -22,3 +22,6 @@ service-connection read. The broker relations are the API's alone (Phase 0 A6), 
 `get_property_brokers` reads them as `POST /brokers/by-listings` does, unmasked as the page shows every signed-in
 user, at most 20 people per call, each call recorded on the run, bounded like every market read (READ ONLY, 8 s). The
 dossier carries no broker.
+
+*Amended 2026-10-29 (operator ruling):* `rank_brokers` is the third such read, Browse's cohort counted by broker as
+`POST /brokers/board` counts it, names and firms only, masked as a non-admin's tab, speed for every signed-in user.

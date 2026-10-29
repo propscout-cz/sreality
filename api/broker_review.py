@@ -33,6 +33,7 @@ from scripts.resolve_brokers import (
     _IDENTITY_ROLLUP,
     recompute_brokers,
 )
+from toolkit.broker_sources import dirty_repointed
 
 LOG = logging.getLogger("broker_review")
 
@@ -283,8 +284,12 @@ def merge_brokers(conn: Any, broker_ids: list[int], *, reason: str = "manual",
             "FROM broker_identities bi WHERE bi.broker_id = ANY(%(losers)s)",
             {"g": group, "s": survivor, "reason": reason, "losers": losers})
         cur.execute(
-            "UPDATE broker_identities SET broker_id=%(s)s WHERE broker_id = ANY(%(losers)s)",
+            "UPDATE broker_identities SET broker_id=%(s)s WHERE broker_id = ANY(%(losers)s) "
+            "RETURNING id",
             {"s": survivor, "losers": losers})
+        # The broker book is per canonical broker (migration 692): the moved identities'
+        # properties change broker, so they are dirtied in this transaction (rule 20).
+        dirty_repointed(cur, [r[0] for r in cur.fetchall()])
         cur.execute(
             "UPDATE brokers SET status='merged_away', merged_into=%(s)s, merged_at=now() "
             "WHERE id = ANY(%(losers)s)", {"s": survivor, "losers": losers})
@@ -348,8 +353,10 @@ def unmerge_group(conn: Any, merge_group_id: str, *, undone_by: str | None = Non
         cur.execute(
             "UPDATE broker_identities bi SET broker_id = ev.prev_broker_id "
             "FROM broker_merge_events ev "
-            "WHERE ev.merge_group_id=%s AND ev.undone_at IS NULL AND ev.identity_id = bi.id",
+            "WHERE ev.merge_group_id=%s AND ev.undone_at IS NULL AND ev.identity_id = bi.id "
+            "RETURNING bi.id",
             (merge_group_id,))
+        dirty_repointed(cur, [r[0] for r in cur.fetchall()])
         cur.execute(
             "UPDATE brokers SET status='active', merged_into=NULL, merged_at=NULL "
             "WHERE id = ANY(%s)", (retired,))

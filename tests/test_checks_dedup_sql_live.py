@@ -40,8 +40,9 @@ from autodedup.incremental_sql import (RT_LEASE_READ_SQL, RT_NEW_LISTINGS_SQL, R
 from autodedup.legacy_retire import LEGACY_SOURCE, RETIRE_BY
 from autodedup.ui_sql import NEGATIVE_VERDICTS
 from scripts.checks import dedup as dd
-from scripts.checks.common import iso, wilson_lower
+from scripts.checks.common import iso
 from scripts.verify_pipeline import THRESHOLDS
+from toolkit.measures import wilson_lower
 from toolkit.property_identity import BIRTH_REASONS
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")

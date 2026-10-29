@@ -319,10 +319,10 @@ Per-lane notes:
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, broker book (mig 691), Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
+  slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker), Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
-  recompute affected brokers (one merged statement), republish `broker_region_type_stats` via the
+  recompute affected brokers (one merged statement; an identity attach or merge dirties its properties, rule 20), republish `broker_region_type_stats` via the
   mig-578 chokepoint when its registry stamp is >~1 h old; `broker_resolution_lock` serializes.
 - **Estimation job lane** (migration 349, Wave 1 W1-3 / Phase 1 Amendment A10) — moves agent +
   deterministic rent-estimate EXECUTION off the FastAPI request threadpool (a 240 s agent run used

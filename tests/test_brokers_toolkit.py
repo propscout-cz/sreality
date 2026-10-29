@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from toolkit import brokers
 
 
@@ -42,100 +40,6 @@ class _Conn:
         return self.cur
 
 
-def test_leaderboard_threads_firm_ids_into_the_rpc_call() -> None:
-    conn = _Conn([{"broker_id": 1}])
-    brokers.leaderboard(conn, firm_ids=[5, 9])
-    sql, params = conn.cur.seen[0]
-    assert ("broker_leaderboard("
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)") in sql
-    assert params == (
-        None, None, None, None, None, None, "active_property_count", 100, [5, 9], None,
-        False, None, False)
-
-
-def test_leaderboard_passes_the_four_chip_arrays_first() -> None:
-    """Migration 609: the RPC's leading four parameters, in Browse's order; the envelope
-    echoes one entry per chip."""
-    arrays = (["Praha", "Na Rybníčkách", "Kraj Vysočina"], [False, False, True],
-              ["obec", "ulice", "kraj"], [554782, 666742, 108])
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn, districts=arrays)
-    _, params = conn.cur.seen[0]
-    assert params[:4] == arrays
-    assert out["metadata"]["filters_used"]["districts"] == [
-        {"name": "Praha", "excluded": False, "level": "obec", "id": 554782},
-        {"name": "Na Rybníčkách", "excluded": False, "level": "ulice", "id": 666742},
-        {"name": "Kraj Vysočina", "excluded": True, "level": "kraj", "id": 108},
-    ]
-
-
-@pytest.mark.parametrize("level,excluded,stamped", [
-    ("kraj", False, True), ("okres", False, True), ("obec", False, True),
-    ("cast_obce", False, False), ("ulice", False, False), ("obec", True, False),
-])
-def test_leaderboard_stamps_freshness_only_when_the_count_book_answers(
-        level, excluded, stamped) -> None:
-    """A quarter, a street or an exclude reads `listings` live (609's gate), so it is
-    "as of now", not as of the matview's last build."""
-    conn = _Conn([{"broker_id": 1}])
-    brokers.leaderboard(conn, districts=(["x"], [excluded], [level], [1]))
-    asked = any("derived_artifacts" in sql for sql, _ in conn.cur.seen)
-    assert asked is stamped
-
-
-def test_leaderboard_omits_firm_ids_when_not_given() -> None:
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn)
-    _, params = conn.cur.seen[0]
-    assert params[:4] == (None, None, None, None)  # no chips = national
-    assert out["metadata"]["filters_used"]["districts"] == []
-    assert params[8] is None  # firm_ids position
-    assert out["metadata"]["filters_used"]["firm_ids"] == []
-
-
-def test_leaderboard_threads_min_price_czk_and_include_unpriced() -> None:
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn, min_price_czk=5_000_000, include_unpriced=True)
-    _, params = conn.cur.seen[0]
-    assert params[9:11] == (5_000_000, True)
-    assert out["metadata"]["filters_used"]["min_price_czk"] == 5_000_000
-    assert out["metadata"]["filters_used"]["include_unpriced"] is True
-
-
-def test_leaderboard_defaults_min_price_czk_none_and_include_unpriced_false() -> None:
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn)
-    _, params = conn.cur.seen[0]
-    assert params[9:11] == (None, False)
-    assert out["metadata"]["filters_used"]["min_price_czk"] is None
-    assert out["metadata"]["filters_used"]["include_unpriced"] is False
-
-
-def test_leaderboard_threads_subtypes_and_include_unknown_subtype() -> None:
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn, subtypes=["kancelar", "sklad"],
-                              include_unknown_subtype=True)
-    _, params = conn.cur.seen[0]
-    assert params[-2:] == (["kancelar", "sklad"], True)
-    assert out["metadata"]["filters_used"]["subtypes"] == ["kancelar", "sklad"]
-    assert out["metadata"]["filters_used"]["include_unknown_subtype"] is True
-
-
-def test_leaderboard_sends_null_not_empty_array_when_no_subtype_is_selected() -> None:
-    """Load-bearing, not cosmetic: the SQL gates its live branch on `p_subtypes is not
-    null`, so an empty array would route to the live branch with a predicate matching no
-    row — an empty leaderboard instead of the unfiltered one. Same `x or None` treatment
-    firm_ids gets, for the same class of reason.
-
-    RED by: passing `subtypes` straight through instead of `subtypes or None`.
-    """
-    conn = _Conn([{"broker_id": 1}])
-    out = brokers.leaderboard(conn, subtypes=[])
-    _, params = conn.cur.seen[0]
-    assert params[-2:] == (None, False)
-    assert out["metadata"]["filters_used"]["subtypes"] == []
-
-
 def test_listing_brokers_dedupes_and_skips_the_query_when_empty() -> None:
     conn = _Conn([{"listing_id": 7}])
     out = brokers.listing_brokers(conn, [9, 7, 9])
@@ -153,20 +57,19 @@ def test_batch_reads_are_bounded() -> None:
     assert len(conn.cur.seen[0][1][0]) == 1000
 
 
-def test_broker_property_ids_finds_the_brokers_own_ads_on_the_portals_in_the_status() -> None:
-    """MS19 (657): one ad satisfies broker AND portal, so the portal side and its status are
-    one predicate per ad of this broker; the property's own status is the caller's. No
-    listing_location join (the read model serves a property by its canonical ad's place)."""
+def test_broker_property_ids_reads_the_brokers_book_under_the_portal_rule() -> None:
+    """MS19 (657): one ad satisfies broker AND portal, so the portal side and its status are the portal rule over the
+    broker's book row (migration 692: the broker's ads on the property, one identity per portal); the property's own
+    status is the caller's. One rendering of that side, the board's too. No listing_location join (the read model
+    serves a property by its canonical ad's place)."""
     conn = _Conn([{"property_id": 10}, {"property_id": 11}])
     out = brokers.broker_property_ids(conn, 4, status="active", portals=("idnes",), limit=100)
     sql, params = conn.cur.seen[0]
     flat = " ".join(sql.split())
-    assert "SELECT DISTINCT l.property_id FROM listings l" in flat
-    assert "WHERE bi.broker_id = %(broker_id)s AND l.property_id IS NOT NULL" in flat
-    assert ("AND (cardinality(%(portals)s::text[]) = 0 OR l.source = ANY(%(portals)s::text[])) "
-            "AND (%(status)s = 'any' OR l.is_active = (%(status)s = 'active'))") in flat
-    assert "GROUP BY" not in flat and "portal_status_matches" not in flat
-    assert "listing_location" not in flat
+    assert flat == ("SELECT b.property_id FROM broker_book b WHERE b.broker_id = %(broker_id)s AND "
+                    f"{brokers.book_rule_sql('b')} ORDER BY b.property_id LIMIT %(limit)s")
+    assert brokers.book_rule_sql("b") == (
+        "portal_status_matches(b.is_active, b.all_sources, b.active_sources, %(portals)s::text[], %(status)s::text)")
     assert params == {"broker_id": 4, "portals": ["idnes"], "status": "active", "limit": 101}
     assert out["data"] == [10, 11]
     assert out["metadata"]["capped"] is False
@@ -199,19 +102,6 @@ def test_broker_property_ids_clamps_limit() -> None:
     brokers.broker_property_ids(conn, 4, limit=999_999)
     _, params = conn.cur.seen[0]
     assert params["limit"] == 50_001
-
-
-def test_geo_options_rejects_an_unknown_level() -> None:
-    """Falling back to "no filter" answered `obec` with every region AND okres."""
-    with pytest.raises(ValueError):
-        brokers.geo_options(_Conn(), geo_level="planet")
-
-
-def test_geo_options_without_a_level_returns_every_level() -> None:
-    conn = _Conn([{"geo_level": "region", "geo_id": 27}])
-    out = brokers.geo_options(conn)
-    assert conn.cur.seen[0][1] == (None, None)
-    assert out["metadata"]["filters_used"]["geo_level"] is None
 
 
 def test_firm_options_with_no_query_browses_the_top_firms_by_broker_count() -> None:

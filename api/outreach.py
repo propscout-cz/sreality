@@ -19,7 +19,8 @@ from typing import Any
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from api.location_filter import DistrictChip, district_arrays
+from api.broker_board import BoardArgs, board
+from api.location_filter import DistrictChip
 
 _DRAFT_MODEL_KEY = "outreach_draft_model"
 _DRAFT_PROMPT_KEY = "outreach_draft_system_prompt"
@@ -43,20 +44,19 @@ RECORD_OUTREACH_DRAFT_TOOL: dict[str, Any] = {
 # --- Campaigns -------------------------------------------------------------
 
 class CampaignTarget(BaseModel):
-    """What `select_targets` ranks by. Unknown keys are refused, so a stale client's (or
-    a stored row's) `region_ids` is an error, never a campaign silently aimed at the
-    whole country."""
+    """The cohort `select_targets` ranks over: its place, category and deal type, live properties. Unknown keys are
+    refused, so a stale client's (or a stored row's) `region_ids` or count `metric` is an error, never a campaign
+    silently aimed at the whole country or another status."""
 
     model_config = ConfigDict(extra="forbid")
 
     districts: list[DistrictChip] = Field(default_factory=list)
     category_main: str | None = None
     category_type: str | None = None
-    metric: str | None = None
 
 
 class StaleTarget(ValueError):
-    """A stored target that is not a chip target (migration 609 rewrites them)."""
+    """A stored target that is not a chip target (migration 609 rewrote them)."""
 
 
 def create_campaign(conn: Any, *, name: str, goal: str | None = None,
@@ -129,30 +129,33 @@ def update_campaign(conn: Any, campaign_id: int, *, name: str | None = None,
 
 # --- Targeting + drafting --------------------------------------------------
 
+# The board's top brokers `select_targets`' exclusions run over before its cut: past the wire's cap.
+CANDIDATES = 2000
+
+
 def select_targets(conn: Any, target: dict[str, Any], *, campaign_id: int | None = None,
                    limit: int = 25) -> list[dict[str, Any]]:
-    """Brokers matching the campaign criteria that are reachable (have an email),
-    not suppressed, and not already drafted for this campaign."""
+    """The broker board's top brokers by live properties in the campaign's cohort (its place, category and deal type)
+    that are reachable (have an email), not suppressed, and not already drafted for this campaign."""
     try:
         spec = CampaignTarget.model_validate(target)
+        args = BoardArgs(
+            districts=[c.model_dump() for c in spec.districts], category_type=spec.category_type,
+            category_main_in=[spec.category_main] if spec.category_main else None, status="active",
+        ).model_copy(update={"limit": CANDIDATES})
     except ValidationError as exc:
-        raise StaleTarget("this campaign's target predates the location chips (migration "
-                          "609); pick its location again and save it") from exc
-    metric = spec.metric or "active_property_count"
+        raise StaleTarget("this campaign's target predates the location chips (migration 609), names no registry "
+                          "category or still counts by a metric; pick it again and save it") from exc
     limit = max(1, min(int(limit), 500))
-    with conn.cursor(row_factory=dict_row) as cur:
+    rows = board(conn, args, contacts=True)["data"]
+    with conn.cursor() as cur:
         cur.execute(
-            "SELECT lb.* FROM broker_leaderboard(%s, %s, %s, %s, %s, %s, %s, %s) lb "
-            "WHERE lb.primary_email IS NOT NULL "
-            "  AND NOT EXISTS (SELECT 1 FROM broker_outreach_suppression s WHERE s.broker_id = lb.broker_id) "
-            "  AND (%s::bigint IS NULL OR NOT EXISTS ("
-            "        SELECT 1 FROM outreach_messages m "
-            "        WHERE m.campaign_id = %s::bigint AND m.broker_id = lb.broker_id)) "
-            "LIMIT %s",
-            (*district_arrays(spec.districts), spec.category_main,
-             spec.category_type, metric, 2000,
-             campaign_id, campaign_id, limit))
-        return cur.fetchall()
+            "SELECT broker_id FROM broker_outreach_suppression WHERE broker_id = ANY(%(ids)s::bigint[]) "
+            "UNION SELECT broker_id FROM outreach_messages "
+            "WHERE campaign_id = %(campaign)s::bigint AND broker_id = ANY(%(ids)s::bigint[])",
+            {"ids": [r["broker_id"] for r in rows], "campaign": campaign_id})
+        excluded = {r[0] for r in cur.fetchall()}
+    return [r for r in rows if r["primary_email"] and r["broker_id"] not in excluded][:limit]
 
 
 def generate_drafts(conn: Any, llm_client: Any, campaign_id: int, *, limit: int = 25) -> dict[str, Any] | None:
@@ -166,7 +169,11 @@ def generate_drafts(conn: Any, llm_client: Any, campaign_id: int, *, limit: int 
     model = llm_client.resolve_model(_DRAFT_MODEL_KEY)
     generated = 0
     for t in targets:
-        ctx = _broker_context(conn, t)
+        # The draft quotes the broker's own counts, as a regenerated one does: a board row carries the cohort's.
+        leader = _leader_row(conn, t["broker_id"])
+        if leader is None:
+            continue
+        ctx = _broker_context(conn, leader)
         resp = llm_client.call(
             called_for=_CALLED_FOR,
             messages=[{"role": "user", "content": _build_payload(campaign, ctx)}],
@@ -366,8 +373,7 @@ def _upsert_message(conn: Any, campaign_id: int, leader: dict[str, Any],
 
 
 def _leader_row(conn: Any, broker_id: int) -> dict[str, Any] | None:
-    # CZ-scoped counts (migration 396): the target was picked off the geo-scoped
-    # leaderboard, so the drafted message must quote the same book. Citing the
+    # CZ-scoped counts (migration 396), the ones every drafted message quotes. Citing the
     # unscoped total at a broker who also syndicates foreign stock would put a
     # number in the email that no surface the operator sees agrees with.
     with conn.cursor(row_factory=dict_row) as cur:

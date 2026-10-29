@@ -21,6 +21,10 @@ Blind spots — a green run does NOT prove these:
     same file keeps the count.
 (e) The dirty-enqueue and derived-write checks read the whole file's text, not the
     ledgered statement.
+
+`REPOINTS` ledgers every `UPDATE broker_identities SET broker_id` (the broker book is per canonical
+broker, migration 692): its file dirties the moved properties through `dirty_repointed` once per
+re-point. Same blind spots; a DB-side re-point is invisible.
 """
 
 from __future__ import annotations
@@ -40,6 +44,9 @@ _INSERT_SNAPSHOTS = re.compile(r"\bINSERT\s+INTO\s+(?:public\.)?listing_snapshot
 _UPDATE_LISTINGS = re.compile(r"\bUPDATE\s+(?:public\.)?listings\b(?!_)", re.I)
 _WHOLESALE_RAW = re.compile(r"\braw_json\s*=\s*(?:%|EXCLUDED\.)", re.I)
 _LAST_SEEN = re.compile(r"\blast_seen_at\s*=", re.I)
+_SET_BROKER = re.compile(
+    r"\bUPDATE\s+(?:public\.)?broker_identities(?:\s+(?:AS\s+)?\w+)?\s+SET\s+broker_id\s*=", re.I)
+_DIRTY_REPOINTED = re.compile(r"\bdirty_repointed\(cur,")
 
 WRITER = "scraper/listing_write.py"
 EXEMPT = {"scraper/db.py", WRITER}   # lifecycle/identity owners; the writer
@@ -73,7 +80,7 @@ LEDGER: dict[str, Site] = {
     "toolkit/condition_scoring.py": Site(
         2, "condition", "rule 14's two derived levels (lane paused)", "gap:rule-14 paused"),
     "toolkit/broker_sources.py": Site(
-        1, "attribution", "broker_identity_id FK: the broker book keys on it (migration 691)",
+        1, "attribution", "broker_identity_id FK: the broker book folds it to its broker (migration 692)",
         "same-statement"),
     "scripts/resolve_brokers.py": Site(
         2, "attribution", "broker_firm_id FK (and its comment): no property rollup reads it",
@@ -85,6 +92,11 @@ LEDGER: dict[str, Site] = {
     "scripts/backfill_listing_surrogate_id.py": Site(
         1, "identity", "dead surrogate backfill (separate cleanup PR)", "n/a"),
 }
+
+
+# Every writer of broker_identities.broker_id, by file and count: the singleton attach and the auto-merge, the
+# operator's merge and unmerge.
+REPOINTS = {"scripts/resolve_brokers.py": 2, "api/broker_review.py": 2}
 
 
 def _runtime_files() -> dict[str, str]:
@@ -149,3 +161,10 @@ def test_a_derived_write_never_replaces_the_payload_or_claims_a_sighting(path: s
     text = FILES[path]
     assert not _WHOLESALE_RAW.search(text)
     assert not _LAST_SEEN.search(text)
+
+
+def test_every_broker_re_point_is_ledgered_and_dirties_its_properties() -> None:
+    assert _sites(_SET_BROKER) == REPOINTS, (
+        "ledger the new UPDATE broker_identities SET broker_id in REPOINTS and dirty its properties through "
+        "toolkit.broker_sources.dirty_repointed in the same transaction")
+    assert _sites(_DIRTY_REPOINTED) == REPOINTS

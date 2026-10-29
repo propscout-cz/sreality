@@ -16,6 +16,7 @@ import {
   useMemoryBrowseState,
   useUrlBrowseState,
 } from './browseState';
+import { DEFAULT_BOARD, boardFromSearchParams } from './brokerBoard';
 import { DEFAULT_SCOPE, neighbourhoodFilters } from './neighbourhood';
 import { layersFromSearchParams } from './mapOverlays';
 import { DEFAULT_SORT, parseSort } from './queries';
@@ -180,7 +181,7 @@ describe('pin limit and price labels on the map overlay', () => {
   });
 });
 
-/* `?tab=` names the stats tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
+/* `?tab=` names the stats tab, the brokers tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
 describe('the tab in the URL', () => {
   const tabOf = (initial: string) =>
     renderHook(() => useUrlBrowseState(), {
@@ -188,8 +189,9 @@ describe('the tab in the URL', () => {
         createElement(MemoryRouter, { initialEntries: [initial] }, children),
     }).result.current.tab;
 
-  it('reads stats as stats, and anything else as the map', () => {
+  it('reads stats and brokers as themselves, and anything else as the map', () => {
     expect(parseTab('stats')).toBe('stats');
+    expect(parseTab('brokers')).toBe('brokers');
     expect(parseTab(null)).toBe('map');
     expect(parseTab('table')).toBe('map');
     expect(parseTab('nonsense')).toBe('map');
@@ -198,6 +200,46 @@ describe('the tab in the URL', () => {
   it('opens an old table link on the map', () => {
     expect(tabOf('/browse?tab=table')).toBe('map');
     expect(tabOf('/browse?tab=stats')).toBe('stats');
+    expect(tabOf('/browse?tab=brokers')).toBe('brokers');
+  });
+});
+
+/* The Makléři tab's options: view knobs in the URL (a default deletes its key),
+ * carried through a filter change, outside the filters, in memory in a modal. */
+describe('the broker board options', () => {
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('reads every option from its key, and nonsense as the default', () => {
+    expect(
+      urlState('/browse?tab=brokers&horizon=60&rank_by=speed&top=50&min_props=5&firm=3,7').result.current.view.board,
+    ).toEqual({ horizonDays: 60, sort: 'speed', limit: 50, minProperties: 5, firmIds: [3, 7] });
+    expect(boardFromSearchParams(new URLSearchParams('horizon=45&rank_by=fast&top=900&min_props=0&firm=a,-2,4'))).toEqual(
+      { ...DEFAULT_BOARD, firmIds: [4] },
+    );
+    expect(fromSearchParams(new URLSearchParams('horizon=14&min_props=3'))).toEqual(fromSearchParams(new URLSearchParams()));
+  });
+
+  it('writes a change as its own key, keeps it through a filter change, and deletes it at the default', () => {
+    const { result } = urlState('/browse?cat=dum&tab=brokers');
+    act(() => result.current.view.setBoard({ sort: 'speed', firmIds: [3] }));
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, categoryMain: ['dum', 'byt'] }));
+    let sp = new URLSearchParams(result.current.search);
+    expect([sp.get('rank_by'), sp.get('firm'), sp.get('tab'), sp.get('cat')]).toEqual(['speed', '3', 'brokers', 'dum,byt']);
+    act(() => result.current.view.setBoard({ sort: 'properties', firmIds: [] }));
+    sp = new URLSearchParams(result.current.search);
+    expect([sp.has('rank_by'), sp.has('firm')]).toEqual([false, false]);
+  });
+
+  it('holds the options in memory in the explore modals, and Go to Browse carries them', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS, tab: 'brokers' }));
+    expect(result.current.board).toEqual(DEFAULT_BOARD);
+    act(() => result.current.setBoard({ horizonDays: 90 }));
+    const sp = new URLSearchParams(browseUrlFromState({ ...result.current }).split('?')[1]);
+    expect([sp.get('horizon'), sp.get('tab')]).toEqual(['90', 'brokers']);
   });
 });
 

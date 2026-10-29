@@ -35,6 +35,7 @@ Rule 22 makes a mixed cohort one click away, so this is not a theoretical arm.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -171,15 +172,34 @@ def tom_observed_sql(alias: str) -> str:
     )
 
 
+# The speed measure's two constants, as migration 691's body spells them (tests/test_measure_tom_days.py pins both): E0,
+# rule 3's structural end gate (an exit before it is untrustworthy), and M, the follow-up / handover margin W0 calibrated.
+EXIT_CLEAN_SINCE = "2026-09-08"
+EXIT_MARGIN_DAYS = 7
+
+
 def exit_within_sql(spell: str, prop: str, days: str) -> str:
     """THE "left the market within N days" measure (migration 691) over a
-    `property_broker_spells`-shaped alias and its `properties`-shaped alias; `days` is an SQL
+    `broker_book`-shaped alias (692) and its `properties`-shaped alias; `days` is an SQL
     expression (a literal or a bound parameter). 'exited' | 'not_exited' | 'unknown', NULL when
     the spell is not followed (left-censored, before the end gate, or its window not over)."""
     return (
         f"measure_exit_within({spell}.tom_observed, {spell}.started_at, {spell}.ended_at, "
         f"{prop}.is_active, {prop}.last_seen_at, {days})"
     )
+
+
+# --- a share's lower bound (the broker board's rank, every health gauge's judgement) ----------
+
+
+def wilson_lower(hits: int, n: int, z: float = 1.96) -> float | None:
+    """The Wilson score interval's lower bound of hits / n; None when nothing was counted."""
+    if n == 0:
+        return None
+    p, z2 = hits / n, z * z
+    centre = p + z2 / (2 * n)
+    margin = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
+    return max(0.0, (centre - margin) / (1 + z2 / n))
 
 
 # --- the Python mirror ----------------------------------------------------

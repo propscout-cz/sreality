@@ -124,7 +124,8 @@ it (`api/`). They do not apply to the scraper.
    not "every address ever seen" — that fuller set is `broker_identity_contacts`, admin-only
    via `/contacts`. Both batch reads bound their input at `toolkit.brokers.MAX_BATCH`
    (1000) at the HTTP layer, so an over-cap batch is a 422 rather than a silently
-   truncated 200, and `?geo_level=` accepts only `region`/`okres` (`GEO_LEVELS`).
+   truncated 200. **`POST /brokers/board`** (`api/broker_board.py`, Browse's Makléři tab, also read by
+   `rank_brokers` and Outreach) masks contacts as above; `BoardArgs` refuses the account lenses.
    `tests/api/test_broker_routes.py` holds two standing gates: no `/brokers` route may
    ride `require_token`, and every non-admin one must stamp `pii_masked` — a new route
    must be added to that table. The SPA is the main consumer since 2026-08-12

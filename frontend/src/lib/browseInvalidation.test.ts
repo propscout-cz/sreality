@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { invalidateBrowseQueries } from './browseInvalidation';
 import { browseKeys } from './browseKeys';
+import { DEFAULT_BOARD } from './brokerBoard';
 import { DEFAULT_FILTERS } from './filters';
 import { DEFAULT_SORT } from './queries';
 
@@ -16,8 +17,9 @@ describe('browse invalidation contract', () => {
     expect(roots(browseKeys.all)).toContain('browse-count');
   });
 
-  it('covers exactly the five Browse read surfaces', () => {
+  it('covers exactly the six Browse read surfaces', () => {
     expect([...roots(browseKeys.all)].sort()).toEqual([
+      'broker-board',
       'browse-count',
       'cards',
       'map',
@@ -47,6 +49,7 @@ describe('browse key factories', () => {
     browseKeys.statsPrefilters(f),
     browseKeys.count(f),
     browseKeys.noPriceCount(f),
+    browseKeys.brokers(f, DEFAULT_BOARD),
   ];
 
   it('roots every reader in the sweep', () => {

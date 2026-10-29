@@ -754,16 +754,21 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
-      # The broker book (migration 691): one spell per (property, broker identity), kept by the
+      # The broker book (migration 692): one row per (property, canonical broker), kept by the
       # property maintenance pass on every path that changes one -- a delist, a revival, a merge and
-      # its detach, a re-attribution through the dirty drain -- and rewriting nothing when nothing
-      # changed. Only the real schema computes the view's aggregate and the upsert's conflict arm.
-      - name: The broker book follows every write (migration 691)
+      # its detach, a re-attribution, and every broker re-point (operator merge and unmerge, the
+      # resolver's auto-merge and singleton attach) through the dirty drain -- and rewriting nothing
+      # when nothing changed. Only the real schema computes the view's aggregate and the upsert's
+      # conflict arm. The re-point's dirty step on two connections: it takes turns with an open
+      # birth or property merge moving one of the identity's ads, whichever writes first.
+      # The board that reads it (api/broker_board.py): Browse's cohort counted by broker under the
+      # portal rule on both sides, every speed arm, the refusals and the read's bound.
+      - name: The broker book follows every write and the board counts it (migration 692)
         timeout-minutes: 5
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_property_broker_spells_live.py -q
+        run: pytest tests/test_broker_book_live.py tests/test_broker_book_repoint_lock_live.py tests/test_broker_board_live.py -q
 
       # W4's whole claim is that FIVE relations publish ONE number. Nothing else
       # in CI can see that: the fake connections cannot evaluate SQL, and PREPARE

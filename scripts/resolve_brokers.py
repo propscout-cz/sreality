@@ -61,7 +61,7 @@ from typing import Any, TypeVar
 
 from scraper import db
 from toolkit import broker_resolver as R
-from toolkit.broker_sources import BROKER_SOURCE_NAMES, attribution_statements
+from toolkit.broker_sources import BROKER_SOURCE_NAMES, attribution_statements, dirty_repointed
 
 LOG = logging.getLogger("resolve_brokers")
 
@@ -150,7 +150,8 @@ FROM targets t WHERE l.id = t.listing_id
 """
 
 # Robust set-based singleton attach: RETURNING carries the seed identity id, so new
-# brokers link back without depending on RETURNING row order.
+# brokers link back without depending on RETURNING row order. The outer RETURNING names the
+# identities attached, whose adverts' properties gain a broker in the book (rule 20).
 _SINGLETON_ATTACH = """
 WITH ins AS (
   INSERT INTO brokers (seed_identity_id, display_name, primary_email, first_seen_at, last_seen_at)
@@ -160,6 +161,7 @@ WITH ins AS (
 )
 UPDATE broker_identities bi SET broker_id = ins.id
 FROM ins WHERE ins.seed_identity_id = bi.id
+RETURNING bi.id
 """
 
 _IDENTITY_ROLLUP = """
@@ -621,9 +623,13 @@ def _link_listings_firm(conn: Any, extra: str = "", params: dict[str, Any] | Non
 
 
 def _attach_singletons(conn: Any) -> int:
-    with conn.cursor() as cur:
+    """Give every identity with no broker its own, dirtying its adverts' properties in the same
+    transaction: the broker book (migration 692) is per canonical broker, so they gain a row."""
+    with conn.transaction(), conn.cursor() as cur:
         cur.execute(_SINGLETON_ATTACH)
-        return cur.rowcount or 0
+        attached = [int(r[0]) for r in cur.fetchall()]
+        dirty_repointed(cur, attached)
+        return len(attached)
 
 
 def _suppressed_pairs(conn: Any) -> set[tuple[int, int]]:
@@ -1103,9 +1109,12 @@ def _apply_merges(conn: Any, groups: list[list[int]], *,
         )
         cur.execute(
             "UPDATE broker_identities bi SET broker_id = d.s "
-            "FROM unnest(%(i)s::bigint[], %(s)s::bigint[]) AS d(i, s) WHERE bi.id = d.i",
+            "FROM unnest(%(i)s::bigint[], %(s)s::bigint[]) AS d(i, s) WHERE bi.id = d.i "
+            "RETURNING bi.id",
             {"i": idents, "s": survivors},
         )
+        # The re-pointed identities' properties change broker in the book (rule 20).
+        dirty_repointed(cur, [r[0] for r in cur.fetchall()])
         cur.execute(
             "UPDATE brokers b SET status = 'merged_away', merged_into = d.s, merged_at = now() "
             "FROM unnest(%(l)s::bigint[], %(s)s::bigint[]) AS d(l, s) WHERE b.id = d.l",

@@ -225,7 +225,10 @@ def _distinct(prop: dict[str, Any], current: Any) -> Any:
 
 
 def _statements(name: str, args: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
-    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT])
+    from tests.api.test_broker_board import head, is_board  # that module reads this one's _distinct
+
+    # The broker board reads its statement's one totals row by name.
+    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT, (is_board, [head()])])
 
     @contextlib.contextmanager
     def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:

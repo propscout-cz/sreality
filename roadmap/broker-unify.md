@@ -25,11 +25,13 @@ The Browse cohort counted by broker: one filter definition, one property × brok
 attribution rule (MS19), one speed measure; the leaderboard and its count book are deleted. Rulings, definitions,
 waves and W0's measurements: `docs/design/broker-board.md`.
 
-- **W1 — the dark broker book** (in progress, `feature/broker-book`): migration 691 (`property_broker_spells` +
-  its view, `measure_exit_within`, backfill), the book in `properties_changed` and every sweep batch, the
-  attribution link dirtying its property, census rails. No reader.
-- **Next — W0** production measurements (read-only; recalibrate M = 7 d), **W2** the `Makléři` Browse tab + agent
-  read, deleting the leaderboard, **W3** deleting `broker_region_type_stats`.
+- **W1 — the dark broker book** (PR #2181 in review): migration 691, the measure, the book in the property pass,
+  the attribution link dirtying its property, census rails.
+- **W2 — the readers** (in progress, `feature/broker-board`, stacked on W1): 692, the `Makléři` tab, `rank_brokers`,
+  Browse's broker scope and Outreach on the book; the leaderboard's routes and toolkit deleted.
+- **Next** — 692's runbook (apply right before the merge, sweep right after the rollout: its header); W0's owed
+  checks; the post-deploy destructive batch (`broker_leaderboard()`, 691's table and view, with the operator's OK and
+  a backup); **W3** deleting `broker_region_type_stats` and `broker_geo_options`.
 
 ## Done
 

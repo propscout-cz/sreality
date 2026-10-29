@@ -23,8 +23,8 @@
    job recomputes the figures from the location advert's point (an advert without one keeps the
    earlier figures until it gains one: the job reads only a point); the job's own UPDATE refuses
    a row whose location advert moved while it ran (migration 636). The broker book
-   (`property_broker_spells`, migration 691: one spell per property and broker identity) is
-   stored from its one view beside every rollup, in the same transaction.
+   (`broker_book`, migration 692: one row per property and canonical broker) is stored from its
+   one view beside every rollup, in the same transaction.
 3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
    property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
    migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`).
@@ -306,31 +306,36 @@ _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
     "SELECT id FROM properties WHERE id = ANY(%(ids)s)",
 )
 
-# The broker book (migration 691): the view's spells of the batch's properties, stored. The view
-# is the one spelling of a spell; the scope is a qual on its grouping column, so it applies below
-# the aggregate. A spell the view no longer holds (its ads moved by a merge or a detach, or
-# re-attributed) is deleted, and only a row that differs is rewritten, so a quiescent batch writes
-# nothing. Scoped exactly like the rollup above, and derived from its range form the same way.
+# The broker book (migration 692): the view's rows of the batch's properties, stored. The view
+# is the one spelling of a row; the scope is a qual on its grouping column, so it applies below
+# the aggregate. A row the view no longer holds (its ads moved, re-attributed or re-pointed to
+# another broker) is deleted, and only a row that differs is rewritten, so a quiescent batch
+# writes nothing. Scoped exactly like the rollup above, and derived from its range form the same way.
 _BROKER_BOOK_BATCH_SQL = """
     WITH spells AS (
-      SELECT property_id, broker_identity_id, started_at, ended_at, tom_observed
-      FROM property_broker_spell_projection
+      SELECT property_id, broker_id, is_active, all_sources, active_sources,
+             started_at, ended_at, tom_observed
+      FROM broker_book_projection
       WHERE property_id >= %(lo)s AND property_id < %(hi)s
     ), gone AS (
-      DELETE FROM property_broker_spells s
+      DELETE FROM broker_book b
       WHERE property_id >= %(lo)s AND property_id < %(hi)s
-        AND NOT EXISTS (SELECT 1 FROM spells v WHERE v.property_id = s.property_id
-                          AND v.broker_identity_id = s.broker_identity_id)
+        AND NOT EXISTS (SELECT 1 FROM spells v WHERE v.property_id = b.property_id
+                          AND v.broker_id = b.broker_id)
     )
-    INSERT INTO property_broker_spells AS s
-      (property_id, broker_identity_id, started_at, ended_at, tom_observed)
+    INSERT INTO broker_book AS b
+      (property_id, broker_id, is_active, all_sources, active_sources,
+       started_at, ended_at, tom_observed)
     SELECT * FROM spells
-    ORDER BY property_id, broker_identity_id
-    ON CONFLICT (property_id, broker_identity_id) DO UPDATE
-      SET started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at,
-          tom_observed = EXCLUDED.tom_observed
-      WHERE (s.started_at, s.ended_at, s.tom_observed)
-            IS DISTINCT FROM (EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed)
+    ORDER BY property_id, broker_id
+    ON CONFLICT (property_id, broker_id) DO UPDATE
+      SET is_active = EXCLUDED.is_active, all_sources = EXCLUDED.all_sources,
+          active_sources = EXCLUDED.active_sources, started_at = EXCLUDED.started_at,
+          ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed
+      WHERE (b.is_active, b.all_sources, b.active_sources, b.started_at, b.ended_at,
+             b.tom_observed)
+            IS DISTINCT FROM (EXCLUDED.is_active, EXCLUDED.all_sources, EXCLUDED.active_sources,
+                              EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed)
 """
 _BROKER_BOOK_SCOPED_SQL = _BROKER_BOOK_BATCH_SQL.replace(
     "property_id >= %(lo)s AND property_id < %(hi)s", "property_id = ANY(%(ids)s)")
@@ -455,8 +460,8 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
 
     The order is load-bearing: `browse_projection` reads the recomputed `properties` row, and the
     book and the broker mirror select adverts by their property AFTER the writer moved them (an
-    identity writer passes both sides, so the side an advert left loses its spell). The Browse patch
-    is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
+    identity writer passes both sides, so the side an advert left loses its book row). The Browse
+    patch is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
     without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
     rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
     2026-10-19) lands on the doomed table: since migration 630 the rebuild re-patches identity
@@ -756,7 +761,7 @@ _MAX_BUDGET_SECONDS = 6000.0
 # _BATCH_RESILIENT_ATTEMPTS: renewing only once per loop iteration would let a
 # retried batch outlive its own lease.)
 _BATCH_STATEMENT_TIMEOUT = "10min"
-# The broker book's ceiling inside the same batch transaction (migration 691). Its
+# The broker book's ceiling inside the same batch transaction (migrations 691, 692). Its
 # statement reads only the batch's attributed adverts; the ceiling exists to keep one
 # attempt (rollup + book) under the lease TTL. Broker board W0 measures its real cost.
 _BOOK_STATEMENT_TIMEOUT = "2min"

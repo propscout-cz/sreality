@@ -9,7 +9,7 @@ source-agnostic. Four statement SHAPES cover every portal —
   2. upsert the email contact,
   3. upsert the phone contact,
   4. point `listings.broker_identity_id` at the identity, dirtying the advert's
-     property (rule 20: the broker book keys on the identity) —
+     property (rule 20: who advertises it changed) —
 
 and what actually differs between portals is a handful of JSON keys plus three
 quirks (phone shape, phone normalisation, chunk materialisation). Onboarding a
@@ -25,7 +25,9 @@ Read by `scripts.resolve_brokers` (which executes the statements) and by
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 # `{sel}` — a listings selector the caller substitutes per chunk (always
 # `l.id = ANY(%(ids)s)`), so no attribution statement is ever unbounded.
@@ -124,8 +126,8 @@ _PHONE_SCALAR_FROM = """FROM listings l
     AND {{sel}}"""
 
 # The link dirties each re-attributed advert's property in the SAME statement (rule 20): the
-# broker book (`property_broker_spells`, migration 691) keys on the identity, so the mark cannot
-# outlive a rolled-back link. A new advert has no property yet; its birth stores its spells.
+# broker book (`broker_book`, migration 692) folds the advert's identity to its broker, so the mark
+# cannot outlive a rolled-back link. A new advert has no property yet; its birth stores its book.
 _LINK_TEMPLATE = """
 WITH linked AS (
 UPDATE listings l SET broker_identity_id = bi.id
@@ -141,6 +143,34 @@ SELECT DISTINCT property_id FROM linked WHERE property_id IS NOT NULL
 ORDER BY 1
 ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
 """
+
+# The other half of who advertises a property: an identity's BROKER. The book is stored per (property, canonical
+# broker), so every writer of `broker_identities.broker_id` dirties the properties of the re-pointed identities' adverts
+# in its own transaction, the link's idiom over the ids its UPDATE returned. The adverts are read FOR SHARE in id order
+# and the unborn skipped AFTER the lock, so a birth, merge or detach moving one takes turns with the re-point: either
+# side otherwise reads the other's old state and the old broker's row stays until the daily sweep (a deadlock's victim
+# is retried, db.run_resilient). Not covered: a link moving an advert ONTO a re-pointed identity while the re-point is
+# open, with a pass in between (FOR SHARE sees the old identity): the daily sweep heals it.
+IDENTITY_REPOINT_DIRTY_SQL = """
+WITH ads AS MATERIALIZED (
+  SELECT l.property_id FROM listings l
+  WHERE l.broker_identity_id = ANY(%(identity_ids)s::bigint[])
+  ORDER BY l.id
+  FOR SHARE OF l
+)
+INSERT INTO dirty_properties (property_id)
+SELECT DISTINCT property_id FROM ads WHERE property_id IS NOT NULL
+ORDER BY 1
+ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
+"""
+
+
+def dirty_repointed(cur: Any, identity_ids: Iterable[int]) -> None:
+    """Dirty the properties of these re-pointed identities' adverts on the writer's cursor, inside its transaction."""
+    ids = sorted({int(i) for i in identity_ids})
+    if ids:
+        cur.execute(IDENTITY_REPOINT_DIRTY_SQL, {"identity_ids": ids})
+
 
 _SCALAR_DIGITS = "regexp_replace(l.raw_json->'{block}'->>'{phone_key}', '[^0-9]', '', 'g')"
 

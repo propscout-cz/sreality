@@ -15,6 +15,7 @@ import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import * as api from '@/lib/api';
+import * as auth from '@/lib/auth';
 import { fmtShortDate } from '@/lib/format';
 import * as queries from '@/lib/queries';
 import { DEFAULT_SORT, type CardRow, type SortSpec } from '@/lib/queries';
@@ -48,7 +49,14 @@ vi.mock('@/components/stats/StatsDashboard', () => ({
     </div>
   ),
 }));
-/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/components/brokers/BrokerBoard', () => ({
+  default: ({ filters, board }: { filters: ListingFilters; board: { horizonDays: number } }) => (
+    <div data-testid="broker-board" data-horizon={board.horizonDays}>
+      {filters.portals.join(',')}
+    </div>
+  ),
+}));
+/* Who is signed in: the "Nová nemovitost" provider (admins only, v1) and the Makléři tab's agenda gate. */
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
   useAuth: vi.fn(() => ({ isAdmin: true })),
@@ -350,6 +358,52 @@ describe('<BrowseExperience> Stats tab', () => {
     expect(await screen.findByRole('tab', { name: 'Statistiky' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'false');
     expect(screen.queryByRole('tab', { name: /^(Stats|Properties)/ })).toBeNull();
+  });
+});
+
+/* The Makléři tab: the board over Browse's own filters, gated as the /brokers
+ * nav entry is (the plan's `brokers` agenda), hidden with Statistiky by a scoped surface. */
+describe('<BrowseExperience> Makléři tab', () => {
+  function BoardHost({ features }: { features?: BrowseFeatures }) {
+    const view = useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, portals: ['idnes'] }, sort: DEFAULT_SORT, tab: 'brokers' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false, ...features }}
+      />
+    );
+  }
+  const renderAs = (who: { isAdmin: boolean; agendas?: Record<string, boolean> }, features?: BrowseFeatures) => {
+    vi.mocked(auth.useAuth).mockReturnValue(who as unknown as ReturnType<typeof auth.useAuth>);
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <BoardHost features={features} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  };
+  const tabNames = () => screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d/g, '').trim());
+  afterEach(() => vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: true } as ReturnType<typeof auth.useAuth>));
+
+  it('names the tab Makléři after Statistiky for a plan with the agenda and renders the board of the current filters', async () => {
+    renderAs({ isAdmin: false, agendas: { brokers: true } });
+    expect(tabNames()).toEqual(['Nemovitosti', 'Statistiky', 'Makléři']);
+    const board = await screen.findByTestId('broker-board');
+    expect(board).toHaveTextContent('idnes');
+    expect(board).toHaveAttribute('data-horizon', '30');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', screen.getByRole('tab', { name: 'Makléři' }).id);
+  });
+
+  it.each([
+    ['a plan without the agenda, a ?tab=brokers link opening the Properties tab', { isAdmin: false, agendas: { brokers: false } }, undefined, ['Nemovitosti', 'Statistiky']],
+    ['a surface that turns the aggregate tabs off', { isAdmin: true }, { stats: false }, ['Nemovitosti']],
+  ])('is not shown to %s', (_, who, features, tabs) => {
+    renderAs(who, features);
+    expect(tabNames()).toEqual(tabs);
+    expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('broker-board')).toBeNull();
   });
 });
 
