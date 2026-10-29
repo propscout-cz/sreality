@@ -2,7 +2,7 @@
 
 Issues and specs for this repo live as GitHub issues on `propscout-cz/sreality`. Use the `gh` CLI for all operations.
 
-**The repo is public: every issue is world-readable.** Keep tokens, DB URLs, operator-private rulings and personal data out of issue titles, bodies and comments.
+**An issue is read by everyone the repo is shared with, for good.** Keep tokens, DB URLs, operator-private rulings and personal data out of issue titles, bodies and comments.
 
 ## Conventions
 
