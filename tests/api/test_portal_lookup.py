@@ -1,5 +1,5 @@
 """Tests for POST /listings/lookup — the Chrome extension's batch (source,
-native id) → MF rent/yield + sreality_id (app deep-link) + latest-estimate.
+native id) → MF rent/yield + the property's header facts + latest estimate.
 
 The logic tests drive `lookup_portal_listings` against a tiny fake cursor that
 returns dict rows (the real query uses psycopg's dict_row factory); the route
@@ -49,13 +49,12 @@ def _mk_market_row(source: str, source_id: str, found: bool, **cols: Any) -> dic
     """One market-query dict row (service-role conn) keyed by SELECT aliases."""
     row: dict[str, Any] = {
         "source": source, "source_id": source_id, "found": found,
-        "sreality_id": None, "listing_id": None, "property_id": None,
+        "listing_id": None, "property_id": None,
         "category_main": None, "category_type": None,
         "area_m2": None, "area_basis": None,
         "price_czk": None, "price_per_m2": None, "price_per_m2_basis": None,
-        "disposition": None, "subtype": None,
-        "display_label": None, "is_active": None,
-        "last_seen_at": None, "mf_reference_rent_czk": None,
+        "disposition": None, "display_label": None, "is_active": None,
+        "mf_reference_rent_czk": None,
         "mf_gross_yield_pct": None, "mf_reference_rent": None,
         **dict.fromkeys(_PROPERTY_FACTS),
     }
@@ -114,25 +113,23 @@ def _items(*pairs: tuple[str, str]) -> list[s.PortalLookupItem]:
     return [s.PortalLookupItem(source=src, source_id=sid) for src, sid in pairs]
 
 
-def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
+def test_lookup_maps_rows_with_mf_and_estimation() -> None:
     market_rows = [
-        # sreality: found, has MF; positive sreality_id
-        _mk_market_row("sreality", "1184977484", True, sreality_id=1184977484,
+        # sreality: found, has MF
+        _mk_market_row("sreality", "1184977484", True,
                        listing_id=9001, property_id=501,
                        category_main="byt", category_type="prodej",
                        area_m2=Decimal("65.0"),
                        price_czk=4_800_000, disposition="2+kk",
-                       display_label="Plzeňská 12, Praha", is_active=True, last_seen_at=_TS,
+                       display_label="Plzeňská 12, Praha", is_active=True,
                        mf_reference_rent_czk=21_840,
                        mf_gross_yield_pct=Decimal("5.46")),
-        # bazos: found, NEGATIVE synthetic sreality_id, no MF;
-        # has a property but is NOT in the pipeline
-        _mk_market_row("bazos", "220291221", True, sreality_id=-187691,
+        # bazos: found, no MF; has a property but is NOT in the pipeline
+        _mk_market_row("bazos", "220291221", True,
                        listing_id=9002, property_id=777,
                        category_main="komercni", category_type="prodej",
-                       price_czk=7_700_000,
-                       subtype="ubytovani", display_label="Pardubice", is_active=True),
-        # idnes: not found → sreality_id null
+                       price_czk=7_700_000, display_label="Pardubice", is_active=True),
+        # idnes: not found
         _mk_market_row("idnes", "deadbeef", False),
     ]
     account_rows = [
@@ -156,11 +153,10 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
 
     sr = data[0]
     assert sr["found"] is True
-    assert sr["sreality_id"] == 1184977484  # positive for sreality
     assert sr["property_id"] == 501
     assert sr["area_m2"] == 65.0  # Decimal → float
     assert sr["mf_gross_yield_pct"] == 5.46
-    assert sr["last_seen_at"] == _TS.isoformat()  # datetime → iso8601
+    assert sr["disposition"] == "2+kk"
     assert sr["latest_estimation"] == {
         "estimation_id": 99, "estimate_kind": "rent", "gross_yield_pct": 5.46,
     }
@@ -175,16 +171,9 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
     assert sr["collection_ids"] == [7, 9]  # property-grain memberships
     assert sr["tag_ids"] == [3]  # property-grain, like collections
     assert sr["dismissed"] is False
-    # apartment: subtype NULL → kind_label is the disposition
-    assert sr["subtype"] is None
-    assert sr["kind_label"] == "2+kk"
 
     bz = data[1]
     assert bz["found"] is True
-    assert bz["sreality_id"] == -187691  # negative synthetic for non-sreality
-    # commercial: kind_label is the Czech subtype label (no disposition)
-    assert bz["subtype"] == "ubytovani"
-    assert bz["kind_label"] == "Ubytování"
     assert bz["latest_estimation"] is None
     assert bz["property_id"] == 777
     # has a property but no card → in_pipeline false (still toggle-able)
@@ -199,7 +188,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
 
     idn = data[2]
     assert idn["found"] is False
-    assert idn["sreality_id"] is None  # not in our DB → no app page
+    assert idn["listing_id"] is None
     assert idn["latest_estimation"] is None
     assert idn["property_id"] is None
     assert idn["pipeline"] is None  # no property → nothing to bookmark
@@ -220,10 +209,10 @@ _MF_DETAIL = {
 
 
 def test_lookup_serves_the_property_mf_result_and_none_before_attach() -> None:
-    """Post-Gate-2 adverts (sreality_id NULL). The attached one carries its
-    PROPERTY's MF result whole — the jsonb the panel renders by shape; the
-    pre-attach one (property_id NULL) has no property, so no MF at all: no
-    coalesce to a listing-grain value, no per-m² quotient of the client's own."""
+    """The attached advert carries its PROPERTY's MF result whole — the jsonb
+    the panel renders by shape; the pre-attach one (property_id NULL) has no
+    property, so no MF at all: no coalesce to a listing-grain value, no per-m²
+    quotient of the client's own."""
     market_rows = [
         _mk_market_row("bezrealitky", "attached", True, listing_id=31,
                        property_id=900, category_main="byt", category_type="prodej",
@@ -238,7 +227,6 @@ def test_lookup_serves_the_property_mf_result_and_none_before_attach() -> None:
         _items(("bezrealitky", "attached"), ("bezrealitky", "fresh")),
     )
     attached, fresh = out["data"]
-    assert attached["sreality_id"] is None  # post-Gate-2
     assert attached["mf_reference_rent"] == _MF_DETAIL
     assert attached["mf_reference_rent_czk"] == 17_700
     assert attached["mf_gross_yield_pct"] == 5.25
@@ -265,19 +253,19 @@ def test_lookup_reads_mf_from_properties_public_by_property_id() -> None:
     assert "mf_reference_rent_per_m2_czk" not in pl._LISTING_COLS
 
 
-def test_lookup_serves_the_property_facts_beside_the_adverts_own_kind() -> None:
+def test_lookup_serves_the_property_facts_beside_the_adverts_own_status() -> None:
     """A merged house seen on its delisted non-canonical advert: the header facts (status
-    included) are the PROPERTY's, the advert's own `is_active` / `subtype` / `kind_label` keep
-    their meaning, and an advert not yet attached has no property facts (no coalesce to its own)."""
+    included) are the PROPERTY's, the advert's own `is_active` keeps its meaning, and an
+    advert not yet attached has no property facts (no coalesce to its own)."""
     market_rows = [
         _mk_market_row("idnes", "merged", True, listing_id=41, property_id=901,
-                       category_main="dum", category_type="prodej", subtype="vila",
+                       category_main="dum", category_type="prodej",
                        is_active=False, property_is_active=True,
                        canonical_listing_id=40, tom_days=94,
                        total_floors=2, condition="velmi_dobry", ownership="osobni",
                        property_subtype="rodinny_dum", plot_area_m2=Decimal("905.0")),
         _mk_market_row("idnes", "fresh", True, listing_id=42, property_id=None,
-                       category_main="dum", category_type="prodej", subtype="vila"),
+                       category_main="dum", category_type="prodej"),
     ]
     merged, fresh = pl.lookup_portal_listings(
         _FakeConn(market_rows), _FakeConn([]), _items(("idnes", "merged"), ("idnes", "fresh")),
@@ -287,8 +275,7 @@ def test_lookup_serves_the_property_facts_beside_the_adverts_own_kind() -> None:
     assert (merged["tom_days"], merged["floor"], merged["total_floors"]) == (94, None, 2)
     assert (merged["condition"], merged["ownership"]) == ("velmi_dobry", "osobni")
     assert merged["plot_area_m2"] == 905.0 and type(merged["plot_area_m2"]) is float
-    assert (merged["property_subtype"], merged["subtype"], merged["kind_label"]) == (
-        "rodinny_dum", "vila", "Vila")
+    assert merged["property_subtype"] == "rodinny_dum"
     for key in _PROPERTY_FACTS:
         assert fresh[key] is None, key
 
@@ -322,8 +309,7 @@ def test_lookup_binds_one_value_pair_per_item() -> None:
 
 def test_lookup_account_query_targets_only_found_listings() -> None:
     market_rows = [
-        _mk_market_row("sreality", "a", True, sreality_id=1, listing_id=11,
-                       property_id=100,
+        _mk_market_row("sreality", "a", True, listing_id=11, property_id=100,
                        category_main="byt", category_type="prodej", is_active=True),
         _mk_market_row("idnes", "miss", False),
     ]
@@ -349,9 +335,9 @@ def test_lookup_account_query_targets_only_found_listings() -> None:
 
 def test_lookup_preserves_request_order_even_if_db_reorders() -> None:
     rows = [
-        _mk_market_row("idnes", "b", True, sreality_id=-2, listing_id=22,
+        _mk_market_row("idnes", "b", True, listing_id=22,
                        category_main="byt", category_type="prodej", is_active=True),
-        _mk_market_row("sreality", "a", True, sreality_id=1, listing_id=21,
+        _mk_market_row("sreality", "a", True, listing_id=21,
                        category_main="byt", category_type="prodej", is_active=True),
     ]
     out = pl.lookup_portal_listings(
@@ -425,7 +411,7 @@ def test_lookup_never_multiplies_rows_for_a_multi_membership_caller() -> None:
     tenant query. The SQL's LATERAL collapses them; this pins that the Python
     shaping cannot undo that (one output row per REQUESTED item, always)."""
     market_rows = [
-        _mk_market_row("sreality", "a", True, sreality_id=1, listing_id=11,
+        _mk_market_row("sreality", "a", True, listing_id=11,
                        property_id=100, category_main="byt",
                        category_type="prodej", is_active=True),
     ]
