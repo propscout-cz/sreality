@@ -10,12 +10,14 @@
 #   scripts/local_pg.sh lanes          # a private copy + every pytest lane of the CI job, in CI's order
 #   scripts/local_pg.sh db <name>      # a long-lived copy named <name>; prints its TEST_DATABASE_URL
 #   scripts/local_pg.sh drop <name>    # drop such a copy
-#   scripts/local_pg.sh psql [db] [psql args]   # psql as the script's user into db (default: the template)
+#   scripts/local_pg.sh psql [db] [psql args]   # psql as the script's user into db (default: the template,
+#                                               # read-only; a session left open there blocks every copy)
 #   scripts/local_pg.sh start|stop|status       # status also prints the template's stamp and the copies
 # Several sessions share one cluster: every run gets its own database, and replay (which rebuilds the
 # cluster, as roles are cluster-wide) refuses while any other copy exists; pass --force to override.
-# replay stamps the template with the migrations it applied; a copy is refused while the template lacks
-# one of the calling worktree's migrations/ (replay, or STALE_OK=1 to run against it anyway).
+# replay stamps the template with each migration's name and checksum; a copy is refused (exit 75, nothing
+# ran) while one of the calling worktree's migrations/ is missing from it or edited since (replay, or
+# STALE_OK=1 to run against it anyway).
 set -euo pipefail
 
 OPT="$HOME/.local/opt"
@@ -37,6 +39,8 @@ export PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGPASSWORD=postgres
 url_for() { echo "postgresql://postgres:postgres@127.0.0.1:$PORT/$1"; }
 
 die() { echo "local_pg: $*" >&2; exit 1; }
+# A copy refused before anything ran exits apart from pytest's codes (0-5), so a caller can tell the two apart.
+refuse() { echo "local_pg: $*" >&2; exit 75; }
 
 install() {
   case "$(uname -s)-$(uname -m)" in
@@ -101,24 +105,28 @@ blocking_copies() {
     | paste -sd, - | sed 's/,/, /g'
 }
 
-migration_names() { (cd "$REPO/migrations" && ls -- *.sql | LC_ALL=C sort); }
-template_names() {
+# One "<name> <checksum>" line per migration in byte order, so an edited migration reads as one the template lacks.
+migration_stamp() { (cd "$REPO/migrations" && cksum -- *.sql | awk '{ print $3, $1 "-" $2 }' | LC_ALL=C sort); }
+template_stamp() {
   psql_q -At -d postgres -c "select shobj_description(oid, 'pg_database') from pg_database where datname = 'replay'"
 }
-stamp_of() { [[ -n "$1" ]] && echo "$(grep -c . <<<"$1") $(tail -1 <<<"$1")" || echo unstamped; }
-# The migrations of $2 that $1 lacks, as "<count> (first <name>)"; nothing when none.
+stamp_of() { [[ -n "$1" ]] && echo "$(grep -c . <<<"$1") $(tail -1 <<<"$1" | cut -d' ' -f1)" || echo unstamped; }
+# The migrations of $2 that $1 lacks or holds another version of, as "<count> (first <name>)"; nothing when none.
 lacking() {
-  local names
-  names=$(LC_ALL=C comm -13 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | grep . || true)
-  [[ -z "$names" ]] || echo "$(grep -c . <<<"$names") (first $(head -1 <<<"$names"))"
+  local lines
+  lines=$(LC_ALL=C comm -13 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | grep . || true)
+  [[ -z "$lines" ]] || echo "$(grep -c . <<<"$lines") (first $(head -1 <<<"$lines" | cut -d' ' -f1))"
 }
 
 # A template that lacks a migration of this worktree would hide its schema change behind unrelated failures.
 require_current_template() {
-  local have want missing blockers
-  have=$(template_names)
-  want=$(migration_names)
+  local have want missing extra blockers
+  have=$(template_stamp)
+  want=$(migration_stamp)
   missing=$(lacking "$have" "$want")
+  extra=$([[ -z "$have" ]] || lacking "$want" "$have")
+  # Usually main moved on, but it can be another branch's replay, which only the caller can judge.
+  [[ -z "$extra" ]] || echo "local_pg: the template holds $extra migrations not in this worktree as it is now" >&2
   [[ -n "$have" && -z "$missing" ]] && return
   local msg="template stale ($(stamp_of "$have") vs $(stamp_of "$want")): run scripts/local_pg.sh replay"
   if [[ "${STALE_OK:-}" == 1 ]]; then
@@ -126,8 +134,9 @@ require_current_template() {
     return
   fi
   blockers=$(blocking_copies)
-  [[ -n "$have" ]] && missing="it lacks $missing of this worktree's migrations" || missing="it was replayed before stamps"
-  die "$msg
+  [[ -n "$have" ]] && missing="$missing of this worktree's migrations are missing from it or edited since" \
+    || missing="it was replayed before stamps"
+  refuse "$msg
   $missing; copies that block a replay: ${blockers:-none}
   (ask their owners, or replay --force; STALE_OK=1 runs against the stale template)"
 }
@@ -173,15 +182,15 @@ replay() {
   psql_q -d postgres -c "alter database replay is_template true"
   # psql interpolates :'var' only in commands it reads from stdin, not from -c.
   local applied
-  applied=$(migration_names)
+  applied=$(migration_stamp)
   psql_q -d postgres -v applied="$applied" <<<"comment on database replay is :'applied'"
-  echo "replayed $(grep -c . <<<"$applied") migrations in $((SECONDS - started)) s (last: $(tail -1 <<<"$applied"))"
+  echo "replayed $(grep -c . <<<"$applied") migrations in $((SECONDS - started)) s (last: $(tail -1 <<<"$applied" | cut -d' ' -f1))"
 }
 
 copy_of_template() {
   ensure_server
   psql_q -At -d postgres -c "select 1 from pg_database where datname = 'replay' and datistemplate" | grep -q 1 \
-    || die "no replayed template; run: scripts/local_pg.sh replay"
+    || refuse "no replayed template; run: scripts/local_pg.sh replay"
   require_current_template
   psql_q -d postgres -c "set client_min_messages = warning" -c "drop database if exists $1 with (force)" -c "create database $1 template replay"
 }
@@ -196,14 +205,15 @@ fresh() {
 
 status() {
   pg_ctl -D "$DATA/data" status || return
-  local have want verdict missing copies
-  have=$(template_names)
-  want=$(migration_names)
+  local have want verdict missing extra copies
+  have=$(template_stamp)
+  want=$(migration_stamp)
   missing=$(lacking "$have" "$want")
+  extra=$([[ -z "$have" ]] || lacking "$want" "$have")
   if [[ -z "$have" ]]; then verdict="replay to stamp it"
-  elif [[ -n "$missing" ]]; then verdict="stale, it lacks $missing"
+  elif [[ -n "$missing" ]]; then verdict="stale, $missing of this worktree's migrations are missing from it or edited since"
   else verdict="current"; fi
-  echo "template: $(stamp_of "$have"); this worktree: $(stamp_of "$want"); $verdict"
+  echo "template: $(stamp_of "$have"); this worktree: $(stamp_of "$want"); $verdict${extra:+; it holds $extra not in this worktree}"
   copies=$(blocking_copies)
   echo "copies: ${copies:-none}"
 }
@@ -244,6 +254,8 @@ case "${1:-}" in
   status) status ;;
   psql) shift; ensure_server; db=replay
         [[ $# -gt 0 && "$1" != -* ]] && { db=$1; shift; }
+        # Every copy is cloned from the template, so a write there would reach them all behind an unchanged stamp.
+        [[ "$db" == replay ]] && export PGOPTIONS="${PGOPTIONS:-} -c default_transaction_read_only=on"
         exec psql -X -d "$db" "$@" ;;
   db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: db <name> (lowercase, not replay/postgres)"
       copy_of_template "$2"; url_for "$2" ;;
