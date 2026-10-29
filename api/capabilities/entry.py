@@ -31,10 +31,12 @@ class Effect(StrEnum):
 
 @dataclass(frozen=True)
 class Caller:
-    """What a transport hands `call`: the autocommit service connection and the caller's verified JWT claims."""
+    """What a transport hands `call`: the autocommit service connection, the caller's verified JWT claims, and
+    the run's recorder, handed (tool name, raw arguments, the envelope or the error payload) once per call."""
 
     market: psycopg.Connection
     claims: Mapping[str, Any] | None = None
+    record: Callable[[str, object, dict[str, Any]], None] | None = None
 
 
 @dataclass(frozen=True)

@@ -1,20 +1,24 @@
 """The tool registry against the replayed schema (#2062): a tenant tool runs in the caller's own RLS transaction
-and sees only their account's rows; a market tool places a property we hold at its location ad and returns the
-toolkit's own envelope. Runs in CI's migrations job (`TEST_DATABASE_URL`)."""
+and sees only their account's rows; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
+places a property we hold at its location ad and returns the toolkit's own envelope. Runs in CI's migrations job
+(`TEST_DATABASE_URL`)."""
 
 from __future__ import annotations
 
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import psycopg
 import pytest
 
+from api import tenant_pool
 from api.capabilities import registry, subject
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.tenant import NoArgs
+from api.filter_args import Args
 from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url
 from tests.test_location_ad_readers_live import POINT, RING, _placed
 from toolkit import ComparableFilters, TargetSpec, find_comparables_relaxed
@@ -94,6 +98,91 @@ def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden(svc: psycopg.Conn
     with pytest.raises(ToolError) as info:
         registry.call(Caller(market=svc), "list_pipeline_stages", {})
     assert info.value.code is ToolErrorCode.FORBIDDEN
+
+
+# --- every tool read is bounded the way PostgREST bounds a signed-in GET -----------------------------------------
+
+class _Bare(Args):
+    pass  # a probe takes nothing (a docstring would reach the schema)
+
+
+def _probe(monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy, handler: Callable[[Context, _Bare], Any]) -> None:
+    monkeypatch.setattr(registry, "ENTRIES", {"probe": Entry(name="probe", description="probe", args=_Bare,
+                                                             handler=handler, tenancy=tenancy, effect=Effect.READ)})
+
+
+def _session(conn: psycopg.Connection) -> tuple[str, bool]:
+    """(transaction_read_only, whether statement_timeout is still the session's own) on an autocommit connection."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT current_setting('transaction_read_only'), "
+                    "(SELECT setting = reset_val FROM pg_settings WHERE name = 'statement_timeout')")
+        return cur.fetchone()
+
+
+def _call_as_a(svc: psycopg.Connection, users: dict[str, Any]) -> dict[str, Any]:
+    return registry.call(Caller(market=svc, claims=_claims(users["a"])), "probe", {})
+
+
+TENANCIES = pytest.mark.parametrize("tenancy", [Tenancy.MARKET, Tenancy.TENANT])
+
+
+@TENANCIES
+@pytest.mark.usefixtures("tenant_pool_db")
+def test_a_tool_reads_read_only_at_authenticateds_8s_and_leaves_the_service_connection_as_it_was(
+        svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy) -> None:
+    def bound(ctx: Context, args: _Bare) -> dict[str, Any]:
+        with ctx.conn.cursor() as cur:
+            cur.execute("SELECT current_setting('transaction_read_only'), current_setting('statement_timeout')")
+            return {"data": list(cur.fetchone())}
+    _probe(monkeypatch, tenancy, bound)
+    assert _session(svc) == ("off", True)
+    assert _call_as_a(svc, users)["data"] == ["on", "8s"]
+    assert _session(svc) == ("off", True)
+
+
+@TENANCIES
+@pytest.mark.parametrize("swallowed", [False, True])
+@pytest.mark.usefixtures("tenant_pool_db")
+def test_a_read_past_its_time_limit_is_a_retryable_busy_even_when_the_handler_swallows_the_cancel(
+        svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy,
+        swallowed: bool) -> None:
+    monkeypatch.setattr(tenant_pool, "READ_BOUND", ("SET TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '50ms'"))
+
+    def sleeper(ctx: Context, args: _Bare) -> dict[str, Any]:
+        try:
+            with ctx.conn.cursor() as cur:
+                cur.execute("SELECT pg_sleep(2)")
+        except psycopg.errors.QueryCanceled:
+            if not swallowed:   # rent_map's reference swallows it and would answer "no reference"
+                raise
+        return {"data": []}
+    _probe(monkeypatch, tenancy, sleeper)
+    started = time.monotonic()
+    with pytest.raises(ToolError) as info:
+        _call_as_a(svc, users)
+    assert (info.value.code, info.value.retryable) == (ToolErrorCode.BUSY, True)
+    assert time.monotonic() - started < 1.5
+    assert _session(svc) == ("off", True)
+
+
+@TENANCIES
+@pytest.mark.usefixtures("tenant_pool_db")
+def test_a_read_tool_that_writes_fails_and_writes_nothing(
+        svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy) -> None:
+    """RLS would let A add a tag of A's own, and the service role anything: READ ONLY refuses both."""
+    name = f"tools-ro-{uuid.uuid4().hex[:12]}"
+
+    def writer(ctx: Context, args: _Bare) -> dict[str, Any]:
+        with ctx.conn.cursor() as cur:
+            cur.execute("INSERT INTO tags (account_id, name, color) VALUES (%s, %s, 'slate')", (users["a_acc"], name))
+        return {"data": []}
+    _probe(monkeypatch, tenancy, writer)
+    with pytest.raises(ToolError) as info:
+        _call_as_a(svc, users)
+    assert info.value.code is ToolErrorCode.INTERNAL   # a READ tool that writes is a defect, not the caller's
+    with svc.cursor() as cur:
+        cur.execute("SELECT count(*) FROM tags WHERE name = %s", (name,))
+        assert cur.fetchone()[0] == 0
 
 
 # --- market: a property we hold, placed at its location ad -------------------------------------------------------

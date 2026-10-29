@@ -51,10 +51,11 @@ def test_a_tool_cannot_be_declared_without_tenancy_or_effect() -> None:
         Entry(name="x", description="x", args=BaseModel, handler=lambda c, a: {}, tenancy=Tenancy.MARKET)
 
 
-def test_a_write_is_only_ever_to_the_users_own_data() -> None:
+def test_a_market_tool_only_reads_so_a_write_is_only_ever_to_the_users_own_data() -> None:
+    """The service connection is bounded READ ONLY (registry._connection): a market tool that wrote would fail."""
     for entry in ENTRIES.values():
-        if entry.effect is Effect.WRITE:
-            assert entry.tenancy is Tenancy.TENANT, entry.name
+        if entry.tenancy is Tenancy.MARKET:
+            assert entry.effect is Effect.READ, entry.name
 
 
 # --- 2-3. no identity in any input schema -----------------------------------------------------------------------
