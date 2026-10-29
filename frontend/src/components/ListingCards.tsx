@@ -34,7 +34,7 @@ import {
   type SortSpec,
 } from '@/lib/queries';
 import {
-  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
+  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
 import type { CohortKind } from '@/lib/filters';
@@ -635,7 +635,7 @@ function Card({
                  A quiet inset label, no border (P06 note); on a delisted card,
                  whose surface is already the inset, it sits one step up. */
               <span
-                title={storeyTag.full}
+                title={storeyTag.title}
                 className={[
                   'card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
                   'rounded-[var(--radius-xs)] text-[var(--color-ink-3)]',
@@ -740,22 +740,10 @@ function focusFromPointer(button: HTMLButtonElement | null): void {
  * ("přízemí" on a house reads as a claim) and a plot has none. */
 const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
 
-/* The small tag beside the place, never part of the headline: "2. patro z 5",
- * the tooltip carrying fmtFloor's full wording. The scale is listings.floor's
- * (ground = 0), so a bare "2/5" would read as the second of five podlaží when it
- * is the third: the ordinal stays spelled and the count stays behind "z". */
-function storeyTagOf(
-  r: CardRow,
-  storey: ListingFloor | null,
-): { text: string; full: string } | null {
+/* The small tag beside the place, never part of the headline. */
+function storeyTagOf(r: CardRow, storey: ListingFloor | null): ReturnType<typeof fmtFloorTag> {
   if (storey == null || !STOREY_CATEGORIES.has(r.category_main)) return null;
-  const full = fmtFloor(storey.floor, storey.total_floors);
-  if (full == null) return null;
-  const storeyOnly = fmtFloor(storey.floor) ?? full;
-  return {
-    text: storey.total_floors == null ? storeyOnly : `${storeyOnly} z ${storey.total_floors}`,
-    full,
-  };
+  return fmtFloorTag(storey.floor, storey.total_floors);
 }
 
 function formatTitle(r: CardRow, cohortKind: CohortKind | null): string {
