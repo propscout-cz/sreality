@@ -5460,7 +5460,7 @@ rendered blank in production.
 | Cached LLM analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
-| Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |
+| Roadmap / sequencing | `ROADMAP.md` + the track file its row links |
 | Map reference overlays (metro, flood zones, kraje; the tile path) | `docs/design/map-overlays.md` |
 
 **Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agent** skills

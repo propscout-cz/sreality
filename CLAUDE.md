@@ -295,5 +295,5 @@ nor is email as a future second push-ledger channel (inactive; rule #16) — Tel
 | Running / debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Dashboards, admin panels, apps, tools — interface/UI design craft; the binding design system (schemes, hierarchy rulings) | `.claude/skills/interface-design` · `.interface-design/system.md` |
 | Full rule rationale, per-portal data sources, territory deep-dives | `docs/architecture.md` |
-| Sequencing / what's next | `ROADMAP.md` → `roadmap/<track>.md` |
+| Sequencing / what's next | `ROADMAP.md` → the track file its row links |
 | Vocabulary: property, ad, canonical ad, merge, split, survivor, curation | `GLOSSARY.md` |

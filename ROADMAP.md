@@ -7,8 +7,6 @@ track's row links, with completed work in `roadmap/archive.md`.
 
 ## How this roadmap is maintained
 
-- One file per track, the one its row links; `roadmap/archive.md` holds completed work (the
-  old `## Done` block).
 - After shipping meaningful work, in the SAME PR update **only** the track file its index
   row links (move a bullet to done, add new "next" items) **and** this index's
   status cell if the track's status changed. Don't defer roadmap updates to a follow-up.
