@@ -1,12 +1,15 @@
 """Shared setup for the live property-identity tests: the `REQUIRED_DB` guard, `db_url()`, and seed
 helpers for properties, adverts, accounts and the operator's property-anchored state. Every seed lands
-inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back."""
+inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back;
+only `signups` commits, and deletes what it made."""
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -102,3 +105,23 @@ def _tag(cur: Any, acc: uuid.UUID) -> int:
         (acc, f"lp-{uuid.uuid4().hex[:12]}"),
     )
     return int(cur.fetchone()[0])
+
+
+@contextlib.contextmanager
+def signups(svc: Any, prefix: str, *keys: str) -> Iterator[dict[str, Any]]:
+    """One user per key signed up through the real trigger (migration 612: the account, its owner membership, the
+    default board, the monitoring collection and the trial), committed on the autocommit `svc` so a connection of
+    its own sees them: `key` is the user, `key_acc` their account. Deleted on exit."""
+    users = {key: uuid.uuid4() for key in keys}
+    with svc.cursor() as cur:
+        for key, user in users.items():
+            cur.execute("INSERT INTO auth.users (id, email) VALUES (%s, %s)",
+                        (user, f"{prefix}-{key}-{user.hex[:8]}@test.local"))
+        cur.execute("SELECT user_id, account_id FROM account_members WHERE user_id = ANY(%s)", (list(users.values()),))
+        account = dict(cur.fetchall())
+    try:
+        yield {**users, **{f"{key}_acc": account[user] for key, user in users.items()}}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM accounts WHERE id = ANY(%s)", (list(account.values()),))
+            cur.execute("DELETE FROM auth.users WHERE id = ANY(%s)", (list(users.values()),))

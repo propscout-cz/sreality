@@ -25,5 +25,5 @@ def test_call_prints_the_envelope_or_the_error(monkeypatch: Any, capsys: Any) ->
                                                    "metadata": {"tool": "find_comparables_relaxed"}}
     monkeypatch.undo()
     monkeypatch.setattr("scraper.db.connect", lambda: contextlib.nullcontext(object()))
-    assert capabilities_demo.main(["call", "list_pipeline_stages"]) == 1
+    assert capabilities_demo.main(["call", "get_my_property_context"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "forbidden"

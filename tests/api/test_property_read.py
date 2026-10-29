@@ -1,7 +1,7 @@
-"""A property as its page reads it (#2063): the dossier and broker tools over the page's own relations and columns.
+"""A property as its page reads it (#2063): the dossier, own-context and broker tools over the page's own relations.
 
 What they read under a user's login is pinned against the replayed schema in tests/test_capabilities_live.py; here, the
-columns (the page's), the statements, the rows they assemble and the broker cap.
+columns (the page's), the statements, the rows they assemble, the broker cap and where a cut falls.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from api import curation, pipeline
 from api import property_read as pr
 from api.capabilities import registry, truncate
 from api.capabilities.entry import Caller
@@ -58,10 +59,21 @@ RUNS = [_row(pr.RUN_COLS, id=3, created_at=_at(9), status="success", input_listi
              gross_yield_pct=Decimal("4.2")),
         _row(pr.RUN_COLS, id=2, created_at=_at(8), status="failed", input_listing_id=72),
         _row(pr.RUN_COLS, id=1, created_at=_at(7), status="success", input_listing_id=71)]
+# The user's own: a card on 8; 7 in their collection 6 and in 5, a colleague's shared with them, tagged and dismissed.
+STATES = [_row(curation.STATE_COLS, property_id=8, stage_id=3, stage_key="zajem", stage_label="Zájem",
+               entered_stage_at=_at(3), collection_ids=[5], tag_ids=[], dismissed=False),
+          _row(curation.STATE_COLS, property_id=7, collection_ids=[5, 6], tag_ids=[2], dismissed=True)]
+COLLEAGUE = "kolega@rk.test"
+NOTES = [(12, 8, "a colleague's", True, _at(5), _at(5), None, COLLEAGUE, None, None),
+         (11, 7, "mine", False, _at(4), _at(4), _at(50), None, None, None)]
+COLLECTIONS = [(6, "Mine", None, _at(0), _at(2), 1, True, True, None, [{"account_id": "x", "email": COLLEAGUE}]),
+               (5, "Shared with me", None, _at(0), _at(1), 3, False, False, COLLEAGUE, [])]
+TAGS = [(2, "balkon", "slate", _at(0), 4)]
+STAGES = [(3, "zajem", "Zájem", 1, "sky", False, True, "Z"), (4, "konec", "Konec", 2, "slate", True, False, None)]
 
 
 def script(props: dict[int, tuple[Any, ...]] = PROPS, runs: list[tuple[Any, ...]] = RUNS,
-           brokers: list[dict[str, Any]] = ()) -> ScriptConn:
+           brokers: list[dict[str, Any]] = (), notes: list[tuple[Any, ...]] = NOTES) -> ScriptConn:
     """The page's relations for the seeds above, every read answered as its statement would be."""
     return ScriptConn([
         (lambda sql: sql.startswith("WITH RECURSIVE chain"), [(7, 7), (9, 8)]),
@@ -71,6 +83,11 @@ def script(props: dict[int, tuple[Any, ...]] = PROPS, runs: list[tuple[Any, ...]
         (lambda sql: "lag(price_czk)" in sql, POINTS),
         (lambda sql: "from estimation_runs" in sql, runs),
         (lambda sql: "FROM listing_broker_public" in sql, [dict(b) for b in brokers]),
+        (lambda sql: "FROM property_pipeline pp" in sql, STATES),
+        (lambda sql: "FROM property_notes n WHERE" in sql, notes),
+        (lambda sql: "FROM collections c ORDER BY" in sql, COLLECTIONS),
+        (lambda sql: "FROM tags t ORDER BY" in sql, TAGS),
+        (lambda sql: "FROM pipeline_stages WHERE" in sql, STAGES),
     ])
 
 
@@ -200,16 +217,80 @@ def test_an_oversized_dossier_drops_trailing_properties_whole() -> None:
     assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
 
 
-@pytest.mark.parametrize("args", [{"property_ids": []}, {"property_ids": list(range(1, 22))},
-                                  {"property_ids": [0]}, {"property_ids": [2**63]},
-                                  {"property_ids": [7], "listing_ids": [71]}])
-@pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers"])
+_REFUSED = [{"property_ids": list(range(1, 22))}, {"property_ids": [0]}, {"property_ids": [2**63]},
+            {"property_ids": [7], "listing_ids": [71]}]
+
+
+@pytest.mark.parametrize("name, args", [(n, a) for n in ("get_property_dossier", "get_property_brokers")
+                                        for a in [{"property_ids": []}, *_REFUSED]]
+                         + [("get_my_property_context", a) for a in _REFUSED])
 def test_up_to_twenty_property_ids_and_nothing_else_or_no_database_is_touched(name: str, args: dict[str, Any]) -> None:
     conn, records = ScriptConn([]), []
     with pytest.raises(ToolError) as info:
         run(name, args, conn, record=lambda *r: records.append(r))
     assert info.value.code is ToolErrorCode.INVALID_ARGUMENTS
     assert not conn.executed and records == [(name, args, info.value.payload())]
+
+
+# --- the user's own context -------------------------------------------------------------------------------------
+
+def test_own_context_answers_in_the_order_asked_a_merged_id_followed_an_unknown_named() -> None:
+    out = run("get_my_property_context", {"property_ids": [7, 9, 404, 7]})
+    seven, eight = out["data"]["properties"]
+    assert seven == {"property_id": 7, "stage_id": None, "stage_key": None, "stage_label": None, "stage_code": None,
+                     "stage_color": None, "entered_stage_at": None, "collection_ids": [5, 6], "tag_ids": [2],
+                     "dismissed": True}
+    assert (eight["stage_label"], eight["entered_stage_at"], eight["collection_ids"]) == (
+        "Zájem", _at(3).isoformat(), [5])
+    meta = out["metadata"]
+    assert (meta["tool"], meta["result_count"], meta["resolved"], meta["missing"], meta["data_freshness"]) == (
+        "get_my_property_context", 2, {9: 8}, [404], None)
+
+
+def test_notes_are_flat_and_keyed_by_property_and_the_vocabularies_are_the_screens_own() -> None:
+    """Notes as GET /properties/{id}/notes serves them, a colleague's naming its author, never their files; the
+    collections, tags and stages verbatim as the API lists them, e-mails included (ruling R4)."""
+    data = run("get_my_property_context", {"property_ids": [9, 7]})["data"]
+    assert [(n["id"], n["property_id"], n["owner_email"]) for n in data["notes"]] == [(12, 8, COLLEAGUE), (11, 7, None)]
+    assert data["notes"][1]["viewing_at"] == _at(50).isoformat() and "attachments" not in data["notes"][0]
+    assert data["collections"] == curation.list_collections(script())["data"]
+    assert data["tags"] == curation.list_tags(script())["data"]
+    assert data["stages"] == pipeline.list_stages(script())["data"]
+    assert [(c["id"], c["owner_email"]) for c in data["collections"]] == [(6, None), (5, COLLEAGUE)]
+
+
+_OWN_READS = ("RECURSIVE chain", "property_pipeline", "property_notes", "FROM collections c", "FROM tags t",
+              "FROM pipeline_stages")
+
+
+def _own_reads(conn: ScriptConn) -> list[tuple[str, Any]]:
+    return [(next(r for r in _OWN_READS if r in sql), params) for sql, params in conn.executed]
+
+
+def test_each_own_read_is_one_statement_over_the_survivors() -> None:
+    conn = script()
+    run("get_my_property_context", {"property_ids": [7, 9, 404]}, conn)
+    assert _own_reads(conn) == [("RECURSIVE chain", {"ids": [7, 9, 404]}), ("property_pipeline", ([7, 8],)),
+                                ("property_notes", ([7, 8],)), *[(r, None) for r in _OWN_READS[3:]]]
+
+
+@pytest.mark.parametrize("args", [{}, {"property_ids": []}])
+def test_with_no_property_the_vocabularies_alone(args: dict[str, Any]) -> None:
+    conn = script()
+    data = run("get_my_property_context", args, conn)["data"]
+    assert (data["properties"], data["notes"]) == ([], [])
+    assert [len(data[k]) for k in ("collections", "tags", "stages")] == [2, 1, 2]
+    assert [r for r, _ in _own_reads(conn)] == list(_OWN_READS[3:])
+
+
+def test_a_cut_drops_whole_notes_oldest_first_and_keeps_the_rest_whole() -> None:
+    notes = [(100 + n, 7, "x" * 1_000, False, _at(-n), _at(-n), None, None, None, None) for n in range(40)]
+    out = run("get_my_property_context", {"property_ids": [7, 9]}, script(notes=notes))
+    kept = [n["id"] for n in out["data"]["notes"]]
+    assert kept == list(range(100, 100 + len(kept))) and 0 < len(kept) < 40
+    assert out["metadata"]["truncated"] == {"data.notes": {"kept": len(kept), "total": 40}}
+    assert [len(out["data"][k]) for k in ("properties", "collections", "tags", "stages")] == [2, 2, 1, 2]
+    assert len(truncate.encode(out)) <= truncate.RESULT_BUDGET
 
 
 # --- the brokers ------------------------------------------------------------------------------------------------

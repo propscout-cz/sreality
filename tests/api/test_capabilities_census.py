@@ -283,8 +283,8 @@ def test_the_forbidden_set_names_what_the_read_models_still_publish() -> None:
 
 
 _READERS = ("api.property_search", "api.property_read")
-# Each tool reader's column allowlists: search's and every *_COLS of the property page's reader.
-_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS"] + [
+# Each tool reader's column allowlists: search's, the property state's and every *_COLS of the property page's reader.
+_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS", "api.curation.STATE_COLS"] + [
     f"api.property_read.{n}" for n in sorted(vars(importlib.import_module("api.property_read"))) if n.endswith("_COLS")]
 
 
@@ -340,7 +340,7 @@ def test_the_relation_pattern_sees_what_it_bans() -> None:
     assert _FORBIDDEN_RELATIONS.findall("from curated_cities_matching(x) join city_index_values v on listing_location")
 
 
-@pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers"])
+@pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers", "get_my_property_context"])
 def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis(name: str) -> None:
     from tests.api.test_property_read import _broker, run, script
     from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
@@ -349,5 +349,7 @@ def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_
     assert rows and not {k for d in rows for k in d} & forbidden_columns(), name
     priced = [d for d in rows if d.get(PPM2_VALUE_KEY) is not None]
     assert all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced), name
+    if name != "get_property_brokers":
+        assert not [k for d in rows for k in d if k.startswith("broker")], name
     if name == "get_property_dossier":
-        assert len(priced) >= 3 and not [k for d in rows for k in d if k.startswith("broker")]
+        assert len(priced) >= 3

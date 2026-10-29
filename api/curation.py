@@ -1,4 +1,5 @@
-"""Persistence helpers for /collections (+ /shares), /properties/{id}/notes, /artifact-links, /tags.
+"""Persistence helpers for /collections (+ /shares), /properties/{id}/notes, /artifact-links, /tags, and the one read
+of a property's state as the caller sees it (the extension's lookup, an agent's own context).
 
 CRUD over the property-grain curation tables (migration 202), keyed on `property_id` so curation
 follows the property across merge/detach (toolkit.property_carriers). Every route runs on
@@ -348,7 +349,7 @@ _UPDATE_NOTE_SQL = (
 
 _LIST_NOTES_SQL = (
     f"SELECT {_NOTE_PROJECTION} FROM property_notes n "
-    "WHERE n.property_id = %s ORDER BY n.created_at DESC, n.id DESC"
+    "WHERE n.property_id = ANY(%s) ORDER BY n.created_at DESC, n.id DESC"
 )
 
 _CREATE_NOTE_SQL = (
@@ -376,13 +377,18 @@ def list_notes(
 ) -> dict[str, Any]:
     """The property's notes, newest first, each with its attachments (oldest first); a
     merged-away id reads its survivor's, as writes do."""
-    pid = resolve_active_property_id(conn, property_id) or property_id
-    with conn.cursor() as cur:
-        cur.execute(_LIST_NOTES_SQL, (pid,))
-        rows = cur.fetchall()
-    notes = [_to_note(r) for r in rows]
+    notes = notes_of(conn, [resolve_active_property_id(conn, property_id) or property_id])
     files = attachments.attachments_by_note(conn, [n["id"] for n in notes])
     return {"data": [{**n, "attachments": files[n["id"]]} for n in notes]}
+
+
+def notes_of(conn: "psycopg.Connection", property_ids: list[int]) -> list[dict[str, Any]]:
+    """The notes on these properties the caller may read, newest first, without their attachments."""
+    if not property_ids:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(_LIST_NOTES_SQL, (list(property_ids),))
+        return [_to_note(r) for r in cur.fetchall()]
 
 
 def create_note(
@@ -639,6 +645,52 @@ def detach_tag(
         cur.execute(sql, (pid, tag_id))
         detached = cur.rowcount > 0
     return {"detached": detached}
+
+
+# --- a property's state, as the caller reads it -----------------------------
+
+# One row per property asked, read by the extension's lookup and an agent's own context alike. RLS alone scopes it
+# (acting_account_ids(), migration 641): no account is bound, so it cannot bind a wrong one (the 2026-07-23
+# regression was a second definition, an explicit account silently binding NULL).
+STATE_COLS = (
+    "property_id", "stage_id", "stage_key", "stage_label", "stage_code", "stage_color", "entered_stage_at",
+    "collection_ids", "tag_ids", "dismissed",
+)
+_PROPERTY_STATE_SQL = """
+SELECT
+    t.property_id,
+    pc.stage_id, pc.key, pc.label, pc.code, pc.color, pc.entered_stage_at,
+    (SELECT coalesce(array_agg(cp.collection_id ORDER BY cp.collection_id), array[]::bigint[])
+       FROM collection_properties cp
+      WHERE cp.property_id = t.property_id) AS collection_ids,
+    (SELECT coalesce(array_agg(pt.tag_id ORDER BY pt.tag_id), array[]::bigint[])
+       FROM property_tags pt
+      WHERE pt.property_id = t.property_id) AS tag_ids,
+    EXISTS (SELECT 1 FROM property_dismissals_public pd
+             WHERE pd.property_id = t.property_id) AS dismissed
+FROM unnest(%s::bigint[]) AS t(property_id)
+-- A LATERAL, not a plain join: RLS is PLURAL (every account the caller belongs to), so a
+-- multi-membership caller could match more than one card and multiply the rows. Such a
+-- caller sees the most recently updated card; the active-account primitive is the future fix.
+LEFT JOIN LATERAL (
+    SELECT pp.stage_id, ps.key, ps.label, ps.code, ps.color, pp.entered_stage_at
+    FROM property_pipeline pp
+    JOIN pipeline_stages ps ON ps.id = pp.stage_id
+    WHERE pp.property_id = t.property_id
+    ORDER BY pp.updated_at DESC, pp.account_id
+    LIMIT 1
+) pc ON true
+"""
+
+
+def property_state(conn: "psycopg.Connection", property_ids: list[int]) -> list[dict[str, Any]]:
+    """Each property's pipeline card (stage_* null without one), the collections and tags holding it, and whether
+    the caller dismissed it."""
+    if not property_ids:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(_PROPERTY_STATE_SQL, (list(property_ids),))
+        return [dict(zip(STATE_COLS, row, strict=True)) for row in cur.fetchall()]
 
 
 # --- helpers ---------------------------------------------------------------

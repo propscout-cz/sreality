@@ -4,19 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from api import pipeline
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
-from api.filter_args import Args
-from api.property_read import PROPERTIES_MAX, PropertyIds, dossier
+from api.property_read import PROPERTIES_MAX, ContextIds, PropertyIds, dossier, own_context
 from api.property_search import PAGE_MAX, SearchArgs, search_properties
-
-
-class NoArgs(Args):
-    pass  # takes nothing, and still refuses an unknown key (a docstring would reach the schema)
-
-
-def _list_pipeline_stages(ctx: Context, args: NoArgs) -> dict[str, Any]:
-    return pipeline.list_stages(ctx.conn)
 
 
 def _search_properties(ctx: Context, args: SearchArgs) -> dict[str, Any]:
@@ -27,13 +17,11 @@ def _dossier(ctx: Context, args: PropertyIds) -> dict[str, Any]:
     return dossier(ctx.conn, args)
 
 
+def _own_context(ctx: Context, args: ContextIds) -> dict[str, Any]:
+    return own_context(ctx.conn, args)
+
+
 ENTRIES = (
-    Entry(
-        name="list_pipeline_stages",
-        description="The stages of the user's deal pipeline board, in board order: id, key, label, position, "
-        "colour, whether a stage is the entry stage or a terminal (closed-deal) one, and its badge code.",
-        args=NoArgs, handler=_list_pipeline_stages, tenancy=Tenancy.TENANT, effect=Effect.READ,
-    ),
     Entry(
         name="search_properties",
         description="The properties Browse lists for these filters, read as the user reads Browse: published, "
@@ -58,5 +46,17 @@ ENTRIES = (
         "runs, estimates_cut saying how many). No broker: get_property_brokers lists them. When metadata.truncated "
         "is present, ask again for the properties left out.",
         args=PropertyIds, handler=_dossier, tenancy=Tenancy.TENANT, effect=Effect.READ,
+    ),
+    Entry(
+        name="get_my_property_context",
+        description=f"What the user holds on up to {PROPERTIES_MAX} properties, read as their own screens read it "
+        "(never as the owner of a board shared with them): per property their pipeline card (stage_id null = none; "
+        "the newest when they hold several), the collections and tags holding it and whether they dismissed it; the "
+        "notes they may read on them, newest first (their own, and a colleague's marked shared on a property in a "
+        "collection shared between them, owner_email naming that colleague); and their vocabularies: collections (one "
+        "shared with them names its owner in owner_email), tags and pipeline stages, the ids search_properties' tags, "
+        "collections and pipeline filters take. With no property ids, the vocabularies alone. When metadata.truncated "
+        "is present, ask again for fewer properties.",
+        args=ContextIds, handler=_own_context, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )

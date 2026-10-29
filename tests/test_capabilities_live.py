@@ -1,9 +1,10 @@
 """The tool registry against the replayed schema (#2062): a tenant tool runs in the caller's own RLS transaction
-and sees only their account's rows; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
+as that user, acting for no one; every tool read is READ ONLY at `authenticated`'s 8 s (#2063); a market tool
 places a property we hold at its location ad and returns the toolkit's own envelope; search_properties selects, under
 the user's login, exactly the properties the Watchdog matches for the same filters (#2063); the dossier is the property
-page's read under the user's login and the brokers the page's, at most twenty people a call, each call recorded
-(#2063). Runs in CI's migrations job (`TEST_DATABASE_URL`)."""
+page's read under the user's login and the brokers the page's, at most twenty people a call, each call recorded; the
+own context is what each user reads in their own identity, a collection shared with them included (#2063). Runs in
+CI's migrations job (`TEST_DATABASE_URL`)."""
 
 from __future__ import annotations
 
@@ -24,7 +25,17 @@ from api.dependencies import SYSTEM_ACCOUNT_ID
 from api.filter_args import Args
 from api.notifications import WatchdogFilterSpec, _build_match_clauses
 from api.property_search import PAGE_MAX
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, _snapshot, _tag, db_url
+from tests._live_property import (
+    REQUIRED_DB,
+    _advert,
+    _collection,
+    _property,
+    _recompute,
+    _snapshot,
+    _tag,
+    db_url,
+    signups,
+)
 from tests._tenant_scope import tool_call
 from tests.test_location_ad_readers_live import POINT, RING, _placed
 from toolkit import ComparableFilters, TargetSpec, find_comparables_relaxed
@@ -46,19 +57,9 @@ def svc() -> Iterator[psycopg.Connection]:
 
 @pytest.fixture(scope="module")
 def users(svc: psycopg.Connection) -> Iterator[dict[str, uuid.UUID]]:
-    """Two signups through the real trigger (migration 612), each born with its default board."""
-    a, b = uuid.uuid4(), uuid.uuid4()
-    with svc.cursor() as cur:
-        cur.execute("INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
-                    (a, f"tools-a-{a.hex[:8]}@test.local", b, f"tools-b-{b.hex[:8]}@test.local"))
-        cur.execute("SELECT user_id, account_id FROM account_members WHERE user_id IN (%s, %s)", (a, b))
-        account = dict(cur.fetchall())
-    try:
-        yield {"a": a, "b": b, "a_acc": account[a], "b_acc": account[b]}
-    finally:
-        with svc.cursor() as cur:
-            cur.execute("DELETE FROM accounts WHERE id IN (%s, %s)", (account[a], account[b]))
-            cur.execute("DELETE FROM auth.users WHERE id IN (%s, %s)", (a, b))
+    """Three signups (C a bystander), each born with its default board and monitoring collection."""
+    with signups(svc, "tools", "a", "b", "c") as made:
+        yield made
 
 
 @pytest.fixture()
@@ -70,9 +71,9 @@ def _claims(user: uuid.UUID) -> dict[str, str]:
     return {"sub": str(user), "role": "authenticated"}
 
 
-def _stage_ids(svc: psycopg.Connection, account: uuid.UUID) -> set[int]:
-    with svc.cursor() as cur:
-        cur.execute("SELECT id FROM pipeline_stages WHERE account_id = %s AND archived_at IS NULL", (account,))
+def _owned(conn: Any, table: str, account: uuid.UUID) -> set[int]:
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT id FROM {table} WHERE account_id = %s", (account,))  # noqa: S608 - fixed tables
         return {int(r[0]) for r in cur.fetchall()}
 
 
@@ -91,11 +92,13 @@ def _call_as_a(svc: psycopg.Connection, users: dict[str, Any]) -> dict[str, Any]
 
 @pytest.mark.usefixtures("tenant_pool_db")
 def test_a_tenant_tool_returns_exactly_the_callers_own_rows(svc: psycopg.Connection, users: dict[str, Any]) -> None:
-    for me, mine, theirs in (("a", "a_acc", "b_acc"), ("b", "b_acc", "a_acc")):
-        out = registry.call(Caller(market=svc, claims=_claims(users[me])), "list_pipeline_stages", {})
-        seen = {stage["id"] for stage in out["data"]}
-        assert seen and seen == _stage_ids(svc, users[mine])
-        assert not seen & _stage_ids(svc, users[theirs])
+    """End to end on what a signup is born with: the user's own board and monitoring collection, never another's."""
+    for me, theirs in (("a", "b_acc"), ("b", "a_acc")):
+        data = registry.call(Caller(market=svc, claims=_claims(users[me])), "get_my_property_context", {})["data"]
+        for vocabulary, table in (("stages", "pipeline_stages"), ("collections", "collections")):
+            seen = {row["id"] for row in data[vocabulary]}
+            assert seen and seen == _owned(svc, table, users[f"{me}_acc"]), vocabulary
+            assert not seen & _owned(svc, table, users[theirs]), vocabulary
 
 
 @pytest.mark.usefixtures("tenant_pool_db")
@@ -114,8 +117,72 @@ def test_a_tenant_tool_runs_as_authenticated_under_the_callers_claims(
 
 def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden(svc: psycopg.Connection) -> None:
     with pytest.raises(ToolError) as info:
-        registry.call(Caller(market=svc), "list_pipeline_stages", {})
+        registry.call(Caller(market=svc), "get_my_property_context", {})
     assert info.value.code is ToolErrorCode.FORBIDDEN
+
+
+def _email(cur: Any, user: uuid.UUID) -> str:
+    cur.execute("SELECT email FROM auth.users WHERE id = %s", (user,))
+    return cur.fetchone()[0]
+
+
+def test_own_context_is_what_each_user_reads_in_their_own_identity(cur: Any, users: dict[str, Any]) -> None:
+    """Acceptance 3 (#2063). A and B on one property: A's card, tag, dismissal, private collection and unmarked note
+    never reach B, B's card, tag and note never reach A; A's collection shared with B brings B that collection, its
+    member and A's note marked shared, each naming A. Bystander C sees none of it. A merged-away id follows."""
+    pid, gone = _property(cur), _property(cur)
+    cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s WHERE id = %s", (pid, gone))
+    stage, tag, note = {}, {}, {}
+    for who in ("a", "b"):
+        acc = users[f"{who}_acc"]
+        cur.execute("SELECT id FROM pipeline_stages WHERE account_id = %s ORDER BY position LIMIT 1", (acc,))
+        stage[who] = cur.fetchone()[0]
+        tag[who] = _tag(cur, acc)
+        cur.execute("INSERT INTO property_pipeline (account_id, property_id, stage_id) VALUES (%s, %s, %s)",
+                    (acc, pid, stage[who]))
+        cur.execute("INSERT INTO property_tags (account_id, property_id, tag_id) VALUES (%s, %s, %s)",
+                    (acc, pid, tag[who]))
+    for name, who, shared in (("a_shared", "a", True), ("a_own", "a", False), ("b_own", "b", False)):
+        cur.execute("INSERT INTO property_notes (account_id, property_id, body, shared) VALUES (%s, %s, %s, %s) "
+                    "RETURNING id", (users[f"{who}_acc"], pid, f"lp {name}", shared))
+        note[name] = cur.fetchone()[0]
+    cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)", (users["a_acc"], pid))
+    private, shared = _collection(cur, users["a_acc"]), _collection(cur, users["a_acc"])
+    for coll in (private, shared):
+        cur.execute("INSERT INTO collection_properties (collection_id, property_id) VALUES (%s, %s)", (coll, pid))
+    cur.execute("INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s)",
+                (shared, users["b_acc"]))
+    a_email, b_email = _email(cur, users["a"]), _email(cur, users["b"])
+
+    def context(who: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        out = tool_call(cur, users[who], "get_my_property_context", {"property_ids": [gone, 2**62]})
+        assert (out["metadata"]["resolved"], out["metadata"]["missing"]) == ({gone: pid}, [2**62])
+        [row] = out["data"]["properties"]
+        return row, out["data"]
+
+    def card(row: dict[str, Any]) -> tuple[Any, ...]:
+        return row["property_id"], row["stage_id"], row["tag_ids"], row["dismissed"], row["collection_ids"]
+
+    row, a = context("a")
+    assert card(row) == (pid, stage["a"], [tag["a"]], True, sorted([private, shared]))
+    assert {n["id"]: n["owner_email"] for n in a["notes"]} == {note["a_shared"]: None, note["a_own"]: None}
+    colls = {c["id"]: c for c in a["collections"]}
+    assert colls[shared]["owner_email"] is None and [s["email"] for s in colls[shared]["shared_with"]] == [b_email]
+    assert private in colls and tag["a"] in {t["id"] for t in a["tags"]} and tag["b"] not in {
+        t["id"] for t in a["tags"]}
+
+    row, b = context("b")
+    assert card(row) == (pid, stage["b"], [tag["b"]], False, [shared])
+    assert {n["id"]: n["owner_email"] for n in b["notes"]} == {note["b_own"]: None, note["a_shared"]: a_email}
+    colls = {c["id"]: c for c in b["collections"]}
+    assert colls[shared]["owner_email"] == a_email and private not in colls
+    assert tag["b"] in {t["id"] for t in b["tags"]} and tag["a"] not in {t["id"] for t in b["tags"]}
+    assert {s["id"] for s in b["stages"]} == _owned(cur.connection, "pipeline_stages", users["b_acc"])
+
+    row, c = context("c")
+    assert card(row) == (pid, None, [], False, []) and c["notes"] == []
+    assert not {private, shared} & {x["id"] for x in c["collections"]}
+    assert not set(tag.values()) & {t["id"] for t in c["tags"]}
 
 
 # --- every tool read is bounded the way PostgREST bounds a signed-in GET -----------------------------------------

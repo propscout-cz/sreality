@@ -1,6 +1,6 @@
 """A property as its page reads it (#2063): the page's own relations and columns (frontend/src/lib/queries.ts), read
-here once for every server-side reader of them: an agent's dossier (under the user's own login) and broker list (on the
-service connection, as the page's broker read), the extension's price chart and the download."""
+here once for every server-side reader of them: an agent's dossier and own context (under the user's own login) and
+broker list (on the service connection, as the page's broker read), the extension's price chart and the download."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Annotated, Any
 import psycopg
 from pydantic import Field
 
+from api import curation, pipeline
 from api.capabilities import truncate
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
@@ -72,11 +73,21 @@ _CUT_NOTE = len(',"truncated":{"data":{"kept":20,"total":20}}')
 _BROKER = ("broker_id", "broker_display_name", "broker_firm_label", "primary_phone", "primary_email")
 
 
+_PropertyId = Annotated[int, Field(ge=1, le=_BIGINT.stop - 1)]
+_FOLLOWED = ("A merged-away id follows its survivor (metadata.resolved); an id we do not hold is listed in "
+             "metadata.missing.")
+
+
 class PropertyIds(Args):
-    property_ids: list[Annotated[int, Field(ge=1, le=_BIGINT.stop - 1)]] = Field(
+    property_ids: list[_PropertyId] = Field(
         min_length=1, max_length=PROPERTIES_MAX, description=f"Properties we hold (property ids), 1 to "
-        f"{PROPERTIES_MAX}, answered in this order. A merged-away id follows its survivor (metadata.resolved); an id "
-        "we do not hold is listed in metadata.missing.")
+        f"{PROPERTIES_MAX}, answered in this order. {_FOLLOWED}")
+
+
+class ContextIds(Args):
+    property_ids: list[_PropertyId] = Field(
+        default_factory=list, max_length=PROPERTIES_MAX, description=f"Properties we hold (property ids), 0 to "
+        f"{PROPERTIES_MAX}, answered in this order; none returns the vocabularies alone. {_FOLLOWED}")
 
 
 def jsonable(value: Any) -> Any:
@@ -139,8 +150,8 @@ def _survivors(conn: psycopg.Connection, asked: list[int]) -> tuple[list[int], d
     }
 
 
-def _envelope(tool: str, args: PropertyIds, data: list[dict[str, Any]], count: int, freshness: str | None,
-              **metadata: Any) -> dict[str, Any]:
+def _envelope(tool: str, args: PropertyIds | ContextIds, data: list[dict[str, Any]] | dict[str, Any], count: int,
+              freshness: str | None, **metadata: Any) -> dict[str, Any]:
     return {"data": data, "metadata": {
         "tool": tool, "filters_used": {"property_ids": args.property_ids}, "result_count": count,
         "queried_at": _now_iso(), "data_freshness": freshness, **metadata}}
@@ -223,3 +234,18 @@ def property_brokers(conn: psycopg.Connection, args: PropertyIds) -> dict[str, A
         "get_property_brokers", args, rows[:cut], len(rows), None, pii_masked=listed["metadata"]["pii_masked"],
         brokers={"kept": min(len(rank), BROKERS_MAX), "total": len(rank)},
         unlisted_property_ids=list(dict.fromkeys(r["property_id"] for r in rows[cut:])), **followed)
+
+
+def own_context(conn: psycopg.Connection, args: ContextIds) -> dict[str, Any]:
+    """What the user holds on these properties in their own identity, flat lists keyed by property id (so a cut drops
+    whole notes), and the vocabularies its ids name: their collections, tags and stages as their screens list them."""
+    ids, followed = _survivors(conn, args.property_ids)
+    state = {s["property_id"]: s for s in curation.property_state(conn, ids)}
+    rows = [jsonable(state[i]) for i in ids if i in state]
+    return _envelope("get_my_property_context", args, {
+        "properties": rows,
+        "notes": curation.notes_of(conn, ids),
+        "collections": curation.list_collections(conn)["data"],
+        "tags": curation.list_tags(conn)["data"],
+        "stages": pipeline.list_stages(conn)["data"],
+    }, len(rows), None, **followed)
