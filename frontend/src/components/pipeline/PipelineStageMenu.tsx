@@ -28,7 +28,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import AnchoredPopover from '@/components/AnchoredPopover';
 import { CheckIcon } from '@/components/phone/phoneIcons';
 import { usePipelineStages } from '@/lib/pipelineReads';
-import { stageAccent, stageBadge } from '@/lib/pipelineStage';
+import { REMOVE_QUESTION, removeWarning, stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import type { PipelineStage } from '@/lib/types';
 
@@ -236,14 +236,8 @@ export function PipelineStageMenuBody({
       <div className={cls.foot}>
         {confirming ? (
           <div className={cls.confirm}>
-            <p className={cls.question}>Odebrat z pipeline?</p>
-            <p className={cls.why}>
-              Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po
-              opětovném přidání se počítají znovu.
-              {hasTerminalSplit
-                ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.'
-                : ''}
-            </p>
+            <p className={cls.question}>{REMOVE_QUESTION}</p>
+            <p className={cls.why}>{removeWarning(stages)}</p>
             <div className={cls.buttons}>
               <button
                 type="button"

@@ -1,4 +1,4 @@
-# Coverage and delisting: the (formerly parked) flag, the slice ledger, and the retired gate
+# Coverage and delisting: the (formerly parked) flag, the walk cycle, and the retired gate
 
 Loaded on demand from `scraper-ops`. Everything here is about one question —
 **may this portal delete listings?** — and the four layers that now answer it
@@ -15,12 +15,12 @@ instead of a boolean somebody typed once.
 > **structural** — `walk_reached_end`, "the walk reached the portal's end" — and
 > the count comparison (`walk_coverage`) is a LOGGED WARNING, never a gate. See
 > "The structural gate" below; the arithmetic in this file still governs the
-> descent/resample triggers and the ledger's `outcome`, which did not change.
+> descent/resample triggers and the slices' `outcome`, which did not change.
 >
 > **2026-10-19 (Health wave 4):** the coverage gate is retired — it had nothing
 > left to evaluate once every scraper portal's flag was true (newest evaluation
 > 2026-09-13) — and with it the ceskereality and mmreality slice writes only it
-> read; idnes keeps its ledger for its own stalest-first order. Health measures
+> read (idnes's went with the walk cycle, 2026-10-29). Health measures
 > coverage instead: the `coverage` gauge and the `scraping` and `delisting`
 > alarms (`references/pipeline-verification.md`).
 
@@ -188,43 +188,56 @@ ends on its terminator ~26 short and descends) is a transport failure and a
 `degraded` page carries no total to measure a union against; descending on either
 would just multiply failed requests and relabel a fetch problem as a coverage one.
 
-## The ledger (`portal_index_slices`, migration 454)
+## The walk cycle (2026-10-29, #2020)
 
-One latest-wins row per `(source, category_main, category_type, slice_key)`:
-`walked_at`, `outcome`, `declared_total`, `collected`, `pages`.
+The ledger is `scrape_runs.by_category`: every walked unit's entry carries its
+nomination `scope`, its verdict and `cycle_started_at`, persisted as the unit ends
+in the same statement as its page count, so a killed walk keeps it. Health's walks
+checks read the same entries. (`portal_index_slices`, migration 454, idnes's own
+slice ledger, went with migration 689.)
 
-- Only `exhausted` is positive. `deadline`, `error`, `degraded` and `ceiling`
-  are **missing evidence**: any one of them held its whole category open for the
-  retired gate — 14 good slices and one hole is not 93% coverage.
-- **`outcome` stayed NUMERIC on 2026-09-08**: the gate counted
-  `outcome='exhausted'` streaks, so re-pointing it at the structural verdict would
-  have silently re-baselined it. Since the gate's retirement (2026-10-19) nothing
-  reads the column — idnes orders by `walked_at` alone — so it is evidence for a
-  human. The structural verdict travels beside it, in code (a field on the slice
-  result) and in the `SLICE`/`CATEGORY` log lines, not in the ledger. Consequence
-  to expect: a slice can read `outcome='degraded'` (one row short) and
-  `stop=pager_end` (reached idnes's last page) at the same time. Both are true;
-  only the second decides nomination. **Never read `exhausted` as "this
-  nominated".**
-- **Both the category order and the slice order are least-recently-walked
-  first**, and an absent row sorts to *infinity*, not zero. Treating unknown as
-  fresh would sort exactly the never-walked slices last, which is the starvation
-  the table exists to end.
-- Category ordering matters as much as slice ordering: the runner walks
-  categories in sequence, so one that eats the whole budget starves the rest
-  however its own slices are sorted. That is what left 8 of 10 never walked.
-- Both helpers are best-effort. An unwritten slice looks stale next run, and an
-  unreadable ledger means "walk everything" — the failure direction is always
-  *more* walking.
+- A **cycle** is one pass over every scope group; its anchor is its first run's
+  start. A run walks group by group, **least recently walked first** whatever the
+  outcome (idnes's slice-ledger rule, lifted), a group never walked first of all
+  (unknown is never "fresh": that is the starvation that once left 8 of 10 idnes
+  categories unwalked), siblings together; the group that ate the budget goes
+  last next time, so one no run can finish never starves the rest.
+- A run **cut by our stop** (a signal, the deadline, a kill) leaves the cycle open,
+  so it writes no end; the next run skips the groups that reached the end since
+  the anchor (`CYCLE … resumed=True skipped=N`), while the cycle is younger than
+  the portal's `walk_timeout_s`. Past it the cycle is left (`CYCLE the open cycle
+  from … outlived …`) and a fresh one starts: on GitHub, the next scheduled walk.
+- The first run that walks its **whole plan ends the cycle**: the orphans are
+  nominated only when every group reached the end since the anchor, against what
+  nothing sighted since it (`last_seen_at < anchor`). Otherwise the end entry reads
+  `walk_reached_end: false` and the next run starts afresh, so one failing
+  category cannot starve the rest. The end entry is the NULL-labelled orphans
+  entry with `scope: {}`; Health dates it at the anchor (`unnominated`).
+- Group nominations stay inside the run (its seen set). A narrowed dispatch walks
+  its subset whole and ends nothing; an unreadable ledger walks everything and
+  nominates no orphans. Any anchor is sound; the partition only decides how much a
+  resumed run re-walks.
+- **Limit:** a unit that KILLS its walk (out of memory, SIGKILL after the grace)
+  records no entry, so its group stays least recently walked and goes first again
+  every run, and the rest wait behind it (as the tail of a fixed order once did).
+  The walk's job cell and the `scraping` walks arm show it; fix the unit.
 
 ```sql
-select category_main, category_type, slice_key, outcome, collected, walked_at
-  from portal_index_slices where source = 'idnes' order by walked_at;
+select started_at, e->>'category_main' cm, e->>'category_type' ct, e->'scope' scope,
+       e->>'walk_reached_end' reached, e->>'cycle_started_at' anchor
+  from scrape_runs, jsonb_array_elements(by_category) e
+ where source = 'idnes' and run_type = 'index' and e ? 'scope'
+ order by started_at desc, anchor limit 40;
 ```
 
-**mmreality wrote one row per category until 2026-10-19**, when its slice write
-went with the gate (its ten rows stay, unread: Health wave 9 left them to the
-scraper track). Its ten per-(sale type, property type) indexes page to their
+The slice outcome (`exhausted`, `incomplete`, `deadline`, `error`, `degraded`,
+`ceiling`) is NUMERIC and lives on in idnes's `SLICE`/`CATEGORY` log lines, where it
+drives the descent and the resample: a slice can read `outcome=degraded` (one row
+short) and `stop=pager_end` (reached idnes's last page) at the same time, and only
+the second decides nomination. **Never read `exhausted` as "this nominated".**
+
+**mmreality wrote one ledger row per category until 2026-10-19**, when its slice
+write went with the gate. Its ten per-(sale type, property type) indexes page to their
 tail with no second axis (the largest is ~300 pages of 12), so each category was
 one slice, `slice_key='national'`, `exhausted` only when the shared arithmetic
 accepted the collected count against the page's own `metadata.count`; the walk's
@@ -259,8 +272,8 @@ ads against its declared total and counts the active ads no walk can nominate, a
 the `scraping` alarm's walks arm times each unit's newest walk that reached the
 end. Migration 643 (Health wave 9) dropped `portal_coverage_gate` (153 rows). It
 did not drop `portals.supports_complete_walk` (no writer now; the Scrapers page's
-portal posture still reads it) or the 150 ceskereality and mmreality rows of
-`portal_index_slices` (unread, unjudged): the scraper track owns both.
+portal posture still reads it): the scraper track owns it. `portal_index_slices`
+went with migration 689 (#2020).
 
 ### ceskereality's descent over the 99-page ceiling
 
@@ -297,8 +310,8 @@ at district 29 restarts at district 1 next run. Politeness is not the constraint
 
 **idnes.** ~4,360 pages per full cycle. Per-page latency through the residential
 proxy swings 1.4-4.0 s with the time of day; break-even at 9000 s was ~2.06 s/page,
-so half the runs fit (night) and half hit the deadline (afternoon). The ledger
-rotation makes that harmless for coverage — all 150 slices stay fresh — but each
+so half the runs fit (night) and half hit the deadline (afternoon). The stalest-first
+rotation (now the walk cycle's) makes that harmless for coverage, but each
 truncated run reports one category incomplete. Budget raised to 13000 s (3.0 s/page).
 
 **The worker's probe does NOT keep sreality fresh.** `PROBE_PAGES = 1` and sreality's
@@ -400,9 +413,9 @@ the count must never veto:
 
 **What to read in a log.** Nomination itself is unchanged:
 `VERIFY cm=… ct=… subtype=… candidates=… queued=… deferred=… active=…`, once per
-scope; since 2026-10-22 a walk whose every unit reached the end adds
-`VERIFY orphans candidates=… queued=… deferred=… active=…` for the active ads in no
-walked scope (a NULL label, an auction type no unit walks). Two lines changed shape:
+scope; since 2026-10-22 the run that ends a walk cycle whose every group reached the end
+(2026-10-29) adds `VERIFY orphans candidates=… queued=… deferred=… active=…` for the active
+ads in no walked scope (a NULL label, an auction type no unit walks). Two lines changed shape:
 
 - `COVERAGE cm=… ct=…: the walk reached the portal's end but collected N of M
   (coverage=…) -- the gap is nominated, the page decides (rule #3)` — a WARNING
@@ -463,7 +476,8 @@ no run arguments).
 1. **Coverage** — the sliced walk reaches everything (or records that it didn't).
    A walk that reached the portal's end nominates; the count comparison is a
    logged warning, never a gate.
-2. **The ledger** — coverage accumulates across runs instead of restarting.
+2. **The walk cycle** — coverage accumulates across runs instead of restarting, and
+   a cut walk resumes where it stopped.
 3. **Nomination, not deletion** — a finished walk queues the rows it did not
    see for a page check; the drain fetches each page and only a positive gone
    signal, confirmed by a second one at least `GONE_DWELL` (12 h) later with

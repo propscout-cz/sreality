@@ -315,6 +315,12 @@ and that list mirrors migration 291's three-arm policy (own account OR SYSTEM OR
 admin) rather than inventing a second tenancy definition. It never widens and never returns
 empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credential raises.
 
+**Named exception — the tool registry (`api/capabilities/registry._connection`, #2062).** A TENANT tool runs
+inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's verified claims, never acting
+as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise. The handler, the envelope check
+and the result's fit all run inside it, so any refusal rolls a write back. It is the only place a tool's connection
+is opened (an AST census); market tools take the service connection the transport hands in.
+
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
 `tenant_pool.tenant_transaction(claims, act_as=None, method="POST")` in the handler, for three reasons:

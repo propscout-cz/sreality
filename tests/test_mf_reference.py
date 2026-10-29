@@ -460,13 +460,11 @@ def test_an_estimation_of_our_advert_hands_the_propertys_facts_to_the_measure(co
                                                                              advert):
     """The run's reference equals the property's: the same golden facts and the same
     stored codes -- the KÚ included -- reach the same function."""
-    from api.estimation_runs import _MF_FACT_KEYS, _SUBJECT_MF_FACTS_SQL
     from toolkit.rent_map import MF_ENGINE, compute_reference_rent
+    from toolkit.subject import subject_mf_facts
 
     pid, lid = adverts[advert]
-    with conn.cursor() as cur:
-        cur.execute(_SUBJECT_MF_FACTS_SQL, {"listing_id": lid})
-        facts = dict(zip(_MF_FACT_KEYS, cur.fetchone()))
+    facts = subject_mf_facts(conn, lid)
     ref = compute_reference_rent(conn, disposition="3+1", area_m2=75, **facts)
     (_, _, detail) = _one(conn, _PROPERTY_MF_SQL.format(pid=pid))
     assert ref == {**detail, "engine": MF_ENGINE}

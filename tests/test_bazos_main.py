@@ -93,10 +93,12 @@ def test_dry_run_records_no_scrape_run(monkeypatch):
 
 
 @pytest.mark.parametrize("argv, narrowed", [
-    (["--dry-run"], False), (["--dry-run", "--sale-type", "prodam", "--category", "byt"], True)])
+    (["--dry-run"], False), (["--dry-run", "--sale-type", "prodam", "--category", "byt"], True),
+    (["--dry-run", "--locality", "Praha"], True), (["--dry-run", "--radius-km", "20"], True)])
 def test_a_dispatch_narrowed_to_one_section_proves_no_orphan(monkeypatch, argv, narrowed):
-    """A one-section dispatch walks a subset of the portal: every other section's ads are in no
-    walked scope, and nominating them as orphans would page-check the whole portal."""
+    """A one-section or one-region dispatch walks a subset of the portal: every other section's ads
+    are in no walked scope, nominating them as orphans would page-check the whole portal, and the
+    run ends no walk cycle."""
     walked: list[Any] = []
     monkeypatch.setattr(bazos_main.portal_runner, "run_index_walk",
                         lambda portal, dry_run, **kw: walked.append(portal) or (0, {}))

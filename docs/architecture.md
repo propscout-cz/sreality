@@ -264,12 +264,12 @@ every `/zahranici/` spelling 404s). That last slice is not a nicety: the kraj sl
 56% of the portal as 100% of it. Proven a true row-level partition by ID enumeration (755 rows,
 14 slices, zero overlap and zero gap), and `kraj_sum + abroad` equals the national declared total
 on all 10 categories. Slicing here is **not** a workaround for a pagination cap — idnes has none
-— it is what makes coverage *provable* (15 declared totals to check instead of one) and
-*resumable*: every slice's outcome lands in `portal_index_slices` (migration 454), and both the
-category order and the slice order are **least-recently-walked first**, with a never-walked slice
-sorting ahead of everything. That is the fix for the real defect, which was amnesia rather than
-speed — a walk that runs out of budget used to restart at the first category's first page, so the
-same head was re-walked while 8 of 10 categories were never touched at all. A category NOMINATES only when **every**
+— it is what makes coverage *provable* (15 declared totals to check instead of one). Which
+category goes first is the runner's walk cycle (rule 3, 2026-10-29): least recently walked first,
+and a cut walk resumes where it stopped. That cures the defect idnes's own slice ledger
+(`portal_index_slices`, migration 454; dropped by migration 689) was built for, which was amnesia
+rather than speed — a walk that runs out of budget used to restart at the first category's first
+page, so the same head was re-walked while 8 of 10 categories were never touched at all. A category NOMINATES only when **every**
 slice was walked *and* each one ended on idnes's own last page; one `deadline`, `error` or
 `ceiling` — a stop of ours — holds the whole category open. An `error` is ours when it ENDS a page loop
 (a place's second refused page); ONE page idnes refuses in a loop that runs on to its end costs that page
@@ -318,9 +318,9 @@ mmreality slice writes only it read. Health asks the same question by measuremen
 latched flag: the `coverage` gauge holds each unit's active ads against its declared total and
 counts the active ads no walk can nominate, and the `scraping` alarm times each unit's newest
 walk that reached the end. Migration 643 (Health wave 9) dropped `portal_coverage_gate`;
-`supports_complete_walk` (no writer now; the Scrapers page's portal posture still reads it) and
-those two portals' `portal_index_slices` rows (unread) stay, owned by the scraper track; idnes
-keeps writing and reading its own slices for its stalest-first order.
+`supports_complete_walk` (no writer now; the Scrapers page's portal posture still reads it)
+stays, owned by the scraper track; `portal_index_slices` went with migration 689 (#2020), its
+order now the runner's walk cycle.
 The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
@@ -1379,21 +1379,42 @@ renumber.** Navigate by area:
    label-blind but a unit's nomination is not, so an active ad whose label lies in no walked
    scope (ceskereality's `/drazby/` auctions, realitymix's chaty with a truncated breadcrumb:
    703 NULL-label ads, 430 unclosable since June) was never checked once it left the index.
-   A walk whose EVERY unit reached the end, over the portal's whole agenda (a bazos dispatch
-   narrowed to one section says `narrowed`), now also nominates those ORPHANS
-   (`db.orphan_candidates`: the complement of the walked scopes, NULL labels included) against
-   every id the walk saw, at the same priority under the same flip cap and dwell (descriptor:
-   no category), and records them as one more `scrape_runs.by_category` entry with NULL labels
-   (an indexless unit's shape), so the checks summing `verify_deferred` count their deferrals and
-   a failed orphan query is a run error and an entry that did not reach the end, aged by the
-   walks check like a failed unit's (`<portal>/walks/orphans`; it declares no total, so no residual). A portal with NO index declares `indexless = True` (`web`, the tenth portal,
+   A walk CYCLE whose every scope group reached the end, over the portal's whole agenda (a bazos
+   dispatch narrowed to one section says `narrowed`), now also nominates those ORPHANS
+   (`db.orphan_candidates`: the complement of the walked scopes, NULL labels included) that
+   nothing sighted since the cycle's anchor, at the same priority under the same flip cap and
+   dwell (descriptor: no category), and records them as the cycle's end: one more
+   `scrape_runs.by_category` entry with NULL labels (an indexless unit's shape) and `scope: {}`,
+   so the checks summing `verify_deferred` count their deferrals and a failed orphan query is a
+   run error and an entry that did not reach the end, aged by the walks check like a failed
+   unit's (`<portal>/walks/orphans`; it declares no total, so no residual). A portal with NO index declares `indexless = True` (`web`, the tenth portal,
    since 2026-10-21): its one unit has no labels, so no scope, and its walk sees nothing by
-   construction — every active `web` ad is an orphan, nominated with no seen set (the
+   construction — every active `web` ad nothing sighted since the anchor is an orphan (the
    empty-seen refusal stays for every other portal). The rail:
    `tests/test_nomination_scope_rail_live.py` (every active ad in exactly one scope, on the
    replayed schema). What a finished walk still means: a
    partial walk (`--limit N`, `--max-pages`, a deadline) cannot know which rows it never
    reached, so it nominates nothing.
+
+   **2026-10-29 — a cut walk resumes as one CYCLE** (#2020, Actions exit W1; `portal_runner._cycle`).
+   A cycle is one pass over every scope group; its anchor is its first run's start. Each run
+   reads the ledger, `scrape_runs.by_category` (every unit's entry carries its `scope`, its
+   verdict and `cycle_started_at`, persisted as the unit ends), and walks group by group, least
+   recently walked first whatever the outcome (idnes's slice ledger's rule, lifted), a group never
+   walked first of all, siblings together, so a group no run can finish goes after the rest next
+   time. A run cut by our stop (a signal, the deadline, a kill) leaves the cycle open; the next run
+   skips the groups that reached the end since the anchor, while the cycle is younger than the
+   portal's `walk_timeout_s` (a cycle is one walk's work; past it a fresh one starts). The first run that walks its whole plan ends the cycle:
+   it nominates the orphans only when every group reached the end since the anchor, otherwise its
+   end entry reads `walk_reached_end: false` and the next run starts a fresh cycle, so one failing
+   category cannot starve the others. Per-group nominations stay inside the run (its seen set,
+   which also re-fetches an ad the portal moved to another category). A narrowed dispatch walks
+   its subset whole and ends nothing; an unreadable ledger walks everything and nominates no
+   orphans. Any anchor is sound (every group reached the end since it, and an ad still listed was
+   sighted since it); the partition only decides how much a resumed run re-walks. Health dates the
+   end entry, and so the orphans and the portal's every-unit walk, at the cycle's anchor
+   (`scripts/checks/scraping.py`). On GitHub the next scheduled walk lies past the timeout and starts
+   afresh, as before; the job runner re-runs an interrupted job at once, inside the cycle.
 
    **2026-09-08 — the nomination gate became STRUCTURAL; the count stopped voting.** Until this
    date the 5th element of `walk_category` was arithmetic: `walk_is_complete(collected,
@@ -3524,7 +3545,7 @@ renumber.** Navigate by area:
     `active_count`, and the HTML portals' `write_details` / `record_failure`), the
     entrypoints' `load_config` / `configure_logging`, the `COVERAGE` warning, end-gated
     presence nomination per scope and of the orphans in none (`_queue_presence_checks`,
-    `_queue_orphan_checks`), category-drift recording, the probe driver,
+    `_end_cycle`), the walk cycle's plan and resume (`_cycle`, `_plan`), category-drift recording, the probe driver,
     the whole drain (queue claim/complete/fail, the fetch pool, batch flush, the gone flip through
     `db.mark_listing_inactive`, the gone-rate breaker from `delist_policy`) and the `scrape_runs` lifecycle (`run_phase`). **Per-portal:** the client (a
     `BasePortalClient` subclass — URL building, body markers, egress such as `USE_PROXY`; the

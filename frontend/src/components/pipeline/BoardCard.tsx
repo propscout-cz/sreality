@@ -24,7 +24,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useDraggable } from '@dnd-kit/core';
 import { fmtArea, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
-import { mfYieldText } from '@/lib/mfReference';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { listingKindLabel } from '@/lib/enums';
 import { propertyPath } from '@/lib/listingUrl';
 import { useNewTabProps } from '@/lib/linkGestures';
@@ -187,6 +187,7 @@ export function CardFace({
      beside it. Keeping one tree means a field added to the card can never
      appear at one size and not another. */
   const { stacked, showsYield } = PIPELINE_CARD_GEOMETRY[size];
+  const mfYield = showsYield ? mfYieldLine(card.mf_gross_yield_pct) : null;
 
   return (
     <div>
@@ -251,12 +252,12 @@ export function CardFace({
             <span className="truncate font-mono tabular-nums text-xs text-[var(--color-ink-4)]">
               {dims || '—'}
             </span>
-            {showsYield && card.mf_gross_yield_pct != null && (
+            {mfYield != null && (
               <span
                 className="card-tip shrink-0 font-mono tabular-nums text-[0.68rem] text-[var(--color-ink-3)]"
-                title="Hrubý výnos dle cenové mapy nájemného MF"
+                title={MF_YIELD_TITLE}
               >
-                MF {mfYieldText(card.mf_gross_yield_pct)}
+                {mfYield}
               </span>
             )}
           </div>

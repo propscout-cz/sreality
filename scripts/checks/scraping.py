@@ -47,8 +47,10 @@ _POISON_GIVE_UPS = 3
 # carrying its portal's facts (a portal whose runs never finished keeps one row with no unit; one
 # with no run in the window is added from SOURCES, so none drops out). A unit reached the end in
 # a walk when every entry of its label did; G is the median start gap of the portal's finished
-# walks in the stale window (the open gap never enters it). Entries carry no scope key and labels
-# repeat, so a unit's totals sum its entries.
+# walks in the stale window (the open gap never enters it). Labels repeat, so a unit's totals sum
+# its entries. A walk cycle's end entry (scope {}, NULL labels) is dated at the cycle's anchor, which
+# its orphans were judged against, and the portal's every-unit walk is its newest cycle that reached
+# the end of every scope group.
 _WALKS_SQL = f"""
 with runs as (
     select source, started_at, by_category,
@@ -58,7 +60,10 @@ with runs as (
      where run_type = 'index'
        and started_at > now() - make_interval(days => %(recent_days)s::int)),
 units as (
-    select r.source, r.started_at,
+    select r.source,
+           case when e -> 'scope' = '{{}}'::jsonb
+                then coalesce((e ->> 'cycle_started_at')::timestamptz, r.started_at)
+                else r.started_at end as started_at,
            e ->> 'category_main' as category_main, e ->> 'category_type' as category_type,
            bool_and(coalesce((e ->> 'walk_reached_end')::boolean, false)) as reached,
            sum((e ->> '{DECLARED_TOTAL_KEY}')::numeric) as declared,
@@ -90,12 +95,12 @@ spacing as (
                and started_at > now() - make_interval(days => %(stale_days)s::int)) g
      group by source),
 ends as (
-    select source, max(started_at) as all_reached_at
-      from (select source, started_at, bool_and(reached) as all_reached
-              from units
-             group by source, started_at) w
-     where all_reached
-     group by source),
+    select r.source, max((e ->> 'cycle_started_at')::timestamptz) as all_reached_at
+      from runs r
+      cross join lateral jsonb_array_elements(
+            case when r.finished then r.by_category else '[]'::jsonb end) as e
+     where e -> 'scope' = '{{}}'::jsonb and coalesce((e ->> 'walk_reached_end')::boolean, false)
+     group by r.source),
 walked as (
     select source, category_main, category_type, max(started_at) as walked_at
       from units
@@ -203,7 +208,7 @@ select h.source, h.category_main, h.category_type, h.held, coalesce(p.pending, 0
 """
 
 # Active ads unseen since before the start of their category's newest end-reached walk (with no
-# such walk, their portal's newest walk in which every entry reached the end) that the walks' own
+# such walk, the anchor of their portal's newest walk cycle that reached the end of every group) that the walks' own
 # predicate, db.nominable_predicate judged at that start, still calls nominable: no walk is
 # nominating them (an ad the drain finished inside the recheck throttle before it was skipped).
 _UNNOMINATED_SQL = f"""

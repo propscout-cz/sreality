@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CHIPS_MAX, FOLD_BELOW_PX, STEP_BAR_MAX, chartShape, cutChips, factChips, fmtDate, portalNote, stageControl,
-  startsFolded, storedFold, tabMarkList, type FactRow,
+  startsFolded, storedFold, tabMarkList, type FactFormat, type FactRow,
 } from './panel_logic.ts';
 
 test('the sheet starts folded below 1280 px whatever was stored, else as last left', () => {
@@ -33,35 +33,41 @@ test('the folded tab marks the stage, a price DROP only, and MF, each only when 
 });
 
 const FMT = {
-  floor: (f: number, t: number | null) => `${f}/${t}`,
+  floor: (f: number, t: number | null) => ({ text: `${f}/${t}`, title: `${f} of ${t}` }),
   label: (col: string, slug: string) => `${col}:${slug}`,
   plot: (m2: number) => `${m2} m² pozemku`,
 };
+const texts = (row: FactRow, fmt: FactFormat): string[] => factChips(row, fmt).map((f) => f.text);
 const BASE: FactRow = {
   category_main: 'byt', floor: 4, total_floors: 6, condition: 'velmi_dobry', ownership: 'osobni',
   property_subtype: 'rodinny', plot_area_m2: 905,
 };
 
 test('each property type shows its own facts, in its order, values only', () => {
-  assert.deepEqual(factChips(BASE, FMT), ['4/6', 'condition:velmi_dobry', 'ownership:osobni']);
-  assert.deepEqual(factChips({ ...BASE, category_main: 'dum' }, FMT),
+  assert.deepEqual(texts(BASE, FMT), ['4/6', 'condition:velmi_dobry', 'ownership:osobni']);
+  assert.deepEqual(texts({ ...BASE, category_main: 'dum' }, FMT),
     ['905 m² pozemku', 'condition:velmi_dobry', 'subtype:rodinny']);
-  assert.deepEqual(factChips({ ...BASE, category_main: 'komercni' }, FMT),
+  assert.deepEqual(texts({ ...BASE, category_main: 'komercni' }, FMT),
     ['subtype:rodinny', '4/6', 'condition:velmi_dobry']);
-  assert.deepEqual(factChips({ ...BASE, category_main: 'pozemek' }, FMT), ['ownership:osobni'],
+  assert.deepEqual(texts({ ...BASE, category_main: 'pozemek' }, FMT), ['ownership:osobni'],
     'a plot: ownership only (its area is the title)');
-  assert.deepEqual(factChips({ ...BASE, category_main: 'ostatni' }, FMT), []);
+  assert.deepEqual(texts({ ...BASE, category_main: 'ostatni' }, FMT), []);
 });
 
 test('a missing fact is left out, never drawn as a dash', () => {
   const bare = { ...BASE, floor: null, condition: null, ownership: '' };
-  assert.deepEqual(factChips(bare, FMT), []);
-  assert.deepEqual(factChips({ ...BASE, category_main: 'dum', plot_area_m2: null }, FMT),
+  assert.deepEqual(texts(bare, FMT), []);
+  assert.deepEqual(texts({ ...BASE, category_main: 'dum', plot_area_m2: null }, FMT),
     ['condition:velmi_dobry', 'subtype:rodinny']);
   // Ground floor is a floor (0), not a missing one.
-  assert.deepEqual(factChips({ ...BASE, floor: 0, condition: null, ownership: null }, FMT), ['0/6']);
+  assert.deepEqual(texts({ ...BASE, floor: 0, condition: null, ownership: null }, FMT), ['0/6']);
   // A formatter that has no label leaves the chip out.
-  assert.deepEqual(factChips(BASE, { ...FMT, label: () => null }), ['4/6']);
+  assert.deepEqual(texts(BASE, { ...FMT, label: () => null }), ['4/6']);
+});
+
+test('the floor chip keeps its formatter\'s tooltip; a label chip has none', () => {
+  assert.deepEqual(factChips(BASE, FMT).slice(0, 2),
+    [{ text: '4/6', title: '4 of 6' }, { text: 'condition:velmi_dobry' }]);
 });
 
 test('a chip row shows three, then +N for the rest', () => {

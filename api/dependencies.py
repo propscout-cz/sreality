@@ -1,19 +1,32 @@
-"""FastAPI dependencies: per-request DB connection, shared SrealityClient, auth."""
+"""FastAPI dependencies: per-request DB connection, shared SrealityClient, auth, the DB busy-error classes."""
 
 from __future__ import annotations
 
 import contextlib
 import os
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import psycopg
 from fastapi import Depends, Header, HTTPException
 
 from scraper import db
 from scraper.sreality_client import SrealityClient
 
-if TYPE_CHECKING:
-    import psycopg
+# The database's "busy right now" error classes: a read cancelled by
+# statement_timeout (57014 — how a lock-blocked reader dies after 120 s, the
+# 2026-09-30 Brokers outage), a lock refused outright (55P03), a deadlock
+# victim (40P01). Retrying CAN help these, so they answer 503 + Retry-After —
+# the one signal the SPA's transient-only retry predicate acts on. Everything
+# else is deterministic and answers 500. Routes that already catch these and
+# refuse with their own contract (toolkit/property_split's structured 409)
+# never reach api.main's _unhandled_exception_handler; the tool registry maps
+# them to its retryable BUSY.
+DB_BUSY_ERRORS = (
+    psycopg.errors.QueryCanceled,
+    psycopg.errors.LockNotAvailable,
+    psycopg.errors.DeadlockDetected,
+)
 
 
 # The API opens a DB connection PER REQUEST, so the full batch-side handshake
