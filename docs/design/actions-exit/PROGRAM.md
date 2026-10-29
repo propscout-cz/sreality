@@ -141,8 +141,8 @@ production.
   inherits the runner's own peak at exec; shared pages count twice, the safe direction; a job shorter than one
   sample records none), and the tail is the last 64 lines. Children carry `oom_score_adj +500`, set by an exec
   shim in the same pid, so an OOM kills the job, not the runner. **Residual:** a fenced child's statement already
-  sent keeps running on the server and can commit (autocommit; the pooler keeps the backend's client alive); the
-  database commit fence for the claim path and `held()` is a follow-up.
+  sent keeps running on the server and can commit (autocommit; the pooler keeps the backend's client alive). The
+  database commit fence, `job_lease.fence` (#2114), serves a holder of its own `Hold`; a runner child holds none.
 - **Retries**: an interrupted run (deploy, kill) is due again at once and is claimed by the new deployment
   within seconds; exit 75 ("more remains") re-dues after 60 s and replaces every self-chain and PAT; failed
   runs back off exponentially from 60 s, capped at the cadence and the next slot; a timeout retries on that
@@ -340,15 +340,15 @@ GitHub run-rate under 50,000 min/month.**
 ### W6 — Consolidate CI, prove the private paths, flip
 `test.yml` absorbs `frontend-build` and `docs-budget` as one `frontend` job (vitest `--maxWorkers=2`, timeout
 sized for 2-vCPU runners; the budget step keeps `fetch-depth: 0`, its `HEAD^1` base argument and a PR-only
-`if:`); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed
-`extension`; required contexts → pytest, schema-and-sql, frontend; gitleaks: one history scan, a PR job over
-the PR's commit range, a commit/push hook; the two fixture map keys replaced by placeholders; LICENSE notice
-(all rights reserved); Dependabot alerts on; docs lose "PUBLIC" (CLAUDE.md, issue-tracker, scraper-ops);
+`if:`); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed `extension`; required
+contexts → pytest, schema-and-sql, frontend, secrets (ruling 2026-10-28); gitleaks: one history scan, a PR job
+over the PR's commit range, a commit/push hook; the two fixture map keys replaced by placeholders; LICENSE
+notice (all rights reserved); Dependabot alerts on; docs lose "PUBLIC" (CLAUDE.md, issue-tracker, scraper-ops);
 R6a deletions; R6b drops behind receipts; the Actions budget set at $100 with alerts.
 **Gate before the flip:** the W5 flip gate holds; artifacts ≤ 1 GB; one pod logs `step=fetch ok` from the
 tarball; history scan clean or every finding rotated/fingerprinted; one autodedup `rt_seed` at the current
 widest scope finishes on a 2-vCPU/7 GB runner, else R5 decides; a deliberately failing draft PR is blocked.
-**After the flip (72 h):** `private:true`; exactly 3 required contexts; Railway statuses for all four
+**After the flip (72 h):** `private:true`; exactly 4 required contexts; Railway statuses for all four
 services on the next merge; canary green; billing page run-rate inside the pool; RunPod and autodedup
 dispatches succeed; the canary and `realtime-scrapers.md` glossary entries updated.
 

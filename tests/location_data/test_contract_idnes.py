@@ -25,7 +25,7 @@ Five committed bodies, and the differences between them are the point:
   * `location_w2a_refetch/idnes_c1.html` — a real FOREIGN listing (Malinska, Krk), captured
     for idnes@4: every Czech-hierarchy field the portal publishes is null on it and the
     country is the only thing that determines the row. It lives in the refetch set so the
-    public repo's PII gate (`test_payload_norm_measured`, which globs that directory)
+    fixtures' PII gate (`test_payload_norm_measured`, which globs that directory)
     covers it; it is a third listing there, not a member of an a1/a2 churn pair.
 """
 
