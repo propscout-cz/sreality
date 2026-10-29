@@ -19,6 +19,18 @@ the 9-window rollup walks the full corpus index ~27×). Underneath: migration 50
 txn" comments, non-additive summed distinct counts (556 brokers inflated), a kraj+okres
 double count enshrined by a test, and two disagreeing CZ-count books (19/100 top brokers).
 
+## Broker board (2026-10-29)
+
+The Browse cohort counted by broker: one filter definition, one property × broker book kept by rule 20's pass, one
+attribution rule (MS19), one speed measure; the leaderboard and its count book are deleted. Rulings, definitions,
+waves and W0's measurements: `docs/design/broker-board.md`.
+
+- **W1 — the dark broker book** (in progress, `feature/broker-book`): migration 691 (`property_broker_spells` +
+  its view, `measure_exit_within`, backfill), the book in `properties_changed` and every sweep batch, the
+  attribution link dirtying its property, census rails. No reader.
+- **Next — W0** production measurements (read-only; recalibrate M = 7 d), **W2** the `Makléři` Browse tab + agent
+  read, deleting the leaderboard, **W3** deleting `broker_region_type_stats`.
+
 ## Done
 
 - **W0 — stop the bleed** (PR #1656, merged 2026-09-30): the sweep's refresh is

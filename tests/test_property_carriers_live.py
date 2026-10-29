@@ -5,9 +5,9 @@ count invariant over the carry record (`_merged`), and a detach routing every it
 came from (MS17); the receipt, the brake's routing along the undone merge's own carry rows and
 its dry run; then the live census — every foreign key to `properties` and every `%property_id%`
 column of the replayed schema is carried (`PROPERTY_CARRIERS`) or named (`NOT_CARRIED`); then the
-after-step (`properties_changed`: rollup, Browse row, broker queue) both writers run; then a set
-detach, which rules nothing. Runs in CI's migrations job with DB_RAILS_REQUIRED=1; every test
-rolls back."""
+after-step (`properties_changed`: rollup, broker book, Browse row, broker queue) both writers run;
+then a set detach, which rules nothing. Runs in CI's migrations job with DB_RAILS_REQUIRED=1;
+every test rolls back."""
 
 from __future__ import annotations
 

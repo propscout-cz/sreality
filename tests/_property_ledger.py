@@ -434,6 +434,7 @@ _HANDLERS: dict[str, Callable[[_Ledger, Any], Any]] = {
         (pi._UNDO_SQL, _Ledger._undo),
         (pi._REACTIVATE_SQL, _Ledger._reactivate),
         (rps._RECOMPUTE_SCOPED_SQL, _Ledger._recompute_scoped),
+        (rps._BROKER_BOOK_SCOPED_SQL, _Ledger._nothing),  # the fake holds no broker book
         (brm._DELETE_SQL, _Ledger._browse_delete),
         (brm._INSERT_SQL, _Ledger._nothing),
         (rps._MIRROR_BROKER_DIRTY_SQL, _Ledger._broker_mirror),
