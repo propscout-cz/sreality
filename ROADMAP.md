@@ -2,13 +2,13 @@
 
 The long-term plan for this project. Each phase builds on the previous; tools within a
 phase are independent. **CLAUDE.md is the authoritative source for active rules; ROADMAP
-is for sequencing.** This file is an index — the actual phase content lives in one file
-per track under `roadmap/`, with completed work in `roadmap/archive.md`.
+is for sequencing.** This file is an index — the phase content lives in the file each
+track's row links, with completed work in `roadmap/archive.md`.
 
 ## How this roadmap is maintained
 
-- One file per track under `roadmap/`; `roadmap/archive.md` holds completed work (the old
-  `## Done` block).
+- One file per track, under `roadmap/` or the `docs/design/` PROGRAM.md its row links;
+  `roadmap/archive.md` holds completed work (the old `## Done` block).
 - After shipping meaningful work, in the SAME PR update **only** the track file its index
   row links (move a bullet to done, add new "next" items) **and** this index's
   status cell if the track's status changed. Don't defer roadmap updates to a follow-up.
