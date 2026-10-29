@@ -1015,13 +1015,13 @@ describe('<Pipeline> board', () => {
   it('shows the MF yield on Velké cards only', async () => {
     renderBoard();
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
-    expect(screen.queryByText(/MF\s*4,3\s*%/)).toBeNull();
+    expect(screen.queryByText(/Výnos MF\s*4,3\s*%/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Střední' }));
-    expect(screen.queryByText(/MF\s*4,3\s*%/)).toBeNull();
+    expect(screen.queryByText(/Výnos MF\s*4,3\s*%/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Velké' }));
-    expect(screen.getByText(/MF\s*4,3\s*%/)).toHaveAttribute(
+    expect(screen.getByText(/Výnos MF\s*4,3\s*%/)).toHaveAttribute(
       'title',
-      'Hrubý výnos dle cenové mapy nájemného MF',
+      'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)',
     );
   });
 

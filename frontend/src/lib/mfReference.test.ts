@@ -4,7 +4,7 @@
  * The notes are stand-ins: the real sentences exist once, in the SQL. */
 import { describe, expect, it } from 'vitest';
 
-import { mfShape, mfYieldText, type ReferenceRent } from './mfReference';
+import { mfShape, mfYieldLine, mfYieldText, type ReferenceRent } from './mfReference';
 
 const as = (o: object) => o as unknown as ReferenceRent;
 const RANGE = {
@@ -60,5 +60,14 @@ describe('mfYieldText', () => {
     expect(mfYieldText(null, as({ note: '(a reason)' }))).toBeNull();
     expect(mfYieldText(null, as({ monthly_rent_czk: 17_700 }))).toBeNull();
     expect(mfYieldText(null)).toBeNull();
+  });
+});
+
+describe('mfYieldLine', () => {
+  const NB = ' ';
+  it('labels the figure once, a range included, and prints nothing without one', () => {
+    expect(mfYieldLine(4.25)).toBe(`Výnos MF 4,3${NB}%`);
+    expect(mfYieldLine(null, as({ range: RANGE }))).toBe(`Výnos MF 3,4–4,2${NB}%`);
+    expect(mfYieldLine(null)).toBeNull();
   });
 });

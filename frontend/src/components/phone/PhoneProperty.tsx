@@ -23,6 +23,7 @@ import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import DownloadPropertyButton from '@/components/listing-detail/DownloadPropertyButton';
 import { fmtShortDate, fmtTomDays } from '@/lib/format';
 import { lazyChunk } from '@/lib/lazyChunk';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { buildPriceSeries, priceChangeEvents, type PriceAdvert } from '@/lib/priceHistory';
 import type { PropertyPublic } from '@/lib/queries';
 import type {
@@ -38,7 +39,6 @@ import CurationRow from './CurationRow';
 import {
   feedDelta,
   feedLine2,
-  feedMfYield,
   feedPrice,
   feedPricePerM2,
   portalsWord,
@@ -132,7 +132,7 @@ export default function PhoneProperty({
   const price = feedPrice(property);
   const ppm2 = feedPricePerM2(property);
   const delta = feedDelta(property.total_price_change_pct);
-  const mf = feedMfYield(property);
+  const mf = mfYieldLine(property.mf_gross_yield_pct, property.mf_reference_rent);
   const line2 = feedLine2(property);
   const portals = sources.length > 0 ? new Set(sources.map((s) => s.source)).size : 1;
   const priceText = price.text ? `${price.text}${price.perMonth ? ' /měs' : ''}` : null;
@@ -179,7 +179,7 @@ export default function PhoneProperty({
             )}
             {mf && (
               <span
-                title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)"
+                title={MF_YIELD_TITLE}
                 className="inline-flex h-5 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 font-mono text-[11px] tabular-nums text-[var(--color-ink-2)]"
               >
                 {mf}

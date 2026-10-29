@@ -1,4 +1,4 @@
-"""FastAPI service exposing the analytical toolkit + estimate_yield.
+"""FastAPI service exposing the analytical toolkit.
 
 Tool routes return the standard toolkit envelope verbatim for the agent
 layer; non-tool routes (e.g. GET /estimations) shape their own.
@@ -14,7 +14,6 @@ import uuid
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
-import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,7 +31,6 @@ from api import tenant_pool
 from api import schemas as s
 from api import skills as skills_module
 from api.agent import AGENT_TOOLS
-from api.estimate_yield import estimate_yield
 from api.building_runs import (
     assert_editable_for_attachments,
     confirm_units,
@@ -46,6 +44,7 @@ from api.building_runs import (
 from api import attachments as attachments_module
 from api import feedback as feedback_module
 from api import refiner as refiner_module
+from api.filter_args import filter_values
 from api.estimation_runs import (
     create_estimation_run,
     estimation_run_owned,
@@ -89,26 +88,18 @@ from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
     ComparableFilters,
     TargetSpec,
-    analyze_distribution,
     cluster_comparables,
     compare_listing_images,
     compare_snapshots,
     compute_amenity_supply,
-    compute_listing_velocity,
-    compute_market_velocity,
     compute_walkability,
-    describe_neighborhood,
     find_anchor_amenities,
     find_comparables,
     find_comparables_along_axis,
-    find_comparables_relaxed,
-    find_distribution_outliers,
     summarize_listing,
     verify_listing_freshness,
 )
 from toolkit.image_similarity import ImageCompareError
-from toolkit.measures import MeasureBasisError
-from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
 
 # Past every walk's timeout plus the kill grace, so the boot sweep never finalizes a running walk (job registry census).
@@ -212,21 +203,6 @@ if _cors_origins:
     )
 
 
-# The database's "busy right now" error classes: a read cancelled by
-# statement_timeout (57014 — how a lock-blocked reader dies after 120 s, the
-# 2026-09-30 Brokers outage), a lock refused outright (55P03), a deadlock
-# victim (40P01). Retrying CAN help these, so they answer 503 + Retry-After —
-# the one signal the SPA's transient-only retry predicate acts on. Everything
-# else is deterministic and answers 500. Routes that already catch these and
-# refuse with their own contract (toolkit/property_split's structured 409)
-# never reach this handler.
-_DB_BUSY_ERRORS = (
-    psycopg.errors.QueryCanceled,
-    psycopg.errors.LockNotAvailable,
-    psycopg.errors.DeadlockDetected,
-)
-
-
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "JSONResponse":
     origin = request.headers.get("origin")
@@ -235,7 +211,7 @@ async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "J
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
 
-    if isinstance(exc, _DB_BUSY_ERRORS):
+    if isinstance(exc, deps.DB_BUSY_ERRORS):
         logging.warning(
             "DB busy (%s) on %s %s", type(exc).__name__, request.method, request.url.path
         )
@@ -437,6 +413,11 @@ def post_maps_resolve(
     )
 
 
+def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:
+    """The body's target, and its cohort filters by registry id (every one it declares reaches the cohort)."""
+    return TargetSpec(**body.target.model_dump()), ComparableFilters(**filter_values(body))
+
+
 @app.post("/tools/find_comparables")
 def post_find_comparables(
     body: s.FindComparablesIn,
@@ -445,20 +426,6 @@ def post_find_comparables(
 ) -> dict[str, Any]:
     target, filters = _build_comparables_inputs(body)
     return find_comparables(conn, target, filters)
-
-
-@app.post("/tools/find_comparables_relaxed")
-def post_find_comparables_relaxed(
-    body: s.FindComparablesRelaxedIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target, filters = _build_comparables_inputs(body)
-    return find_comparables_relaxed(
-        conn, target, filters,
-        min_results=body.min_results,
-        relaxation_ladder=body.relaxation_ladder,
-    )
 
 
 @app.post("/tools/find_comparables_along_axis")
@@ -475,14 +442,6 @@ def post_find_comparables_along_axis(
         corridor_m=body.corridor_m,
         cache_ttl_days=body.cache_ttl_days,
     )
-
-
-@app.post("/tools/analyze_distribution")
-def post_analyze_distribution(
-    body: s.AnalyzeDistributionIn,
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return analyze_distribution(body.listings, field=body.field)
 
 
 @app.post("/tools/cluster_comparables")
@@ -523,93 +482,6 @@ def post_compare_snapshots(
         else None
     )
     return compare_snapshots(conn, body.sreality_id, since, listing_id=body.listing_id)
-
-
-@app.post("/tools/describe_neighborhood")
-def post_describe_neighborhood(
-    body: s.DescribeNeighborhoodIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return describe_neighborhood(
-        conn,
-        lat=body.lat,
-        lng=body.lng,
-        radius_m=body.radius_m,
-        max_age_days=body.max_age_days,
-        category_main=body.category_main,
-        category_type=body.category_type,
-    )
-
-
-@app.post("/tools/find_distribution_outliers")
-def post_find_distribution_outliers(
-    body: s.FindDistributionOutliersIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return find_distribution_outliers(
-        conn,
-        body.listings,
-        field=body.field,
-        iqr_multiplier=body.iqr_multiplier,
-        investigate_history=body.investigate_history,
-    )
-
-
-@app.post("/tools/compute_market_velocity")
-def post_compute_market_velocity(
-    body: s.ComputeMarketVelocityIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        # lifecycle left at default (None); the velocity `lifecycle` arg
-        # drives the is_active gate.
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    return compute_market_velocity(
-        conn, target, filters,
-        lifecycle=body.lifecycle,
-        trend_split_days=body.trend_split_days,
-    )
 
 
 @app.post("/tools/find_anchor_amenities")
@@ -744,21 +616,6 @@ def post_compare_listing_images(
         )
     except ImageCompareError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/tools/compute_listing_velocity")
-def post_compute_listing_velocity(
-    body: s.ComputeListingVelocityIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return compute_listing_velocity(
-        conn,
-        body.sreality_id,
-        radius_m=body.radius_m,
-        disposition_match=body.disposition_match,
-        lifecycle=body.lifecycle,
-    )
 
 
 @app.post("/estimations")
@@ -1180,92 +1037,6 @@ def get_building_attachment_raw(
     over two hops)."""
     return attachments_module.file_response(*attachments_module.building_attachment_bytes(
         conn, attachment_id, building_run_id=building_id))
-
-
-@app.post("/estimate_yield")
-def post_estimate_yield(
-    body: s.EstimateYieldIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        max_age_days=body.max_age_days,
-        lifecycle=body.lifecycle,
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    try:
-        result = estimate_yield(
-            conn, target, filters, body.purchase_price_czk,
-            estimate_kind=body.estimate_kind,
-            expected_monthly_rent_czk=body.expected_monthly_rent_czk,
-        )
-    except MeasureBasisError as exc:
-        # A cohort with no single per-m² basis (or one contradicting
-        # estimate_kind) is a bad REQUEST, not a server fault: the caller pinned
-        # a category set whose Kč/m² has no one unit, and scaling it would
-        # return a confident number nobody can name. The two run-backed callers
-        # (POST /estimations, the watchdog auto-estimate) already record this as
-        # a failed run; this ad-hoc route has no run to fail, so it answers 422.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Secondary MF Cenová mapa reference (rent only). The amenity filters double as the
-    # subject's facts on this ad-hoc surface; a typed point has no stored location, so
-    # its obec comes from the one containing-obec statement and it never binds a KÚ.
-    # A secondary reference never fails the route: on an error the payload omits it.
-    if body.estimate_kind == "rent":
-        try:
-            reference_rent = compute_reference_rent(
-                conn,
-                category_main=body.category_main, category_type=body.category_type,
-                disposition=target.disposition, area_m2=target.area_m2,
-                price_czk=body.purchase_price_czk, condition=None,
-                has_balcony=body.has_balcony, terrace=body.terrace,
-                furnished="ano" if "ano" in (body.furnished or []) else None,
-                garage=body.garage, has_lift=body.has_lift, building_type=None,
-                obec_kod=maps.containing_obec_kod(conn, lat=target.lat, lng=target.lng),
-            )
-        except Exception:  # noqa: BLE001 - secondary reference, never fatal
-            logging.warning("MF reference for /estimate_yield failed", exc_info=True)
-            reference_rent = None
-        if reference_rent is not None:
-            result["data"]["reference_rent"] = reference_rent
-    return result
 
 
 # --- curation -------------------------------------------------------------
@@ -1774,49 +1545,3 @@ def decide_skill_refinement(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _build_comparables_inputs(
-    body: s.FindComparablesIn,
-) -> tuple[TargetSpec, ComparableFilters]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        max_age_days=body.max_age_days,
-        lifecycle=body.lifecycle,
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    return target, filters

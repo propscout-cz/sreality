@@ -57,30 +57,11 @@ def client(monkeypatch):
     def fake_find(conn, target, filters):
         return {"data": {"listings": []}, "metadata": {"tool": "find_comparables"}}
 
-    def fake_dist(listings, field):
-        return {"data": {"n": 0}, "metadata": {"tool": "analyze_distribution"}}
-
     def fake_verify(conn, c, sid, max_age):
         return {"data": {"sreality_id": sid}, "metadata": {"tool": "verify_listing_freshness"}}
 
     def fake_compare(conn, sid, since, listing_id=None):
         return {"data": {"snapshot_count": 0}, "metadata": {"tool": "compare_snapshots"}}
-
-    def fake_estimate(conn, target, filters, purchase_price_czk=None, **_kw):
-        return {"data": {"sample_size": 0}, "metadata": {"tool": "estimate_yield"}}
-
-    def fake_neighborhood(conn, **_kw):
-        return {"data": {}, "metadata": {"tool": "describe_neighborhood"}}
-
-    def fake_outliers(conn, listings, **_kw):
-        return {"data": {"outliers": []}, "metadata": {"tool": "find_distribution_outliers"}}
-
-    def fake_market_vel(conn, target, filters, lifecycle, trend_split_days):
-        return {"data": {"cohort_size": 0}, "metadata": {"tool": "compute_market_velocity"}}
-
-    def fake_listing_vel(conn, sreality_id, **_kw):
-        return {"data": {"sreality_id": sreality_id, "found": False},
-                "metadata": {"tool": "compute_listing_velocity"}}
 
     def fake_anchors(conn, **_kw):
         return {"data": {"categories": {}, "from_cache": {}},
@@ -101,14 +82,8 @@ def client(monkeypatch):
         return {"id": run_id, "status": "success"}
 
     monkeypatch.setattr(api_main, "find_comparables", fake_find)
-    monkeypatch.setattr(api_main, "analyze_distribution", fake_dist)
     monkeypatch.setattr(api_main, "verify_listing_freshness", fake_verify)
     monkeypatch.setattr(api_main, "compare_snapshots", fake_compare)
-    monkeypatch.setattr(api_main, "estimate_yield", fake_estimate)
-    monkeypatch.setattr(api_main, "describe_neighborhood", fake_neighborhood)
-    monkeypatch.setattr(api_main, "find_distribution_outliers", fake_outliers)
-    monkeypatch.setattr(api_main, "compute_market_velocity", fake_market_vel)
-    monkeypatch.setattr(api_main, "compute_listing_velocity", fake_listing_vel)
     monkeypatch.setattr(api_main, "find_anchor_amenities", fake_anchors)
     monkeypatch.setattr(api_main, "create_estimation_run", fake_create_run)
     monkeypatch.setattr(api_main, "get_estimation_run", fake_get_run)
@@ -279,14 +254,8 @@ def client(monkeypatch):
 
 _CAT = {"category_main": "byt", "category_type": "pronajem"}
 _FIND_BODY = {"target": {"lat": 50.0, "lng": 14.0}, **_CAT}
-_DIST_BODY = {"listings": [], "field": "price_per_m2"}
 _VERIFY_BODY = {"sreality_id": 1, "max_age_hours": 24}
 _COMPARE_BODY = {"sreality_id": 1}
-_ESTIMATE_BODY = {"target": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}, **_CAT}
-_NEIGHBORHOOD_BODY = {"lat": 50.0, "lng": 14.0, **_CAT}
-_OUTLIERS_BODY = {"listings": []}
-_MARKET_VEL_BODY = {"target": {"lat": 50.0, "lng": 14.0}, **_CAT}
-_LISTING_VEL_BODY = {"sreality_id": 1}
 _ANCHORS_BODY = {"lat": 50.0, "lng": 14.0}
 _CREATE_ESTIMATION_BODY = {"spec": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}}
 _RESOLVE_BODY = {"lat": 50.0, "lng": 14.0, "type": "regional.municipality", "name": "x"}
@@ -305,15 +274,9 @@ _DASHBOARD = "66666666-6666-6666-6666-666666666666"
 def _gated_calls(client) -> list:
     return [
         ("POST", "/tools/find_comparables", _FIND_BODY),
-        ("POST", "/tools/analyze_distribution", _DIST_BODY),
         ("POST", "/tools/verify_listing_freshness", _VERIFY_BODY),
         ("POST", "/tools/compare_snapshots", _COMPARE_BODY),
-        ("POST", "/tools/describe_neighborhood", _NEIGHBORHOOD_BODY),
-        ("POST", "/tools/find_distribution_outliers", _OUTLIERS_BODY),
-        ("POST", "/tools/compute_market_velocity", _MARKET_VEL_BODY),
-        ("POST", "/tools/compute_listing_velocity", _LISTING_VEL_BODY),
         ("POST", "/tools/find_anchor_amenities", _ANCHORS_BODY),
-        ("POST", "/estimate_yield", _ESTIMATE_BODY),
         ("GET", "/estimations", None),
         ("GET", "/maps/suggest?query=foo", None),
         ("POST", "/maps/resolve", _RESOLVE_BODY),
