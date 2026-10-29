@@ -6,7 +6,7 @@
 
 import { categoryMainLabel, categoryTypeLabel, enumLabel, subtypeLabel } from '../../frontend/src/lib/enums';
 import {
-  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2, fmtPct, fmtTomDays,
+  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2, fmtPct, fmtTomDays,
 } from '../../frontend/src/lib/format';
 import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/src/lib/measure';
 import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
@@ -71,13 +71,17 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
   }
 
   const facts = factChips(l, {
-    floor: fmtFloor,
+    floor: fmtFloorTag,
     label: (column, slug) => (column === 'subtype' ? subtypeLabel(slug) : enumLabel(column, slug)),
     plot: (m2) => fmtArea(m2, 'plot'),
   });
   if (facts.length > 0) {
     const row = h('div', 'facts');
-    for (const f of facts) row.appendChild(h('span', 'fact', f));
+    for (const f of facts) {
+      const chip = h('span', 'fact', f.text);
+      if (f.title != null && f.title !== f.text) chip.title = f.title;
+      row.appendChild(chip);
+    }
     ident.appendChild(row);
   }
   head.appendChild(ident);

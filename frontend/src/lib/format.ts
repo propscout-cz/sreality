@@ -99,6 +99,20 @@ export const fmtFloor = (
   return totalFloors == null ? storey : `${storey} z ${totalFloors} podlaží`;
 };
 
+/* The storey as a tag or chip prints it, "2. patro z 5", with fmtFloor's full
+ * wording as its tooltip. The scale is ground = 0, so a bare "2/5" would read as
+ * the second of five podlaží when it is the third: the ordinal stays spelled and
+ * the count stays behind "z". */
+export const fmtFloorTag = (
+  floor: number | null | undefined,
+  totalFloors?: number | null,
+): { text: string; title: string } | null => {
+  const storey = fmtFloor(floor);
+  const full = fmtFloor(floor, totalFloors);
+  if (storey == null || full == null) return null;
+  return { text: totalFloors == null ? storey : `${storey} z ${totalFloors}`, title: full };
+};
+
 /* Distance from a subject point. Metres under a kilometre — the difference
  * between 80 m and 900 m is the difference between the same street and a
  * different neighbourhood — and one decimal of a kilometre above it, where the

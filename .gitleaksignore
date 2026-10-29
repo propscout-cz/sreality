@@ -1,0 +1,68 @@
+# Every finding of the full-history scan (the command in scripts/gitleaks.sh), each judged once on 2026-10-28 (#2035), so the
+# scan exits 0 over history. History only: a new finding is fixed, or, when it is no secret, marked `gitleaks:allow`
+# on its own line, which survives a rebase or a squash where a commit-keyed fingerprint here would not.
+
+# Rotated: a personal login password in a scraper config uploaded 2026-06-02 and removed since; the operator changed it before 2026-10-28.
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config.json:generic-api-key:4
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config_batch1.json:generic-api-key:4
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config_batch2.json:generic-api-key:4
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config_batch3.json:generic-api-key:4
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config_batch4.json:generic-api-key:4
+f8d34de2352b68f9aa7aaa18c466c058882997be:scraper/inspiration_sraper_del_me/config_batch5.json:generic-api-key:4
+
+# Third-party credentials embedded in the portals' own pages (a Google Maps key, a map tiles key, a captcha site key, a
+# widget token), public there; blanked in the fixtures by scripts/fetch_and_anonymize_fixtures.py since #2035.
+1982a15dd3180b0e25210f7fc89dc707bbefc0f8:tests/fixtures/portal_html/idnes_komercni_echo_cellar.html:generic-api-key:783
+1982a15dd3180b0e25210f7fc89dc707bbefc0f8:tests/fixtures/portal_html/idnes_komercni_echo_cellar.html:generic-api-key:790
+1982a15dd3180b0e25210f7fc89dc707bbefc0f8:tests/fixtures/portal_html/idnes_komercni_echo_tenement.html:generic-api-key:795
+1982a15dd3180b0e25210f7fc89dc707bbefc0f8:tests/fixtures/portal_html/idnes_komercni_echo_tenement.html:generic-api-key:802
+97fca2e6f08828b1fdcf5a5a23d98fe09a0c9de8:tests/fixtures/portal_html/idnes_komercni_echo_cellar.html:generic-api-key:783
+97fca2e6f08828b1fdcf5a5a23d98fe09a0c9de8:tests/fixtures/portal_html/idnes_komercni_echo_cellar.html:generic-api-key:790
+97fca2e6f08828b1fdcf5a5a23d98fe09a0c9de8:tests/fixtures/portal_html/idnes_komercni_echo_tenement.html:generic-api-key:795
+97fca2e6f08828b1fdcf5a5a23d98fe09a0c9de8:tests/fixtures/portal_html/idnes_komercni_echo_tenement.html:generic-api-key:802
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_a1.html:gcp-api-key:1437
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_a1.html:generic-api-key:2671
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_a2.html:gcp-api-key:1437
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_a2.html:generic-api-key:2671
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_b1.html:gcp-api-key:1311
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/ceskereality_b1.html:generic-api-key:2518
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_a1.html:generic-api-key:773
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_a1.html:generic-api-key:780
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_a2.html:generic-api-key:773
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_a2.html:generic-api-key:780
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_b1.html:generic-api-key:793
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/idnes_b1.html:generic-api-key:800
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/realitymix_a1.html:generic-api-key:19
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/realitymix_a2.html:generic-api-key:19
+e031f044472d8986a3cdb3c0fd1c984298317e6d:tests/fixtures/location_w2a_refetch/realitymix_b1.html:generic-api-key:19
+f004f4707a87e2ab90f1880f5e84ec07bc017fd2:tests/fixtures/portal_html/idnes_detail.html:generic-api-key:968
+f004f4707a87e2ab90f1880f5e84ec07bc017fd2:tests/fixtures/portal_html/idnes_detail.html:generic-api-key:975
+f004f4707a87e2ab90f1880f5e84ec07bc017fd2:tests/fixtures/portal_html/realitymix_detail.html:generic-api-key:21
+
+# Public by design: the Chrome extension's public key, which pins its extension id.
+f4d18f7e39ac79dd8eff0d62d0d6ecbbcbc5f5e4:chrome-extension/manifest.json:generic-api-key:8
+
+# Test fakes: a Web Push application server key and RFC 8291's example subscription auth secret.
+807070a2bc2f20becee71798cb556f6dde8a2248:frontend/src/test/pushFakes.ts:generic-api-key:8
+f3959daf5849a19ca534a4c97a73324924b6708d:tests/api/test_push.py:generic-api-key:31
+
+# No secret: record ids, settings and payload keys, salted broker digests and an Actions cache key that merely look random.
+0534aaf41cf4517ea0b48a20bd2d364ad638112e:frontend/src/pages/NewDedupDashboard.tsx:generic-api-key:130
+39512ecd41032d1fa4bad611a5fe6928e607ded5:tests/autodedup/data_s15_trial_examples.json:generic-api-key:17
+39512ecd41032d1fa4bad611a5fe6928e607ded5:tests/autodedup/data_s15_trial_examples.json:generic-api-key:549
+44886da6085f63d029079e79b919f6a1771a9675:toolkit/dedup_sim_settings.py:generic-api-key:107
+44886da6085f63d029079e79b919f6a1771a9675:toolkit/dedup_sim_settings.py:generic-api-key:191
+44886da6085f63d029079e79b919f6a1771a9675:toolkit/dedup_sim_settings.py:generic-api-key:71
+49f72ef57f74f33f6aad8ad9198aa2b1e1af3890:tests/autodedup/data_s15_trial_examples.json:generic-api-key:743
+526fd30a4bd801692710490b197affeaee37d225:tests/autodedup/data_s15_trial_examples.json:generic-api-key:19
+526fd30a4bd801692710490b197affeaee37d225:tests/autodedup/data_s15_trial_examples.json:generic-api-key:317
+526fd30a4bd801692710490b197affeaee37d225:tests/autodedup/data_s15_trial_examples.json:generic-api-key:375
+526fd30a4bd801692710490b197affeaee37d225:tests/autodedup/data_s15_trial_examples.json:generic-api-key:438
+526fd30a4bd801692710490b197affeaee37d225:tests/autodedup/data_s15_trial_examples.json:generic-api-key:501
+7b38307a4c28279445b9ccafb19948f008bbe70d:tests/api/test_autodedup_rulings.py:generic-api-key:295
+87ff32ce74eaf47113f14a1d95f3635f0bb8fac0:frontend/src/pages/AutodedupRulings.test.tsx:generic-api-key:341
+9929efcfcad1e1284666c162746528a729eb4cd6:tests/test_payload_churn_write.py:generic-api-key:509
+b9efe68d0ad256b9e28fff43b907de0986f10ea8:frontend/src/pages/NewDedupSettings.test.tsx:generic-api-key:31
+e173cde14e8167136cf371c473b54b7039467901:.github/workflows/label_proposal_backfill.yml:generic-api-key:91
+e944357d5281034e0e1537f6ecabb8d3498598c4:tests/test_payload_churn_write.py:generic-api-key:484
+fe30812c28d225d3375d011122a54156d35f4426:frontend/src/pages/AutodedupResidualGroups.test.tsx:generic-api-key:112

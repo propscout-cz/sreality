@@ -3,6 +3,7 @@ import {
   fmtArea,
   fmtDistanceM,
   fmtFloor,
+  fmtFloorTag,
   fmtMeasuredPricePerM2,
   fmtPct,
   fmtPP,
@@ -183,6 +184,15 @@ describe('fmtFloor', () => {
   it('returns null for an absent storey so each surface renders its own gap', () => {
     expect(fmtFloor(null, 5)).toBeNull();
     expect(fmtFloor(undefined)).toBeNull();
+  });
+});
+
+describe('fmtFloorTag', () => {
+  it('shortens the count to "z N" and keeps the full wording as the title', () => {
+    expect(fmtFloorTag(4, 6)).toEqual({ text: '4. patro z 6', title: '4. patro z 6 podlaží' });
+    expect(fmtFloorTag(0, 4)).toEqual({ text: 'přízemí z 4', title: 'přízemí z 4 podlaží' });
+    expect(fmtFloorTag(3)).toEqual({ text: '3. patro', title: '3. patro' });
+    expect(fmtFloorTag(null, 5)).toBeNull();
   });
 });
 
