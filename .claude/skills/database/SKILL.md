@@ -31,8 +31,9 @@ psql "$SUPABASE_DB_URL" -c "\d listings" | head -60
   disable the server via `/mcp`.
 - **When there is no `psql` on PATH and no `SUPABASE_DB_URL`** — a cloud-only session, or any
   shell that never sourced `.env` — the command above silently cannot run and MCP
-  `execute_sql` is the only read path. The preference for `psql` was about CONTEXT COST, not
-  correctness, so carry that intent across: **one aggregate row per question**, never a wide
+  `execute_sql` is the only read path. Production is project_id `erlvtprrmrylhznfyaih` (`.env.example`):
+  pass it straight to `mcp__supabase__execute_sql`, no `list_projects`. The preference for `psql` was
+  about CONTEXT COST, not correctness, so carry that intent across: **one aggregate row per question**, never a wide
   result set. `count(*) FILTER (WHERE …)` for several counts in one row; `string_agg(name, ',')`
   to list what exists; `md5(string_agg(col, ',' ORDER BY ordinal_position))` to compare a long
   column list against something you computed locally **without printing either**. Migrations
