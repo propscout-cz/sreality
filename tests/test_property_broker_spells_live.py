@@ -257,3 +257,26 @@ def test_tom_observed_follows_the_identitys_first_ad_in_the_projection_order(cur
 
     properties_changed(cur.connection, [pid])
     assert _book(cur, pid)[who] == (datetime.fromisoformat("2026-03-01T12:00:00+00:00"), None, False)
+
+
+def test_broker_book_folds_a_brokers_identities_into_one_row_per_property(cur: Any) -> None:
+    """broker_book (migration 691): one broker's identities on two portals are one row whose sources are those portals,
+    active_sources the ones with an ad still running; the earliest spell starts it; an unresolved identity has no row."""
+    now = _now(cur)
+    pid = _property(cur)
+    cur.execute("INSERT INTO brokers (display_name) VALUES ('lp-broker') RETURNING id")
+    broker = int(cur.fetchone()[0])
+    cur.execute("INSERT INTO broker_identities (source, source_broker_id_native, broker_id) VALUES "
+                "('sreality', %s, %s), ('idnes', %s, %s) RETURNING id",
+                (f"lp-{uuid.uuid4()}", broker, f"lp-{uuid.uuid4()}", broker))
+    on_sreality, on_idnes = (int(r[0]) for r in cur.fetchall())
+    unresolved = _identity(cur)
+    _ad(cur, pid, on_sreality, now - timedelta(days=20), now - timedelta(days=12), active=False)
+    _advert(cur, pid, source="idnes", broker_identity_id=on_idnes, first_seen_at=now - timedelta(days=15),
+            last_seen_at=now - timedelta(hours=1))
+    _ad(cur, pid, unresolved, now - timedelta(days=30), now - timedelta(hours=1))
+    properties_changed(cur.connection, [pid])
+
+    cur.execute("SELECT broker_id, is_active, all_sources, active_sources, started_at, ended_at FROM broker_book "
+                "WHERE property_id = %s", (pid,))
+    assert cur.fetchall() == [(broker, True, ["idnes", "sreality"], ["idnes"], now - timedelta(days=20), None)]

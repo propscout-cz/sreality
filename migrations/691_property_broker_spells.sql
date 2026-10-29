@@ -18,6 +18,7 @@
 --                                     which every merge, detach, birth and dirty-drain slice runs, and the daily sweep's
 --                                     batches), each time from the view. Service role only, like every broker relation
 --                                     (Phase 0 A6, migration 299; ADR-0002 amended 2026-10-29).
+--   broker_book                       the book read by canonical broker (identities folded), what every reader reads.
 --   measure_exit_within(...)          THE speed measure: did this spell's property leave the market within N days.
 --                                     Python face toolkit.measures.exit_within_sql.
 -- The book is keyed on the IDENTITY, so a broker merge (it re-points broker_identities.broker_id) changes no row; a
@@ -97,6 +98,34 @@ comment on column public.property_broker_spells.tom_observed is
 alter table public.property_broker_spells enable row level security;
 revoke all on public.property_broker_spells from public, anon, authenticated;
 
+-- 2b. The book read as (property, canonical broker): every reader of "this broker's properties" reads THIS (the board,
+--     Browse's broker scope, the broker counts), never the spells. A broker's identities are one per portal, so the
+--     sources are the portals the broker advertises the property on (active_sources: with an ad still running), the
+--     shape portal_status_matches takes (MS19: broker + portal + status = one ad). started_at / ended_at / tom_observed
+--     fold the broker's spells as a spell folds its ads; tom_observed is the earliest spell's. An identity not yet
+--     resolved to a broker has no row here (its property reads unattributed).
+create or replace view public.broker_book as
+  select s.property_id,
+         bi.broker_id,
+         bool_or(s.ended_at is null) as is_active,
+         array_agg(distinct bi.source order by bi.source) as all_sources,
+         coalesce(array_agg(distinct bi.source order by bi.source) filter (where s.ended_at is null), '{}')
+           as active_sources,
+         min(s.started_at) as started_at,
+         case when bool_or(s.ended_at is null) then null else max(s.ended_at) end as ended_at,
+         (array_agg(s.tom_observed order by s.started_at, s.broker_identity_id))[1] as tom_observed
+  from public.property_broker_spells s
+  join public.broker_identities bi on bi.id = s.broker_identity_id
+  join public.brokers b on b.id = bi.broker_id and b.status = 'active'
+  group by s.property_id, bi.broker_id;
+
+comment on view public.broker_book is
+  'The broker book by canonical broker (migration 691): one row per (property, broker) over property_broker_spells. '
+  'is_active / all_sources / active_sources are portal_status_matches'' inputs at the broker''s grain (MS19); started_at, '
+  'ended_at and tom_observed fold the broker''s spells (measure_exit_within''s inputs). Service role only (A6).';
+
+revoke all on public.broker_book from public, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 3. THE speed measure, beside measure_tom_days (617). One expression, no sub-select, no SET: inlinable.
 -- ---------------------------------------------------------------------------
@@ -170,7 +199,8 @@ begin
   end if;
   foreach v_role in array array['anon', 'authenticated'] loop
     if has_table_privilege(v_role, 'public.property_broker_spells', 'select')
-       or has_table_privilege(v_role, 'public.property_broker_spell_projection', 'select') then
+       or has_table_privilege(v_role, 'public.property_broker_spell_projection', 'select')
+       or has_table_privilege(v_role, 'public.broker_book', 'select') then
       raise exception '691 did not land: % can read the broker book', v_role;
     end if;
   end loop;

@@ -102,6 +102,7 @@ _BROKER_PII_RELATIONS: list[str] = [
     "firms_public",
     "property_broker_spell_projection",
     "property_broker_spells",
+    "broker_book",
 ]
 
 # Migration 398: contact-PII columns allowed to REMAIN on a browser-readable

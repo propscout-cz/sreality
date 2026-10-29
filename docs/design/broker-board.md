@@ -31,6 +31,13 @@ delete the spells the view no longer holds. Dirty sources: every existing rule-2
 (`toolkit/broker_sources.py`), which enqueues a re-attributed advert's property in the same statement. The book is
 identity-keyed, so a broker merge (it re-points `broker_identities.broker_id`) changes no row. Service role only.
 
+**Book by broker** (`broker_book`, same migration): the spells folded to (property, canonical broker), what every
+reader reads. `is_active` / `all_sources` / `active_sources` are `portal_status_matches`' inputs at the broker's grain
+(a broker's identities are one per portal, so the sources are the portals the broker advertises the property on);
+`started_at`, `ended_at` and `tom_observed` fold the broker's spells as a spell folds its ads (the earliest spell's
+flag). A property therefore counts once per broker in volume and in speed. An identity not yet resolved to a broker
+has no row, so its property reads unattributed.
+
 **Volume** = the distinct cohort properties with an ad of the broker in the property's status (MS19: under active,
 an active ad; otherwise any ad).
 
@@ -64,23 +71,20 @@ trustworthy) and M = 7 days (the follow-up / handover margin, recalibrated by W0
 - **W3** — delete the count book: `broker_region_type_stats`, its hourly publish in the broker-maintenance lane, its
   registry row, `broker_geo_options`.
 
-## W0 measurements (production, read-only)
+## W0 measurements (production, read-only, 2026-10-29)
 
-1. Handover gaps: for properties with two identities' spells, the gap from one's `ended_at` to the other's
-   `started_at` and to the property's `last_seen_at` — sets M.
-2. Gone lag: last sighting → `is_active = false` flip per portal (rule 3's 12–24 h dwell), so L reflects the exit.
-3. Revivals within M of an `exited` spell's end, per portal.
-4. Followed share per portal and N: `tom_observed`, S ≥ E0, window closed.
-5. `unknown` share per portal and N.
-6. Broker coverage per portal: active ads with `broker_identity_id`, the coverage line's numbers.
-7. Brokers with n ≥ `MIN_N` per N, and how often two identities of one broker share a property.
-8. Book cost: backfill time and rows, the scoped upsert per drain slice, the sweep batch's added time (2-min ceiling).
-9. Drift: view rows the table lacks, and table rows the view lacks, after one daily sweep (expected 0).
+| measure | result | consequence |
+| --- | --- | --- |
+| start lag `first_seen_at − discovered_at`, ads since 2026-09-08 | p99 ≤ 2.4 h on every broker portal (bazos 23 h, no broker) | `first_seen_at` is a sound start |
+| active ads unseen 7+ days | 0 on every portal | `unknown` is rare; the 7-day rule is a no-op today |
+| gone lag `inactive_at − last_seen_at`, delisted since 2026-10-09 | p50 31–39 h, p99 45–65 h; ceskereality / realitymix 1 % tails 28–58 d | M = 7 d covers p99; tails read `unknown` |
+| properties with 2+ canonical brokers | 7.4 % national, 8.8 % byt/prodej, 31.6 % Praha byt/prodej (4,620 of 4,659 across portals, 73 one name) | real co-listing (non-exclusive mandates): every broker present at the exit is credited |
+| look-alike successor within 14 d (≈100 m, disposition, area ±3 %, price ±15 %) after a byt/prodej exit | Praha 11.2 %, elsewhere 33.2 % (upper bound) | outside the autodedup scope up to a third of exits may be re-posts until dedup covers the area (ruling 1) |
+| sreality `state_cb` Prodáno / Rezervováno on recent delistings | 266 of 22,881 (1.2 %) | too sparse to validate the exit proxy |
+| book size | ~725k (property, identity) pairs; Praha byt/prodej 32k over 14.7k properties | backfill in one statement |
 
-## Open for W2
-
-- A broker with two identities on one property has two spells; W2 decides whether speed counts the property once
-  per broker, and spells it once if so.
+Still owed after the apply: the board query's cold and warm EXPLAIN on production, the backfill's time, and
+the book against today's broker scope (`broker_property_ids`) per broker × status × portal (expected: equal).
 
 ## Out of scope
 
