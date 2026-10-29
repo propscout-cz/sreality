@@ -217,6 +217,10 @@ slice ledger, went with migration 689.)
   its subset whole and ends nothing; an unreadable ledger walks everything and
   nominates no orphans. Any anchor is sound; the partition only decides how much a
   resumed run re-walks.
+- **Limit:** a unit that KILLS its walk (out of memory, SIGKILL after the grace)
+  records no entry, so its group stays least recently walked and goes first again
+  every run, and the rest wait behind it (as the tail of a fixed order once did).
+  The walk's job cell and the `scraping` walks arm show it; fix the unit.
 
 ```sql
 select started_at, e->>'category_main' cm, e->>'category_type' ct, e->'scope' scope,
