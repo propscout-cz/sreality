@@ -5,7 +5,7 @@
  * own, read per property. Wording is the old panel's wherever it had the string. */
 
 import { COLLECTION_SAVE_LABEL, isMine, shareAudience } from '../../frontend/src/lib/collectionRules';
-import { stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
+import { REMOVE_QUESTION, removeWarning, stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
 import type { Note, PipelineStage, Tag } from '../../frontend/src/lib/types';
 import { buildCard } from './card';
 import { buildChecklist, buildCollectionChecklist, stateLine } from './checklist';
@@ -396,15 +396,10 @@ export function createMine(deps: MineDeps) {
   /* Removal is the one pipeline action with no undo — the card's dates go and
    * re-adding restamps them — so it asks, and points at the closed stages. */
   function removeConfirm(id: number, stages: readonly PipelineStage[], busy: boolean): HTMLElement {
-    const closedStage = stages.find((s) => s.is_terminal);
     const box = h('div', 'confirm');
     box.setAttribute('role', 'group');
-    box.setAttribute('aria-label', 'Odebrat z pipeline?');
-    box.append(
-      h('p', 'confirm-q', 'Odebrat z pipeline?'),
-      h('p', 'confirm-d', 'Karta ztratí „v pipeline od“ i „ve fázi od“.'
-        + (closedStage != null ? ` Uzavřený obchod raději přesuňte do fáze „${closedStage.label}“.` : '')),
-    );
+    box.setAttribute('aria-label', REMOVE_QUESTION);
+    box.append(h('p', 'confirm-q', REMOVE_QUESTION), h('p', 'confirm-d', removeWarning(stages)));
     const actions = h('div', 'row-actions');
     const yes = h('button', 'danger', busy ? 'Odebírám…' : 'Odebrat');
     yes.dataset.key = 'remove-yes';
