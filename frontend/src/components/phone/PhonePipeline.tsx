@@ -68,13 +68,14 @@ import { useCardTags } from '@/lib/useCardTags';
 import TagChip from '@/components/curation/TagChip';
 import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
 import DelegatedStamp from '@/components/DelegatedStamp';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import type { DistrictChip } from '@/lib/filters';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
 import BottomSheet from './BottomSheet';
 import { PHOTO_DARK } from './CardPhotoStrip';
-import { feedDelta, feedLayout, feedMfYield, feedPrice } from './FeedCard';
+import { feedDelta, feedLayout, feedPrice } from './FeedCard';
 import { StageSheet, TagSheet, type SheetSubject } from './FeedSheets';
 import PhonePipelineSkeleton from './PhonePipelineSkeleton';
 import { usePhoneHeaderAside } from './PhoneShell';
@@ -540,7 +541,7 @@ function PipelinePhoneCard({
   const place = card.display_label?.trim() || null;
   const delta = feedDelta(card.total_price_change_pct);
   const days = fmtDaysInStage(daysInStage(card.entered_stage_at));
-  const mf = feedMfYield(card);
+  const mf = mfYieldLine(card.mf_gross_yield_pct);
   const text = [layout, place].filter(Boolean).join(' · ');
   const sheetSubject: SheetSubject = { property_id: card.property_id, text, figure: price.text ? priceLabel : null };
 
@@ -595,7 +596,7 @@ function PipelinePhoneCard({
         </p>
         <p className="mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11px] tabular-nums text-[var(--color-ink-3)]">
           {days && <span>{days}</span>}
-          {mf && <span title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)">{mf}</span>}
+          {mf && <span title={MF_YIELD_TITLE}>{mf}</span>}
           {!card.is_active && <span>neaktivní</span>}
         </p>
         {!readOnly && (

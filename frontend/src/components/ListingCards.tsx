@@ -39,7 +39,7 @@ import {
 } from '@/lib/format';
 import type { CohortKind } from '@/lib/filters';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
-import { mfYieldText } from '@/lib/mfReference';
+import { MF_YIELD_LABEL, MF_YIELD_TITLE, mfYieldText } from '@/lib/mfReference';
 import { listingKindParts, listingTypeLabel } from '@/lib/enums';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
@@ -674,9 +674,9 @@ function Card({
         {r.mf_gross_yield_pct != null && (
           <p
             className="card-tip mt-0.5 text-[0.62rem] text-[var(--color-ink-3)] tabular-nums"
-            title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)"
+            title={MF_YIELD_TITLE}
           >
-            Výnos MF{' '}
+            {MF_YIELD_LABEL}{' '}
             <span className="text-[var(--color-ink)] font-medium">
               {mfYieldText(r.mf_gross_yield_pct)}
             </span>
