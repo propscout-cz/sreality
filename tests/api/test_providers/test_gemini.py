@@ -196,6 +196,17 @@ def test_role_assistant_is_mapped_to_model(patch_gemini):
     assert contents[1].role == "model"
 
 
+def test_a_call_cut_at_the_output_limit_reports_max_tokens(patch_gemini):
+    """Its arguments may be half-written, so it must not read as a finished tool call."""
+    response = _tool_call_response("find_things", {})
+    response.candidates[0].finish_reason = "MAX_TOKENS"
+    patch_gemini(response)
+    out = GeminiProvider().complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="gemini-2.5-pro",
+    )
+    assert out.tool_calls and out.stop_reason == "max_tokens"
+
+
 def test_function_call_extracted(patch_gemini):
     patch_gemini(_tool_call_response("find_things", {"radius_m": 1500}))
     p = GeminiProvider()

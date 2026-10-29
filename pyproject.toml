@@ -59,6 +59,10 @@ api = [
   # base-14 PDF fonts have no Czech letters) and needs only Pillow + charset-normalizer,
   # both already installed. fpdf2 is LGPL and adds fonttools; weasyprint needs Pango.
   "reportlab>=4.4",
+  # An agent folder's input and output shape is JSON Schema (skills/README.md), checked at load and at every run
+  # (api/agents/). The stdlib validates none, pydantic validates its own models only, and a hand-written subset
+  # would be a second, partial implementation of a standard; jsonschema is the reference one.
+  "jsonschema>=4.18",
 ]
 # Used only by scripts/ingest_boundaries.py; kept out of the default
 # install so the scraper / API images stay slim. Pure-Python combo

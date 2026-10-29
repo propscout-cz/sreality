@@ -19,9 +19,9 @@ from pydantic import BaseModel, Field
 from api import dependencies as deps
 from api import rent_map
 from api.agent import list_agent_tools
+from api.agents.definition import DefinitionError
 from api.skills import (
     SkillNotFound,
-    SkillValidationError,
     list_skills,
     load_skill,
     update_skill,
@@ -142,7 +142,7 @@ def put_skill(
     }
     try:
         skill = update_skill(conn, name, fields, updated_by="settings_ui")
-    except SkillValidationError as exc:
+    except DefinitionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SkillNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

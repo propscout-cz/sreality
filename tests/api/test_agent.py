@@ -33,7 +33,8 @@ from api.providers import (
     ToolCall,
     Usage,
 )
-from api.skills import Skill, SkillLimits
+from api.agents.definition import Limits
+from api.skills import Skill
 from toolkit.comparables import ComparableFilters, TargetSpec
 from toolkit.measures import MeasureBasisError
 from tests.api._fakes import _FakeConn, _ScriptedProvider
@@ -59,7 +60,7 @@ def _make_skill(
             "record_estimate",
         ],
         preferred_model={"anthropic": "claude-sonnet-4-5", "gemini": "gemini-2.5-pro"},
-        limits=SkillLimits(
+        limits=Limits(
             max_iterations=max_iterations,
             max_cost_usd=max_cost_usd,
             wall_clock_timeout_s=wall_clock_timeout_s,

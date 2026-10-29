@@ -43,11 +43,3 @@ def test_645_is_idempotent_and_the_new_text_names_no_level() -> None:
         assert not [w for w in _LEVEL_WORDS if w in new.lower()], tag
         for old in ("b0", "s0", "v0"):
             assert _quoted(_MIGRATION, old) not in new
-
-
-def test_the_canonical_skill_file_carries_the_same_new_text() -> None:
-    skill = (_ROOT / "skills" / "rental_estimator_full_v1" / "SKILL.md").read_text(encoding="utf-8")
-    body = skill.split("## System prompt body", 1)[1]
-    assert _quoted(_MIGRATION, "b1") in body
-    assert _quoted(_MIGRATION, "s1") in body
-    assert not [w for w in _LEVEL_WORDS if w in body.lower()]

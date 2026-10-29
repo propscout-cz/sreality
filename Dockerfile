@@ -70,6 +70,8 @@ COPY data/ ./data/
 # tree in the image (setuptools' packages.find matches nothing and fails silently at build
 # time, so the miss only shows as a crash-loop at runtime).
 COPY autodedup/ ./autodedup/
+# The agent folders api/agents/definition.py loads (#2065).
+COPY skills/ ./skills/
 
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
 # The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that

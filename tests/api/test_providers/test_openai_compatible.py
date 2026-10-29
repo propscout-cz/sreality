@@ -119,6 +119,16 @@ def test_function_call_extracted():
     assert out.stop_reason == "tool_use"
 
 
+def test_a_call_cut_at_the_length_limit_reports_max_tokens():
+    """Its arguments may be half-written (they parse to {}), so it must not read as a finished tool call."""
+    response = _tool_call_response("find_things", {})
+    response._payload["choices"][0]["finish_reason"] = "length"
+    out = _provider(FakeSession([response])).complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="test-model",
+    )
+    assert out.tool_calls and out.stop_reason == "max_tokens"
+
+
 def test_tool_schema_translated_to_openai_function_shape():
     session = FakeSession([_tool_call_response("record_x", {})])
     p = _provider(session)

@@ -44,6 +44,9 @@ PRICES: dict[str, ModelPrice] = {
     # $15/$75. Confirm against docs.anthropic.com if it drifts.
     "claude-opus-4-5":   ModelPrice(5.0, 25.0, 0.50, 6.25),
     "claude-opus-4-7":   ModelPrice(15.0, 75.0, 1.50, 18.75),
+    # The agent platform's code agents (docs/design/agent-platform/MVP.md); cache write is 1.25x input.
+    "claude-opus-5-5":   ModelPrice(4.0, 20.0, 0.20, 5.00),
+    "claude-sonnet-5-5": ModelPrice(2.0, 10.0, 0.20, 2.50),
 }
 
 # Dated snapshot suffix, e.g. "-20251001" on "claude-haiku-4-5-20251001".

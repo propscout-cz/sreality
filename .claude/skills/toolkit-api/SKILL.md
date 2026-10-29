@@ -162,15 +162,12 @@ it (`api/`). They do not apply to the scraper.
    `GET /estimations/{id}/trace/{n}/payload`. Same retention discipline as
    `listing_freshness_checks`: rows older than 30 days are safe to delete; no automated
    pruner.
-10. **Agent skills live in the `skills` table; the on-disk `skills/<name>/SKILL.md` file is
-    the canonical seed.** Each skill is a bundle of (system prompt + allowed tool whitelist +
-    per-provider preferred model + loop limits; `preferred_model` names any non-empty subset of the
-    registered providers, a run on an unnamed one fails). Migration 029's seed `INSERT` is the importer
-    of the markdown file's content; at runtime the DB row is the source of truth. Operators
-    edit via `/settings` (UI) or `PUT /admin/skills/{name}` (API). Every update writes a
-    `skills_history` row via trigger — same pattern as `app_settings_history` (migration 020).
-    When adding a new skill: commit a new `skills/<name>/SKILL.md`, write the corresponding
-    seed `INSERT` in a new migration, apply.
+10. **An agent is one folder in repo-root `skills/`** (`skills/README.md`): frontmatter = a priced model per
+    provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
+    `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
+    journal) and ends it on `submit_result`, checked against the run's own tool results; `scripts/agent_run.py`
+    runs one locally and records a cassette. Only the estimator still reads the `skills` table (Settings,
+    `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
     completion types; `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
