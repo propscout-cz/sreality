@@ -65,7 +65,8 @@ def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
     """Run one tool; its result envelope, or a ToolError. The caller's recorder sees whichever, once."""
     try:
         entry, args = validate(name, raw_args)
-        # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
+        # A refusal from the connection or the tool is raised inside the `with`, so a tenant transaction rolls back
+        # before the error is mapped; a validation refusal opens none.
         with _connection(caller, entry) as conn:
             result = entry.handler(Context(conn), args)
             # A handler that swallowed a database error answered without that read (rent_map's reference swallows

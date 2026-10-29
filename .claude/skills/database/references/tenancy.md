@@ -145,7 +145,8 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   owner to the caller exists — `edit` on any method and table; `read` on `GET`/`HEAD` only and on the
   three pipeline tables only (`for_board`; ruling 2: a read share sees the board, never the owner's
   notes, files, tags, collections, dismissals or links; a missing method counts as a write) — and
-  **nothing** otherwise. The API runs a GET/HEAD that acts `READ ONLY`, as PostgREST does.
+  **nothing** otherwise. The API runs every GET/HEAD tenant transaction `READ ONLY` under `authenticated`'s 8 s
+  `statement_timeout` (`tenant_pool.bound_read`), acting or not, as PostgREST runs the SPA's own.
 - **Replace, never union.** While acting, the eleven tables show the owner's rows and none of the
   caller's own, so the card map, the entry stage, the dismissal rule and Browse's curated scope stay
   single-account. The child triggers (292's shape) read the owner's parent under the acting identity

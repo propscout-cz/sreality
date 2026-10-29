@@ -17,7 +17,6 @@ from api import tenant_pool
 from api.capabilities import registry, subject
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode
-from api.capabilities.tenant import NoArgs
 from api.filter_args import Args
 from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url
 from tests.test_location_ad_readers_live import POINT, RING, _placed
@@ -69,6 +68,19 @@ def _stage_ids(svc: psycopg.Connection, account: uuid.UUID) -> set[int]:
         return {int(r[0]) for r in cur.fetchall()}
 
 
+class _Bare(Args):
+    pass  # a probe takes nothing (a docstring would reach the schema)
+
+
+def _probe(monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy, handler: Callable[[Context, _Bare], Any]) -> None:
+    monkeypatch.setattr(registry, "ENTRIES", {"probe": Entry(name="probe", description="probe", args=_Bare,
+                                                             handler=handler, tenancy=tenancy, effect=Effect.READ)})
+
+
+def _call_as_a(svc: psycopg.Connection, users: dict[str, Any]) -> dict[str, Any]:
+    return registry.call(Caller(market=svc, claims=_claims(users["a"])), "probe", {})
+
+
 @pytest.mark.usefixtures("tenant_pool_db")
 def test_a_tenant_tool_returns_exactly_the_callers_own_rows(svc: psycopg.Connection, users: dict[str, Any]) -> None:
     for me, mine, theirs in (("a", "a_acc", "b_acc"), ("b", "b_acc", "a_acc")):
@@ -81,15 +93,13 @@ def test_a_tenant_tool_returns_exactly_the_callers_own_rows(svc: psycopg.Connect
 @pytest.mark.usefixtures("tenant_pool_db")
 def test_a_tenant_tool_runs_as_authenticated_under_the_callers_claims(
         svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    def whoami(ctx: Context, args: NoArgs) -> dict[str, Any]:
+    def whoami(ctx: Context, args: _Bare) -> dict[str, Any]:
         with ctx.conn.cursor() as cur:
             cur.execute("SELECT current_user, current_setting('request.jwt.claims', true)::jsonb ->> 'sub', "
                         "current_setting('request.headers', true)")
             return {"data": list(cur.fetchone())}
-    probe = Entry(name="whoami", description="probe", args=NoArgs, handler=whoami,
-                  tenancy=Tenancy.TENANT, effect=Effect.READ)
-    monkeypatch.setattr(registry, "ENTRIES", {"whoami": probe})
-    role, sub, headers = registry.call(Caller(market=svc, claims=_claims(users["a"])), "whoami", {})["data"]
+    _probe(monkeypatch, Tenancy.TENANT, whoami)
+    role, sub, headers = _call_as_a(svc, users)["data"]
     assert (role, sub) == ("authenticated", str(users["a"]))
     assert not headers   # never acting as anyone
 
@@ -102,25 +112,12 @@ def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden(svc: psycopg.Conn
 
 # --- every tool read is bounded the way PostgREST bounds a signed-in GET -----------------------------------------
 
-class _Bare(Args):
-    pass  # a probe takes nothing (a docstring would reach the schema)
-
-
-def _probe(monkeypatch: pytest.MonkeyPatch, tenancy: Tenancy, handler: Callable[[Context, _Bare], Any]) -> None:
-    monkeypatch.setattr(registry, "ENTRIES", {"probe": Entry(name="probe", description="probe", args=_Bare,
-                                                             handler=handler, tenancy=tenancy, effect=Effect.READ)})
-
-
 def _session(conn: psycopg.Connection) -> tuple[str, bool]:
     """(transaction_read_only, whether statement_timeout is still the session's own) on an autocommit connection."""
     with conn.cursor() as cur:
         cur.execute("SELECT current_setting('transaction_read_only'), "
                     "(SELECT setting = reset_val FROM pg_settings WHERE name = 'statement_timeout')")
         return cur.fetchone()
-
-
-def _call_as_a(svc: psycopg.Connection, users: dict[str, Any]) -> dict[str, Any]:
-    return registry.call(Caller(market=svc, claims=_claims(users["a"])), "probe", {})
 
 
 TENANCIES = pytest.mark.parametrize("tenancy", [Tenancy.MARKET, Tenancy.TENANT])
