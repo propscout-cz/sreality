@@ -45,7 +45,7 @@ LEGACY: dict[str, Ledgered] = {
         "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),
     "autodedup/incremental_sql.py": Ledgered(
         "S3 autodedup.rt_lease (mig 539): the SQL behind autodedup/rt_lease.py (lane pass, rt_seed, live apply)",
-        "sreality-e9 (autodedup); it moves only on e9's and the operator's go"),
+        "the merge coordinator (it owns autodedup); it moves only on its and the operator's go"),
 }
 
 
