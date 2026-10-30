@@ -1954,7 +1954,7 @@ function MapViewControls({
           />
         </label>
         <span className="text-[0.65rem] text-[var(--color-ink-3)]">
-          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}).
+          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}). Tento prohlížeč si číslo pamatuje.
         </span>
       </div>
       <label className="inline-flex items-center gap-1.5 cursor-pointer">
