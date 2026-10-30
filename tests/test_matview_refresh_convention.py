@@ -23,8 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Dollar-quote-aware comment stripping, reused like test_broker_leaderboard_contract
-# reuses the rls-grants helpers: migration headers quote refresh statements in prose.
+# Dollar-quote-aware comment stripping: migration headers quote refresh statements in prose.
 from tests.test_derived_artifacts_stamping import _drop_sql_comment_lines
 
 _REPO = Path(__file__).resolve().parent.parent

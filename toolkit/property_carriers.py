@@ -293,9 +293,6 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
         "migration 464's frozen copy of tag_candidates: a backup, never read",
     ("browse_list", "property_id"):
         "a read model rebuilt wholesale (migration 276); the writers patch it per property",
-    ("property_broker_spells", "property_id"):
-        "derived: W1's identity-grain broker book (migration 691), written by nothing since 692 "
-        "and dropped in the destructive batch",
     ("broker_book", "property_id"):
         "derived: the broker book (migration 692), recomputed from its view by properties_changed, "
         "which every merge and detach runs over both sides",

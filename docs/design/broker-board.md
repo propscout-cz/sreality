@@ -62,9 +62,10 @@ seam) answers no speed: its end is never observed. A coverage line names the coh
 - **W1 (#2181, dark)** — 691: the identity-grain book, the measure, the pass, the link's dirty source, census rails.
 - **W2** — 692 (the book at broker grain, the re-point dirty source) and its readers: the `Makléři` tab, `rank_brokers`,
   Browse's broker scope, Outreach; the leaderboard's routes and toolkit deleted.
-- **W3a** — every other broker number read from the book; the count writers deleted. No migration: the count book, its
-  hourly publish and its registry row stay, unread, as one unit.
-- **W3b** (destructive: the operator's OK and a backup first) — that unit, the count columns, W2's leftovers.
+- **W3a (#2183, merged 2026-10-30)** — every other broker number read from the book; the count writers deleted. No
+  migration: the count book, its hourly publish and its registry row stay, unread, as one unit.
+- **W3b** (destructive: the operator's OK and a backup first) — that unit, the count columns, W2's leftovers:
+  migration 693, prepared (below).
 
 ## W2 as built
 
@@ -107,29 +108,35 @@ syndication feed can head a name search, as it can the board). The firm label vo
 longer ad-weighted) changes 8 of 2,945 voted firm names on production (6 gain one, 2 differ; 27 lose a 60 % majority and
 keep their name).
 
-## W3b's drop list
+## W3b as prepared
 
-One migration, applied after W3a deploys and before W3b merges; nothing W3a deploys reads any of it:
+**Migration 693** (`cleanup/broker-count-book-drop`), applied once W3a's rollout is live on the API and the worker (it
+is: #2183 merged 2026-10-30, Railway green 05:01–05:03Z), with the operator's OK and the backup below, and before W3b
+merges; nothing W3a deploys reads any of it (its header cites each reader):
 
-1. `drop view broker_geo_options`;
-2. `drop function broker_leaderboard(text[], boolean[], text[], bigint[], text, text, text, integer, bigint[], integer,
-   boolean, text[], boolean)` and `district_level_codes(text[], bigint[], boolean[], text, boolean)`;
-3. `brokers_public` dropped and re-created without its eight count columns and the matview join, `anon` and
-   `authenticated` revoked;
-4. `drop materialized view broker_region_type_stats` and delete its `derived_artifacts` row (the deployed refresh reads
-   the row first and refreshes nothing without it);
-5. `broker_firm_memberships_public` dropped and re-created without `listing_count`;
-6. `drop view firms_public`;
-7. the columns `brokers.{listing_count, property_count, active_listing_count, active_property_count}`,
+1. the `derived_artifacts` row `broker_region_type_stats`, alone and first: the deployed refresh reads the row before
+   it refreshes, so it stops before anything it refreshes goes;
+2. in one transaction: `broker_geo_options`, `broker_leaderboard(...)` and `district_level_codes(...)` (609's
+   signatures), `brokers_public` dropped and re-created without its eight count columns and the matview join (580's
+   body otherwise, `anon` and `authenticated` revoked), then the matview `broker_region_type_stats`;
+3. in one transaction: `broker_firm_memberships_public` re-created without `listing_count` (187's body otherwise, the
+   same revoke), `firms_public` dropped (no reader);
+4. the columns `brokers.{listing_count, property_count, active_listing_count, active_property_count}`,
    `firms.{broker_count, listing_count, active_listing_count, stats_computed_at}`,
-   `broker_identities.{listing_count, active_listing_count}`, `broker_firm_memberships.listing_count`;
-8. 691's `property_broker_spell_projection` and `property_broker_spells`;
-9. a post-check that `anon` and `authenticated` read none of the re-created views.
+   `broker_identities.{listing_count, active_listing_count}`, `broker_firm_memberships.listing_count`, one table per
+   statement (`brokers.stats_computed_at` stays: the broker lane writes it);
+5. 691's `property_broker_spell_projection` and `property_broker_spells` (its index named, so the drift probe retires it);
+6. a post-check: every dropped object gone, the two views exactly their columns, neither readable by `anon` or
+   `authenticated`.
 
-With it: the four `tests/test_broker_leaderboard_*.py`, `migrations.yml`'s leaderboard step, the broker index pin in
-`tests/test_matview_indexes.py`, the refresh (`scripts/resolve_brokers._maybe_refresh_matview`, the lane's
-`refreshed`), the A6 lists' entries (`test_migration_rls_grants.py`,
-`test_tenant_isolation_live.py`), the spells' `NOT_CARRIED` entry, and the docs naming them.
+Backup first (the matview is derived and rebuildable from 580's text, so it gets no dump):
+`gh workflow run backup_before_drop.yml -f label=broker-count-book -f targets="brokers:id,listing_count,property_count,active_listing_count,active_property_count firms:id,broker_count,listing_count,active_listing_count,stats_computed_at broker_identities:id,listing_count,active_listing_count broker_firm_memberships:id,listing_count property_broker_spells"`.
+
+Deleted with it: the four `tests/test_broker_leaderboard_*.py` and `migrations.yml`'s leaderboard step, the broker
+index pin in `tests/test_matview_indexes.py`, the refresh (`scripts/resolve_brokers._maybe_refresh_matview`, the
+broker lane's `refreshed`), the A6 lists' entries for the dropped relations and the leaderboard's EXECUTE probe
+(`test_migration_rls_grants.py` with its `firms_public` test, `test_tenant_isolation_live.py`) and the spells'
+`NOT_CARRIED` entry.
 
 ## W0 measurements (production, read-only, 2026-10-29)
 
