@@ -274,6 +274,8 @@ def generate_cases() -> list[dict[str, Any]]:
             box = {"bounds": {"west": round(point["lng"] - 0.02, 2), "south": round(point["lat"] - 0.02, 2),
                               "east": round(point["lng"] + 0.02, 2), "north": round(point["lat"] + 0.02, 2)}}
             cases.append(_case(grain, "location=box", box, None, "location"))
+            circle = {"circle": {"lat": round(point["lat"], 4), "lng": round(point["lng"], 4), "radius_m": 1500}}
+            cases.append(_case(grain, "location=circle", circle, None, "location"))
             everything[grain].update(box)
             everything[grain].update({
                 "districts": _district_cases()[2][1],

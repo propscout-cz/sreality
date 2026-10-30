@@ -44,8 +44,9 @@ def _types(text: str, fn: str) -> str:
 
 
 def test_the_latest_definitions_are_the_contract() -> None:
-    # 678 restated the Stats pivot with its small-sample summary (tests/test_678_stats_small_samples.py).
-    later = {"browse_stats_properties": "678_stats_small_samples.sql"}
+    # 678 restated the Stats pivot with its small-sample summary (tests/test_678_stats_small_samples.py); 694 both
+    # RPCs with the circle (tests/test_694_true_circle_map_area.py).
+    later = {"browse_stats_properties": "694_true_circle_map_area.sql", "browse_map_cells": "694_true_circle_map_area.sql"}
     for fn in FNS:
         assert latest_definition(fn).name == later.get(fn, "662_status_filter_contract.sql"), fn
     assert {fn: _md5(_body(_statement(SOURCE[fn], fn))) for fn in FNS} == LIVE

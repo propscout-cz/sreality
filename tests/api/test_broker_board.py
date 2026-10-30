@@ -20,7 +20,7 @@ from toolkit.measures import EXIT_CLEAN_SINCE, EXIT_MARGIN_DAYS, wilson_lower
 from toolkit.stats_registry import MIN_N
 
 # The board's own options, beside the registry filters (frontend/src/lib/brokerBoard.test.ts pins the same names).
-OPTIONS = {"bounds", "horizon_days", "sort", "min_properties", "limit", "firm_ids", "broker_id"}
+OPTIONS = {"bounds", "circle", "horizon_days", "sort", "min_properties", "limit", "firm_ids", "broker_id"}
 
 
 def is_board(sql: str) -> bool:

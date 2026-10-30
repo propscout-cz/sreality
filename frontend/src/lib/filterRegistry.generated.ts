@@ -117,7 +117,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "location",
       "pg_column": null,
       "default": null,
-      "description": "Where the listing must be. Composite filter with two complementary sub-fields: a location chip list (see the `districts` filter — RÚIAN code equality per level) and a map box (`bounds`: west/south/east/north, WGS84, a band on the property's lat/lng). The box is what Browse filters on — its viewport, or the square around a centre+radius pick — so a watchdog saved from Browse watches the rows Browse showed. Both are independent AND-clauses. Leave everything null for no spatial restriction.",
+      "description": "Where the listing must be. Composite filter with two complementary parts: a location chip list (see the `districts` filter — RÚIAN code equality per level) and a map area, either a box (`bounds`: west/south/east/north, WGS84) or a circle (`circle`: lat/lng and radius_m metres on the WGS84 spheroid), never both, tested on the property's point by the one predicate Browse uses (`in_map_area`), so a watchdog saved from Browse watches the rows Browse showed. The chips and the area are independent AND-clauses. Leave everything null for no spatial restriction.",
       "category": "Spatial",
       "ui_control": "location",
       "agendas": [

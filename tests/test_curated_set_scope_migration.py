@@ -191,9 +191,10 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
 # conjunct of both RPCs (tests/test_644_condition_unknown_filter.py), 648 appended the energy-rating
 # parameter (tests/test_648_browse_energy_rating_filter.py), 661/662 took the status as one parameter,
 # 678 gave the Stats cells under the floor their small-sample summary; the rest is 629's.
-_LATER = {
-    "browse_stats_properties": "678_stats_small_samples.sql",
-    "browse_map_cells": "662_status_filter_contract.sql",
+_LATER = {  # 694 restated the three Browse readers with the circle (tests/test_694_true_circle_map_area.py)
+    "browse_list_visible": "694_true_circle_map_area.sql",
+    "browse_stats_properties": "694_true_circle_map_area.sql",
+    "browse_map_cells": "694_true_circle_map_area.sql",
 }
 
 

@@ -340,6 +340,16 @@ jobs:
           pytest tests/test_browse_map_cells_plan.py \
                  tests/test_browse_map_cells_live.py -q
 
+      # The map area is ONE predicate (migration 694): in_map_area answers a TRUE circle, half a metre
+      # in and out in every direction at three radii and two latitudes against PostGIS's own
+      # ST_Project, keeps the readers' per-edge box, drops a row without a point from any area, and
+      # browse_list_visible and browse_map_cells answer the same circle (the old square's corners out).
+      - name: The map area is a true circle (migration 694)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_in_map_area_live.py -q
+
       # The /costs rollups are only indexable because their bucket expressions name a
       # zone explicitly — a bare `called_at::date` is STABLE, and Postgres refuses to
       # index it (42P17). Revert either view and the index stops matching silently: the
