@@ -279,7 +279,7 @@ function BrokerRow({ b, checked, onToggle }: {
         </p>
       </div>
       <span className="shrink-0 text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)] text-right">
-        {fmtCount(b.active_property_count)}
+        {fmtCount(b.active_properties)}
         <span className="block text-[0.62rem] text-[var(--color-ink-4)]">aktivních</span>
       </span>
     </li>

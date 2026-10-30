@@ -282,7 +282,7 @@ describe('fetchBrokerDossier', () => {
     data: {
       broker: { broker_id: 7, display_name: 'Jan' },
       memberships: [],
-      region_shares: [{ geo_id: 19, name: 'Praha', active_property_count: 4 }],
+      region_shares: [{ geo_id: 19, name: 'Praha', properties: 4, active_properties: 4 }],
       ...extra,
     },
     ...(metadata === undefined ? {} : { metadata }),

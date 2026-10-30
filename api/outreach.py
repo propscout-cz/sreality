@@ -19,8 +19,10 @@ from typing import Any
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from api import tenant_pool
 from api.broker_board import BoardArgs, board
 from api.location_filter import DistrictChip
+from toolkit.brokers import BROKER_COUNTS_SQL, footprint
 
 _DRAFT_MODEL_KEY = "outreach_draft_model"
 _DRAFT_PROMPT_KEY = "outreach_draft_system_prompt"
@@ -170,10 +172,9 @@ def generate_drafts(conn: Any, llm_client: Any, campaign_id: int, *, limit: int 
     generated = 0
     for t in targets:
         # The draft quotes the broker's own counts, as a regenerated one does: a board row carries the cohort's.
-        leader = _leader_row(conn, t["broker_id"])
-        if leader is None:
+        ctx = _broker_context(conn, t["broker_id"])
+        if ctx is None:
             continue
-        ctx = _broker_context(conn, leader)
         resp = llm_client.call(
             called_for=_CALLED_FOR,
             messages=[{"role": "user", "content": _build_payload(campaign, ctx)}],
@@ -197,10 +198,9 @@ def regenerate_message(conn: Any, llm_client: Any, message_id: int) -> dict[str,
         return None
     if msg["status"] not in ("draft", "approved"):
         return _iso_message(msg)  # don't clobber sent/replied
-    leader = _leader_row(conn, msg["broker_id"])
-    if leader is None:
+    ctx = _broker_context(conn, msg["broker_id"])
+    if ctx is None:
         return None
-    ctx = _broker_context(conn, leader)
     system = llm_client.resolve_system_prompt(_DRAFT_PROMPT_KEY)
     model = llm_client.resolve_model(_DRAFT_MODEL_KEY)
     resp = llm_client.call(
@@ -301,37 +301,29 @@ def list_suppressions(conn: Any) -> list[dict[str, Any]]:
 
 # --- Internals -------------------------------------------------------------
 
-def _broker_context(conn: Any, leader: dict[str, Any]) -> dict[str, Any]:
-    broker_id = leader["broker_id"]
-    with conn.cursor(row_factory=dict_row) as cur:
-        # W4: exact rollup cells — the regional ('*','*') cell ranks regions,
-        # the national 'cz' concrete cells rank categories. No sums: cells that
-        # can overlap must never be added.
+def _broker_context(conn: Any, broker_id: int) -> dict[str, Any] | None:
+    """The facts a draft quotes: the broker's own numbers, the ones every broker surface shows
+    (toolkit.brokers.BROKER_COUNTS_SQL), as one bounded read; None for an unknown or merged-away broker."""
+    with conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+        tenant_pool.bound_read(cur)
         cur.execute(
-            "SELECT o.name FROM broker_region_type_stats s "
-            "LEFT JOIN broker_geo_options o ON o.geo_level='region' AND o.geo_id=s.geo_id "
-            "WHERE s.broker_id=%s AND s.geo_level='region' "
-            "  AND s.category_main='*' AND s.category_type='*' "
-            "ORDER BY s.active_property_count DESC NULLS LAST LIMIT 3",
-            (broker_id,))
-        regions = [r["name"] for r in cur.fetchall() if r["name"]]
-        cur.execute(
-            "SELECT s.category_main, s.category_type FROM broker_region_type_stats s "
-            "WHERE s.broker_id=%s AND s.geo_level='cz' "
-            "  AND s.category_main <> '*' AND s.category_type <> '*' "
-            "ORDER BY s.active_property_count DESC NULLS LAST LIMIT 3",
-            (broker_id,))
-        cats = [f"{r['category_main']}/{r['category_type']}" for r in cur.fetchall() if r["category_main"]]
+            "SELECT p.display_name, p.primary_email, p.primary_phone, p.firm_name, p.firm_domain, n.* "
+            f"FROM brokers_public p CROSS JOIN {BROKER_COUNTS_SQL} WHERE p.broker_id = %(broker_id)s",
+            {"broker_id": broker_id})
+        leader = cur.fetchone()
+        if leader is None:
+            return None
+        regions, categories = footprint(cur, broker_id)
     return {
         "broker_id": broker_id,
         "name": leader.get("display_name"),
         "firm": leader.get("firm_name") or leader.get("firm_domain"),
         "email": leader.get("primary_email"),
         "phone": leader.get("primary_phone"),
-        "active_listings": leader.get("active_property_count"),
-        "total_listings": leader.get("property_count"),
-        "regions": regions,
-        "categories": cats,
+        "active_properties": leader.get("active_properties"),
+        "regions": [r["name"] for r in regions[:3] if r["name"]],
+        "categories": [f"{c['category_main']}/{c['category_type']}" for c in categories[:3]
+                       if c["category_main"] and c["category_type"]],
     }
 
 
@@ -347,8 +339,8 @@ def _build_payload(campaign: dict[str, Any], ctx: dict[str, Any]) -> str:
         f"- Name: {ctx.get('name') or 'neznámé'}",
         f"- Firm: {ctx.get('firm') or 'neuvedeno'}",
     ]
-    if ctx.get("active_listings") is not None:
-        lines.append(f"- Active listings tracked: {ctx['active_listings']}")
+    if ctx.get("active_properties") is not None:
+        lines.append(f"- Active properties tracked: {ctx['active_properties']}")
     if ctx.get("regions"):
         lines.append(f"- Most active regions: {', '.join(ctx['regions'])}")
     if ctx.get("categories"):
@@ -370,21 +362,6 @@ def _upsert_message(conn: Any, campaign_id: int, leader: dict[str, Any],
             (campaign_id, leader["broker_id"], leader.get("primary_email"),
              leader.get("primary_phone"), draft["subject"], draft["body"],
              resp.llm_call_id, resp.model, resp.cost_usd))
-
-
-def _leader_row(conn: Any, broker_id: int) -> dict[str, Any] | None:
-    # CZ-scoped counts (migration 396), the ones every drafted message quotes. Citing the
-    # unscoped total at a broker who also syndicates foreign stock would put a
-    # number in the email that no surface the operator sees agrees with.
-    with conn.cursor(row_factory=dict_row) as cur:
-        # W4: the true property counts under their true names — the old aliasing
-        # quoted LISTING counts as property counts in drafted emails.
-        cur.execute(
-            "SELECT broker_id, display_name, primary_email, primary_phone, firm_name, "
-            "  firm_domain, cz_property_count AS property_count, "
-            "  cz_active_property_count AS active_property_count "
-            "FROM brokers_public WHERE broker_id = %s", (broker_id,))
-        return cur.fetchone()
 
 
 def _extract_tool(tool_calls: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

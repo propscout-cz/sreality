@@ -273,7 +273,7 @@ describe('<BrokerBoard>', () => {
 
   it('renders each name-search result as an anchor to that broker', async () => {
     vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
-      { broker_id: 99, display_name: 'Hledany Makler', firm_name: null, firm_domain: null, cz_active_property_count: 3, active_property_count: 5 },
+      { broker_id: 99, display_name: 'Hledany Makler', firm_name: null, firm_domain: null, active_properties: 3 },
     ] as unknown as Awaited<ReturnType<typeof brokers.searchBrokersByName>>);
     renderBoard();
     fireEvent.change(screen.getByPlaceholderText(/Hledat makl/), { target: { value: 'Hledany' } });

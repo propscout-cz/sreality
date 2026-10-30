@@ -90,7 +90,6 @@ class _World:
         p, l, i, b = self.props, self.ads, self.idents, self.brokers
         c.execute("DELETE FROM broker_book WHERE property_id = ANY(%s) OR broker_id = ANY(%s)", (p, b))
         c.execute("DELETE FROM dirty_properties WHERE property_id = ANY(%s)", (p,))
-        c.execute("DELETE FROM dirty_broker_listings WHERE listing_id = ANY(%s)", (l,))
         c.execute("DELETE FROM browse_list WHERE property_id = ANY(%s)", (p,))
         c.execute("DELETE FROM property_merge_carries WHERE from_property_id = ANY(%s) OR to_property_id = ANY(%s)",
                   (p, p))

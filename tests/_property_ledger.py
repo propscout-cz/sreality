@@ -12,9 +12,8 @@ handed the seam, and `db.carries` each carry record row written (`RecordingCarri
 recording carrier hands back). The fixture also plans no curation (`curation_plan` answers []) and
 records each `route_curation` call in `db.routed` (left, routes, landed): the routing SQL runs
 live only. The fake also models the dispatch carrier's one UPDATE (re-point, mark the survivor's
-twin a duplicate); a test runs it for real with `keep_real`. `db.changed`, `db.browse` and `db.broker`
-each id list the after-step (`properties_changed`) recomputed, patched into Browse and queued for
-the broker drain."""
+twin a duplicate); a test runs it for real with `keep_real`. `db.changed` and `db.browse` each id
+list the after-step (`properties_changed`) recomputed and patched into Browse."""
 
 from __future__ import annotations
 
@@ -45,7 +44,7 @@ class _Tx:
                       dict(self.db.into),
                       [dict(r) for r in self.db.verdicts], dict(self.db.mnl),
                       list(self.db.carried), list(self.db.changed), list(self.db.browse),
-                      list(self.db.broker), {k: dict(v) for k, v in self.db.dispatches.items()},
+                      {k: dict(v) for k, v in self.db.dispatches.items()},
                       [dict(c) for c in self.db.carries], [dict(x) for x in self.db.sets],
                       list(self.db.routed))
         return self
@@ -54,7 +53,7 @@ class _Tx:
         if exc_type is not None or self.force_rollback:
             (self.db.listings, self.db.props, self.db.events, self.db.into,
              self.db.verdicts, self.db.mnl,
-             self.db.carried, self.db.changed, self.db.browse, self.db.broker,
+             self.db.carried, self.db.changed, self.db.browse,
              self.db.dispatches, self.db.carries, self.db.sets,
              self.db.routed) = self.saved
             self.db.log.append(("rollback", None))
@@ -128,7 +127,6 @@ class _Ledger:
         self.carries: list[dict[str, Any]] = []
         self.changed: list[list[int]] = []
         self.browse: list[list[int]] = []
-        self.broker: list[list[int]] = []
         self.dispatches = {nid: dict.fromkeys((*_DISPATCH_IDENTITY, "duplicate_of")) | row
                            for nid, row in (dispatches or {}).items()}
 
@@ -364,9 +362,6 @@ class _Ledger:
     def _browse_delete(self, p: Any) -> None:
         self.browse.append(list(p[0]))
 
-    def _broker_mirror(self, p: Any) -> None:
-        self.broker.append(list(p["ids"]))
-
     def _nothing(self, p: Any) -> None:
         return None
 
@@ -437,7 +432,6 @@ _HANDLERS: dict[str, Callable[[_Ledger, Any], Any]] = {
         (rps._BROKER_BOOK_SCOPED_SQL, _Ledger._nothing),  # the fake holds no broker book
         (brm._DELETE_SQL, _Ledger._browse_delete),
         (brm._INSERT_SQL, _Ledger._nothing),
-        (rps._MIRROR_BROKER_DIRTY_SQL, _Ledger._broker_mirror),
         (carriers.Dispatches.REPOINT_SQL, _Ledger._dispatch_repoint),
         (carriers.NOTIFICATION_EVENTS_LOCK_SQL, _Ledger._nothing),
     )

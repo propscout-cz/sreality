@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api import dependencies as deps
+from api import tenant_pool
 from api.broker_board import BoardArgs, board
 from toolkit import brokers
 from toolkit.filter_registry import PORTAL_OPTIONS
@@ -54,7 +55,7 @@ def post_board(
 def get_firm_options(
     q: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     return _policy(brokers.firm_options(conn, q=q, limit=limit), claims)
@@ -64,7 +65,7 @@ def get_firm_options(
 def get_search(
     q: str = Query(min_length=1),
     limit: int = Query(default=12, ge=1, le=100),
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     # The only read whose PREDICATE is caller-supplied, so the policy has to reach
@@ -87,7 +88,7 @@ def post_listing_brokers(
 @router.get("/{broker_id}")
 def get_broker(
     broker_id: int,
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     result = brokers.get_broker(conn, broker_id)

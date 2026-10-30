@@ -211,7 +211,7 @@ describe('<FilterSidebar> broker', () => {
     vi.mocked(api.listCollections).mockImplementation(never);
     vi.mocked(api.listTags).mockImplementation(never);
     vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
-      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', cz_active_property_count: 41 } as brokers.BrokerPublic,
+      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', active_properties: 41 } as brokers.BrokerPublic,
     ]);
     let latest: ListingFilters = DEFAULT_FILTERS;
     function Host() {

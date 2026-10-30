@@ -2131,9 +2131,9 @@ renumber.** Navigate by area:
     letter before the click);
     an engine merge rules nothing. Then
     `properties_changed` (`scripts/recompute_property_stats.py`, the dirty drain's own
-    after-step: the scoped rollup, the broker book, the Browse row, the broker queue) runs ONCE over the survivor
-    and the retired, so `brokers.property_count` follows on the broker drain's cadence, not at
-    the daily broker sweep. `detach_listings` is the ONE split and the ONE undo, set-shaped: one
+    after-step: the scoped rollup, the broker book, the Browse row) runs ONCE over the survivor
+    and the retired, so every broker number (read from the book) follows in the merge's own
+    transaction. `detach_listings` is the ONE split and the ONE undo, set-shaped: one
     transaction locks every property its steps will lock, up front in id order, then re-plans
     each advert in the caller's order (so it sees the call's earlier adverts) and sends it back
     to its ORIGIN (the `prev_property_id` of its oldest live ledger row), reactivating that
@@ -2566,7 +2566,7 @@ renumber.** Navigate by area:
     scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
     twin). A broker filter moves the portal side onto that broker's ads only (one of its ads on P
     in the switch's status, over the broker's `broker_book` row: `toolkit/brokers.book_rule_sql`, read by
-    `broker_property_ids` and the broker board), so broker + portal means one ad satisfies both, while the status stays the
+    `broker_property_ids`, the broker board and a broker's own numbers), so broker + portal means one ad satisfies both, while the status stays the
     property's. ONE SQL function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
     defaulted; two independent conjuncts since 657), is read by both aggregate RPCs and, inlined,
     by both property grains' one `portals` hook (the Watchdog's `any` arm, as it has no status
@@ -3467,7 +3467,7 @@ renumber.** Navigate by area:
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, the broker book,
-    `sync_browse_list`, and the broker queue for their attributed adverts) in ONE transaction under
+    and `sync_browse_list`) in ONE transaction under
     the 10-min ceiling, then dequeues — so a change usually no longer waits for the `*/15`
     wholesale rebuild — which was a measured mean of 11.7 min, worst 36.6 (94 rebuilds / 24 h,
     2026-09-21). A fast path, not a guarantee: the rebuild snapshots `browse_projection` at its
@@ -3516,7 +3516,7 @@ renumber.** Navigate by area:
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
     that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
     second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
-    own after-step: scoped recompute, broker book, Browse patch, broker queue) directly, and never
+    own after-step: scoped recompute, broker book, Browse patch) directly, and never
     enqueue `dirty_properties`.
     **The pass also keeps the broker book** (`broker_book`, migration 692): one row per (property,
     canonical broker), stored from its one view `broker_book_projection`. `properties_changed` upserts
@@ -3524,7 +3524,9 @@ renumber.** Navigate by area:
     longer holds (an identity writer passes both sides, so the side an advert left loses its row);
     each full-sweep batch does the same over its id range in the batch's transaction, the book under
     its own 2-min ceiling so one attempt (10 + 2 min) stays inside the 15-min lease. Its columns, and
-    why the fold is at write time: `docs/design/broker-board.md`.
+    why the fold is at write time: `docs/design/broker-board.md`. Every broker number is read from it
+    (`toolkit/brokers.py` `BROKER_COUNTS_SQL`: search, the dossier, the merge review and Outreach's draft
+    facts; the board inside a Browse cohort; ruling 4), so no broker number is the broker lane's.
     A residual of removing the
     inline singleton rollup: a crawler change confined to unhashed columns (`area_basis`,
     `published_at`, `source_url`) reaches its property only at the daily sweep, and an

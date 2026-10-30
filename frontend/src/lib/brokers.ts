@@ -60,7 +60,15 @@ export interface BrokerFirmOption {
   broker_count: number;
 }
 
-export interface BrokerPublic extends BrokerContactFields {
+/* A broker's numbers, in Browse's vocabulary (operator ruling 4, toolkit.brokers
+ * BROKER_COUNTS_SQL): the published, served properties with an ad of theirs, and
+ * those live with a live ad of theirs — the board's count. */
+export interface BrokerCounts {
+  properties: number;
+  active_properties: number;
+}
+
+export interface BrokerPublic extends BrokerContactFields, BrokerCounts {
   broker_id: number;
   display_name: string | null;
   firm_id: number | null;
@@ -69,20 +77,8 @@ export interface BrokerPublic extends BrokerContactFields {
   firm_is_franchise: boolean | null;
   source_count: number;
   distinct_source_count: number;
-  listing_count: number;
-  property_count: number;
-  active_listing_count: number;
-  active_property_count: number;
   first_seen_at: string | null;
   last_seen_at: string | null;
-  /* The same counts restricted to listings that resolved to a Czech obec
-   * (migration 396). The ranking columns — broker search orders on
-   * cz_active_property_count, so a surface that renders a broker row must show
-   * this number, not the unscoped twin, or the order looks arbitrary. */
-  cz_listing_count: number;
-  cz_property_count: number;
-  cz_active_listing_count: number;
-  cz_active_property_count: number;
 }
 
 export interface BrokerMembership {
@@ -92,7 +88,6 @@ export interface BrokerMembership {
   firm_name: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
-  listing_count: number;
   is_current: boolean;
 }
 
@@ -117,12 +112,14 @@ export interface BrokerListing {
   property_id: number | null;
 }
 
-export interface BrokerRegionShare {
+export interface BrokerRegionShare extends BrokerCounts {
   geo_id: number;
   name: string | null;
-  property_count: number;
-  active_property_count: number;
-  listing_count: number;
+}
+
+export interface BrokerCategoryShare extends BrokerCounts {
+  category_main: string | null;
+  category_type: string | null;
 }
 
 /* One distinct (kind, value) contact across a broker's identities. Admin-only —
@@ -134,14 +131,14 @@ export interface BrokerContact {
   last_seen_at: string | null;
 }
 
-/* GET /brokers/{id} returns identity + memberships + regional footprint (+ the
- * full contact set for an admin) in ONE call, so the detail page doesn't fan out
- * four queries and doesn't need the region-name lookup the old client-side
- * aggregation depended on — `region_shares[].name` is joined server-side. */
+/* GET /brokers/{id} returns identity + memberships + the footprint by region and
+ * by category, busiest first (+ the full contact set for an admin) in ONE call;
+ * `region_shares[].name` is joined server-side. */
 export interface BrokerDossier {
   broker: BrokerPublic;
   memberships: BrokerMembership[];
   region_shares: BrokerRegionShare[];
+  categories: BrokerCategoryShare[];
   contacts?: BrokerContact[];
   pii_masked: boolean;
 }
@@ -341,13 +338,13 @@ export async function fetchBrokerDossier(
   }
 }
 
-export async function fetchBrokerListings(
-  brokerId: number,
-  limit = 500,
-): Promise<BrokerListing[]> {
+/* The inventory's one page: a read this long is a cap, not the broker's whole book. */
+export const BROKER_LISTINGS_LIMIT = 500;
+
+export async function fetchBrokerListings(brokerId: number): Promise<BrokerListing[]> {
   const r = await apiGet<Envelope<BrokerListing[]>>(
     `/brokers/${brokerId}/listings`,
-    { limit },
+    { limit: BROKER_LISTINGS_LIMIT },
   );
   return r.data ?? [];
 }

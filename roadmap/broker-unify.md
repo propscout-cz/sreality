@@ -25,13 +25,16 @@ The Browse cohort counted by broker: one filter definition, one property × brok
 attribution rule (MS19), one speed measure; the leaderboard and its count book are deleted. Rulings, definitions,
 waves and W0's measurements: `docs/design/broker-board.md`.
 
-- **W1 — the dark broker book** (PR #2181 in review): migration 691, the measure, the book in the property pass,
+- **W1 — the dark broker book** (#2181, merged 2026-10-29): migration 691, the measure, the book in the property pass,
   the attribution link dirtying its property, census rails.
-- **W2 — the readers** (in progress, `feature/broker-board`, stacked on W1): 692, the `Makléři` tab, `rank_brokers`,
+- **W2 — the readers** (#2182, merged 2026-10-29): 692, the `Makléři` tab, `rank_brokers`,
   Browse's broker scope and Outreach on the book; the leaderboard's routes and toolkit deleted.
-- **Next** — 692's runbook (apply right before the merge, sweep right after the rollout: its header); W0's owed
-  checks; the post-deploy destructive batch (`broker_leaderboard()`, 691's table and view, with the operator's OK and
-  a backup); **W3** deleting `broker_region_type_stats` and `broker_geo_options`.
+- **W3a — one broker vocabulary** (in progress, `feature/broker-one-count-book`, stacked on W2): search, the dossier,
+  the merge review and Outreach's facts read the book (`BROKER_COUNTS_SQL`), a firm chip counts the brokers its filter
+  selects; the count rollups, the 7-day rule, the broker mirror and the `Inzeráty` ad counts deleted; no migration.
+- **Next** — **W3b**, one destructive migration with the operator's OK and a backup: the
+  count book with its refresh and registry row, the views and functions over it, the frozen count columns, 691's spells
+  (`docs/design/broker-board.md`, W3b's drop list).
 
 ## Done
 

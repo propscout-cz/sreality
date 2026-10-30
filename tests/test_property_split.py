@@ -537,10 +537,10 @@ def test_a_split_brings_derived_state_current_once_per_writer_call(listings, let
     if len(set(listings.values())) > 1:
         merge_property_set(db, sorted(set(listings.values())), source="autodedup", reason="r")
     expect = _preview(db, letters)["plan"]
-    for seen in (db.changed, db.browse, db.broker):
+    for seen in (db.changed, db.browse):
         seen.clear()
     _split(db, letters, expect=expect)
-    assert len(db.changed) == 1 + joins and db.changed == db.browse == db.broker
+    assert len(db.changed) == 1 + joins and db.changed == db.browse
     assert 10 in db.changed[0] and len(db.routed) == 1
 
 

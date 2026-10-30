@@ -16,7 +16,7 @@ import * as toast from '@/lib/toast';
 import { cardRow } from '@/test/cardRow';
 
 import BrokerDetail from '../BrokerDetail';
-import { brokerCardFilters, typeCounts } from './PhoneBrokerDetail';
+import { brokerCardFilters } from './PhoneBrokerDetail';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -25,7 +25,6 @@ vi.mock('@/lib/phoneShell', async (importOriginal) => ({
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchBrokerDossier: vi.fn(),
-  fetchBrokerListings: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
@@ -49,25 +48,6 @@ vi.mock('@/components/ExploreBrokerModal', () => ({
   },
 }));
 
-const listing = (id: number, extra: Partial<brokers.BrokerListing> = {}): brokers.BrokerListing => ({
-  broker_id: 7,
-  sreality_id: null,
-  listing_id: id,
-  source: 'sreality',
-  source_url: null,
-  display_label: 'Praha',
-  category_main: 'byt',
-  category_type: 'prodej',
-  disposition: '2+kk',
-  subtype: null,
-  area_m2: 50,
-  price_czk: 5_000_000,
-  is_active: true,
-  last_seen_at: '2026-10-12T08:00:00Z',
-  property_id: id,
-  ...extra,
-});
-
 const dossier = (broker: Partial<brokers.BrokerPublic> = {}): brokers.BrokerDossier => ({
   broker: {
     broker_id: 7,
@@ -78,16 +58,10 @@ const dossier = (broker: Partial<brokers.BrokerPublic> = {}): brokers.BrokerDoss
     firm_is_franchise: false,
     source_count: 3,
     distinct_source_count: 3,
-    listing_count: 52,
-    active_listing_count: 37,
-    property_count: 50,
-    active_property_count: 35,
+    properties: 50,
+    active_properties: 35,
     first_seen_at: '2026-01-01T00:00:00Z',
     last_seen_at: '2026-10-12T08:00:00Z',
-    cz_listing_count: 52,
-    cz_property_count: 50,
-    cz_active_listing_count: 37,
-    cz_active_property_count: 35,
     has_phone: true,
     has_email: false,
     ...broker,
@@ -100,25 +74,22 @@ const dossier = (broker: Partial<brokers.BrokerPublic> = {}): brokers.BrokerDoss
       firm_name: 'Domov 9 Reality',
       first_seen_at: null,
       last_seen_at: null,
-      listing_count: 40,
       is_current: true,
     },
   ],
   region_shares: [
-    { geo_id: 19, name: 'Hlavní město Praha', property_count: 40, active_property_count: 30, listing_count: 44 },
-    { geo_id: 27, name: 'Středočeský kraj', property_count: 10, active_property_count: 5, listing_count: 8 },
+    { geo_id: 19, name: 'Hlavní město Praha', properties: 40, active_properties: 30 },
+    { geo_id: 27, name: 'Středočeský kraj', properties: 10, active_properties: 5 },
+  ],
+  categories: [
+    { category_main: 'byt', category_type: 'prodej', properties: 45, active_properties: 33 },
+    { category_main: 'byt', category_type: 'pronajem', properties: 5, active_properties: 2 },
   ],
   pii_masked: true,
 });
 
 beforeEach(() => {
   vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue(dossier());
-  vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-    listing(1),
-    listing(2),
-    listing(3, { category_type: 'pronajem' }),
-    listing(4, { is_active: false }),
-  ]);
   vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [cardRow(11), cardRow(12)], nextCursor: null });
   vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map() as PipelineMembers);
   vi.mocked(queries.fetchPipelineStages).mockResolvedValue([]);
@@ -154,6 +125,9 @@ describe('<BrokerDetail> on the phone', () => {
     expect(screen.getByText('telefon · kontakt na vyžádání')).toBeInTheDocument();
     expect(screen.getByText('e-mail —')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Kopírovat' })).toBeNull();
+    // Ruling 4: property grain, no ad counts.
+    expect(screen.getByText('Nemovitosti').nextElementSibling?.textContent).toBe('35 / 50');
+    expect(screen.queryByText('Inzeráty')).toBeNull();
   });
 
   it('mounts no map: the footprint is numbers and the explore modal is never asked for', async () => {
@@ -161,7 +135,7 @@ describe('<BrokerDetail> on the phone', () => {
     const reach = await screen.findByRole('region', { name: 'Působnost' });
     expect(within(reach).getByText('Hlavní město Praha')).toBeInTheDocument();
     expect(reach.textContent?.replace(/ /g, ' ')).toContain('30 / 40');
-    expect(reach.textContent).toContain('Byty · prodej');
+    expect(within(reach).getByText('Byty · pronájem').parentElement?.nextElementSibling?.textContent).toBe('2 / 5');
     expect(exploreHook).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /explore|mapě/i })).toBeNull();
     expect(container.querySelector('.maplibregl-map, canvas')).toBeNull();
@@ -229,16 +203,5 @@ describe('<BrokerDetail> on the phone', () => {
     vi.mocked(brokers.fetchBrokerDossier).mockRejectedValue(new Error('503'));
     renderPage();
     expect(await screen.findByText('Makléře se nepodařilo načíst.')).toBeInTheDocument();
-  });
-});
-
-describe('typeCounts', () => {
-  it('counts active ads per category and offer, largest first', () => {
-    expect(
-      typeCounts([listing(1), listing(2), listing(3, { category_type: 'pronajem' }), listing(4, { is_active: false })]),
-    ).toEqual([
-      { key: 'byt|prodej', label: 'Byty · prodej', count: 2 },
-      { key: 'byt|pronajem', label: 'Byty · pronájem', count: 1 },
-    ]);
   });
 });

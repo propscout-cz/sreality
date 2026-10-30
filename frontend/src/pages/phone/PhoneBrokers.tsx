@@ -132,14 +132,14 @@ function SearchResults({ typed, term }: { typed: string; term: string }) {
         <ol aria-label="Nalezení makléři" className="border-b border-[var(--color-rule)]">
           {results.map((b) => (
             <li key={b.broker_id}>
-              {/* The CZ-scoped count is what the search orders by (migration 396). */}
+              {/* The live properties the search orders by. */}
               <BrokerRow
                 id={b.broker_id}
                 lead={<Initials name={b.display_name} />}
                 name={b.display_name}
                 firm={b.firm_name ?? b.firm_domain}
-                value={b.cz_active_property_count}
-                unit={czPlural(b.cz_active_property_count, ...PROPERTY_NOUN)}
+                value={b.active_properties}
+                unit={czPlural(b.active_properties, ...PROPERTY_NOUN)}
               />
             </li>
           ))}

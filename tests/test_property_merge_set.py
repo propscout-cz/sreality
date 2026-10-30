@@ -185,11 +185,11 @@ def test_a_pair_a_member_already_holds_is_not_this_merges():
 
 def test_the_whole_set_is_brought_current_once():
     """One `properties_changed` over the survivor and every retired id: the rollup (a retired id
-    holds no advert, so the recompute skips it), the Browse patch (its row goes) and the broker
-    queue, each once, after the last retire."""
+    holds no advert, so the recompute skips it) and the Browse patch (its row goes), each once,
+    after the last retire."""
     db = _Ledger({1: 1, 2: 2, 3: 3, 4: 3, 5: 4})
     _merge(db, [4, 3, 2, 1])
-    assert db.changed == db.browse == db.broker == [[1, 2, 3, 4]]
+    assert db.changed == db.browse == [[1, 2, 3, 4]]
     assert db.sql("status = 'merged_away'") == [(1, 2), (1, 3), (1, 4)]
     order = [s for s, _p in db.log]
     last_retire = max(i for i, s in enumerate(order) if "status = 'merged_away'" in s)
@@ -214,7 +214,7 @@ def test_a_refusal_on_a_later_pair_rolls_the_whole_set_back(monkeypatch):
         _merge(db, [3, 7, 9])
     assert any(step.retired == 7 for s, step in db.log if s.startswith("carrier:"))
     assert db.listings == {1: 3, 2: 7, 3: 9} and db.events == []
-    assert db.carried == [] and db.changed == db.browse == db.broker == []
+    assert db.carried == [] and db.changed == db.browse == []
     assert db.props == {3: "active", 7: "active", 9: "active"}
     assert db.sql("WITH batch AS") == []
 

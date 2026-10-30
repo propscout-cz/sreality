@@ -171,8 +171,6 @@ def test_attach_stragglers_births_and_recomputes_them_in_one_transaction() -> No
     assert order[birth] == " ".join(NEW_SINGLETONS_SQL.split())
     assert conn.executed[birth][1] == {"ids": [11, 12]}
     assert conn.executed[recompute][1] == {"ids": [101, 102]}
-    mirror = next(i for i, s in enumerate(order) if "INSERT INTO dirty_broker_listings" in s)
-    assert recompute < mirror and conn.executed[mirror][1] == {"ids": [101, 102]}
     assert not any("ST_DWithin" in s or "INSERT INTO dirty_properties" in s
                    or "source_id_native" in s or "lock_timeout" in s for s in order)
 
@@ -207,7 +205,7 @@ def test_attach_is_bounded_and_browse_syncs_its_births(monkeypatch: Any) -> None
 
 def test_attach_brings_its_births_current_through_properties_changed(monkeypatch: Any) -> None:
     """A birth's after-step is THE after-step of the drain and the identity writers (recompute,
-    broker book, Browse patch, broker queue), never a hand-rolled copy: it runs once over the born
+    broker book, Browse patch), never a hand-rolled copy: it runs once over the born
     ids, inside the birth's transaction and under the batch ceiling the attach has always had."""
     import scripts.recompute_property_stats as rps
 
@@ -289,7 +287,7 @@ class _DrainConn:
 # dequeue outside it.
 _SLICE = ("BEGIN", "SET LOCAL statement_timeout", "SET LOCAL lock_timeout", "WITH batch AS",
           "WITH spells AS", "BEGIN", "DELETE FROM browse_list", "INSERT INTO browse_list", "COMMIT",
-          "INSERT INTO dirty_broker_listings", "COMMIT", "DELETE FROM dirty_properties")
+          "COMMIT", "DELETE FROM dirty_properties")
 
 
 def _steps(executed: list[tuple[str, Any]]) -> list[str]:
@@ -305,36 +303,24 @@ def test_drain_dirty_recomputes_each_batch_then_terminates():
     # each dequeue is a compare-and-set on the marks the slice claimed, never the run cutoff
     assert conn.deleted == [([7, 8], ["t1", "t1"]), ([9], ["t2"])]
     # each slice: recompute and broker book under the raised ceiling and the 5 s lock wait, Browse
-    # patch, broker queue, then dequeue
+    # patch, then dequeue
     assert _steps(conn.executed) == list(_SLICE) * 2
     assert "SET LOCAL lock_timeout = '5s'" in _sqls(conn)
-    assert [p for s, p in conn.executed if s.startswith("INSERT INTO dirty_broker_listings")] == [
-        {"ids": [7, 8]}, {"ids": [9]}]
     assert [p for s, p in conn.executed if s.startswith("DELETE FROM browse_list")] == [
         ([7, 8],), ([9],)]
 
 
-def test_properties_changed_recomputes_then_patches_then_queues_brokers():
+def test_properties_changed_recomputes_then_patches():
     """The identity writers' after-step is the drain's, minus the ceiling and the dequeue: it
     nests in the caller's transaction and inherits the caller's timeouts."""
     conn = _FakeConn()
     properties_changed(conn, [9, 3, None, 9, 3])
     assert _steps(conn.executed) == ["WITH batch AS", "WITH spells AS", "DELETE FROM browse_list",
-                                     "INSERT INTO browse_list", "INSERT INTO dirty_broker_listings"]
-    assert len(conn.executed) == 5
-    assert [p for _s, p in conn.executed] == [{"ids": [3, 9]}, {"ids": [3, 9]}, ([3, 9],),
-                                               ([3, 9],), {"ids": [3, 9]}]
+                                     "INSERT INTO browse_list"]
+    assert len(conn.executed) == 4
+    assert [p for _s, p in conn.executed] == [{"ids": [3, 9]}, {"ids": [3, 9]}, ([3, 9],), ([3, 9],)]
     assert not any("statement_timeout" in s or "lock_timeout" in s or "dirty_properties" in s
                    for s in _sqls(conn))
-
-
-def test_the_broker_mirror_stamps_statement_time_not_transaction_start():
-    """Inside a merge's transaction now() is its start, which a concurrent broker pass's cutoff
-    can follow; its `marked_at <= cutoff` dequeue would then drop the re-stamp."""
-    from scripts.recompute_property_stats import _MIRROR_BROKER_DIRTY_SQL as sql
-
-    assert "now()" not in sql
-    assert sql.count("clock_timestamp()") == 2
 
 
 def test_properties_changed_with_no_ids_runs_nothing():
