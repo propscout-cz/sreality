@@ -55,7 +55,7 @@ def _acl(text: str) -> list[str]:
 
 
 def test_it_is_the_latest_definition_and_restates_the_pivot_once() -> None:
-    assert latest_definition(FN).name == NAME
+    assert latest_definition(FN).name == "694_true_circle_map_area.sql"  # 694 the circle
     assert SQL.count(f"create or replace function public.{FN}(") == 1
     assert CODE.count("create or replace function") == 1
 

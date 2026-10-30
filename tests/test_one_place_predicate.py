@@ -94,8 +94,8 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # (tests/test_661_662_status_filter.py); 678 gave the Stats cells under the floor their small-sample
 # summary (tests/test_678_stats_small_samples.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "678_stats_small_samples.sql",
-    "browse_map_cells": "662_status_filter_contract.sql",
+    "browse_stats_properties": "694_true_circle_map_area.sql",
+    "browse_map_cells": "694_true_circle_map_area.sql",
 }
 
 
@@ -225,7 +225,7 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     Stats pivot's chart `spec`, which shapes the answer and never the cohort; 629 the
     nine curated-set scope parameters (tests/test_curated_set_scope_migration.py); 648
     the energy-rating filter (tests/test_648_browse_energy_rating_filter.py); 661/662 moved
-    the status from two booleans to one trailing `status_filter`."""
+    the status from two booleans to one trailing `status_filter`; 694 appended the circle."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
     # 640 dropped 598's denylist once 629 judged membership in the database.
@@ -244,6 +244,8 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
             "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
             "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
             "energy_rating_filter", "status_filter",
+            # 694: the circle, the other map area.
+            "circle_lat", "circle_lng", "circle_radius_m",
             ) if p not in gone_later
         ], f"{func}: parameter list changed"
         for chip_param in (

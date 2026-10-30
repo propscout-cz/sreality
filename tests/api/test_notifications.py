@@ -82,23 +82,44 @@ def test_build_clauses_skips_unset_box() -> None:
     assert not any(k.startswith("bbox_") for k in params)
 
 
+_AREA_CALL = (
+    "public.in_map_area(l.lat, l.lng, %(bbox_west)s::float8, %(bbox_south)s::float8, %(bbox_east)s::float8, "
+    "%(bbox_north)s::float8, %(circle_lat)s::float8, %(circle_lng)s::float8, %(circle_radius_m)s::float8)"
+)
+
+
 def test_build_clauses_emits_the_map_box_when_set() -> None:
-    """Rule 16: the box is the lat/lng band Browse's list (`queries.ts applyFilters`)
-    and both stats RPCs (`bbox_*`) apply — no circle, no ST_DWithin, no own shape."""
+    """Rule 16: the box is tested by the one predicate Browse's list source and both
+    stats RPCs test (`in_map_area`, migration 694), never a shape of its own."""
     spec = WatchdogFilterSpec(bounds={"west": 14.40, "south": 50.06, "east": 14.44, "north": 50.10})
     where, params = _build_match_clauses(spec)
-    assert "l.lng >= %(bbox_west)s" in where
-    assert "l.lng <= %(bbox_east)s" in where
-    assert "l.lat >= %(bbox_south)s" in where
-    assert "l.lat <= %(bbox_north)s" in where
-    assert not any("ST_DWithin" in w for w in where)
+    assert _AREA_CALL in where
+    assert not any("ST_DWithin" in w or "l.lng >=" in w for w in where)
     # Anchored: `sl.geom` is the W5 consumer rule's own probe into listing_location,
     # which is not `properties_public.geom` and must not be flagged as one.
-    assert not any(re.search(r"(?<![a-z_])l\.geom", w) for w in where)
-    assert params["bbox_west"] == 14.40
-    assert params["bbox_east"] == 14.44
-    assert params["bbox_south"] == 50.06
-    assert params["bbox_north"] == 50.10
+    assert not any(re.search(r"(?<![a-z_])l\.geom", w) for w in where)
+    assert (params["bbox_west"], params["bbox_south"], params["bbox_east"], params["bbox_north"]) == (
+        14.40, 50.06, 14.44, 50.10)
+    assert (params["circle_lat"], params["circle_lng"], params["circle_radius_m"]) == (None, None, None)
+
+
+def test_build_clauses_emits_the_map_circle_when_set() -> None:
+    """A circle saved from Browse is the same predicate with the circle's arguments: a true circle, not the
+    square around it."""
+    spec = WatchdogFilterSpec(circle={"lat": 50.08, "lng": 14.42, "radius_m": 1500})
+    where, params = _build_match_clauses(spec)
+    assert _AREA_CALL in where
+    assert (params["circle_lat"], params["circle_lng"], params["circle_radius_m"]) == (50.08, 14.42, 1500)
+    assert params["bbox_west"] is None
+
+
+def test_filter_spec_map_area_is_a_box_or_a_circle_never_both() -> None:
+    with pytest.raises(ValidationError):
+        WatchdogFilterSpec(bounds={"west": 14.3, "south": 50.0, "east": 14.5, "north": 50.2},
+                           circle={"lat": 50.08, "lng": 14.42, "radius_m": 1500})
+    for radius in (50, 20_000):  # outside Browse's slider, the registry's radius_m domain
+        with pytest.raises(ValidationError):
+            WatchdogFilterSpec(circle={"lat": 50.08, "lng": 14.42, "radius_m": radius})
 
 
 def test_build_clauses_city_quality_is_one_obec_predicate() -> None:

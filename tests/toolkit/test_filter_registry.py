@@ -203,14 +203,14 @@ def test_watchdog_filter_spec_fields_equal_the_watchdog_agenda() -> None:
     A declared filter missing from the spec is not an error anywhere else: pydantic's
     extra='ignore' drops the key on save, and the watchdog silently matches wider than
     the Browse view it was made from (merge f2d7b359 lost three filters that way).
-    `bounds` (the map box) is the sub-field of the composite `location` filter;
+    `bounds` and `circle` (the map area) are the sub-fields of the composite `location` filter;
     the chips are their own FilterDef.
     """
     from api.notifications import WatchdogFilterSpec
 
     declared = _agenda_ids(fr.Agenda.WATCHDOG)
     assert "location" in declared
-    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds"}
+    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds", "circle"}
             - _RETIRED_BUT_DESERIALISABLE)
     declared -= {"location"}
     assert spec == declared, (

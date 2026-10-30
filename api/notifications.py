@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, field_validator, model_validator
 
 from api.cursor import decode_cursor, encode_cursor
-from api.location_filter import DistrictChip, MapBounds, bounds_where, district_where
+from api.location_filter import DistrictChip, MapBounds, MapCircle, area_where, district_where, one_area
 from location_data.claims_common import served_location_predicate
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
 from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
@@ -81,10 +81,10 @@ class WatchdogFilterSpec(BaseModel):
     narrow ("furnished 3+kk in Praha 2 under 30 000 Kč near these
     coordinates") as the operator wants.
 
-    The map box is optional and the ONE spatial shape: `bounds` is what
-    Browse filters on (its viewport, or the square around a centre+radius
-    pick), so a watchdog saved from Browse watches the rows Browse showed.
-    Place chips are an independent AND; null everywhere = no restriction.
+    The map area is optional: a box (`bounds`, Browse's viewport) or a true
+    circle (`circle`, Browse's centre + radius), never both, so a watchdog
+    saved from Browse watches the rows Browse showed. Place chips are an
+    independent AND; null everywhere = no restriction.
     """
 
     # Category. `category_type` (deal type) stays single-valued — rent and
@@ -104,8 +104,9 @@ class WatchdogFilterSpec(BaseModel):
     # Disposition (multi-select; matches any).
     dispositions: list[str] | None = None
 
-    # The map box (rule 16): the lat/lng band Browse's list and both stats RPCs apply.
+    # The map area (rule 16): a box or a circle, tested by the predicate Browse's list and both stats RPCs test.
     bounds: MapBounds | None = None
+    circle: MapCircle | None = None
 
     # Place. Each chip is a `DistrictChip` — a LEVEL plus a RÚIAN CODE
     # (`api/location_filter.py`), the one predicate Browse, Stats, the map and
@@ -231,6 +232,11 @@ class WatchdogFilterSpec(BaseModel):
                 }
         return data
 
+    @model_validator(mode="after")
+    def _one_area(self) -> "WatchdogFilterSpec":
+        one_area(self.bounds, self.circle)
+        return self
+
 
 def _build_match_clauses(
     spec: WatchdogFilterSpec,
@@ -257,9 +263,9 @@ def _build_match_clauses(
                         published_property_predicate("l.property_id")]
     params: dict[str, Any] = {}
 
-    # The map box, on the lat/lng properties_public projects off the location ad's
-    # point: the band Browse's list and both stats RPCs apply (rule 16).
-    b_where, b_params = bounds_where(spec.bounds, alias="l")
+    # The map area, on the lat/lng properties_public projects off the location ad's
+    # point: the predicate Browse's list and both stats RPCs test (rule 16).
+    b_where, b_params = area_where(spec.bounds, spec.circle, alias="l")
     where.extend(b_where)
     params.update(b_params)
 

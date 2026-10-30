@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 from pydantic import Field
 
 from api import tenant_pool
-from api.filter_args import Box, agenda_ids, filter_model
+from api.filter_args import MapAreaArgs, agenda_ids, filter_model
 from api.property_read import jsonable
 from api.property_search import cohort_where
 from scraper.portal_factory import indexless_sources
@@ -64,10 +64,7 @@ class RankArgs(filter_model(
         "inactive = a delisted property, every ad ended. A broker counts a property with one of their ads there in "
         "that status (with a portal filter: on that portal). Any status but any answers no speed.",
     },
-)):
-    bounds: Box | None = Field(
-        None, description="The map box: a property matches when its point lies inside, as on Browse's map. Null = "
-        "anywhere.")
+), MapAreaArgs):
     horizon_days: Literal[14, 30, 60, 90] = Field(
         30, description="Speed is the share of a broker's followed properties that left the market (sold or "
         "withdrawn, not necessarily sold) within this many days of the broker's first ad there.")

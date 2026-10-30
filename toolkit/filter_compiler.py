@@ -282,13 +282,13 @@ LISTINGS_GRAIN = FilterGrain(
 PROPERTIES_GRAIN = FilterGrain(
     agenda=Agenda.WATCHDOG,
     exprs=MappingProxyType({"plot_area_m2": plot_area_sql("l")}),
-    caller_renders=frozenset({"location", "bounds", "districts"}),
+    caller_renders=frozenset({"location", "bounds", "circle", "districts"}),
     hooks=_PORTAL_RULE,
 )
 BROWSE_GRAIN = FilterGrain(
     agenda=Agenda.BROWSE,
     exprs=MappingProxyType({}),
-    caller_renders=frozenset({"location", "bounds", "districts", "tags", "collections", "pipeline",
+    caller_renders=frozenset({"location", "bounds", "circle", "districts", "tags", "collections", "pipeline",
                               "show_dismissed"}),
     hooks=MappingProxyType({**_PORTAL_RULE, "status": _modifier,
                             "tom_observed_only": _only("l.tom_observed")}),

@@ -103,8 +103,8 @@ def test_the_revert_restores_644s_statements() -> None:
 
 def test_these_are_the_latest_definitions() -> None:
     # 657 restated the Stats pivot without the status lens (tests/test_657_status_is_the_propertys.py).
-    later = {"browse_stats_properties": "678_stats_small_samples.sql",  # 678 the small-sample summary
-             "browse_map_cells": "662_status_filter_contract.sql"}  # 657 the lens, 661/662 the status parameter
+    later = {"browse_stats_properties": "694_true_circle_map_area.sql",  # 678 the small-sample summary, 694 the circle
+             "browse_map_cells": "694_true_circle_map_area.sql"}  # 657 the lens, 661/662 the status parameter, 694 the circle
     for fn in FNS:
         assert latest_definition(fn).name == later.get(fn, NAME), fn
 

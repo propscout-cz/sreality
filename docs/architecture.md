@@ -2510,18 +2510,19 @@ renumber.** Navigate by area:
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
     `furnished` / `ownership` / `condition_match`: NULL or a value outside the column's canon,
     `COLUMN_CANONICAL_VALUES`, which the canon itself never joins; the RPCs spell each canon out,
-    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). **The map box is the
-    ONE spatial shape** (2026-10-21, closed M3): Browse filters by `effectiveBbox` — its viewport, or
-    the square around a centre+radius pick (a circumscribed square, accepted since the mode shipped;
-    the main map still draws the exact circle) — as a lat/lng band on the list and both stats RPCs
-    (`bbox_*`); `WatchdogFilterSpec.bounds` (the `location` composite's one sub-field beside the
-    `districts` chips, Browse's `MapBounds`) is that same box, rendered as the same band by
-    `api/location_filter.bounds_where`, so a watchdog saved from Browse watches the rows Browse
-    showed; the matcher's own circle (`lat`/`lng`/`radius_m`, ST_DWithin) is gone, no stored spec
-    ever carried one. Saving from Browse offers the viewport box through one checkbox (ticked;
-    the preset dialog's question, because a stale viewport would fire forever) and takes a
-    centre+radius square always; the editor's `MapAreaControl` sets the box to the mini-map's
-    view. A true circle, if ever wanted, is one change for both surfaces. Open divergence: the six amenities are the property's union
+    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). **The map area is ONE
+    predicate** (2026-10-30, replacing 10-21's box-only ruling, M3): a box (Browse's viewport) or a TRUE
+    circle (centre + radius, metres on the WGS84 spheroid), never both, tested by `public.in_map_area`
+    (migration 694: the box band, or a band no narrower than the circle then `ST_DWithin` on geography) in
+    `browse_list_visible`, both stats RPCs and `api/location_filter.area_where`, which renders the same call
+    for the watchdog matcher, the broker board and the agents' `search_properties`.
+    `WatchdogFilterSpec.bounds` / `.circle` (the `location` composite's area beside the `districts` chips)
+    are Browse's, so a watchdog saved from Browse watches the rows Browse showed; the radius domain is the
+    registry's `radius_m` (100 m to 10 km). Until the SPA hands its circle over, Browse still sends a
+    centre + radius pick as the square around it (`effectiveBbox`), the 12 to 22 % overcount measured
+    2026-10-30. Saving from Browse offers the viewport box through one checkbox (ticked; the preset
+    dialog's question, because a stale viewport would fire forever); the editor's `MapAreaControl` sets
+    the box to the mini-map's view. Open divergence: the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the

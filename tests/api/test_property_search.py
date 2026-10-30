@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from api.capabilities import registry
 from api.capabilities.entry import Caller
@@ -40,9 +41,10 @@ def _refused(args: dict[str, Any]) -> ToolError:
 
 # --- the arguments ----------------------------------------------------------------------------------------------
 
-def test_every_browse_filter_is_an_argument_but_the_place_composite_which_travels_as_bounds_and_districts() -> None:
+def test_every_browse_filter_is_an_argument_but_the_place_composite_which_travels_as_its_parts() -> None:
     assert tuple(SearchFilters.model_fields) == tuple(i for i in BROWSE if i != "location")
-    assert set(SearchArgs.model_fields) - set(SearchFilters.model_fields) == {"bounds", "sort", "limit", "offset"}
+    assert set(SearchArgs.model_fields) - set(SearchFilters.model_fields) == {
+        "bounds", "circle", "sort", "limit", "offset"}
 
 
 def test_each_description_is_the_registrys_with_its_unit_and_basis_or_a_stated_override() -> None:
@@ -178,14 +180,25 @@ def test_a_set_scope_reaches_the_source_in_browses_normal_form(scope: dict[str, 
     assert (params["collections_set"], params["collections_in"], params["collections_out"]) == sides
 
 
-def test_the_place_and_the_box_are_the_watchdogs_renderers() -> None:
+def test_the_place_and_the_area_are_the_watchdogs_renderers() -> None:
     _, ((page, params), _) = _run({
         "category_type": "prodej", "bounds": {"west": 16.5, "south": 49.1, "east": 16.7, "north": 49.3},
         "districts": [{"name": "Brno", "level": "obec", "id": 582786},
                       {"name": "Žabovřesky", "level": "cast_obce", "id": 411, "excluded": True}]})
     assert "(l.obec_id = ANY(%(district_codes_obec)s))" in page
     assert "NOT COALESCE(l.cast_obce_id = ANY(%(district_codes_excl_cast_obce)s), false)" in page
-    assert "l.lng >= %(bbox_west)s" in page and params["bbox_north"] == 49.3
+    assert "public.in_map_area(l.lat, l.lng, %(bbox_west)s::float8" in page and params["bbox_north"] == 49.3
+    assert params["circle_radius_m"] is None
+
+
+def test_a_circle_travels_beside_the_box_never_with_it() -> None:
+    _, ((page, params), _) = _run({
+        "category_type": "prodej", "circle": {"lat": 49.2, "lng": 16.6, "radius_m": 2000}})
+    assert "public.in_map_area(l.lat, l.lng, %(bbox_west)s::float8" in page
+    assert (params["circle_lat"], params["circle_radius_m"], params["bbox_west"]) == (49.2, 2000, None)
+    with pytest.raises(ValidationError):
+        SearchArgs(category_type="prodej", bounds={"west": 16.5, "south": 49.1, "east": 16.7, "north": 49.3},
+                   circle={"lat": 49.2, "lng": 16.6, "radius_m": 2000})
 
 
 def test_the_envelope_is_the_toolkits_with_the_pages_one_unit() -> None:
