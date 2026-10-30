@@ -107,7 +107,8 @@ through ONE server-side reader per screen. A new reader of these relations calls
   function's are integers; a fraction is refused, never rounded). Over budget it cuts `cells` from the tail and keeps
   the `places` a kept cell names (`fit` would keep every name and few cells). `tests/api/test_stats_pivot_census.py`
   holds `PARAMS` (sent, with their SQL types) and `UNMAPPED` (the four parked condition levels, each with why) to the
-  latest signature, and `PARAMS` to the keys the dashboard sends.
+  latest signature, and `PARAMS` to the keys the dashboard sends, each from the field it feeds it from
+  (`filters.ts` `REGISTRY_KEY_MAP`).
 - `market_evidence` (TENANT, #2064): prices achieved round a subject, two arms never mixed, every row and summary
   labelled `evidence` (`proxy` / `registered`) beside its `price_per_m2_basis` (`api/market_evidence.py`). The subject
   is a `PlaceSubject` placed through the page's readers (`listings_public`, `properties_public`; `match_listing` is
@@ -117,10 +118,11 @@ through ONE server-side reader per screen. A new reader of these relations calls
   over exactly that cohort. The window is the registry's `tom_days_min`/`tom_days_max`, by default
   `stats_registry.SOLD_MARKET_DAYS` (2–60, twin of `stats.ts`); any other needs `window_reason`, echoed in
   `metadata.window`. Registered: `sold_comparables` with the SOLD filters over `SOLD_GRAIN`, ordered and capped (200,
-  `more`) as the page reads it, summed up by a port of `soldComps.ts` `summarizeSold` (its constants pinned as twins);
-  byt and dum for sale only, else empty with `metadata.registered_refused`; `sold_coverage` in
-  `metadata.registered_coverage` (the centre's town only). A filter an arm cannot apply is named in
-  `metadata.unapplied`.
+  `more`) as the page reads it, within `radius_m` but never past `sold_db.MAX_READ_RADIUS_M` (5 km, the margin the
+  fetcher covers round every town; the radius read is `metadata.registered_radius_m`), summed up by a port of
+  `soldComps.ts` `summarizeSold` (its constants pinned as twins); byt and dum for sale only, else empty with
+  `metadata.registered_refused`; `sold_coverage` in `metadata.registered_coverage` (the centre's town only). A filter
+  an arm cannot apply is named in `metadata.unapplied`.
 
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
 `property_read.*_COLS`, `market_evidence`'s two) is disjoint from `forbidden_columns()`, derived from the registry

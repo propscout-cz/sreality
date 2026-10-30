@@ -1,6 +1,7 @@
 """The Stats dashboard for an agent (#2064): every parameter of the dashboard's function is either sent the
 dashboard's way (`stats_pivot.PARAMS`, bound as its declared type) or named unsent with a reason
-(`stats_pivot.UNMAPPED`), and the tool sends exactly the keys the dashboard sends, with the dashboard's values.
+(`stats_pivot.UNMAPPED`), and the tool sends exactly the keys the dashboard sends, each from the filter the dashboard
+feeds it from (filters.ts REGISTRY_KEY_MAP), with the dashboard's values.
 
 The census reads the latest definition from the migrations, as tests/test_626_stats_dashboard.py does; a parameter a
 later migration adds fails it until it is mapped or reasoned away. The rows it selects are pinned against the
@@ -10,6 +11,7 @@ function's own answer in tests/test_capabilities_live.py.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,13 +24,14 @@ from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import RESULT_BUDGET, encode
 from tests.api._script_conn import ScriptConn
 from tests.migration_defs import latest_definition
-from tests.test_browse_map_read_contract import _builder_keys
+from tests.test_browse_map_read_contract import REPO, _balanced_block, _builder_keys, _strip_ts_comments, _ts
 from tests.test_portal_exclusion_migration import _params
 from toolkit import filter_registry as fr
 from toolkit.filter_compiler import RETIRED_FILTERS
 from toolkit.measures import BASIS_MIXED, BASIS_UNKNOWN, SALE_CAPITAL_CZK_M2
 
 FN = "browse_stats_properties"
+FILTERS_TS = REPO / "frontend" / "src" / "lib" / "filters.ts"
 
 
 def census(signature: list[tuple[str, str]], params: Mapping[str, str], unmapped: Mapping[str, str]) -> list[str]:
@@ -68,6 +71,48 @@ def test_the_census_fails_on_a_type_drift_a_vanished_parameter_an_overlap_and_a_
 
 def test_the_tool_sends_exactly_the_keys_the_dashboard_sends_plus_its_spec() -> None:
     assert set(sp.PARAMS) - {"spec"} == _builder_keys()
+
+
+def registry_key_map() -> dict[str, str]:
+    """filters.ts REGISTRY_KEY_MAP: registry id -> the ListingFilters field Browse keeps its value in."""
+    src = FILTERS_TS.read_text(encoding="utf-8")
+    block = _strip_ts_comments(_balanced_block(src, src.index("{", src.index("export const REGISTRY_KEY_MAP"))))
+    keys = dict(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:\s*'(\w+)'", block, flags=re.MULTILINE))
+    assert len(keys) > 60, f"only parsed {len(keys)} REGISTRY_KEY_MAP entries: the parse broke"
+    return keys
+
+
+def _builder_fields() -> dict[str, str | None]:
+    """buildBrowseStatsArgs' return block: each parameter -> the first ListingFilters field its line reads (`f.x`,
+    `f.x.length ? f.x : null`, `triToBool(f.x)`), None when it reads none."""
+    src = _ts()
+    block = _balanced_block(src, src.index("{", src.index("return {", src.index("export const buildBrowseStatsArgs"))))
+    lines = re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:(.*)$", _strip_ts_comments(block), flags=re.MULTILINE)
+    return {p: (m[1] if (m := re.search(r"\bf\.(\w+)", e)) else None) for p, e in lines}
+
+
+# The one filter _AS_IS sends as is that the dashboard reads through a helper: queries.ts adPortals(f), which is
+# f.portals but under a broker scope, and no agent tool takes one.
+_THROUGH = frozenset({"portals"})
+
+
+def _fed_otherwise(as_is: Mapping[str, str]) -> list[tuple[str, str, str | None]]:
+    """Each (registry id, parameter) whose parameter the dashboard does not feed from that id's own field."""
+    fields, keys = _builder_fields(), registry_key_map()
+    return [(fid, p, fields.get(p)) for fid, p in as_is.items()
+            if fid not in _THROUGH and (fields.get(p) is None or fields[p] != keys.get(fid))]
+
+
+def test_the_dashboard_feeds_every_parameter_sent_as_is_from_that_filters_own_field() -> None:
+    """By value, not only by key: a parameter sent from the wrong filter (a min fed from a max) turns this red."""
+    assert _fed_otherwise(sp._AS_IS) == []
+    src = _ts()
+    assert "const portals = adPortals(f);" in src
+    assert re.search(r"\bportal_filter:\s*portals\.length \? portals : null", src)
+    assert "export const adPortals = (f: ListingFilters): string[] => (f.brokerId != null ? [] : f.portals);" in src
+    swapped = {**sp._AS_IS, "min_price_czk": "price_max_filter", "max_price_czk": "price_min_filter"}
+    assert _fed_otherwise(swapped) == [("min_price_czk", "price_max_filter", "priceMax"),
+                                       ("max_price_czk", "price_min_filter", "priceMin")]
 
 
 def test_only_the_parked_condition_levels_go_unsent() -> None:

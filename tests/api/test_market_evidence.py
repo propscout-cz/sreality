@@ -23,6 +23,9 @@ from api.capabilities import registry
 from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
 from tests.api._script_conn import ScriptConn
+from tests.api.test_capabilities_census import _dicts
+from tests.api.test_stats_pivot_census import registry_key_map
+from tests.test_browse_map_read_contract import _balanced_block, _strip_ts_comments
 from toolkit import stats_registry as sr
 from toolkit.measures import (
     BASIS_MIXED,
@@ -51,6 +54,19 @@ def test_the_defaults_are_twins_of_the_screens() -> None:
     assert int(_const("soldComps.ts", "SMALL_UNIT_M2")) == me.SMALL_UNIT_M2
     assert _const("soldComps.ts", "COVERED_CATEGORIES") == (
         f"new Set([{', '.join(repr(c) for c in me.COVERED_CATEGORIES)}])")
+
+
+def test_the_sold_lens_is_the_stats_tabs_facet_for_facet() -> None:
+    """stats.ts soldMarketFilters' literal, keyed by registry id (filters.ts REGISTRY_KEY_MAP), is sold_lens's own:
+    a facet the Stats tab adds, drops or changes turns this red."""
+    src = (LIB / "stats.ts").read_text(encoding="utf-8")
+    body = _strip_ts_comments(_balanced_block(src, src.index("({", src.index("export const soldMarketFilters")) + 1))
+    assert re.search(r"^\s*\.\.\.f,$", body, flags=re.MULTILINE), "the lens no longer keeps the other filters"
+    ts = dict(re.findall(r"^\s*(\w+):\s*(.+?),?$", body, flags=re.MULTILINE))
+    by_field = {field: fid for fid, field in registry_key_map().items()}
+    lo, hi = sr.SOLD_MARKET_DAYS   # their twin is pinned above
+    value = {"true": True, "false": False, "SOLD_MARKET_DAYS.min": lo, "SOLD_MARKET_DAYS.max": hi}
+    assert {by_field[k]: v[1:-1] if v.startswith("'") else value[v] for k, v in ts.items()} == me.sold_lens()
 
 
 # --- the arguments ----------------------------------------------------------------------------------------------
@@ -160,14 +176,6 @@ def _statement(executed: list[tuple[str, Any]], start: str) -> tuple[str, Any]:
     return next((sql, params) for sql, params in executed if sql.startswith(start) or start in sql)
 
 
-def _dicts(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [d for v in value for d in _dicts(v)]
-    if not isinstance(value, dict):
-        return []
-    return [value] + [d for v in value.values() for d in _dicts(v)]
-
-
 def test_every_row_and_summary_is_labelled_and_every_per_m2_figure_has_its_basis() -> None:
     out, _ = _run(POINT)
     data = out["data"]
@@ -239,6 +247,7 @@ def test_registered_sales_are_flats_and_houses_for_sale_and_any_other_ask_emptie
     out, executed = _run({**POINT, **categories})
     assert not [sql for sql, _ in executed if "sold_" in sql]
     assert out["data"]["registered"] == [] and out["metadata"]["registered_refused"]
+    assert out["metadata"]["registered_radius_m"] is None
     assert out["data"]["registered_summary"]["sales"] == 0
 
 
@@ -258,10 +267,19 @@ def test_the_registered_arm_reads_the_pages_sales_nearest_first_with_its_own_fil
                    "l.area_m2 <= %(max_area_m2)s", "l.sold_age_days <= %(max_sold_age_days)s"):
         assert clause in sql, clause
     assert sql.endswith("ORDER BY l.distance_m, l.sold_at DESC, l.source_record_id LIMIT %(cap)s")
-    assert (params["radius_m"], params["cap"]) == (3000, me.SOLD_COMPS_LIMIT + 1)
+    assert (params["radius_m"], params["cap"], out["metadata"]["registered_radius_m"]) == (
+        3000, me.SOLD_COMPS_LIMIT + 1, 3000)
     assert out["metadata"]["registered_coverage"] == {
         "obec_kod": 554782, "obec_name": "Praha", "fetched_at": SEEN.isoformat(), "record_count": 120,
         "source_total": 400, "truncated": False, "last_attempt_at": SEEN.isoformat(), "last_attempt_status": "ok"}
+
+
+def test_the_registered_arm_reads_no_further_than_its_sales_are_fetched_and_says_so() -> None:
+    """scraper/sold_db.MAX_READ_RADIUS_M: the margin the fetcher covers round every town; the proxy reads the circle."""
+    out, executed = _run({**POINT, "radius_m": 8000})
+    assert _statement(executed, "FROM public.sold_comparables(")[1]["radius_m"] == 5000
+    assert _statement(executed, "SELECT l.property_id, l.category_main")[1]["circle_radius_m"] == 8000
+    assert out["metadata"]["registered_radius_m"] == 5000
 
 
 def test_more_than_the_pages_cap_is_said_and_the_rows_are_the_nearest_few() -> None:

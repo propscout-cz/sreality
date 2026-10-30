@@ -21,6 +21,7 @@ from api.filter_args import filter_model
 from api.property_read import jsonable, properties
 from api.property_search import cohort_where
 from api.stats_pivot import AggregateArgs, payload_basis, pivot_args, run_pivot, whole_m2
+from scraper.sold_db import MAX_READ_RADIUS_M
 from toolkit import ComparableFilters, _max_last_seen, _now_iso
 from toolkit import filter_registry as fr
 from toolkit import stats_registry as sr
@@ -70,7 +71,9 @@ def sold_lens(*, tom_days_min: int = _LO, tom_days_max: int = _HI, **cohort: Any
 EvidenceScope = filter_model(
     "EvidenceScope", ("radius_m", "category_main", "category_type"), ComparableFilters,
     descriptions={
-        "radius_m": "The circle round the subject both arms read, in metres.",
+        "radius_m": f"The circle round the subject, in metres: the proxy arm reads all of it, the registered arm at "
+        f"most {MAX_READ_RADIUS_M} (its sales are fetched no further round each town), the radius it read in "
+        "metadata.registered_radius_m.",
         "category_main": "The property type, one value; null = every type. Registered sales are byt and dum only.",
         "category_type": "Deal type: pronajem = for rent, prodej = for sale, drazba = auction, podil = fractional "
         "ownership; null = every deal type. It decides the per-m² unit; registered sales are prodej only.",
@@ -194,10 +197,10 @@ def _covered(category_main: Any, category_type: Any) -> str | None:
     return None
 
 
-def _registered(conn: psycopg.Connection, args: EvidenceArgs, category_main: Any,
-                at: dict[str, float]) -> tuple[list[dict[str, Any]], bool, dict[str, Any] | None]:
-    """The page's registered sales round the subject, nearest first (queries.ts fetchSoldComparables), at most
-    SOLD_COMPS_LIMIT, whether more exist, and the coverage of the centre's own town."""
+def _registered(conn: psycopg.Connection, args: EvidenceArgs, category_main: Any, at: dict[str, float],
+                radius_m: int) -> tuple[list[dict[str, Any]], bool, dict[str, Any] | None]:
+    """The page's registered sales within `radius_m` of the subject, nearest first (queries.ts fetchSoldComparables),
+    at most SOLD_COMPS_LIMIT, whether more exist, and the coverage of the centre's own town."""
     values = {"category_main_in": None if category_main is None else [category_main],
               **{f: getattr(args, f) for f in _SOLD_FILTERS}}
     where, params = compile_filter_where(values, SOLD_GRAIN)
@@ -207,7 +210,7 @@ def _registered(conn: psycopg.Connection, args: EvidenceArgs, category_main: Any
             f"SELECT {columns} FROM public.sold_comparables(%(subject_lat)s::float8, %(subject_lng)s::float8, "
             f"%(radius_m)s::float8) l WHERE {' AND '.join(where) or 'true'} "
             "ORDER BY l.distance_m, l.sold_at DESC, l.source_record_id LIMIT %(cap)s",
-            {**params, **at, "radius_m": args.radius_m, "cap": SOLD_COMPS_LIMIT + 1})
+            {**params, **at, "radius_m": radius_m, "cap": SOLD_COMPS_LIMIT + 1})
         sales = [{"evidence": REGISTERED, **jsonable(dict(zip(REGISTERED_COLUMNS, r, strict=True)))}
                  for r in cur.fetchall()]
         cur.execute(f"SELECT {', '.join(_COVERAGE_COLUMNS)} FROM public.sold_coverage(%(subject_lat)s::float8, "
@@ -234,7 +237,10 @@ def market_evidence(conn: psycopg.Connection, args: EvidenceArgs) -> dict[str, A
     proxy, cohort = _proxy(conn, lens, subject, at, args.limit)
     payload = run_pivot(conn, pivot_args(conn, lens, property_ids=cohort))
     refused = _covered(category_main, category_type)
-    sales, more, coverage = ([], False, None) if refused else _registered(conn, args, category_main, at)
+    # Sales are fetched no further than MAX_READ_RADIUS_M round each town (scraper/sold_db.py), so a wider circle
+    # would be covered by luck, not by construction: the arm reads at most that far, as the page's largest radius.
+    reach = None if refused else min(args.radius_m, MAX_READ_RADIUS_M)
+    sales, more, coverage = ([], False, None) if reach is None else _registered(conn, args, category_main, at, reach)
     registered = sales[:args.limit]
     summary = summarize_sold(sales) or {"n": None, "held_out": None, "mixed_kinds": None, "median_price_per_m2": None,
                                         PPM2_BASIS_KEY: cohort_basis(measure_backed(sales))}
@@ -257,6 +263,7 @@ def market_evidence(conn: psycopg.Connection, args: EvidenceArgs) -> dict[str, A
             "window": {"tom_days_min": args.tom_days_min, "tom_days_max": args.tom_days_max,
                        "default": (args.tom_days_min, args.tom_days_max) == sr.SOLD_MARKET_DAYS,
                        "reason": args.window_reason},
+            "registered_radius_m": reach,
             "registered_coverage": coverage,
             "registered_refused": refused,
             "unapplied": {REGISTERED: _set(args, _NOT_REGISTERED), PROXY: _set(args, _NOT_PROXY)},

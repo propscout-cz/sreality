@@ -354,17 +354,11 @@ def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_
         assert len(priced) >= 3
 
 
-def test_a_cohort_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis() -> None:
-    """#2064: the prices achieved label every per-m² figure, row and summary alike, with its basis; the dashboard's
-    pivot names its one unit beside its cells, in data and in metadata."""
+def test_an_achieved_price_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis() -> None:
+    """#2064: the prices achieved label every per-m² figure, row and summary alike, with its basis."""
     from tests.api.test_market_evidence import POINT, _run
-    from tests.api.test_stats_pivot_census import _call, _payload
     from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
     rows = _dicts(_run(POINT)[0]["data"])
     assert not {k for d in rows for k in d} & forbidden_columns()
     priced = [d for d in rows if any(d.get(k) is not None for k in (PPM2_VALUE_KEY, "median_price_per_m2", "median"))]
     assert len(priced) >= 4 and all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced)
-    cell = {"keys": [], "col": None, "n": 5, "mean": 1.0, "median": 1.0, "p10": 1.0, "p25": 1.0, "p75": 1.0,
-            "p90": 1.0, "small": None}
-    pivot = _call({}, _payload(cells=[cell]))[0]
-    assert pivot["data"]["basis"] in PPM2_BASES and pivot["metadata"]["price_per_m2_basis"] == pivot["data"]["basis"]

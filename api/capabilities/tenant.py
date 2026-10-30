@@ -6,7 +6,7 @@ from typing import Any
 
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.capabilities.subject import sentence
-from api.market_evidence import SMALL_UNIT_M2, EvidenceArgs, market_evidence
+from api.market_evidence import MAX_READ_RADIUS_M, SMALL_UNIT_M2, EvidenceArgs, market_evidence
 from api.property_read import PROPERTIES_MAX, ContextIds, PropertyIds, dossier, own_context
 from api.property_search import PAGE_MAX, SearchArgs, search_properties
 from api.stats_pivot import AggregateArgs, aggregate_properties
@@ -94,11 +94,11 @@ ENTRIES = (
         f"evidence. proxy: properties within radius_m that left the market (every ad ended, seen from its first ad) "
         f"after a time on market in the window, at its last asking price, no transaction price (a withdrawal "
         f"looks alike; exits before {EXIT_CLEAN_SINCE}, from absence sweeps, count as on the Stats tab); "
-        f"proxy_summary: the dashboard's statistic. registered: cadastre-registered sales (reas.cz: ~30 days late, "
-        f"24 months back, fetched only near properties someone works on; registered_coverage: the centre's town "
-        f"only), byt and dum for sale, no time on market; its summary's median holds out units under "
-        f"{SMALL_UNIT_M2} m². Window {SOLD_MARKET_DAYS[0]}-{SOLD_MARKET_DAYS[1]} days unless window_reason says why; "
-        f"metadata.unapplied: what an arm cannot apply. {sentence(EvidenceArgs)}",
+        f"proxy_summary: the dashboard's statistic. registered: cadastre-registered sales within radius_m, at most "
+        f"{MAX_READ_RADIUS_M} m (reas.cz: ~30 days late, fetched only near properties someone works on; "
+        f"registered_coverage: the centre's town only), byt and dum for sale, no time on market; its summary's median "
+        f"holds out units under {SMALL_UNIT_M2} m². Window {SOLD_MARKET_DAYS[0]}-{SOLD_MARKET_DAYS[1]} days by "
+        f"default; metadata.unapplied: what an arm cannot apply. {sentence(EvidenceArgs)}",
         args=EvidenceArgs, handler=_evidence, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )
