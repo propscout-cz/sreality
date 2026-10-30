@@ -5075,7 +5075,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   centre of the country. Grade and confidence are untouched — the LEVEL is what says how coarse a
   position is — the radius is floored by the placed-on entity's reach (the část's farthest door, the
   polygon's `containment_radius_m`: Praha 17.6 km where the `obec` constant says 1 km), and
-  `disputed` is never set by this path. Foreign and undetermined rows bind no Czech unit, so they
+  FILL's point never causes a dispute (a row FILL places because a declared-blurred pin was set aside,
+  v5.9, still carries that pin's `pin_outside_obec`). Foreign and undetermined rows bind no Czech unit, so they
   keep `geom NULL` by construction.
 * **GRADE** (`grade.py`) is two tables: `match_confidence` from how many INDEPENDENT fields agreed
   with the bound entity (`exact` an address point the pin corroborates, `high` ≥ 2 fields, `medium`
@@ -5085,10 +5086,11 @@ portal's payload or its own page, and every other stamp is class E outright.
   understate the thing the position came off. A portal's declared
   precision reaches the confidence and never the grain (see the position ladder below).
 * **CHECK** (`check.py`) decides the country and whether the row disagrees with itself. `disputed` is
-  ONE nullable text column whose value IS the reason: `pin_outside_obec` (an EXACT or UNDECLARED pin is
-  kept and the granularity drops to the admin level; a DECLARED blurred pin outside the town is not the
-  position since v5.9 and the flag records that it disagreed; asked only when the town came from a CLAIM,
-  since on BIND's pin-derived rungs the comparison is circular), `pin_outside_cz`, `country_conflict`, and
+  ONE nullable text column whose value IS the reason: `pin_outside_obec` (where an EXACT or UNDECLARED
+  pin IS the position it is kept and the grain drops to `obec`; a DECLARED blurred pin outside the town
+  is set aside since v5.9 and the grain stays the bind's; a register-placed row keeps its grain; asked
+  only when the town came from a CLAIM, since on BIND's pin-derived rungs the comparison is circular),
+  `pin_outside_cz`, `country_conflict`, and
   `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; the granularity does
   NOT drop, because the address identity is the half that bound to the register and the coordinate is
   the half that lost, and GRADE caps such a row at `medium`). A Czech admin
@@ -5100,6 +5102,8 @@ portal's payload or its own page, and every other stamp is class E outright.
 before it is a portal's:
 
     registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  FILL's unit point
+                                                      (the pin rung yields to FILL's point when
+                                                       DECLARED blurred and outside the bound obec, v5.9)
 
 `ruian_streets` carries no geometry, so a bound street's point is DERIVED — the centroid of its valid
 address points, with an EXTENT that reaches the FARTHEST of them (all but 4 of the 83,451 live streets
@@ -5118,29 +5122,40 @@ point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule wou
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
 `pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
 
-**A fourth state since v5.9 (operator ruling 2026-10-30, "the words decide"): a pin the portal DECLARES
-blurred that lies OUTSIDE the obec the claims bound is not the position.** bazos places every advert on a
-postal-area point — one Kolín pin carried 143 active ads from 34 obce, and 12,543 active bazos rows said one
-town and drew another, 8.8 km off at r = 1 km (19509113: Jestřabí Lhota, drawn in Kolín). `core` asks the
-registry once whether the elected pin lies in the bound obec (never on the pin-derived rungs R7/R8, where
-the town came from the pin) and `place()` leaves such a row unplaced, so FILL stands it at the named
-entity's own point — a bound část's doors, else the obec's point — with that entity's reach as its radius.
-The pin stays EVIDENCE and `pin_outside_obec` is still recorded. An EXACT or UNDECLARED pin outside the
-town keeps the position as before (the only position there is), at `obec` grain and flagged: which half is
-wrong there is not ruled.
+**The pin rung has one exception since v5.9 (operator ruling 2026-10-30, "the words decide"): a pin the
+portal DECLARES blurred that lies OUTSIDE the obec the claims bound is not a position at all — FILL's point
+beats it.** bazos places every advert on a postal-area point — one Kolín pin carried 143 active ads from 34
+obce, and 12,543 active bazos rows said one town and drew another, 8.8 km off at r = 1 km (19509113:
+Jestřabí Lhota, drawn in Kolín). ONE containment read (`bind.pin_inside_bound_obec`, asked by `core`, read by
+`place()` and CHECK; never on the pin-derived rungs R7/R8, where the town came from the pin) decides it:
+`place()` leaves such a row unplaced, so FILL stands it at the named entity's own point — a bound část's
+doors, else the obec's point — with the level's radius floored by that entity's reach (v5.8). The pin stays
+EVIDENCE and `pin_outside_obec` is still recorded; the grain stays the bind's (~2.9k of the moved bazos rows
+bound a část and now publish the quarter grain). Every blur-declared label counts: bazos
+`approximate_location`, idnes `no_exact_address`, sreality `street`/`ward`/`quarter`/`municipality`/
+`not_address`, mmreality `regional`, maxima `Circle`/`LineString`, realitymix `estimated`; a blurred pin
+outside every Czech obec is set aside the same way and CHECK then records `pin_outside_cz` or
+`country_conflict`. An EXACT or UNDECLARED pin outside the town keeps the position as before (the only
+position there is), at `obec` grain and flagged: which half is wrong there is not ruled. The costs the
+ruling accepts, by name: a homonym town bound without a PSČ, or a bazos town the text reader misread, now
+places the row at the wrong town's point; there is no boundary tolerance, so a blurred pin just across the
+town line moves to the town's point; autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
+town and část points (re-decided lazily, never forced).
 
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named
 no street, and it cannot un-say what RÚIAN holds about the street the ad named. W18 deleted the
 `DECLARED_CAP` ladder outright rather than narrowing it: keying the cap on the elected POSITION was
 wrong twice over (it published a bazos row with `street_name` + `ulice_kod`, the position on the
-street's centroid and `granularity='obec'` at 1 km, and it INVERTED the two labels that are capped but
-not blurred — idnes' `no_exact_address`, 66,165 listings, and sreality's `not_address`, 13,176 — because
+street's centroid and `granularity='obec'` at 1 km, and it INVERTED the two labels that were then capped
+but not blurred — idnes' `no_exact_address`, 66,165 listings, and sreality's `not_address`, 13,176, both
+blur-declared by their contracts since W1-c — because
 a pin AGREEING with the bound street stayed the position and was capped while one CONTRADICTING it lost
 the position and was not), and keying it on the PIN-DERIVED rungs instead was correct and INERT: R7/R8
 already grade `obec` and every cap value is at or coarser than that, so the table could not change an
-answer on any input. What a declaration still does is rank the pin against a blurred sibling and cap the
-confidence at `medium` — a blurred pin is a weak witness however good the bind is.
+answer on any input. What a declaration still does is rank the pin against a blurred sibling, cap the
+confidence at `medium` — a blurred pin is a weak witness however good the bind is — and, since v5.9, set
+aside a pin that lies outside the bound obec (the grain still stays the bind's).
 
 It is a **pure function**: no wall clock, no network, no randomness, enforced by an AST scan, so a
 row replays byte-identically from its inputs and the three version ids stamped on it

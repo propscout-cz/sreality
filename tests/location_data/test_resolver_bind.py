@@ -687,9 +687,18 @@ def test_place_sets_aside_only_a_declared_blurred_pin_known_to_lie_outside_the_b
     pin = mm.claim(2, "coordinate", lat=49.7573, lon=18.0158)
     blurred = step_bind.DeclaredPrecision(label="approximate_location", blurred=True,
                                           claim_ids=(3,))
-    exact = step_bind.DeclaredPrecision(label=None, blurred=False, claim_ids=())
+    undeclared = step_bind.DeclaredPrecision(label=None, blurred=False, claim_ids=())
+    exact = step_bind.DeclaredPrecision(label="gps", blurred=False, claim_ids=(3,))
     place = step_bind.place
     assert place(binding, pin, declared=blurred, pin_inside_bound_obec=False).origin == "none"
     assert place(binding, pin, declared=blurred, pin_inside_bound_obec=True).origin == "portal_pin"
     assert place(binding, pin, declared=blurred).origin == "portal_pin"
+    assert place(binding, pin, declared=undeclared, pin_inside_bound_obec=False).origin == "portal_pin"
     assert place(binding, pin, declared=exact, pin_inside_bound_obec=False).origin == "portal_pin"
+    # The question itself, asked once for both readers: not asked without a bound town or on
+    # a pin-derived rung; False outside; True inside.
+    ask = step_bind.pin_inside_bound_obec
+    assert ask(binding, pin, mm.default_mirror()) is False
+    assert ask(binding, mm.claim(4, "coordinate", lat=50.0900, lon=14.4500), mm.default_mirror()) is True
+    assert ask(binding, None, mm.default_mirror()) is None
+    assert ask(replace(binding, rung="R7"), pin, mm.default_mirror()) is None

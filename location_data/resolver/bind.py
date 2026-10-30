@@ -1098,6 +1098,21 @@ def elect_pin(claims: Sequence[Claim]) -> Claim | None:
     return eligible[0] if eligible else None
 
 
+def pin_inside_bound_obec(
+    binding: Binding, pin_claim: Claim | None, registry: RegistryView
+) -> bool | None:
+    """The ONE containment question `place()` and CHECK both read (v5.9): does the elected pin
+    lie inside the obec the CLAIMS bound? None when it is not asked — no pin, no bound town (a
+    region-only bind), or a town the pin itself established (R7/R8, where the comparison is
+    circular). The drain pre-answers `containing_obec` for every claim coordinate in the slice,
+    so this is one cached read per listing."""
+    pin = pin_claim.point if pin_claim is not None else None
+    if pin is None or binding.obec_kod is None or binding.pin_derived:
+        return None
+    covering = registry.containing_obec(*pin)
+    return covering is not None and covering.code == binding.obec_kod
+
+
 def place(
     binding: Binding,
     pin_claim: Claim | None,
@@ -1108,6 +1123,8 @@ def place(
     """The ONE precedence rule (W18), in order:
 
         registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  (FILL's unit point)
+                                                          (unless DECLARED blurred and outside
+                                                           the bound obec, v5.9 — see below)
 
     with the street beating the pin only when the pin cannot be trusted over it, which is
     exactly three states:
@@ -1127,19 +1144,14 @@ def place(
     reads as a ceiling of `medium`. An exact pin that AGREES with the street keeps the
     position: the pin is the finer of two true answers.
 
-    A FOURTH state (v5.9, operator ruling 2026-10-30: "the words decide"): the pin is DECLARED
-    blurred and lies OUTSIDE the obec the claims bound. bazos places every advert on a
-    postal-area point — one Kolín pin carried 143 active ads from 34 obce, 8.8 km from the
-    village listing 19509113 names — so 12,543 active rows said one town and drew another. A
-    coordinate the portal itself calls approximate, in a town the ad does not name, is not a
-    position: the row is left unplaced here and FILL stands it at the named entity's own point
-    (a bound část's doors, else the obec's point) with that entity's reach as its radius. The
-    pin stays EVIDENCE — CHECK reads the elected claim and still records `pin_outside_obec`.
-    An EXACT or UNDECLARED pin outside the town keeps the position as before (the only
-    position there is), at `obec` grain and flagged; which half is wrong there is not ruled.
-    `pin_inside_bound_obec` is the caller's one registry read: None means it was never asked
-    (no pin, no bound town, or a town the pin itself established on R7/R8, where the
-    comparison is circular).
+    The PIN rung has one exception of its own (v5.9, operator ruling 2026-10-30: "the words
+    decide"): a pin the portal DECLARES blurred that lies OUTSIDE the obec the claims bound is
+    not a position at all. The row is left unplaced here and FILL stands it at the named
+    entity's own point (a bound část's doors, else the obec's point), its radius floored by that
+    entity's reach; the pin stays EVIDENCE, so CHECK still records `pin_outside_obec`. An EXACT
+    or UNDECLARED pin outside the town is kept as before. `pin_inside_bound_obec` is
+    `pin_inside_bound_obec()`'s answer, handed in by `core` (None = never asked). Figures and
+    history: `version.py` v5.9, architecture § Location data.
 
     WHICH POINT WINS HERE DOES NOT DECIDE THE GRAIN, and deliberately not. A portal's
     declared precision is a statement about its own COORDINATE, so `grade.grade` applies the
@@ -1159,7 +1171,7 @@ def place(
     loader has never written: it looked like a fallback and was dead in production on every
     one of the 8,706 towned rows that shipped `geom NULL`.
     """
-    pin = (pin_claim.lat, pin_claim.lon) if pin_claim else None
+    pin = pin_claim.point if pin_claim is not None else None
     if binding.target_kind == "address_point" and binding.lat is not None:
         return Position(
             lat=binding.lat, lon=binding.lon, origin="registry_point",

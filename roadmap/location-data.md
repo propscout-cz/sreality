@@ -782,7 +782,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
      DROP+CREATE views, so AFTER the deploy), **508** (W4-c, destructive — operator word + `pg_dump`,
      05:20–05:30 UTC, AFTER the deploy) — ALL APPLIED 2026-09-13, alongside the captain's **511**
      (backup), **512** (506's cancelled rebuild, re-run at 3600 s) and **513** (v1 of the pin-audit
-     surface retired, a precondition for 508). Left: **514** (W5, additive — BEFORE its merge: it
+     surface retired, a precondition for 508). **514** APPLIED too (confirmed 2026-10-30: `browse_projection`
+     carries the served predicate, as 522's header measured; W5, additive — BEFORE its merge: it
      only HIDES rows, so a database that has it while the old code runs is correct; the reverse would
      leak the exempted set into the watchdog).
   3. ~~**The later lock-free wave**: narrow `listings_public` + `portal_listing_counts`~~ — **DONE,
@@ -1218,10 +1219,20 @@ component is slimmed twice — each wave rewrites one component and slims its st
   claims bound is no longer the position: `bind.place` leaves the row to FILL (the bound část's doors,
   else the obec's point, radius floored by its reach); the pin stays evidence and the flag stays. Measured
   2026-10-30 before the bump: 12,547 active rows move (bazos 12,543, realitymix 2, idnes 1, sreality 1);
-  12,582 served properties stood on a disputed bazos pin. Untouched, unruled: UNDECLARED pins outside
-  their town (realitymix 719, idnes 290, sreality 188, ceskereality 138 — wrong pin or wrong name is not
-  known; 565 realitymix ads sit > 20 km from their town), the constant 1 km radius on a kept pin, and
-  consumers reading `disputed` (only the Location Quality page does).
+  12,582 served properties stood on a disputed bazos pin; ~2.9k of the moved rows bound a část and now
+  publish the quarter grain the bind always had (≈ 47 properties re-point their location ad at the next
+  rollup); ≤ 30 `country_conflict` / `pin_outside_cz` rows with a blurred pin move too. Every blur-declared
+  label counts (bazos approximate_location, idnes no_exact_address, sreality street/ward/quarter/
+  municipality/not_address, mmreality regional, maxima Circle/LineString, realitymix estimated). Costs
+  accepted with the ruling: a homonym town bound without a PSČ, or a bazos town the text reader misread,
+  now places the row at the wrong town's point; no boundary tolerance (a blurred pin just across the town
+  line moves to the town's point); autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
+  town and část points (re-decided lazily, never forced, as ruled for v5.8). Untouched, unruled: exact or
+  undeclared pins outside their town (realitymix 719, idnes 290, ceskereality 138 undeclared; sreality 188
+  declared `gps` — wrong pin or wrong name is not known; 565 realitymix ads sit > 20 km from their town),
+  the constant 1 km radius on a kept pin, and consumers reading `disputed` (only the Location Quality page
+  does). Rollout: the bump re-queues the corpus through the full-resolve sweep, whose GitHub cron fires
+  ~08–10Z (not 03:17), so `location_resolve.yml mode=full-resolve` is dispatched right after the deploy.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

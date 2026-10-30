@@ -249,10 +249,64 @@ def test_a_declared_blurred_pin_inside_the_named_town_stays_the_position():
     assert resolution.match_confidence == "medium"
 
 
+def test_a_declared_precise_pin_outside_the_named_town_is_kept_like_an_undeclared_one():
+    """sreality declares `gps` on 188 such active rows: the portal vouches for the coordinate
+    and the words name another town. Which half is wrong is not ruled, so the pin stays the
+    position at the obec grain, flagged, exactly as an undeclared pin does. The pin sits in
+    Kladno, 25 km from Praha — inside the 40 km reach a precise pin imposes on the town rule
+    (v5.5), so the name still binds; a precise pin 300 km away would drop the name instead and
+    the pin's own town would bind on R7, undisputed."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.1477, lon=14.1028, declared_precision_label="gps"),
+    ])
+    assert resolution.obec_kod == 554782
+    assert resolution.disputed == "pin_outside_obec"
+    assert (resolution.lat, resolution.lon) == (50.1477, 14.1028)
+    assert resolution.granularity == "obec"
+
+
+def test_a_street_the_register_cannot_place_falls_through_to_the_same_rule():
+    """`28. října` is a Praha street with no address point in the mirror, so the street rung
+    has no point of its own and the ladder reaches the pin — where a declared-blurred pin
+    outside Praha is set aside and FILL walks the chain to the town's point. The grain is the
+    bind's (street); the radius is the level's, floored by the unit's reach where it has one."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
+        mm.claim(2, "street_name", source="bazos", value_text="28. října"),
+        mm.claim(3, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
+        mm.claim(4, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ])
+    assert resolution.ulice_kod == 102
+    assert resolution.disputed == "pin_outside_obec"
+    assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
+    assert resolution.granularity == "street"
+
+
+def test_a_part_with_no_doors_stands_at_its_towns_point_at_the_quarter_grain():
+    """A městský obvod (or a část with no door) has no point of its own, so the set-aside row
+    takes the town's point — coarser than the grain says, and the radius says so once the unit
+    carries a reach (v5.8). The 13 MOMC rows among the moved bazos ads are this case."""
+    mirror = mm.default_mirror()
+    mirror.units.append(mm._unit(99, "momc", 500178, "Praha 6", "praha 6",
+                                 "k19.o3100.b554782.m500178", parent=13))
+    resolution = _resolve([
+        mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", source="bazos", value_text="Praha 6"),
+        mm.claim(3, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
+        mm.claim(4, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ], mirror)
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (554782, 500178)
+    assert resolution.granularity == "cast_obce_or_quarter"
+    assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
+    assert resolution.disputed == "pin_outside_obec"
+
+
 def test_a_town_the_pin_itself_established_never_yields_its_own_pin():
     """BIND's pin-derived rungs: the town CAME from the pin, so the containment question is
-    circular and is not asked — a reverse-geocoded row (R7) and a sliver row 100 m outside
-    its polygon (R8) both keep the pin, with no dispute."""
+    not asked. The R7 half is a sanity check (its town contains the pin by construction); the
+    R8 half is the rail — a sliver row 100 m outside its polygon would otherwise be set aside
+    in favour of the very town the pin chose. Both keep the pin, with no dispute."""
     reverse = _resolve([
         mm.claim(1, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
         mm.claim(2, "precision_declaration", source="bazos", **_APPROXIMATE),

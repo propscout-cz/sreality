@@ -64,8 +64,9 @@ def grade(
     blurred pin is a weak witness however good the bind is) and never the grain.
 
     Two cuts of this rule were wrong before it came out. Keying it on the elected POSITION
-    inverted the two labels that are capped but NOT blurred — idnes' `no_exact_address`
-    (66,165 listings) and sreality's `not_address` (13,176): a pin that AGREED with the bound
+    inverted the two labels that were then capped but NOT blurred — idnes' `no_exact_address`
+    (66,165 listings) and sreality's `not_address` (13,176; both blur-declared by their
+    contracts since W1-c, so v5.9 covers them): a pin that AGREED with the bound
     street stayed the position and was capped to `cast_obce_or_quarter` at 750 m, while a pin
     that CONTRADICTED it lost to the street point and graded `street` at 300 m, so the
     better-evidenced row graded coarser. Keying it on the PIN-DERIVED rungs instead was
