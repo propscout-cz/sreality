@@ -258,24 +258,20 @@ def _extract_gemini_usage(raw: Any) -> Usage:
         return Usage()
     def _g(name: str) -> int:
         return int(getattr(meta, name, 0) or 0)
+    cached = _g("cached_content_token_count")
     return Usage(
-        input_tokens=_g("prompt_token_count"),
-        output_tokens=_g("candidates_token_count"),
-        cache_read_tokens=_g("cached_content_token_count"),
+        # prompt_token_count includes the cached part (Usage keeps them disjoint); thinking is billed as output.
+        input_tokens=max(_g("prompt_token_count") - cached, 0),
+        output_tokens=_g("candidates_token_count") + _g("thoughts_token_count"),
+        cache_read_tokens=cached,
         cache_write_tokens=0,
     )
 
 
 def _normalise_gemini_finish(raw: Any, tool_calls: list[ToolCall]) -> str:
-    if tool_calls:
-        return "tool_use"
+    # A reply cut at its limit says so even when it carries calls: their arguments may be half-written.
     candidates = getattr(raw, "candidates", None) or []
-    if not candidates:
-        return "end_turn"
-    finish = getattr(candidates[0], "finish_reason", None)
-    finish_str = str(finish) if finish is not None else ""
-    if "MAX_TOKENS" in finish_str:
+    finish = getattr(candidates[0], "finish_reason", None) if candidates else None
+    if finish is not None and "MAX_TOKENS" in str(finish):
         return "max_tokens"
-    if "STOP" in finish_str:
-        return "end_turn"
-    return "end_turn"
+    return "tool_use" if tool_calls else "end_turn"

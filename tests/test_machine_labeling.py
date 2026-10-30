@@ -149,18 +149,6 @@ def test_an_unusable_reply_writes_nothing() -> None:
     assert "return" in src.split("if error is not None or not verdicts:")[1][:400]
 
 
-def test_the_called_for_value_is_in_the_literal_and_the_migration() -> None:
-    from api.llm_client import CalledFor
-    from toolkit import machine_labeling as ml
-
-    assert ml.CALLED_FOR in typing.get_args(CalledFor)
-    mig = (ROOT / "migrations" / "468_bulk_label_called_for.sql").read_text()
-    assert "'label_image_bulk'" in mig
-    # The list is restated whole; the previous values must survive.
-    for kept in ("'review_exam_image'", "'suggest_exam_answer'", "'parse_url'"):
-        assert kept in mig
-
-
 def test_the_lane_defaults_to_dry_run_and_validates_its_inputs() -> None:
     import yaml
 

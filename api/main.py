@@ -29,8 +29,6 @@ from api import maps
 from api import sreality_price_map
 from api import tenant_pool
 from api import schemas as s
-from api import skills as skills_module
-from api.agent import AGENT_TOOLS
 from api.building_runs import (
     assert_editable_for_attachments,
     confirm_units,
@@ -241,12 +239,6 @@ async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "J
         }},
         headers=headers,
     )
-
-# Skill validation needs to know the registered agent tools and the
-# registered provider names. Populate at import time so PUT /admin/skills/*
-# rejects bogus tool / provider names with a clear 400.
-skills_module.AGENT_TOOL_NAMES = set(AGENT_TOOLS.keys())
-skills_module.PROVIDER_NAMES = set(deps.get_providers().keys())
 
 # /admin/* is admin-gated — the router itself carries Depends(require_admin)
 # (see api/routes/admin.py): a real is_admin JWT claim is required and the

@@ -103,7 +103,7 @@ new vision caller in that test rather than picking an edge by hand.
 A/B harness were deleted wholesale with the legacy dedup decision engine (2026-08 cutoff —
 architectural rule #15, `docs/design/new-dedup/CUTOFF.md`), along with their `app_settings`
 prompt/model keys and their `llm_calls.called_for` values. Nothing routes vision at dedup any
-more; the `CalledFor` literal in `api/llm_client.py` is the live list. The rebuilt engine's
+more; `llm_calls_called_for_check` (its newest migration) is the live list. The rebuilt engine's
 vision level (manual batches, model routing, its own prompt contract) is Wave 6 of
 `docs/design/new-dedup/PROGRAM.md` — build it there, don't restore the old tools. Their paid
 verdict caches (`listing_visual_matches`, `listing_site_plan_matches`,

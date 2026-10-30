@@ -25,7 +25,7 @@ const RUNNER_CPUS = 4;
 const RUNNER_MEMORY_BYTES = 8000000000;
 const RUNNER_DRAINING_SECONDS = 250;
 // Every repo tree the root Dockerfile copies, plus the files that build it (a census pins it to the COPY lines).
-const BACKEND_WATCH = ["/Dockerfile", "/.dockerignore", "/pyproject.toml", "/scraper/**", "/toolkit/**", "/api/**", "/scripts/**", "/location_data/**", "/contracts/**", "/data/**", "/autodedup/**"];
+const BACKEND_WATCH = ["/Dockerfile", "/.dockerignore", "/pyproject.toml", "/scraper/**", "/toolkit/**", "/api/**", "/scripts/**", "/location_data/**", "/contracts/**", "/data/**", "/autodedup/**", "/skills/**"];
 const kept = (...names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
 
 const api = (name: string) => project(name, { resources: [service("sreality", {

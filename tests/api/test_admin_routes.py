@@ -79,21 +79,23 @@ def client(monkeypatch, store):
     admin = routes.admin
 
     def fake_list_skills(conn, *, include_archived=False):
-        from api.skills import Skill, SkillLimits
+        from api.agents.definition import Limits
+        from api.skills import Skill
         return [
             Skill(
                 name=s.name, description=s.description,
                 system_prompt=s.system_prompt,
                 allowed_tools=list(s.allowed_tools),
                 preferred_model=dict(s.preferred_model),
-                limits=SkillLimits(**s.limits),
+                limits=Limits(**s.limits),
                 updated_at=s.updated_at,
             )
             for s in store["skills"].values()
         ]
 
     def fake_load_skill(conn, name):
-        from api.skills import Skill, SkillLimits, SkillNotFound
+        from api.agents.definition import Limits
+        from api.skills import Skill, SkillNotFound
         if name not in store["skills"]:
             raise SkillNotFound(f"skill {name!r} not found")
         s = store["skills"][name]
@@ -102,19 +104,20 @@ def client(monkeypatch, store):
             system_prompt=s.system_prompt,
             allowed_tools=list(s.allowed_tools),
             preferred_model=dict(s.preferred_model),
-            limits=SkillLimits(**s.limits),
+            limits=Limits(**s.limits),
             updated_at=s.updated_at,
         )
 
     def fake_update_skill(conn, name, fields, *, updated_by=None):
-        from api.skills import SkillNotFound, SkillValidationError
+        from api.agents.definition import DefinitionError
+        from api.skills import SkillNotFound
         if name not in store["skills"]:
             raise SkillNotFound(f"skill {name!r} not found")
         s = store["skills"][name]
         for k, v in fields.items():
             if k == "allowed_tools":
                 if "boguscallout" in (v or []):
-                    raise SkillValidationError("unknown tool 'boguscallout'")
+                    raise DefinitionError("unknown tool 'boguscallout'")
                 s.allowed_tools = list(v)
             else:
                 setattr(s, k, v)

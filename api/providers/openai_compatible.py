@@ -255,10 +255,11 @@ def _completion_from_raw(raw: dict[str, Any], *, model: str) -> Completion:
         cache_write_tokens=0,
     )
     finish_reason = str(choices[0].get("finish_reason") or "")
-    if tool_calls:
-        stop_reason = "tool_use"
-    elif finish_reason == "length":
+    # A reply cut at its limit says so even when it carries calls: their arguments may be half-written.
+    if finish_reason == "length":
         stop_reason = "max_tokens"
+    elif tool_calls:
+        stop_reason = "tool_use"
     else:
         stop_reason = "end_turn"
 

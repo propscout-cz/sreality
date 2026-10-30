@@ -28,7 +28,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from api.providers import (
     Block,
@@ -49,28 +49,6 @@ if TYPE_CHECKING:
     import psycopg
 
 LOG = logging.getLogger(__name__)
-
-
-CalledFor = Literal[
-    "parse_url",
-    "summarize_listing",
-    "compare_listing_images",
-    "agent_estimation",
-    "extract_building_units",
-    "read_floor_plan",
-    "refine_skill",
-    "discover_condition_markers",
-    "score_listing_condition",
-    "enrich_listing_description",
-    "screen_exam_image",
-    "suggest_exam_answer",
-    "review_exam_image",
-    "label_image_bulk",
-    # W2-10, migration 470. Annotation only — the DB CHECK is the enforcement, and this
-    # Literal has drifted from it before; keeping it honest costs nothing.
-    "extract_location_claims",
-    "location_llm_bakeoff",
-]
 
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -173,7 +151,7 @@ class LLMClient:
     def call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         messages: list[dict[str, Any]] | list[Message],
         system: str | None = None,
         tools: list[dict[str, Any]] | list[ToolSchema] | None = None,
@@ -191,7 +169,9 @@ class LLMClient:
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
-        don't use it.
+        don't use it. `called_for` must be a value `llm_calls_called_for_check`
+        admits (the latest migration restating it holds the list); the
+        INSERT runs after the provider has billed.
         """
         # A caller that passes only a model (e.g. a dedup lane reading its
         # app_settings value) doesn't know the backend; derive it from the id so
@@ -266,7 +246,7 @@ class LLMClient:
     def record_external_call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         usage: Usage,
@@ -347,7 +327,7 @@ class LLMClient:
     def _record_call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         usage: Usage,
@@ -389,7 +369,7 @@ class LLMClient:
     def _record_failure(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         duration_ms: int,

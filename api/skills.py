@@ -1,27 +1,21 @@
-"""Skill loading + updating for the reasoning agent.
+"""The estimator's skills, one row each in the `skills` table (migration 029), until M2 retires the table (#2078).
 
-A `Skill` is one row in the `skills` table (migration 029). The
-canonical content lives in `skills/<name>/SKILL.md` in git; the
-migration's seed `INSERT` imports it once. Day-to-day edits happen
-through `update_skill` (Settings page → PUT /admin/skills/{name}),
-and the `skills_history` trigger preserves every prior version.
-
-Validation in `update_skill` rejects:
-- tool names outside the global registry (`AGENT_TOOL_NAMES`),
-- an empty preferred_model, or one naming a provider outside the
-  registry (a subset is fine: a provider the skill does not name is
-  one the agent cannot run that skill on — the run fails),
-- limits outside sane bounds.
-
-The validation is deliberately narrow — we want operators to be
-able to experiment, but not to break the agent loop by typo'ing a
-tool name.
+The live text is the row: edits go through `update_skill` (Settings page -> PUT /admin/skills/{name}) and the
+`skills_history` trigger keeps every prior version. The old `skills/` seed copies are legacy reference under
+docs/design/agent-platform/legacy-skills/. `update_skill` runs the same checks as an agent folder
+(`api.agents.definition`): tools named in the estimator's own `AGENT_TOOLS`, a priced model per named provider, and
+limits within bounds.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
+
+from api import dependencies
+from api.agent import AGENT_TOOLS
+from api.agents import definition
+from api.agents.definition import Limits
 
 if TYPE_CHECKING:
     import psycopg
@@ -31,19 +25,6 @@ class SkillNotFound(LookupError):
     """Raised by load_skill when the named row does not exist."""
 
 
-class SkillValidationError(ValueError):
-    """Raised by update_skill on invalid fields."""
-
-
-# Set in api/main.py once the agent tool registry is built. Skill
-# validation rejects allowed_tools entries outside this set.
-AGENT_TOOL_NAMES: set[str] = set()
-
-# Set in api/main.py once providers are constructed. Skill
-# validation rejects preferred_model keys outside this set.
-PROVIDER_NAMES: set[str] = set()
-
-
 @dataclass(frozen=True)
 class Skill:
     name: str
@@ -51,17 +32,10 @@ class Skill:
     system_prompt: str
     allowed_tools: list[str]
     preferred_model: dict[str, str]
-    limits: "SkillLimits"
+    limits: Limits
     updated_at: str | None = None
     archived_at: str | None = None
     version: int = 1
-
-
-@dataclass(frozen=True)
-class SkillLimits:
-    max_iterations: int
-    max_cost_usd: float
-    wall_clock_timeout_s: float
 
 
 def load_skill(conn: "psycopg.Connection", name: str) -> Skill:
@@ -117,24 +91,21 @@ def update_skill(
 
     if "description" in fields:
         sets.append("description = %(description)s")
-        params["description"] = _validate_str(fields["description"], "description")
+        params["description"] = definition.text(fields["description"], "description")
     if "system_prompt" in fields:
         sets.append("system_prompt = %(system_prompt)s")
-        params["system_prompt"] = _validate_str(
-            fields["system_prompt"], "system_prompt"
-        )
+        params["system_prompt"] = definition.text(fields["system_prompt"], "system_prompt")
     if "allowed_tools" in fields:
-        tools = _validate_allowed_tools(fields["allowed_tools"])
+        tools = definition.tool_names(fields["allowed_tools"], AGENT_TOOLS)
         sets.append("allowed_tools = %(allowed_tools)s::jsonb")
         params["allowed_tools"] = _jsonb_dumps(tools)
     if "preferred_model" in fields:
-        model_map = _validate_preferred_model(fields["preferred_model"])
+        model_map = definition.models(fields["preferred_model"], dependencies.get_providers())
         sets.append("preferred_model = %(preferred_model)s::jsonb")
         params["preferred_model"] = _jsonb_dumps(model_map)
     if "limits" in fields:
-        limits = _validate_limits(fields["limits"])
         sets.append("limits = %(limits)s::jsonb")
-        params["limits"] = _jsonb_dumps(limits)
+        params["limits"] = _jsonb_dumps(asdict(definition.limits(fields["limits"])))
     if updated_by is not None:
         sets.append("updated_by = %(updated_by)s")
         params["updated_by"] = updated_by
@@ -167,7 +138,7 @@ def _row_to_skill(row: tuple[Any, ...]) -> Skill:
         system_prompt=system_prompt,
         allowed_tools=list(allowed_tools or []),
         preferred_model=dict(preferred_model or {}),
-        limits=SkillLimits(
+        limits=Limits(
             max_iterations=int(limits.get("max_iterations", 12)),
             max_cost_usd=float(limits.get("max_cost_usd", 1.0)),
             wall_clock_timeout_s=float(limits.get("wall_clock_timeout_s", 120.0)),
@@ -176,77 +147,6 @@ def _row_to_skill(row: tuple[Any, ...]) -> Skill:
         archived_at=str(archived_at) if archived_at is not None else None,
         version=int(version) if version is not None else 1,
     )
-
-
-def _validate_str(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise SkillValidationError(f"{label} must be a non-empty string")
-    return value
-
-
-def _validate_allowed_tools(value: Any) -> list[str]:
-    if not isinstance(value, list) or not value:
-        raise SkillValidationError(
-            "allowed_tools must be a non-empty list of tool names"
-        )
-    out: list[str] = []
-    for entry in value:
-        if not isinstance(entry, str):
-            raise SkillValidationError(
-                "allowed_tools entries must be strings"
-            )
-        if AGENT_TOOL_NAMES and entry not in AGENT_TOOL_NAMES:
-            raise SkillValidationError(
-                f"unknown tool {entry!r}; "
-                f"registered tools: {sorted(AGENT_TOOL_NAMES)}"
-            )
-        out.append(entry)
-    return out
-
-
-def _validate_preferred_model(value: Any) -> dict[str, str]:
-    if not isinstance(value, dict) or not value:
-        raise SkillValidationError(
-            "preferred_model must be a {provider: model} map"
-        )
-    out: dict[str, str] = {}
-    for k, v in value.items():
-        if not isinstance(k, str) or not isinstance(v, str):
-            raise SkillValidationError(
-                "preferred_model entries must be string -> string"
-            )
-        if PROVIDER_NAMES and k not in PROVIDER_NAMES:
-            raise SkillValidationError(
-                f"unknown provider {k!r}; "
-                f"registered providers: {sorted(PROVIDER_NAMES)}"
-            )
-        out[k] = v
-    return out
-
-
-def _validate_limits(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise SkillValidationError("limits must be an object")
-    max_iter = value.get("max_iterations")
-    if not isinstance(max_iter, int) or not (1 <= max_iter <= 50):
-        raise SkillValidationError(
-            "limits.max_iterations must be an int in [1, 50]"
-        )
-    max_cost = value.get("max_cost_usd")
-    if not isinstance(max_cost, (int, float)) or not (0 < max_cost <= 20):
-        raise SkillValidationError(
-            "limits.max_cost_usd must be a number in (0, 20]"
-        )
-    wall = value.get("wall_clock_timeout_s")
-    if not isinstance(wall, (int, float)) or not (1 <= wall <= 600):
-        raise SkillValidationError(
-            "limits.wall_clock_timeout_s must be a number in [1, 600]"
-        )
-    return {
-        "max_iterations": max_iter,
-        "max_cost_usd": float(max_cost),
-        "wall_clock_timeout_s": float(wall),
-    }
 
 
 def _jsonb_dumps(value: Any) -> str:

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from api.capabilities import registry
 from api.capabilities.entry import Caller, Effect, Entry, Tenancy
-from api.capabilities.schema import portable
+from api.capabilities.schema import PORTABLE_KEYWORDS, nodes, portable
 from tests.api._script_conn import ScriptConn
 from toolkit import filter_registry as fr
 
@@ -107,26 +107,12 @@ def test_a_market_tool_takes_no_id_but_a_property_or_an_ad_and_never_forces_a_re
 
 # --- 4. portable shape ------------------------------------------------------------------------------------------
 
-_UNPORTABLE = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "title", "const", "exclusiveMinimum", "exclusiveMaximum"}
-
-
-def _nodes(node: Any) -> list[dict[str, Any]]:
-    if isinstance(node, list):
-        return [n for x in node for n in _nodes(x)]
-    if not isinstance(node, dict):
-        return []
-    out = [node]
-    for key, value in node.items():
-        out += [n for sub in value.values() for n in _nodes(sub)] if key == "properties" else _nodes(value)
-    return out
-
-
 def test_every_input_schema_is_portable_to_every_provider() -> None:
     for name, entry in ENTRIES.items():
         schema = entry.input_schema
         assert schema["type"] == "object", name
-        for node in _nodes(schema):
-            assert not _UNPORTABLE & set(node), (name, _UNPORTABLE & set(node))
+        for node in nodes(schema):
+            assert set(node) <= PORTABLE_KEYWORDS, (name, set(node) - PORTABLE_KEYWORDS)
             assert not isinstance(node.get("type"), list), name
             if node.get("type") == "object":
                 assert node.get("additionalProperties") is False, name

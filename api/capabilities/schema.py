@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel
 
 _NULL = {"type": "null"}
+
+# The keywords every provider builds a tool schema from: Gemini's client, the strictest, refuses $ref, anyOf, const,
+# exclusive bounds, uniqueItems and multipleOf; a $ref would also be fetched (file, URL) by a JSON Schema validator.
+PORTABLE_KEYWORDS = frozenset({
+    "type", "description", "properties", "required", "items", "enum", "nullable", "default", "additionalProperties",
+    "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "pattern", "format",
+})
 
 
 def portable(model: type[BaseModel]) -> dict[str, Any]:
@@ -38,3 +46,13 @@ def _clean(node: Any, defs: dict[str, Any]) -> Any:
         else:
             out[key] = _clean(value, defs)
     return out
+
+
+def nodes(schema: Any) -> Iterator[dict[str, Any]]:
+    """`schema` and every schema nested in it through `properties` and `items`."""
+    if not isinstance(schema, dict):
+        return
+    yield schema
+    for sub in (schema.get("properties") or {}).values():
+        yield from nodes(sub)
+    yield from nodes(schema.get("items"))

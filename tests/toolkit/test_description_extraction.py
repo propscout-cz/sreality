@@ -530,14 +530,6 @@ def test_a_pass_with_an_empty_scope_claims_nothing(monkeypatch) -> None:
     assert tx.run_pass(object()) == {"claimed": 0, "reason": "empty_scope"}
 
 
-def test_the_called_for_is_the_one_the_cost_series_already_knows() -> None:
-    """Renaming would need a migration and would break the 60-day per-lane cost series
-    plus the two frontend cost pages."""
-    from api.llm_client import CalledFor
-
-    assert tx.CALLED_FOR in CalledFor.__args__
-
-
 def test_the_budget_guard_is_the_shared_engines_and_binds_before_the_call() -> None:
     import inspect
 

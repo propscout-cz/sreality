@@ -5502,6 +5502,6 @@ rendered blank in production.
 | Roadmap / sequencing | `ROADMAP.md` + the track file its row links |
 | Map reference overlays (metro, flood zones, kraje; the tile path) | `docs/design/map-overlays.md` |
 
-**Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agent** skills
-seeded into the `skills` DB table (architectural rule #10). `.claude/skills/` holds the
-Claude Code reference skills above — never seed those into the DB table.
+**Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agents**, one folder each, loaded
+from the image by `api/agents/` (`skills/README.md`; toolkit-api rule 10). `.claude/skills/` holds the Claude
+Code reference skills above. The estimator's DB-stored skill (`skills` table) is neither, until #2078 retires it.

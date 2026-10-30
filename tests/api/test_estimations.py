@@ -534,7 +534,7 @@ def test_post_with_mode_agent_does_not_500(client, monkeypatch):
             name=name, description="", system_prompt="",
             allowed_tools=["record_estimate"],
             preferred_model={"anthropic": "x", "gemini": "y"},
-            limits=sk.SkillLimits(
+            limits=sk.Limits(
                 max_iterations=5, max_cost_usd=1.0,
                 wall_clock_timeout_s=60.0,
             ),
@@ -589,7 +589,7 @@ def test_agent_basis_refusal_lands_a_failed_run_not_a_500(client, monkeypatch):
             name=name, description="", system_prompt="",
             allowed_tools=["record_estimate"],
             preferred_model={"anthropic": "x", "gemini": "y"},
-            limits=sk.SkillLimits(
+            limits=sk.Limits(
                 max_iterations=5, max_cost_usd=1.0,
                 wall_clock_timeout_s=60.0,
             ),
