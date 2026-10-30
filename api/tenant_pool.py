@@ -55,6 +55,14 @@ def bound_read(cur: psycopg.Cursor) -> None:
         cur.execute(statement)
 
 
+def read_conn(conn: psycopg.Connection = Depends(deps.get_db_conn)) -> "Iterator[psycopg.Connection]":
+    """FastAPI dependency: the service connection as one bounded read, held for the request like `tenant_conn`."""
+    with conn.transaction():
+        with conn.cursor() as cur:
+            bound_read(cur)
+        yield conn
+
+
 @contextlib.contextmanager
 def tenant_transaction(
     claims: dict, *, act_as: uuid.UUID | None, method: str,

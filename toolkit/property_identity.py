@@ -6,7 +6,7 @@ carrying every property-anchored operator-state row through
 (migration 589); `detach_listings` moves a set of adverts back to their ledger origins, or to new
 records through the one birth path (`_born`), under one lock taken up front, and routes the
 curation they take (`property_carriers.curation_plan` / `route_curation`). Both finish with
-`properties_changed` once per call (rollup, broker book, Browse row, broker queue). Callers:
+`properties_changed` once per call (rollup, broker book, Browse row). Callers:
 `api.property_merge` and `toolkit.property_split` (the operator), `autodedup.apply` and
 `autodedup.reconcile` (merge, inside `app_settings.autodedup_apply_scope`),
 `autodedup.apply.unapply` and `autodedup.legacy_retire` (detach, one call per group). An operator

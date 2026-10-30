@@ -16,6 +16,7 @@ from api.broker_board import MIXED_CATEGORY, OUTCOME_SELECTED, BoardArgs, board
 from scripts.recompute_property_stats import properties_changed
 from tests._live_property import REQUIRED_DB, _advert, _property
 from tests.test_location_ad_readers_live import _placed
+from toolkit import brokers
 from toolkit.measures import wilson_lower
 
 pytestmark = REQUIRED_DB
@@ -26,6 +27,10 @@ _PLACE = [{"name": "Lp board", "level": "obec", "id": _TOWN}]
 _S = datetime(2026, 9, 9, 12, tzinfo=timezone.utc)
 _D = timedelta(days=1)
 _BENCHMARK = ("market", "unknown", "cohort_properties", "attributed_properties", "unattributed_share")
+# Divides by zero only in a bounded read, READ ONLY at 8 s (tenant_pool.READ_BOUND). Not `SELECT 1 / 0 WHERE ...`:
+# the planner folds a constant `1 / 0` and raises whatever the WHERE says.
+_BOUND_PROBE = ("SELECT 1 / (current_setting('transaction_read_only') <> 'on' "
+                "OR current_setting('statement_timeout') <> '8s')::int")
 
 
 @pytest.fixture()
@@ -150,14 +155,40 @@ def test_speed_is_refused_on_an_outcome_filter_or_a_mixed_cohort_and_volume_stil
     assert _by(out, seeded)["C"]["properties"] == c_count
 
 
+def test_a_brokers_own_numbers_are_the_boards_over_every_category(cur: Any, seeded: dict[str, int]) -> None:
+    """Ruling 4: the dossier, search and Outreach read the broker's book, which over every category is the unfiltered
+    board's count, any status and active (every seed is served); by region (a property without one counts only in the
+    totals) and by category; a firm counts the brokers its filter selects."""
+    cur.execute("INSERT INTO admin_boundaries (id, level, name, geom) VALUES (999102, 'kraj', 'Lp kraj', "
+                "ST_Multi(ST_MakeEnvelope(15, 49.5, 15.1, 49.6, 4326))::geography)")
+    cur.execute("SELECT property_id FROM broker_book WHERE broker_id = %s", (seeded["C"],))
+    c_pids = [r[0] for r in cur.fetchall()]
+    cur.execute("UPDATE listing_location SET kraj_kod = 999102 WHERE listing_id IN "
+                "(SELECT id FROM listings WHERE property_id = ANY(%s))", (c_pids,))
+    properties_changed(cur.connection, c_pids)
+    board_counts = {(n, s): r["properties"] for s in ("any", "active")
+                    for n, r in _by(_board(cur, category_type=None, status=s), seeded).items()}
+    for name in "AC":
+        dossier = brokers.get_broker(cur.connection, seeded[name])["data"]
+        assert (dossier["broker"]["properties"], dossier["broker"]["active_properties"]) == (
+            board_counts[name, "any"], board_counts[name, "active"])
+    c = brokers.get_broker(cur.connection, seeded["C"])["data"]
+    assert c["region_shares"] == [{"geo_id": 999102, "name": "Lp kraj", "properties": 4, "active_properties": 3}]
+    assert c["categories"] == [
+        {"category_main": "byt", "category_type": "prodej", "properties": 3, "active_properties": 2},
+        {"category_main": "byt", "category_type": "pronajem", "properties": 1, "active_properties": 1}]
+    assert brokers.get_broker(cur.connection, seeded["A"])["data"]["region_shares"] == []
+    cur.execute("SELECT canonical_domain FROM firms WHERE id = %s", (seeded["firm"],))
+    firm = brokers.firm_options(cur.connection, q=cur.fetchone()[0])["data"]
+    assert [(f["firm_id"], f["broker_count"]) for f in firm] == [(seeded["firm"], 1)]
+
+
 def test_the_read_is_bounded_read_only_at_8s(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """bound_read in the board's own transaction: its statement runs READ ONLY at 8 s (the probe divides by zero only
-    under both), and a write in its place fails and leaves nothing."""
+    """bound_read in the board's own transaction: its statement runs READ ONLY at 8 s, and a write in its place fails
+    and leaves nothing."""
     from api import broker_board
 
-    monkeypatch.setattr(broker_board, "_statement", lambda cohort: (
-        "SELECT 1 / 0 WHERE current_setting('transaction_read_only') = 'on' "
-        "AND current_setting('statement_timeout') = '8s'"))
+    monkeypatch.setattr(broker_board, "_statement", lambda cohort: _BOUND_PROBE)
     with pytest.raises(psycopg.errors.DivisionByZero):
         _board(cur)
     monkeypatch.setattr(broker_board, "_statement",
@@ -166,3 +197,19 @@ def test_the_read_is_bounded_read_only_at_8s(cur: Any, monkeypatch: pytest.Monke
         _board(cur)
     cur.execute("SELECT count(*) FROM brokers WHERE display_name = 'lp-read-only'")
     assert cur.fetchone() == (0,)
+
+
+def test_a_brokers_own_numbers_are_bounded_reads_too(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """READ ONLY at 8 s, as the board: the routes' connection (tenant_pool.read_conn: search, the dossier, the firm
+    chips, the merge review's list) and Outreach's draft facts."""
+    from api import outreach, tenant_pool
+
+    reads = tenant_pool.read_conn(cur.connection)
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        next(reads).execute(_BOUND_PROBE)
+    reads.close()
+    cur.execute("INSERT INTO brokers (display_name) VALUES ('lp-facts') RETURNING id")
+    broker_id = cur.fetchone()[0]
+    monkeypatch.setattr(outreach, "footprint", lambda c, _: c.execute(_BOUND_PROBE))
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        outreach._broker_context(cur.connection, broker_id)

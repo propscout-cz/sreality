@@ -16,15 +16,17 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
+from api import tenant_pool
 from api.routes import brokers as broker_routes
 
 _SEARCH_ROW = {"broker_id": 1, "display_name": "RK Alfa",
                "primary_email": "a@b.cz", "primary_phone": "+420 111 222 333",
-               "active_property_count": 9}
+               "active_properties": 9}
 
 
 def _client(claims: dict):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
+    api_main.app.dependency_overrides[tenant_pool.read_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: claims
     return TestClient(api_main.app)
 
@@ -246,7 +248,7 @@ def test_search_masks_contacts_for_a_plain_user(client, monkeypatch):
                             "data": [dict(_SEARCH_ROW)], "metadata": {}})
     body = client.get("/brokers/search", params={"q": "alfa"}).json()
     assert body["data"][0] == {"broker_id": 1, "display_name": "RK Alfa",
-                               "active_property_count": 9,
+                               "active_properties": 9,
                                "has_email": True, "has_phone": True}
     assert body["metadata"]["pii_masked"] is True
 
@@ -362,6 +364,16 @@ def test_the_unmasked_routes_still_stamp_the_policy(
     res = client.request(method, url, json=body)
     assert res.status_code == 200, res.text
     assert res.json()["metadata"]["pii_masked"] is False
+
+
+@pytest.mark.parametrize("path", ["/brokers/search", "/brokers/firm-options", "/brokers/{broker_id}",
+                                  "/broker-review/candidates"])
+def test_a_read_counting_the_broker_book_is_bounded(path: str) -> None:
+    """READ ONLY at 8 s, as the board's own read (tenant_pool.read_conn; tests/test_broker_board_live.py)."""
+    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+
+    (route,) = [r for m, p, r in _api_routes() if (m, p) == ("GET", path)]
+    assert tenant_pool.read_conn in _reachable_calls(route.dependant)
 
 
 def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:

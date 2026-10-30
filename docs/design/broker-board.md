@@ -4,7 +4,7 @@
 `BROWSE_GRAIN`), one property × broker book kept by rule 20's property pass, one attribution rule (MS19's portal rule,
 rule 16), one speed measure ("left the market within N days", ranked by its Wilson lower bound). Everything it
 replaces is deleted: the leaderboard RPC and its count book (`broker_region_type_stats`, its 7-day liveness rule,
-its own geo chips) go once the board reads the book.
+its own geo chips) go, and every broker number is the book's.
 
 ## Operator rulings, 2026-10-29
 
@@ -61,10 +61,10 @@ seam) answers no speed: its end is never observed. A coverage line names the coh
 - **W0 (done, read-only)** — production measurements, M recalibrated (below).
 - **W1 (#2181, dark)** — 691: the identity-grain book, the measure, the pass, the link's dirty source, census rails.
 - **W2** — 692 (the book at broker grain, the re-point dirty source) and its readers: the `Makléři` tab, `rank_brokers`,
-  Browse's broker scope, Outreach; the leaderboard's routes and toolkit deleted. `broker_leaderboard()`, its SQL
-  rails and 691's `property_broker_spells` + projection go in the post-deploy destructive batch.
-- **W3** — delete the count book: `broker_region_type_stats`, its hourly publish, its registry row,
-  `broker_geo_options` (the broker page and Outreach's draft facts read them until then).
+  Browse's broker scope, Outreach; the leaderboard's routes and toolkit deleted.
+- **W3a** — every other broker number read from the book; the count writers deleted. No migration: the count book, its
+  hourly publish and its registry row stay, unread, as one unit.
+- **W3b** (destructive: the operator's OK and a backup first) — that unit, the count columns, W2's leftovers.
 
 ## W2 as built
 
@@ -83,6 +83,54 @@ the phone's Makléři screen (its filters in `FilterSheetBody`); the tab's optio
 identity. A value under a registry floor is held at it, so Browse and the board judge one cohort. Not Browse's
 cohort, and said on the tab: the account lenses and market growth are not applied; dismissed properties count.
 
+## W3a as built
+
+**A broker's own numbers are its book, `toolkit/brokers.BROKER_COUNTS_SQL`**: `properties` = the book's rows of the
+broker, `active_properties` = those with one of its ads still running (a live ad makes its property live). The board
+reads the same book inside a Browse cohort. Read by name search (its order), the dossier (`GET /brokers/{id}`, plus
+`footprint` over the book's properties Browse serves: by region, `admin_boundaries` on `browse_list.region_id`, a
+property without one or not yet published counted only in the totals, and by category and deal type), the merge review
+and Outreach's draft facts. Not joined to `browse_list` for the totals: name search for `ov` (7,200 matches) took 2.7 s
+that way on production and 163 ms on the book alone (2026-10-29); 0.18 % of live book rows are not yet in Browse. A firm chip counts the active
+brokers whose primary firm it is: the brokers the board's firm filter selects.
+
+**Deleted**: the identity, broker and firm count rollups with their three copies of the 7-day rule; the property pass's
+mirror into `dirty_broker_listings` (the queue stays: attribution, names, contacts, primary firm, memberships); the
+SPA's ad counts (both `Inzeráty` tiles, each firm's ad count, the phone's per-type ad tally and its listings read, the
+inventory's `z N` ad total; a full inventory page reads `500+`). The firm label vote is one vote per idnes identity, no
+longer ad-weighted. Each read is bounded as the board's (READ ONLY, 8 s): `tenant_pool.read_conn` on the routes,
+`bound_read` in Outreach.
+
+**Numbers move** (ruling 4): property grain, published and served only, no 7-day rule, a co-listed property counted for
+each broker, and foreign properties counted (Browse serves the determined foreign; 396's CZ scope is gone, so an idnes
+syndication feed can head a name search, as it can the board). The firm label vote (one vote per idnes identity, no
+longer ad-weighted) changes 8 of 2,945 voted firm names on production (6 gain one, 2 differ; 27 lose a 60 % majority and
+keep their name).
+
+## W3b's drop list
+
+One migration, applied after W3a deploys and before W3b merges; nothing W3a deploys reads any of it:
+
+1. `drop view broker_geo_options`;
+2. `drop function broker_leaderboard(text[], boolean[], text[], bigint[], text, text, text, integer, bigint[], integer,
+   boolean, text[], boolean)` and `district_level_codes(text[], bigint[], boolean[], text, boolean)`;
+3. `brokers_public` dropped and re-created without its eight count columns and the matview join, `anon` and
+   `authenticated` revoked;
+4. `drop materialized view broker_region_type_stats` and delete its `derived_artifacts` row (the deployed refresh reads
+   the row first and refreshes nothing without it);
+5. `broker_firm_memberships_public` dropped and re-created without `listing_count`;
+6. `drop view firms_public`;
+7. the columns `brokers.{listing_count, property_count, active_listing_count, active_property_count}`,
+   `firms.{broker_count, listing_count, active_listing_count, stats_computed_at}`,
+   `broker_identities.{listing_count, active_listing_count}`, `broker_firm_memberships.listing_count`;
+8. 691's `property_broker_spell_projection` and `property_broker_spells`;
+9. a post-check that `anon` and `authenticated` read none of the re-created views.
+
+With it: the four `tests/test_broker_leaderboard_*.py`, `migrations.yml`'s leaderboard step, the broker index pin in
+`tests/test_matview_indexes.py`, the refresh (`scripts/resolve_brokers._maybe_refresh_matview`, the lane's
+`refreshed`), the A6 lists' entries (`test_migration_rls_grants.py`,
+`test_tenant_isolation_live.py`), the spells' `NOT_CARRIED` entry, and the docs naming them.
+
 ## W0 measurements (production, read-only, 2026-10-29)
 
 | measure | result | consequence |
@@ -95,9 +143,9 @@ cohort, and said on the tab: the account lenses and market growth are not applie
 | sreality `state_cb` Prodáno / Rezervováno on recent delistings | 266 of 22,881 (1.2 %) | too sparse to validate the exit proxy |
 | book size | ~725k (property, identity) pairs; Praha byt/prodej 32k over 14.7k properties | backfill in one statement |
 
-Still owed after 692's apply (its header is the deploy runbook): the board's cold and warm EXPLAIN over the stored
-book, the backfill's time, a daily auto-merge's extra dirty load, and the book against today's broker scope per
-broker × status × portal (expected: equal).
+After 692 (2026-10-29): the board took 277 ms for Praha byt/prodej, 865 ms national byt/prodej, 3.18 s national all
+categories; 18 of 608,988 rows drifted between the apply and the rollout, left to the 04:15 sweep (a dispatched sweep
+holds the maintenance lease for an hour). Still owed: a daily auto-merge's extra dirty load.
 
 ## Out of scope
 

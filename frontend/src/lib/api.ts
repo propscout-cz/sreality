@@ -3600,8 +3600,8 @@ export interface BrokerMergeBroker {
   primary_phone: string | null;
   source_count: number;
   distinct_source_count: number;
-  active_property_count: number;
-  property_count: number;
+  active_properties: number;
+  properties: number;
 }
 
 export interface BrokerMergeCandidate {

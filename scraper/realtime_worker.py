@@ -43,10 +43,10 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              one drain-until-empty broker pass via scripts.resolve_brokers.
              run_incremental_pass, the pass's only scheduled runtime. Attributes
              dirty listings to brokers, recomputes only the affected brokers'
-             rollups, and republishes the leaderboard matview when its
-             derived_artifacts stamp is older than ~an hour — so broker numbers
-             stop being a once-daily artifact of the full sweep (Broker Unify
-             W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
+             names, contacts, firm and memberships (their numbers are the broker
+             book's), and republishes the unread leaderboard matview when its
+             derived_artifacts stamp is older than ~an hour, until W3b drops it
+             (Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds`

@@ -150,23 +150,23 @@ def _mask(value: Any) -> Any:
 
 def firm_options(conn: Any, *, q: str | None = None, limit: int = 20) -> dict[str, Any]:
     """Companies matching `q` (name or domain), busiest first; an empty query
-    browses the top firms instead of returning nothing."""
+    browses the top firms instead of returning nothing. `broker_count` is the
+    active brokers whose primary firm it is: the brokers the board's firm filter
+    selects (api/broker_board.py)."""
     term = (q or "").strip()
     limit = max(1, min(int(limit), 100))
     like = f"%{_like_escape(term)}%"
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT firm_id, canonical_domain, display_name, is_franchise, broker_count "
-            "FROM firms_public "
+            "SELECT f.id AS firm_id, f.canonical_domain, f.display_name, f.is_franchise, "
+            "  count(b.id) AS broker_count "
+            "FROM firms f LEFT JOIN brokers b ON b.primary_firm_id = f.id AND b.status = 'active' "
             # display_name is NULL for every franchise domain and any domain
             # under the resolver's 60% modal-label share (migration 190's
             # _FIRM_DISPLAY_NAMES) — canonical_domain must match too, or
             # "mmreality" would find nothing.
-            "WHERE (%s = '' OR coalesce(display_name, '') ILIKE %s OR canonical_domain ILIKE %s) "
-            # broker_count, not a listing/property count: firms never got the
-            # migration 396 CZ-scope split, so ranking on inventory size would
-            # resurface the foreign-syndication distortion that migration fixed.
-            "ORDER BY broker_count DESC NULLS LAST, canonical_domain LIMIT %s",
+            "WHERE (%s = '' OR coalesce(f.display_name, '') ILIKE %s OR f.canonical_domain ILIKE %s) "
+            "GROUP BY f.id ORDER BY broker_count DESC, f.canonical_domain LIMIT %s",
             (term, like, like, limit))
         rows = cur.fetchall()
     return _envelope("broker_firm_options", rows, {"query": term, "limit": limit}, len(rows), None)
@@ -174,12 +174,8 @@ def firm_options(conn: Any, *, q: str | None = None, limit: int = 20) -> dict[st
 
 def search(conn: Any, query: str, *, limit: int = 12,
            include_pii: bool = False) -> dict[str, Any]:
-    """Brokers whose display name matches `query` (>=2 chars), busiest first.
-
-    Ranked on the CZ-scoped count (migration 396), like every other broker
-    ranking: two idnes syndication feeds carry ~26k foreign listings between them
-    and would otherwise head the results for any query they matched. Both counts
-    are returned, so the row still shows the broker's whole book.
+    """Brokers whose display name matches `query` (>=2 chars), busiest first: by
+    their live properties, the number every broker surface shows (BROKER_COUNTS_SQL).
 
     `include_pii` is the caller's identity, not a formatting flag: without it the
     ILIKE ran over the RAW display_name while the response redacted it, so a
@@ -192,9 +188,9 @@ def search(conn: Any, query: str, *, limit: int = 12,
         return _envelope("broker_search", [], {"query": term, "limit": limit}, 0, None)
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT * FROM brokers_public WHERE display_name ILIKE %s "
-            "ORDER BY cz_active_property_count DESC NULLS LAST LIMIT %s",
-            (f"%{_like_escape(term)}%", limit))
+            f"SELECT {_BROKER_SQL} WHERE p.display_name ILIKE %(like)s "
+            "ORDER BY n.active_properties DESC, p.broker_id LIMIT %(limit)s",
+            {"like": f"%{_like_escape(term)}%", "limit": limit})
         rows = cur.fetchall()
     if not include_pii:
         rows = [r for r in rows if _matches_masked(r.get("display_name"), term)]
@@ -205,36 +201,28 @@ def search(conn: Any, query: str, *, limit: int = 12,
 
 
 def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
-    """Full broker dossier: identity row + firm memberships + regional footprint +
-    every distinct contact. Returns None if the broker id is unknown / merged away."""
+    """Full broker dossier: identity row and its numbers + firm memberships +
+    regional and category footprint + every distinct contact. Returns None if the
+    broker id is unknown / merged away."""
+    params = {"broker_id": broker_id}
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT * FROM brokers_public WHERE broker_id = %s", (broker_id,))
+        cur.execute(f"SELECT {_BROKER_SQL} WHERE p.broker_id = %(broker_id)s", params)
         broker = cur.fetchone()
         if broker is None:
             return None
         cur.execute(
-            "SELECT * FROM broker_firm_memberships_public WHERE broker_id = %s "
-            "ORDER BY last_seen_at DESC NULLS LAST", (broker_id,))
+            "SELECT broker_id, firm_id, firm_domain, firm_name, first_seen_at, last_seen_at, is_current "
+            "FROM broker_firm_memberships_public WHERE broker_id = %(broker_id)s "
+            "ORDER BY last_seen_at DESC NULLS LAST", params)
         memberships = cur.fetchall()
-        # W4: the ('*','*') rollup cell per region IS the broker's regional
-        # total, computed exactly — never sum category cells (a property whose
-        # listings straddle cells would count twice).
-        cur.execute(
-            "SELECT s.geo_id, o.name, "
-            "  s.property_count, s.active_property_count, s.listing_count "
-            "FROM broker_region_type_stats s "
-            "LEFT JOIN broker_geo_options o ON o.geo_level='region' AND o.geo_id=s.geo_id "
-            "WHERE s.broker_id = %s AND s.geo_level='region' "
-            "  AND s.category_main = '*' AND s.category_type = '*' "
-            "ORDER BY s.active_property_count DESC", (broker_id,))
-        region_shares = cur.fetchall()
+        region_shares, categories = footprint(cur, broker_id)
         contacts = _contacts(cur, broker_id)
     for coll in (broker, *memberships):
         for k in ("first_seen_at", "last_seen_at"):
             if k in coll:
                 coll[k] = _iso(coll[k])
-    data = {"broker": broker, "memberships": memberships,
-            "region_shares": region_shares, "contacts": contacts}
+    data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
+            "categories": categories, "contacts": contacts}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
 
 
@@ -260,6 +248,39 @@ def book_rule_sql(alias: str) -> str:
     property side binds. The property's own status and every exclusion are the caller's."""
     return (f"portal_status_matches({alias}.is_active, {alias}.all_sources, {alias}.active_sources, "
             "%(portals)s::text[], %(status)s::text)")
+
+
+# A broker's own numbers are its book (operator ruling 4, docs/design/broker-board.md): the properties with an ad of
+# the broker, live while one of those ads runs (a live ad makes its property live). The board reads the same book
+# inside a Browse cohort.
+_COUNTS = "count(*) AS properties, count(*) FILTER (WHERE b.is_active) AS active_properties"
+# The counts as a LATERAL to a `p.broker_id`.
+BROKER_COUNTS_SQL = f"LATERAL (SELECT {_COUNTS} FROM broker_book b WHERE b.broker_id = p.broker_id) n"
+# A broker row and its numbers. Named, never `*`: brokers_public still carries counts nothing writes (W3b drops them).
+_BROKER_SQL = ("p.broker_id, p.display_name, p.primary_email, p.primary_phone, p.firm_id, p.firm_domain, p.firm_name, "
+               "p.firm_is_franchise, p.source_count, p.distinct_source_count, p.first_seen_at, p.last_seen_at, n.* "
+               f"FROM brokers_public p CROSS JOIN {BROKER_COUNTS_SQL}")
+# The numbers by region and by category, over the book's properties Browse serves (a property without a region,
+# foreign, or not yet published counts only in the totals).
+_FOOTPRINT_SQL = f"""
+    SELECT grouping(l.region_id) = 0 AS by_region, l.region_id AS geo_id, ab.name, l.category_main, l.category_type,
+           {_COUNTS}
+    FROM broker_book b JOIN browse_list l USING (property_id) LEFT JOIN admin_boundaries ab ON ab.id = l.region_id
+    WHERE b.broker_id = %(broker_id)s
+    GROUP BY GROUPING SETS ((l.region_id, ab.name), (l.category_main, l.category_type))
+    ORDER BY active_properties DESC, properties DESC, ab.name, l.category_main, l.category_type
+"""
+
+
+def footprint(cur: Any, broker_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The broker's numbers per region and per category and deal type, busiest first (a dict_row cursor)."""
+    cur.execute(_FOOTPRINT_SQL, {"broker_id": broker_id})
+    rows = cur.fetchall()
+    regions = [{k: r[k] for k in ("geo_id", "name", "properties", "active_properties")}
+               for r in rows if r["by_region"] and r["geo_id"] is not None]
+    categories = [{k: r[k] for k in ("category_main", "category_type", "properties", "active_properties")}
+                  for r in rows if not r["by_region"]]
+    return regions, categories
 
 
 # No listing_location join: browse_list serves a property only when its canonical ad is placed (rule 25), and that is

@@ -55,7 +55,7 @@ const answer = (meta: Partial<BoardMeta> = {}) => ({
 beforeEach(() => {
   vi.mocked(api.apiPost).mockResolvedValue(answer());
   vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
-    { broker_id: 42, display_name: 'Jana Kubíčková', firm_name: 'Domov 9', firm_domain: null, cz_active_property_count: 12 } as BrokerPublic,
+    { broker_id: 42, display_name: 'Jana Kubíčková', firm_name: 'Domov 9', firm_domain: null, active_properties: 12 } as BrokerPublic,
   ]);
 });
 

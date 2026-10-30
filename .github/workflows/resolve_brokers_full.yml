@@ -3,14 +3,12 @@ name: Broker resolution (full sweep + backfill)
 # Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill.
 # Re-attributes a rotating lap of broker-bearing listings from raw_json
 # (keyset-batched so the raw_json scan never times out over the pooler),
-# recomputes ALL broker rollups + memberships in ONE merged statement
-# (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27
-# full index walks and 100+ min), rebuilds firm rollups, runs the cross-source
-# merge step, generates candidates, and clears the dirty queue — the
-# self-healing backstop for anything the incremental drain missed. It no longer
-# publishes the leaderboard matview: that is the drain path's job
-# (hourly-if-stale, the realtime worker's broker lane), so serving freshness
-# stopped depending on this job's length or its GH-cron-drifted start time.
+# runs the cross-source merge step, recomputes ALL broker rollups + memberships
+# in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old
+# 9-window loop paid ~27 full index walks and 100+ min), relabels firms,
+# generates candidates, and clears the dirty queue — the self-healing backstop
+# for anything the incremental drain missed. It publishes no count: every broker
+# number is read from the broker book, which the property pass keeps.
 # Nominally runs after the property recompute (04:15); in practice GH throttling
 # drifts both into the same mid-morning window. mode=backfill is the same code
 # path (the first population); dispatch it once after this lands on main.

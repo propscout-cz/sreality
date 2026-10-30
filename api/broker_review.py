@@ -10,9 +10,9 @@ queue by `reason` rather than reading one mixed page.
 
 Merges are reversible: every re-pointed identity is logged to broker_merge_events
 (source='operator'), and unmerge replays it. Affected brokers' rollups are recomputed
-inline (reusing the resolver's rollup SQL); the leaderboard matview catches up on
-the next daily sweep, but a merged loser drops off the leaderboard immediately
-(brokers_public is active-only). Writes live here in api/, not toolkit (rule #5).
+inline (reusing the resolver's rollup SQL); their numbers are the broker book's, whose
+re-pointed properties the merge dirties (rule 20), and a merged loser leaves every
+broker read at once (brokers_public is active-only). Writes live here in api/, not toolkit (rule #5).
 
 Negative decisions are durable too (migration 401). Unmerging a group, and
 dismissing a contact-bridge candidate, write broker_merge_suppressions rows — the
@@ -29,11 +29,9 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
-from scripts.resolve_brokers import (
-    _IDENTITY_ROLLUP,
-    recompute_brokers,
-)
+from scripts.resolve_brokers import recompute_brokers
 from toolkit.broker_sources import dirty_repointed
+from toolkit.brokers import BROKER_COUNTS_SQL
 
 LOG = logging.getLogger("broker_review")
 
@@ -149,10 +147,10 @@ def list_candidates(conn: Any, *, status: str = "proposed", limit: int = 100,
         brokers: dict[int, dict[str, Any]] = {}
         if all_ids:
             cur.execute(
-                "SELECT broker_id, display_name, firm_name, firm_domain, primary_email, "
-                "  primary_phone, source_count, distinct_source_count, "
-                "  active_property_count, property_count "
-                "FROM brokers_public WHERE broker_id = ANY(%s)", (all_ids,))
+                "SELECT p.broker_id, p.display_name, p.firm_name, p.firm_domain, p.primary_email, "
+                "  p.primary_phone, p.source_count, p.distinct_source_count, n.* "
+                f"FROM brokers_public p CROSS JOIN {BROKER_COUNTS_SQL} WHERE p.broker_id = ANY(%(ids)s)",
+                {"ids": all_ids})
             brokers = {r["broker_id"]: r for r in cur.fetchall()}
     for r in rows:
         r["created_at"] = _iso(r["created_at"])
@@ -470,9 +468,6 @@ def _recompute_brokers(conn: Any, broker_ids: list[int]) -> None:
     if not bids:
         return
     with conn.cursor() as cur:
-        cur.execute(_IDENTITY_ROLLUP.format(
-            extra="AND broker_identity_id IN (SELECT id FROM broker_identities "
-                  "WHERE broker_id = ANY(%(bids)s))"), {"bids": bids})
         recompute_brokers(cur, bids)
 
 

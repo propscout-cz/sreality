@@ -434,33 +434,17 @@ _SAVE_SWEEP_CURSOR_SQL = """
 _DELETE_SWEEP_CURSOR_SQL = "DELETE FROM app_settings WHERE key = 'property_sweep_cursor'"
 
 
-# Every advert of these properties that a broker is attributed to, queued for the broker drain
-# (Broker Unify W3): `brokers.property_count` / `active_property_count` key on the advert's
-# property, so a recompute, a merge or a detach changes them. Stamped clock_timestamp(), not
-# now(): this runs inside the writer's (or the slice's) transaction, whose now() is its START.
-# A broker pass whose cutoff falls inside that transaction would otherwise read the pre-move
-# listings.property_id and then, once we commit, its `marked_at <= cutoff` dequeue would still
-# match our re-stamp and drop it — that broker's counts stale until the daily sweep. Statement
-# time narrows the window to the gap between this statement and the commit.
-_MIRROR_BROKER_DIRTY_SQL = (
-    "INSERT INTO dirty_broker_listings (listing_id, marked_at) "
-    "SELECT l.id, clock_timestamp() FROM listings l "
-    "WHERE l.property_id = ANY(%(ids)s) AND l.broker_identity_id IS NOT NULL "
-    "ON CONFLICT (listing_id) DO UPDATE SET marked_at = clock_timestamp()"
-)
-
-
 def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     """Make what is derived from these properties true now, inside the caller's transaction: the
-    rollup and the broker book (the sweep's own bodies, scoped), their Browse rows, and their
-    attributed adverts queued for the broker drain. THE after-step of the dirty drain, of both
+    rollup and the broker book (the sweep's own bodies, scoped) and their Browse rows. THE
+    after-step of the dirty drain, of both
     identity writers (`toolkit.property_identity`) and of every birth (`_attach_stragglers`, under
     `_bounded`); it opens no transaction, sets no ceiling and never enqueues
     `dirty_properties` (the drain calls it on ids it is about to dequeue).
 
     The order is load-bearing: `browse_projection` reads the recomputed `properties` row, and the
-    book and the broker mirror select adverts by their property AFTER the writer moved them (an
-    identity writer passes both sides, so the side an advert left loses its book row). The Browse
+    book selects adverts by their property AFTER the writer moved them (an identity writer
+    passes both sides, so the side an advert left loses its book row). The Browse
     patch is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
     without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
     rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
@@ -481,8 +465,6 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
         cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": ids})
         cur.execute(_BROKER_BOOK_SCOPED_SQL, {"ids": ids})
     sync_browse_list(conn, ids)
-    with conn.cursor() as cur:
-        cur.execute(_MIRROR_BROKER_DIRTY_SQL, {"ids": ids})
 
 
 @contextmanager
@@ -895,7 +877,7 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
     maintenance lane: attach new stragglers, then bring the dirty set current through
-    `properties_changed` (recompute, broker book, `browse_list` patch, broker queue), so a change reaches
+    `properties_changed` (recompute, broker book, `browse_list` patch), so a change reaches
     Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle
     the fresh properties the pipeline is done with (`_settle_fresh`).
     Serialized by the maintenance lease; a caller that
