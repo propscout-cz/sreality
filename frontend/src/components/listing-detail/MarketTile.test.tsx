@@ -97,7 +97,7 @@ describe('<MarketTile>', () => {
     fireEvent.click(within(screen.getByRole('group', { name: 'Vzorek' })).getByRole('button', { name: 'Vše' }));
     fireEvent.click(within(screen.getByRole('group', { name: 'Okruh' })).getByRole('button', { name: '1 km' }));
     await waitFor(() => expect(lastPivotFilters()).toMatchObject({
-      status: 'any', showDismissed: true, centerRadius: { radius_m: 1000 },
+      status: 'any', showDismissed: true, circle: { radius_m: 1000 },
     }));
     expect(JSON.parse(localStorage.getItem('sreality.marketTile') ?? '{}')).toEqual({ radiusM: 1000, market: 'all' });
   });

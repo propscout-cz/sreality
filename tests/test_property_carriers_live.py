@@ -5,9 +5,9 @@ count invariant over the carry record (`_merged`), and a detach routing every it
 came from (MS17); the receipt, the brake's routing along the undone merge's own carry rows and
 its dry run; then the live census — every foreign key to `properties` and every `%property_id%`
 column of the replayed schema is carried (`PROPERTY_CARRIERS`) or named (`NOT_CARRIED`); then the
-after-step (`properties_changed`: rollup, Browse row, broker queue) both writers run; then a set
-detach, which rules nothing. Runs in CI's migrations job with DB_RAILS_REQUIRED=1; every test
-rolls back."""
+after-step (`properties_changed`: rollup, broker book, Browse row) both writers run;
+then a set detach, which rules nothing. Runs in CI's migrations job with DB_RAILS_REQUIRED=1;
+every test rolls back."""
 
 from __future__ import annotations
 
@@ -860,12 +860,6 @@ def _derived(cur: Any, pid: int) -> tuple[int | None, bool, bool]:
     return count, bool(listed), bool(projected)
 
 
-def _queued(cur: Any, listing_id: int) -> bool:
-    cur.execute("SELECT EXISTS (SELECT 1 FROM dirty_broker_listings WHERE listing_id = %s)",
-                (listing_id,))
-    return bool(cur.fetchone()[0])
-
-
 def _located(cur: Any, *listing_ids: int) -> None:
     """A resolved point per advert: `browse_projection` serves only a located property (rule 25),
     so without one Browse holds neither side and every Browse assertion is vacuous."""
@@ -879,21 +873,16 @@ def _located(cur: Any, *listing_ids: int) -> None:
 
 def test_merge_and_detach_bring_derived_state_current(cur):
     """The rollup counts the moved advert (counts, not timestamps: now() is fixed inside the test
-    transaction), Browse lists the survivor and never the retired property, and the
-    broker-attributed advert is queued for the broker drain — after the merge, and again after
-    the detach, which lists both properties again with the target's rollup recomputed."""
+    transaction) and Browse lists the survivor and never the retired property — after the merge,
+    and again after the detach, which lists both properties again with the target's rollup
+    recomputed."""
     s, r, s_advert, advert = _pair(cur)
     _located(cur, s_advert, advert)
     for pid in (s, r):
         _recompute(cur, pid)
-    cur.execute("INSERT INTO broker_identities (source, source_broker_id_native, display_name) "
-                "VALUES ('idnes', %s, 'lp') RETURNING id", (f"lp-{uuid.uuid4()}",))
-    cur.execute("UPDATE listings SET broker_identity_id = %s WHERE id = %s",
-                (int(cur.fetchone()[0]), advert))
-    # R listed as the last rebuild left it, S not yet; nothing queued before the writer runs.
+    # R listed as the last rebuild left it, S not yet.
     cur.execute("INSERT INTO browse_list SELECT * FROM browse_projection WHERE property_id = %s",
                 (r,))
-    cur.execute("DELETE FROM dirty_broker_listings WHERE listing_id = %s", (advert,))
     _require(_derived(cur, s) == (1, False, True),
              f"S is not seeded as one projected, unlisted advert: {_derived(cur, s)}")
     _require(_derived(cur, r) == (1, True, True),
@@ -902,16 +891,13 @@ def test_merge_and_detach_bring_derived_state_current(cur):
     _merged(cur, s, r)
     assert _derived(cur, s) == (2, True, True), "the survivor's rollup or Browse row is stale"
     assert not _derived(cur, r)[1], "Browse still lists the merged-away property"
-    assert _queued(cur, advert), "the merge did not queue the attributed advert for brokers"
 
     # The merge's recompute skips R (no advert left), so R still holds its seeded 1: make it
     # stale (the column is NOT NULL), so a final 1 proves the detach recomputed its target.
     cur.execute("UPDATE properties SET source_count = 0 WHERE id = %s", (r,))
-    cur.execute("DELETE FROM dirty_broker_listings WHERE listing_id = %s", (advert,))
     _detached(cur, advert, r)
     for pid in (s, r):
         assert _derived(cur, pid) == (1, True, True), f"property {pid} not brought current"
-    assert _queued(cur, advert), "the detach did not queue the attributed advert for brokers"
 
 
 # --- the set detach: no ruling, one change ---------------------------------------------------

@@ -10,6 +10,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import dependencies as deps
 from api import main as api_main
 from api import outreach
+from api.broker_board import BOARD_MAX
 from api.routes import outreach as outreach_routes
 from tests.test_brokers_toolkit import _Conn
 
@@ -40,8 +41,7 @@ def test_create_campaign(client, monkeypatch):
                    "category_main": "byt"}})
     assert res.status_code == 200
     assert captured["name"] == "Praha byty"
-    assert captured["target"] == {"districts": [_PRAHA], "category_main": "byt",
-                                  "category_type": None, "metric": None}
+    assert captured["target"] == {"districts": [_PRAHA], "category_main": "byt", "category_type": None}
     assert res.json()["id"] == 1
 
 
@@ -50,8 +50,7 @@ def test_create_campaign_without_a_target_stores_the_national_shape(client, monk
     monkeypatch.setattr(outreach_routes.outreach, "create_campaign",
                         lambda conn, **kw: captured.update(kw) or {"id": 2})
     assert client.post("/outreach/campaigns", json={"name": "Celá ČR"}).status_code == 200
-    assert captured["target"] == {"districts": [], "category_main": None,
-                                  "category_type": None, "metric": None}
+    assert captured["target"] == {"districts": [], "category_main": None, "category_type": None}
 
 
 @pytest.mark.parametrize("target", [
@@ -59,7 +58,8 @@ def test_create_campaign_without_a_target_stores_the_national_shape(client, monk
     {"districts": [{"name": "Praha", "level": "locality", "id": 554782}]},
     {"districts": [{"name": "Praha", "level": "obec", "id": 0}]},
     {"region_ids": [27]},
-], ids=["no level or code", "not one of the five levels", "no code", "the deleted id lists"])
+    {"districts": [], "metric": "active_property_count"},
+], ids=["no level or code", "not one of the five levels", "no code", "the deleted id lists", "a count metric"])
 def test_a_campaign_target_refuses_a_chip_without_a_level_and_code(client, monkeypatch, target):
     """Migration 609: a target is chips or nothing — a stale client's `region_ids` would
     otherwise be dropped and the campaign silently aimed at the whole country."""
@@ -83,33 +83,49 @@ def test_update_campaign_replaces_the_target_only_when_sent(client, monkeypatch)
     assert captured[1]["target"]["districts"] == [_PRAHA]
 
 
-def test_select_targets_compiles_the_stored_chips_like_the_leaderboard() -> None:
-    """The stored chips reach the RPC as the four arrays `toolkit.brokers.leaderboard`
-    sends, ahead of the categories, the metric and the 2000 cap (the contract test pins
-    the 8-argument call)."""
-    conn = _Conn()
-    target = {"districts": [_PRAHA, {**_PRAHA, "name": "Žižkov", "level": "cast_obce",
-                                     "id": 490067, "excluded": True}],
-              "category_main": "byt", "category_type": "prodej", "metric": "listing_count"}
-    outreach.select_targets(conn, target, campaign_id=7, limit=30)
-    _, params = conn.cur.seen[0]
-    assert params == (["Praha", "Žižkov"], [False, True], ["obec", "cast_obce"],
-                      [554782, 490067], "byt", "prodej", "listing_count", 2000, 7, 7, 30)
+def _board(monkeypatch, found: list[dict]) -> list:
+    calls = []
+    monkeypatch.setattr(outreach, "board", lambda conn, args, *, contacts: calls.append((args, contacts))
+                        or {"data": found, "metadata": {}})
+    return calls
 
 
-def test_select_targets_without_chips_is_national() -> None:
-    conn = _Conn()
-    outreach.select_targets(conn, {"districts": []})
-    _, params = conn.cur.seen[0]
-    assert params == (None, None, None, None, None, None, "active_property_count", 2000,
-                      None, None, 25)
+@pytest.mark.parametrize("target, chips, category_main_in, category_type", [
+    ({"districts": [_PRAHA, {**_PRAHA, "name": "Žižkov", "level": "cast_obce", "id": 490067, "excluded": True}],
+      "category_main": "byt", "category_type": "prodej"},
+     [("obec", 554782, False), ("cast_obce", 490067, True)], ["byt"], "prodej"),
+    ({"districts": []}, [], None, None),
+], ids=["chips, category and deal type", "national"])
+def test_select_targets_reads_the_board_over_the_campaigns_live_cohort(
+        monkeypatch, target, chips, category_main_in, category_type) -> None:
+    """The board's top CANDIDATES by live properties, past the wire's cap: the exclusions come before the cut."""
+    calls = _board(monkeypatch, [])
+    outreach.select_targets(_Conn(), target, campaign_id=7, limit=30)
+    ((args, contacts),) = calls
+    assert contacts is True and args.limit == outreach.CANDIDATES > BOARD_MAX
+    assert [(c.level, c.id, c.excluded) for c in args.districts] == chips
+    assert (args.category_main_in, args.category_type, args.status, args.sort) == (
+        category_main_in, category_type, "active", "properties")
+
+
+def test_select_targets_keeps_reachable_unsuppressed_undrafted_brokers_in_the_boards_order(monkeypatch) -> None:
+    rows = [{"broker_id": b, "primary_email": e} for b, e in ((1, "a@rk.cz"), (2, None), (3, "c@rk.cz"),
+                                                               (4, "d@rk.cz"), (5, "e@rk.cz"))]
+    _board(monkeypatch, rows)
+    conn = _Conn([(3,)])  # suppressed or already drafted for this campaign
+    out = outreach.select_targets(conn, {"districts": []}, campaign_id=7, limit=2)
+    assert [r["broker_id"] for r in out] == [1, 4]
+    sql, params = conn.cur.seen[0]
+    assert "broker_outreach_suppression" in sql and "outreach_messages" in sql
+    assert params == {"ids": [1, 2, 3, 4, 5], "campaign": 7}
 
 
 @pytest.mark.parametrize("target", [
     {"region_ids": [108], "category_main": "byt"},
     {"districts": [{"name": "Praha", "level": "locality", "id": 554782}]},
     {"districts": [{"name": "Praha"}]},
-], ids=["the id lists", "not one of the five levels", "no level or code"])
+    {"districts": [], "metric": "listing_count"},
+], ids=["the id lists", "not one of the five levels", "no level or code", "a leaderboard metric"])
 def test_select_targets_refuses_a_stored_target_that_is_not_chips(target) -> None:
     """An old API image can write `region_ids` between 609's apply and the deploy. Read
     leniently, that campaign would target the whole country; it is refused instead."""

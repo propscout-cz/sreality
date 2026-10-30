@@ -293,6 +293,9 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
         "migration 464's frozen copy of tag_candidates: a backup, never read",
     ("browse_list", "property_id"):
         "a read model rebuilt wholesale (migration 276); the writers patch it per property",
+    ("broker_book", "property_id"):
+        "derived: the broker book (migration 692), recomputed from its view by properties_changed, "
+        "which every merge and detach runs over both sides",
     ("autodedup.clusters", "property_id"): _AUTODEDUP_HISTORY,
     ("autodedup.merges", "survivor_property_id"): _AUTODEDUP_HISTORY,
     ("autodedup.merges", "retired_property_id"): _AUTODEDUP_HISTORY,

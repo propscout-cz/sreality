@@ -4,25 +4,27 @@ Mounted under `/brokers/*` on real Supabase-Auth identity (`verify_jwt`), never
 `require_token`: that gate discards the claims `apply_pii_policy` needs for the admin
 unmask — and until 2026-10-13 it also admitted a static key inlined into the SPA
 bundle, so anyone holding the public bundle could pull 2000 brokers' unmasked email +
-phone off the leaderboard (D1/D2 of the 2026-08-12 broker E2E review). Any logged-in user now reads the broker graph with
+phone off the old leaderboard (D1/D2 of the 2026-08-12 broker E2E review). Any logged-in user now reads the broker graph with
 contact PII replaced by has_email / has_phone flags — `apply_pii_policy`, applied
 to every envelope so a widened view can't leak through an un-guarded route — and
 only an admin gets the values. The one exception is `POST /brokers/by-listings`, the
 property page's and board card's broker list: every signed-in caller gets the values
 there (operator ruling 2026-10-18). The dedicated contacts endpoint is `require_admin`.
 
-Thin HTTP layer over `toolkit.brokers`; every response is the standard envelope.
+Thin HTTP layer over `toolkit.brokers` and the broker board (`api.broker_board`); every response is the standard
+envelope.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from api import dependencies as deps
-from api.location_filter import DistrictChip, district_arrays
+from api import tenant_pool
+from api.broker_board import BoardArgs, board
 from toolkit import brokers
 from toolkit.filter_registry import PORTAL_OPTIONS
 
@@ -38,57 +40,22 @@ def _policy(envelope: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
     return brokers.apply_pii_policy(envelope, include_pii=deps.is_admin(claims))
 
 
-def _districts(
-    request: Request,
-    districts: list[str] = Query(default=[]),
-    districts_lvl: list[str] = Query(default=[]),
-    districts_id: list[int] = Query(default=[]),
-    districts_excl: list[bool] = Query(default=[]),
-) -> list[DistrictChip]:
-    """The location chips as four parallel repeated params, one entry per chip each."""
-    # A bundle from before 609 still sends the id lists; ignored, its "Praha" board would
-    # silently be the country's.
-    if {"region_ids", "okres_ids", "obec_ids"} & request.query_params.keys():
-        raise HTTPException(status_code=422, detail="region_ids / okres_ids / obec_ids are "
-                            "replaced by the districts chips; reload the page")
-    if not len(districts) == len(districts_lvl) == len(districts_id) == len(districts_excl):
-        raise HTTPException(status_code=422, detail=(
-            "districts, districts_lvl, districts_id and districts_excl need one entry per chip"))
-    try:
-        return [DistrictChip(name=n, level=lvl, id=code, excluded=excl) for n, lvl, code, excl
-                in zip(districts, districts_lvl, districts_id, districts_excl)]
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=[
-            {"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]) from exc
-
-
-@router.get("/leaderboard")
-def get_leaderboard(
-    districts: list[DistrictChip] = Depends(_districts),
-    category_main: str | None = None,
-    category_type: str | None = None,
-    metric: str = "active_property_count",
-    limit: int = Query(default=100, ge=1, le=2000),
-    firm_ids: list[int] = Query(default=[]),
-    min_price_czk: int | None = Query(default=None, ge=0),
-    include_unpriced: bool = Query(default=False),
-    subtypes: list[str] = Query(default=[]),
-    include_unknown_subtype: bool = Query(default=False),
+@router.post("/board")
+def post_board(
+    body: BoardArgs,
     conn: Any = Depends(deps.get_db_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
-    return _policy(brokers.leaderboard(
-        conn, districts=district_arrays(districts), category_main=category_main, category_type=category_type,
-        metric=metric, limit=limit, firm_ids=firm_ids,
-        min_price_czk=min_price_czk, include_unpriced=include_unpriced,
-        subtypes=subtypes, include_unknown_subtype=include_unknown_subtype), claims)
+    """Browse's Makléři tab: the cohort's brokers by volume and speed (operator ruling 2026-10-29: every signed-in
+    user); contacts as every other /brokers read shows them."""
+    return _policy(board(conn, body, contacts=True), claims)
 
 
 @router.get("/firm-options")
 def get_firm_options(
     q: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     return _policy(brokers.firm_options(conn, q=q, limit=limit), claims)
@@ -98,7 +65,7 @@ def get_firm_options(
 def get_search(
     q: str = Query(min_length=1),
     limit: int = Query(default=12, ge=1, le=100),
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     # The only read whose PREDICATE is caller-supplied, so the policy has to reach
@@ -106,15 +73,6 @@ def get_search(
     # the response redacted, i.e. a guess-confirming oracle over it.
     admin = deps.is_admin(claims)
     return _policy(brokers.search(conn, q, limit=limit, include_pii=admin), claims)
-
-
-@router.get("/geo-options")
-def get_geo_options(
-    geo_level: Literal["region", "okres"] | None = Query(default=None),
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.verify_jwt),
-) -> dict[str, Any]:
-    return _policy(brokers.geo_options(conn, geo_level=geo_level), claims)
 
 
 @router.post("/by-listings")
@@ -130,7 +88,7 @@ def post_listing_brokers(
 @router.get("/{broker_id}")
 def get_broker(
     broker_id: int,
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     result = brokers.get_broker(conn, broker_id)

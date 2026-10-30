@@ -18,8 +18,8 @@ import pytest
 from location_data.claims_common import SOURCES, served_location_predicate
 from scraper.db import QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRIORITY_NEW
 from scripts.checks import publishing as pub
-from scripts.checks.common import wilson_lower
 from tests.scripts.test_checks_platform import _Conn
+from toolkit.measures import wilson_lower
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 19, 6, 0, tzinfo=_UTC)

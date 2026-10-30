@@ -206,7 +206,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Advanced',
     keys: [
-      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'locationMode', 'centerRadius',
+      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'circle',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',

@@ -89,10 +89,11 @@ jobs:
     # Outer backstop only: the script clean-stops at --max-seconds (6000s =
     # 100 min, the clamp), so this fires only if the process wedges entirely.
     # Sized on the same "budget + one in-flight batch + prelude/finalize"
-    # relationship as the old 4200/75 pair: 100 min budget + 20 min for one
+    # relationship as the old 4200/75 pair: 100 min budget + 24 min for one
     # in-flight batch (the clean-stop only checks at a batch BOUNDARY; a batch
-    # runs under the 10-min _BATCH_STATEMENT_TIMEOUT and now gets
-    # _BATCH_RESILIENT_ATTEMPTS=2 tries at it) + ~10 min prelude/finalize/release.
+    # runs the rollup under the 10-min _BATCH_STATEMENT_TIMEOUT and the broker
+    # book under the 2-min _BOOK_STATEMENT_TIMEOUT, and gets
+    # _BATCH_RESILIENT_ATTEMPTS=2 tries at it) + ~6 min prelude/finalize/release.
     timeout-minutes: 130
     permissions:
       contents: read

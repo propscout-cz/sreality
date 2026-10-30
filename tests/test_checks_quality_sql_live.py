@@ -52,11 +52,11 @@ from scraper import field_census
 from scripts.checks import publishing as pub
 from scripts.checks import quality as q
 from scripts.checks.clock import fetchall
-from scripts.checks.common import NEW_AD_H, iso, wilson_lower
+from scripts.checks.common import NEW_AD_H, iso
 from scripts.verify_pipeline import THRESHOLDS
 from tests.location_data import claim_intake_fixtures as fx
 from toolkit import description_extraction as text_lane
-from toolkit.measures import unit_label
+from toolkit.measures import unit_label, wilson_lower
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"

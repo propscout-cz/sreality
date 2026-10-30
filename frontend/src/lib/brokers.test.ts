@@ -91,134 +91,12 @@ describe('auth mode', () => {
   it('sends the session JWT on every repointed read', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const b = await loadBrokers();
-    await b.fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: null,
-      categoryType: null,
-      metric: 'active_property_count',
-    });
     await b.searchBrokersByName('novak');
     await b.searchBrokerFirms('mmreality');
     await b.fetchListingBrokersByIds([1]);
     await b.fetchBrokerListings(7);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(4);
     for (const c of calls) expect(authHeader(c)).toBe('Bearer USER-JWT');
-  });
-});
-
-describe('fetchBrokerLeaderboard', () => {
-  /* One entry per chip in each of the four parallel params, in chip order — the
-   * route zips them back into chips; the context is display-only and stays home. */
-  it('sends the chips as four parallel repeated params', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [
-        { name: 'Kraj Vysočina', context: null, level: 'kraj', id: 108 },
-        { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
-        { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067, excluded: true },
-      ],
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      metric: 'listing_count',
-      limit: 50,
-      firmIds: [8, 41],
-    });
-    const url = new URL(calls[0].url);
-    expect(url.pathname).toBe('/brokers/leaderboard');
-    expect(url.searchParams.getAll('districts')).toEqual(['Kraj Vysočina', 'Na Rybníčkách', 'Žižkov']);
-    expect(url.searchParams.getAll('districts_lvl')).toEqual(['kraj', 'ulice', 'cast_obce']);
-    expect(url.searchParams.getAll('districts_id')).toEqual(['108', '666742', '490067']);
-    expect(url.searchParams.getAll('districts_excl')).toEqual(['false', 'false', 'true']);
-    expect(url.searchParams.has('districts_ctx')).toBe(false);
-    expect(url.searchParams.get('metric')).toBe('listing_count');
-    expect(url.searchParams.get('limit')).toBe('50');
-    expect(url.searchParams.getAll('firm_ids')).toEqual(['8', '41']);
-  });
-
-  it('omits the chip params and firm_ids when neither is set — no chips is the whole country', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: null, categoryType: null, metric: 'listing_count',
-    });
-    const params = new URL(calls[0].url).searchParams;
-    for (const k of ['districts', 'districts_lvl', 'districts_id', 'districts_excl', 'firm_ids']) {
-      expect(params.has(k)).toBe(false);
-    }
-  });
-
-  it('sends min_price_czk and include_unpriced when a value filter is set', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: 'byt', categoryType: 'prodej', metric: 'active_property_count',
-      minPriceCzk: 5_000_000, includeUnpriced: true,
-    });
-    const url = new URL(calls[0].url);
-    expect(url.searchParams.get('min_price_czk')).toBe('5000000');
-    expect(url.searchParams.get('include_unpriced')).toBe('true');
-  });
-
-  it('sends each selected subtype as a repeated param, with the unknown-subtype flag', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: 'komercni', categoryType: null, metric: 'active_property_count',
-      subtypes: ['kancelar', 'sklad'], includeUnknownSubtype: true,
-    });
-    const url = new URL(calls[0].url);
-    expect(url.searchParams.getAll('subtypes')).toEqual(['kancelar', 'sklad']);
-    expect(url.searchParams.get('include_unknown_subtype')).toBe('true');
-  });
-
-  it('omits subtypes entirely when none are selected', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: null, categoryType: null, metric: 'listing_count',
-    });
-    const url = new URL(calls[0].url);
-    expect(url.searchParams.getAll('subtypes')).toEqual([]);
-    expect(url.searchParams.get('include_unknown_subtype')).toBe('false');
-  });
-
-  // null/undefined must be OMITTED, not sent as the literal string "null" — the
-  // API route's `int | None` default only applies when the param is absent.
-  it('omits min_price_czk when unset and defaults include_unpriced to false', async () => {
-    const calls = stubFetch(() => ({ body: { data: [] } }));
-    const { fetchBrokerLeaderboard } = await loadBrokers();
-    await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: null, categoryType: null, metric: 'listing_count',
-    });
-    const url = new URL(calls[0].url);
-    expect(url.searchParams.has('min_price_czk')).toBe(false);
-    expect(url.searchParams.get('include_unpriced')).toBe('false');
-  });
-
-  it('keeps the masked flags on the returned rows', async () => {
-    stubFetch(() => ({
-      body: {
-        data: [{ broker_id: 1, display_name: 'A', has_email: true, has_phone: false }],
-        metadata: { pii_masked: true },
-      },
-    }));
-    const { fetchBrokerLeaderboard, contactState } = await loadBrokers();
-    const rows = await fetchBrokerLeaderboard({
-      districts: [],
-      categoryMain: null, categoryType: null, metric: 'listing_count',
-    });
-    expect(contactState(rows[0].primary_email, rows[0].has_email)).toEqual({
-      state: 'masked',
-    });
-    expect(contactState(rows[0].primary_phone, rows[0].has_phone)).toEqual({
-      state: 'none',
-    });
   });
 });
 
@@ -404,7 +282,7 @@ describe('fetchBrokerDossier', () => {
     data: {
       broker: { broker_id: 7, display_name: 'Jan' },
       memberships: [],
-      region_shares: [{ geo_id: 19, name: 'Praha', active_property_count: 4 }],
+      region_shares: [{ geo_id: 19, name: 'Praha', properties: 4, active_properties: 4 }],
       ...extra,
     },
     ...(metadata === undefined ? {} : { metadata }),

@@ -111,7 +111,6 @@ describe('<Outreach> the campaign target', () => {
             districts: [STREET],
             category_main: 'byt',
             category_type: 'prodej',
-            metric: 'active_property_count',
           },
         }),
       ),

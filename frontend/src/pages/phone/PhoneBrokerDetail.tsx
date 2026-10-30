@@ -4,10 +4,9 @@
  * desktop surface and is never opened here), the firms, and their live ads as
  * the feed's own cards.
  *
- * Reads are the desktop page's: `fetchBrokerDossier` (identity, firms, region
- * footprint; contacts masked server-side for a non-admin, rendered with the
- * desktop card's exact words) and `fetchBrokerListings` (the per-type counts),
- * both under the desktop's query keys. The cards are Browse's read scoped to the
+ * Reads are the desktop page's: `fetchBrokerDossier` (identity, firms, the region
+ * and category footprint; contacts masked server-side for a non-admin, rendered
+ * with the desktop card's exact words), under the desktop's query key. The cards are Browse's read scoped to the
  * broker (`brokerId`, the MS19 allowlist behind the desktop "explore" view),
  * live ads only — one cohort definition for both shells. */
 
@@ -23,9 +22,8 @@ import { browseKeys } from '@/lib/browseKeys';
 import {
   contactState,
   fetchBrokerDossier,
-  fetchBrokerListings,
   prettyPhone,
-  type BrokerListing,
+  type BrokerCategoryShare,
   type BrokerMembership,
   type BrokerPublic,
   type BrokerRegionShare,
@@ -35,7 +33,7 @@ import { categoryMainLabelPlural, categoryTypeLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS, dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { COPY_WORDS, copyText } from '@/lib/clipboard';
-import { czPlural, fmtCount } from '@/lib/format';
+import { fmtCount } from '@/lib/format';
 import type { KeysetCursor } from '@/lib/keyset';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalsWord } from '@/components/phone/FeedCard';
@@ -52,27 +50,6 @@ export function brokerCardFilters(brokerId: number): ListingFilters {
   return { ...FEED_ALL_FILTERS, brokerId };
 }
 
-/* Active ads per category × offer, largest first: "Byty · prodej  23". */
-export function typeCounts(rows: ReadonlyArray<BrokerListing>): Array<{ key: string; label: string; count: number }> {
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const l of rows) {
-    if (!l.is_active) continue;
-    const key = `${l.category_main ?? ''}|${l.category_type ?? ''}`;
-    const label = [
-      l.category_main ? categoryMainLabelPlural(l.category_main) : 'Ostatní',
-      l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    const hit = counts.get(key);
-    if (hit) hit.count += 1;
-    else counts.set(key, { label, count: 1 });
-  }
-  return [...counts]
-    .map(([key, v]) => ({ key, ...v }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'cs'));
-}
-
 export default function PhoneBrokerDetail() {
   const { id } = useParams<{ id: string }>();
   const brokerId = Number(id);
@@ -82,11 +59,6 @@ export default function PhoneBrokerDetail() {
   const dossierQ = useQuery({
     queryKey: ['broker-dossier', brokerId],
     queryFn: () => fetchBrokerDossier(brokerId),
-    enabled: valid,
-  });
-  const listingsQ = useQuery({
-    queryKey: ['broker-listings', brokerId],
-    queryFn: () => fetchBrokerListings(brokerId),
     enabled: valid,
   });
   const dossier = dossierQ.data;
@@ -137,12 +109,7 @@ export default function PhoneBrokerDetail() {
       <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
         <Panel title="Působnost">
           <Footprint shares={dossier.region_shares} />
-          <Types
-            rows={listingsQ.data ?? null}
-            loading={listingsQ.isPending}
-            error={listingsQ.isError ? (listingsQ.error as Error) : null}
-            total={b.listing_count}
-          />
+          <Types rows={dossier.categories} />
         </Panel>
         <Panel title="Firmy" count={dossier.memberships.length}>
           <Firms rows={dossier.memberships} />
@@ -250,8 +217,7 @@ function EmailLine({ state }: { state: ContactState }) {
 /* The prototype's facts grid: label left, mono figure right, two columns. */
 function Facts({ b }: { b: BrokerPublic }) {
   const facts: Array<{ label: string; value: ReactNode }> = [
-    { label: 'Nemovitosti', value: <Pair active={b.active_property_count} total={b.property_count} /> },
-    { label: 'Inzeráty', value: <Pair active={b.active_listing_count} total={b.listing_count} /> },
+    { label: 'Nemovitosti', value: <Pair active={b.active_properties} total={b.properties} /> },
     { label: 'Portály', value: fmtCount(b.distinct_source_count) },
     {
       label: 'Naposledy',
@@ -286,7 +252,7 @@ function Pair({ active, total }: { active: number; total: number }) {
 }
 
 /* One numbers list: name left, figure right, hairlines between. */
-function NumberRows({ rows }: { rows: Array<{ key: string | number; label: string; value: ReactNode; extra?: ReactNode }> }) {
+function NumberRows({ rows }: { rows: Array<{ key: string | number; label: string; value?: ReactNode; extra?: ReactNode }> }) {
   return (
     <ul>
       {rows.map((r, i) => (
@@ -314,20 +280,19 @@ function SubHead({ label, aside }: { label: string; aside?: string }) {
   );
 }
 
-/* The regional footprint as numbers (Q12: no map). */
+/* The regional footprint as numbers (Q12: no map), busiest first as served. */
 function Footprint({ shares }: { shares: BrokerRegionShare[] }) {
-  const sorted = [...shares].sort((a, b) => b.active_property_count - a.active_property_count);
   return (
     <div>
       <SubHead label="Kraje" aside="aktivní / celkem nemovitostí" />
-      {sorted.length === 0 ? (
+      {shares.length === 0 ? (
         <p className="text-[13px] text-[var(--color-ink-4)]">Bez aktivního regionu.</p>
       ) : (
         <NumberRows
-          rows={sorted.map((s) => ({
+          rows={shares.map((s) => ({
             key: s.geo_id,
             label: s.name ?? '—',
-            value: <Pair active={s.active_property_count} total={s.property_count} />,
+            value: <Pair active={s.active_properties} total={s.properties} />,
           }))}
         />
       )}
@@ -335,35 +300,26 @@ function Footprint({ shares }: { shares: BrokerRegionShare[] }) {
   );
 }
 
-function Types({
-  rows,
-  loading,
-  error,
-  total,
-}: {
-  rows: BrokerListing[] | null;
-  loading: boolean;
-  error: Error | null;
-  total: number;
-}) {
-  const counts = useMemo(() => typeCounts(rows ?? []), [rows]);
-  /* The listings route caps its page; say so rather than pass a partial count
-   * off as the whole book. */
-  const partial = rows != null && rows.length < total;
+/* Per category × offer, busiest first as served: "Byty · prodej  23 / 30". */
+function Types({ rows }: { rows: BrokerCategoryShare[] }) {
   return (
     <div className="mt-4">
-      <SubHead
-        label="Typy"
-        aside={partial ? `aktivní inzeráty · načteno ${fmtCount(rows.length)} z ${fmtCount(total)}` : 'aktivní inzeráty'}
-      />
-      {loading ? (
-        <p className="text-[13px] text-[var(--color-ink-3)]">Načítám…</p>
-      ) : error ? (
-        <p className="text-[13px] text-[var(--color-brick)]">Inzeráty se nepodařilo načíst: {error.message}</p>
-      ) : counts.length === 0 ? (
-        <p className="text-[13px] text-[var(--color-ink-4)]">Žádný aktivní inzerát.</p>
+      <SubHead label="Typy" aside="aktivní / celkem nemovitostí" />
+      {rows.length === 0 ? (
+        <p className="text-[13px] text-[var(--color-ink-4)]">Žádná nemovitost.</p>
       ) : (
-        <NumberRows rows={counts.map((c) => ({ key: c.key, label: c.label, value: fmtCount(c.count) }))} />
+        <NumberRows
+          rows={rows.map((c) => ({
+            key: `${c.category_main ?? ''}|${c.category_type ?? ''}`,
+            label: [
+              c.category_main ? categoryMainLabelPlural(c.category_main) : 'Ostatní',
+              c.category_type ? categoryTypeLabel(c.category_type).toLowerCase() : null,
+            ]
+              .filter(Boolean)
+              .join(' · '),
+            value: <Pair active={c.active_properties} total={c.properties} />,
+          }))}
+        />
       )}
     </div>
   );
@@ -383,14 +339,6 @@ function Firms({ rows }: { rows: BrokerMembership[] }) {
             aktuální
           </span>
         ) : undefined,
-        value: (
-          <>
-            {fmtCount(m.listing_count)}{' '}
-            <span className="font-sans text-[var(--color-ink-3)]">
-              {czPlural(m.listing_count, 'inzerát', 'inzeráty', 'inzerátů')}
-            </span>
-          </>
-        ),
       }))}
     />
   );

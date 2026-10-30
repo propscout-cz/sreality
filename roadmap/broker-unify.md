@@ -19,6 +19,25 @@ the 9-window rollup walks the full corpus index ~27×). Underneath: migration 50
 txn" comments, non-additive summed distinct counts (556 brokers inflated), a kraj+okres
 double count enshrined by a test, and two disagreeing CZ-count books (19/100 top brokers).
 
+## Broker board (2026-10-29)
+
+The Browse cohort counted by broker: one filter definition, one property × broker book kept by rule 20's pass, one
+attribution rule (MS19), one speed measure; the leaderboard and its count book are deleted. Rulings, definitions,
+waves and W0's measurements: `docs/design/broker-board.md`.
+
+- **W1 — the dark broker book** (#2181, merged 2026-10-29): migration 691, the measure, the book in the property pass,
+  the attribution link dirtying its property, census rails.
+- **W2 — the readers** (#2182, merged 2026-10-29): 692, the `Makléři` tab, `rank_brokers`,
+  Browse's broker scope and Outreach on the book; the leaderboard's routes and toolkit deleted.
+- **W3a — one broker vocabulary** (#2183, merged 2026-10-30): search, the dossier,
+  the merge review and Outreach's facts read the book (`BROKER_COUNTS_SQL`), a firm chip counts the brokers its filter
+  selects; the count rollups, the 7-day rule, the broker mirror and the `Inzeráty` ad counts deleted; no migration.
+- **W3b — the old count book dropped** (prepared, `cleanup/broker-count-book-drop`): migration 693
+  drops the count book with its registry row, the views and functions over it, the frozen count columns and 691's
+  spells; the refresh, the leaderboard tests and the A6 entries go with it. Destructive: W3a is live on Railway
+  (2026-10-30), so it waits only on the operator's OK and the backup (`docs/design/broker-board.md`, W3b as prepared),
+  then merge.
+
 ## Done
 
 - **W0 — stop the bleed** (PR #1656, merged 2026-09-30): the sweep's refresh is

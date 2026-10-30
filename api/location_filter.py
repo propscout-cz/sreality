@@ -3,17 +3,15 @@
 Every surface that lets the operator narrow by place — Browse's list
 (`districtsFilterClause`), Browse's Stats and map (`browse_stats_properties` /
 `browse_map_cells`), the pipeline board's in-memory predicate, the Watchdog
-matcher and the broker leaderboard (`broker_leaderboard`, migration 609: Brokers
-and Outreach) — tests a chip the same way:
+matcher and the broker board (Browse's own cohort) — tests a chip the same way:
 
     <level>_id = any(<codes at that level>)
 
 plain equality, per level, nothing else, over FIVE code columns: `region_id`,
 `okres_id`, `obec_id`, `cast_obce_id` (migration 503) and `ulice_id`, the RÚIAN
-street code (584) — or, in the leaderboard, which reads `listing_location`
-directly, its `kraj_kod` … `ulice_kod`. `listing_location` answers every listing
-with those codes, and `admin_boundaries.id` IS the RÚIAN code (migrations
-083/141), so a chip and a listing come from one register.
+street code (584). `listing_location` answers every listing with those codes,
+and `admin_boundaries.id` IS the RÚIAN code (migrations 083/141), so a chip and a
+listing come from one register.
 
 WHAT YOU PICK IS WHAT YOU FILTER. A chip is exactly one unit at the level the
 operator picked; a street chip filters at its street, never its town. A chip
@@ -22,12 +20,12 @@ write), the typeahead never makes one, and migration 606 deleted the last stored
 rows that held one. Nothing re-reads a chip by name — a name can mean several
 units ("Jihlava" is an obec AND an okres), so a re-guess could only widen.
 
-THE MAP BOX is the other spatial shape, and the only one (rule 16): `MapBounds` is
-Browse's `MapBounds` (`lib/filters.ts`), the box Browse filters on — its viewport, or
-the square around a centre+radius pick (`effectiveBbox`) — and `bounds_where` renders
-it as the lat/lng band Browse's list (`queries.ts applyFilters`) and both stats RPCs
-(`bbox_west` … `bbox_north`) apply, so a watchdog saved from Browse watches the rows
-Browse showed. A row with no point falls out of the band, as it does there.
+THE MAP AREA is the other spatial shape (rule 16): a box (`MapBounds`, Browse's
+viewport) or a circle (`MapCircle`, Browse's centre + radius), never both. `area_where`
+renders either as one call of `public.in_map_area` (migration 694), the predicate
+Browse's list source and both stats RPCs test, so a watchdog saved from Browse watches
+the rows Browse showed. The circle is true (metres on the WGS84 spheroid), not the
+square around it. A row with no point falls out of either, as it does there.
 """
 
 from __future__ import annotations
@@ -37,6 +35,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
+
+from toolkit.filter_registry import REGISTRY
 
 ChipLevel = Literal["kraj", "okres", "obec", "cast_obce", "ulice"]
 
@@ -76,6 +76,25 @@ class MapBounds(BaseModel):
         return self
 
 
+# Browse's radius domain is the registry's (`radius_m`): one definition for the slider and every reader.
+_RADIUS = REGISTRY["radius_m"].constraints or {}
+
+
+class MapCircle(BaseModel):
+    """The map circle: a centre in WGS84 degrees and a radius in metres (Browse's centre + radius)."""
+
+    lat: float = Field(ge=-90, le=90, description="The centre's latitude (WGS84).")
+    lng: float = Field(ge=-180, le=180, description="The centre's longitude (WGS84).")
+    radius_m: float = Field(ge=_RADIUS["min"], le=_RADIUS["max"],
+                            description="The radius in metres, measured on the WGS84 spheroid.")
+
+
+def one_area(bounds: MapBounds | None, circle: MapCircle | None) -> None:
+    """A map area is a box or a circle, never both (Browse's one spatial value)."""
+    if bounds is not None and circle is not None:
+        raise ValueError("a map area is a box (bounds) or a circle, never both")
+
+
 @dataclass(frozen=True)
 class DistrictCodePlan:
     """Codes per level, include and exclude — what the SPA's `districtCodePlan` returns too."""
@@ -91,18 +110,6 @@ def district_code_plan(chips: Sequence[DistrictChip] | None) -> DistrictCodePlan
         if chip.id not in codes:
             codes.append(chip.id)
     return plan
-
-
-def district_arrays(
-    chips: Sequence[DistrictChip] | None,
-) -> tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]:
-    """The four parallel chip arguments of a chip-taking RPC — names (which drive
-    its unnest), excluded flags, levels, codes — one entry per chip, all NULL for
-    none: what the SPA's `buildBrowseStatsArgs` sends Browse's two RPCs."""
-    if not chips:
-        return None, None, None, None
-    return ([c.name for c in chips], [c.excluded for c in chips],
-            [c.level for c in chips], [c.id for c in chips])
 
 
 def _arms(plan_side: dict[str, list[int]], alias: str, prefix: str,
@@ -150,19 +157,20 @@ def district_where(
     return where, params
 
 
-def bounds_where(bounds: MapBounds | None, alias: str) -> tuple[list[str], dict[str, Any]]:
-    """Render the map box as the lat/lng band Browse applies; `alias` must expose `lat` + `lng`."""
-    if bounds is None:
+def area_where(
+    bounds: MapBounds | None, circle: MapCircle | None, alias: str,
+) -> tuple[list[str], dict[str, Any]]:
+    """Render the map area as the one `in_map_area` call (migration 694); `alias` must expose `lat` + `lng`."""
+    if bounds is None and circle is None:
         return [], {}
     if not alias:
-        raise ValueError("bounds_where requires an alias")
-    return (
-        [
-            f"{alias}.lng >= %(bbox_west)s", f"{alias}.lng <= %(bbox_east)s",
-            f"{alias}.lat >= %(bbox_south)s", f"{alias}.lat <= %(bbox_north)s",
-        ],
-        {
-            "bbox_west": bounds.west, "bbox_east": bounds.east,
-            "bbox_south": bounds.south, "bbox_north": bounds.north,
-        },
-    )
+        raise ValueError("area_where requires an alias")
+    one_area(bounds, circle)
+    box = (bounds.west, bounds.south, bounds.east, bounds.north) if bounds else (None,) * 4
+    disc = (circle.lat, circle.lng, circle.radius_m) if circle else (None,) * 3
+    params: dict[str, Any] = dict(zip(
+        ("bbox_west", "bbox_south", "bbox_east", "bbox_north", "circle_lat", "circle_lng", "circle_radius_m"),
+        (*box, *disc), strict=True,
+    ))
+    args = ", ".join(f"%({k})s::float8" for k in params)
+    return [f"public.in_map_area({alias}.lat, {alias}.lng, {args})"], params

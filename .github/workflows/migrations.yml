@@ -307,30 +307,9 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_admin_gate_policies_live.py -q
 
-      # W4 pushes the leaderboard's LIMIT under the display join, so between 87% and 99.2%
-      # of rows stop being joined and decorated only to be discarded. Two properties need a
-      # real database: that `firms` is not scanned below the Limit node (the statement
-      # returns identical rows either way — only the plan differs), and that the activity
-      # semi-join sits INSIDE the ranking CTE, because leaving it above the LIMIT lets a
-      # merged_away broker eat a top-N slot and silently under-fill the page.
-      #
-      # The behavioural rail parks the matview and substitutes a real table — you cannot
-      # INSERT into a materialized view, and CI's replayed copy is empty. The chip-parity
-      # rail (609) runs the live branch's chip predicate over the shared chip table.
-      - name: Broker leaderboard ranks before it hydrates (migration 435)
-        env:
-          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-          DB_RAILS_REQUIRED: "1"
-        run: |
-          pytest tests/test_broker_leaderboard_plan_shape.py \
-                 tests/test_broker_leaderboard_live.py \
-                 tests/test_broker_leaderboard_chip_parity.py -q
-
-      # The leaderboard's fast arm is an index-only scan on broker_region_type_stats' covering index,
-      # which migration 508's DROP+CREATE silently lost (56 ms became 3-5 s, nothing went red). The
-      # same catalog read holds migration 578's precondition: REFRESH ... CONCURRENTLY needs one
+      # Migration 578's precondition, read off the catalog: REFRESH ... CONCURRENTLY needs one
       # unique index with no predicate and no expression on every matview.
-      - name: Every matview refreshes concurrently and the broker matview keeps its indexes (migration 578)
+      - name: Every matview refreshes concurrently (migration 578)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
@@ -360,6 +339,16 @@ jobs:
         run: |
           pytest tests/test_browse_map_cells_plan.py \
                  tests/test_browse_map_cells_live.py -q
+
+      # The map area is ONE predicate (migration 694): in_map_area answers a TRUE circle, half a metre
+      # in and out in every direction at three radii and two latitudes against PostGIS's own
+      # ST_Project, keeps the readers' per-edge box, drops a row without a point from any area, and
+      # browse_list_visible and browse_map_cells answer the same circle (the old square's corners out).
+      - name: The map area is a true circle (migration 694)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_in_map_area_live.py -q
 
       # The /costs rollups are only indexable because their bucket expressions name a
       # zone explicitly — a bare `called_at::date` is STABLE, and Postgres refuses to
@@ -754,6 +743,22 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
+      # The broker book (migration 692): one row per (property, canonical broker), kept by the
+      # property maintenance pass on every path that changes one -- a delist, a revival, a merge and
+      # its detach, a re-attribution, and every broker re-point (operator merge and unmerge, the
+      # resolver's auto-merge and singleton attach) through the dirty drain -- and rewriting nothing
+      # when nothing changed. Only the real schema computes the view's aggregate and the upsert's
+      # conflict arm. The re-point's dirty step on two connections: it takes turns with an open
+      # birth or property merge moving one of the identity's ads, whichever writes first.
+      # The board that reads it (api/broker_board.py): Browse's cohort counted by broker under the
+      # portal rule on both sides, every speed arm, the refusals and the read's bound.
+      - name: The broker book follows every write and the board counts it (migration 692)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_broker_book_live.py tests/test_broker_book_repoint_lock_live.py tests/test_broker_board_live.py -q
+
       # W4's whole claim is that FIVE relations publish ONE number. Nothing else
       # in CI can see that: the fake connections cannot evaluate SQL, and PREPARE
       # type-checks a statement without ever computing a value -- so a view left
@@ -774,7 +779,9 @@ jobs:
 
       # Time on market is ONE measure (migration 617): the function answers its documented
       # cases, listings_public and the Python emitter return what it returns, and it still
-      # INLINES (a `SET` clause would turn every TOM predicate into a per-row call).
+      # INLINES (a `SET` clause would turn every TOM predicate into a per-row call). The
+      # speed measure beside it (measure_exit_within, migration 691) answers its case table
+      # and inlines the same way.
       - name: One time-on-market definition (migration 617)
         timeout-minutes: 5
         env:

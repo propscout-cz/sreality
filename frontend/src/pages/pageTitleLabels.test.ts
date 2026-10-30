@@ -27,7 +27,6 @@ const LABEL_ABOVE_H1 = /<(p|div|span)\s+className="[^"]*\buppercase\b[^"]*"[^>]*
 const OWNED_ELSEWHERE = [
   'components/BrowseExperience.tsx',
   'pages/BrokerReview.tsx',
-  'pages/Brokers.tsx',
   'pages/CollectionDetail.tsx',
   'pages/Collections.tsx',
   'pages/Notifications.tsx',

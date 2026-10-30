@@ -522,7 +522,7 @@ def test_measures_watch_and_the_strict_lines(check: Any) -> None:
                                       measure_input_gap_share_7d=0.30))[
             "idnes/measures/byt-prodej"]["status"]
 
-    lower = common.wilson_lower(300, 1_000)
+    lower = measures.wilson_lower(300, 1_000)
     assert status(lower - 0.10 + 1e-6) == "ok"
     assert status(lower - 0.10 - 1e-6) == "warn"
     assert status(lower - 0.25 + 1e-6) == "warn"

@@ -43,10 +43,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              one drain-until-empty broker pass via scripts.resolve_brokers.
              run_incremental_pass, the pass's only scheduled runtime. Attributes
              dirty listings to brokers, recomputes only the affected brokers'
-             rollups, and republishes the leaderboard matview when its
-             derived_artifacts stamp is older than ~an hour — so broker numbers
-             stop being a once-daily artifact of the full sweep (Broker Unify
-             W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
+             names, contacts, firm and memberships (their numbers are the broker
+             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds`
@@ -1371,8 +1369,7 @@ def _broker_maintenance_sync() -> dict[str, Any]:
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's
     startup path."""
     if not _BROKER_MAINTENANCE_PASS_LOCK.try_enter():
-        return {"skipped": True, "previous_pass_running": True,
-                "attributed": 0, "brokers": 0, "refreshed": False}
+        return {"skipped": True, "previous_pass_running": True, "attributed": 0, "brokers": 0}
     try:
         from scripts.resolve_brokers import run_incremental_pass
 
@@ -1395,7 +1392,6 @@ async def _broker_maintenance_pass(stop_event: asyncio.Event, state: dict[str, A
         "skipped": bool(stats.get("skipped")),
         "attributed": stats.get("attributed", 0),
         "brokers": stats.get("brokers", 0),
-        "refreshed": bool(stats.get("refreshed")),
     }
     if stats.get("previous_pass_running"):
         # _PassLock has already logged the wedge once.
@@ -1403,10 +1399,7 @@ async def _broker_maintenance_pass(stop_event: asyncio.Event, state: dict[str, A
     elif last["skipped"]:
         LOG.info("BROKER lane skipped (resolution lock held by cron or daily sweep)")
     else:
-        LOG.info(
-            "BROKER lane attributed=%d brokers=%d refreshed=%s",
-            last["attributed"], last["brokers"], last["refreshed"],
-        )
+        LOG.info("BROKER lane attributed=%d brokers=%d", last["attributed"], last["brokers"])
     _record_pass(state, "broker_maintenance", last)
 
 

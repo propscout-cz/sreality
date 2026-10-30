@@ -7,6 +7,22 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
+- **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
+  more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
+  the "Piny do" limit is remembered per browser (#2184); a switch to centre + radius places the circle
+  in the middle of the main map (radius = half the view's shorter side, 100 m to 10 km), its centre is
+  dragged ON the main map, the sidebar keeps the radius only (the small map, lat / lng and Clear are
+  gone); the circle is TRUE, not the square around it (+12 to 22 % overcount measured).
+- One map area (`bounds` or `circle`, URL `bbox` or `circle`; `locationMode`, `centerRadius`,
+  `effectiveBbox`, `LocationControl` deleted), sent as the readers' own parameters and tested by
+  `in_map_area` (migration 694) in the list source, both stats RPCs, the watchdog matcher, the broker
+  board and the agents' search. Migration 695 strips the two dead keys from saved presets.
+- **Pin hover** (ruled 2026-10-30): every pin answers a pointer with its preview on the map, the click
+  popup's own HTML (a click keeps it open), and lights its card when the card is loaded; the hover follows
+  the pin under the cursor (`mousemove`), so touching pins follow it and a stack lights together. Before:
+  10 % of pins answered with 72 of 659 cards loaded.
+
 ### Preset save moves into the chip menu; Reset leaves the preset (2026-10-27, no migration)
 - **Done** (operator ask 2026-10-27: "get rid of the update preset button", option B of the
   proposal page). The copper Update button is gone from both saved-set bars (Browse presets, Stats

@@ -6,7 +6,8 @@
  * sidebar's own words; each row opens onto the sidebar's own control — the
  * registry form row (the curated-set chips among its widgets), the place
  * typeahead, the two-sided portal chips — and every edit applies through the
- * sidebar's `applySidebarUpdates`. The sheet holds a DRAFT: "Zobrazit N
+ * sidebar's `applySidebarUpdates` (`FilterSheetBody`, which the phone's
+ * Makléři screen draws too). The sheet holds a DRAFT: "Zobrazit N
  * nemovitostí" (N is Browse's count of the draft) applies it to the feed's URL;
  * "Zavřít" lets it go. The map-only group stays out: the phone has no map.
  *
@@ -16,7 +17,7 @@
  * keeps the preset's stored order. Every filter rides into it, the curated-set
  * lenses, the broker and the dismissed reveal included (`filtersForPreset`). */
 
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { FilterForm } from '@/components/FilterForm';
@@ -93,8 +94,7 @@ function useDebounced<T>(value: T, ms: number): T {
 export default function FilterSheet({ filters, sort, base, preset, onApply, onClose }: FilterSheetProps) {
   const [draft, setDraft] = useState(filters);
   const [draftSort, setDraftSort] = useState(sort);
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
-  const [placeOpen, setPlaceOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   const [presetOpen, setPresetOpen] = useState(false);
 
   const settled = useDebounced(draft, COUNT_DEBOUNCE_MS);
@@ -104,6 +104,110 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
     staleTime: 60_000,
   });
   const counting = settled !== draft || countQ.isPending;
+
+  const modified = !filtersEqualForPreset(draft, base);
+  const clearable = filtersBeyond(draft, base) > 0 || !isNewestFirst(draftSort);
+  const apply = (presetId: string | null = preset?.id ?? null) => {
+    onApply({ filters: draft, sort: draftSort, presetId });
+    onClose();
+  };
+
+  const n = countQ.data;
+  const showLabel = counting
+    ? 'Zobrazit … nemovitostí'
+    : n == null
+      ? 'Zobrazit nemovitosti'
+      : `Zobrazit ${n.toLocaleString('cs-CZ')} ${czPlural(n, 'nemovitost', 'nemovitosti', 'nemovitostí')}`;
+
+  const footer = (
+    <div className="flex items-center gap-2 px-4">
+      <button
+        type="button"
+        onClick={() => {
+          setDraft(base);
+          setDraftSort(DEFAULT_SORT);
+        }}
+        disabled={!clearable}
+        className="h-11 shrink-0 px-1 text-[15px] text-[var(--color-ink-2)] disabled:text-[var(--color-ink-4)]"
+      >
+        Vymazat
+      </button>
+      {modified && (
+        <button
+          type="button"
+          onClick={() => setPresetOpen(true)}
+          aria-haspopup="dialog"
+          aria-label="Předvolba"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
+        >
+          <MoreIcon />
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => apply()}
+        aria-busy={counting || undefined}
+        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
+      >
+        {showLabel}
+      </button>
+    </div>
+  );
+
+  return (
+    <BottomSheet label="Filtry" closeLabel="Zavřít" onClose={onClose} footer={footer}>
+      <div className={`pb-6 ${NO_FOCUS_ZOOM}`}>
+        <Row
+          rowKey="sort"
+          label="Řazení"
+          words={sortLabel(draftSort)}
+          open={sortOpen}
+          onToggle={() => setSortOpen((o) => !o)}
+        >
+          {/* Seventeen orders: a chip row, not the joined bar (system.md § Option groups). */}
+          <div role="group" aria-label="Řazení" className="flex flex-wrap gap-1">
+            {SORT_OPTIONS.map((o) => (
+              <PickButton
+                key={o.value}
+                variant="solid"
+                on={o.value === sortToParam(draftSort)}
+                onClick={() => setDraftSort(parseSort(o.value))}
+              >
+                {o.label}
+              </PickButton>
+            ))}
+          </div>
+        </Row>
+        <FilterSheetBody draft={draft} setDraft={setDraft} />
+      </div>
+
+      {presetOpen && (
+        <PresetSheet
+          draft={draft}
+          sort={draftSort}
+          preset={preset}
+          onSaved={(id) => apply(id)}
+          onClose={() => setPresetOpen(false)}
+        />
+      )}
+    </BottomSheet>
+  );
+}
+
+/* The sheet's filter rows over a draft: the sidebar's bands, each row opening
+ * onto the sidebar's own control, every edit through `applySidebarUpdates`.
+ * The Feed's Filtry (above) and the phone's Makléři screen both draw it; each
+ * owns its draft and what applying it means. */
+export function FilterSheetBody({
+  draft,
+  setDraft,
+}: {
+  draft: ListingFilters;
+  setDraft: Dispatch<SetStateAction<ListingFilters>>;
+}) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const [placeOpen, setPlaceOpen] = useState(false);
+  const settled = useDebounced(draft, COUNT_DEBOUNCE_MS);
 
   const view = listingFiltersToRegistryView(draft);
   const units = sidebarUnits(draft);
@@ -117,13 +221,6 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
       else next.add(key);
       return next;
     });
-
-  const modified = !filtersEqualForPreset(draft, base);
-  const clearable = filtersBeyond(draft, base) > 0 || !isNewestFirst(draftSort);
-  const apply = (presetId: string | null = preset?.id ?? null) => {
-    onApply({ filters: draft, sort: draftSort, presetId });
-    onClose();
-  };
 
   const body = (row: SheetRow): ReactNode => {
     if (row.kind === 'form') {
@@ -177,115 +274,50 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
     }
   };
 
-  const n = countQ.data;
-  const showLabel = counting
-    ? 'Zobrazit … nemovitostí'
-    : n == null
-      ? 'Zobrazit nemovitosti'
-      : `Zobrazit ${n.toLocaleString('cs-CZ')} ${czPlural(n, 'nemovitost', 'nemovitosti', 'nemovitostí')}`;
-
-  const footer = (
-    <div className="flex items-center gap-2 px-4">
-      <button
-        type="button"
-        onClick={() => {
-          setDraft(base);
-          setDraftSort(DEFAULT_SORT);
-        }}
-        disabled={!clearable}
-        className="h-11 shrink-0 px-1 text-[15px] text-[var(--color-ink-2)] disabled:text-[var(--color-ink-4)]"
-      >
-        Vymazat
-      </button>
-      {modified && (
-        <button
-          type="button"
-          onClick={() => setPresetOpen(true)}
-          aria-haspopup="dialog"
-          aria-label="Předvolba"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-        >
-          <MoreIcon />
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={() => apply()}
-        aria-busy={counting || undefined}
-        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
-      >
-        {showLabel}
-      </button>
-    </div>
-  );
-
   return (
-    <BottomSheet label="Filtry" closeLabel="Zavřít" onClose={onClose} footer={footer}>
-      <div className={`pb-6 ${NO_FOCUS_ZOOM}`}>
-        <Row
-          rowKey="sort"
-          label="Řazení"
-          words={sortLabel(draftSort)}
-          open={open.has('sort')}
-          onToggle={() => toggle('sort')}
-        >
-          {/* Seventeen orders: a chip row, not the joined bar (system.md § Option groups). */}
-          <div role="group" aria-label="Řazení" className="flex flex-wrap gap-1">
-            {SORT_OPTIONS.map((o) => (
-              <PickButton
-                key={o.value}
-                variant="solid"
-                on={o.value === sortToParam(draftSort)}
-                onClick={() => setDraftSort(parseSort(o.value))}
-              >
-                {o.label}
-              </PickButton>
-            ))}
-          </div>
-        </Row>
-        {sheetBands(draft).map((band) => (
-          <section key={band.title} aria-label={band.title}>
-            <DayRule label={band.title} />
-            {band.groups.map((g, gi) => (
-              <div key={gi}>
-                {g.rows.map((row) =>
-                  row.kind === 'custom' && row.block.key === 'districts' ? (
-                    <Row
-                      key={row.key}
-                      rowKey={row.key}
-                      ids={row.ids}
-                      label={row.label}
-                      words={rowWords(row, draft, view, units)}
-                      onOpenSheet={() => setPlaceOpen(true)}
-                    />
-                  ) : (
-                    <Row
-                      key={row.key}
-                      rowKey={row.key}
-                      ids={row.ids}
-                      label={row.label}
-                      words={rowWords(row, draft, view, units)}
-                      inline={row.inline}
-                      open={open.has(row.key)}
-                      onToggle={() => toggle(row.key)}
-                    >
-                      {body(row)}
-                    </Row>
-                  ),
-                )}
-                {g.notes.map((note) => (
-                  <div key={note.key} className="px-4 pb-2">
-                    <CityPopulationHint />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </section>
-        ))}
-      </div>
+    <>
+      {sheetBands(draft).map((band) => (
+        <section key={band.title} aria-label={band.title}>
+          <DayRule label={band.title} />
+          {band.groups.map((g, gi) => (
+            <div key={gi}>
+              {g.rows.map((row) =>
+                row.kind === 'custom' && row.block.key === 'districts' ? (
+                  <Row
+                    key={row.key}
+                    rowKey={row.key}
+                    ids={row.ids}
+                    label={row.label}
+                    words={rowWords(row, draft, view, units)}
+                    onOpenSheet={() => setPlaceOpen(true)}
+                  />
+                ) : (
+                  <Row
+                    key={row.key}
+                    rowKey={row.key}
+                    ids={row.ids}
+                    label={row.label}
+                    words={rowWords(row, draft, view, units)}
+                    inline={row.inline}
+                    open={open.has(row.key)}
+                    onToggle={() => toggle(row.key)}
+                  >
+                    {body(row)}
+                  </Row>
+                ),
+              )}
+              {g.notes.map((note) => (
+                <div key={note.key} className="px-4 pb-2">
+                  <CityPopulationHint />
+                </div>
+              ))}
+            </div>
+          ))}
+        </section>
+      ))}
 
       {/* The place typeahead in a tall sheet of its own, field at the top, so
-        * its suggestions open above the keyboard (the brokers' place sheet). */}
+        * its suggestions open above the keyboard. */}
       {placeOpen && (
         <BottomSheet label="Location" onClose={() => setPlaceOpen(false)}>
           <div className={`min-h-[70dvh] px-4 pt-3 ${NO_FOCUS_ZOOM}`}>
@@ -297,17 +329,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           </div>
         </BottomSheet>
       )}
-
-      {presetOpen && (
-        <PresetSheet
-          draft={draft}
-          sort={draftSort}
-          preset={preset}
-          onSaved={(id) => apply(id)}
-          onClose={() => setPresetOpen(false)}
-        />
-      )}
-    </BottomSheet>
+    </>
   );
 }
 

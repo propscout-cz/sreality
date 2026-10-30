@@ -41,11 +41,10 @@ from scripts.checks.common import (
     now,
     oneline,
     result,
-    wilson_lower,
     with_trends,
 )
 from toolkit import description_extraction as text_lane
-from toolkit.measures import unit_label
+from toolkit.measures import unit_label, wilson_lower
 
 _PARSING = "parsing"
 

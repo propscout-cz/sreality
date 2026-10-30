@@ -88,6 +88,18 @@ _Avoid_: backfill day, horizon, go-live day
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
+**Broker spell**:
+The time one broker's ads ran on one property, on every portal the broker is on: from the first of them being first
+seen until the last of them was last seen, and open while one still runs. The broker book holds one per property and
+canonical broker, kept by property maintenance; an ad whose portal account is not yet resolved to a broker has none.
+_Avoid_: listing period, mandate, tenure
+
+**Left the market within N days** (UI: "Opustilo trh do N dní"):
+A broker spell that ended within N days of its start while its property left the market and stayed off: sold or
+withdrawn, not necessarily a sale. Judged only for followed spells: newly listed, begun on or after 2026-09-08, with
+N + 7 days behind them.
+_Avoid_: sold, sale speed, time to sell
+
 **Settled**:
 A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
 read every one of its ads, holds no pending question about them and keeps none of them in a group

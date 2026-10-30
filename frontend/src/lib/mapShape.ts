@@ -1,6 +1,5 @@
-/* One dashed copper shape on a maplibre map. LocationControl's radius circle
- * and MapAreaControl's map box both paint through these two calls, so the two
- * spatial controls cannot drift in paint. */
+/* One dashed copper shape on a maplibre map: MapAreaControl's map area (a box,
+ * or a watchdog's circle) paints through these two calls. */
 import type { GeoJSONSource, Map as MaplibreMap } from 'maplibre-gl';
 
 import type { MapBounds } from './filters';

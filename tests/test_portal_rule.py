@@ -7,7 +7,7 @@ the map cells over `browse_list`) and through both property grains' compiled rul
 (`toolkit.filter_compiler.PROPERTIES_GRAIN`, the Watchdog's, and `BROWSE_GRAIN`, the agents'
 search over Browse's source); every broker case seeds its
 ads, runs the broker lookup (`toolkit.brokers.broker_property_ids`, the portal side on the
-broker's ads) and keeps the property's own status beside it, as Browse does. The SPA half is
+broker's book row, migration 692) and keeps the property's own status beside it, as Browse does. The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
 and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
@@ -176,15 +176,21 @@ def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
 
 
 def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], int]:
+    """Each broker with one identity per portal they advertise on, as attribution keys them (an identity is one
+    portal's), and the property's book kept by the maintenance pass the lookup reads (migration 692)."""
+    from scripts.recompute_property_stats import properties_changed
+
     brokers: dict[str, int] = {}
     for label in sorted({ad["broker"] for ad in case["ads"]}):
         cur.execute("insert into brokers (display_name) values (%s) returning id",
                     (f"rule-{label}",))
-        broker_id = cur.fetchone()[0]
+        brokers[label] = cur.fetchone()[0]
+    identities: dict[tuple[str, str], int] = {}
+    for label, source in sorted({(ad["broker"], ad["source"]) for ad in case["ads"]}):
         cur.execute(
             "insert into broker_identities (source, source_broker_id_native, broker_id) "
-            "values ('sreality', %s, %s) returning id", (f"rule-{next(_IDS)}", broker_id))
-        brokers[label] = cur.fetchone()[0]
+            "values (%s, %s, %s) returning id", (source, f"rule-{next(_IDS)}", brokers[label]))
+        identities[label, source] = cur.fetchone()[0]
     cur.execute("insert into properties default values returning id")
     property_id = cur.fetchone()[0]
     for ad in case["ads"]:
@@ -193,11 +199,9 @@ def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], i
             "insert into listings (source, source_id_native, sreality_id, raw_json, property_id, "
             "broker_identity_id, is_active) values (%s, %s, %s, '{}', %s, %s, %s)",
             (ad["source"], str(native), native if ad["source"] == "sreality" else None,
-             property_id, brokers[ad["broker"]], ad["is_active"]))
-    cur.execute("select id, broker_id from broker_identities where id = any(%s)",
-                (list(brokers.values()),))
-    by_identity = dict(cur.fetchall())
-    return {label: by_identity[i] for label, i in brokers.items()}, property_id
+             property_id, identities[ad["broker"], ad["source"]], ad["is_active"]))
+    properties_changed(cur.connection, [property_id])
+    return brokers, property_id
 
 
 @live

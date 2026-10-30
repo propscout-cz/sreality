@@ -159,7 +159,7 @@ def test_a_reactivating_detach_runs_no_carrier_and_changes_both_once():
     planned before it moves and routed after, once per property left (MS17)."""
     db = _Ledger({1: 10, 2: 20})
     _merged(db, [10, 20])
-    for seen in (db.log, db.carried, db.changed, db.browse, db.broker):
+    for seen in (db.log, db.carried, db.changed, db.browse):
         seen.clear()
     assert _detach(db, 2, decided_by=OP)["reactivated"]
     assert db.carried == [] and db.carries == []
@@ -169,7 +169,7 @@ def test_a_reactivating_detach_runs_no_carrier_and_changes_both_once():
     for table in ("DELETE FROM properties", "DELETE FROM property_merge_events",
                   "property_merge_carries"):
         assert table not in written, f"a detach touched {table}"
-    assert db.changed == db.browse == db.broker == [[10, 20]]
+    assert db.changed == db.browse == [[10, 20]]
     (reactivate,) = [s for s, _p in db.log if "SET status = 'active'" in s]
     assert "merged_into = NULL, merged_at = NULL, is_active = EXISTS (" in reactivate
 
@@ -261,7 +261,7 @@ def test_a_native_split_takes_the_merges_lock_order_and_runs_no_carrier():
     written = " ".join(order)
     assert "DELETE FROM properties" not in written, (
         "a native split touched DELETE FROM properties (rules 18, 22)")
-    assert db.changed == db.browse == db.broker == [[10, born]]
+    assert db.changed == db.browse == [[10, born]]
 
 
 def test_a_split_advert_merged_back_is_detached_to_its_new_record():
@@ -340,7 +340,7 @@ def test_a_set_detach_sends_both_home_and_changes_once():
     ONCE."""
     db = _Ledger({1: 10, 2: 20, 3: 20})
     group = _merged(db, [10, 20])["merge_group_id"]
-    for seen in (db.log, db.carried, db.changed, db.browse, db.broker):
+    for seen in (db.log, db.carried, db.changed, db.browse):
         seen.clear()
     out = _set(db, [3, 2], reason="jiné patro")
     assert [(a["listing_id"], a["outcome"], a["left_property_id"], a["restored_property_id"],
@@ -349,7 +349,7 @@ def test_a_set_detach_sends_both_home_and_changes_once():
     assert db.listings == {1: 10, 2: 20, 3: 20} and db.props[20] == "active"
     assert _verdicts(db) == [] and out["rulings_written"] == 0
     assert db.routed == [(10, (), {3: 20, 2: 20})]
-    assert db.changed == db.browse == db.broker == [[10, 20]], "the after-step runs once per set"
+    assert db.changed == db.browse == [[10, 20]], "the after-step runs once per set"
     # every property the steps lock, locked first in id order, before anything moves
     first_lock = next(i for i, (s, _p) in enumerate(db.log) if s.endswith("FOR UPDATE"))
     assert db.log[first_lock][1] == {"ids": [10, 20]}

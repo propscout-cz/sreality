@@ -34,9 +34,9 @@ from scripts.checks.common import (
     now,
     num,
     result,
-    wilson_lower,
     with_trends,
 )
+from toolkit.measures import wilson_lower
 
 # The four baselines: the same window 7, 14, 21 and 28 days earlier (the weekday cycle).
 _BASELINE_WEEKS = 4

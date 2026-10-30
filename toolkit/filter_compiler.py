@@ -10,7 +10,8 @@ that grants filters on a relation, the spellings that relation needs where it la
 (`listings`: the target-relative clauses and the cohort invariants),
 `api/notifications._build_match_clauses` (`properties_public`: the served and published
 predicates, the map box and the place chips) and `api/property_search` (Browse's own source,
-`browse_list_visible`: the map box, the place chips and the caller's own lenses).
+`browse_list_visible`: the map box, the place chips and the caller's own lenses; its `cohort_where`, without the
+lenses, is the broker board's cohort over `browse_list`).
 """
 
 from __future__ import annotations
@@ -281,13 +282,13 @@ LISTINGS_GRAIN = FilterGrain(
 PROPERTIES_GRAIN = FilterGrain(
     agenda=Agenda.WATCHDOG,
     exprs=MappingProxyType({"plot_area_m2": plot_area_sql("l")}),
-    caller_renders=frozenset({"location", "bounds", "districts"}),
+    caller_renders=frozenset({"location", "bounds", "circle", "districts"}),
     hooks=_PORTAL_RULE,
 )
 BROWSE_GRAIN = FilterGrain(
     agenda=Agenda.BROWSE,
     exprs=MappingProxyType({}),
-    caller_renders=frozenset({"location", "bounds", "districts", "tags", "collections", "pipeline",
+    caller_renders=frozenset({"location", "bounds", "circle", "districts", "tags", "collections", "pipeline",
                               "show_dismissed"}),
     hooks=MappingProxyType({**_PORTAL_RULE, "status": _modifier,
                             "tom_observed_only": _only("l.tom_observed")}),

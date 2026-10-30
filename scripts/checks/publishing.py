@@ -19,7 +19,8 @@ from location_data.claims_common import SOURCES, served_location_predicate
 from scraper.db import QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRIORITY_NEW
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (NEW_AD_H, ago, as_utc, cell, graded as _graded, iso, judged,
-                                   now, result, wilson_lower)
+                                   now, result)
+from toolkit.measures import wilson_lower
 from toolkit.publication import visible_since_sql
 
 # A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its Browse

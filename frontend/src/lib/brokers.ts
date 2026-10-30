@@ -1,5 +1,4 @@
 import { ApiError, apiGet, apiPost } from './api';
-import type { DistrictChip } from './filters';
 import type { ListingStatus } from './filters';
 
 // 420731404040 -> +420 731 404 040 (display only; storage stays digit-normalized).
@@ -33,18 +32,6 @@ export function telHref(p: string): string {
  * looks like an absent one.
  */
 
-export type LeaderMetric =
-  | 'active_property_count'
-  | 'property_count'
-  | 'listing_count'
-  | 'active_listing_count';
-
-/* The two orderings the leaderboard offers, desktop and phone alike. */
-export const LEADER_METRIC_OPTIONS: ReadonlyArray<{ value: LeaderMetric; label: string }> = [
-  { value: 'active_property_count', label: 'Nemovitosti' },
-  { value: 'listing_count', label: 'Inzeráty' },
-];
-
 /* The masked pair. `primary_*` is present only for an admin session; a non-admin
  * gets `has_*` in its place. Both are optional because which one arrives is a
  * property of the CALLER, not of the row. */
@@ -55,23 +42,11 @@ export interface BrokerContactFields {
   has_phone?: boolean;
 }
 
-export interface BrokerLeaderRow extends BrokerContactFields {
-  broker_id: number;
-  display_name: string | null;
-  firm_id: number | null;
-  firm_name: string | null;
-  firm_domain: string | null;
-  listing_count: number;
-  property_count: number;
-  active_listing_count: number;
-  active_property_count: number;
-}
-
 /* One row of GET /brokers/firm-options — a company, not a broker. display_name
  * is NULL for every franchise domain (mmreality.cz, re-max.cz, ...) and any
  * domain under the resolver's 60% modal-label share, so canonical_domain is the
  * only field guaranteed present; render/search display_name ?? canonical_domain,
- * same fallback the leaderboard row already uses for firm_name ?? firm_domain. */
+ * same fallback the board row uses for firm_name ?? firm_domain. */
 export interface BrokerFirmOption {
   firm_id: number;
   // NULL on the `firms` table means "independent / free-provider broker"
@@ -85,7 +60,15 @@ export interface BrokerFirmOption {
   broker_count: number;
 }
 
-export interface BrokerPublic extends BrokerContactFields {
+/* A broker's numbers, in Browse's vocabulary (operator ruling 4, toolkit.brokers
+ * BROKER_COUNTS_SQL): the published, served properties with an ad of theirs, and
+ * those live with a live ad of theirs — the board's count. */
+export interface BrokerCounts {
+  properties: number;
+  active_properties: number;
+}
+
+export interface BrokerPublic extends BrokerContactFields, BrokerCounts {
   broker_id: number;
   display_name: string | null;
   firm_id: number | null;
@@ -94,20 +77,8 @@ export interface BrokerPublic extends BrokerContactFields {
   firm_is_franchise: boolean | null;
   source_count: number;
   distinct_source_count: number;
-  listing_count: number;
-  property_count: number;
-  active_listing_count: number;
-  active_property_count: number;
   first_seen_at: string | null;
   last_seen_at: string | null;
-  /* The same counts restricted to listings that resolved to a Czech obec
-   * (migration 396). The ranking columns — broker search orders on
-   * cz_active_property_count, so a surface that renders a broker row must show
-   * this number, not the unscoped twin, or the order looks arbitrary. */
-  cz_listing_count: number;
-  cz_property_count: number;
-  cz_active_listing_count: number;
-  cz_active_property_count: number;
 }
 
 export interface BrokerMembership {
@@ -117,7 +88,6 @@ export interface BrokerMembership {
   firm_name: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
-  listing_count: number;
   is_current: boolean;
 }
 
@@ -142,12 +112,14 @@ export interface BrokerListing {
   property_id: number | null;
 }
 
-export interface BrokerRegionShare {
+export interface BrokerRegionShare extends BrokerCounts {
   geo_id: number;
   name: string | null;
-  property_count: number;
-  active_property_count: number;
-  listing_count: number;
+}
+
+export interface BrokerCategoryShare extends BrokerCounts {
+  category_main: string | null;
+  category_type: string | null;
 }
 
 /* One distinct (kind, value) contact across a broker's identities. Admin-only —
@@ -159,39 +131,16 @@ export interface BrokerContact {
   last_seen_at: string | null;
 }
 
-/* GET /brokers/{id} returns identity + memberships + regional footprint (+ the
- * full contact set for an admin) in ONE call, so the detail page doesn't fan out
- * four queries and doesn't need the region-name lookup the old client-side
- * aggregation depended on — `region_shares[].name` is joined server-side. */
+/* GET /brokers/{id} returns identity + memberships + the footprint by region and
+ * by category, busiest first (+ the full contact set for an admin) in ONE call;
+ * `region_shares[].name` is joined server-side. */
 export interface BrokerDossier {
   broker: BrokerPublic;
   memberships: BrokerMembership[];
   region_shares: BrokerRegionShare[];
+  categories: BrokerCategoryShare[];
   contacts?: BrokerContact[];
   pii_masked: boolean;
-}
-
-export interface LeaderboardParams {
-  districts: DistrictChip[];
-  categoryMain: string | null;
-  categoryType: string | null;
-  metric: LeaderMetric;
-  limit?: number;
-  firmIds?: number[];
-  // Same column, same >= semantics as Browse's own min_price_czk (migration 448) —
-  // total asking price for a sale, monthly rent for a rental. null/undefined = no
-  // value filter. includeUnpriced only matters once minPriceCzk is set: whether a
-  // listing with no price ("cena na vyžádání") counts as meeting it.
-  minPriceCzk?: number | null;
-  includeUnpriced?: boolean;
-  /* Portal-agnostic `listings.subtype` slugs from the shared filter registry
-   * (lib/enums SUBTYPE_LABELS_BY_MAIN), meaningful only for categoryMain in
-   * (dum, komercni). Empty = no filter. includeUnknownSubtype is the twin of
-   * includeUnpriced — and it matters: subtype coverage is a PORTAL gap (sreality
-   * labels everything, ceskereality/realitymix/mmreality label nothing), so
-   * excluding unlabelled rows also ranks by which portals a broker lists on. */
-  subtypes?: string[];
-  includeUnknownSubtype?: boolean;
 }
 
 /* The attributed broker for one listing, contact included (migration 419).
@@ -259,40 +208,6 @@ function chunk<T>(xs: ReadonlyArray<T>, size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size));
   return out;
-}
-
-/* No wrapper for GET /brokers/geo-options: this module's caller (BrokerDetail's
- * region-name map) went away when the dossier started joining region_shares[].name
- * server-side, and the page's location control is the shared LocationTypeahead,
- * whose chips the leaderboard filters on exactly as Browse does.
- * A broker-specific geo vocabulary would fork that contract for one page. The
- * route stays — it is the only path to broker_geo_options, which is dark to
- * `authenticated` — so re-adding a wrapper is a few lines if a consumer appears. */
-
-export async function fetchBrokerLeaderboard(
-  p: LeaderboardParams,
-  signal?: AbortSignal,
-): Promise<BrokerLeaderRow[]> {
-  const r = await apiGet<Envelope<BrokerLeaderRow[]>>(
-    '/brokers/leaderboard',
-    {
-      districts: p.districts.map((d) => d.name),
-      districts_lvl: p.districts.map((d) => d.level),
-      districts_id: p.districts.map((d) => d.id),
-      districts_excl: p.districts.map((d) => d.excluded === true),
-      category_main: p.categoryMain,
-      category_type: p.categoryType,
-      metric: p.metric,
-      limit: p.limit ?? 100,
-      firm_ids: p.firmIds ?? [],
-      min_price_czk: p.minPriceCzk ?? null,
-      include_unpriced: p.includeUnpriced ?? false,
-      subtypes: p.subtypes ?? [],
-      include_unknown_subtype: p.includeUnknownSubtype ?? false,
-    },
-    signal,
-  );
-  return r.data ?? [];
 }
 
 export async function searchBrokersByName(
@@ -423,13 +338,13 @@ export async function fetchBrokerDossier(
   }
 }
 
-export async function fetchBrokerListings(
-  brokerId: number,
-  limit = 500,
-): Promise<BrokerListing[]> {
+/* The inventory's one page: a read this long is a cap, not the broker's whole book. */
+export const BROKER_LISTINGS_LIMIT = 500;
+
+export async function fetchBrokerListings(brokerId: number): Promise<BrokerListing[]> {
   const r = await apiGet<Envelope<BrokerListing[]>>(
     `/brokers/${brokerId}/listings`,
-    { limit },
+    { limit: BROKER_LISTINGS_LIMIT },
   );
   return r.data ?? [];
 }

@@ -49,7 +49,7 @@ const CUSTOM_REACH: Record<CustomBlockKey, { ids: string[]; fields: Array<keyof 
     ids: ['portals', 'portals_excluded', 'portals_excluded_active_only'],
     fields: ['portals', 'portalsExcluded', 'portalsExcludedActiveOnly'],
   },
-  location_mode: { ids: ['location'], fields: ['locationMode', 'centerRadius'] },
+  location_mode: { ids: ['location'], fields: ['circle'] },
   broker: { ids: [], fields: ['brokerId'] },
 };
 
@@ -132,6 +132,17 @@ export const UNROWED_FILTERS: ReadonlyArray<Omit<AppliedFilter, 'row'>> = (() =>
   }
   return [...groups].map(([key, fields]) => ({ key, label: UNROWED_LABELS[key] ?? key, fields }));
 })();
+
+/* The words the sidebar names registry filter `id` by: the label of the row
+ * that draws it, else the name of its field no row draws, else the id. */
+export function filterLabel(id: string): string {
+  const field = KEY_OF[id];
+  return (
+    ALL_ROWS.find((r) => r.ids.includes(id))?.label ??
+    UNROWED_FILTERS.find((g) => field != null && g.fields.includes(field))?.label ??
+    id
+  );
+}
 
 /* What `f` sets beyond its scope's own, in the sidebar's order: a row once
  * however many fields it edits, then each field no row draws. */

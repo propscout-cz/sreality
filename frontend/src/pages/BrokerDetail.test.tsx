@@ -57,14 +57,13 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
     firm_id: null,
     firm_domain: null,
     firm_name: 'RE/MAX',
-    listing_count: 52,
-    active_listing_count: 37,
-    property_count: 50,
-    active_property_count: 35,
+    properties: 50,
+    active_properties: 35,
     ...broker,
   } as brokers.BrokerPublic,
   memberships: [],
   region_shares: [],
+  categories: [],
   pii_masked: true,
 });
 
@@ -132,7 +131,7 @@ describe('<BrokerDetail> honest error states', () => {
   });
 
   /* The dossier succeeds independently now, so an inventory failure rendered as
-     "Žádné inzeráty." would sit directly under a stats strip asserting 37/52. */
+     "Žádné inzeráty." would sit directly under a stats strip asserting 35/50. */
   it('does not report a failed inventory read as an empty inventory', async () => {
     vi.mocked(brokers.fetchBrokerListings).mockRejectedValue(new Error('timeout'));
     renderPage();
@@ -258,11 +257,11 @@ describe('<BrokerDetail> section cards', () => {
     vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({
       ...dossier({}),
       region_shares: [
-        { geo_id: 1, name: 'Praha', active_property_count: 9 },
-        { geo_id: 2, name: 'Brno', active_property_count: 3 },
+        { geo_id: 1, name: 'Praha', active_properties: 9 },
+        { geo_id: 2, name: 'Brno', active_properties: 3 },
       ] as unknown as brokers.BrokerRegionShare[],
       memberships: [
-        { firm_id: 5, firm_name: 'RE/MAX', firm_domain: null, is_current: true, listing_count: 40 },
+        { firm_id: 5, firm_name: 'RE/MAX', firm_domain: null, is_current: true },
       ] as unknown as brokers.BrokerMembership[],
     });
     vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({ listing_id: 1 }), listing({ listing_id: 2 })]);
@@ -275,7 +274,9 @@ describe('<BrokerDetail> section cards', () => {
     }
     expect(countOf(card('Kde inzeruje'))).toBe('2');
     expect(countOf(card('Kanceláře'))).toBe('1');
-    expect(countOf(card('Inventář'))).toBe('2 z 52');
+    expect(countOf(card('Inventář'))).toBe('2');
+    // Ruling 4: property grain, no ad counts.
+    expect(screen.queryByText('Inzeráty')).toBeNull();
     /* No box in a box: the lists sit on the card itself; the table keeps its own. */
     expect(within(card('Kde inzeruje')).getByRole('list').parentElement).not.toHaveClass('border');
     expect(within(card('Kanceláře')).getByRole('list').parentElement).not.toHaveClass('border');
@@ -283,6 +284,17 @@ describe('<BrokerDetail> section cards', () => {
     /* Typ / Nabídka are L4 field labels. */
     expect(within(card('Inventář')).getByText('Typ', { selector: 'span' }))
       .toHaveClass('uppercase', 'tracking-[0.08em]', 'font-semibold');
+  });
+
+  it('marks a full inventory page as a cap, not the whole book', async () => {
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue(
+      Array.from({ length: brokers.BROKER_LISTINGS_LIMIT }, (_, i) => listing({ listing_id: i + 1 })),
+    );
+    renderPage();
+    await screen.findByRole('table');
+    expect(countOf(card('Inventář'))).toBe('500+');
+    fireEvent.click(within(card('Inventář')).getByRole('button', { name: 'Domy' }));
+    expect(countOf(card('Inventář'))).toBe('0 z 500+');
   });
 
   it('keeps an empty section as its card with count 0 and one muted line', async () => {

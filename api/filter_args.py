@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model, model_validator
 
-from api.location_filter import DistrictChip, MapBounds
+from api.location_filter import DistrictChip, MapBounds, MapCircle, one_area
 from toolkit import filter_registry as fr
 
 _SCALARS: dict[fr.FilterType, type] = {
@@ -46,6 +46,26 @@ class Chip(DistrictChip):
 
 class Box(MapBounds):
     model_config = ConfigDict(extra="forbid")
+
+
+class Circle(MapCircle):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MapAreaArgs(Args):
+    """The map area a tool takes, as Browse filters on it: a box or a circle, never both (api/location_filter)."""
+
+    bounds: Box | None = Field(
+        None, description="The map box: a property matches when its point lies inside, as on Browse's map. Null = "
+        "anywhere.")
+    circle: Circle | None = Field(
+        None, description="The map circle: a property matches when its point lies within radius_m metres of the "
+        "centre, as Browse's centre + radius. Never with bounds. Null = anywhere.")
+
+    @model_validator(mode="after")
+    def _one_area(self) -> Self:
+        one_area(self.bounds, self.circle)
+        return self
 
 
 class CityIndexRule(Args):

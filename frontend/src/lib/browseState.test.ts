@@ -2,7 +2,7 @@ import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
-import { bboxAround, fromSearchParams, DEFAULT_FILTERS } from './filters';
+import { fromSearchParams, DEFAULT_FILTERS } from './filters';
 import {
   DEFAULT_OVERLAY,
   PIN_LIMIT_DEFAULT,
@@ -16,25 +16,13 @@ import {
   useMemoryBrowseState,
   useUrlBrowseState,
 } from './browseState';
+import { DEFAULT_BOARD, boardFromSearchParams } from './brokerBoard';
 import { DEFAULT_SCOPE, neighbourhoodFilters } from './neighbourhood';
 import { layersFromSearchParams } from './mapOverlays';
 import { DEFAULT_SORT, parseSort } from './queries';
 import type { SavedDashboard } from './types';
 
 const TREBIC = { lat: 49.2147, lng: 15.8816 };
-
-describe('bboxAround', () => {
-  it('produces a well-ordered box ~km across centred on the point', () => {
-    const b = bboxAround(TREBIC.lat, TREBIC.lng, 5);
-    expect(b.west).toBeLessThan(b.east);
-    expect(b.south).toBeLessThan(b.north);
-    // centre is (lat, lng)
-    expect((b.north + b.south) / 2).toBeCloseTo(TREBIC.lat, 6);
-    expect((b.east + b.west) / 2).toBeCloseTo(TREBIC.lng, 6);
-    // N–S span ≈ 5 km (1° lat ≈ 111.32 km)
-    expect((b.north - b.south) * 111.32).toBeCloseTo(5, 1);
-  });
-});
 
 /* An unset ("Vše") category must resolve to NO
  * constraint — not Browse's narrow default (['byt'] / 'pronajem'). A broker who
@@ -82,9 +70,8 @@ describe('browseUrlFromState ↔ fromSearchParams round-trip', () => {
     expect(parsed.categoryType).toBe('prodej');
     expect(parsed.dispositions).toEqual(['3+kk']);
     expect(parsed.ownership).toEqual(['osobni']);
-    expect(parsed.locationMode).toBe('center_radius');
-    expect(parsed.centerRadius?.radius_m).toBe(500);
-    expect(parsed.centerRadius?.lat).toBeCloseTo(TREBIC.lat, 4);
+    expect(parsed.circle?.radius_m).toBe(500);
+    expect(parsed.circle?.lat).toBeCloseTo(TREBIC.lat, 4);
   });
 
   /* The rent map is a registry layer now, its size category the variant: the
@@ -170,6 +157,7 @@ describe('pin limit and price labels on the map overlay', () => {
     expect(parsePinLimit('5')).toBe(PIN_LIMIT_MIN);
     expect(parsePinLimit('99999')).toBe(PIN_LIMIT_MAX);
     expect(parsePinLimit('350')).toBe(350);
+    expect(parsePinLimit('')).toBe(PIN_LIMIT_DEFAULT);
   });
 
   /* View knobs, NOT cohort filters: they must not reach the filter spec. */
@@ -180,7 +168,61 @@ describe('pin limit and price labels on the map overlay', () => {
   });
 });
 
-/* `?tab=` names the stats tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
+/* The limit typed into "Piny do" is remembered per browser (operator ask 2026-10-30):
+ * a fresh Browse starts from it, a link that names `pins` still wins. */
+describe('the remembered pin limit', () => {
+  const REMEMBERED = 'map.pins';
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('starts a Browse without `pins` from the remembered limit, and a link that names one from the link', () => {
+    localStorage.setItem(REMEMBERED, '500');
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(500);
+    expect(urlState('/browse?pins=300').result.current.view.overlay.pinLimit).toBe(300);
+  });
+
+  it('reads nothing remembered, or nonsense, as the default', () => {
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+    localStorage.setItem(REMEMBERED, 'abc');
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+  });
+
+  it('remembers a change, and a change back to the default leaves the URL plain', () => {
+    const { result } = urlState('/browse?cat=byt');
+    act(() => result.current.view.setOverlay({ pinLimit: 500 }));
+    expect(new URLSearchParams(result.current.search).get('pins')).toBe('500');
+    expect(localStorage.getItem(REMEMBERED)).toBe('500');
+    expect(result.current.view.overlay.pinLimit).toBe(500);
+    act(() => result.current.view.setOverlay({ pinLimit: PIN_LIMIT_DEFAULT }));
+    expect(new URLSearchParams(result.current.search).has('pins')).toBe(false);
+    expect(localStorage.getItem(REMEMBERED)).toBe(String(PIN_LIMIT_DEFAULT));
+    expect(result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+  });
+
+  it('keeps the remembered limit through a filter change', () => {
+    localStorage.setItem(REMEMBERED, '800');
+    const { result } = urlState('/browse');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 5_000_000 }));
+    expect(result.current.view.overlay.pinLimit).toBe(800);
+  });
+
+  it('seeds the in-memory (Explore) view from the remembered limit and writes it back', () => {
+    localStorage.setItem(REMEMBERED, '400');
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    expect(result.current.overlay.pinLimit).toBe(400);
+    act(() => result.current.setOverlay({ pinLimit: 1_000 }));
+    expect(result.current.overlay.pinLimit).toBe(1_000);
+    expect(localStorage.getItem(REMEMBERED)).toBe('1000');
+  });
+});
+
+/* `?tab=` names the stats tab, the brokers tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
 describe('the tab in the URL', () => {
   const tabOf = (initial: string) =>
     renderHook(() => useUrlBrowseState(), {
@@ -188,8 +230,9 @@ describe('the tab in the URL', () => {
         createElement(MemoryRouter, { initialEntries: [initial] }, children),
     }).result.current.tab;
 
-  it('reads stats as stats, and anything else as the map', () => {
+  it('reads stats and brokers as themselves, and anything else as the map', () => {
     expect(parseTab('stats')).toBe('stats');
+    expect(parseTab('brokers')).toBe('brokers');
     expect(parseTab(null)).toBe('map');
     expect(parseTab('table')).toBe('map');
     expect(parseTab('nonsense')).toBe('map');
@@ -198,6 +241,46 @@ describe('the tab in the URL', () => {
   it('opens an old table link on the map', () => {
     expect(tabOf('/browse?tab=table')).toBe('map');
     expect(tabOf('/browse?tab=stats')).toBe('stats');
+    expect(tabOf('/browse?tab=brokers')).toBe('brokers');
+  });
+});
+
+/* The Makléři tab's options: view knobs in the URL (a default deletes its key),
+ * carried through a filter change, outside the filters, in memory in a modal. */
+describe('the broker board options', () => {
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('reads every option from its key, and nonsense as the default', () => {
+    expect(
+      urlState('/browse?tab=brokers&horizon=60&rank_by=speed&top=50&min_props=5&firm=3,7').result.current.view.board,
+    ).toEqual({ horizonDays: 60, sort: 'speed', limit: 50, minProperties: 5, firmIds: [3, 7] });
+    expect(boardFromSearchParams(new URLSearchParams('horizon=45&rank_by=fast&top=900&min_props=0&firm=a,-2,4'))).toEqual(
+      { ...DEFAULT_BOARD, firmIds: [4] },
+    );
+    expect(fromSearchParams(new URLSearchParams('horizon=14&min_props=3'))).toEqual(fromSearchParams(new URLSearchParams()));
+  });
+
+  it('writes a change as its own key, keeps it through a filter change, and deletes it at the default', () => {
+    const { result } = urlState('/browse?cat=dum&tab=brokers');
+    act(() => result.current.view.setBoard({ sort: 'speed', firmIds: [3] }));
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, categoryMain: ['dum', 'byt'] }));
+    let sp = new URLSearchParams(result.current.search);
+    expect([sp.get('rank_by'), sp.get('firm'), sp.get('tab'), sp.get('cat')]).toEqual(['speed', '3', 'brokers', 'dum,byt']);
+    act(() => result.current.view.setBoard({ sort: 'properties', firmIds: [] }));
+    sp = new URLSearchParams(result.current.search);
+    expect([sp.has('rank_by'), sp.has('firm')]).toEqual([false, false]);
+  });
+
+  it('holds the options in memory in the explore modals, and Go to Browse carries them', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS, tab: 'brokers' }));
+    expect(result.current.board).toEqual(DEFAULT_BOARD);
+    act(() => result.current.setBoard({ horizonDays: 90 }));
+    const sp = new URLSearchParams(browseUrlFromState({ ...result.current }).split('?')[1]);
+    expect([sp.get('horizon'), sp.get('tab')]).toEqual(['90', 'brokers']);
   });
 });
 

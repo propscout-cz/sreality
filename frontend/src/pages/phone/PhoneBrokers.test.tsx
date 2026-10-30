@@ -1,90 +1,101 @@
-/* Makléři on the phone (#1769): /brokers under the phone shell is the reduced
- * leaderboard — place, category, offer, metric — over the desktop's own
- * `fetchBrokerLeaderboard`, plus the name search shown in place of the roll. */
+/* Makléři on the phone (#1769): /brokers under the phone shell is the broker
+ * board over the URL's Browse filters, edited in the Filtry sheet's body, with
+ * the desktop tab's own request (lib/brokerBoard), plus the name search shown in
+ * place of the roll. */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { placeLabelOf } from '@/components/phone/placeLabel';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
-import type { BrokerLeaderRow, BrokerPublic, LeaderboardParams } from '@/lib/brokers';
+import type { BrokerPublic } from '@/lib/brokers';
+import type { BoardMeta } from '@/lib/brokerBoard';
 import { ROUTES } from '@/lib/routes';
 import { expectNoNestedInteractive } from '@/test/a11y';
+import { BOARD_META, boardRow } from '@/test/brokerBoard';
 
 import Brokers from '../Brokers';
-import { brokerInitials, metricUnitHead } from './PhoneBrokers';
+import { brokerInitials } from './PhoneBrokers';
 
+const never = vi.hoisted(() => () => new Promise<never>(() => {}));
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
   usePhoneShell: () => true,
 }));
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
-  fetchBrokerLeaderboard: vi.fn(),
   searchBrokersByName: vi.fn(),
-  searchBrokerFirms: vi.fn(),
 }));
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
+  apiPost: vi.fn(),
   listBrokerMergeCandidates: vi.fn(),
+  listCollections: vi.fn(never),
+  listTags: vi.fn(never),
 }));
+vi.mock('@/lib/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/queries')>()),
+  fetchNoPriceCount: vi.fn(never),
+  fetchDismissedCount: vi.fn(never),
+  fetchPipelineStages: vi.fn(never),
+}));
+vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(never) }));
 
-const leader = (id: number, extra: Partial<BrokerLeaderRow> = {}): BrokerLeaderRow => ({
-  broker_id: id,
-  display_name: `Makléř ${id}`,
-  firm_id: null,
-  firm_name: `Firma ${id}`,
-  firm_domain: null,
-  listing_count: 100 - id,
-  property_count: 80 - id,
-  active_listing_count: 60 - id,
-  active_property_count: 50 - id,
-  ...extra,
+const answer = (meta: Partial<BoardMeta> = {}) => ({
+  data: [
+    boardRow(1, { firm_name: 'Firma 1', properties: 49, n: 40, exited: 12, share: 0.3, rank: 0.17 }),
+    boardRow(2, { properties: 48, n: 3, exited: 1 }),
+  ],
+  metadata: { ...BOARD_META, ...meta },
 });
 
 beforeEach(() => {
-  vi.mocked(brokers.fetchBrokerLeaderboard).mockResolvedValue([leader(1), leader(2, { firm_name: null, firm_domain: null })]);
+  vi.mocked(api.apiPost).mockResolvedValue(answer());
   vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
-    { broker_id: 42, display_name: 'Jana Kubíčková', firm_name: 'Domov 9', firm_domain: null, cz_active_property_count: 12 } as BrokerPublic,
+    { broker_id: 42, display_name: 'Jana Kubíčková', firm_name: 'Domov 9', firm_domain: null, active_properties: 12 } as BrokerPublic,
   ]);
 });
 
 afterEach(() => vi.clearAllMocks());
 
-function renderPage() {
+function Search() {
+  return <p data-testid="search">{useLocation().search}</p>;
+}
+
+function renderPage(url = '/brokers') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/brokers']}>
+      <MemoryRouter initialEntries={[url]}>
         <Brokers />
+        <Search />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-const lastParams = (): LeaderboardParams => {
-  const calls = vi.mocked(brokers.fetchBrokerLeaderboard).mock.calls;
-  return calls[calls.length - 1][0];
-};
+const lastBody = () => vi.mocked(api.apiPost).mock.calls.at(-1)?.[1] as Record<string, unknown>;
+const roll = () => screen.findByRole('list', { name: 'Žebříček makléřů' });
 
 describe('<Brokers> on the phone', () => {
-  it('opens on byty · prodej across the country, ranked by active properties', async () => {
-    renderPage();
-    const board = await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    expect(lastParams()).toMatchObject({
-      districts: [],
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      metric: 'active_property_count',
-      limit: 100,
-    });
+  it.each([
+    ['/brokers', { category_main_in: ['byt'], category_type: 'prodej', districts: null, horizon_days: 30, sort: 'properties', limit: 100 }, 'Celá ČR · byty · prodej'],
+    ['/brokers?cat=dum&deal=pronajem&horizon=60&rank_by=speed', { category_main_in: ['dum'], category_type: 'pronajem', horizon_days: 60, sort: 'speed' }, 'Celá ČR · domy · pronájem'],
+  ])('reads the cohort and the options from the URL (%s) as the desktop tab does, volume and speed on each row', async (url, body, caption) => {
+    renderPage(url);
+    const board = await roll();
+    expect(api.apiPost).toHaveBeenCalledWith('/brokers/board', expect.any(Object), expect.any(AbortSignal));
+    expect(lastBody()).toMatchObject(body);
+    expect(screen.getByText(caption)).toBeInTheDocument();
     const rows = within(board).getAllByRole('link');
     expect(rows[0]).toHaveAttribute('href', ROUTES.brokerDetail.build({ id: 1 }));
     expect(rows[0].textContent).toContain('Makléř 1');
     expect(rows[0].textContent).toContain('49');
+    expect(rows[0].textContent).toMatch(/12 z 40 · 30\s%/);
+    expect(rows[1].textContent).toContain('n = 3');
     expect(rows[1].textContent).toContain('nezávislý / neznámá kancelář');
     expectNoNestedInteractive(board);
     /* The desktop's extras stay on the desktop. */
@@ -92,41 +103,31 @@ describe('<Brokers> on the phone', () => {
     expect(api.listBrokerMergeCandidates).not.toHaveBeenCalled();
   });
 
-  it('a category, offer or metric chip changes the request', async () => {
+  it('edits the cohort in the Filtry sheet body and applies it to the URL', async () => {
     const user = userEvent.setup();
-    renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
+    renderPage('/brokers?cat=dum&horizon=60');
+    await roll();
+    await user.click(screen.getByRole('button', { name: 'Filtry (1 navíc)' }));
+    const sheet = screen.getByRole('dialog', { name: 'Filtry' });
+    await waitFor(() => expect(within(sheet).getAllByRole('region').length).toBeGreaterThan(0));
+    /* The order and the presets are the Feed's, never the board's. */
+    expect(within(sheet).queryByRole('button', { name: /^Řazení/ })).toBeNull();
+    expect(within(sheet).queryByRole('button', { name: 'Předvolba' })).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Domy' }));
-    await waitFor(() => expect(lastParams().categoryMain).toBe('dum'));
-    expect(screen.getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
-
-    await user.click(screen.getByRole('button', { name: 'Prodej' }));
-    await waitFor(() => expect(lastParams().categoryType).toBeNull());
-
-    await user.click(screen.getByRole('button', { name: 'Inzeráty' }));
-    await waitFor(() => expect(lastParams().metric).toBe('listing_count'));
-    const first = within(await screen.findByRole('list', { name: 'Žebříček makléřů' })).getAllByRole('link')[0];
-    await waitFor(() => expect(first.textContent).toContain('99'));
-  });
-
-  it('opens the place picker in a sheet', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    await user.click(screen.getByRole('button', { name: 'Místo: Celá ČR' }));
-    const sheet = screen.getByRole('dialog', { name: 'Místo' });
-    expect(within(sheet).getByRole('textbox', { name: 'Místo' })).toBeInTheDocument();
-    expect(
-      within(sheet).getByText('Kraj, okres, obec, část obce nebo ulice; bez místa platí celá ČR.'),
-    ).toBeInTheDocument();
+    await user.click(within(sheet).getByRole('button', { name: 'Vymazat' }));
+    await user.click(within(sheet).getByRole('button', { name: 'Zobrazit makléře' }));
+    expect(screen.queryByRole('dialog', { name: 'Filtry' })).toBeNull();
+    await waitFor(() => expect(lastBody().category_main_in).toEqual(['byt']));
+    const sp = new URLSearchParams(screen.getByTestId('search').textContent ?? '');
+    expect(sp.get('cat')).not.toBe('dum');
+    expect(sp.get('horizon')).toBe('60');
+    expect(screen.getByRole('button', { name: 'Filtry' })).toBeInTheDocument();
   });
 
   it('searching by name swaps the roll for the results, clearing brings it back as it was', async () => {
     const user = userEvent.setup();
-    renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    await user.click(screen.getByRole('button', { name: 'Domy' }));
+    renderPage('/brokers?cat=dum');
+    await roll();
     await user.type(screen.getByRole('searchbox', { name: 'Hledat makléře podle jména' }), 'Kub');
 
     const results = await screen.findByRole('list', { name: 'Nalezení makléři' });
@@ -137,13 +138,22 @@ describe('<Brokers> on the phone', () => {
     expect(screen.queryByRole('list', { name: 'Žebříček makléřů' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Vymazat hledání' }));
-    expect(await screen.findByRole('list', { name: 'Žebříček makléřů' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
-    expect(lastParams().categoryMain).toBe('dum');
+    expect(await roll()).toBeInTheDocument();
+    expect(lastBody().category_main_in).toEqual(['dum']);
   });
 
-  it('says a failed leaderboard failed', async () => {
-    vi.mocked(brokers.fetchBrokerLeaderboard).mockRejectedValue(new Error('boom'));
+  it('explains a refused speed and turns Rychlost off', async () => {
+    vi.mocked(api.apiPost).mockResolvedValue(
+      answer({ speed_refused: 'mixed_category', speed_refused_by: ['category_main_in'] }),
+    );
+    renderPage();
+    await roll();
+    expect(screen.getByRole('note')).toHaveTextContent('Zvolte jen jednu hodnotu: „Type“.');
+    expect(within(screen.getByRole('group', { name: 'Řadit dle' })).getByRole('button', { name: 'Rychlost' })).toBeDisabled();
+  });
+
+  it('says a failed board failed', async () => {
+    vi.mocked(api.apiPost).mockRejectedValue(new Error('boom'));
     renderPage();
     expect(await screen.findByText('Žebříček se nepodařilo načíst.')).toBeInTheDocument();
   });
@@ -173,59 +183,27 @@ describe('<Brokers> on the phone: one joined bar per pick-one', () => {
       .filter((b) => b.getAttribute('aria-pressed') === 'true')
       .map((b) => b.textContent);
 
-  it('draws Typ and Nabídka as phone-tone bars inside the Výběr row', async () => {
-    renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    const row = screen.getByRole('group', { name: 'Výběr' });
-    for (const [name, labels, lit] of [
-      ['Typ', ['Byty', 'Domy'], 'Byty'],
-      ['Nabídka', ['Prodej', 'Pronájem'], 'Prodej'],
-    ] as const) {
-      const { group, buttons } = bar(name);
-      expect(row.contains(group)).toBe(true);
-      expect(buttons.map((b) => b.textContent)).toEqual(labels);
-      expect(pressed(group)).toEqual([lit]);
-      expect(within(group).getByRole('button', { name: lit })).toHaveClass(
-        'bg-[var(--color-inset)]',
-        'text-[var(--color-ink)]',
-      );
-    }
-  });
-
-  it('a tap on the lit Typ or Nabídka segment releases it and lights nothing', async () => {
+  it('draws Řadit and the horizon as phone-tone bars in the Výběr row, writing the board options', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    const typ = screen.getByRole('group', { name: 'Typ' });
-    const nabidka = screen.getByRole('group', { name: 'Nabídka' });
+    await roll();
+    const choice = screen.getByRole('group', { name: 'Výběr' });
 
-    await user.click(within(typ).getByRole('button', { name: 'Byty' }));
-    await waitFor(() => expect(lastParams().categoryMain).toBeNull());
-    expect(pressed(typ)).toEqual([]);
+    const sort = bar('Řadit dle');
+    expect(choice.contains(sort.group)).toBe(true);
+    expect(sort.buttons.map((b) => b.textContent)).toEqual(['Nemovitosti', 'Rychlost']);
+    expect(pressed(sort.group)).toEqual(['Nemovitosti']);
+    expect(sort.buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+    await user.click(sort.buttons[1]);
+    await waitFor(() => expect(lastBody().sort).toBe('speed'));
+    expect(pressed(sort.group)).toEqual(['Rychlost']);
 
-    await user.click(within(nabidka).getByRole('button', { name: 'Pronájem' }));
-    await waitFor(() => expect(lastParams().categoryType).toBe('pronajem'));
-    expect(pressed(nabidka)).toEqual(['Pronájem']);
-    await user.click(within(nabidka).getByRole('button', { name: 'Pronájem' }));
-    await waitFor(() => expect(lastParams().categoryType).toBeNull());
-    expect(pressed(nabidka)).toEqual([]);
-  });
-
-  it('draws Řadit as a phone-tone bar whose lit segment never lets go', async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
-    const { group, buttons } = bar('Řadit dle');
-    expect(buttons.map((b) => b.textContent)).toEqual(['Nemovitosti', 'Inzeráty']);
-    expect(pressed(group)).toEqual(['Nemovitosti']);
-    expect(buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
-
-    await user.click(buttons[0]);
-    expect(lastParams().metric).toBe('active_property_count');
-    expect(pressed(group)).toEqual(['Nemovitosti']);
-    await user.click(buttons[1]);
-    await waitFor(() => expect(lastParams().metric).toBe('listing_count'));
-    expect(pressed(group)).toEqual(['Inzeráty']);
+    const horizon = bar('Opustilo trh do (dní)');
+    expect(horizon.buttons.map((b) => b.textContent)).toEqual(['14 dní', '30 dní', '60 dní', '90 dní']);
+    expect(pressed(horizon.group)).toEqual(['30 dní']);
+    await user.click(horizon.buttons[2]);
+    await waitFor(() => expect(lastBody().horizon_days).toBe(60));
+    expect(new URLSearchParams(screen.getByTestId('search').textContent ?? '').get('horizon')).toBe('60');
   });
 });
 
@@ -233,34 +211,24 @@ describe('<Brokers> on the phone: one joined bar per pick-one', () => {
  * the figures, never under each one. */
 describe('<Brokers> on the phone: P28', () => {
   // On screen only: not the sr-only copy in each row's link name, and not the
-  // leaderboard kept mounted under `hidden` while a name is searched.
+  // board kept mounted under `hidden` while a name is searched.
   const shown = (text: string, root: Pick<typeof screen, 'queryAllByText'> = screen) =>
     root
       .queryAllByText(text)
       .filter((el) => !el.classList.contains('sr-only') && !el.closest('[hidden]'));
 
-  it('the ranked unit is said once above the roll, and follows the metric', async () => {
-    const user = userEvent.setup();
+  it('the unit is said once above the roll', async () => {
     renderPage();
-    const board = await screen.findByRole('list', { name: 'Žebříček makléřů' });
-
+    const board = await roll();
     expect(shown('nemovitostí')).toHaveLength(1);
     expect(board.contains(shown('nemovitostí')[0])).toBe(false);
-    expect(shown('nemovitostí', within(board))).toHaveLength(0);
     expect(within(board).getAllByRole('link')[0]).toHaveAccessibleName(/49 nemovitostí/);
-
-    await user.click(screen.getByRole('button', { name: 'Inzeráty' }));
-    const first = within(screen.getByRole('list', { name: 'Žebříček makléřů' })).getAllByRole('link')[0];
-    await waitFor(() => expect(first).toHaveAccessibleName(/99 inzerátů/));
-    expect(shown('inzerátů')).toHaveLength(1);
-    expect(shown('nemovitostí')).toHaveLength(0);
-    expect(shown('inzerátů')[0].textContent).toBe(metricUnitHead('listing_count'));
   });
 
   it('search results say their unit once too', async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByRole('list', { name: 'Žebříček makléřů' });
+    await roll();
     await user.type(screen.getByRole('searchbox', { name: 'Hledat makléře podle jména' }), 'Kub');
 
     const results = await screen.findByRole('list', { name: 'Nalezení makléři' });
@@ -268,11 +236,6 @@ describe('<Brokers> on the phone: P28', () => {
     expect(shown('nemovitostí', within(results))).toHaveLength(0);
     expect(shown('nemovitostí')).toHaveLength(1);
     expect(results.contains(shown('nemovitostí')[0])).toBe(false);
-  });
-
-  it('names the head from the same branch as the figures', () => {
-    expect(metricUnitHead('active_property_count')).toBe('nemovitostí');
-    expect(metricUnitHead('listing_count')).toBe('inzerátů');
   });
 });
 

@@ -10,7 +10,6 @@ also carry their trend (`trend`, wave 6): a rolling series rebuilt from the chec
 from __future__ import annotations
 
 import datetime as _dt
-import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -128,16 +127,6 @@ def oneline(text: Any, limit: int = 200) -> str:
 def graded(value: float, warn: float, fail: float) -> str:
     """Problem above `fail`, Watch above `warn`, else OK."""
     return "fail" if value > fail else "warn" if value > warn else "ok"
-
-
-def wilson_lower(hits: int, n: int, z: float = 1.96) -> float | None:
-    """The Wilson score interval's lower bound of hits / n; None when nothing was counted."""
-    if n == 0:
-        return None
-    p, z2 = hits / n, z * z
-    centre = p + z2 / (2 * n)
-    margin = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
-    return max(0.0, (centre - margin) / (1 + z2 / n))
 
 
 def cell(subject: str, status: str, message: str, *, value: Any = None, unit: str = "",

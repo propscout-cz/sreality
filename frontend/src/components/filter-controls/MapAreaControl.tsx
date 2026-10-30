@@ -5,16 +5,17 @@
  * Browse's viewport filter — and "Clear" drops it. No corner handles and no
  * number inputs: the box is a view, and a view is what the operator sees.
  *
- * State shape (`MapBounds | null`): west < east, south < north in WGS84
- * degrees, or null for no map area. The Watchdog editor is its one site;
- * Browse's sidebar draws the centre+radius circle with LocationControl. Both
- * paint through lib/mapShape. Carries maplibre-gl, so import it lazily. */
+ * Value: the watchdog's map area, a box (west < east, south < north in WGS84
+ * degrees) or the circle a watchdog saved from Browse holds, or null for none.
+ * It emits a box or null: "Use current view" turns a circle into the view's box.
+ * The Watchdog editor is its one site. Carries maplibre-gl, so import it lazily. */
 
 import { useEffect, useRef } from 'react';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 
 import { createMap } from '@/lib/basemap';
-import { mapAreaLabel, type MapBounds } from '@/lib/filters';
+import { circleBounds, mapAreaLabel, type MapBounds, type MapCircle } from '@/lib/filters';
+import { circleRing } from '@/lib/geoRing';
 import { addDashedShape, boxRing, setDashedShape } from '@/lib/mapShape';
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 11 };
@@ -22,7 +23,7 @@ const BOX = 'map-area';
 const FIT_PADDING = 24;
 
 interface MapAreaControlProps {
-  value: MapBounds | null;
+  value: MapBounds | MapCircle | null;
   onChange: (next: MapBounds | null) => void;
   /** Optional explanation rendered under the buttons. */
   hint?: string;
@@ -111,12 +112,15 @@ export function MapAreaControl({ value, onChange, hint }: MapAreaControlProps) {
   );
 }
 
-function show(map: MaplibreMap, value: MapBounds | null, fit: boolean): void {
-  setDashedShape(map, BOX, value ? boxRing(value) : null);
-  if (value && fit) {
-    map.fitBounds(
-      [[value.west, value.south], [value.east, value.north]],
-      { padding: FIT_PADDING, duration: 0 },
-    );
+function show(map: MaplibreMap, value: MapBounds | MapCircle | null, fit: boolean): void {
+  if (!value) {
+    setDashedShape(map, BOX, null);
+    return;
+  }
+  const circle = 'radius_m' in value;
+  setDashedShape(map, BOX, circle ? circleRing(value.lat, value.lng, value.radius_m) : boxRing(value));
+  if (fit) {
+    const b = circle ? circleBounds(value) : value;
+    map.fitBounds([[b.west, b.south], [b.east, b.north]], { padding: FIT_PADDING, duration: 0 });
   }
 }

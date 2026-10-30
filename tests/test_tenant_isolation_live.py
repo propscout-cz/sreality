@@ -81,8 +81,8 @@ _ADMIN_ONLY_RELATIONS: list[str] = list(ADMIN_ONLY_RELATIONS)
 
 # Amendment A6 (Phase 0): the broker-directory PII surfaces stay dark to BOTH
 # browser roles; the SPA reads them only through the identity-gated, PII-masking
-# /brokers API. These are SECURITY DEFINER views/matview (the broker base tables
-# are already RLS-on-no-policy), so the effective gate is the absence of a
+# /brokers API. These are SECURITY DEFINER views (the broker base tables and the
+# book are RLS-on-no-policy), so the effective gate is the absence of a
 # browser-role SELECT grant on each.
 #
 # MIRRORS tests/test_migration_rls_grants.py::_BROKER_A6_SURFACES -- add a new
@@ -96,10 +96,9 @@ _BROKER_PII_RELATIONS: list[str] = [
     "broker_firm_memberships_public",
     "broker_listings_public",
     "listing_broker_public",
-    "broker_geo_options",
     "broker_resolution_runs_public",
-    "broker_region_type_stats",
-    "firms_public",
+    "broker_book",
+    "broker_book_projection",
 ]
 
 # Migration 398: contact-PII columns allowed to REMAIN on a browser-readable
@@ -1432,7 +1431,7 @@ def test_matviews_not_writable_by_browser_roles(svc: Any) -> None:
 
 def test_broker_pii_dark_to_browser_roles(svc: Any) -> None:
     """Amendment A6: neither anon nor authenticated may read the broker-directory
-    PII surfaces (or execute the broker_leaderboard RPC) before Wave 4 masking."""
+    PII surfaces before Wave 4 masking."""
     with svc.cursor() as cur:
         leaks: list[str] = []
         for rel in _BROKER_PII_RELATIONS:
@@ -1446,22 +1445,6 @@ def test_broker_pii_dark_to_browser_roles(svc: Any) -> None:
                 leaks.append(f"anon can SELECT {rel}")
             if auth_sel:
                 leaks.append(f"authenticated can SELECT {rel}")
-        # broker_leaderboard RPC — look the oid up so we don't hard-code the args
-        cur.execute(
-            "SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-            "WHERE n.nspname = 'public' AND p.proname = 'broker_leaderboard'"
-        )
-        for (oid,) in cur.fetchall():
-            cur.execute(
-                "SELECT has_function_privilege('anon', %s, 'EXECUTE'), "
-                "       has_function_privilege('authenticated', %s, 'EXECUTE')",
-                (oid, oid),
-            )
-            anon_x, auth_x = cur.fetchone()
-            if anon_x:
-                leaks.append("anon can EXECUTE broker_leaderboard")
-            if auth_x:
-                leaks.append("authenticated can EXECUTE broker_leaderboard")
     assert not leaks, f"broker PII reachable by a browser role (A6 violated): {leaks}"
 
 

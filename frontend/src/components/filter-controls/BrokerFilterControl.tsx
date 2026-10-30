@@ -121,9 +121,9 @@ export default function BrokerFilterControl({
                     {labelOf(b).firm ?? 'nezávislý'}
                   </span>
                 </span>
-                {/* The CZ-scoped count the search orders by (migration 396). */}
+                {/* The live properties the search orders by. */}
                 <span className="shrink-0 text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)]">
-                  {fmtCount(b.cz_active_property_count)}
+                  {fmtCount(b.active_properties)}
                 </span>
               </button>
             ))

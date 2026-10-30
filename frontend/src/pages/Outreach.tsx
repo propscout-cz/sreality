@@ -47,7 +47,6 @@ export default function Outreach() {
           districts,
           category_main: categoryMain,
           category_type: categoryType,
-          metric: 'active_property_count',
         },
       }),
     onSuccess: (c) => {

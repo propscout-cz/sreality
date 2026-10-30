@@ -502,6 +502,12 @@ MAX_RETIRE_FRACTION: float = 0.05
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
 # `guard_agrees`, and this budget stays below it, so raising it never enables the corpus.
 #
+# 14,000 MB since 2026-10-30, raised to its projection for E964's next batch: the operator's
+# widening to kraje 86, 94 and 108 (14 okresy, 95,343 adverts the store does not hold). On the
+# schema's 8,334 MB its seed projects 1,963 MB of build and cut plus 27 MB of snapshot (~10,324
+# MB), and the 16,055 Liberecký adverts still unread bring both builds to ~10,700 MB, leaving
+# ~3,300 MB for arrivals. The database is 146.6 GB, so the raise is ~3 % of it.
+#
 # 10,000 MB since E940 (2026-10-17; 6,000 since E946, 1,500 since E941, 800 since E916, 400
 # before that; MB here are MiB, as the guard computes them), sized for the re-seed that lists
 # Prague whole and kraj 27 (E939 S4, E961): seven towns (25,527 located adverts), obec:554782
@@ -519,7 +525,7 @@ MAX_RETIRE_FRACTION: float = 0.05
 # eight towns plus all 157 Prague quarters (~170,000, ~3,700 MB projected) and E941's 1,500 for
 # S1's 38,000. A DELETE never shrinks a file, so the schema's size is a high-water mark that
 # pruned generations leave behind.
-MAX_SCHEMA_MB: float = 10000.0
+MAX_SCHEMA_MB: float = 14000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
@@ -557,7 +563,7 @@ SNAPSHOT_BYTES_PER_ROW: int = 300
 # refuses a scope whose peak would pass HALF of what the container may use — the rule a widened
 # scope's gate holds the worker to (E939) — measured at import (#2016): 8,192 MiB / 12 kB =
 # 699,050 adverts on a public runner (E940's whole cut: 56 kB, ~149,800), though MAX_SCHEMA_MB
-# binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
+# binds first, above ~660k. The 323,128 of the re-seed: ~3.7 GiB.
 CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
 SEED_MEMORY_MB: float = memory_ceiling_mb() / 2
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are

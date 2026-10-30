@@ -16,7 +16,7 @@ import {
   useCountLevel,
 } from '@/lib/mapCounts';
 import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/queries';
-import type { CenterRadius, MapBounds } from '@/lib/filters';
+import type { MapBounds, MapCircle } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
 import { czPlural } from '@/lib/format';
@@ -68,12 +68,10 @@ const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
  * kraj borders were always drawn. */
 const OVERLAY_BEFORE_ID = psgLayerId(GROWTH_METRIC_ORDER[0]);
 
-const centerRadiusPolygon = (
-  cr: CenterRadius,
-): GeoJSON.Feature<GeoJSON.Polygon> => ({
+const circlePolygon = (c: MapCircle): GeoJSON.Feature<GeoJSON.Polygon> => ({
   type: 'Feature',
   properties: {},
-  geometry: { type: 'Polygon', coordinates: [circleRing(cr.lat, cr.lng, cr.radius_m)] },
+  geometry: { type: 'Polygon', coordinates: [circleRing(c.lat, c.lng, c.radius_m)] },
 });
 
 const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
@@ -302,10 +300,12 @@ interface Props {
   bounds: MapBounds | null;
   /* Fires on user-driven pan/zoom (we ignore programmatic moves).
    * `null` means "the operator cleared the map area" (Reset-view).
-   * Suppressed when `locationMode === 'center_radius'`: the
-   * spatial predicate comes from the sidebar's centre+radius
-   * widget, not the viewport. */
+   * Suppressed while a circle is the map area: the circle holds still
+   * while the map moves. */
   onBoundsChange?: (b: MapBounds | null) => void;
+  /* Every settled view, user-driven or programmatic: where a switch to
+   * centre + radius places its circle. */
+  onViewChange?: (b: MapBounds) => void;
   /* Cross-source hover sync. Listings whose ids appear here render
    * with the highlight paint expressions; the map pushes its own
    * mouseenter/mouseleave events outward through onHover. */
@@ -314,12 +314,11 @@ interface Props {
   /* The locator halo's points: the hovered cards' own rows (HoverTarget), so the
    * halo lands even when the map holds no row for the property. */
   haloPoints: ReadonlyArray<HaloPoint>;
-  /* When set (i.e. the operator chose centre+radius mode in the
-   * sidebar) the map renders a dashed copper circle around the
-   * point so the cohort's geographic scope is visible. The circle
-   * is purely visual — the cohort filtering happens client-side
-   * via the circumscribed square in filters.effectiveBbox. */
-  centerCircle: CenterRadius | null;
+  /* The circle map area: a dashed copper ring with a draggable centre. The
+   * cohort is this exact circle, filtered in the database (`in_map_area`). */
+  circle: MapCircle | null;
+  /* A drag of the circle's centre ends here; without it the centre stays put. */
+  onCircleMove?: (next: MapCircle) => void;
   /* Latest "fly to this place" command from outside (e.g. a District
    * typeahead pick). The map watches the prop's identity and animates
    * to (lat, lng, zoom) when it changes. Programmatic moves don't
@@ -416,7 +415,9 @@ export default function ListingMap({
   hoveredIds,
   onHover,
   haloPoints,
-  centerCircle,
+  circle,
+  onCircleMove,
+  onViewChange,
   flyTo,
   frame,
   anchor = null,
@@ -526,13 +527,18 @@ export default function ListingMap({
   const newTab = useNewTabProps();
   const newTabRef = useRef(newTab);
   newTabRef.current = newTab;
-  /* When centre+radius mode is active the `moveend` handler must
-   * skip emitting bounds — the cohort filters by the dashed circle,
-   * not the viewport. Suppression flag rather than removing the
-   * listener so toggling the mode at runtime doesn't require a
-   * map remount. */
-  const suppressBoundsRef = useRef(centerCircle != null);
-  suppressBoundsRef.current = centerCircle != null;
+  /* While a circle is the map area the `moveend` handler must skip
+   * emitting bounds — the cohort is the circle, not the viewport. A flag
+   * rather than removing the listener, so the switch needs no remount. */
+  const suppressBoundsRef = useRef(circle != null);
+  suppressBoundsRef.current = circle != null;
+  const circleRef = useRef(circle);
+  circleRef.current = circle;
+  const onCircleMoveRef = useRef(onCircleMove);
+  onCircleMoveRef.current = onCircleMove;
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
+  const centreMarkerRef = useRef<maplibregl.Marker | null>(null);
   /* Initial bbox from URL captured once at mount time — applying it
    * on the load event is what restores a shared link's exact viewport.
    * Reading the live `bounds` prop instead would refit every time the
@@ -895,15 +901,45 @@ export default function ListingMap({
       map.on('mouseleave', COUNTS, () => {
         map.getCanvas().style.cursor = '';
       });
-      map.on('mouseenter', 'point', (e) => {
+      /* Every pin answers a pointer (operator ruling 2026-10-30): its preview on the map,
+       * the popup a click opens, and its card lit when the card is loaded. Followed per pin
+       * under the cursor (`mousemove`, not the layer's one `mouseenter`), so moving across
+       * touching pins follows the cursor and pins stacked on one point light together. A
+       * click keeps the preview open; while one is open, hovering adds no second. */
+      let preview: maplibregl.Popup | null = null;
+      let previewId: string | number | undefined;
+      const hidePreview = () => {
+        preview?.remove();
+        preview = null;
+        previewId = undefined;
+      };
+      map.on('mousemove', 'point', (e) => {
         map.getCanvas().style.cursor = 'pointer';
-        const f = e.features?.[0];
-        const id = f?.id as number | undefined;
-        if (typeof id === 'number') onHoverRef.current?.([id]);
+        const features = e.features ?? [];
+        const ids = [...new Set(features.map((f) => f.id).filter((id): id is number => typeof id === 'number'))];
+        onHoverRef.current?.(ids.length > 0 ? ids : null);
+        const top = features[0];
+        if (!top || top.geometry.type !== 'Point' || popupRef.current?.isOpen()) {
+          hidePreview();
+          return;
+        }
+        if (top.id === previewId) return;
+        preview?.remove();
+        previewId = top.id;
+        preview = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          maxWidth: '280px',
+          className: 'listing-popup',
+        })
+          .setLngLat(top.geometry.coordinates as [number, number])
+          .setHTML(listingPopupHtml(top.properties as unknown as MapRow, newTabRef.current))
+          .addTo(map);
       });
       map.on('mouseleave', 'point', () => {
         map.getCanvas().style.cursor = '';
         onHoverRef.current?.(null);
+        hidePreview();
       });
 
       const setPinPrecisionArea = (row: MapRow | null, at: [number, number] | null) => {
@@ -917,7 +953,8 @@ export default function ListingMap({
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
         /* Removing the previous popup fires its `close`, which clears the
-         * previous circle before this one is drawn. */
+         * previous circle before this one is drawn; the hover preview gives way. */
+        hidePreview();
         popupRef.current?.remove();
         const popup = new maplibregl.Popup({
           closeButton: true,
@@ -935,9 +972,8 @@ export default function ListingMap({
         popupRef.current = popup.addTo(map);
       });
 
-      /* Centre+radius overlay. The polygon source carries an empty
-       * ring when the operator hasn't picked a centre yet; the
-       * effect below populates it when `centerCircle` is non-null. */
+      /* The circle map area. The polygon source carries an empty ring
+       * while the area is a box; the effect below draws the circle. */
       map.addSource('center-circle', {
         type: 'geojson',
         data: emptyCenterCircle,
@@ -1102,6 +1138,7 @@ export default function ListingMap({
       });
 
       setReady(true);
+      onViewChangeRef.current?.(viewBounds(map));
 
       /* Restore the exact viewport captured in the URL on mount.
        * Marks the initial-fit ref so the rows effect doesn't fight us
@@ -1123,12 +1160,12 @@ export default function ListingMap({
      * fitBounds / easeTo calls produce events with `originalEvent ===
      * undefined`, which we skip — otherwise the initial-fit refit and
      * the Reset-view animation would both write to the URL.
-     * Also skip when centre+radius mode is on; the dashed circle owns
-     * the spatial predicate in that mode.
+     * Also skip while a circle is the map area; it holds still.
      * Any user move, in either mode, voids a still-pending fit to results:
      * an empty first cohort (a small circle) leaves it pending, and the next
      * non-empty one (the switch back to the viewport) zoomed out over them. */
     map.on('moveend', (e) => {
+      onViewChangeRef.current?.(viewBounds(map));
       if (e.originalEvent == null) return;
       didInitialFitRef.current = true;
       if (suppressBoundsRef.current) return;
@@ -1137,6 +1174,8 @@ export default function ListingMap({
 
     return () => {
       popupRef.current?.remove();
+      centreMarkerRef.current?.remove();
+      centreMarkerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -1268,31 +1307,51 @@ export default function ListingMap({
     ready,
   ]);
 
-  // Sync the centre+radius overlay polygon whenever the prop changes.
-  // No-op until the map's `load` event has run — until then there's
-  // no `center-circle` source to call setData on.
+  /* Draw the circle and its draggable centre whenever the prop changes. No-op until
+   * the map's `load` has run (no `center-circle` source before it). The ring follows
+   * a drag live; the drop commits the new centre (the radius stays). */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    const src = map.getSource('center-circle') as
-      | GeoJSONSource | undefined;
-    if (!src) return;
-    src.setData(
-      centerCircle ? centerRadiusPolygon(centerCircle) : emptyCenterCircle,
-    );
-  }, [centerCircle, ready]);
+    const ring = (c: MapCircle | null) =>
+      (map.getSource('center-circle') as GeoJSONSource | undefined)?.setData(
+        c ? circlePolygon(c) : emptyCenterCircle,
+      );
+    ring(circle);
+    if (!circle || !onCircleMoveRef.current) {
+      centreMarkerRef.current?.remove();
+      centreMarkerRef.current = null;
+      return;
+    }
+    if (!centreMarkerRef.current) {
+      const marker = new maplibregl.Marker({ color: '#b58438', draggable: true });
+      const at = (): MapCircle | null => {
+        const c = circleRef.current;
+        if (!c) return null;
+        const { lat, lng } = marker.getLngLat();
+        return { ...c, lat, lng };
+      };
+      marker.on('drag', () => ring(at()));
+      marker.on('dragend', () => {
+        const next = at();
+        if (next) onCircleMoveRef.current?.(next);
+      });
+      centreMarkerRef.current = marker;
+    }
+    centreMarkerRef.current.setLngLat([circle.lng, circle.lat]).addTo(map);
+  }, [circle, ready]);
 
-  /* Leaving the circle hands the spatial predicate back to the viewport: emit
-   * the view on screen, so the cohort is what the map shows without a pan (the
-   * URL's bbox is otherwise stale or absent — no move writes it under a circle). */
-  const prevCenterCircleRef = useRef(centerCircle);
+  /* Leaving the circle hands the map area back to the viewport: emit the view on
+   * screen, so the cohort is what the map shows without a pan (the URL's bbox is
+   * absent — no move writes it under a circle). */
+  const prevCircleRef = useRef(circle);
   useEffect(() => {
-    const had = prevCenterCircleRef.current != null;
-    prevCenterCircleRef.current = centerCircle;
+    const had = prevCircleRef.current != null;
+    prevCircleRef.current = circle;
     const map = mapRef.current;
-    if (!ready || !map || !had || centerCircle != null) return;
+    if (!ready || !map || !had || circle != null) return;
     onBoundsChangeRef.current?.(viewBounds(map));
-  }, [centerCircle, ready]);
+  }, [circle, ready]);
 
   /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
    * the pin limit, every one a pin at any zoom) or as the server's tile cells
@@ -1531,9 +1590,12 @@ export default function ListingMap({
             <span
               className="font-normal text-[var(--color-ink-2)]"
               title={
-                `V záběru je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, mapa je proto počítá `
-                + 'po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, nic se neusekne. '
-                + 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.'
+                `${circle ? 'V kruhu' : 'V záběru'} je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, `
+                + 'mapa je proto počítá po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, '
+                + 'nic se neusekne. '
+                + (circle
+                  ? 'Zmenšete kruh nebo zvyšte limit pinů a piny se vrátí.'
+                  : 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.')
               }
             >
               · po dlaždicích
@@ -1954,7 +2016,7 @@ function MapViewControls({
           />
         </label>
         <span className="text-[0.65rem] text-[var(--color-ink-3)]">
-          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}).
+          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}). Tento prohlížeč si číslo pamatuje.
         </span>
       </div>
       <label className="inline-flex items-center gap-1.5 cursor-pointer">

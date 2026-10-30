@@ -12,6 +12,7 @@ Imports are lazy and inside the functions on purpose: every portal module import
 
 from __future__ import annotations
 
+import functools
 import importlib
 from typing import Any
 
@@ -85,3 +86,10 @@ def build_client_class(source: str) -> Any:
     attributes off it (`USE_PROXY`, `PROXY_REQUIRED`) rather than making one."""
     mod_name, cls_name = CLIENT_CLASSES[source]
     return getattr(importlib.import_module(mod_name), cls_name)
+
+
+@functools.cache
+def indexless_sources() -> tuple[str, ...]:
+    """The sources whose Portal has no index to walk (the `indexless` seam: `web`): their walk observes no ad's end."""
+    return tuple(sorted(s for s, (mod_name, cls_name) in PORTAL_CLASSES.items()
+                        if getattr(getattr(importlib.import_module(mod_name), cls_name), "indexless", False)))

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import type { ListingFilters } from '@/lib/filters';
@@ -7,6 +7,7 @@ import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
+import SettingsRow from '@/components/SettingsRow';
 import { Segmented, Switch } from '@/components/controls';
 import { STATS_REGISTRY } from '@/lib/statsRegistry.generated';
 import {
@@ -240,22 +241,6 @@ export default function StatsDashboard({
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-/* One row of the settings panel: a tracked small-caps label naming what the row
- * sets ("Dashboard": which charts; "Vzorek": which properties count), stacked over
- * its controls while the PANEL is narrow. The panel's own width decides, not the
- * screen's: the filter sidebar stays open below lg, and a dashboard chip (up to
- * ~20rem: a 16rem name plus grip and ⋯) never shrinks, so the column waits for a
- * cell that holds one. A plain label, not a heading or a group: the chart titles
- * are the board's headings, and the lens is the group named "Vzorek". */
-function SettingsRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid grid-cols-1 gap-y-1.5 py-3 @min-[30rem]:grid-cols-[6.5rem_minmax(0,1fr)] @min-[30rem]:items-baseline @min-[30rem]:gap-x-4">
-      <span className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">{label}</span>
-      <div className="min-w-0">{children}</div>
     </div>
   );
 }

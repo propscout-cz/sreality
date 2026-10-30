@@ -21,7 +21,8 @@ from scraper.db import QUEUE_PRIORITY_VERIFY
 from location_data.claims_common import SOURCES
 from scraper.delist_policy import GONE_DWELL, RECHECK_THROTTLE
 from scripts.checks.clock import fetchall
-from scripts.checks.common import ago, as_utc, cell, iso, judged, num, result, wilson_lower
+from scripts.checks.common import ago, as_utc, cell, iso, judged, num, result
+from toolkit.measures import wilson_lower
 
 # A second walk-path verdict confirms a removal GONE_DWELL after the first, but presence_candidates
 # re-nominates no ad within RECHECK_THROTTLE of its last check, so the longer of the two binds.

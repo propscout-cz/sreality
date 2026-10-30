@@ -2031,7 +2031,7 @@ renumber.** Navigate by area:
     Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
     neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
-    left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
+    left unset and named), Browse's circle around it (250 m – 2 km, 500 m default, the true circle
     every Browse reader filters on), the user's building material and condition, under the Stats lens
     "Prodáno (trh)" (default) or "Vše". Its "Prozkoumat okolí" opens the explore window over the same
     filter, lens and dashboard, Stats tab open; "Explore area" under the minimap is its twin (operator
@@ -2131,9 +2131,9 @@ renumber.** Navigate by area:
     letter before the click);
     an engine merge rules nothing. Then
     `properties_changed` (`scripts/recompute_property_stats.py`, the dirty drain's own
-    after-step: the scoped rollup, the Browse row, the broker queue) runs ONCE over the survivor
-    and the retired, so `brokers.property_count` follows on the broker drain's cadence, not at
-    the daily broker sweep. `detach_listings` is the ONE split and the ONE undo, set-shaped: one
+    after-step: the scoped rollup, the broker book, the Browse row) runs ONCE over the survivor
+    and the retired, so every broker number (read from the book) follows in the merge's own
+    transaction. `detach_listings` is the ONE split and the ONE undo, set-shaped: one
     transaction locks every property its steps will lock, up front in id order, then re-plans
     each advert in the caller's order (so it sees the call's earlier adverts) and sends it back
     to its ORIGIN (the `prev_property_id` of its oldest live ledger row), reactivating that
@@ -2504,24 +2504,27 @@ renumber.** Navigate by area:
     the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
     source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
     the map box, the place chips, the reader's own lenses in `setScope.ts` normalizeScope's form and
-    the one-portal order of Q49 b). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    the one-portal order of Q49 b; without the lenses, `cohort_where`, the broker board's cohort). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
     `furnished` / `ownership` / `condition_match`: NULL or a value outside the column's canon,
     `COLUMN_CANONICAL_VALUES`, which the canon itself never joins; the RPCs spell each canon out,
-    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). **The map box is the
-    ONE spatial shape** (2026-10-21, closed M3): Browse filters by `effectiveBbox` — its viewport, or
-    the square around a centre+radius pick (a circumscribed square, accepted since the mode shipped;
-    the main map still draws the exact circle) — as a lat/lng band on the list and both stats RPCs
-    (`bbox_*`); `WatchdogFilterSpec.bounds` (the `location` composite's one sub-field beside the
-    `districts` chips, Browse's `MapBounds`) is that same box, rendered as the same band by
-    `api/location_filter.bounds_where`, so a watchdog saved from Browse watches the rows Browse
-    showed; the matcher's own circle (`lat`/`lng`/`radius_m`, ST_DWithin) is gone, no stored spec
-    ever carried one. Saving from Browse offers the viewport box through one checkbox (ticked;
-    the preset dialog's question, because a stale viewport would fire forever) and takes a
-    centre+radius square always; the editor's `MapAreaControl` sets the box to the mini-map's
-    view. A true circle, if ever wanted, is one change for both surfaces. Open divergence: the six amenities are the property's union
+    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). **The map area is ONE
+    predicate** (2026-10-30, replacing 10-21's box-only ruling, M3): a box (Browse's viewport) or a TRUE
+    circle (centre + radius, metres on the WGS84 spheroid), never both, tested by `public.in_map_area`
+    (migration 694: the box band, or a band no narrower than the circle then `ST_DWithin` on geography) in
+    `browse_list_visible`, both stats RPCs and `api/location_filter.area_where`, which renders the same call
+    for the watchdog matcher, the broker board and the agents' `search_properties`.
+    `WatchdogFilterSpec.bounds` / `.circle` (the `location` composite's area beside the `districts` chips)
+    are Browse's, so a watchdog saved from Browse watches the rows Browse showed; the radius domain is the
+    registry's `radius_m` (100 m to 10 km). The SPA holds ONE map area (`ListingFilters.bounds` or
+    `.circle`, URL `bbox` or `circle`) and sends it as those readers' own parameters (`queries.areaArgs`);
+    a switch to centre + radius places the circle in the middle of the main map, whose centre is dragged
+    there, the sidebar sizing only the radius (operator ruling 2026-10-30; the square it replaced
+    overcounted 12 to 22 %). Saving from Browse offers the viewport box through one checkbox (ticked;
+    the preset dialog's question, because a stale viewport would fire forever) and takes a circle
+    always; the editor's `MapAreaControl` shows either and sets the box to the mini-map's view. Open divergence: the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the
@@ -2565,9 +2568,9 @@ renumber.** Navigate by area:
     UI because it sharpens as the AUTODEDUP scope grows (measured 2026-10-13: outside the apply
     scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
     twin). A broker filter moves the portal side onto that broker's ads only (one of its ads on P
-    in the switch's status: `toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`),
-    so broker + portal means one ad satisfies both, while the status stays the property's. ONE SQL
-    function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
+    in the switch's status, over the broker's `broker_book` row: `toolkit/brokers.book_rule_sql`, read by
+    `broker_property_ids`, the broker board and a broker's own numbers), so broker + portal means one ad satisfies both, while the status stays the
+    property's. ONE SQL function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
     defaulted; two independent conjuncts since 657), is read by both aggregate RPCs and, inlined,
     by both property grains' one `portals` hook (the Watchdog's `any` arm, as it has no status
     filter, and the agents' search with Browse's status); the SPA
@@ -2599,15 +2602,11 @@ renumber.** Navigate by area:
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
     `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
-    (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
-    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
-    Outreach, in the per-level `= any(district_level_codes(…))` form, the SQL twin of `district_where`
-    over `listing_location`'s `*_kod`, which the planner folds to constants) all compile the same plan; the shared table
-    `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
-    `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
-    test rather than a support ticket. The leaderboard's count book has cells for an INCLUDE at kraj /
-    okres / obec only, so any other chip set (a quarter, a street, an exclude) reads `listings` live —
-    one gate pair, exact complements, pinned in `tests/test_broker_leaderboard_contract.py`.
+    (Browse's PostgREST string and the pipeline board's in-memory twin) and the two RPC bodies
+    (`browse_stats_properties`, `browse_map_cells`) all compile the same plan; the shared table
+    `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py` and
+    `districtCodes.test.ts`, so a divergence is a red test rather than a support ticket. (The broker
+    leaderboard's own copy, 609, and its count book went in 693: the broker board filters Browse's cohort.)
     What this replaced was **five** predicates in **six** copies (obec/okres/region equality, a
     `locality` obec-AND-ILIKE pair, a name fallback ILIKE-ing four text columns). Equality is
     enough because `listing_location` (migration 501) answers every listing with RÚIAN codes.
@@ -3451,7 +3450,11 @@ renumber.** Navigate by area:
 20. **Property maintenance is dirty-set incremental (Phase 3), not a full-table recompute.**
     The writers that change a property's children — `listing_write.write_listings` (a content
     change, or a revival, or a write under an inactive property), `mark_listing_inactive`
-    (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`) — enqueue the affected `property_id` into `dirty_properties`
+    (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`),
+    the broker attribution link (`toolkit/broker_sources.py`: a changed `listings.broker_identity_id`, in the same
+    statement; a new advert has no property yet) and every broker re-point (a changed `broker_identities.broker_id`,
+    through `broker_sources.dirty_repointed` in its transaction: `docs/design/broker-board.md`) — enqueue the
+    affected `property_id` into `dirty_properties`
     (migration 106) with a cheap set-based `INSERT ... ON CONFLICT DO UPDATE SET marked_at`.
     The realtime worker's maintenance lane (`recompute_property_stats.run_incremental_pass`, every
     30 s; its only runtime since Actions-exit W0, #2010, deleted `property_maintenance.yml`) attaches
@@ -3462,16 +3465,19 @@ renumber.** Navigate by area:
     and the pass is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
-    the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
-    and the broker queue for their attributed adverts) in ONE transaction under the 10-min
-    ceiling, then dequeues — so a change usually no longer waits for the `*/15`
+    the ids it recomputed — each slice runs `properties_changed` (recompute, the broker book,
+    and `sync_browse_list`) in ONE transaction under
+    the 10-min ceiling, then dequeues — so a change usually no longer waits for the `*/15`
     wholesale rebuild — which was a measured mean of 11.7 min, worst 36.6 (94 rebuilds / 24 h,
     2026-09-21). A fast path, not a guarantee: the rebuild snapshots `browse_projection` at its
     start and renames the new table in at its end, so a patch committed inside that window is
     superseded silently, and a rebuild is in flight ~26 % of wall-clock (283 runs / 72 h, mean
     237 s against a 900 s cadence). The drain is race-free +
-    terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
-    since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
+    terminating: it claims rows dirtied at/before a run cutoff and deletes each only while it
+    still carries the `marked_at` it was claimed with (a compare-and-set, 2026-10-29), so a mid-run
+    re-dirty survives — even one stamped at/before the cutoff by a writer whose transaction began
+    before it and committed after the slice read its adverts (an attribution chunk is one long
+    transaction); it is claimed again once committed.
     The incremental pass then ends with `_settle_fresh`, which stamps `settled_at` (rule 16's
     publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
@@ -3509,8 +3515,17 @@ renumber.** Navigate by area:
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
     that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
     second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
-    own after-step: scoped recompute, Browse patch, broker queue) directly, and never enqueue
-    `dirty_properties`.
+    own after-step: scoped recompute, broker book, Browse patch) directly, and never
+    enqueue `dirty_properties`.
+    **The pass also keeps the broker book** (`broker_book`, migration 692): one row per (property,
+    canonical broker), stored from its one view `broker_book_projection`. `properties_changed` upserts
+    the view's rows for its ids, rewriting only a row that differs, and deletes the rows the view no
+    longer holds (an identity writer passes both sides, so the side an advert left loses its row);
+    each full-sweep batch does the same over its id range in the batch's transaction, the book under
+    its own 2-min ceiling so one attempt (10 + 2 min) stays inside the 15-min lease. Its columns, and
+    why the fold is at write time: `docs/design/broker-board.md`. Every broker number is read from it
+    (`toolkit/brokers.py` `BROKER_COUNTS_SQL`: search, the dossier, the merge review and Outreach's draft
+    facts; the board inside a Browse cohort; ruling 4), so no broker number is the broker lane's.
     A residual of removing the
     inline singleton rollup: a crawler change confined to unhashed columns (`area_basis`,
     `published_at`, `source_url`) reaches its property only at the daily sweep, and an
@@ -3855,7 +3870,7 @@ renumber.** Navigate by area:
     `broker_id`s came out of that response. The route itself is deleted too (#2063: no reader, no traffic).
     `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
     route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
-    values on the property page and the board card; the leaderboard, search and broker dossier still
+    values on the property page and the board card; the broker board, search and broker dossier still
     swap them for `has_email` / `has_phone` for a non-admin. The agents' `get_property_brokers` (#2063) is the
     same read on the service connection, unmasked the same way (ADR-0002: at most 20 people per call, each call
     recorded; MCP stays masked). **Migration 398 settles that for good:**
@@ -4386,15 +4401,17 @@ renumber.** Navigate by area:
     job checks view = emitter = function on one row. Its
     limits are the doc comment's, stated so a panel does not oversell it: an ACTIVE row is its age
     so far (a lower bound, right-censored), an INACTIVE row its closed run, so a cohort that mixes
-    both mixes two things; and the anchor is OUR first sighting, because no portal supplies a
-    usable listing date (5 of 9 carry none, sreality's is the last edit, ceskereality's lags a
+    both mixes two things; and the anchor is `first_seen_at`, which is the drain's first WRITE of
+    the ad, not the walk's sighting (migration 444: the two differ by the detail queue's wait, once
+    nine days; the sighting is `discovered_at`, which nothing reads yet), because no portal supplies
+    a usable listing date (5 of 9 carry none, sreality's is the last edit, ceskereality's lags a
     median 26 days), so an ad active before its portal was first walked reads younger than it is.
     `tom_days_min/max` is a column filter on every read model, applied to the Browse list, count,
     pins, Stats and map counts alike (before 2026-10-17 it reached only the last two).
 
-    **Its second half — "newly listed" (2026-10-18, migration 625).** A TOM counts from OUR first
-    sighting, which is the ad's start only when the walk saw it appear. In a SWEEP (a portal
-    category's first walk, or a catch-up after a gap) the walk discovers the existing stock in one
+    **Its second half — "newly listed" (2026-10-18, migration 625).** A TOM counts from our first
+    write of the ad (`first_seen_at`), which is the ad's start only when the walk saw it appear. In
+    a SWEEP (a portal category's first walk, or a catch-up after a gap) the walk discovers the existing stock in one
     day, and every ad in it reads younger than it is; the two portals that publish a listing date
     measure the gap at a median 0.6 d on ordinary days against 16 d (bazos) / 77 d (ceskereality)
     on sweep days. Sweeps are not one go-live date per portal (sreality's largest was a land
@@ -4416,6 +4433,18 @@ renumber.** Navigate by area:
     ~1.1k ads, 0.1 % of the corpus); the flag of an ad first seen TODAY can flip when the hour's
     refresh learns the day was a sweep; mixing active and inactive ads (the first half) is
     unchanged and the operator's to live with.
+
+    **Its third — "left the market within N days" (2026-10-29, migration 691, broker board W1).**
+    `public.measure_exit_within(observed, started_at, ended_at, property_active, property_last_seen,
+    days)` judges one broker SPELL (a `broker_book` row: a canonical broker's ads on a property, from
+    the first one's `first_seen_at` to the last one's last sighting, NULL while one runs) against its property: NULL = not followed (not `tom_observed`, started before the
+    2026-09-08 structural end gate of rule 3, or its window N + 7 days not yet closed); `exited` =
+    the spell ended by day N, the property left the market and nothing ran on more than 7 days past
+    it; `unknown` = flagged live but unseen since before day N; else `not_exited`. Inlinable like
+    617's; Python face `toolkit.measures.exit_within_sql`; the case table, one definer and one face
+    are `tests/test_measure_tom_days.py`'s. A spell's `tom_observed` is a stored copy of 625's flag
+    for its first ad, so it can lag a re-learned sweep day by up to one daily sweep, harmless because
+    no spell is read before its N + 7-day window closes. `docs/design/broker-board.md`.
 
     **The Stats dashboard reads the measure, never re-derives it (migration 626).** Its `ppm2` measure
     and its per-m² bands read `browse_list.price_per_m2`; a band's step follows the payload's `basis`
@@ -5155,8 +5184,8 @@ legacy columns in five different assemblies, the SPA and the extension falling b
 orders, so one listing could be labelled two ways at once. Every place FILTER is
 `<level>_id = any(codes)`, plain equality at five levels (`region_id` / `okres_id` / `obec_id` /
 `cast_obce_id` / `ulice_id`), compiled in exactly two places (`api/location_filter.py` and
-`frontend/src/lib/districtCodes.ts`) plus three SQL bodies (`browse_stats_properties`,
-`browse_map_cells`, `broker_leaderboard` — 609, over `listing_location`'s five codes), all five
+`frontend/src/lib/districtCodes.ts`) plus two SQL bodies (`browse_stats_properties`,
+`browse_map_cells`; 609's `broker_leaderboard` went in 693), all four
 tested against ONE table, `tests/fixtures/district_chip_plan.json`.
 A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN

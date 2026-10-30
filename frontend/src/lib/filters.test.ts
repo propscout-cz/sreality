@@ -2,7 +2,7 @@
  *
  * Covers:
  *   - URL round-trip through fromSearchParams / toSearchParams, including
- *     the new centre+radius + locationMode fields.
+ *     the map area (a box or a circle).
  *   - isDefault correctly returns false when any non-default field is set.
  *   - listingFiltersToRegistryView ↔ applyRegistryUpdate symmetry.
  *   - Tri-state amenities pivot 'any' / 'yes' / 'no' ↔ null / true / false
@@ -30,7 +30,9 @@ import {
   readPresetSpec,
   savedMapArea,
   filtersToWatchdogSpec,
-  effectiveBbox,
+  CIRCLE_RADIUS,
+  circleBounds,
+  circleInView,
   mapAreaLabel,
   fromSearchParams,
   isDefault,
@@ -198,18 +200,16 @@ describe('URL round-trip', () => {
     expect(toSearchParams(DEFAULT_FILTERS).has('subtype')).toBe(false);
   });
 
-  it('round-trips the centre+radius mode and coordinates', () => {
-    const f: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50.0867, lng: 14.4205, radius_m: 1500 },
-    };
-    const round = fromSearchParams(toSearchParams(f));
-    expect(round.locationMode).toBe('center_radius');
-    expect(round.centerRadius).not.toBeNull();
-    expect(round.centerRadius!.lat).toBeCloseTo(50.0867, 4);
-    expect(round.centerRadius!.lng).toBeCloseTo(14.4205, 4);
-    expect(round.centerRadius!.radius_m).toBe(1500);
+  it('round-trips the circle as one `circle` key; a link holds one map area, its radius in the slider domain', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, circle: { lat: 50.0867, lng: 14.4205, radius_m: 1500 } };
+    const sp = toSearchParams(f);
+    expect(sp.get('circle')).toBe('50.0867,14.4205,1500');
+    expect(fromSearchParams(sp).circle).toEqual({ lat: 50.0867, lng: 14.4205, radius_m: 1500 });
+    const both = fromSearchParams(new URLSearchParams('circle=50,14,1500&bbox=14.3,50,14.5,50.2'));
+    expect(both.bounds).toBeNull();
+    expect(both.circle).toEqual({ lat: 50, lng: 14, radius_m: 1500 });
+    expect(fromSearchParams(new URLSearchParams('circle=50,14,99999')).circle!.radius_m).toBe(CIRCLE_RADIUS.max);
+    expect(fromSearchParams(new URLSearchParams('circle=50,14,5')).circle!.radius_m).toBe(CIRCLE_RADIUS.min);
   });
 
   it('round-trips the bounds box (viewport mode)', () => {
@@ -221,13 +221,12 @@ describe('URL round-trip', () => {
     expect(round.bounds).toEqual({
       west: 14.3, south: 50.0, east: 14.5, north: 50.2,
     });
-    expect(round.locationMode).toBe('viewport');
+    expect(round.circle).toBeNull();
   });
 
-  it('omits locationMode and center from the URL on the default', () => {
+  it('omits the circle from the URL on the default', () => {
     const sp = toSearchParams(DEFAULT_FILTERS);
-    expect(sp.has('locmode')).toBe(false);
-    expect(sp.has('center')).toBe(false);
+    expect(sp.has('circle')).toBe(false);
   });
 
   const JIHLAVA = { name: 'Jihlava', context: null, level: 'obec' as const, id: 586846 };
@@ -524,15 +523,7 @@ describe('isDefault', () => {
   it('returns false when any single filter is non-default', () => {
     expect(isDefault({ ...DEFAULT_FILTERS, priceMin: 10_000 })).toBe(false);
     expect(isDefault({ ...DEFAULT_FILTERS, hasBalcony: 'yes' })).toBe(false);
-    expect(
-      isDefault({ ...DEFAULT_FILTERS, locationMode: 'center_radius' }),
-    ).toBe(false);
-    expect(
-      isDefault({
-        ...DEFAULT_FILTERS,
-        centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-      }),
-    ).toBe(false);
+    expect(isDefault({ ...DEFAULT_FILTERS, circle: { lat: 50, lng: 14, radius_m: 1000 } })).toBe(false);
   });
 });
 
@@ -760,23 +751,20 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.city_index_rules).toEqual([{ index_name: 'safety', op: '>=', value: 7 }]);
   });
 
-  it('the map box is the one spatial shape: the viewport box when kept, the centre+radius square always', () => {
+  it('the map area: the viewport box when kept, the circle always, never both', () => {
     const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
     const viewport = { ...DEFAULT_FILTERS, bounds };
     expect(filtersToWatchdogSpec(viewport).spec.bounds).toEqual(bounds);
     expect(filtersToWatchdogSpec(viewport, { includeMapArea: true }).spec.bounds).toEqual(bounds);
     expect(filtersToWatchdogSpec(viewport, { includeMapArea: false }).spec.bounds).toBeNull();
+    expect(filtersToWatchdogSpec(viewport).spec.circle).toBeNull();
     expect(filtersToWatchdogSpec(viewport).unsupported).toEqual([]);
 
-    const cr = { lat: 50.08, lng: 14.42, radius_m: 1500 };
-    const centered = { ...DEFAULT_FILTERS, locationMode: 'center_radius' as const, centerRadius: cr, bounds };
-    /* The square Browse filtered on (effectiveBbox), never the stale viewport, and
-     * whatever the checkbox says: a sidebar pick is not a viewport. */
-    const square = effectiveBbox(centered);
-    expect(square).not.toBeNull();
-    expect(filtersToWatchdogSpec(centered, { includeMapArea: false }).spec.bounds).toEqual(square);
-    expect(filtersToWatchdogSpec(centered).spec.bounds).toEqual(square);
-    expect(Object.keys(filtersToWatchdogSpec(centered).spec)).not.toContain('radius_m');
+    /* The true circle Browse filtered on, whatever the checkbox says: a circle is not a viewport. */
+    const circle = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+    const circled = { ...DEFAULT_FILTERS, circle };
+    expect(filtersToWatchdogSpec(circled, { includeMapArea: false }).spec.circle).toEqual(circle);
+    expect(filtersToWatchdogSpec(circled).spec).toMatchObject({ circle, bounds: null });
   });
 
   it('tri-state amenities pivot to bool | null', () => {
@@ -1068,51 +1056,36 @@ describe('filter presets', () => {
   });
 });
 
-/* The ONE box rule: the list, both stats RPCs and a watchdog saved from Browse all
- * read effectiveBbox, so these pin what "in this map area" means everywhere. */
-describe('effectiveBbox', () => {
-  it('returns null when both modes are empty', () => {
-    expect(effectiveBbox(DEFAULT_FILTERS)).toBeNull();
+/* The circle a switch to centre + radius places, and the box the camera frames it with. */
+describe('circleInView', () => {
+  it('sits in the middle of the view with the largest radius that fits, on the slider grid', () => {
+    // ~4.45 km north-south, ~2.86 km east-west at 50.08 N: the shorter side halves to ~1.43 km.
+    const c = circleInView({ west: 14.4, south: 50.06, east: 14.44, north: 50.1 });
+    expect(c.lat).toBeCloseTo(50.08, 9);
+    expect(c.lng).toBeCloseTo(14.42, 9);
+    expect(c.radius_m).toBe(1400);
   });
 
-  it('returns the literal viewport bounds in viewport mode', () => {
-    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
-    expect(effectiveBbox({ ...DEFAULT_FILTERS, bounds })).toEqual(bounds);
+  it('keeps the radius inside the domain for a street-level or a country-wide view', () => {
+    expect(circleInView({ west: 14.42, south: 50.08, east: 14.4201, north: 50.0801 }).radius_m).toBe(CIRCLE_RADIUS.min);
+    expect(circleInView({ west: 12, south: 48.5, east: 19, north: 51 }).radius_m).toBe(CIRCLE_RADIUS.max);
   });
+});
 
-  it('ignores viewport bounds in centre+radius mode, and is null there without a centre', () => {
-    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-      bounds,
-    });
-    expect(got!.north).toBeLessThan(50.2);
-    expect(got!.west).toBeLessThan(14.3);
-    expect(effectiveBbox({ ...DEFAULT_FILTERS, locationMode: 'center_radius', centerRadius: null, bounds })).toBeNull();
-  });
-
-  it('draws the square around the circle: centre-symmetric, 1 km ≈ 1/111.32 deg of latitude, wider near the pole', () => {
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-    })!;
+describe('circleBounds', () => {
+  it('is centre-symmetric, 1 km ≈ 1/111.32 deg of latitude, wider in longitude near the pole', () => {
+    const got = circleBounds({ lat: 50, lng: 14, radius_m: 1000 });
     expect(got.north - 50).toBeCloseTo(50 - got.south, 9);
     expect(got.east - 14).toBeCloseTo(14 - got.west, 9);
     expect(got.north - 50).toBeCloseTo(1 / 111.32, 6);
     const span = (lat: number) => {
-      const b = effectiveBbox({
-        ...DEFAULT_FILTERS,
-        locationMode: 'center_radius',
-        centerRadius: { lat, lng: 14, radius_m: 1000 },
-      })!;
+      const b = circleBounds({ lat, lng: 14, radius_m: 1000 });
       return b.east - b.west;
     };
     expect(span(70)).toBeGreaterThan(span(10));
   });
 });
+
 
 /* A preset click puts the area it saved in the map frame (BrowseExperience →
  * ListingMap `frame`); a preset without one leaves the camera where it is. */
@@ -1125,14 +1098,9 @@ describe('savedMapArea', () => {
     expect(savedMapArea({ filters: filtersForPreset(f, false), sort: null })).toBeNull();
   });
 
-  it('frames the square around a saved centre+radius, as Browse filters on', () => {
-    const f: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-      bounds,
-    };
-    expect(savedMapArea({ filters: f, sort: null })).toEqual(effectiveBbox(f));
+  it('frames the box around a saved circle', () => {
+    const circle = { lat: 50, lng: 14, radius_m: 1000 };
+    expect(savedMapArea({ filters: { ...DEFAULT_FILTERS, circle }, sort: null })).toEqual(circleBounds(circle));
   });
 
   it('reads the legacy bare-filters blob too', () => {
@@ -1145,5 +1113,9 @@ describe('mapAreaLabel', () => {
     expect(mapAreaLabel({ west: 14.4, south: 50.06, east: 14.44, north: 50.1 })).toBe(
       'map area ≈ 2.9 × 4.5 km around 50.0800, 14.4200',
     );
+  });
+
+  it('names the circle by its radius and centre', () => {
+    expect(mapAreaLabel({ lat: 50.08, lng: 14.42, radius_m: 1500 })).toBe('circle 1.5 km around 50.0800, 14.4200');
   });
 });

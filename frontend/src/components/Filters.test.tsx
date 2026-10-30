@@ -48,6 +48,10 @@ const renderPicker = (ui: React.ReactElement) =>
     </QueryClientProvider>,
   );
 
+/* The circle Browse would place: the sidebar asks for it, it does not compute it. */
+const CIRCLE = { lat: 50.08, lng: 14.42, radius_m: 1400 };
+const PLACE = () => CIRCLE;
+
 describe('<FilterSidebar> status line', () => {
   it('draws status, seen at birth and dismissed as segmented controls that edit the filters', async () => {
     vi.mocked(api.listCollections).mockImplementation(never);
@@ -56,7 +60,7 @@ describe('<FilterSidebar> status line', () => {
     function Host() {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
-        <FilterSidebar
+        <FilterSidebar placeCircle={PLACE}
           onReset={() => {}}
           filters={filters}
           onChange={(next) => {
@@ -106,7 +110,7 @@ describe('<FilterSidebar> pick-one bars', () => {
   function Host({ onChange, initial = DEFAULT_FILTERS }: { onChange: (f: ListingFilters) => void; initial?: ListingFilters }) {
     const [filters, setFilters] = useState<ListingFilters>(initial);
     return (
-      <FilterSidebar
+      <FilterSidebar placeCircle={PLACE}
         filters={filters}
         onReset={() => {}}
         onChange={(next) => {
@@ -160,7 +164,7 @@ describe('<FilterSidebar> pick-one bars', () => {
     vi.mocked(api.listTags).mockImplementation(never);
     renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={DEFAULT_FILTERS} onChange={onChange} onReset={() => {}} />
+        <FilterSidebar placeCircle={PLACE} filters={DEFAULT_FILTERS} onChange={onChange} onReset={() => {}} />
       </MemoryRouter>,
     );
     const user = userEvent.setup();
@@ -172,7 +176,34 @@ describe('<FilterSidebar> pick-one bars', () => {
     expect(segs[0]).toHaveClass(...CHOSEN);
     expect(segs[0].parentElement).toHaveClass('grid', 'w-full');
     await user.click(segs[1]);
-    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, locationMode: 'center_radius' });
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, bounds: null, circle: CIRCLE });
+  });
+
+  /* Operator ruling 2026-10-30: the centre lives on the main map (placed and dragged there);
+   * the sidebar keeps only the radius. No small map, no lat / lng boxes, no Clear. */
+  it('keeps only the radius for a circle, in the slider domain, and switches back to the viewport', async () => {
+    const onChange = vi.fn();
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    const filters = { ...DEFAULT_FILTERS, circle: CIRCLE };
+    renderPicker(
+      <MemoryRouter>
+        <FilterSidebar placeCircle={PLACE} filters={filters} onChange={onChange} onReset={() => {}} />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    expect(screen.queryByLabelText('latitude')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Clear spatial filter' })).toBeNull();
+    fireEvent.change(screen.getByRole('slider', { name: 'Radius' }), { target: { value: '2500' } });
+    expect(onChange).toHaveBeenLastCalledWith({ ...filters, bounds: null, circle: { ...CIRCLE, radius_m: 2500 } });
+    const metres = screen.getByRole('textbox', { name: 'Radius in metres' });
+    await user.clear(metres);
+    await user.type(metres, '50000');
+    expect(onChange).toHaveBeenLastCalledWith({ ...filters, bounds: null, circle: { ...CIRCLE, radius_m: 10_000 } });
+    const mode = screen.getByRole('group', { name: 'Map filter' });
+    await user.click(within(mode).getByRole('button', { name: 'Map viewport' }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...filters, bounds: null, circle: null });
   });
 });
 
@@ -211,13 +242,13 @@ describe('<FilterSidebar> broker', () => {
     vi.mocked(api.listCollections).mockImplementation(never);
     vi.mocked(api.listTags).mockImplementation(never);
     vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
-      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', cz_active_property_count: 41 } as brokers.BrokerPublic,
+      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', active_properties: 41 } as brokers.BrokerPublic,
     ]);
     let latest: ListingFilters = DEFAULT_FILTERS;
     function Host() {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
-        <FilterSidebar
+        <FilterSidebar placeCircle={PLACE}
           onReset={() => {}}
           filters={filters}
           onChange={(next) => {
@@ -253,7 +284,7 @@ describe('<FilterSidebar> location pick', () => {
     function Host() {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
-        <FilterSidebar
+        <FilterSidebar placeCircle={PLACE}
           onReset={() => {}}
           filters={filters}
           onChange={(next) => {
@@ -299,7 +330,7 @@ describe('<FilterSidebar> collapse', () => {
     vi.mocked(api.listTags).mockImplementation(never);
     return renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onReset={() => {}} onCollapse={onCollapse} />
+        <FilterSidebar placeCircle={PLACE} filters={DEFAULT_FILTERS} onChange={() => {}} onReset={() => {}} onCollapse={onCollapse} />
       </MemoryRouter>,
     );
   };
@@ -324,7 +355,7 @@ describe('<FilterSidebar> reset', () => {
     const onReset = vi.fn();
     renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={{ ...DEFAULT_FILTERS, priceMax: 5_000_000 }} onChange={onChange} onReset={onReset} />
+        <FilterSidebar placeCircle={PLACE} filters={{ ...DEFAULT_FILTERS, priceMax: 5_000_000 }} onChange={onChange} onReset={onReset} />
       </MemoryRouter>,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));

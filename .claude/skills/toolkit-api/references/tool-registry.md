@@ -81,11 +81,11 @@ through ONE server-side reader per screen. A new reader of these relations calls
 
 - `search_properties` (TENANT): Browse's own source, `browse_list_visible` (migration 629: the user's dismissals and
   tag, collection and pipeline scope judged under their RLS), the registry's `Agenda.BROWSE` filters (no Search
-  agenda; `location` gives way to `bounds` + `districts`) compiled by `compile_filter_where` over `BROWSE_GRAIN`
-  (rule 16), Browse's sort menu and one-portal order, the card allowlist `SEARCH_COLUMNS`, a page plus the total.
-  `category_type` is required but nullable: it decides the per-m² unit. A centre + radius pick is covered: Browse
-  filters on the square around the circle (`filters.ts` `effectiveBbox`), which is a `bounds` box. Browse's broker
-  scope and market growth live outside the registry and are not offered (#2172).
+  agenda; `location` gives way to `bounds` or `circle` + `districts`) compiled by `compile_filter_where` over
+  `BROWSE_GRAIN` (rule 16), the area through `area_where` (`in_map_area`, migration 694: a true circle), Browse's
+  sort menu and one-portal order, the card allowlist `SEARCH_COLUMNS`, a page plus the total. `category_type` is
+  required but nullable: it decides the per-m² unit. Browse's broker scope and market growth live outside the
+  registry and are not offered (#2172).
 - `get_property_dossier` (TENANT): `api/property_read.py`, the property page's own relations and allowlists
   (`properties_public`, `property_sources_public`, `listings_public`, `listing_snapshots_public`, and the runs the
   page lists from `estimation_runs` under RLS), which the extension's price chart and the PDF download read through
@@ -96,6 +96,8 @@ through ONE server-side reader per screen. A new reader of these relations calls
 - `get_property_brokers` (MARKET): the page's `POST /brokers/by-listings` read (`toolkit.brokers.listing_brokers`,
   unmasked as the page shows every signed-in user), grouped as the page groups them (`brokers.property_brokers`,
   MS7), stopping at 20 people per call. MCP stays masked (AR13): an MCP export leaves it out or masks it.
+- `rank_brokers` (MARKET): Browse's Makléři tab (`api/broker_board.board`) less `firm_ids` and `broker_id`, at most 50
+  brokers, masked as a non-admin's tab (`docs/design/broker-board.md`).
 
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
 `property_read.*_COLS`) is disjoint from `forbidden_columns()`, derived from the registry (rule 14's retired

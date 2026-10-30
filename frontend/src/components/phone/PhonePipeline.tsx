@@ -25,7 +25,7 @@
  *
  * LOKALITA is the desktop bar's place filter, nothing of its own: the same
  * `districts` params (lib/pipelineState, so one link is one view on either
- * device), the same typeahead in the brokers' place sheet, and the same
+ * device), the same typeahead as the Filtry sheet's place sheet, and the same
  * in-memory rule over the board's five codes (`matchesDistricts`). The stage
  * pages keep every stage and count only the cards in the place. */
 

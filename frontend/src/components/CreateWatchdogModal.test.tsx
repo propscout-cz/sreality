@@ -18,7 +18,7 @@ import { useState } from 'react';
 
 import { expectDialogContract } from '@/test/a11y';
 import { createWatchdogSubscription } from '@/lib/api';
-import { DEFAULT_FILTERS, effectiveBbox, type ListingFilters } from '@/lib/filters';
+import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import CreateWatchdogModal, { MAP_AREA_LABEL } from './CreateWatchdogModal';
 
 vi.mock('@/lib/api', async (orig) => ({
@@ -127,19 +127,14 @@ describe('<CreateWatchdogModal> map area', () => {
     expect(screen.queryByRole('button', { name: MAP_AREA_LABEL })).toBeNull();
   });
 
-  it('has no checkbox in centre+radius mode: the square Browse filtered on always rides along', async () => {
-    const filters: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50.08, lng: 14.42, radius_m: 1500 },
-      bounds: BOUNDS,
-    };
-    renderHost(filters);
+  it('has no checkbox for a circle: the circle Browse filtered on always rides along', async () => {
+    const circle = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+    renderHost({ ...DEFAULT_FILTERS, circle });
     open();
     expect(screen.queryByRole('button', { name: MAP_AREA_LABEL })).toBeNull();
     create();
     const saved = await lastSavedSpec();
-    expect(saved.bounds).toEqual(effectiveBbox(filters));
-    expect(saved.bounds).not.toEqual(BOUNDS);
+    expect(saved.circle).toEqual(circle);
+    expect(saved.bounds).toBeNull();
   });
 });

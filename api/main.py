@@ -265,7 +265,7 @@ app.include_router(property_merge_router)
 # /labeling/* (operator image labels + annotations: training examples, border
 # cases, tag annotations, image-pair notes) — admin-gated (require_admin).
 app.include_router(labeling_router)
-# /brokers/* (broker intelligence reads: leaderboard, detail, listings, contacts)
+# /brokers/* (broker intelligence reads: the board, detail, listings, contacts)
 # — real user identity (verify_jwt) with contact PII masked to has_email/has_phone
 # for non-admins; /contacts is admin-only.
 app.include_router(brokers_router)

@@ -16,16 +16,17 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
+from api import tenant_pool
 from api.routes import brokers as broker_routes
-from toolkit import brokers as brokers_toolkit
 
-_LEADER_ROW = {"broker_id": 1, "display_name": "RK Alfa",
+_SEARCH_ROW = {"broker_id": 1, "display_name": "RK Alfa",
                "primary_email": "a@b.cz", "primary_phone": "+420 111 222 333",
-               "active_property_count": 9}
+               "active_properties": 9}
 
 
 def _client(claims: dict):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
+    api_main.app.dependency_overrides[tenant_pool.read_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: claims
     return TestClient(api_main.app)
 
@@ -43,133 +44,53 @@ def admin_client(request):
     api_main.app.dependency_overrides.clear()
 
 
-def test_leaderboard_passes_params(client, monkeypatch):
-    captured = {}
-    def fake(conn, **kw):
-        captured.update(kw)
-        return {"data": [{"broker_id": 1}], "metadata": {"tool": "broker_leaderboard"}}
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
-
-    res = client.get("/brokers/leaderboard",
-                     params={"districts": ["Praha", "Kraj Vysočina"],
-                             "districts_lvl": ["obec", "kraj"],
-                             "districts_id": [554782, 108],
-                             "districts_excl": ["false", "true"],
-                             "metric": "listing_count", "limit": 5,
-                             "firm_ids": [8], "min_price_czk": 5_000_000,
-                             "include_unpriced": True})
-    assert res.status_code == 200
-    assert captured["districts"] == (
-        ["Praha", "Kraj Vysočina"], [False, True], ["obec", "kraj"], [554782, 108])
-    assert captured["metric"] == "listing_count"
-    assert captured["limit"] == 5
-    assert captured["firm_ids"] == [8]
-    assert captured["min_price_czk"] == 5_000_000
-    assert captured["include_unpriced"] is True
-    assert res.json()["data"] == [{"broker_id": 1}]  # no contact column, no flags
+_BOARD_ROW = {"broker_id": 1, "display_name": "RK Alfa", "firm_id": None, "firm_name": None, "firm_domain": None,
+              "primary_email": "a@b.cz", "primary_phone": "+420 111 222 333", "properties": 9, "n": 6, "exited": 3,
+              "unknown": 0, "share": 0.5, "rank": 0.19}
 
 
-def test_leaderboard_defaults_firm_ids_and_chips_to_empty(client, monkeypatch):
-    captured = {}
-    def fake(conn, **kw):
-        captured.update(kw)
-        return {"data": [], "metadata": {}}
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
-    client.get("/brokers/leaderboard")
-    assert captured["firm_ids"] == []
-    assert captured["districts"] == (None, None, None, None)
-
-
-@pytest.mark.parametrize("params", [
-    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": [554782]},
-    {"districts": ["Praha"], "districts_lvl": ["locality"], "districts_id": [554782],
-     "districts_excl": ["false"]},
-    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": [0],
-     "districts_excl": ["false"]},
-    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": ["Praha"],
-     "districts_excl": ["false"]},
-    {"region_ids": [27]},
-], ids=["a list short", "not one of the five levels", "no code", "a name for a code",
-        "the deleted id lists"])
-def test_leaderboard_refuses_a_chip_without_a_level_and_code(client, monkeypatch, params):
-    """A chip is a (level, code) or it cannot exist (605/609): every malformed shape is a
-    422 before the toolkit runs — and so is a pre-609 bundle's `region_ids`, which ignored
-    would answer its "Praha" board with the country's brokers."""
+def _stub_board(monkeypatch) -> list:
     calls = []
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard",
-                        lambda conn, **kw: calls.append(kw) or {"data": [], "metadata": {}})
-    res = client.get("/brokers/leaderboard", params=params)
-    assert res.status_code == 422 and calls == []
+    monkeypatch.setattr(broker_routes, "board", lambda conn, args, *, contacts: calls.append((args, contacts)) or {
+        "data": [dict(_BOARD_ROW)], "metadata": {"tool": "broker_board"}})
+    return calls
 
 
-def test_leaderboard_defaults_value_filter_to_unset(client, monkeypatch):
-    captured = {}
-    def fake(conn, **kw):
-        captured.update(kw)
-        return {"data": [], "metadata": {}}
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
-    client.get("/brokers/leaderboard")
-    assert captured["min_price_czk"] is None
-    assert captured["include_unpriced"] is False
+def test_the_board_takes_browses_filters_and_its_own_options(client, monkeypatch):
+    calls = _stub_board(monkeypatch)
+    res = client.post("/brokers/board", json={
+        "category_type": "prodej", "dispositions": ["2+kk"], "districts": [{"name": "Praha", "level": "kraj",
+        "id": 19}], "bounds": {"west": 14.2, "south": 49.9, "east": 14.7, "north": 50.2}, "horizon_days": 60,
+        "sort": "speed", "limit": 50, "min_properties": 3, "firm_ids": [8], "broker_id": 4})
+    assert res.status_code == 200, res.text
+    ((args, contacts),) = calls
+    assert contacts is True
+    assert (args.dispositions, args.districts[0].id, args.bounds.west, args.horizon_days, args.sort, args.limit,
+            args.min_properties, args.firm_ids, args.broker_id) == (["2+kk"], 19, 14.2, 60, "speed", 50, 3, [8], 4)
 
 
-def test_leaderboard_passes_subtypes(client, monkeypatch):
-    captured = {}
-    def fake(conn, **kw):
-        captured.update(kw)
-        return {"data": [], "metadata": {}}
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
-    client.get("/brokers/leaderboard",
-               params={"subtypes": ["kancelar", "sklad"], "include_unknown_subtype": True})
-    assert captured["subtypes"] == ["kancelar", "sklad"]
-    assert captured["include_unknown_subtype"] is True
+@pytest.mark.parametrize("body", [
+    {},
+    {"category_type": "prodej", "tags": {"set": "in"}},
+    {"category_type": "prodej", "show_dismissed": True},
+    {"category_type": "prodej", "location": {"west": 14.2}},
+    {"category_type": "prodej", "horizon_days": 45},
+    {"category_type": "prodej", "limit": 201},
+    {"category_type": "prodej", "min_properties": 0},
+    {"category_type": "prodej", "metric": "listing_count"},
+], ids=["no deal type", "a lens", "dismissals", "the place composite", "a horizon off the menu", "over the cap",
+        "no minimum", "the leaderboard's metric"])
+def test_the_board_refuses_what_it_cannot_judge_before_it_reads(client, monkeypatch, body):
+    calls = _stub_board(monkeypatch)
+    assert client.post("/brokers/board", json=body).status_code == 422 and calls == []
 
 
-def test_leaderboard_defaults_subtypes_to_empty(client, monkeypatch):
-    captured = {}
-    def fake(conn, **kw):
-        captured.update(kw)
-        return {"data": [], "metadata": {}}
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
-    client.get("/brokers/leaderboard")
-    assert captured["subtypes"] == []
-    assert captured["include_unknown_subtype"] is False
-
-
-def test_leaderboard_rejects_a_negative_min_price(client, monkeypatch):
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard",
-                        lambda conn, **kw: {"data": [], "metadata": {}})
-    res = client.get("/brokers/leaderboard", params={"min_price_czk": -1})
-    assert res.status_code == 422
-
-
-def test_leaderboard_masks_contacts_for_a_plain_user(client, monkeypatch):
-    """The inversion this wave fixes: the leaderboard returned up to 2000 brokers'
-    email + phone behind a token shipped inside the public SPA bundle."""
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard",
-                        lambda conn, **kw: {"data": [dict(_LEADER_ROW)], "metadata": {}})
-    body = client.get("/brokers/leaderboard").json()
-    row = body["data"][0]
-    assert row == {"broker_id": 1, "display_name": "RK Alfa",
-                   "active_property_count": 9, "has_email": True, "has_phone": True}
-    assert body["metadata"]["pii_masked"] is True
-
-
-def test_leaderboard_is_unmasked_for_an_admin(admin_client, monkeypatch):
-    monkeypatch.setattr(broker_routes.brokers, "leaderboard",
-                        lambda conn, **kw: {"data": [dict(_LEADER_ROW)], "metadata": {}})
-    body = admin_client.get("/brokers/leaderboard").json()
+def test_the_board_is_unmasked_for_an_admin(admin_client, monkeypatch):
+    """A plain user's board is masked: the PII gate below."""
+    _stub_board(monkeypatch)
+    body = admin_client.post("/brokers/board", json={"category_type": None}).json()
     assert body["data"][0]["primary_email"] == "a@b.cz"
     assert body["metadata"]["pii_masked"] is False
-
-
-def test_leaderboard_flags_a_broker_with_no_contacts(client, monkeypatch):
-    monkeypatch.setattr(
-        broker_routes.brokers, "leaderboard",
-        lambda conn, **kw: {"data": [{"broker_id": 2, "primary_email": None,
-                                      "primary_phone": ""}], "metadata": {}})
-    assert client.get("/brokers/leaderboard").json()["data"][0] == {
-        "broker_id": 2, "has_email": False, "has_phone": False}
 
 
 def test_get_broker_404_when_missing(client, monkeypatch):
@@ -243,7 +164,7 @@ def _by_listings_with_contact(c, monkeypatch) -> dict:
 def test_by_listings_gives_a_non_admin_the_values(client, monkeypatch):
     """The property page's and board card's broker list shows the contact to every
     signed-in user (operator ruling 2026-10-18) — the one /brokers route that does
-    not mask for a non-admin. The leaderboard, search and dossier still do."""
+    not mask for a non-admin. The board, search and dossier still do."""
     body = _by_listings_with_contact(client, monkeypatch)
     assert body["data"] == [_ATTRIBUTION_WITH_CONTACT]
     assert body["metadata"]["pii_masked"] is False
@@ -324,10 +245,10 @@ def test_the_broker_by_id_batch_route_is_gone(client):
 def test_search_masks_contacts_for_a_plain_user(client, monkeypatch):
     monkeypatch.setattr(broker_routes.brokers, "search",
                         lambda conn, q, *, limit=12, include_pii=False: {
-                            "data": [dict(_LEADER_ROW)], "metadata": {}})
+                            "data": [dict(_SEARCH_ROW)], "metadata": {}})
     body = client.get("/brokers/search", params={"q": "alfa"}).json()
     assert body["data"][0] == {"broker_id": 1, "display_name": "RK Alfa",
-                               "active_property_count": 9,
+                               "active_properties": 9,
                                "has_email": True, "has_phone": True}
     assert body["metadata"]["pii_masked"] is True
 
@@ -352,33 +273,6 @@ def test_search_pushes_the_non_admin_identity_into_the_query(client, monkeypatch
 
 def test_search_still_matches_the_raw_name_for_an_admin(admin_client, monkeypatch):
     assert _search_include_pii(admin_client, monkeypatch) is True
-
-
-def test_geo_options(client, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(broker_routes.brokers, "geo_options",
-                        lambda conn, *, geo_level=None: captured.update(level=geo_level)
-                        or {"data": [{"geo_level": "region", "geo_id": 27, "name": "Praha",
-                                      "broker_count": 12}], "metadata": {}})
-    res = client.get("/brokers/geo-options", params={"geo_level": "region"})
-    assert res.status_code == 200
-    assert captured["level"] == "region"
-    assert res.json()["data"][0]["broker_count"] == 12
-
-
-@pytest.mark.parametrize("level", brokers_toolkit.GEO_LEVELS)
-def test_geo_options_accepts_every_level_the_toolkit_knows(client, monkeypatch, level):
-    monkeypatch.setattr(broker_routes.brokers, "geo_options",
-                        lambda conn, *, geo_level=None: {"data": [], "metadata": {}})
-    assert client.get("/brokers/geo-options", params={"geo_level": level}).status_code == 200
-
-
-def test_geo_options_rejects_a_level_it_cannot_answer(client):
-    """`obec` is in the SPA's geo vocabulary but never in broker_geo_options, and
-    an unvalidated level fell through to "no filter" — i.e. every region AND okres
-    returned as if they were obce."""
-    assert client.get("/brokers/geo-options",
-                      params={"geo_level": "obec"}).status_code == 422
 
 
 def test_firm_options(client, monkeypatch):
@@ -422,9 +316,8 @@ _SENTINEL = {"data": [{"broker_id": 1, "display_name": "leak@rk.cz",
 # (method, route template, concrete URL, JSON body) for every non-admin /brokers
 # route. `test_the_pii_gate_covers_every_non_admin_broker_route` keeps it honest.
 _NON_ADMIN_CALLS = [
-    ("GET", "/brokers/leaderboard", "/brokers/leaderboard", None),
+    ("POST", "/brokers/board", "/brokers/board", {"category_type": None}),
     ("GET", "/brokers/search", "/brokers/search?q=a", None),
-    ("GET", "/brokers/geo-options", "/brokers/geo-options", None),
     ("GET", "/brokers/firm-options", "/brokers/firm-options", None),
     ("GET", "/brokers/{broker_id}", "/brokers/1", None),
     ("GET", "/brokers/{broker_id}/listings", "/brokers/1/listings", None),
@@ -437,15 +330,16 @@ _UNMASKED_CALLS = [
     ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
 ]
 
-_TOOLKIT_READS = ("leaderboard", "search", "geo_options", "firm_options",
-                  "listing_brokers", "get_broker", "broker_listings", "broker_property_ids")
+_TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_listings",
+                  "broker_property_ids")
 
 
 def _stub_every_toolkit_read(monkeypatch) -> None:
+    def sentinel(*a, **kw):
+        return {"data": [dict(_SENTINEL["data"][0])], "metadata": {}}
     for name in _TOOLKIT_READS:
-        monkeypatch.setattr(broker_routes.brokers, name,
-                            lambda *a, **kw: {"data": [dict(_SENTINEL["data"][0])],
-                                              "metadata": {}})
+        monkeypatch.setattr(broker_routes.brokers, name, sentinel)
+    monkeypatch.setattr(broker_routes, "board", sentinel)
 
 
 @pytest.mark.parametrize("method,_template,url,body", _NON_ADMIN_CALLS,
@@ -470,6 +364,16 @@ def test_the_unmasked_routes_still_stamp_the_policy(
     res = client.request(method, url, json=body)
     assert res.status_code == 200, res.text
     assert res.json()["metadata"]["pii_masked"] is False
+
+
+@pytest.mark.parametrize("path", ["/brokers/search", "/brokers/firm-options", "/brokers/{broker_id}",
+                                  "/broker-review/candidates"])
+def test_a_read_counting_the_broker_book_is_bounded(path: str) -> None:
+    """READ ONLY at 8 s, as the board's own read (tenant_pool.read_conn; tests/test_broker_board_live.py)."""
+    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+
+    (route,) = [r for m, p, r in _api_routes() if (m, p) == ("GET", path)]
+    assert tenant_pool.read_conn in _reachable_calls(route.dependant)
 
 
 def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:

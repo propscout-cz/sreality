@@ -318,3 +318,10 @@ cards to the view anyway). Ledger: this wave adds more than it deletes (the poin
 from the row to the map);
 deleted: `hoverOrigin` and the map's row lookup, the comparables map's inline halo builder (one
 `haloFeatures`), Browse's inline hover reducer.
+
+**W6 (2026-10-30, operator ask: "I do not see pins for inactive properties").** Not an inactive bug: the
+operator's 273-property view was over the default limit of 200, and the limit reset to 200 on every visit
+because it lived only in the URL. Asked whether to raise the default, the operator kept it ("there is an input
+field for the user for that") and ruled that the browser remember it: the "Piny do" value is stored per
+browser (`localStorage` key `map.pins`, `lib/browseState`), a Browse URL without `pins` starts from it, and
+a link naming `pins` still wins. The default and range are unchanged.

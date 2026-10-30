@@ -350,9 +350,8 @@ every artifact is an ordinary row now. Same posture as 276: RLS on with zero pol
 everything revoked, read by the backend only (the `jobs` check's `artifact/<name>` cells among
 them; migration 643 dropped its browser view `derived_artifacts_public`). **A new derived artifact needs a registry row**, and
 `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
-set is now empty and **nothing may be added to it**. Two budgets are deliberately NOT their
-cadence: `broker_region_type_stats` 30 h (not 24 — its daily sweep itself runs up to 2h01m, so
-24 h alarms on every healthy run; measured in 440's header) and `property_sweep` (migration 622,
+set is now empty and **nothing may be added to it**. One budget is deliberately NOT its
+cadence: `property_sweep` (migration 622,
 the daily full sweep's completed cycle, stamped by `recompute_property_stats`) 38 h, because the
 `jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem at 56 h, as
 ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
@@ -380,7 +379,7 @@ which extracts every name literal from both the repo tree and `pg_proc.prosrc` a
 
 **Matview publication has ONE idiom: `select public.refresh_matview(name)`** (migration 578,
 the Broker Unify sprint's answer to the 2026-09-30 outage — a plain ACCESS EXCLUSIVE REFRESH
-of `broker_region_type_stats` blocked every reader for 352 s in working hours). Python
+of the broker count book (dropped by 693) blocked every reader for 352 s in working hours). Python
 producers call `scraper.db.refresh_matview(conn, name)` and never run
 `refresh materialized view` themselves (`tests/test_matview_refresh_convention.py` fails CI
 on a bypass, and on a plain refresh in any migration after 578). The chokepoint RAISEs on a
@@ -392,8 +391,7 @@ duration in the refresh's own transaction. **CONCURRENTLY is valid inside a tran
 (the restriction people misremember is `CREATE INDEX CONCURRENTLY`'s); two producer comments
 claimed otherwise and drove the blocking design — never re-derive that claim from a comment.
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
-this for all matviews, plus the exact broker index set — migration 508's DROP+CREATE
-silently lost 414's covering index and no test noticed). Pre-578 SQL producers
+this for all matviews). Pre-578 SQL producers
 (`refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
 their pinned inline shapes; new SQL producers call the chokepoint.
 

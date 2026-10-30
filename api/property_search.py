@@ -8,8 +8,8 @@ from typing import Any, Literal
 import psycopg
 from pydantic import Field
 
-from api.filter_args import Box, agenda_ids, filter_model, filter_values
-from api.location_filter import bounds_where, district_where
+from api.filter_args import Args, MapAreaArgs, agenda_ids, filter_model, filter_values
+from api.location_filter import area_where, district_where
 from api.property_read import jsonable
 from toolkit import _max_last_seen, _now_iso
 from toolkit.filter_compiler import BROWSE_GRAIN, compile_filter_where
@@ -58,10 +58,7 @@ SearchFilters = filter_model(
 )
 
 
-class SearchArgs(SearchFilters):
-    bounds: Box | None = Field(
-        None, description="The map box: a property matches when its point lies inside, as on Browse's map. Null = "
-        "anywhere.")
+class SearchArgs(SearchFilters, MapAreaArgs):
     sort: Literal[SORTS] = Field(
         "-first_seen_at", description="The order Browse's sort menu offers: a field, descending with a leading '-'; "
         "a missing value sorts last. Ties break on property_id. With exactly one portal, newest / oldest first "
@@ -72,16 +69,17 @@ class SearchArgs(SearchFilters):
         "narrow the filters to reach others.")
 
 
-def _sole_portal(args: SearchArgs) -> str | None:
+def _sole_portal(args: Args) -> str | None:
     """queries.ts solePortal: the one included portal, when exactly one is."""
     portals = set(args.portals or ())
     return next(iter(portals)) if len(portals) == 1 else None
 
 
-def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
-    """The FROM and WHERE a page and its count share, with their parameters."""
+def cohort_where(args: Args) -> tuple[list[str], dict[str, Any]]:
+    """Browse's cohort over a `browse_list`-shaped `l`, without the reader's lenses: its conjuncts and their
+    parameters (the broker board counts the same cohort, api/broker_board.py)."""
     where, params = compile_filter_where(filter_values(args), BROWSE_GRAIN)
-    for fragments, more in (district_where(args.districts, "l"), bounds_where(args.bounds, "l")):
+    for fragments, more in (district_where(args.districts, "l"), area_where(args.bounds, args.circle, "l")):
         where += fragments
         params.update(more)
     if portal := _sole_portal(args):
@@ -89,6 +87,12 @@ def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
         # one-portal order's column non-NULL and lets P's partial index (migration 590) serve page and count alike.
         # P is a PORTAL_OPTIONS literal.
         where.append(f"l.newest_ad_at_{portal} IS NOT NULL")
+    return where, params
+
+
+def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
+    """The FROM and WHERE a page and its count share, with their parameters."""
+    where, params = cohort_where(args)
     params["hide_dismissed"] = not args.show_dismissed
     for name in _SETS:
         # setScope.scopeArgs over a scope already in normalizeScope's form (SetScope): an empty side is no side.

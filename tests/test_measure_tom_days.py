@@ -1,11 +1,14 @@
 """One time-on-market, one definition (migration 617): offline, every view that publishes
 `tom_days` calls the function and no Python module spells the arithmetic; on the replayed schema
 (CI, `TEST_DATABASE_URL`) the function answers its documented cases, inlines, and `listings_public`
-and the Python emitter return what it returns for the same row."""
+and the Python emitter return what it returns for the same row. Its two companions are held the same
+way: "observed from the start" (625) and "left the market within N days" (691, one definer, one
+Python face, a case table over every arm and boundary, inlined)."""
 
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -180,3 +183,107 @@ def test_sweep_days_are_the_first_day_and_the_outliers(cur: Any) -> None:
 
     cur.execute(f"SELECT {tom_observed_sql('l')} FROM listings l WHERE l.id = %s", (ordinary[0],))
     assert cur.fetchone()[0] is True
+
+
+# --- "left the market within N days" (migration 691) --------------------------------------
+
+def test_exit_within_has_one_definition_and_one_python_face() -> None:
+    """The function is defined by one migration and spelled in runtime Python only by its face, so every reader W2
+    adds calls toolkit.measures.exit_within_sql instead of re-spelling the arguments."""
+    from toolkit.measures import exit_within_sql
+
+    definers = [p.name for p in sorted((_ROOT / "migrations").glob("[0-9]*.sql"))
+                if re.search(r"create\s+(or\s+replace\s+)?function\s+(public\.)?measure_exit_within\b",
+                             p.read_text(), re.I)]
+    assert definers == ["691_property_broker_spells.sql"]
+    callers = sorted(str(p.relative_to(_ROOT)) for tree in ("scraper", "toolkit", "api", "scripts")
+                     for p in (_ROOT / tree).rglob("*.py") if "measure_exit_within(" in p.read_text())
+    assert callers == ["toolkit/measures.py"], f"call exit_within_sql, not the function, in {callers}"
+    assert exit_within_sql("s", "p", "%(days)s") == (
+        "measure_exit_within(s.tom_observed, s.started_at, s.ended_at, p.is_active, p.last_seen_at, %(days)s)")
+
+
+def test_the_python_faces_constants_are_the_functions_own() -> None:
+    """The board reports E0 and M (clean_exits_since, margin_days) from toolkit.measures; they are the body's."""
+    from toolkit.measures import EXIT_CLEAN_SINCE, EXIT_MARGIN_DAYS
+
+    sql = (_ROOT / "migrations" / "691_property_broker_spells.sql").read_text()
+    body = sql[sql.index("create or replace function public.measure_exit_within("):].split("$function$")[1]
+    assert f"p_started_at >= timestamptz '{EXIT_CLEAN_SINCE} 00:00:00+00'" in body
+    assert f"now() - (p_days + {EXIT_MARGIN_DAYS}) * interval '24 hours'" in body
+    assert f"p_property_last_seen <= p_ended_at + {EXIT_MARGIN_DAYS} * interval '24 hours'" in body
+
+
+_E0 = "timestamptz '2026-09-08 00:00:00+00'"
+# Followed for every N <= 30 from 2026-10-16 on (E0 + 1 day + N + M), whatever day CI runs.
+_FOLLOWED = f"{_E0} + interval '24 hours'"
+_US = timedelta(microseconds=1)
+_NULL = object()
+
+
+def _d(days: float) -> timedelta:
+    return timedelta(days=days)
+
+
+def _exit(cur: Any, *, start: str | None, days: int | None = 14, observed: bool | None = True,
+          end: timedelta | None = None, active: bool | None = False, seen: Any = None) -> str | None:
+    """measure_exit_within with S = `start` (SQL over now() or E0; None = NULL), E = S + `end` (None = an open spell)
+    and L = S + `seen` (defaults to E; `_NULL` = NULL). One statement, so now() is one instant on both sides of every
+    boundary."""
+    seen = end if seen is None else seen
+    cur.execute(
+        f"WITH t AS (SELECT {start or 'NULL::timestamptz'} AS s) "
+        "SELECT measure_exit_within(%s, t.s, t.s + %s::interval, %s, t.s + %s::interval, %s) FROM t",
+        (observed, end, active, None if seen is _NULL else seen, days))
+    return cur.fetchone()[0]
+
+
+@REQUIRED_DB
+def test_exit_within_answers_its_case_table(cur: Any) -> None:
+    """Every arm and every boundary: E0 and the window (the start), N (the end), M (the last sighting), and NULLs. In
+    UTC, so the cases' days are the measure's 24 h."""
+    cur.execute("SET LOCAL TimeZone = 'UTC'")
+    window = "now() - interval '21 days'"  # N + M for N = 14
+    cases: list[tuple[str, dict[str, Any], str | None]] = [
+        # not followed, or nothing to judge
+        ("left-censored start", dict(start=_FOLLOWED, observed=False, end=_d(5)), None),
+        ("unknown observation", dict(start=_FOLLOWED, observed=None, end=_d(5)), None),
+        ("a microsecond before E0", dict(start=f"{_E0} - interval '1 microsecond'", end=_d(5)), None),
+        ("window N + M not over", dict(start=f"{window} + interval '1 microsecond'", end=_d(5)), None),
+        ("no start", dict(start=None, end=_d(5)), None),
+        ("no N", dict(start=_FOLLOWED, days=None, end=_d(5)), None),
+        ("property status unknown", dict(start=_FOLLOWED, end=_d(5), active=None), None),
+        ("property never seen", dict(start=_FOLLOWED, end=_d(5), seen=_NULL), None),
+        # exited, each boundary inclusive
+        ("exactly at E0", dict(start=_E0, end=_d(5)), "exited"),
+        ("window closes exactly now", dict(start=window, end=_d(5)), "exited"),
+        ("ended on day N", dict(start=_FOLLOWED, end=_d(14)), "exited"),
+        ("last seen M after the end", dict(start=_FOLLOWED, end=_d(5), seen=_d(12)), "exited"),
+        ("N = 30", dict(start=_FOLLOWED, days=30, end=_d(29)), "exited"),
+        # not exited
+        ("ended a microsecond past day N", dict(start=_FOLLOWED, end=_d(14) + _US), "not_exited"),
+        ("handed over: seen past M", dict(start=_FOLLOWED, end=_d(5), seen=_d(12) + _US), "not_exited"),
+        ("open, on the market at day N", dict(start=_FOLLOWED, active=True, seen=_d(20)), "not_exited"),
+        ("open, seen exactly on day N", dict(start=_FOLLOWED, active=True, seen=_d(14)), "not_exited"),
+        ("ended in time, property still live", dict(start=_FOLLOWED, end=_d(5), active=True, seen=_d(20)),
+         "not_exited"),
+        ("open spell, property ended", dict(start=_FOLLOWED, active=False, seen=_d(5)), "not_exited"),
+        # unknown: flagged live, unseen since before day N
+        ("open, unseen since before day N", dict(start=_FOLLOWED, active=True, seen=_d(14) - _US), "unknown"),
+        ("ended in time, property live but unseen", dict(start=_FOLLOWED, end=_d(5), active=True, seen=_d(10)),
+         "unknown"),
+    ]
+    got = {name: _exit(cur, **kw) for name, kw, _ in cases}
+    assert got == {name: want for name, _, want in cases}
+
+
+@REQUIRED_DB
+def test_exit_within_inlines(cur: Any) -> None:
+    from toolkit.measures import exit_within_sql
+
+    cur.execute(
+        "EXPLAIN (VERBOSE, COSTS OFF) "
+        f"SELECT {exit_within_sql('s', 'p', '30')} FROM broker_book s JOIN properties p ON p.id = s.property_id"
+    )
+    plan = "\n".join(r[0] for r in cur.fetchall())
+    assert "measure_exit_within" not in plan, plan

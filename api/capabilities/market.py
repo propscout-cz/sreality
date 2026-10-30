@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from api.broker_board import BoardArgs, RankArgs, board
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.capabilities.subject import (
     CATEGORIES,
@@ -29,11 +30,13 @@ from toolkit import (
     find_comparables_relaxed,
     find_distribution_outliers,
 )
+from toolkit.brokers import apply_pii_policy
 from toolkit.filter_registry import Agenda
 from toolkit.measures import RENT_MONTHLY_CZK_M2
 from toolkit.rent_map import compute_reference_rent
 
 _COMPARABLES = agenda_ids(Agenda.COMPARABLES)
+RANK_MAX = 50
 CohortFilters = filter_model("CohortFilters", _COMPARABLES, ComparableFilters)
 # The deal type follows estimate_kind, so a rent estimate never scales a sale cohort.
 YieldFilters = filter_model("YieldFilters", tuple(i for i in _COMPARABLES if i != "category_type"), ComparableFilters)
@@ -92,6 +95,10 @@ class YieldArgs(Subject, YieldFilters):
         None, ge=0, description="The price paid or asked, in Kč; with a rent estimate it yields a gross yield.")
     expected_monthly_rent_czk: int | None = Field(
         None, ge=0, description="The monthly rent expected, in Kč; with a sale estimate it yields a gross yield.")
+
+
+class RankBrokersArgs(RankArgs):
+    limit: int = Field(RANK_MAX // 2, ge=1, le=RANK_MAX, description="How many brokers to return.")
 
 
 class ReferenceRentArgs(HeldSubject):
@@ -168,6 +175,12 @@ def _brokers(ctx: Context, a: PropertyIds) -> dict[str, Any]:
     return property_brokers(ctx.conn, a)
 
 
+def _rank_brokers(ctx: Context, a: RankBrokersArgs) -> dict[str, Any]:
+    # Masked as the tab masks a non-admin's: a display_name can be the broker's e-mail or phone.
+    return apply_pii_policy(board(ctx.conn, BoardArgs.model_validate(a.model_dump(by_alias=True)), contacts=False),
+                            include_pii=False)
+
+
 def _subject(args: type[Args]) -> str:
     """The subject sentence, naming only the categories `args` declares."""
     declared = [c for c in CATEGORIES if c in args.model_fields]
@@ -229,4 +242,19 @@ ENTRIES = (
           f"{BROKERS_MAX} people and stops at the next: metadata.brokers says how many of how many, and "
           f"metadata.unlisted_property_ids the properties to ask for again. A merged-away id follows its survivor.",
           PropertyIds, _brokers),
+    # Browse's Makléři tab (POST /brokers/board) on the same connection: the third read of the broker relations, with
+    # speed for every signed-in user and their agents (operator ruling 2026-10-29); names and firms, no contact.
+    _read("rank_brokers",
+          "The brokers of the properties Browse lists for these filters, read as Browse's Makléři tab reads them: per "
+          "broker their properties in the cohort (with one of their ads there in the property's status, on the "
+          "portals asked), and speed: of their followed properties (n, the ones whose outcome is known), how many "
+          "left the market within horizon_days of the broker's first ad (exited; sold or withdrawn, not necessarily "
+          "sold), the share and its Wilson lower bound (rank), null below metadata.min_n or when metadata."
+          "speed_refused names why (outcome_selected: a filter selects on how the stay went; mixed_category: the "
+          "cohort holds more than one property or deal type) and metadata.speed_refused_by the filters to change. "
+          "metadata.market is the same share over every attributed property of the cohort, metadata."
+          "uncovered_portals the cohort's portals that publish no broker. Names and firms only, never a contact (a "
+          "name that is an e-mail or a phone number arrives redacted). category_type is required (null = every deal "
+          "type).",
+          RankBrokersArgs, _rank_brokers),
 )
