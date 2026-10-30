@@ -901,15 +901,45 @@ export default function ListingMap({
       map.on('mouseleave', COUNTS, () => {
         map.getCanvas().style.cursor = '';
       });
-      map.on('mouseenter', 'point', (e) => {
+      /* Every pin answers a pointer (operator ruling 2026-10-30): its preview on the map,
+       * the popup a click opens, and its card lit when the card is loaded. Followed per pin
+       * under the cursor (`mousemove`, not the layer's one `mouseenter`), so moving across
+       * touching pins follows the cursor and pins stacked on one point light together. A
+       * click keeps the preview open; while one is open, hovering adds no second. */
+      let preview: maplibregl.Popup | null = null;
+      let previewId: string | number | undefined;
+      const hidePreview = () => {
+        preview?.remove();
+        preview = null;
+        previewId = undefined;
+      };
+      map.on('mousemove', 'point', (e) => {
         map.getCanvas().style.cursor = 'pointer';
-        const f = e.features?.[0];
-        const id = f?.id as number | undefined;
-        if (typeof id === 'number') onHoverRef.current?.([id]);
+        const features = e.features ?? [];
+        const ids = [...new Set(features.map((f) => f.id).filter((id): id is number => typeof id === 'number'))];
+        onHoverRef.current?.(ids.length > 0 ? ids : null);
+        const top = features[0];
+        if (!top || top.geometry.type !== 'Point' || popupRef.current?.isOpen()) {
+          hidePreview();
+          return;
+        }
+        if (top.id === previewId) return;
+        preview?.remove();
+        previewId = top.id;
+        preview = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          maxWidth: '280px',
+          className: 'listing-popup',
+        })
+          .setLngLat(top.geometry.coordinates as [number, number])
+          .setHTML(listingPopupHtml(top.properties as unknown as MapRow, newTabRef.current))
+          .addTo(map);
       });
       map.on('mouseleave', 'point', () => {
         map.getCanvas().style.cursor = '';
         onHoverRef.current?.(null);
+        hidePreview();
       });
 
       const setPinPrecisionArea = (row: MapRow | null, at: [number, number] | null) => {
@@ -923,7 +953,8 @@ export default function ListingMap({
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
         /* Removing the previous popup fires its `close`, which clears the
-         * previous circle before this one is drawn. */
+         * previous circle before this one is drawn; the hover preview gives way. */
+        hidePreview();
         popupRef.current?.remove();
         const popup = new maplibregl.Popup({
           closeButton: true,
