@@ -171,6 +171,7 @@ describe('pin limit and price labels on the map overlay', () => {
     expect(parsePinLimit('5')).toBe(PIN_LIMIT_MIN);
     expect(parsePinLimit('99999')).toBe(PIN_LIMIT_MAX);
     expect(parsePinLimit('350')).toBe(350);
+    expect(parsePinLimit('')).toBe(PIN_LIMIT_DEFAULT);
   });
 
   /* View knobs, NOT cohort filters: they must not reach the filter spec. */
@@ -178,6 +179,60 @@ describe('pin limit and price labels on the map overlay', () => {
     const withKnobs = fromSearchParams(new URLSearchParams('pins=500&labels=0'));
     const without = fromSearchParams(new URLSearchParams(''));
     expect(withKnobs).toEqual(without);
+  });
+});
+
+/* The limit typed into "Piny do" is remembered per browser (operator ask 2026-10-30):
+ * a fresh Browse starts from it, a link that names `pins` still wins. */
+describe('the remembered pin limit', () => {
+  const REMEMBERED = 'map.pins';
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('starts a Browse without `pins` from the remembered limit, and a link that names one from the link', () => {
+    localStorage.setItem(REMEMBERED, '500');
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(500);
+    expect(urlState('/browse?pins=300').result.current.view.overlay.pinLimit).toBe(300);
+  });
+
+  it('reads nothing remembered, or nonsense, as the default', () => {
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+    localStorage.setItem(REMEMBERED, 'abc');
+    expect(urlState('/browse').result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+  });
+
+  it('remembers a change, and a change back to the default leaves the URL plain', () => {
+    const { result } = urlState('/browse?cat=byt');
+    act(() => result.current.view.setOverlay({ pinLimit: 500 }));
+    expect(new URLSearchParams(result.current.search).get('pins')).toBe('500');
+    expect(localStorage.getItem(REMEMBERED)).toBe('500');
+    expect(result.current.view.overlay.pinLimit).toBe(500);
+    act(() => result.current.view.setOverlay({ pinLimit: PIN_LIMIT_DEFAULT }));
+    expect(new URLSearchParams(result.current.search).has('pins')).toBe(false);
+    expect(localStorage.getItem(REMEMBERED)).toBe(String(PIN_LIMIT_DEFAULT));
+    expect(result.current.view.overlay.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+  });
+
+  it('keeps the remembered limit through a filter change', () => {
+    localStorage.setItem(REMEMBERED, '800');
+    const { result } = urlState('/browse');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 5_000_000 }));
+    expect(result.current.view.overlay.pinLimit).toBe(800);
+  });
+
+  it('seeds the in-memory (Explore) view from the remembered limit and writes it back', () => {
+    localStorage.setItem(REMEMBERED, '400');
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    expect(result.current.overlay.pinLimit).toBe(400);
+    act(() => result.current.setOverlay({ pinLimit: 1_000 }));
+    expect(result.current.overlay.pinLimit).toBe(1_000);
+    expect(localStorage.getItem(REMEMBERED)).toBe('1000');
   });
 });
 
