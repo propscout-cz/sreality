@@ -15,6 +15,8 @@ branches" on two Karlín/Nusle listings.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from location_data.resolver import check as step_check
@@ -167,7 +169,11 @@ def test_a_pin_outside_the_resolved_obec_keeps_the_pin_and_drops_to_the_admin_le
     has one no longer has "the pin because it is the only position there is" — it takes the
     register's point and disputes `pin_off_street` instead (the test below). This rail is
     about the rows that still have nothing else. No PSČ and an undeclared pin (v5.5): the town
-    rule keeps the name — 56 realitymix pins sit on the centre of Czechia — and this flags it."""
+    rule keeps the name — 56 realitymix pins sit on the centre of Czechia — and this flags it.
+
+    UNDECLARED pin, deliberately: since v5.9 a pin the portal itself calls approximate yields
+    the position to the words (the tests below); a pin nobody called approximate is kept, as
+    which half is wrong there is not ruled."""
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "coordinate", lat=49.7573, lon=18.0158),
@@ -176,6 +182,89 @@ def test_a_pin_outside_the_resolved_obec_keeps_the_pin_and_drops_to_the_admin_le
     assert resolution.obec_kod == 554782
     assert (resolution.lat, resolution.lon) == (49.7573, 18.0158)
     assert resolution.granularity == "obec"
+
+
+# ------------------------------------------------ v5.9: the words decide (ruling 2026-10-30)
+
+_APPROXIMATE = {"value_text": "approximate_location",
+                "declared_precision_label": "approximate_location", "blur_evidence": "declared"}
+
+
+def test_a_declared_blurred_pin_outside_the_named_town_yields_the_position_to_the_words():
+    """Operator ruling 2026-10-30 ("the words"). bazos stamps every pin "Přibližná lokalita"
+    and places it on a POSTAL-AREA point: one Kolín pin carried 143 active ads from 34 obce,
+    and listing 19509113 said Jestřabí Lhota while its row drew Kolín, 8.8 km off at r = 1 km
+    — 12,543 active bazos rows in that state. A pin the portal itself calls approximate, in a
+    town the ad does not name, is the half that yields: FILL stands the row at the town's own
+    point, the pin stays EVIDENCE (CHECK still says `pin_outside_obec`), the grain is the
+    bind's and the blurred pin caps the confidence at `medium`, exactly as before."""
+    claims = [
+        mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
+        mm.claim(2, "psc", source="bazos", value_text="16000"),
+        mm.claim(3, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
+        mm.claim(4, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ]
+    resolution = _resolve(claims)
+    assert resolution.disputed == "pin_outside_obec"
+    assert resolution.obec_kod == 554782
+    assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)   # Praha's own point
+    assert resolution.granularity == "obec"
+    assert resolution.match_confidence == "medium"
+    assert resolution.uncertainty_radius_m == 1000.0
+    # v5.8's floor applies to this placement as to every FILL placement: the town's reach,
+    # not the level constant, is the radius a reader sees.
+    mirror = mm.default_mirror()
+    mirror.units[:] = [replace(u, extent_m=17_600.0) if u.unit_id == 13 else u
+                       for u in mirror.units]
+    assert _resolve(claims, mirror).uncertainty_radius_m == 17_600.0
+
+
+def test_a_declared_blurred_pin_outside_the_town_bound_to_a_part_stands_at_the_parts_doors():
+    """The words name the quarter too: the row stands where v5.8 puts a pinless část — the
+    centroid of its own doors — at the quarter grain, and the flag still records the pin."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", source="bazos", value_text="Vokovice"),
+        mm.claim(3, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
+        mm.claim(4, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ])
+    assert resolution.disputed == "pin_outside_obec"
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (554782, 490067)
+    assert resolution.granularity == "cast_obce_or_quarter"
+    assert 50.1010 < resolution.lat < 50.1012 and 14.3480 < resolution.lon < 14.3482
+    assert resolution.uncertainty_radius_m == 750.0
+
+
+def test_a_declared_blurred_pin_inside_the_named_town_stays_the_position():
+    """Nothing moves where nothing disagrees: a blurred pin inside the town it names is the
+    finer of two true answers and keeps the position, at the obec grain and `medium`."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
+        mm.claim(2, "coordinate", source="bazos", lat=50.0900, lon=14.4500),
+        mm.claim(3, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ])
+    assert resolution.disputed is None
+    assert (resolution.lat, resolution.lon) == (50.0900, 14.4500)
+    assert resolution.granularity == "obec"
+    assert resolution.match_confidence == "medium"
+
+
+def test_a_town_the_pin_itself_established_never_yields_its_own_pin():
+    """BIND's pin-derived rungs: the town CAME from the pin, so the containment question is
+    circular and is not asked — a reverse-geocoded row (R7) and a sliver row 100 m outside
+    its polygon (R8) both keep the pin, with no dispute."""
+    reverse = _resolve([
+        mm.claim(1, "coordinate", source="bazos", lat=49.7573, lon=18.0158),
+        mm.claim(2, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ])
+    assert (reverse.obec_kod, reverse.disputed) == (599212, None)
+    assert (reverse.lat, reverse.lon) == (49.7573, 18.0158)
+    sliver = _resolve([
+        mm.claim(1, "coordinate", source="bazos", lat=49.79413, lon=18.0158),
+        mm.claim(2, "precision_declaration", source="bazos", **_APPROXIMATE),
+    ])
+    assert (sliver.obec_kod, sliver.disputed) == (599212, None)
+    assert (sliver.lat, sliver.lon) == (49.79413, 18.0158)
 
 
 def test_a_pin_that_cannot_be_on_the_named_street_loses_to_the_street():

@@ -1098,7 +1098,13 @@ def elect_pin(claims: Sequence[Claim]) -> Claim | None:
     return eligible[0] if eligible else None
 
 
-def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecision) -> Position:
+def place(
+    binding: Binding,
+    pin_claim: Claim | None,
+    *,
+    declared: DeclaredPrecision,
+    pin_inside_bound_obec: bool | None = None,
+) -> Position:
     """The ONE precedence rule (W18), in order:
 
         registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  (FILL's unit point)
@@ -1120,6 +1126,20 @@ def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecis
     stamped `pin_overridden`, which CHECK turns into `disputed='pin_off_street'` and GRADE
     reads as a ceiling of `medium`. An exact pin that AGREES with the street keeps the
     position: the pin is the finer of two true answers.
+
+    A FOURTH state (v5.9, operator ruling 2026-10-30: "the words decide"): the pin is DECLARED
+    blurred and lies OUTSIDE the obec the claims bound. bazos places every advert on a
+    postal-area point — one Kolín pin carried 143 active ads from 34 obce, 8.8 km from the
+    village listing 19509113 names — so 12,543 active rows said one town and drew another. A
+    coordinate the portal itself calls approximate, in a town the ad does not name, is not a
+    position: the row is left unplaced here and FILL stands it at the named entity's own point
+    (a bound část's doors, else the obec's point) with that entity's reach as its radius. The
+    pin stays EVIDENCE — CHECK reads the elected claim and still records `pin_outside_obec`.
+    An EXACT or UNDECLARED pin outside the town keeps the position as before (the only
+    position there is), at `obec` grain and flagged; which half is wrong there is not ruled.
+    `pin_inside_bound_obec` is the caller's one registry read: None means it was never asked
+    (no pin, no bound town, or a town the pin itself established on R7/R8, where the
+    comparison is circular).
 
     WHICH POINT WINS HERE DOES NOT DECIDE THE GRAIN, and deliberately not. A portal's
     declared precision is a statement about its own COORDINATE, so `grade.grade` applies the
@@ -1166,6 +1186,8 @@ def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecis
             source_claim_ids=(pin_claim.id,),  # type: ignore[union-attr]
         )
     if pin_claim is not None and pin is not None:
+        if declared.blurred and pin_inside_bound_obec is False:
+            return Position(lat=None, lon=None, origin="none")
         return Position(
             lat=pin[0], lon=pin[1], origin="portal_pin", blurred=declared.blurred,
             source_claim_ids=(pin_claim.id,),

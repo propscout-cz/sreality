@@ -5063,7 +5063,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   only a bound `č.p.` point publishes one, and only psč still falls back to a claim, preserve-if-null.
   A street bound in a town the advert's town field names takes the část obce all its doors lie in
   (Q3), else none. Only an operator correction outranks the registry. It also fills
-  **the position: the portal pin when admissible, else the finest bound unit's point on surface** — the boundary's stored
+  **the position: the portal pin when admissible — and not DECLARED blurred outside the town the claims
+  bound (v5.9) — else the finest bound unit's point on surface** — the boundary's stored
   inscribed-circle centre, inside the polygon where `ST_Centroid` need not be, read off the same
   chain rather than as a tenth registry question. RÚIAN draws no polygon for a část obce, so since
   v5.8 a bound část stands at the centroid of its own valid doors (`part_point`, the street's
@@ -5084,9 +5085,10 @@ portal's payload or its own page, and every other stamp is class E outright.
   understate the thing the position came off. A portal's declared
   precision reaches the confidence and never the grain (see the position ladder below).
 * **CHECK** (`check.py`) decides the country and whether the row disagrees with itself. `disputed` is
-  ONE nullable text column whose value IS the reason: `pin_outside_obec` (the pin is kept, the
-  granularity drops to the admin level; asked only when the town came from a CLAIM, since on BIND's
-  pin-derived rungs the comparison is circular), `pin_outside_cz`, `country_conflict`, and
+  ONE nullable text column whose value IS the reason: `pin_outside_obec` (an EXACT or UNDECLARED pin is
+  kept and the granularity drops to the admin level; a DECLARED blurred pin outside the town is not the
+  position since v5.9 and the flag records that it disagreed; asked only when the town came from a CLAIM,
+  since on BIND's pin-derived rungs the comparison is circular), `pin_outside_cz`, `country_conflict`, and
   `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; the granularity does
   NOT drop, because the address identity is the half that bound to the register and the coordinate is
   the half that lost, and GRADE caps such a row at `medium`). A Czech admin
@@ -5115,6 +5117,17 @@ is wrong. The extent is in that threshold because a street is not a
 point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule would call half of its pins a
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
 `pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
+
+**A fourth state since v5.9 (operator ruling 2026-10-30, "the words decide"): a pin the portal DECLARES
+blurred that lies OUTSIDE the obec the claims bound is not the position.** bazos places every advert on a
+postal-area point — one Kolín pin carried 143 active ads from 34 obce, and 12,543 active bazos rows said one
+town and drew another, 8.8 km off at r = 1 km (19509113: Jestřabí Lhota, drawn in Kolín). `core` asks the
+registry once whether the elected pin lies in the bound obec (never on the pin-derived rungs R7/R8, where
+the town came from the pin) and `place()` leaves such a row unplaced, so FILL stands it at the named
+entity's own point — a bound část's doors, else the obec's point — with that entity's reach as its radius.
+The pin stays EVIDENCE and `pin_outside_obec` is still recorded. An EXACT or UNDECLARED pin outside the
+town keeps the position as before (the only position there is), at `obec` grain and flagged: which half is
+wrong there is not ruled.
 
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named

@@ -80,7 +80,17 @@ def resolve(
             if c.claim_type == "street_name" and step_bind.admissible(c, None) is None
             and normalized[c.id].rejections == ("town_as_street",)),
     )
-    position = step_bind.place(binding, pin_claim, declared=declared)
+    # The one containment read `place()` needs (v5.9): is the elected pin inside the obec the
+    # CLAIMS bound? Never asked of a pin-derived town (R7/R8 — the pin is where the town came
+    # from), and the drain pre-answers it for every claim coordinate, so CHECK's later read of
+    # the same point is a cache hit.
+    pin_inside_bound_obec: bool | None = None
+    if (pin_claim is not None and pin_claim.has_position and binding.obec_kod is not None
+            and not binding.pin_derived):
+        covering = ctx.registry.containing_obec(float(pin_claim.lat), float(pin_claim.lon))  # type: ignore[arg-type]
+        pin_inside_bound_obec = covering is not None and covering.code == binding.obec_kod
+    position = step_bind.place(
+        binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_bound_obec)
 
     # ---- 2. FILL. It answers the hierarchy AND the position the hierarchy implies: a row
     # the claims could not place is placed at the finest bound unit's own registry point, so

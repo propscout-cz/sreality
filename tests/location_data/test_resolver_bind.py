@@ -674,3 +674,22 @@ def test_2a_2b_2c_the_reader_rows_resolve_where_the_operator_put_them():
         _, resolution = _from_reading(18726990, _payload(kind, **cells), bar,
                                       ("psc", "50002"), pin=(50.196572, 15.806580))
         assert (resolution.obec_kod, resolution.ulice_kod) == (569810, street), kind
+
+
+# ------------------------------------------------ v5.9: the words decide (ruling 2026-10-30)
+
+
+def test_place_sets_aside_only_a_declared_blurred_pin_known_to_lie_outside_the_bound_town():
+    """`pin_inside_bound_obec` is the caller's one registry read. None (never asked) and True
+    keep the pin; False sets it aside only when the portal DECLARED the pin blurred — an exact
+    or undeclared pin outside the town is kept, as before, and CHECK flags it."""
+    binding = _bind([mm.claim(1, "obec_name", value_text="Praha")])
+    pin = mm.claim(2, "coordinate", lat=49.7573, lon=18.0158)
+    blurred = step_bind.DeclaredPrecision(label="approximate_location", blurred=True,
+                                          claim_ids=(3,))
+    exact = step_bind.DeclaredPrecision(label=None, blurred=False, claim_ids=())
+    place = step_bind.place
+    assert place(binding, pin, declared=blurred, pin_inside_bound_obec=False).origin == "none"
+    assert place(binding, pin, declared=blurred, pin_inside_bound_obec=True).origin == "portal_pin"
+    assert place(binding, pin, declared=blurred).origin == "portal_pin"
+    assert place(binding, pin, declared=exact, pin_inside_bound_obec=False).origin == "portal_pin"

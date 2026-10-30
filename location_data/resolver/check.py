@@ -12,7 +12,10 @@ Three reasons ship:
   position to a register point is still evidence, and this is the test that evidence is for.
   Where the pin IS the position it is KEPT (throwing it away loses the only position we have)
   and the granularity drops to the admin level, because the address identity is the half that
-  is now in doubt; where the REGISTER placed the row the grain stands, because the address
+  is now in doubt — since v5.9 that is an EXACT or UNDECLARED pin only: a DECLARED blurred pin
+  outside the bound town never becomes the position (`bind.place` leaves the row to FILL;
+  operator ruling 2026-10-30, "the words decide"), and this flag is then what records that
+  the pin disagreed; where the REGISTER placed the row the grain stands, because the address
   identity is the half that bound. It is asked only when the town came from a CLAIM: on BIND's
   two pin-derived rungs (the reverse geocode and the sliver fallback) the comparison is
   circular — the pin is where the town came from — and a sliver is an edge case of the

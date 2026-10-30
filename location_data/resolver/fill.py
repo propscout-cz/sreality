@@ -14,7 +14,9 @@ W2-a the quarter was filled only on the point-in-polygon branch (`cast_obce_for_
 and deletes the query.
 
 FILL also places the row when BIND's pin election did not (W2-a3): **the portal pin when one
-was admissible, else the finest bound entity's own registry point** — a část obce's at the
+was admissible, else the finest bound entity's own registry point** — and, since v5.9, when the
+one admissible pin is DECLARED blurred and lies outside the town the claims bound (operator
+ruling 2026-10-30: the words decide) — a část obce's at the
 centroid of its own doors (v5.8), since RÚIAN draws it no polygon. 29 % of towned rows
 (8,706 of 29,892, measured 2026-09-12 08:05Z) carried `geom NULL` because the only position
 the resolver published was a pin, and a listing bound by NAME has none — so a row that knows
@@ -131,7 +133,8 @@ def fill(
 
 
 def position(filled: Fill, binding: Binding) -> Position:
-    """The position FILL publishes when BIND's pin election came back empty (W2-a3).
+    """The position FILL publishes when BIND's pin election came back empty (W2-a3), or when
+    `bind.place` set a declared-blurred pin outside the bound town aside (v5.9).
 
     It is a REGISTRY point, so nothing about it can contradict the row: CHECK's containment
     tests are asked of a portal pin only, because a point that came out of the mirror is

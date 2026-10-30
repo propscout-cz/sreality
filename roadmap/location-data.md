@@ -1161,7 +1161,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (first draft 1.77 s; 2.51 s with no category), a kraj + obec pair 44 ms as before. Outreach stores
   chips in `target.districts` (609 rewrote the stored id lists; 0 campaigns existed); the API refuses
   the old id lists (422 on a request, 409 on a stored target). No index: the arms OR five columns.
-- **ONE PIN — a property's location is its location ad — in review 2026-10-20 (636 not yet applied)** (operator rulings
+- **ONE PIN — a property's location is its location ad — delivered 2026-10-20 (migrations 635 + 636 applied)** (operator rulings
   of 2026-10-19, R1/R3/R5/R7–R9; migrations 635 + 636; `docs/design/one-pin/PROGRAM.md`). A property used to
   stand at its canonical ad's point, so two ads of one building could draw a ring where a sibling ad
   held the exact address. `properties.location_listing_ref_id` now points at the ad ranked first by a
@@ -1204,9 +1204,24 @@ component is slimmed twice — each wave rewrites one component and slims its st
   where Prague's point was 9 km). A FILL placement's radius is floored by the placed-on entity's
   reach — the část's farthest door (Břevnov 2.9 km), the polygon's `containment_radius_m` (Praha
   17.6 km, against the 1 km and 750 m constants). The bump re-queues the corpus. Left: 266
-  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Autodedup
+  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Measured
+  2026-10-30 with every row at v5.8: active ads on their town's point idnes 9,401 (was 22,124),
+  realitymix 743 (12,806), remax 327 (539), maxima 22. Autodedup
   reads these points as `same_exact_pin` / `pin_pop` (any grain); a shared quarter centroid is a
   smaller population than Prague's one point, which is an operator call for that program.
+- **The words decide — resolver v5.9, 2026-10-30** (operator ruling 2026-10-30; build #2192, gate #2193;
+  no migration). One row held two answers to "where": the named town (`obec_name` / PSČ claims) and the
+  portal's pin as the position; CHECK flagged `pin_outside_obec`, dropped the grain to obec and kept the
+  pin at a constant r = 1 km, so the list said one town and the map drew another. bazos places every ad
+  on a postal-area point ("Přibližná lokalita"; one Kolín pin carried 143 active ads from 34 obce;
+  19509113 "Jestřabí Lhota" stood 8.8 km off, inside Kolín). A DECLARED blurred pin outside the obec the
+  claims bound is no longer the position: `bind.place` leaves the row to FILL (the bound část's doors,
+  else the obec's point, radius floored by its reach); the pin stays evidence and the flag stays. Measured
+  2026-10-30 before the bump: 12,547 active rows move (bazos 12,543, realitymix 2, idnes 1, sreality 1);
+  12,582 served properties stood on a disputed bazos pin. Untouched, unruled: UNDECLARED pins outside
+  their town (realitymix 719, idnes 290, sreality 188, ceskereality 138 — wrong pin or wrong name is not
+  known; 565 realitymix ads sit > 20 km from their town), the constant 1 km radius on a kept pin, and
+  consumers reading `disputed` (only the Location Quality page does).
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the
