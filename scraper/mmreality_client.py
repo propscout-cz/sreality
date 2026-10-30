@@ -19,7 +19,8 @@ LOG = logging.getLogger(__name__)
 
 BASE_URL = "https://www.mmreality.cz"
 
-# Substrings mmreality serves (HTTP 200) for a listing no longer offered.
+# Substrings mmreality serves (HTTP 200) for a listing no longer offered; matched with
+# every \xa0 read as a space (the portal writes "v\xa0nabídce" since its 2026-10-27 redesign).
 _GONE_MARKERS: tuple[str, ...] = (
     "nabídka již není aktivní",
     "nemovitost již není v nabídce",
@@ -84,6 +85,6 @@ class MmRealityClient(BasePortalClient):
         ):
             raise ListingGoneError(url, response.status_code)
         text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
+        if any(marker in text.lower().replace("\xa0", " ") for marker in _GONE_MARKERS):
             raise ListingGoneError(url, response.status_code)
         return text, response.status_code
