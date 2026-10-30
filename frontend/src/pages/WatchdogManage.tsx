@@ -282,7 +282,8 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
         : head,
     );
   }
-  if (spec.bounds) bits.push(mapAreaLabel(spec.bounds));
+  const area = spec.circle ?? spec.bounds;
+  if (area) bits.push(mapAreaLabel(area));
   if (spec.min_price_czk != null || spec.max_price_czk != null) {
     const lo = spec.min_price_czk != null ? `${spec.min_price_czk.toLocaleString()}` : '0';
     const hi = spec.max_price_czk != null ? `${spec.max_price_czk.toLocaleString()}` : '∞';

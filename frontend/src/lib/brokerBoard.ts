@@ -9,7 +9,7 @@ import { ApiError, apiPost } from './api';
 import { browseKeys } from './browseKeys';
 import type { BrokerContactFields } from './brokers';
 import { filtersForAgenda } from './filterRegistry.generated';
-import { DEFAULT_FILTERS, effectiveBbox, listingFiltersToRegistryView, type ListingFilters } from './filters';
+import { DEFAULT_FILTERS, listingFiltersToRegistryView, type ListingFilters } from './filters';
 import { scopeActive } from './setScope';
 
 export const BOARD_HORIZONS = [14, 30, 60, 90] as const;
@@ -102,7 +102,8 @@ export function boardRequest(f: ListingFilters, o: BoardOptions): Record<string,
   const view = listingFiltersToRegistryView(f);
   return {
     ...Object.fromEntries(BOARD_FILTER_IDS.map((id) => [id, view[id]])),
-    bounds: effectiveBbox(f),
+    bounds: f.bounds,
+    circle: f.circle,
     broker_id: f.brokerId,
     horizon_days: o.horizonDays,
     sort: o.sort,

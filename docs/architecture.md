@@ -2031,7 +2031,7 @@ renumber.** Navigate by area:
     Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
     neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
-    left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
+    left unset and named), Browse's circle around it (250 m – 2 km, 500 m default, the true circle
     every Browse reader filters on), the user's building material and condition, under the Stats lens
     "Prodáno (trh)" (default) or "Vše". Its "Prozkoumat okolí" opens the explore window over the same
     filter, lens and dashboard, Stats tab open; "Explore area" under the minimap is its twin (operator
@@ -2518,11 +2518,13 @@ renumber.** Navigate by area:
     for the watchdog matcher, the broker board and the agents' `search_properties`.
     `WatchdogFilterSpec.bounds` / `.circle` (the `location` composite's area beside the `districts` chips)
     are Browse's, so a watchdog saved from Browse watches the rows Browse showed; the radius domain is the
-    registry's `radius_m` (100 m to 10 km). Until the SPA hands its circle over, Browse still sends a
-    centre + radius pick as the square around it (`effectiveBbox`), the 12 to 22 % overcount measured
-    2026-10-30. Saving from Browse offers the viewport box through one checkbox (ticked; the preset
-    dialog's question, because a stale viewport would fire forever); the editor's `MapAreaControl` sets
-    the box to the mini-map's view. Open divergence: the six amenities are the property's union
+    registry's `radius_m` (100 m to 10 km). The SPA holds ONE map area (`ListingFilters.bounds` or
+    `.circle`, URL `bbox` or `circle`) and sends it as those readers' own parameters (`queries.areaArgs`);
+    a switch to centre + radius places the circle in the middle of the main map, whose centre is dragged
+    there, the sidebar sizing only the radius (operator ruling 2026-10-30; the square it replaced
+    overcounted 12 to 22 %). Saving from Browse offers the viewport box through one checkbox (ticked;
+    the preset dialog's question, because a stale viewport would fire forever) and takes a circle
+    always; the editor's `MapAreaControl` shows either and sets the box to the mini-map's view. Open divergence: the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the

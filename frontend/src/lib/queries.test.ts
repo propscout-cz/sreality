@@ -1,6 +1,6 @@
 /* Tests for the Browse query builders in queries.ts: the sort, the portal rule, the
- * district chips and the prefilters. The box helpers (effectiveBbox) live in
- * lib/filters.ts with their tests. */
+ * district chips, the prefilters and the map area's parameters (areaArgs). The circle
+ * helpers (circleInView, circleBounds) live in lib/filters.ts with their tests. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
@@ -19,6 +19,7 @@ import {
   CARD_SORTS,
   adPortals,
   applyPortalRule,
+  areaArgs,
   applyPrefilters,
   buildBrowseStatsArgs,
   fetchBrowseCount,
@@ -1007,10 +1008,12 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
       await fetchListingsForCards(f, DEFAULT_SORT, null);
       const [pins, ...lists] = urls.filter((u) => !u.pathname.endsWith('/browse_map_cells'));
       if (!showDismissed) expect(pins.pathname).toBe('/rest/v1/rpc/browse_list_visible');
+      /* The map area is the source's own parameters (migration 694), tested in the database. */
       expect(filters(pins)).toEqual(expect.arrayContaining([
         'all_sources=ov.{sreality}', 'newest_ad_at_sreality=not.is.null',
-        'lat=gte.49.94', 'lat=lte.50.18', 'lng=gte.14.22', 'lng=lte.14.71',
+        'bbox_south=49.94', 'bbox_north=50.18', 'bbox_west=14.22', 'bbox_east=14.71',
       ]));
+      expect(filters(pins).some((p) => p.startsWith('lat=gte') || p.startsWith('lng=gte'))).toBe(false);
       expect(pins.searchParams.has('order') || pins.searchParams.has('limit')).toBe(false);
       expect(lists).toHaveLength(1);
       for (const list of lists) {
@@ -1069,5 +1072,27 @@ describe('the Neuvedeno chip reaches the list as NULL or off-canon', () => {
   it('sends the selection to the aggregates as it stands, the sentinel included', () => {
     const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, conditionMatch: ['__unknown__'] }, NO_PREFILTERS);
     expect(args.condition_match_filter).toEqual(['__unknown__']);
+  });
+});
+
+/* The map area, one value for every reader (migration 694): a box or a circle, never both, sent as
+ * the source's and the stats RPCs' own parameters so the database tests it with in_map_area. */
+describe('areaArgs and the stats args', () => {
+  const box = { west: 14.22, south: 49.94, east: 14.71, north: 50.18 };
+  const circle = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+  const none: BrowsePrefilters = { obecIds: null, propertyIds: null, empty: false };
+
+  it('sends the set side only', () => {
+    expect(areaArgs(DEFAULT_FILTERS)).toEqual({});
+    expect(areaArgs({ ...DEFAULT_FILTERS, bounds: box })).toEqual({
+      bbox_west: 14.22, bbox_south: 49.94, bbox_east: 14.71, bbox_north: 50.18,
+    });
+    expect(areaArgs({ ...DEFAULT_FILTERS, circle })).toEqual({ circle_lat: 50.08, circle_lng: 14.42, circle_radius_m: 1500 });
+  });
+
+  it('hands the stats RPCs the circle itself, never the square around it', () => {
+    const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, circle }, none);
+    expect(args).toMatchObject({ circle_lat: 50.08, circle_lng: 14.42, circle_radius_m: 1500 });
+    expect([args.bbox_west, args.bbox_south, args.bbox_east, args.bbox_north]).toEqual([null, null, null, null]);
   });
 });

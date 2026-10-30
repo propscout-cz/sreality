@@ -1,7 +1,7 @@
 /* Wire shapes mirroring the public views from migration 008. Only the columns
  * the UI actually reads are typed here; expand as Parts B–E need more. */
 
-import type { DistrictChip, ListingFilters, MapBounds, PresetSpec } from './filters';
+import type { DistrictChip, ListingFilters, MapBounds, MapCircle, PresetSpec } from './filters';
 import type { ReferenceRent } from './mfReference';
 
 /* The whole Czech grammar, 1 through 9 — the same span
@@ -915,12 +915,12 @@ export interface WatchdogFilterSpec {
   // Portal-agnostic property sub-type (multi-select; matches any).
   subtype: string[] | null;
   dispositions: string[] | null;
-  /* The map box (rule 16): the ONE spatial shape, what Browse filters on — its
-   * viewport, or the square around a centre+radius pick (filters.effectiveBbox)
-   * — so a watchdog saved from Browse watches the rows Browse showed. The
-   * matcher renders it as the same lat/lng band (api/location_filter
-   * .bounds_where). Null = no map area. */
+  /* The map area (rule 16): a box (Browse's viewport) or a true circle (its
+   * centre + radius), never both — what Browse filters on, so a watchdog saved
+   * from Browse watches the rows Browse showed. The matcher tests it with the
+   * same predicate (api/location_filter.area_where, `in_map_area`). Null = none. */
   bounds: MapBounds | null;
+  circle: MapCircle | null;
   /* Place, as chips. Each chip is a LEVEL plus a RÚIAN CODE — the one
    * predicate Browse, Stats, the map and the watchdog matcher share
    * (rule 16, lib/districtCodes + api/location_filter). `context` is
@@ -1015,6 +1015,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   subtype: null,
   dispositions: null,
   bounds: null,
+  circle: null,
   districts: null,
   min_price_czk: null,
   max_price_czk: null,

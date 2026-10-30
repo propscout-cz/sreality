@@ -55,58 +55,61 @@ export interface MapBounds {
   north: number;
 }
 
-/* Operator-set point + radius for the "dot + circle on the map" mode.
- * When `locationMode === 'center_radius'` the cohort is filtered by an
- * approximate bbox around (lat, lng) within `radius_m` metres; the
- * sidebar's <LocationControl> owns the point + radius UI and the main
- * map renders a dashed circle for visual context. Viewport bounds are
- * ignored in this mode. */
-export interface CenterRadius {
+/* The map circle (operator ruling 2026-10-30): a centre and a radius in metres,
+ * filtered as a TRUE circle by the database's one spatial predicate (`in_map_area`,
+ * migration 694) — exactly what the main map draws. A map area is a box (`bounds`,
+ * the viewport) or a circle, never both; the circle holds still while the map pans. */
+export interface MapCircle {
   lat: number;
   lng: number;
   radius_m: number;
 }
 
-export type LocationMode = 'viewport' | 'center_radius';
+/* The radius domain is the registry's (`radius_m`, the server's MapCircle bound);
+ * the slider steps by 100 m. */
+const RADIUS_LIMITS = filterById('radius_m')?.constraints ?? {};
+export const CIRCLE_RADIUS = {
+  min: Number(RADIUS_LIMITS.min ?? 100),
+  max: Number(RADIUS_LIMITS.max ?? 10_000),
+  step: 100,
+};
 
-/* A WGS84 bounding box roughly `km` kilometres across (half-extent each
- * side), centred on (lat, lng). Longitude degrees shrink with latitude so
- * the east/west extent scales by cos(lat). Used to frame the map AND seed
- * the viewport cohort when opening Browse focused on a single point (the
- * "Explore area" modal) — the same `bounds` value both fits the camera and
- * narrows the cohort, so no separate flyTo is needed. */
 const KM_PER_DEG = 111.32;
+const cosLat = (lat: number): number => Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
 
-export const bboxAround = (lat: number, lng: number, km: number): MapBounds => {
-  const half = km / 2;
-  const dLat = half / KM_PER_DEG;
-  const dLng = half / (KM_PER_DEG * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
-  return { west: lng - dLng, south: lat - dLat, east: lng + dLng, north: lat + dLat };
-};
-
-/* THE box Browse filters on, from the location mode: viewport → the map's
- * `bounds` (or null); centre+radius → the square around the circle, through the
- * one box-around-a-point formula above. A circumscribed square admits a few
- * corner listings beyond the true radius — accepted since the mode shipped; the
- * main map still draws the exact circle. One rule, every reader: the list
- * (queries.applyFilters), both stats RPCs (`bbox_*`) and a watchdog saved from
- * Browse (filtersToWatchdogSpec), so what Browse shows is what a watchdog
- * watches (rule 16). */
-export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
-  if (f.locationMode === 'center_radius') {
-    return f.centerRadius
-      ? bboxAround(f.centerRadius.lat, f.centerRadius.lng, (2 * f.centerRadius.radius_m) / 1000)
-      : null;
-  }
-  return f.bounds;
-};
-
-/* The box in words for a summary line: its extent in km and its centre. */
-export const mapAreaLabel = (b: MapBounds): string => {
+/* The circle a switch to centre + radius places: the middle of the map view and the
+ * largest radius that fits inside it (half its shorter side), on the slider's grid. */
+export const circleInView = (b: MapBounds): MapCircle => {
   const lat = (b.north + b.south) / 2;
-  const lng = (b.east + b.west) / 2;
-  const h = (b.north - b.south) * KM_PER_DEG;
-  const w = (b.east - b.west) * KM_PER_DEG * Math.cos((lat * Math.PI) / 180);
+  const h = (b.north - b.south) * KM_PER_DEG * 1000;
+  const w = (b.east - b.west) * KM_PER_DEG * 1000 * cosLat(lat);
+  const r = Math.round(Math.min(h, w) / 2 / CIRCLE_RADIUS.step) * CIRCLE_RADIUS.step;
+  return {
+    lat,
+    lng: (b.east + b.west) / 2,
+    radius_m: Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, r)),
+  };
+};
+
+/* Prague, where the main map starts: the view a circle is placed in before any map was shown. */
+export const MAP_START_VIEW: MapBounds = { west: 14.22, south: 49.94, east: 14.71, north: 50.18 };
+
+/* The circle's bounding box, to frame the camera on it — never a filter. */
+export const circleBounds = (c: MapCircle): MapBounds => {
+  const dLat = c.radius_m / 1000 / KM_PER_DEG;
+  const dLng = c.radius_m / 1000 / (KM_PER_DEG * cosLat(c.lat));
+  return { west: c.lng - dLng, south: c.lat - dLat, east: c.lng + dLng, north: c.lat + dLat };
+};
+
+/* The map area in words for a summary line: a box's extent or a circle's radius, and the centre. */
+export const mapAreaLabel = (area: MapBounds | MapCircle): string => {
+  if ('radius_m' in area) {
+    return `circle ${(area.radius_m / 1000).toFixed(1)} km around ${area.lat.toFixed(4)}, ${area.lng.toFixed(4)}`;
+  }
+  const lat = (area.north + area.south) / 2;
+  const lng = (area.east + area.west) / 2;
+  const h = (area.north - area.south) * KM_PER_DEG;
+  const w = (area.east - area.west) * KM_PER_DEG * cosLat(lat);
   return `map area ≈ ${w.toFixed(1)} × ${h.toFixed(1)} km around ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 };
 
@@ -292,12 +295,10 @@ export interface ListingFilters {
   tags: SetScope | null;
   /* Browse-only collection scope (rule #18, lib/setScope; own + shared). Null = off. */
   collections: SetScope | null;
+  /* The map area, a box or a circle, never both: `bounds` follows the map's
+   * pan and zoom; a `circle` holds still while the map moves. */
   bounds: MapBounds | null;
-  /* `viewport` (default) = map pan/zoom emits bounds, those filter
-   * the cohort. `center_radius` = a sidebar-set point + radius drives
-   * the spatial predicate; bounds is ignored on the SQL side. */
-  locationMode: LocationMode;
-  centerRadius: CenterRadius | null;
+  circle: MapCircle | null;
   /* Phase QUAL — curated-city quality filters. Browse + Watchdog only;
    * intentionally not surfaced to the estimation agent / comparables
    * tool (the registry's agenda gating enforces that). The Browse
@@ -379,8 +380,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   tags: null,
   collections: null,
   bounds: null,
-  locationMode: 'viewport',
-  centerRadius: null,
+  circle: null,
   cityIndexRules: [],
   minCityPopulation: null,
   maxCityPopulation: null,
@@ -630,11 +630,9 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     brokerId: parseIntOrNull(sp.get('broker')),
     tags: parseSetScope(sp, 'tags'),
     collections: parseSetScope(sp, 'collections'),
-    bounds: parseBounds(sp.get('bbox')),
-    locationMode: sp.get('locmode') === 'center_radius'
-      ? 'center_radius'
-      : 'viewport',
-    centerRadius: parseCenterRadius(sp.get('center')),
+    /* A link holds one map area; a circle wins over a stray box. */
+    bounds: parseCircle(sp.get('circle')) ? null : parseBounds(sp.get('bbox')),
+    circle: parseCircle(sp.get('circle')),
     cityIndexRules: parseCityIndexRules(sp.get('cq_rules')),
     minCityPopulation: parseIntOrNull(sp.get('cq_pop_min')),
     maxCityPopulation: parseIntOrNull(sp.get('cq_pop_max')),
@@ -726,14 +724,15 @@ const parseBounds = (s: string | null): MapBounds | null => {
 
 const fmtBoundsCoord = (n: number): string => Number(n.toFixed(5)).toString();
 
-const parseCenterRadius = (s: string | null): CenterRadius | null => {
+/* The URL's `circle` as lat,lng,radius_m; the radius clamped into the slider's domain. */
+const parseCircle = (s: string | null): MapCircle | null => {
   if (!s) return null;
   const parts = s.split(',');
   if (parts.length !== 3) return null;
   const [lat, lng, radius] = parts.map(Number);
   if (![lat, lng, radius].every((x) => Number.isFinite(x))) return null;
   if (radius <= 0) return null;
-  return { lat, lng, radius_m: Math.trunc(radius) };
+  return { lat, lng, radius_m: Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, Math.trunc(radius))) };
 };
 
 const fmtRange = (lo: number | null, hi: number | null): string =>
@@ -843,13 +842,9 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
       `${fmtBoundsCoord(west)},${fmtBoundsCoord(south)},${fmtBoundsCoord(east)},${fmtBoundsCoord(north)}`,
     );
   }
-  if (f.locationMode === 'center_radius') sp.set('locmode', 'center_radius');
-  if (f.centerRadius) {
-    const { lat, lng, radius_m } = f.centerRadius;
-    sp.set(
-      'center',
-      `${fmtBoundsCoord(lat)},${fmtBoundsCoord(lng)},${radius_m}`,
-    );
+  if (f.circle) {
+    const { lat, lng, radius_m } = f.circle;
+    sp.set('circle', `${fmtBoundsCoord(lat)},${fmtBoundsCoord(lng)},${radius_m}`);
   }
   if (f.cityIndexRules.length) {
     sp.set('cq_rules', fmtCityIndexRules(f.cityIndexRules));
@@ -994,7 +989,7 @@ export const browseTitleSummary = (f: ListingFilters): string | null => {
 /* Generic compare against DEFAULT_FILTERS so new fields can never be
  * forgotten here (the old hand-maintained &&-chain silently missed
  * priceGrowthRules). Arrays count as default when empty; object-valued
- * fields (bounds, centerRadius) default to null, so a
+ * fields (bounds, circle) default to null, so a
  * null-vs-set check is exact. */
 export const isDefault = (f: ListingFilters): boolean =>
   (Object.keys(DEFAULT_FILTERS) as Array<keyof ListingFilters>).every((k) => {
@@ -1166,11 +1161,12 @@ export const readPresetSpec = (
   return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
-/* The area a saved filter puts in the map frame when it is loaded: the box it
- * filters on (effectiveBbox — a saved map area, or the square around a saved
- * centre+radius); null when it saved no area, and the camera stays put. */
-export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null =>
-  effectiveBbox(readPresetSpec(spec).filters);
+/* The area a saved filter puts in the map frame when it is loaded: its saved box,
+ * or the box around its circle; null when it saved no area, and the camera stays put. */
+export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null => {
+  const { bounds, circle } = readPresetSpec(spec).filters;
+  return circle ? circleBounds(circle) : bounds;
+};
 
 const canonicalParams = (sp: URLSearchParams): string =>
   [...sp.entries()]
@@ -1406,10 +1402,10 @@ export function applySidebarUpdates(
  * clause for are NOT silently dropped: `filtersToWatchdogSpec` reports them in
  * `unsupported` so the UI can tell the operator what won't be watched.
  *
- * Honoured (mapped): category, disposition, district chips, THE map box
- * (`bounds` — effectiveBbox, rule 16: a centre+radius pick saves as the square
- * Browse filtered on, always; the viewport box unless the caller opts it out,
- * which is the create dialog's one checkbox), price / price-per-m² / MF-yield /
+ * Honoured (mapped): category, disposition, district chips, THE map area
+ * (rule 16: a circle always, the same true circle Browse filtered on; the
+ * viewport box unless the caller opts it out, which is the create dialog's one
+ * checkbox), price / price-per-m² / MF-yield /
  * area / usable / estate / garden bounds, building material, tri-state
  * amenities, furnished, ownership, both sides of the portal rule (MS19 +
  * migration 597), condition_match, parking-lots min, the price-history pair
@@ -1465,9 +1461,9 @@ export function filtersToWatchdogSpec(
 ): FiltersToWatchdogResult {
   const f = filters;
   const arr = <T>(xs: T[]): T[] | null => (xs.length === 0 ? null : xs);
-  /* A centre+radius pick is a sidebar filter, never a stale viewport, so it
-   * always rides along; the viewport box only when the caller keeps it. */
-  const bounds = f.locationMode === 'center_radius' || includeMapArea ? effectiveBbox(f) : null;
+  /* A circle is a filter the operator set, never a stale viewport, so it always
+   * rides along; the viewport box only when the caller keeps it. */
+  const bounds = includeMapArea ? f.bounds : null;
 
   const spec: WatchdogFilterSpec = {
     ...DEFAULT_WATCHDOG_FILTER_SPEC,
@@ -1478,6 +1474,7 @@ export function filtersToWatchdogSpec(
     dispositions: arr(f.dispositions),
     districts: arr(f.districts),
     bounds,
+    circle: f.circle,
     min_price_czk: f.priceMin,
     max_price_czk: f.priceMax,
     include_no_price: f.includeNoPrice,
