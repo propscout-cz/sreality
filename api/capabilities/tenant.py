@@ -5,8 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
+from api.capabilities.subject import sentence
+from api.market_evidence import SMALL_UNIT_M2, EvidenceArgs, market_evidence
 from api.property_read import PROPERTIES_MAX, ContextIds, PropertyIds, dossier, own_context
 from api.property_search import PAGE_MAX, SearchArgs, search_properties
+from api.stats_pivot import AggregateArgs, aggregate_properties
+from toolkit.measures import EXIT_CLEAN_SINCE
+from toolkit.stats_registry import SOLD_MARKET_DAYS
 
 
 def _search_properties(ctx: Context, args: SearchArgs) -> dict[str, Any]:
@@ -19,6 +24,14 @@ def _dossier(ctx: Context, args: PropertyIds) -> dict[str, Any]:
 
 def _own_context(ctx: Context, args: ContextIds) -> dict[str, Any]:
     return own_context(ctx.conn, args)
+
+
+def _aggregate(ctx: Context, args: AggregateArgs) -> dict[str, Any]:
+    return aggregate_properties(ctx.conn, args)
+
+
+def _evidence(ctx: Context, args: EvidenceArgs) -> dict[str, Any]:
+    return market_evidence(ctx.conn, args)
 
 
 ENTRIES = (
@@ -60,5 +73,32 @@ ENTRIES = (
         "first, down to one property); the vocabularies do not depend on the properties asked, so ask with no "
         "property ids to read the most of them.",
         args=ContextIds, handler=_own_context, tenancy=Tenancy.TENANT, effect=Effect.READ,
+    ),
+    Entry(
+        name="aggregate_properties",
+        description="The Stats dashboard's pivot over the properties Browse lists for these filters, read as the user "
+        "reads Browse (their dismissals, tags, collections and pipeline): data is the dashboard function's own "
+        "answer. filtered counts the cohort, sample those with the measure, both categories and a value on every "
+        "chosen dimension, excluded the rest. cells hold every rollup level: keys [] is the cohort total, keys of "
+        "length L the first L rows, col the column's key; a band key is its lower bound, a place key its RÚIAN code "
+        "as text, named in places. n always; mean, median, p10, p25, p75, p90 from min_n properties up, below it "
+        "small (min, max, mean, median). refused says why no cells came back: empty; mixed_category (more than one "
+        "category_main or category_type: narrow them); mixed_status (time on market over live and ended "
+        "properties); too_many_cells. basis names the unit of every per-m² figure; a metadata.price_per_m2_basis of "
+        "'mixed' or 'unknown' means there is none. category_type is required (null = every deal type).",
+        args=AggregateArgs, handler=_aggregate, tenancy=Tenancy.TENANT, effect=Effect.READ,
+    ),
+    Entry(
+        name="market_evidence",
+        description=f"Prices achieved round a subject, two arms never mixed, each row and summary labelled by "
+        f"evidence. proxy: properties within radius_m that left the market (every ad ended, seen from its first ad) "
+        f"after a time on market in the window, at its last asking price, no transaction price (a withdrawal "
+        f"looks alike; exits before {EXIT_CLEAN_SINCE}, from absence sweeps, count as on the Stats tab); "
+        f"proxy_summary: the dashboard's statistic. registered: cadastre-registered sales (reas.cz: ~30 days late, "
+        f"24 months back, fetched only near properties someone works on; registered_coverage: the centre's town "
+        f"only), byt and dum for sale, no time on market; its summary's median holds out units under "
+        f"{SMALL_UNIT_M2} m². Window {SOLD_MARKET_DAYS[0]}-{SOLD_MARKET_DAYS[1]} days unless window_reason says why; "
+        f"metadata.unapplied: what an arm cannot apply. {sentence(EvidenceArgs)}",
+        args=EvidenceArgs, handler=_evidence, tenancy=Tenancy.TENANT, effect=Effect.READ,
     ),
 )

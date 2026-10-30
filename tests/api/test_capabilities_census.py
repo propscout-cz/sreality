@@ -169,9 +169,15 @@ _POINT = {"lat": 50.08, "lng": 14.42, "area_m2": 60.0, "disposition": "2+kk", "f
 _VELOCITY_SUBJECT = (lambda sql: "AS tom_days" in sql and "l.is_active, l.disposition" in sql,
                      [(True, "2+kk", 50.08, 14.42, "byt", "prodej", 70, 12)])
 _COUNT = (lambda sql: sql.startswith("SELECT count(*)"), [(0,)])
-# A filter that only modifies another renders only beside it: the baseline sets the one it modifies.
+# The Stats dashboard's function answers one payload, which aggregate_properties and market_evidence read by key.
+_PIVOT = (lambda sql: sql.startswith("SELECT public.browse_stats_properties("),
+          [({"filtered": 0, "sample": 0, "excluded": 0, "basis": None, "min_n": 5, "refused": "empty", "places": [],
+             "cells": []},)])
+# A filter that only modifies another renders only beside it: the baseline sets the one it modifies. market_evidence's
+# window other than the Stats tab's carries its reason.
 _PARTNERS = {"include_no_price": {"min_price_czk": 1_000_000}, "portals_excluded_active_only": {"portals_excluded": ["bazos"]},
-             "price_change_window_days": {"price_change_count_min": 2}}
+             "price_change_window_days": {"price_change_count_min": 2},
+             "tom_days_min": {"window_reason": "a census window"}, "tom_days_max": {"window_reason": "a census window"}}
 
 
 def _point_fields(entry: Entry) -> tuple[str, ...]:
@@ -194,7 +200,7 @@ def _baseline(entry: Entry) -> dict[str, Any]:
         args["floor_band"] = 2         # the point's floor renders only inside a floor band
     for modifier, partner in _PARTNERS.items():
         if modifier in fields:
-            args.update(partner)
+            args.update({k: v for k, v in partner.items() if k in fields})
     return args
 
 
@@ -214,7 +220,7 @@ def _statements(name: str, args: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     from tests.api.test_broker_board import head, is_board  # that module reads this one's _distinct
 
     # The broker board reads its statement's one totals row by name.
-    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT, (is_board, [head()])])
+    conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT, (is_board, [head()]), _PIVOT])
 
     @contextlib.contextmanager
     def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:
@@ -271,9 +277,11 @@ def test_the_forbidden_set_names_what_the_read_models_still_publish() -> None:
             "near_overall_15km"} <= forbidden_columns()
 
 
-_READERS = ("api.property_search", "api.property_read")
-# Each tool reader's column allowlists: search's, the property state's and every *_COLS of the property page's reader.
-_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS", "api.curation.STATE_COLS"] + [
+_READERS = ("api.property_search", "api.property_read", "api.market_evidence")
+# Each tool reader's column allowlists: search's, the property state's, every *_COLS of the property page's reader and
+# the two arms of the achieved-price evidence.
+_ALLOWLISTS = ["api.property_search.SEARCH_COLUMNS", "api.curation.STATE_COLS", "api.market_evidence.PROXY_COLUMNS",
+               "api.market_evidence.REGISTERED_COLUMNS"] + [
     f"api.property_read.{n}" for n in sorted(vars(importlib.import_module("api.property_read"))) if n.endswith("_COLS")]
 
 
@@ -310,7 +318,9 @@ _DARK_UNDER_LOGIN = re.compile(
     r"\bcanonical_advert\b|\bsubject_mf_facts\b|\bmatch_listing\b", re.IGNORECASE)
 
 
-@pytest.mark.parametrize("module", _READERS)
+# api/stats_pivot resolves Browse's city-index rules through curated_cities_matching, as Browse does: a FILTER (rule 17
+# lets agents that rank use one), never a value in a result, so it is held to the login census only.
+@pytest.mark.parametrize("module", (*_READERS, "api.stats_pivot"))
 def test_no_tool_reader_reads_a_relation_dark_under_the_users_login(module: str) -> None:
     source = Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
     assert not _DARK_UNDER_LOGIN.findall(source), module
@@ -342,3 +352,19 @@ def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_
         assert not [k for d in rows for k in d if k.startswith("broker")], name
     if name == "get_property_dossier":
         assert len(priced) >= 3
+
+
+def test_a_cohort_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis() -> None:
+    """#2064: the prices achieved label every per-m² figure, row and summary alike, with its basis; the dashboard's
+    pivot names its one unit beside its cells, in data and in metadata."""
+    from tests.api.test_market_evidence import POINT, _run
+    from tests.api.test_stats_pivot_census import _call, _payload
+    from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
+    rows = _dicts(_run(POINT)[0]["data"])
+    assert not {k for d in rows for k in d} & forbidden_columns()
+    priced = [d for d in rows if any(d.get(k) is not None for k in (PPM2_VALUE_KEY, "median_price_per_m2", "median"))]
+    assert len(priced) >= 4 and all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced)
+    cell = {"keys": [], "col": None, "n": 5, "mean": 1.0, "median": 1.0, "p10": 1.0, "p25": 1.0, "p75": 1.0,
+            "p90": 1.0, "small": None}
+    pivot = _call({}, _payload(cells=[cell]))[0]
+    assert pivot["data"]["basis"] in PPM2_BASES and pivot["metadata"]["price_per_m2_basis"] == pivot["data"]["basis"]

@@ -9,13 +9,13 @@ from pydantic import Field
 from api.broker_board import BoardArgs, RankArgs, board
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.capabilities.subject import (
-    CATEGORIES,
     HeldSubject,
     PlaceSubject,
     Subject,
     held_mf_facts,
     held_spec,
     place,
+    sentence,
 )
 from api.estimate_yield import estimate_yield
 from api.filter_args import Args, agenda_ids, filter_model, filter_values
@@ -181,14 +181,6 @@ def _rank_brokers(ctx: Context, a: RankBrokersArgs) -> dict[str, Any]:
                             include_pii=False)
 
 
-def _subject(args: type[Args]) -> str:
-    """The subject sentence, naming only the categories `args` declares."""
-    declared = [c for c in CATEGORIES if c in args.model_fields]
-    return ("The subject is exactly one of property_id, listing_id or point. For a property or ad we hold, an unset "
-            f"{' or '.join(declared)} takes the subject's own value (null means every category); a point must state "
-            f"{' and '.join(declared)}.")
-
-
 _COHORT = ("The cohort is the comparables these filters select, at most 500 nearest, each property once. Omitting "
            "lifecycle means every ad, live or delisted; max_age_days needs lifecycle='active'.")
 _NO_UNIT = "'mixed' or 'unknown' means the cohort has no single per-m² unit."
@@ -202,27 +194,27 @@ def _read(name: str, description: str, args: type[Args], handler: Any) -> Entry:
 ENTRIES = (
     _read("find_comparables_relaxed",
           f"Comparable ads around a subject, widened step by step until at least min_results are found. "
-          f"{_subject(ComparablesArgs)} {_COHORT} A price_per_m2_basis of {_NO_UNIT}",
+          f"{sentence(ComparablesArgs)} {_COHORT} A price_per_m2_basis of {_NO_UNIT}",
           ComparablesArgs, _comparables),
     _read("analyze_distribution",
           f"n, min, max, mean, median, p10 to p90, standard deviation and IQR of one value over the comparables "
-          f"cohort these arguments select. {_subject(DistributionArgs)} {_COHORT} A basis of {_NO_UNIT}",
+          f"cohort these arguments select. {sentence(DistributionArgs)} {_COHORT} A basis of {_NO_UNIT}",
           DistributionArgs, _distribution),
     _read("find_distribution_outliers",
           f"The comparables whose value lies beyond the Tukey fences of their cohort. Only sreality ads are tested "
-          f"today, and the ids returned are sreality ids. {_subject(OutliersArgs)} {_COHORT} A basis of {_NO_UNIT}",
+          f"today, and the ids returned are sreality ids. {sentence(OutliersArgs)} {_COHORT} A basis of {_NO_UNIT}",
           OutliersArgs, _outliers),
     _read("compute_market_velocity",
           f"Time on market around a subject: statistics over live and delisted ads, how many of each, and the trend "
           f"between ads first seen recently and before. A live ad's time so far is still running, and a delisting "
-          f"is an ad ending, not a sale. {_subject(MarketVelocityArgs)} Lifecycle defaults to every ad.",
+          f"is an ad ending, not a sale. {sentence(MarketVelocityArgs)} Lifecycle defaults to every ad.",
           MarketVelocityArgs, _market_velocity),
     _read("compute_listing_velocity",
           "One ad's time on market and its percentile rank among the ads around it.",
           ListingVelocityArgs, _listing_velocity),
     _read("estimate_yield",
           f"A rent or sale estimate from the comparables' per-m² distribution, and a gross yield when the other "
-          f"price is given. The deal type always follows estimate_kind. {_subject(YieldArgs)} {_COHORT} A "
+          f"price is given. The deal type always follows estimate_kind. {sentence(YieldArgs)} {_COHORT} A "
           f"price_per_m2_basis of {_NO_UNIT}", YieldArgs, _yield),
     _read("compute_reference_rent",
           "The Ministry of Finance rent-map reference (Cenová mapa nájemného) for a flat we hold: the monthly rent "
@@ -231,7 +223,7 @@ ENTRIES = (
     _read("describe_neighborhood",
           f"The market within the radius of a subject: how many ads are live, their disposition, building-type and "
           f"condition mix, price statistics by disposition, the trend, and how old the data is. "
-          f"{_subject(NeighbourhoodArgs)} A point is a place only (lat and lng).",
+          f"{sentence(NeighbourhoodArgs)} A point is a place only (lat and lng).",
           NeighbourhoodArgs, _neighbourhood),
     # The page's broker read (POST /brokers/by-listings): the broker relations are the API's alone (A6), never the
     # user's login, so this is the market's connection, unmasked as the page shows every signed-in user.

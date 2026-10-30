@@ -98,17 +98,42 @@ through ONE server-side reader per screen. A new reader of these relations calls
   MS7), stopping at 20 people per call. MCP stays masked (AR13): an MCP export leaves it out or masks it.
 - `rank_brokers` (MARKET): Browse's Makléři tab (`api/broker_board.board`) less `firm_ids` and `broker_id`, at most 50
   brokers, masked as a non-admin's tab (`docs/design/broker-board.md`).
+- `aggregate_properties` (TENANT, #2064): the Stats dashboard's own function, `browse_stats_properties`, handed exactly
+  the arguments the dashboard sends for the same Browse filters by ONE mapper, `api/stats_pivot.pivot_args`
+  (`buildBrowseStatsArgs` over `resolveBrowsePrefilters` and `scopeArgs`: an empty list as null, the chips as four
+  arrays, the city rules and `with_estimates` resolved under the login), plus a spec from `toolkit/stats_registry.py`
+  (`rows`/`cols`/`measure`; what `validate_spec` refuses is INVALID_ARGUMENTS). `data` is the function's payload as it
+  answers, `metadata.price_per_m2_basis` its `basis` (else mixed or unknown). The area bounds take whole m² (the
+  function's are integers; a fraction is refused, never rounded). Over budget it cuts `cells` from the tail and keeps
+  the `places` a kept cell names (`fit` would keep every name and few cells). `tests/api/test_stats_pivot_census.py`
+  holds `PARAMS` (sent, with their SQL types) and `UNMAPPED` (the four parked condition levels, each with why) to the
+  latest signature, and `PARAMS` to the keys the dashboard sends.
+- `market_evidence` (TENANT, #2064): prices achieved round a subject, two arms never mixed, every row and summary
+  labelled `evidence` (`proxy` / `registered`) beside its `price_per_m2_basis` (`api/market_evidence.py`). The subject
+  is a `PlaceSubject` placed through the page's readers (`listings_public`, `properties_public`; `match_listing` is
+  dark under the login), its own property never its evidence. Proxy: the Stats tab's sold-market lens (`stats.ts`
+  `soldMarketFilters`: inactive, observed from the first ad, dismissed included) over a circle of `radius_m`, validated
+  as `AggregateArgs` and read by `cohort_where` over `browse_list`, nearest first; its summary is the pivot's total
+  over exactly that cohort. The window is the registry's `tom_days_min`/`tom_days_max`, by default
+  `stats_registry.SOLD_MARKET_DAYS` (2–60, twin of `stats.ts`); any other needs `window_reason`, echoed in
+  `metadata.window`. Registered: `sold_comparables` with the SOLD filters over `SOLD_GRAIN`, ordered and capped (200,
+  `more`) as the page reads it, summed up by a port of `soldComps.ts` `summarizeSold` (its constants pinned as twins);
+  byt and dum for sale only, else empty with `metadata.registered_refused`; `sold_coverage` in
+  `metadata.registered_coverage` (the centre's town only). A filter an arm cannot apply is named in
+  `metadata.unapplied`.
 
 The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation.STATE_COLS`, each
-`property_read.*_COLS`) is disjoint from `forbidden_columns()`, derived from the registry (rule 14's retired
-levels, rule 17's city-quality columns), and names no broker; `api/property_search.py` and `api/property_read.py`
-name none of the relations those values are stored in (`curated_cities*`, `city_index_*`, `city_population`,
-`listing_condition_scores`, `listing_broker_public`, `listing_location`), nor one that reads as nothing under the
-login (base `listings`, `canonical_advert`, …). The read models they do read (`browse_list_visible`,
-`properties_public`) still publish parked levels, city-quality and (`properties_public`, #2174) broker columns, which
-only the allowlists keep out; the dossier, broker and own-context reads, each run on a fixture, return no
-forbidden key at any depth and every per-m² figure with its basis. Not covered: `api/curation.py`'s relations (only
-its `STATE_COLS` allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH_COLUMNS`).
+`property_read.*_COLS`, `market_evidence`'s two) is disjoint from `forbidden_columns()`, derived from the registry
+(rule 14's retired levels, rule 17's city-quality columns), and names no broker; `api/property_search.py`,
+`api/property_read.py` and `api/market_evidence.py` name none of the relations those values are stored in
+(`curated_cities*`, `city_index_*`, `city_population`, `listing_condition_scores`, `listing_broker_public`,
+`listing_location`), nor one that reads as nothing under the login (base `listings`, `canonical_advert`, …);
+`api/stats_pivot.py` is held to that last pattern only, since it resolves the city rules through
+`curated_cities_matching`, as Browse does. The read models they do read (`browse_list_visible`, `properties_public`)
+still publish parked levels, city-quality and (`properties_public`, #2174) broker columns, which only the allowlists
+keep out; the dossier, broker, own-context and achieved-price reads, each run on a fixture, return no forbidden key at
+any depth and every per-m² figure with its basis. Not covered: `api/curation.py`'s relations (only its `STATE_COLS`
+allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH_COLUMNS`).
 
 ## Adding a tool
 
