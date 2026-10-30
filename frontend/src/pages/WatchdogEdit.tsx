@@ -118,7 +118,7 @@ export default function WatchdogEdit() {
         </Section>
 
         <Section title="Map area">
-          <Row label="Box">
+          <Row label="Area">
             <Suspense
               fallback={
                 <div
@@ -128,11 +128,12 @@ export default function WatchdogEdit() {
               }
             >
             <MapAreaControl
-              value={spec.bounds}
-              onChange={(next) => setSpec((prev) => ({ ...prev, bounds: next }))}
+              value={spec.circle ?? spec.bounds}
+              onChange={(next) => setSpec((prev) => ({ ...prev, bounds: next, circle: null }))}
               hint={
                 'Optional. Pan and zoom, then "Use current view" to watch only what the ' +
-                'map shows — the same box Browse filters on. Clear to drop the map area.'
+                'map shows — the same box Browse filters on; a circle saved from Browse ' +
+                'shows here as it is. Clear to drop the map area.'
               }
             />
             </Suspense>

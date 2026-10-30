@@ -20,7 +20,7 @@ import {
   speedOf,
   type BoardOptions,
 } from './brokerBoard';
-import { DEFAULT_FILTERS, applyRegistryUpdates, effectiveBbox, fromSearchParams, type ListingFilters } from './filters';
+import { DEFAULT_FILTERS, applyRegistryUpdates, fromSearchParams, type ListingFilters } from './filters';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -31,7 +31,7 @@ vi.mock('./api', async (importOriginal) => ({
 const FILTER_IDS = filtersForAgenda('browse')
   .filter((d) => d.id !== 'location' && d.category !== 'Curation')
   .map((d) => d.id);
-const OPTIONS = ['bounds', 'horizon_days', 'sort', 'min_properties', 'limit', 'firm_ids', 'broker_id'];
+const OPTIONS = ['bounds', 'circle', 'horizon_days', 'sort', 'min_properties', 'limit', 'firm_ids', 'broker_id'];
 
 /* The registry's constraints as the server renders them (api/filter_args): `min` a floor, `enum` the vocabulary. */
 function refused(body: Record<string, unknown>): string[] {
@@ -120,13 +120,8 @@ describe('the board request against the registry', () => {
       min_properties: 3,
       firm_ids: [3, 7],
     });
-    const circle: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      bounds: { west: 0, south: 0, east: 1, north: 1 },
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50.08, lng: 14.42, radius_m: 2000 },
-    };
-    expect(boardRequest(circle, DEFAULT_BOARD).bounds).toEqual(effectiveBbox(circle));
+    const circle: ListingFilters = { ...DEFAULT_FILTERS, circle: { lat: 50.08, lng: 14.42, radius_m: 2000 } };
+    expect(boardRequest(circle, DEFAULT_BOARD)).toMatchObject({ bounds: null, circle: circle.circle });
   });
 
   it('never sends an account lens, and names the set ones', () => {

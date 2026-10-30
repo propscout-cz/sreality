@@ -49,7 +49,7 @@ const CUSTOM_REACH: Record<CustomBlockKey, { ids: string[]; fields: Array<keyof 
     ids: ['portals', 'portals_excluded', 'portals_excluded_active_only'],
     fields: ['portals', 'portalsExcluded', 'portalsExcludedActiveOnly'],
   },
-  location_mode: { ids: ['location'], fields: ['locationMode', 'centerRadius'] },
+  location_mode: { ids: ['location'], fields: ['circle'] },
   broker: { ids: [], fields: ['brokerId'] },
 };
 

@@ -54,7 +54,10 @@ import {
   toSearchParams,
   savedMapArea,
   cohortKindOf,
+  circleInView,
+  MAP_START_VIEW,
   type ListingFilters,
+  type MapBounds,
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
@@ -174,6 +177,13 @@ export default function BrowseExperience({
   /* Map frame command. Set when the operator loads a preset that saved a map
    * area; ListingMap fits the camera to it. */
   const [mapFrame, setMapFrame] = useState<MapFrameCommand | null>(null);
+  /* The main map's last settled view (a ref: it moves on every pan, and nothing
+   * renders from it). A switch to centre + radius places its circle there. */
+  const mapViewRef = useRef<MapBounds | null>(null);
+  const placeCircle = useCallback(
+    () => circleInView(mapViewRef.current ?? filters.bounds ?? MAP_START_VIEW),
+    [filters.bounds],
+  );
   const loadPreset = useCallback(
     (p: FilterPreset) => {
       view.loadPreset(p);
@@ -520,6 +530,7 @@ export default function BrowseExperience({
               width={sidebar.value}
               layout={layout}
               onCollapse={() => sidebarCollapsed.set(true)}
+              placeCircle={placeCircle}
             />
 
             <ResizeHandle
@@ -698,11 +709,9 @@ export default function BrowseExperience({
                     hoveredIds={hoveredIds}
                     haloPoints={hoverState.points}
                     onHover={setHoveredFromMap}
-                    centerCircle={
-                      filters.locationMode === 'center_radius'
-                        ? filters.centerRadius
-                        : null
-                    }
+                    circle={filters.circle}
+                    onCircleMove={(circle) => view.setFilters({ ...filters, circle })}
+                    onViewChange={(b) => { mapViewRef.current = b; }}
                     flyTo={mapFlyTo}
                     frame={mapFrame}
                     anchor={anchor}

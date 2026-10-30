@@ -11,7 +11,6 @@ import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
   type ListingFilters,
   buildingMaterialToValues,
-  effectiveBbox,
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
@@ -200,9 +199,23 @@ interface CountOption {
 const selectFrom = (relation: string, columns: string, opts?: CountOption) =>
   supabase.from(relation).select(columns, opts);
 
+/* The map area as the readers' parameters (migration 694): a box or a circle, tested
+ * in the database by its one spatial predicate, `in_map_area`. Only the set side is sent. */
+export const areaArgs = (f: ListingFilters): Record<string, number> => {
+  if (f.circle) {
+    return { circle_lat: f.circle.lat, circle_lng: f.circle.lng, circle_radius_m: f.circle.radius_m };
+  }
+  if (f.bounds) {
+    const { west, south, east, north } = f.bounds;
+    return { bbox_west: west, bbox_south: south, bbox_east: east, bbox_north: north };
+  }
+  return {};
+};
+
 /* THE start of every Browse cohort read, so the list, its count, the map pins
- * and the no-price hint cannot disagree about which properties are hidden. Only
- * the active scope sides are sent (lib/setScope.scopeArgs). */
+ * and the no-price hint cannot disagree about which properties are hidden or
+ * where they lie. Only the active scope sides and the set map area are sent
+ * (lib/setScope.scopeArgs, areaArgs). */
 const readSource = (
   fn: string,
   f: ListingFilters,
@@ -210,7 +223,7 @@ const readSource = (
   opts: CountOption = {},
 ): ReturnType<typeof selectFrom> =>
   supabase
-    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f) }, { get: true, ...opts })
+    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f), ...areaArgs(f) }, { get: true, ...opts })
     .select(columns) as unknown as ReturnType<typeof selectFrom>;
 
 const listSource = (f: ListingFilters, columns: string, opts?: CountOption) =>
@@ -348,13 +361,6 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
     r = f.totalPriceChangePct < 0
       ? r.lte('total_price_change_pct', f.totalPriceChangePct)
       : r.gte('total_price_change_pct', f.totalPriceChangePct);
-  }
-  const bbox = effectiveBbox(f);
-  if (bbox) {
-    r = r.gte('lng', bbox.west)
-         .lte('lng', bbox.east)
-         .gte('lat', bbox.south)
-         .lte('lat', bbox.north);
   }
   return r as unknown as T;
 };
@@ -907,7 +913,6 @@ export const buildBrowseStatsArgs = (
     ? [...buildingMaterialToValues(f.buildingMaterial)]
     : null;
 
-  const effBbox = effectiveBbox(f);
   const portals = adPortals(f);
 
   return {
@@ -973,10 +978,13 @@ export const buildBrowseStatsArgs = (
     subtype_filter:          f.subtype.length ? f.subtype : null,
     building_type_filter:    buildingTypeArray,
     condition_match_filter:  f.conditionMatch.length ? f.conditionMatch : null,
-    bbox_west:               effBbox?.west  ?? null,
-    bbox_south:              effBbox?.south ?? null,
-    bbox_east:               effBbox?.east  ?? null,
-    bbox_north:              effBbox?.north ?? null,
+    bbox_west:               f.bounds?.west  ?? null,
+    bbox_south:              f.bounds?.south ?? null,
+    bbox_east:               f.bounds?.east  ?? null,
+    bbox_north:              f.bounds?.north ?? null,
+    circle_lat:              f.circle?.lat ?? null,
+    circle_lng:              f.circle?.lng ?? null,
+    circle_radius_m:         f.circle?.radius_m ?? null,
     city_pop_min:            f.minCityPopulation,
     city_pop_max:            f.maxCityPopulation,
     /* Migration 142/143 — fast polygon-edge proximity precomputed columns. */

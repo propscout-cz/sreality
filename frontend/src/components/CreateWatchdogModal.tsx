@@ -42,8 +42,8 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
 
-  /* The viewport box is offered; a centre+radius square is not a viewport. */
-  const offersMapArea = filters.locationMode === 'viewport' && filters.bounds != null;
+  /* The viewport box is offered; a circle always rides along (filtersToWatchdogSpec). */
+  const offersMapArea = filters.bounds != null;
   const { spec, unsupported } = useMemo(
     () => filtersToWatchdogSpec(filters, { includeMapArea: offersMapArea && withMapArea }),
     [filters, offersMapArea, withMapArea],

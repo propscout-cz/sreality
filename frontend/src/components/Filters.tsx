@@ -1,9 +1,9 @@
 import { Fragment, Suspense, useRef, type ReactNode } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import {
-  type CenterRadius,
+  CIRCLE_RADIUS,
   type ListingFilters,
-  type LocationMode,
+  type MapCircle,
   DEFAULT_FILTERS,
   isDefault,
   listingFiltersToRegistryView,
@@ -18,7 +18,7 @@ import {
 } from '@/lib/filterLayout';
 import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
 import type { MapySuggestion } from '@/lib/maps';
-import { CollapsibleGroup, SegmentedBar, Section } from '@/components/controls';
+import { CollapsibleGroup, DecimalField, SegmentedBar, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
@@ -33,16 +33,8 @@ import MarketGrowthFilter from '@/components/MarketGrowthFilter';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { AccountCuratedSetFilter } from '@/components/filter-controls/CuratedSetFilter';
 import type { CuratedSet, SetScope } from '@/lib/setScope';
-/* Lazy: this is the only control here that draws a map, it renders only in
- * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
- * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
 /* Lazy: it only mounts once the folded Advanced band opens. */
 const BrokerFilterControl = lazyChunk(() => import('@/components/filter-controls/BrokerFilterControl'));
-const LocationControl = lazyChunk(() =>
-  import('@/components/filter-controls/LocationControl').then((m) => ({
-    default: m.LocationControl,
-  })),
-);
 
 interface SidebarProps {
   filters: ListingFilters;
@@ -66,6 +58,9 @@ interface SidebarProps {
    * caller swaps in <FilterSidebarRail> while folded. Optional so the other
    * consumers (Watchdog edit form, etc.) get a sidebar that cannot fold. */
   onCollapse?: () => void;
+  /* The circle a switch to centre + radius places: in the middle of the main map's
+   * view, which Browse knows. */
+  placeCircle: () => MapCircle;
 }
 
 const bandActive = (
@@ -292,7 +287,7 @@ function ChevronGlyph({ direction }: { direction: 'left' | 'right' }) {
 }
 
 export function FilterSidebar({
-  filters, onChange, onReset, onLocationPick, width = 320, layout = 'page', onCollapse,
+  filters, onChange, onReset, onLocationPick, width = 320, layout = 'page', onCollapse, placeCircle,
 }: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
@@ -364,12 +359,11 @@ export function FilterSidebar({
         );
       case 'location_mode':
         return (
-          <LocationModeSection
+          <MapAreaSection
             label={b.label}
-            mode={filters.locationMode}
-            centerRadius={filters.centerRadius}
-            onModeChange={(mode) => onChange({ ...filters, locationMode: mode })}
-            onCenterRadiusChange={(cr) => onChange({ ...filters, centerRadius: cr })}
+            circle={filters.circle}
+            onChange={(circle) => onChange({ ...filters, bounds: null, circle })}
+            placeCircle={placeCircle}
           />
         );
     }
@@ -532,14 +526,11 @@ export function CityPopulationHint() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Location mode: viewport vs centre+radius                                   */
+/* Map area: the viewport or a circle                                         */
 /*                                                                            */
-/* The joined bar picks which spatial predicate drives the cohort. In         */
-/* `viewport` mode (default) the main map's pan/zoom emits the bbox; in       */
-/* `center_radius` mode an in-sidebar small map widget lets the operator      */
-/* drop a dot and dial a radius — the cohort filters to that circle           */
-/* (approximated as a bbox client-side; the main map still draws the precise  */
-/* circle overlay).                                                           */
+/* The joined bar picks the map area. By default the main map's pan and zoom  */
+/* emit the box; a circle is placed in the middle of the main map, dragged    */
+/* there, and sized here. Either is tested in the database (`in_map_area`).   */
 /* -------------------------------------------------------------------------- */
 
 const rowClass = (r: FilterRow): string => {
@@ -607,49 +598,63 @@ function SegmentedLine({
   );
 }
 
-const LOCATION_MODES: ReadonlyArray<{ value: LocationMode; label: string }> = [
-  { value: 'viewport', label: 'Map viewport' },
-  { value: 'center_radius', label: 'Centre + radius' },
-];
+const MAP_AREA_MODES = [
+  { value: 'view', label: 'Map viewport' },
+  { value: 'circle', label: 'Centre + radius' },
+] as const;
 
-function LocationModeSection({
+/* The map area: the view on screen, or a circle that holds still while the map moves.
+ * A switch to the circle places it in the middle of the main map (operator ruling
+ * 2026-10-30), where its centre is dragged; here, only its radius. */
+function MapAreaSection({
   label,
-  mode,
-  centerRadius,
-  onModeChange,
-  onCenterRadiusChange,
+  circle,
+  onChange,
+  placeCircle,
 }: {
   label: string;
-  mode: LocationMode;
-  centerRadius: CenterRadius | null;
-  onModeChange: (next: LocationMode) => void;
-  onCenterRadiusChange: (next: CenterRadius | null) => void;
+  circle: MapCircle | null;
+  onChange: (next: MapCircle | null) => void;
+  placeCircle: () => MapCircle;
 }) {
+  const setRadius = (radius: number | null) => {
+    if (!circle || radius == null) return;
+    const radius_m = Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, Math.round(radius)));
+    if (radius_m !== circle.radius_m) onChange({ ...circle, radius_m });
+  };
   return (
     <Section label={label}>
-      <SegmentedBar fill options={LOCATION_MODES} value={mode} onChange={onModeChange} />
-      {mode === 'center_radius' ? (
-        <div className="mt-3">
-          {/* Reserve the control's own height so switching to centre+radius doesn't
-            * jump the sidebar while the map chunk arrives. */}
-          <Suspense
-            fallback={
-              <div
-                className="h-[13.5rem] rounded-[var(--radius-sm)] bg-[var(--color-inset)]"
-                aria-busy="true"
-              />
-            }
-          >
-            <LocationControl
-              value={centerRadius}
-              onChange={onCenterRadiusChange}
-              hint={
-                'The cohort filters to listings inside the dashed circle. ' +
-                'Click the small map to set the centre or drag the marker. ' +
-                'The full-page map still shows the circle for context.'
-              }
+      <SegmentedBar
+        fill
+        options={MAP_AREA_MODES}
+        value={circle ? 'circle' : 'view'}
+        onChange={(mode) => onChange(mode === 'circle' ? placeCircle() : null)}
+      />
+      {circle ? (
+        <div className="mt-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={CIRCLE_RADIUS.min}
+              max={CIRCLE_RADIUS.max}
+              step={CIRCLE_RADIUS.step}
+              value={circle.radius_m}
+              onChange={(e) => setRadius(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-[var(--color-copper)]"
+              aria-label="Radius"
             />
-          </Suspense>
+            <DecimalField
+              label="Radius in metres"
+              value={circle.radius_m}
+              onChange={setRadius}
+              integer
+              suffix="m"
+              className="w-24 shrink-0"
+            />
+          </div>
+          <p className="text-[0.7rem] text-[var(--color-ink-4)]">
+            Filtering by the circle on the main map. Drag its centre to move it.
+          </p>
         </div>
       ) : (
         <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">

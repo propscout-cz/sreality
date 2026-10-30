@@ -2,7 +2,7 @@ import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
-import { bboxAround, fromSearchParams, DEFAULT_FILTERS } from './filters';
+import { fromSearchParams, DEFAULT_FILTERS } from './filters';
 import {
   DEFAULT_OVERLAY,
   PIN_LIMIT_DEFAULT,
@@ -23,19 +23,6 @@ import { DEFAULT_SORT, parseSort } from './queries';
 import type { SavedDashboard } from './types';
 
 const TREBIC = { lat: 49.2147, lng: 15.8816 };
-
-describe('bboxAround', () => {
-  it('produces a well-ordered box ~km across centred on the point', () => {
-    const b = bboxAround(TREBIC.lat, TREBIC.lng, 5);
-    expect(b.west).toBeLessThan(b.east);
-    expect(b.south).toBeLessThan(b.north);
-    // centre is (lat, lng)
-    expect((b.north + b.south) / 2).toBeCloseTo(TREBIC.lat, 6);
-    expect((b.east + b.west) / 2).toBeCloseTo(TREBIC.lng, 6);
-    // N–S span ≈ 5 km (1° lat ≈ 111.32 km)
-    expect((b.north - b.south) * 111.32).toBeCloseTo(5, 1);
-  });
-});
 
 /* An unset ("Vše") category must resolve to NO
  * constraint — not Browse's narrow default (['byt'] / 'pronajem'). A broker who
@@ -83,9 +70,8 @@ describe('browseUrlFromState ↔ fromSearchParams round-trip', () => {
     expect(parsed.categoryType).toBe('prodej');
     expect(parsed.dispositions).toEqual(['3+kk']);
     expect(parsed.ownership).toEqual(['osobni']);
-    expect(parsed.locationMode).toBe('center_radius');
-    expect(parsed.centerRadius?.radius_m).toBe(500);
-    expect(parsed.centerRadius?.lat).toBeCloseTo(TREBIC.lat, 4);
+    expect(parsed.circle?.radius_m).toBe(500);
+    expect(parsed.circle?.lat).toBeCloseTo(TREBIC.lat, 4);
   });
 
   /* The rent map is a registry layer now, its size category the variant: the
