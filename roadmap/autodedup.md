@@ -92,8 +92,8 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   seed commits, never a bare revert: brake, revert, re-seed** (the retired `payload` still holds
   the 10-16 calibration). Owed, scheduled right after that sitting is verified: the DROP of
   `payload` / `artifact_url` (destructive: the operator's OK + a backup; the old reader then
-  fails loudly). Still binding at the nation's size: `MAX_SCHEMA_MB` 10,000 (~470k ads,
-  E940/E962), the cut's memory bound 699,050 ads at 12 kB (E962); the worker's calibration is
+  fails loudly). Still binding at the nation's size: `MAX_SCHEMA_MB` 14,000 since 2026-10-30
+  (~660k ads; 10,000 / ~470k under E940/E962), the cut's memory bound 699,050 ads at 12 kB (E962); the worker's calibration is
   ~2.9 GB through every pass (resident ~1.6 + `context_for`'s copy ~1.2) and ~4.5–5 GB at a
   digest change — under its 22.9 GB (one row a block of `block_token_df` would let the read
   parse a block at a time; not built).
