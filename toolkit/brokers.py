@@ -256,7 +256,7 @@ def book_rule_sql(alias: str) -> str:
 _COUNTS = "count(*) AS properties, count(*) FILTER (WHERE b.is_active) AS active_properties"
 # The counts as a LATERAL to a `p.broker_id`.
 BROKER_COUNTS_SQL = f"LATERAL (SELECT {_COUNTS} FROM broker_book b WHERE b.broker_id = p.broker_id) n"
-# A broker row and its numbers. Named, never `*`: brokers_public still carries counts nothing writes (W3b drops them).
+# A broker row and its numbers (brokers_public carries no count since migration 693: they are the book's).
 _BROKER_SQL = ("p.broker_id, p.display_name, p.primary_email, p.primary_phone, p.firm_id, p.firm_domain, p.firm_name, "
                "p.firm_is_franchise, p.source_count, p.distinct_source_count, p.first_seen_at, p.last_seen_at, n.* "
                f"FROM brokers_public p CROSS JOIN {BROKER_COUNTS_SQL}")

@@ -1082,32 +1082,6 @@ def _affected(conn: Any, listing_ids: list[int]) -> list[int]:
         return [int(r[0]) for r in cur.fetchall()]
 
 
-# The leaderboard matview republishes from the DRAIN path (the worker lane every
-# ~30 s), not from the daily
-# sweep — freshness stopped being coupled to a 1.5-3h job that GH cron drift
-# parks in working hours (Broker Unify W3). The derived_artifacts stamp is the
-# clock, so the cadence needs no new setting; the chokepoint
-# (migration 578) refreshes CONCURRENTLY (readers never block; measured 85 s),
-# stamps rows + duration in-DB, and skips (-1) when a refresh is in flight.
-# Nothing reads it since broker board W3a; W3b drops it with this refresh and its registry row.
-_MATVIEW_REFRESH_AFTER = "55 minutes"
-
-
-def _maybe_refresh_matview(conn: Any) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT last_succeeded_at IS NULL OR last_succeeded_at < now() - %s::interval "
-            "FROM derived_artifacts WHERE name = 'broker_region_type_stats'",
-            (_MATVIEW_REFRESH_AFTER,))
-        row = cur.fetchone()
-    if not row or not row[0]:
-        return False
-    rows = db.refresh_matview(
-        conn, "broker_region_type_stats", statement_timeout="0")
-    LOG.info("RESOLVE matview refreshed rows=%d", rows)
-    return True
-
-
 _CANDIDATE_BROKERS = """
 SELECT b.id, b.display_name, b.primary_firm_id, f.canonical_domain, f.display_name
 FROM brokers b JOIN firms f ON f.id = b.primary_firm_id
@@ -1737,18 +1711,15 @@ def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
     scripts.recompute_property_stats.run_incremental_pass. Skips cleanly when
     another resolution run holds the lock, drains the dirty queue until empty
     (not one slice per invocation — the one-slice shape left 2,300-row, 5 h+
-    backlogs between throttled GH runs), and finishes by republishing the
-    leaderboard matview when its registry stamp is older than
-    _MATVIEW_REFRESH_AFTER, so freshness rides whichever host is alive."""
+    backlogs between throttled GH runs)."""
     if reconnect is None:
         reconnect = db.connect
     free, franchise, _auto_merge = _settings(conn)
     holder = f"incremental-{uuid.uuid4()}"
     if not _try_acquire_lock(conn, holder, "incremental"):
         LOG.info("RESOLVE skip mode=incremental: lock held by another resolution run")
-        return {"skipped": True, "attributed": 0, "brokers": 0, "refreshed": False}
+        return {"skipped": True, "attributed": 0, "brokers": 0}
     attributed = brokers = passes = 0
-    refreshed = False
     try:
         # Each inner pass claims up to batch_size ids at its own cutoff; a full
         # claim means the queue may hold more. The cap is a runaway backstop
@@ -1761,11 +1732,9 @@ def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
             passes += 1
             if res["attributed"] < batch_size or passes >= 50:
                 break
-        refreshed = _maybe_refresh_matview(conn)
     finally:
         _release_lock(conn, holder, reconnect)
-    return {"skipped": False, "attributed": attributed, "brokers": brokers,
-            "passes": passes, "refreshed": refreshed}
+    return {"skipped": False, "attributed": attributed, "brokers": brokers, "passes": passes}
 
 
 def main() -> int:
@@ -1811,17 +1780,15 @@ def main() -> int:
             return 0
 
         if args.incremental:
-            # THE incremental driver (run_incremental_pass) owns the lock skip,
-            # the drain-until-empty loop and the stale-matview republish — the
-            # realtime worker's broker lane calls the same function, so this
-            # entry is only the hand run.
+            # THE incremental driver (run_incremental_pass) owns the lock skip
+            # and the drain-until-empty loop — the realtime worker's broker lane
+            # calls the same function, so this entry is only the hand run.
             res = run_incremental_pass(conn, args.batch_size, reconnect=reconnect)
             if not res.get("skipped"):
                 LOG.info(
-                    "RESOLVE incremental done attributed=%d brokers=%d passes=%d "
-                    "refreshed=%s elapsed=%.1fs",
+                    "RESOLVE incremental done attributed=%d brokers=%d passes=%d elapsed=%.1fs",
                     res["attributed"], res["brokers"], res.get("passes", 1),
-                    res.get("refreshed"), time.monotonic() - started)
+                    time.monotonic() - started)
             return 0
 
         # Pooler-safe mutual exclusion (migration 192). The full sweep waits,

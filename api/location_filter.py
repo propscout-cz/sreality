@@ -3,17 +3,15 @@
 Every surface that lets the operator narrow by place — Browse's list
 (`districtsFilterClause`), Browse's Stats and map (`browse_stats_properties` /
 `browse_map_cells`), the pipeline board's in-memory predicate, the Watchdog
-matcher and the broker board (Browse's own cohort; `broker_leaderboard`,
-migration 609, until its drop) — tests a chip the same way:
+matcher and the broker board (Browse's own cohort) — tests a chip the same way:
 
     <level>_id = any(<codes at that level>)
 
 plain equality, per level, nothing else, over FIVE code columns: `region_id`,
 `okres_id`, `obec_id`, `cast_obce_id` (migration 503) and `ulice_id`, the RÚIAN
-street code (584) — or, in the leaderboard, which reads `listing_location`
-directly, its `kraj_kod` … `ulice_kod`. `listing_location` answers every listing
-with those codes, and `admin_boundaries.id` IS the RÚIAN code (migrations
-083/141), so a chip and a listing come from one register.
+street code (584). `listing_location` answers every listing with those codes,
+and `admin_boundaries.id` IS the RÚIAN code (migrations 083/141), so a chip and a
+listing come from one register.
 
 WHAT YOU PICK IS WHAT YOU FILTER. A chip is exactly one unit at the level the
 operator picked; a street chip filters at its street, never its town. A chip

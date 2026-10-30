@@ -68,8 +68,8 @@ Wave 3 retired eight platform keys into the three checks the worker measures (be
 and `llm_burn_rate` into `llm`; `long_open_transaction` and `db_saturation` into `capacity` (the
 latter's failure-rate arm into the `jobs` check's pg_cron cells); `worker_lane_stall`,
 `workflow_poller_liveness` and `broker_resolution_freshness` into `jobs` (33 of the last's 34
-onsets were edge flaps; `broker_maintenance` is a lane cell and `broker_region_type_stats` an
-artifact cell); and `dual_write_parity` (Q6) went with the R2 dual-write it guarded. Their
+onsets were edge flaps; `broker_maintenance` is a lane cell, and `broker_region_type_stats` was an
+artifact cell until migration 693 dropped it); and `dual_write_parity` (Q6) went with the R2 dual-write it guarded. Their
 thresholds and tests went with them.
 Wave 4 retired seven portal keys into the four portal checks the worker measures (below):
 `walk_coverage` (with `_SELF_CERTIFYING_TOTALS`, now the `Portal.total_is_count` seam) and
