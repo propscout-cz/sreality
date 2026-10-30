@@ -18,8 +18,10 @@ toolkit work.
   `effectiveBbox`, `LocationControl` deleted), sent as the readers' own parameters and tested by
   `in_map_area` (migration 694) in the list source, both stats RPCs, the watchdog matcher, the broker
   board and the agents' search. Migration 695 strips the two dead keys from saved presets.
-- **Next (owed):** pin hover shows the pin's preview on the map for every pin (ruled 2026-10-30; a pin
-  lights its card only when the card is loaded), and hovers per pin under the cursor.
+- **Pin hover** (ruled 2026-10-30): every pin answers a pointer with its preview on the map, the click
+  popup's own HTML (a click keeps it open), and lights its card when the card is loaded; the hover follows
+  the pin under the cursor (`mousemove`), so touching pins follow it and a stack lights together. Before:
+  10 % of pins answered with 72 of 659 cards loaded.
 
 ### Preset save moves into the chip menu; Reset leaves the preset (2026-10-27, no migration)
 - **Done** (operator ask 2026-10-27: "get rid of the update preset button", option B of the
