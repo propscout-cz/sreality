@@ -133,7 +133,7 @@ it (`api/`). They do not apply to the scraper.
    must be added to that table. The SPA is the main consumer since 2026-08-12
    (`frontend/src/lib/brokers.ts`, on the session JWT); it previously read the
    underlying views straight off PostgREST and had been dark since migration 299 revoked
-   them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift).
+   them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift; dropped by 693).
    Because the cap is a 422 on the WHOLE batch, `fetchListingBrokersByIds` chunks
    client-side (supabase-js `.in()` had no such cap, so an oversized board would otherwise
    lose every card's broker, not just the overflow). Its `fetchBrokersByIds` twin is

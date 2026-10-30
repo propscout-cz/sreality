@@ -29,12 +29,14 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   the attribution link dirtying its property, census rails.
 - **W2 — the readers** (#2182, merged 2026-10-29): 692, the `Makléři` tab, `rank_brokers`,
   Browse's broker scope and Outreach on the book; the leaderboard's routes and toolkit deleted.
-- **W3a — one broker vocabulary** (in progress, `feature/broker-one-count-book`, stacked on W2): search, the dossier,
+- **W3a — one broker vocabulary** (#2183, merged 2026-10-30): search, the dossier,
   the merge review and Outreach's facts read the book (`BROKER_COUNTS_SQL`), a firm chip counts the brokers its filter
   selects; the count rollups, the 7-day rule, the broker mirror and the `Inzeráty` ad counts deleted; no migration.
-- **Next** — **W3b**, one destructive migration with the operator's OK and a backup: the
-  count book with its refresh and registry row, the views and functions over it, the frozen count columns, 691's spells
-  (`docs/design/broker-board.md`, W3b's drop list).
+- **W3b — the old count book dropped** (prepared, `cleanup/broker-count-book-drop`): migration 693
+  drops the count book with its registry row, the views and functions over it, the frozen count columns and 691's
+  spells; the refresh, the leaderboard tests and the A6 entries go with it. Destructive: W3a is live on Railway
+  (2026-10-30), so it waits only on the operator's OK and the backup (`docs/design/broker-board.md`, W3b as prepared),
+  then merge.
 
 ## Done
 
