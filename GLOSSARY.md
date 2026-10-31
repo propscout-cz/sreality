@@ -292,6 +292,23 @@ What a merge writes down about each item of curation it moved or folded, so a sp
 back where it came from.
 _Avoid_: carry log, curation ledger, snapshot
 
+**Curation sync**:
+The catching-up of every open window of a signed-in user with a change to that user's curation, or to
+the shares that decide who sees it, made anywhere else (another window, the phone, the extension, a
+delegate, a merge). It is a re-read prompted by the curation clock, never a render from its signal.
+_Avoid_: live sync, live update, Realtime, push (alone), operator state sync
+
+**Curation clock**:
+One counter per account and family of curation (the board, dismissals, collections, tags, notes, links,
+shares), advanced only by the database, once per committed change. It is a change signal compared only
+for inequality: it holds no content and is not history.
+_Avoid_: version, tick, revision, change log
+
+**Clock read**:
+One window's read of the curation clock, on a cadence while the window is visible and at once when it is
+shown again (the cadence: `docs/design/curation-sync.md` § 3.5).
+_Avoid_: probe, tick, poll (alone), heartbeat
+
 **Watchdog**:
 A saved filter that alerts an account when a property newly matches it or drops its price.
 _Avoid_: alert (for the saved filter), subscription, notification

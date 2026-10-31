@@ -1,13 +1,13 @@
 /* The hydration layer's two invariants.
  *
  * 1. Its cache keys must not collide with any write's sweep, because
- *    invalidations match by PREFIX: every pipeline card write re-reads
- *    PIPELINE_REVALIDATE (members, board, dismissals — plus every Browse surface
- *    when the cohort is pipeline-scoped), and the stage editor re-reads stages
- *    and board. If a decoration key ever sat under one of those, every drag
- *    would refetch every thumbnail and every broker on the board — the split
- *    that makes the board fast would make it slower than the blocking chain it
- *    replaced. This is standing constraint 1 of the sprint, and it is cheap to
+ *    re-reads match by PREFIX: every pipeline card write re-reads its tables'
+ *    reads (lib/curationSync: members, board, dismissals — plus every Browse
+ *    surface when the cohort is pipeline-scoped), and the stage editor re-reads
+ *    stages, board and members. If a decoration key ever sat under one of
+ *    those, every drag would refetch every thumbnail and every broker on the
+ *    board — the split that makes the board fast would make it slower than the
+ *    blocking chain it replaced. This is standing constraint 1 of the sprint, and it is cheap to
  *    violate by accident, so it is pinned here rather than trusted to review.
  *
  * 2. Keys are a property of the id SET, not of the array that arrived — so a
@@ -18,8 +18,8 @@ import { describe, expect, it } from 'vitest';
 
 import { autodedupKeys } from '@/lib/autodedupKeys';
 import { browseKeys } from '@/lib/browseKeys';
-import { PIPELINE_REVALIDATE } from '@/lib/pipelineCache';
-import { dismissalKeys, pipelineKeys } from '@/lib/queries';
+import { SYNC_ROOTS, tableReads } from '@/lib/curationSync';
+import { dismissalKeys } from '@/lib/queries';
 
 import type { ImagePublic } from '@/lib/types';
 
@@ -44,8 +44,8 @@ describe('hydration key namespace', () => {
   it('is disjoint from every write sweep prefix', () => {
     const sweeps: ReadonlyArray<readonly unknown[]> = [
       ['pipeline'],                   // the pipeline namespace root itself
-      ...PIPELINE_REVALIDATE,         // every card write
-      pipelineKeys.stages,            // the stage editor, with the board
+      ...tableReads(['property_pipeline', 'property_dismissals'], null), // every card write
+      ...tableReads(['pipeline_stages'], null), // the stage editor
       ...browseKeys.all,              // merge / split / link / dismissal / a curation settle (the widest)
       autodedupKeys.all,              // the rulings page's wholesale sweep
       dismissalKeys.all,
@@ -57,6 +57,14 @@ describe('hydration key namespace', () => {
           `${JSON.stringify(key)} must not be swept by ${JSON.stringify(sweep)}`,
         ).toBe(false);
       }
+    }
+  });
+
+  /* A change made in another window re-reads under these roots (curation sync). */
+  it('is disjoint from every curation sync root', () => {
+    for (const root of SYNC_ROOTS) {
+      expect(matchesPrefix([HYDRATION_NAMESPACE], root), JSON.stringify(root)).toBe(false);
+      for (const key of decorationKeys) expect(matchesPrefix(key, root)).toBe(false);
     }
   });
 

@@ -26,7 +26,8 @@ import {
 } from '@/lib/stats';
 import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
-import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
+import { cachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import SavedSetBar, {
   useSavedSet, type SavedSetBadge, type SavedSetCopy, type SavedSetMenuItem,

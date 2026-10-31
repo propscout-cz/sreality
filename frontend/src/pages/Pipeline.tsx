@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -33,10 +33,13 @@ import {
   useActingReadOnly,
   type ActiveBoard,
 } from '@/lib/acting';
-import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
 import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import { holdReads, type Hold } from '@/lib/revalidate';
 import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
@@ -565,7 +568,7 @@ function ViewerLine({ share }: { share: PipelineShare }) {
   const leave = useMutation({
     mutationFn: () => unsharePipeline(share.account_id, 'shared_with_me'),
     onSuccess: () => {
-      void revalidatePipelineShares(qc);
+      void revalidateTables(qc, ['pipeline_shares']);
       resetActiveBoard();
     },
     /* Its failure shows under the line; an onError keeps the global toast off it. */
@@ -608,7 +611,7 @@ function PipelineSharing({ shares }: { shares: PipelineShares | null }) {
         sharePipeline(email, mode ?? 'read').then((next) => qc.setQueryData(pipelineShareKeys.all, next))
       }
       onRevoke={(account_id) =>
-        unsharePipeline(account_id, 'shared_with').then(() => revalidatePipelineShares(qc))
+        unsharePipeline(account_id, 'shared_with').then(() => revalidateTables(qc, ['pipeline_shares']))
       }
     />
   );
@@ -828,6 +831,39 @@ export const boardCollision: CollisionDetection = (args) => {
 /* No sensor, no drag: a read-only board's DndContext never starts one. */
 const NO_SENSORS: ReturnType<typeof useSensors> = [];
 
+/* What a drag holds: the board and the members map, and the stages — they are
+ * the droppable columns (docs/design/curation-sync.md Decision 10). */
+const DRAG_HELD = [pipelineKeys.board, pipelineKeys.members, pipelineKeys.stages] as const;
+
+/* A drag holds its board's reads from pick-up to drop, so a re-read — a change
+ * made elsewhere, a mount — never repaints the columns under the card in hand:
+ * one in flight at pick-up is cancelled and owed, one that starts meanwhile too
+ * (lib/revalidate `holdReads`). The drop calls `move.mutate` FIRST, whose own
+ * hold (lib/useOptimisticWrite) registers synchronously over the board and the
+ * members map, and only then lets the drag's go. A read is paid when the LAST
+ * hold over it goes, so what the drag parked on the board and members waits for
+ * the move's settle, which reads each once; the stages, held by the drag alone,
+ * are read at the drop. A drop with no move, a cancel and an unmount pay
+ * everything parked at once. */
+function useDragHold(): { grab: () => void; letGo: () => void } {
+  const qc = useQueryClient();
+  const actAs = useActAs();
+  const held = useRef<Hold | null>(null);
+  const letGo = useCallback(() => {
+    held.current?.release();
+    held.current = null;
+  }, []);
+  useEffect(() => letGo, [letGo]);
+  const grab = () => {
+    letGo();
+    held.current = holdReads(
+      qc,
+      DRAG_HELD.map((key) => ({ queryKey: actingKey(actAs, key) })),
+    );
+  };
+  return { grab, letGo };
+}
+
 function Board({
   live,
   closed,
@@ -863,6 +899,7 @@ function Board({
    * one snaps back AND says why (rule #22). */
   const { move, remove } = usePipelineCard();
   const onRemove = (propertyId: number) => remove.mutate(propertyId);
+  const drag = useDragHold();
 
   const activeCard = activeId
     ? cards.find((c) => `${CARD_PREFIX}${c.property_id}` === activeId) ?? null
@@ -872,8 +909,14 @@ function Board({
     <DndContext
       sensors={readOnly ? NO_SENSORS : sensors}
       collisionDetection={boardCollision}
-      onDragStart={(e: DragStartEvent) => setActiveId(String(e.active.id))}
-      onDragCancel={() => setActiveId(null)}
+      onDragStart={(e: DragStartEvent) => {
+        drag.grab();
+        setActiveId(String(e.active.id));
+      }}
+      onDragCancel={() => {
+        setActiveId(null);
+        drag.letGo();
+      }}
       onDragEnd={(e: DragEndEvent) => {
         setActiveId(null);
         const plan = planMove(
@@ -881,7 +924,9 @@ function Board({
           e.over ? String(e.over.id) : null,
           cards,
         );
+        // The move's hold first, then the drag lets go (useDragHold).
         if (plan) move.mutate(plan);
+        drag.letGo();
       }}
     >
       <BoardFrame
@@ -946,17 +991,13 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
   const [err, setErr] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState('');
 
-  /* Narrowed from a wholesale `['pipeline']` sweep to the two caches a stage
-   * edit can actually change: the stage list itself, and the board (whose
-   * columns and badges render from it). The old prefix also swept
-   * `card(id)` and `members` — and, had the decoration keys been nested under
-   * it, every thumbnail and broker line on the board as well. They are not
-   * (lib/hydration owns its own namespace, pinned by hydration.test.ts), but
-   * the sweep was still wider than the fact that changed. */
+  /* What a stage edit moves is lib/curationSync's `pipeline_stages` row: the
+   * stage list, the board (its columns) and the members map, whose stage label,
+   * colour and code every funnel badge renders from (property_pipeline_public
+   * joins the stages). The hand list it replaces omitted the members. */
   const invalidate = () => {
     setErr(null);
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.stages) });
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.board) });
+    void revalidateTables(qc, ['pipeline_stages'], actAs);
   };
   const onError = (e: unknown) =>
     setErr(e instanceof Error ? e.message : 'Akce selhala.');
@@ -1055,8 +1096,10 @@ function StageEditorRow({
   onError: (e: unknown) => void;
   invalidate: () => void;
 }) {
-  const [label, setLabel] = useState(stage.label);
-  const [code, setCode] = useState(stage.code ?? '');
+  /* Both fields follow the stage while untouched, so a rename made elsewhere shows
+   * here and a focus and blur never writes it back (D3, lib/useServerDraft). */
+  const label = useServerDraft(stage.label, trimDraft);
+  const code = useServerDraft(stage.code ?? '', trimDraft);
   const actAs = useActAs();
 
   const update = useMutation({
@@ -1076,18 +1119,27 @@ function StageEditorRow({
     onError,
   });
 
+  /* Only what the user typed is saved; an emptied name is refused, back to the stage's.
+   * The row stays open after a save, so the saved draft is marked: the next value
+   * the server reads back ends it, even a change made elsewhere meanwhile. */
   const saveLabel = () => {
-    const next = label.trim();
-    if (next && next !== stage.label) update.mutate({ label: next });
-    else setLabel(stage.label);
+    label.onBlur();
+    const next = label.edited();
+    if (next === '') label.reset();
+    else if (next != null) {
+      update.mutate({ label: next });
+      label.saved();
+    }
   };
 
   /* Empty box = no code: the badge falls back to the ordinal rather than
    * freezing a guessed number into the row (migration 377). */
   const saveCode = () => {
-    const next = code.trim();
-    if (next === (stage.code ?? '')) return;
+    code.onBlur();
+    const next = code.edited();
+    if (next == null) return;
     update.mutate({ code: next === '' ? null : next });
+    code.saved();
   };
 
   return (
@@ -1119,8 +1171,9 @@ function StageEditorRow({
           </button>
         </div>
         <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
+          value={code.value}
+          onChange={(e) => code.onChange(e.target.value)}
+          onFocus={code.onFocus}
           onBlur={saveCode}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -1132,8 +1185,9 @@ function StageEditorRow({
           className="w-10 shrink-0 rounded-[var(--radius-sm)] border border-transparent bg-[var(--color-inset)] px-1 py-1 text-center font-mono text-sm tabular-nums text-[var(--color-ink)] hover:border-[var(--color-rule)]"
         />
         <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
+          value={label.value}
+          onChange={(e) => label.onChange(e.target.value)}
+          onFocus={label.onFocus}
           onBlur={saveLabel}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();

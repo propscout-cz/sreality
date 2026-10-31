@@ -60,9 +60,9 @@ def _fetch_all(fetch: Any, keys: list[str]) -> list[bytes]:
 @router.get("/properties/{property_id}/download.zip")
 def get_property_download(
     property_id: int,
+    tconn: tenant_pool.TenantConn,
     conn: Any = Depends(deps.get_db_conn),
     claims: dict = Depends(deps.verify_jwt),
-    tconn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
     # The page's own reads (its brokers come through the PII policy below, never properties_public).
     found = property_read.properties(conn, [property_id])

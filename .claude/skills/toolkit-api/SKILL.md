@@ -32,7 +32,7 @@ it (`api/`). They do not apply to the scraper.
    **An agent reaches a tool through the tool registry** (`api/capabilities/`, #2062): one `Entry` per tool
    (tenancy + effect, a generated strict argument model), one `registry.call`, one error table, structural
    truncation. Adding a tool, its census and the parity reads (#2063: search, dossier, own context, brokers, every
-   read bounded): `references/tool-registry.md`.
+   read bounded; #2064: cohort statistics, achieved prices): `references/tool-registry.md`.
 3. **Every tool excludes `given_up = true` listings** from `listing_fetch_failures` by
    default. An `include_unreliable: bool = False` parameter overrides. Every cohort (`_shared_filter_where`, the listings adapter over `toolkit/filter_compiler.compile_filter_where`: comparables, velocity, the transit corridor) counts a property ONCE: its FROM is `location_data.claims_common.COHORT_LOCATION_FROM` (ruling R8, migration 636: place → the live property it locates → its canonical advert as the comparable, so price, area and snapshot_id are the canonical advert's and distance, district and place the location advert's), and `_shared_filter_where` leaves out every advert of the subject's property via `TargetSpec.exclude_listing_ids` / `TargetIn.exclude_listing_ids` (the ONE exclusion, decision 13: any advert of the subject names its whole property; the sreality-keyed `exclude_ids` is gone, a frozen spec's copy is history and never re-read).
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
@@ -273,7 +273,7 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
-  `Depends(tenant_conn)` there is circular). The ONE no-account posture: resolved once at the route edge,
+  `TenantConn` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,
   every share-create route never acts; a delegate's collection-monitoring field is a 403). Its twin `require_acting_account_id` (migration 641) is the caller's own
   account without the header, else the owner `acting_account_ids()` grants (`403 "no edit share from that
@@ -288,8 +288,9 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
 write whose caller has no JWT `sub`, ONLY where the table carries a SYSTEM RLS arm
 (`estimation_runs`, 291/292) — never a fallback on a tenant conn (290 gave curation none).
 
-For routes that need per-account **data isolation** (not just an admin/non-admin split), use
-`api/tenant_pool.py`'s `tenant_conn` instead of the service-role `get_db_conn` — it opens an
+For routes that need per-account **data isolation** (not just an admin/non-admin split), take
+`conn: tenant_pool.TenantConn` (never a bare `Depends(tenant_conn)`: one transaction, committed before the response)
+instead of the service-role `get_db_conn` — it opens an
 RLS-scoped transaction under the `tenant_pool` role; `verify_jwt` is authentication, `tenant_conn`
 (via RLS) is authorization, and it has no fallback connection (the static-token bypass was DELETED
 2026-09-11, dead since PR #941 — an unset `TENANT_POOL_DB_URL` now raises). **WHICH of the four scoping shapes a

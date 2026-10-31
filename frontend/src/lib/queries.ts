@@ -1835,6 +1835,8 @@ export const filterPresetKeys = {
 export const curationKeys = {
   collections: ['curation', 'collections'] as const,
   collection: (id: number) => ['curation', 'collection', id] as const,
+  /* Prefix of every collection page read above (lib/curationSync). */
+  anyCollection: ['curation', 'collection'] as const,
   tags: ['curation', 'tags'] as const,
   propertyTagMembers: ['curation', 'property-tag-members'] as const,
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,

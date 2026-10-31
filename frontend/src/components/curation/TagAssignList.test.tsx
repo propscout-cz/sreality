@@ -1,6 +1,6 @@
 /* The one tag assign list: a row per tag that attaches or detaches, a typed
  * name that creates and attaches, and a failed read that retries instead of
- * reading as "no tags". Every write revalidates through lib/tagCache. */
+ * reading as "no tags". Every write re-reads through lib/curationSync's map. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (orig) => ({
 
 import { attachTag, createTag, detachTag, listTags } from '@/lib/api';
 import { ActingAs, actingKey } from '@/lib/acting';
+import { watchReads } from '@/test/reads';
 import { TAG_SEARCH_LABEL, TagAssignList } from './TagAssignList';
 
 const tag = (id: number, name: string): Tag => ({
@@ -31,13 +32,13 @@ const TAGS = [tag(5, 'k prohlídce'), tag(6, 'odmítnuto')];
 function renderList(memberIds: number[] = [], seed: (qc: QueryClient) => void = () => {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   seed(qc);
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
+  const reads = watchReads(qc);
   render(
     <QueryClientProvider client={qc}>
       <TagAssignList property_id={42} memberIds={new Set(memberIds)} />
     </QueryClientProvider>,
   );
-  return { invalidate, qc };
+  return { ...reads, qc };
 }
 
 describe('<TagAssignList>', () => {
@@ -48,8 +49,11 @@ describe('<TagAssignList>', () => {
   });
 
   it('lists the property\'s own tags first, ticked, and toggles membership per row', async () => {
-    const { invalidate } = renderList([6]);
+    const { reread, clear } = renderList([6], (c) =>
+      c.setQueryData(curationKeys.propertyTagMembers, new Map([[42, [6]]])),
+    );
     const rows = await screen.findAllByRole('button', { pressed: true });
+    clear();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('odmítnuto');
     const list = screen.getByRole('list', { name: 'Štítky' });
@@ -59,8 +63,8 @@ describe('<TagAssignList>', () => {
     await waitFor(() => expect(attachTag).toHaveBeenCalledWith(42, 5));
     fireEvent.click(screen.getByRole('button', { name: /odmítnuto/, pressed: true }));
     await waitFor(() => expect(detachTag).toHaveBeenCalledWith(42, 6));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.propertyTagMembers });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.tags });
+    await waitFor(() => expect(reread(curationKeys.propertyTagMembers)).toBe(true));
+    expect(reread(curationKeys.tags)).toBe(true);
   });
 
   it('a tag put on a card listed under "Bez štítků" drops that card from the list (ruling 9)', async () => {
@@ -118,7 +122,8 @@ describe('<TagAssignList>', () => {
     qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>());
     qc.setQueryData(actingKey('owner-1', curationKeys.propertyTagMembers), new Map<number, number[]>());
     qc.setQueryData<InfiniteData<Page>>(cards, { pages: [{ rows: [{ property_id: 42 }] }], pageParams: [null] });
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    qc.setQueryData(curationKeys.tags, { data: TAGS });
+    const { reread } = watchReads(qc);
     render(
       <QueryClientProvider client={qc}>
         <ActingAs share={owner}>
@@ -134,7 +139,7 @@ describe('<TagAssignList>', () => {
     );
     expect(qc.getQueryData<Map<number, number[]>>(curationKeys.propertyTagMembers)?.size).toBe(0);
     expect(qc.getQueryData<InfiniteData<Page>>(cards)!.pages[0].rows).toEqual([{ property_id: 42 }]);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.tags) });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: curationKeys.tags });
+    await waitFor(() => expect(reread(actingKey('owner-1', curationKeys.tags))).toBe(true));
+    expect(reread(curationKeys.tags)).toBe(false);
   });
 });

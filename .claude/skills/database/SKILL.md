@@ -85,7 +85,8 @@ tenant-scoped:
   293) — the RLS-scoped path for per-account API routes. Connects to
   `TENANT_POOL_DB_URL` as the `tenant_pool` role (`LOGIN NOINHERIT`, zero data access on
   its own), `autocommit=False`, `prepare_threshold=None`. Inside **one transaction per
-  request** it runs `SET LOCAL ROLE authenticated` then
+  request** (committed before the response: `TenantConn`, `references/tenancy.md`) it runs `SET LOCAL ROLE authenticated`, `tenant_pool.SEARCH_PATH` (PostGIS is in
+  `extensions` in production, off the pool role's default path) then
   `SELECT set_config('request.jwt.claims', %s, true)` (bind param — `SET` only takes a
   literal, so a bare `SET LOCAL ... = <claims>` would be both a syntax error and an
   injection surface for attacker-shaped JWT claims) before yielding the connection for
