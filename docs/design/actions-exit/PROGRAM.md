@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service (#2025 PR-1) and the move of its first three jobs (#2025 PR-2) in review. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service and the move of its first three jobs (#2025) landed, their 7-day gate #2123 running. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -185,7 +185,7 @@ production.
   its own liveness subject (migration 675); a clean stop deletes its row, and each beat forgets another
   deployment's rows and its own deployment's after an hour of silence. A replica that never registers never
   beats, so it has no row: a job main's registry puts on the runner with no live row is the `jobs` check's
-  `job-runner/registry` Problem an hour after the worker's boot (`jobs_runner_register_grace_s`), once the previous
+  `job-runner/registry` Problem 30 minutes after the worker's boot (`jobs_runner_register_grace_s`), once the previous
   measurement read it missing too. The two global in-flight thresholds are replaced by a test-pinned mirror of the
   worker's one pass budget (`LANE_PASS_BUDGET_S` = `LANE_PASS_TIMEOUT_SECONDS`): a lane is Watch at ⅔ and a
   Problem at 1×, a job Watch at ⅔ of its `timeout_s` and a Problem at the runner's recorded stop; one shape, two
@@ -285,7 +285,7 @@ runner image, migration 683 (`rent_map_cells` names its scripts, not a workflow)
 (2) the move of stale_images, rent_map and map_overlays, after #2026 deploys, with no `.railway/` change and no
 migration, so `git revert -m 1` undoes it (pause first); fetch_rent_map.yml's companion re-render is folded into
 `scripts/fetch_rent_map.py` (a refused render exits 1; the override is a `map_overlays` request `--sections rent_map
---accept-shrink`, then a `rent_map` request clears that job's cell); (3) migration-only, `map_overlay_tiles` re-hosted to `job-runner` once (2) deploys.
+--accept-shrink`, then a `rent_map` request clears that job's cell); (3) migration 702, `map_overlay_tiles` re-hosted to `job-runner` once (2) deployed; each later move PR re-hosts its own row (`test_no_artifact_of_a_runner_job_is_hosted_on_github`).
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.

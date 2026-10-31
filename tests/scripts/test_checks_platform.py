@@ -33,7 +33,7 @@ T: dict[str, Any] = {
     "jobs_gh_gap_min_starts": 10, "jobs_poller_stale_h": 18, "jobs_cron_fail_of_3": 2,
     "jobs_cron_gap_multiple": 3, "jobs_cron_gap_min_starts": 5, "jobs_lane_floor_s": 900,
     "jobs_lane_boot_grace_s": 900, "jobs_lane_daily_interval_s": 3600,
-    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 3600,
+    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 1800,
     "capacity_p50_warn_multiple": 3, "capacity_p50_warn_floor_s": 30,
     "capacity_p50_fail_multiple": 4, "capacity_p50_fail_floor_s": 60,
     "capacity_p95_interval_warn": 0.5, "capacity_p95_interval_fail": 0.8,
