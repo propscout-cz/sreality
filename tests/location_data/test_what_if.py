@@ -45,15 +45,27 @@ def _at(claim: Any, days: int) -> Any:
     return replace(claim, observed_at=T0 + timedelta(days=days))
 
 
-def _v7() -> contracts.PortalContract:
-    """Today before W4 as a contract value: the marker reads the print map first, and no
-    `absent` (W3's key) — so on the hidden-pin page it never fires."""
-    def v7(entry: Any) -> Any:
+def _marker_reads(css: str, version: int) -> contracts.PortalContract:
+    """The shipped contract with the `estimated` marker re-pointed, so the test states both sides
+    of W4 itself and never depends on which version the checkout ships (W3's `absent` key aside:
+    neither side of W4 had it)."""
+    def repoint(entry: Any) -> Any:
         locator = {k: v for k, v in entry.locator.items() if k != "absent"}
-        return replace(entry, locator={**locator, "css": "div#print-map, div#map"})
+        return replace(entry, locator={**locator, "css": css})
 
-    entries = [v7(e) if e.entry_id == "rm.det.agency_est_flag" else e for e in CONTRACT.entries]
-    return replace(CONTRACT, version=7, entries=entries)
+    entries = [repoint(e) if e.entry_id == "rm.det.agency_est_flag" else e
+               for e in CONTRACT.entries]
+    return replace(CONTRACT, version=version, entries=entries)
+
+
+def _v7() -> contracts.PortalContract:
+    """Before W4: the marker read the print node first, which always carries a value."""
+    return _marker_reads("div#print-map, div#map", CONTRACT.version)
+
+
+def _v8() -> contracts.PortalContract:
+    """W4's bump as a contract value: the marker reads the interactive map only."""
+    return _marker_reads("div#map", CONTRACT.version + 1)
 
 
 def _mined(contract: contracts.PortalContract, first_id: int) -> list[Any]:
@@ -162,8 +174,8 @@ def test_an_intake_claim_reads_back_as_the_resolver_reads_the_stored_row():
 
 def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
     """The W4 path over the real contract: today (v7) the marker reads `#print-map` and never
-    fires; re-mined under the contract on disk it reads the blank `#map`. Every type the re-mine
-    states is replaced by its newer claim, and another portal's listing is left alone."""
+    fires; re-mined under the bump it reads the blank `#map`. Every type the bump states is
+    replaced by its newer claim, and another portal's listing is left alone."""
     today = _mined(_v7(), 1)
     assert "precision_declaration" not in {c.claim_type for c in today}
     monkeypatch.setattr(claims_intake, "scan_rows",
@@ -171,7 +183,7 @@ def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
     monkeypatch.setattr(page_readers, "load_bodies",
                         lambda cur, ids, store: ({9001: HIDDEN_PIN_PAGE}, 1))
     unmined: set[int] = set()
-    out = what_if.remine(CONTRACT, object(), unmined)(_FakeConn(), {7: today, 8: []})
+    out = what_if.remine(_v8(), object(), unmined)(_FakeConn(), {7: today, 8: []})
     assert out[8] == [] and unmined == set()
     declared = [c for c in out[7] if c.claim_type == "precision_declaration"]
     assert [(c.value_text, c.blur_evidence) for c in declared] == [("estimated", "declared")]
@@ -188,7 +200,7 @@ def test_a_page_that_would_not_remine_is_counted_not_hidden(monkeypatch):
                         lambda cur, ids: [_scan(7, 9001), _scan(9, None)])
     monkeypatch.setattr(page_readers, "load_bodies", lambda cur, ids, store: ({}, 1))
     unmined: set[int] = set()
-    out = what_if.remine(CONTRACT, object(), unmined)(_FakeConn(), {7: today, 9: []})
+    out = what_if.remine(_v8(), object(), unmined)(_FakeConn(), {7: today, 9: []})
     assert unmined == {7}
     assert out[7] == today
 
