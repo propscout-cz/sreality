@@ -112,7 +112,6 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     claim_value_bytes,
     coordinate_verdict,
     env_positive_int,
-    envelope_wkt,
     guard_admits,
     json_pointer,
     locator_reads,
@@ -367,7 +366,6 @@ def _read_bbox_envelope(entry: Entry, row: ListingRow) -> list[Claim]:
     if not guard_admits(entry, GUARD_CZ_BBOX, (lat_min, lon_min), (lat_max, lon_max)):
         return []
     return [_base(entry, row,
-                  value_shape_wkt=envelope_wkt(lat_min, lon_min, lat_max, lon_max),
                   value_jsonb={"bounding_box": node,
                                "geometry_type": json_pointer(row.raw_json,
                                                              "/locality/geometry/geometry_type")})]

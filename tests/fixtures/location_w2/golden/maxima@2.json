@@ -31,7 +31,6 @@
           "value_text": null,
           "value_num": null,
           "value_geom_wkt": "POINT(15.259603745235422 50.36339611563554)",
-          "value_shape_wkt": null,
           "value_jsonb": {
             "coords_source": "page",
             "ladder": "first_party_page"
@@ -55,7 +54,6 @@
           "value_text": "page",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": {
             "source": "page"
           },
@@ -78,7 +76,6 @@
           "value_text": "Údrnice, Únětice",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -114,7 +111,6 @@
           "value_text": null,
           "value_num": null,
           "value_geom_wkt": "POINT(15.0562 50.7663)",
-          "value_shape_wkt": null,
           "value_jsonb": {
             "coords_source": "page",
             "ladder": "first_party_page"
@@ -138,7 +134,6 @@
           "value_text": "page",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": {
             "source": "page"
           },
@@ -161,7 +156,6 @@
           "value_text": "Liberec, Liberec XIV-Ruprechtice, Baltská",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -197,7 +191,6 @@
           "value_text": "Krásný Les",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -233,7 +226,6 @@
           "value_text": null,
           "value_num": null,
           "value_geom_wkt": "POINT(15.266305699712364 50.35640416157747)",
-          "value_shape_wkt": null,
           "value_jsonb": {
             "coords_source": "page",
             "ladder": "first_party_page"
@@ -257,7 +249,6 @@
           "value_text": "page",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": {
             "source": "page"
           },
@@ -280,7 +271,6 @@
           "value_text": "Údrnice, Únětice",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -302,7 +292,6 @@
       "value_text": "Brno",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,
@@ -321,7 +310,6 @@
       "value_text": "Brno-střed",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,
@@ -340,7 +328,6 @@
       "value_text": "Veveří",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,
@@ -359,7 +346,6 @@
       "value_text": "49.20256,16.60411",
       "value_num": null,
       "value_geom_wkt": "POINT(16.60411 49.20256)",
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": "point",
       "declared_radius_m": null,
@@ -378,7 +364,6 @@
       "value_text": "Prodej bytu 2+kk 48 m2, Veveří, Brno-střed | MAXIMA REALITY",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,
@@ -397,7 +382,6 @@
       "value_text": "15",
       "value_num": 15.0,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,

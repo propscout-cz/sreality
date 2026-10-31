@@ -1151,7 +1151,6 @@ def _read_json_geometry(
         return []
     claim = _page_claim(
         entry, row, value=geometry.kind,
-        value_shape_wkt=geometry.shape_wkt,
         declared_radius_m=(None if geometry.radius_m is None
                            else round(geometry.radius_m, 1)),
         declared_precision_label=geometry.kind.lower(), blur_evidence=blur,

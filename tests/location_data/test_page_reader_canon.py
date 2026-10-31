@@ -877,7 +877,6 @@ def test_json_geometry_gives_a_linestring_its_midpoint_and_half_its_length():
     assert pin.declared_precision_label == "linestring"
     shape = one(read("json_geometry", document, _geometry_entry("uncertainty_geometry")))
     assert shape.value_text == "LineString"
-    assert shape.value_shape_wkt.startswith("LINESTRING(")
     assert shape.declared_radius_m == pytest.approx(350.0, abs=10.0)
     assert shape.value_jsonb["radius_basis"] == "half_segment_length"
 
@@ -896,7 +895,6 @@ def test_json_geometry_converts_a_circle_radius_and_declares_the_blur(radius, me
     assert pin.blur_evidence == "declared" and pin.declared_precision_label == "circle"
     shape = one(read("json_geometry", document, _geometry_entry("uncertainty_geometry")))
     assert shape.declared_radius_m == pytest.approx(metres, abs=0.1)
-    assert shape.value_shape_wkt.startswith("POINT(")
     assert shape.value_jsonb["radius_basis"] == "radius_deg_times_111000"
     assert shape.blur_evidence == "declared"
 

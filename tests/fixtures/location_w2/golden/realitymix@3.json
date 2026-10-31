@@ -33,7 +33,6 @@
           "value_text": "Bilovec",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,

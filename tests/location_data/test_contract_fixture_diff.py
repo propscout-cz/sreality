@@ -212,7 +212,7 @@ def bodies_for(source: str) -> dict[str, tuple[Body, ...]]:
 # where a reader emits one, so a golden without one reads as before.
 _CLAIM_FIELDS = (
     "claim_type", "surface", "page_kind", "extraction_method",
-    "value_text", "value_num", "value_geom_wkt", "value_shape_wkt", "value_jsonb",
+    "value_text", "value_num", "value_geom_wkt", "value_jsonb",
     "declared_precision_label", "declared_radius_m",
     "claim_confidence", "blur_evidence", "licence_class", "subject_scoped",
 )
@@ -289,7 +289,6 @@ def project_archived(read: Any) -> dict[str, Any]:
         "value_text": claim.value_text,
         "value_num": claim.value_num,
         "value_geom_wkt": claim.value_geom_wkt,
-        "value_shape_wkt": claim.value_shape_wkt,
         "value_jsonb": claim.value_jsonb,
         "declared_precision_label": claim.declared_precision_label,
         "declared_radius_m": claim.declared_radius_m,

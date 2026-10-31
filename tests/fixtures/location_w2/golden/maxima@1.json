@@ -35,7 +35,6 @@
           "value_text": null,
           "value_num": null,
           "value_geom_wkt": "POINT(15.0562 50.7663)",
-          "value_shape_wkt": null,
           "value_jsonb": {
             "coords_source": "page",
             "ladder": "first_party_page"
@@ -59,7 +58,6 @@
           "value_text": "page",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": {
             "source": "page"
           },
@@ -82,7 +80,6 @@
           "value_text": "Liberec, Liberec XIV-Ruprechtice, Baltská",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,

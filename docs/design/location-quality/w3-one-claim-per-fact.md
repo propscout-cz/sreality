@@ -358,7 +358,9 @@ nothing; `Constraints.street_line` is a string. 7 `OPERATOR_METHOD`, `OPERATOR_F
 and FILL's override are gone: the operator outranks at the read and binds through the register. The
 hash-only `Claim` inputs (`distance_m`, `travel_mode`, `target_text`, `declared_confidence`,
 `legacy_source_column`, and the `conflict_signal` reader's `legacy_source_column` key) went in their own
-commit with the 23 goldens that carried them.
+commit with the 23 goldens that carried them; `value_shape_wkt` (set by `bbox_envelope` and
+`json_geometry`'s shape arm, counted by the byte guard, stored nowhere since 498) and the then-dead
+`envelope_wkt` went after review, with the key from all 46 goldens.
 
 ### 2.4 Absence under A and under C
 

@@ -32,7 +32,6 @@
           "value_text": "České Budějovice 4, U Smaltovny",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -53,7 +52,6 @@
           "value_text": "U Smaltovny",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -89,7 +87,6 @@
           "value_text": null,
           "value_num": null,
           "value_geom_wkt": "POINT(14.3204 50.0446)",
-          "value_shape_wkt": null,
           "value_jsonb": {
             "coords_source": "page",
             "ladder": "first_party_page"
@@ -113,7 +110,6 @@
           "value_text": "page",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": {
             "source": "page"
           },
@@ -136,7 +132,6 @@
           "value_text": "Praha Stodůlky",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -157,7 +152,6 @@
           "value_text": "Praha Stodůlky",
           "value_num": null,
           "value_geom_wkt": null,
-          "value_shape_wkt": null,
           "value_jsonb": null,
           "declared_precision_label": null,
           "declared_radius_m": null,
@@ -179,7 +173,6 @@
       "value_text": "České Budějovice",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,
@@ -198,7 +191,6 @@
       "value_text": "Nádražní",
       "value_num": null,
       "value_geom_wkt": null,
-      "value_shape_wkt": null,
       "value_jsonb": null,
       "declared_precision_label": null,
       "declared_radius_m": null,

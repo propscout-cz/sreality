@@ -309,7 +309,6 @@ class Claim:
     value_text: str | None = None
     value_num: float | None = None
     value_geom_wkt: str | None = None
-    value_shape_wkt: str | None = None
     value_jsonb: Any | None = None
     declared_precision_label: str | None = None
     declared_radius_m: float | None = None
@@ -762,14 +761,6 @@ def wkt_point(wkt: str) -> tuple[float, float]:
     return lat, lon
 
 
-def envelope_wkt(lat_min: float, lon_min: float, lat_max: float, lon_max: float) -> str:
-    corners = (
-        (lon_min, lat_min), (lon_max, lat_min), (lon_max, lat_max),
-        (lon_min, lat_max), (lon_min, lat_min),
-    )
-    return "POLYGON((" + ", ".join(f"{x!r} {y!r}" for x, y in corners) + "))"
-
-
 def in_cz_bbox(lat: float, lon: float) -> bool:
     lat_min, lat_max, lon_min, lon_max = cz_bbox()
     return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
@@ -961,7 +952,7 @@ def claim_value_bytes(claim: Claim) -> int:
     if claim.value_jsonb is not None:
         total += len(json.dumps(claim.value_jsonb, ensure_ascii=False,
                                 default=str).encode("utf-8"))
-    for text in (claim.value_text, claim.value_geom_wkt, claim.value_shape_wkt):
+    for text in (claim.value_text, claim.value_geom_wkt):
         if text is not None:
             total += len(text.encode("utf-8"))
     return total
