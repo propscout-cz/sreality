@@ -21,7 +21,8 @@ import { browseKeys } from '@/lib/browseKeys';
 import { browseReads, settlePatches, settleRereads } from '@/lib/curationSettle';
 import { dismissalKeys, fetchIsDismissed } from '@/lib/queries';
 import { dismissToast, pushToast } from '@/lib/toast';
-import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
+import { cachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
 /* One undo offer on screen at a time: an action toast stays until closed (so
  * its button stays reachable), and a triage run would otherwise stack them. */

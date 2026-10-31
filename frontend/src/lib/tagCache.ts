@@ -1,6 +1,6 @@
 /* A landed tag attach / detach. Which reads any other tag write moves is
- * lib/curationSync's map (`revalidateTables(qc, ['tags'], actAs)`; a delete also
- * writes `property_tags`, migration 202's cascade). The hand-typed list that
+ * lib/curationSync's map (`revalidateTables(qc, ['tags'], actAs)`; a delete
+ * writes `deletedTables('tags')`, its cascade included). The hand-typed list that
  * lived here once re-read a `listing-tags` key migration 202 had retired, so a
  * deleted tag stayed on the property page until the query went stale. */
 
@@ -19,4 +19,5 @@ export const settleTagWrite = (
   tag_id: number,
   member: boolean,
   actAs: string | null = null,
-): void => settleMemberWrite(qc, 'tags', property_id, tag_id, member, actAs, tableReads(['property_tags'], actAs));
+): void =>
+  settleMemberWrite(qc, 'tags', property_id, tag_id, member, { actAs, reads: tableReads(['property_tags'], actAs) });

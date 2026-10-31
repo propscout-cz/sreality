@@ -3079,8 +3079,9 @@ renumber.** Navigate by area:
     commit message is not one. Adding a
     new property-anchored operator-state table = one `CurationTable(...)` line, or one adapter when
     its collision must not DELETE (history, like dismissals) or it is single-valued (like the
-    pipeline); the write census's `_CARRIED_TABLES` derives from the carried columns, so there is
-    no second list to keep. A detach runs no carrier: it routes each item to where the carry
+    pipeline); the write census's `_CARRIED_TABLES` derives from the carried columns, and the SPA's
+    re-read list (`lib/mergedAdverts.ts` `CARRIED_TABLES`) is pinned equal to them
+    (`tests/test_carried_tables_read_contract.py`). A detach runs no carrier: it routes each item to where the carry
     record and its advert say (above) — nothing is destroyed, a copy or a re-created fold never
     lands where its account already holds that item, and nothing is copied for another account.
     Notes carry `origin_listing_id` / `origin_listing_ref_id` ("written while viewing this
@@ -3113,8 +3114,8 @@ renumber.** Navigate by area:
     `useCollectionMembership(property_id)`; no surface hand-types a `useQuery` over either key),
     and ONE answer to "what does a collection write re-read": the tables it writes, through
     `lib/curationSync`'s map (`revalidateTables`) — the menu and the collection page's row-remove
-    (`settleCollectionWrite`, `collection_properties`), BOTH collection DELETEs (`collections` and
-    `collection_properties`: migration 202 cascades memberships away), a share or leave
+    (`settleCollectionWrite`, `collection_properties`), BOTH collection DELETEs
+    (`deletedTables('collections')`: the map's `CASCADES` adds what the foreign keys take along), a share or leave
     (`collection_shares`, which also moves whose shared notes the caller reads) and the merge
     (the carriers re-point `collection_properties`, so the map's keys change). The hand-typed key
     lists it replaced had drifted — every one but the menu forgot the shared map — the same failure

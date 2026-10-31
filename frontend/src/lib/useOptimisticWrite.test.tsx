@@ -11,12 +11,8 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { useState, type ReactNode } from 'react';
 
 import { createMutationCache } from './mutationCache';
-import {
-  cachePatch,
-  useOptimisticWrite,
-  type OptimisticWrite,
-  type OptimisticWriteResult,
-} from './useOptimisticWrite';
+import { cachePatch } from './revalidate';
+import { useOptimisticWrite, type OptimisticWrite, type OptimisticWriteResult } from './useOptimisticWrite';
 import * as toast from '@/lib/toast';
 
 vi.mock('@/lib/toast', async (importOriginal) => {

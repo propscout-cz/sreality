@@ -3,8 +3,8 @@
  * family made elsewhere re-reads; and the census that keeps every curation key
  * under some table. */
 
-import { describe, expect, it } from 'vitest';
-import { hashKey, QueryClient, type QueryKey } from '@tanstack/react-query';
+import { describe, expect, it, vi } from 'vitest';
+import { hashKey, InfiniteQueryObserver, QueryClient, QueryObserver, type QueryKey } from '@tanstack/react-query';
 
 import { actingKey } from './acting';
 import { browseKeys } from './browseKeys';
@@ -12,6 +12,7 @@ import {
   clockChanges,
   clockKey,
   CURATION_FAMILIES,
+  deletedTables,
   familyTargets,
   LENS_REREAD,
   NOT_SYNCED,
@@ -24,9 +25,11 @@ import {
 } from './curationSync';
 import { DEFAULT_FILTERS } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, pipelineShareKeys } from './queries';
+import { isOwed, revalidate } from './revalidate';
 
 const TABLES = Object.keys(SYNC_TABLES) as SyncTable[];
 const OWNER = 'owner-1';
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const hashes = (keys: readonly QueryKey[]) => new Set(keys.map((k) => hashKey(k)));
 const startsWith = (key: QueryKey, prefix: QueryKey) =>
@@ -45,7 +48,7 @@ describe('tableReads', () => {
     for (const key of theirs) expect(key.slice(0, 2)).toEqual(['acting', OWNER]);
   });
 
-  it('a card write re-reads what PIPELINE_REVALIDATE did: members, board, dismissals', () => {
+  it('a card write (property_pipeline + property_dismissals) re-reads members, board and dismissals', () => {
     expect(hashes(tableReads(['property_pipeline', 'property_dismissals'], null))).toEqual(
       hashes([pipelineKeys.members, pipelineKeys.board, dismissalKeys.all]),
     );
@@ -68,6 +71,20 @@ describe('tableReads', () => {
   it('never names a Browse read: Browse is the settle\'s and LENS_REREAD\'s', () => {
     const browse = browseKeys.all.map(([root]) => root as unknown);
     for (const key of tableReads(TABLES, null)) expect(browse).not.toContain(key[0]);
+  });
+});
+
+describe('deletedTables', () => {
+  it('a collection delete writes its memberships and shares, a tag delete its memberships', () => {
+    expect(deletedTables('collections')).toEqual(['collections', 'collection_properties', 'collection_shares']);
+    expect(deletedTables('tags')).toEqual(['tags', 'property_tags']);
+    expect(deletedTables('property_notes')).toEqual(['property_notes']);
+  });
+
+  it('the shares a collection delete takes add no read its memberships do not', () => {
+    expect(hashes(tableReads(deletedTables('collections'), null))).toEqual(
+      hashes(tableReads(['collections', 'collection_properties'], null)),
+    );
   });
 });
 
@@ -129,6 +146,44 @@ describe('familyTargets', () => {
    * stats until navigation; only the marks follow at once. */
   it('LENS_REREAD leaves every Browse read to its next mount', () => {
     expect(LENS_REREAD).toEqual({ lists: 'mount', aggregates: 'mount' });
+  });
+
+  it('a remote lens change reads nothing of a mounted cohort until it mounts again; the marks follow at once', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cards = browseKeys.cards(f, DEFAULT_SORT);
+    const count = browseKeys.count(f);
+    qc.setQueryData(cards, { pages: [{ rows: [] }], pageParams: [0] });
+    qc.setQueryData(count, 1);
+    qc.setQueryData(pipelineKeys.members, new Map());
+    const list = vi.fn(async () => ({ rows: [] }));
+    const total = vi.fn(async () => 1);
+    const marks = vi.fn(async () => new Map());
+    const mountCohort = () => [
+      new InfiniteQueryObserver(qc, {
+        queryKey: cards,
+        queryFn: list,
+        initialPageParam: 0,
+        getNextPageParam: () => undefined,
+        staleTime: Infinity,
+      }).subscribe(() => {}),
+      new QueryObserver(qc, { queryKey: count, queryFn: total, staleTime: Infinity }).subscribe(() => {}),
+    ];
+    const cohort = mountCohort();
+    new QueryObserver(qc, { queryKey: pipelineKeys.members, queryFn: marks, staleTime: Infinity }).subscribe(() => {});
+
+    void revalidate(qc, familyTargets(qc, 'board', null));
+    await flush();
+    expect(marks).toHaveBeenCalledTimes(1);
+    expect(list).not.toHaveBeenCalled();
+    expect(total).not.toHaveBeenCalled();
+    expect(isOwed(qc, cards) && isOwed(qc, count)).toBe(true);
+
+    for (const unmount of cohort) unmount();
+    mountCohort();
+    await flush();
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(total).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, cards) || isOwed(qc, count)).toBe(false);
   });
 
   it('every family has a table, and every table a family', () => {

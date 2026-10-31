@@ -18,8 +18,9 @@ import { createElement, type ReactNode } from 'react';
 
 import { REQUEST_DEADLINE_MS } from './api';
 import { createMutationCache } from './mutationCache';
-import { cachePatch, useOptimisticWrite } from './useOptimisticWrite';
+import { useOptimisticWrite } from './useOptimisticWrite';
 import {
+  cachePatch,
   HOLD_TTL_MS,
   holdReads,
   isOwed,
@@ -230,6 +231,68 @@ describe('owe and pay', () => {
     unmount();
   });
 
+  /* useInfiniteList's fetchNextPage takes query-core's default, cancelRefetch:
+   * a scroll during a payment cancels it and fetches its page instead. */
+  it('pays again once a scroll that cancelled the payment lands its page', async () => {
+    const qc = client();
+    const payment = deferred<string>();
+    let calls = 0;
+    const fn = vi.fn(async ({ pageParam }: { pageParam: number }) => {
+      calls += 1;
+      return calls === 2 ? payment.promise : `p${pageParam}`;
+    });
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: string, all: string[]) => all.length,
+      staleTime: Infinity,
+    });
+    observer.subscribe(() => {});
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    void revalidate(qc, [['list']]);
+    expect(fn).toHaveBeenCalledTimes(2); // the payment, in flight
+    await observer.fetchNextPage(); // the scroll: cancels it, reads page 1
+    payment.resolve('stale');
+    await flush();
+    await flush();
+
+    // The load, the cancelled payment, the page — then one full read, every page.
+    expect(fn.mock.calls.map(([ctx]) => ctx.pageParam)).toEqual([0, 0, 1, 0, 1]);
+    expect(isOwed(qc, ['list'])).toBe(false);
+    expect(qc.getQueryData<InfiniteData<string>>(['list'])?.pages).toEqual(['p0', 'p1']);
+  });
+
+  it('pays again when that page fails instead', async () => {
+    const qc = client();
+    const payment = deferred<string>();
+    let calls = 0;
+    const fn = vi.fn(async ({ pageParam }: { pageParam: number }) => {
+      calls += 1;
+      if (calls === 2) return payment.promise;
+      if (calls === 3) throw new Error('page');
+      return `p${pageParam}`;
+    });
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: string, all: string[]) => all.length,
+      staleTime: Infinity,
+    });
+    observer.subscribe(() => {});
+    await flush();
+
+    void revalidate(qc, [['list']]);
+    await observer.fetchNextPage();
+    await flush();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(4); // the full read again, on the one page held
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+
   it('drops the debt of a query that leaves the cache', () => {
     const qc = client();
     qc.setQueryData(['a'], 0);
@@ -327,6 +390,23 @@ describe("'mount' debts and a second reader", () => {
     observer.setOptions({ queryKey: ['count'], queryFn: fn, staleTime: Infinity, enabled: true });
     await flush();
     expect(fn).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, ['count'])).toBe(false);
+  });
+
+  it('a first reader mounted while the key is held pays at the release', async () => {
+    const qc = client();
+    qc.setQueryData(['count'], 0);
+    const fn = counter(() => 7);
+    const hold = holdReads(qc, [{ queryKey: ['count'] }]);
+    void revalidate(qc, [{ queryKey: ['count'], mode: 'mount' }]);
+    mount(qc, ['count'], fn); // fresh: the mount itself reads nothing
+    await flush();
+    expect(fn).not.toHaveBeenCalled();
+
+    hold.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(qc.getQueryData(['count'])).toBe(7);
     expect(isOwed(qc, ['count'])).toBe(false);
   });
 });

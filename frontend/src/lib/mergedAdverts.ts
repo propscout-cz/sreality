@@ -274,7 +274,8 @@ export function splitPlan(
 }
 
 /* The curation a merge or split moves between properties: the tables
- * PROPERTY_CARRIERS carries (toolkit/property_carriers.py), notifications aside. */
+ * PROPERTY_CARRIERS carries (toolkit/property_carriers.py), notifications aside;
+ * tests/test_carried_tables_read_contract.py pins the two equal. */
 const CARRIED_TABLES: readonly SyncTable[] = [
   'collection_properties',
   'property_tags',

@@ -38,7 +38,7 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { revalidateTables } from '@/lib/curationSync';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import { listingKindLabel } from '@/lib/enums';
@@ -125,8 +125,7 @@ function Header({ collection }: { collection: Collection }) {
   const del = useMutation({
     mutationFn: () => deleteCollection(collection.id),
     onSuccess: () => {
-      // Migration 202 cascades its memberships away.
-      void revalidateTables(qc, ['collections', 'collection_properties']);
+      void revalidateTables(qc, deletedTables('collections'));
       navigate(ROUTES.collections.build(), { replace: true });
     },
     onError: (err: Error) => setError(err.message || 'Sbírku se nepodařilo smazat.'),

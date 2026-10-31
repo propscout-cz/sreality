@@ -319,38 +319,56 @@ describe('the member map', () => {
 /* A change made elsewhere re-reads a cohort's count while a click on that cohort
  * is in flight: neither that read nor one started during the write may land
  * over the click's patch with a pre-write count, and the count is the server's
- * once the write has settled (the scheduler's holds, lib/revalidate). */
+ * once the write has settled (the scheduler's holds, lib/revalidate). The read
+ * is owed 'now', or 'mount' (LENS_REREAD) and being paid by the count's mount. */
 describe('a remote re-read during a click', () => {
-  it('never lands over the settle, and the count is right after it', async () => {
-    const f = filters({ pipeline: scope({ set: 'out' }) });
-    const ENTRY: PipelineStage = {
-      id: 5, key: 'review', label: '5', position: 1, color: 'copper', is_terminal: false, is_entry: true, code: '5',
-    };
+  const f = filters({ pipeline: scope({ set: 'out' }) });
+  const ENTRY: PipelineStage = {
+    id: 5, key: 'review', label: '5', position: 1, color: 'copper', is_terminal: false, is_entry: true, code: '5',
+  };
+
+  /* `remotes`: how many count reads hang until the test answers them. */
+  function rig(remotes: number) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     seed(qc, f, [[P, 1]], 50);
     qc.setQueryData(pipelineKeys.members, members([]));
     const server = { count: 50 };
-    const remote = [deferred<number>(), deferred<number>()];
-    const count = vi
-      .fn()
-      .mockReturnValueOnce(remote[0].promise)
-      .mockReturnValueOnce(remote[1].promise)
-      .mockImplementation(async () => server.count);
+    const remote = Array.from({ length: remotes }, () => deferred<number>());
+    const count = vi.fn(async () => server.count);
+    for (const r of remote) count.mockReturnValueOnce(r.promise);
     const write = deferred<string>();
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: qc }, children);
-    const { result } = renderHook(
-      () => {
-        useQuery({ queryKey: browseKeys.count(f), queryFn: count, staleTime: Infinity });
-        return useOptimisticWrite({
-          mutationKey: ['write', 'pipeline', 'add'],
-          mutationFn: (_: number) => write.promise,
-          patch: (id, c) => [...placeCard(id, ENTRY), ...settlePatches(c, id, 'pipeline')],
-          revalidate: (id, failed, c) => settleRereads(c, id, 'pipeline', failed),
-        });
-      },
-      { wrapper },
-    );
+    /* Browse's count reader and the card's pipeline add, mounted together. */
+    const mountBrowse = () =>
+      renderHook(
+        () => {
+          useQuery({ queryKey: browseKeys.count(f), queryFn: count, staleTime: Infinity });
+          return useOptimisticWrite({
+            mutationKey: ['write', 'pipeline', 'add'],
+            mutationFn: (_: number) => write.promise,
+            patch: (id, c) => [...placeCard(id, ENTRY), ...settlePatches(c, id, 'pipeline')],
+            revalidate: (id, failed, c) => settleRereads(c, id, 'pipeline', failed),
+          });
+        },
+        { wrapper },
+      ).result;
+    /* The write lands with the server's count down one; the count settles there. */
+    const land = async (calls: number) => {
+      server.count = 49;
+      await act(async () => write.resolve('ok'));
+      await waitFor(() => expect(count).toHaveBeenCalledTimes(calls));
+      await waitFor(() => expect(qc.getQueryState(browseKeys.count(f))?.fetchStatus).toBe('idle'));
+      expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+      expect(isOwed(qc, browseKeys.count(f))).toBe(false);
+      expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1]]);
+    };
+    return { qc, remote, count, mountBrowse, land };
+  }
+
+  it('never lands over the settle, and the count is right after it', async () => {
+    const { qc, remote, mountBrowse, land } = rig(2);
+    const result = mountBrowse();
 
     void revalidate(qc, [browseKeys.count(f)]); // the remote re-read, in flight at the click
     act(() => result.current.mutate(P));
@@ -362,12 +380,22 @@ describe('a remote re-read during a click', () => {
     });
     expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
 
-    server.count = 49;
-    await act(async () => write.resolve('ok'));
-    await waitFor(() => expect(count).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(qc.getQueryState(browseKeys.count(f))?.fetchStatus).toBe('idle'));
+    await land(3);
+  });
+
+  it("nor does a 'mount' re-read its mount is paying when the click comes", async () => {
+    const { qc, remote, count, mountBrowse, land } = rig(1);
+    void revalidate(qc, [{ queryKey: browseKeys.count(f), mode: 'mount' }]); // a remote lens change: owed till the mount
+    const result = mountBrowse();
+    await act(async () => {}); // the first observer pays it, a microtask later
+    expect(count).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.mutate(P));
     expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
-    expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1]]);
+    await act(async () => remote[0].resolve(50));
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+
+    await land(2);
   });
 });
 

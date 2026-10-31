@@ -1,4 +1,6 @@
-/* THE table→read map of curation (docs/design/curation-sync.md § 3.5). Pure.
+/* THE table→read map of curation (docs/design/curation-sync.md § 3.5). The map
+ * and its lookups are pure; `revalidateTables` owes reads through lib/revalidate
+ * and `applySyncQueryDefaults` sets the client's query defaults.
  *
  * One row per curation TABLE: its family (the unit the curation clock counts),
  * the reads that select it — or a view or policy that joins it — and the lens of
@@ -76,6 +78,16 @@ export const SYNC_TABLES = {
 } as const satisfies Record<string, SyncEntry>;
 
 export type SyncTable = keyof typeof SYNC_TABLES;
+
+/* What a DELETE on a table takes with it: the foreign keys `on delete cascade`
+ * from migrations 202 (memberships) and 610 (collection shares). */
+const CASCADES: Readonly<Partial<Record<SyncTable, readonly SyncTable[]>>> = {
+  collections: ['collection_properties', 'collection_shares'],
+  tags: ['property_tags'],
+};
+
+/** The tables a DELETE on `table` writes: itself and every table it cascades into. */
+export const deletedTables = (table: SyncTable): SyncTable[] => [table, ...(CASCADES[table] ?? [])];
 
 const entry = (table: SyncTable): SyncEntry => SYNC_TABLES[table];
 

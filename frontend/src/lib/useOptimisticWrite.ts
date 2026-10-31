@@ -60,7 +60,7 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query';
 
-import { holdReads, revalidate as owe, type Hold, type Revalidation } from '@/lib/revalidate';
+import { holdReads, revalidate, type CachePatch, type Hold, type Revalidation } from '@/lib/revalidate';
 
 export type Rollback = () => void;
 
@@ -68,19 +68,6 @@ export type Rollback = () => void;
 export type WriteContext = { hold: Hold; rollback?: undefined } | { rollback: Rollback; hold?: undefined };
 
 type ReadList = readonly (Revalidation | QueryKey)[];
-
-/** One optimistic cache write: which queries (prefix unless `exact`) and the value each holds while in flight. */
-export interface CachePatch {
-  filters: QueryFilters;
-  update: (old: unknown) => unknown;
-}
-
-export function cachePatch<T>(
-  filters: QueryFilters,
-  update: (old: T | undefined) => T | undefined,
-): CachePatch {
-  return { filters, update: update as (old: unknown) => unknown };
-}
 
 export type PendingKey = string | number;
 
@@ -187,7 +174,7 @@ export function useOptimisticWrite<V = void, R = unknown>({
   mutationKey,
   mutationFn,
   patch,
-  revalidate = [],
+  revalidate: reads = [],
   pendingKey,
   onSuccess,
   onError,
@@ -211,9 +198,9 @@ export function useOptimisticWrite<V = void, R = unknown>({
     onError: onError && ((error, vars) => onError(error, vars)),
     onSettled: (_data, error, vars, ctx) => {
       if (error) (ctx?.hold?.rollback ?? ctx?.rollback)?.(); // before the re-read
-      const keys = typeof revalidate === 'function' ? revalidate(vars, error != null, qc) : revalidate;
+      const keys = typeof reads === 'function' ? reads(vars, error != null, qc) : reads;
       // Not returned: the write is settled now, not when its re-read lands.
-      void owe(qc, keys, { release: ctx?.hold });
+      void revalidate(qc, keys, { release: ctx?.hold });
     },
   });
 
