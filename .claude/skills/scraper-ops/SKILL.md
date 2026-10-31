@@ -489,8 +489,8 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `IMAGES STOP suspicious ...` when the transient-failure circuit-breaker trips (exit 0; the lane's next pass retries)
 - `IMAGES done downloaded=... errors=... taken_down=... source_unavailable=... attempted=... phash_missed=...` (`phash_missed` =
   stored but inline-unhashed, 0 in steady state; its cause is one `IMAGE phash_inline_failed` WARNING per kind per run)
-- `IMAGES lane ... phash_retried=... phash_hashed=... phash_given_up=...` per worker pass, also in the heartbeat; a row given up logs one
-  `PHASH gave up id=...` WARNING, and `phash_attempts = 0` re-queues it (say after an R2 outage)
+- `IMAGES lane ... phash_retried=... phash_hashed=... phash_given_up=...` per pass, also in the heartbeat; a row given up logs one
+  `PHASH gave up id=...` WARNING, and `phash_attempts = 0` re-queues (after an R2 outage)
 
 A run ending with `errors > 0` is not necessarily a failure (single-listing fetch errors are
 tolerated). A run that did not emit a `RUN done` line is a real failure — check the GitHub
