@@ -17,7 +17,9 @@
  * with a location box.
  *
  * onPick fires once per pick, before it resolves, so the Browse map can fly to
- * the picked place — also for a pick that adds no chip. */
+ * the picked place — also for a pick that adds no chip. The suggest read
+ * (`usePlaceSuggest`) and its list (`SuggestPanel`) are shared with the
+ * property page's address picker (location W3b). */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -60,6 +62,36 @@ const chipFromResolve = (
   return isDistrictChip(chip) ? chip : PICK_NOTICE.refused(pick.name);
 };
 
+/* The Mapy suggest read behind a place box: the typed query, debounced, and its answer. */
+export function usePlaceSuggest() {
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query.trim()), QUERY_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
+  const suggestQ = useQuery({
+    queryKey: ['maps', 'suggest', debounced],
+    queryFn: ({ signal }) => fetchSuggest(debounced, signal),
+    enabled: debounced.length >= MIN_QUERY_LEN,
+    staleTime: 60_000,
+    retry: false,
+  });
+  return {
+    query,
+    setQuery,
+    reset: () => {
+      setQuery('');
+      setDebounced('');
+    },
+    matches: suggestQ.data ?? [],
+    isLoading: suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN,
+    tooShort: debounced.length > 0 && debounced.length < MIN_QUERY_LEN,
+    notConfigured:
+      suggestQ.error instanceof Error && suggestQ.error.message === SUGGEST_NOT_CONFIGURED,
+  };
+}
+
 export function LocationTypeahead({
   label,
   value,
@@ -94,17 +126,12 @@ export function LocationTypeahead({
     };
   }, []);
 
-  const [query, setQuery] = useState('');
-  const [debounced, setDebounced] = useState('');
+  const suggest = usePlaceSuggest();
+  const { notConfigured } = suggest;
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(query.trim()), QUERY_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [query]);
 
   useEffect(() => {
     if (!open) return;
@@ -114,18 +141,6 @@ export function LocationTypeahead({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
-
-  const suggestQ = useQuery({
-    queryKey: ['maps', 'suggest', debounced],
-    queryFn: ({ signal }) => fetchSuggest(debounced, signal),
-    enabled: debounced.length >= MIN_QUERY_LEN,
-    staleTime: 60_000,
-    retry: false,
-  });
-
-  const notConfigured =
-    suggestQ.error instanceof Error &&
-    suggestQ.error.message === SUGGEST_NOT_CONFIGURED;
 
   const emit = (next: ReadonlyArray<DistrictChip>) => {
     latest.current = next;
@@ -137,8 +152,7 @@ export function LocationTypeahead({
    * nothing (an excluded chip stays excluded). */
   const add = async (s: MapySuggestion) => {
     onPick?.(s);
-    setQuery('');
-    setDebounced('');
+    suggest.reset();
     setNotice(null);
     setPending((n) => n + 1);
     const res = await resolveSuggestion(s).catch(() => null);
@@ -162,18 +176,15 @@ export function LocationTypeahead({
     );
   };
 
-  const isLoading = suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN;
-  const tooShort = debounced.length > 0 && debounced.length < MIN_QUERY_LEN;
-
   return (
     <div aria-busy={pending > 0}>
       <div ref={ref} className="relative">
         <input
           type="text"
           aria-label={label}
-          value={query}
+          value={suggest.query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            suggest.setQuery(e.target.value);
             setNotice(null);
             setOpen(true);
           }}
@@ -186,9 +197,9 @@ export function LocationTypeahead({
         />
         {open && !notConfigured && (
           <SuggestPanel
-            isLoading={isLoading}
-            tooShort={tooShort}
-            matches={suggestQ.data ?? []}
+            isLoading={suggest.isLoading}
+            tooShort={suggest.tooShort}
+            matches={suggest.matches}
             onPick={add}
           />
         )}
@@ -266,7 +277,7 @@ export function LocationTypeahead({
   );
 }
 
-function SuggestPanel({
+export function SuggestPanel({
   isLoading,
   tooShort,
   matches,
