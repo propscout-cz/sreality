@@ -27,6 +27,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from autodedup import ui_sql as usql
+from location_data import operator_corrections
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
@@ -913,8 +914,10 @@ def detach_listings(
     named in `new`, go to a NEW record (`_born`). Every property the steps lock is locked first,
     in id order. The curation the adverts take is planned before anything moves (`curation`,
     else `property_carriers.curation_plan` per property left, along `merge_group_id`'s carry
-    rows when given) and routed after (`route_curation`), counted in `curation`. Idempotent,
-    each `outcome` saying why nothing moved. A detach writes no ruling (`rulings_written` stays
+    rows when given) and routed after (`route_curation`), counted in `curation`. A moved advert
+    leaves the operator's address pick behind (`operator_corrections.clear`, W3b ruling R1: it
+    was split off because it is another place). Idempotent, each `outcome` saying why nothing
+    moved. A detach writes no ruling (`rulings_written` stays
     0; `reason` is unused since a split writes its own); then `properties_changed` ONCE over
     every property left and reached. An unknown advert refuses the set before anything moves;
     an empty set is a no-op. Callers: `toolkit.property_split`; `autodedup.apply.unapply` and
@@ -952,6 +955,7 @@ def detach_listings(
                     routed = carriers.route_curation(cur, plan, left=left, landed=landed)
                     for key, n in routed.items():
                         counts[key] = counts.get(key, 0) + n
+            operator_corrections.clear(conn, [d.listing_id for d in moved])
             properties_changed(conn, [p for d in moved for p in (d.left, d.target)])
 
     return {

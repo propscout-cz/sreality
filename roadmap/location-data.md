@@ -1317,6 +1317,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
   the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
   The refetch lane ticks hourly, a constant.
+- **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
+  `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
+  address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
+  300 m), and `POST /location/corrections {property_id, pick}` → `operator_corrections.submit_pick`,
+  the four picker types on every ad (tombstones for the unstated ones; `pick: null` clears), then the
+  location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
+  Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
+  Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

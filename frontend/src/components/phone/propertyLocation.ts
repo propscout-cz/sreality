@@ -24,6 +24,12 @@ export interface PropertyLocation {
 export const STATIC_MAP_W = 1080;
 export const STATIC_MAP_H = 810;
 
+/* The two reads' keys: the address picker (W3b) invalidates both after a pick. */
+export const propertyLocationKeys = {
+  location: (propertyId: number) => ['property-location', propertyId] as const,
+  staticMap: (propertyId: number) => ['property-static-map', propertyId] as const,
+};
+
 /* An hour, as the API's private Cache-Control. */
 const HOUR = 60 * 60_000;
 
@@ -42,7 +48,7 @@ export function refusalReason(err: unknown): string | null {
 
 export function usePropertyLocation(propertyId: number, enabled: boolean) {
   return useQuery({
-    queryKey: ['property-location', propertyId],
+    queryKey: propertyLocationKeys.location(propertyId),
     queryFn: ({ signal }) => fetchPropertyLocation(propertyId, signal),
     staleTime: HOUR,
     enabled,
@@ -54,7 +60,7 @@ export function usePropertyLocation(propertyId: number, enabled: boolean) {
  * never a second Mapy credit. */
 export function useStaticMap(propertyId: number, enabled: boolean) {
   const q = useQuery({
-    queryKey: ['property-static-map', propertyId, STATIC_MAP_W],
+    queryKey: [...propertyLocationKeys.staticMap(propertyId), STATIC_MAP_W],
     queryFn: ({ signal }) => fetchPropertyStaticMap(propertyId, STATIC_MAP_W, signal),
     staleTime: HOUR,
     enabled,
