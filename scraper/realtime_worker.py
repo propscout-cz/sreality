@@ -44,7 +44,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              run_incremental_pass, the pass's only scheduled runtime. Attributes
              dirty listings to brokers, recomputes only the affected brokers'
              names, contacts, firm and memberships (their numbers are the broker
-             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
+             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on the broker_resolution lease;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds` (absent = 15 s,
@@ -690,7 +690,7 @@ _R2_WARNED: set[str] = set()
 _PROBE_PASS_LOCK = _PassLock("probe")
 _DRAIN_PASS_LOCK = _PassLock("drain")
 # The broker lane's: an abandoned drain-until-empty pass keeps its thread, and its
-# broker_resolution_lock row goes stale after _LOCK_STALE_MIN, so without this the next
+# broker_resolution lease lapses after _LOCK_STALE_MIN, so without this the next
 # tick would take the lease and run a second pass beside it, a thread per abandoned pass.
 _BROKER_MAINTENANCE_PASS_LOCK = _PassLock("broker_maintenance")
 
@@ -1363,7 +1363,7 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
 
 def _broker_maintenance_sync() -> dict[str, Any]:
     """One drain-until-empty broker pass on the worker's own connection. Reuses
-    THE script implementation (never forks it); broker_resolution_lock inside
+    THE script implementation (never forks it); the broker_resolution lease inside
     run_incremental_pass makes this safe beside the daily full sweep and a
     hand run — a concurrent caller returns skipped. In ONE thread holding the lane's pass
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's

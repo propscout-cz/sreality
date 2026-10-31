@@ -10,10 +10,13 @@ so these tests assert that EVERY page stays bounded (the regression guard).
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
+import psycopg
 import pytest
 
+from scraper import job_lease
 from scripts.resolve_brokers import _BROKER_SOURCES, _broker_bearing_ids
 
 
@@ -196,7 +199,12 @@ def test_main_opens_the_connection_through_db_connect(monkeypatch: Any) -> None:
 
 
 _BEAT = "UPDATE broker_resolution_lock SET heartbeat_at=now()"
+_FENCE = "FROM scheduled_jobs WHERE job_name = %(job)s AND lease_holder = %(holder)s AND lease_expires_at > clock_timestamp() FOR UPDATE"
 _RELEASE = "UPDATE broker_resolution_lock SET holder=NULL"
+
+
+def _hold() -> job_lease.Hold:
+    return job_lease.Hold("broker_resolution", "incremental:abc", 1200, float("inf"))
 
 
 class _ResilientCur:
@@ -229,6 +237,8 @@ class _ResilientCur:
             self._rows = [(1,)]
         elif "FROM dirty_broker_listings" in s and s.startswith("SELECT"):
             self._rows = [(10,), (11,)]
+        elif "scheduled_jobs" in s and ("RETURNING" in s or "FOR UPDATE" in s):
+            self._rows = list(self._conn.lease_rows)
         elif "SELECT key, value FROM app_settings" in s:
             self._rows = list(self._conn.settings_rows)
         elif "SELECT value FROM app_settings" in s:
@@ -261,9 +271,14 @@ class _ResilientCur:
 
 
 class _ResilientConn:
+    autocommit = False
+    info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)
+
     def __init__(self, name: str, fail_on: str | None = None,
                  lock_rows: int = 1) -> None:
         self.name = name
+        # The `scheduled_jobs` lease row's answer to a renewal or fence: empty is a refusal.
+        self.lease_rows: list[tuple[Any, ...]] = [(1,)]
         self.fail_on = fail_on
         self.lock_rows = lock_rows
         self.broken = False
@@ -333,16 +348,18 @@ def test_heartbeat_runs_once_per_attempt_not_once_per_phase(monkeypatch: Any) ->
     first = _ResilientConn("first", fail_on="INSERT INTO broker_identities")
     fresh = _ResilientConn("fresh")
 
-    rb._run_incremental(first, [], [], 500, "incremental:abc",
+    rb._run_incremental(first, [], [], 500, _hold(),
                         reconnect=lambda: fresh)
 
     # the dropped attempt beat before it ran, and it was that attempt's LAST
     # statement (nothing of the phase itself landed). Attribution's timeout lift
-    # is not phase data — SET LOCAL rolls back with the aborted transaction.
+    # is not phase data — SET LOCAL rolls back with the aborted transaction. The new
+    # row's renewal comes right before the beat.
     landed = [s for s in first.executed if "statement_timeout" not in s]
     assert landed[-1].startswith(_BEAT)
-    # ...and the replay beat AGAIN, first thing, on the FRESH connection
-    assert fresh.executed[0].startswith(_BEAT)
+    # ...and the replay renewed AGAIN, first thing, on the FRESH connection
+    assert "UPDATE scheduled_jobs SET lease_expires_at" in " ".join(fresh.executed[:2])
+    assert fresh.executed[2].startswith(_BEAT)
     beats = [i for i, s in enumerate(fresh.executed) if s.startswith(_BEAT)]
     phases = ["INSERT INTO broker_identities", "UPDATE broker_identities bi SET firm_identity_id",
               "WITH targets AS MATERIALIZED", "INSERT INTO brokers",
@@ -375,7 +392,7 @@ def test_lost_lock_aborts_the_run_instead_of_resolving_concurrently(
     stolen = _ResilientConn("stolen", lock_rows=0)
 
     with pytest.raises(RuntimeError, match="lock lost mid-run"):
-        rb._run_incremental(stolen, [], [], 500, "incremental:abc",
+        rb._run_incremental(stolen, [], [], 500, _hold(),
                             reconnect=lambda: stolen)
 
     # exactly ONE beat: non-transient, so no retry churn...
@@ -384,10 +401,79 @@ def test_lost_lock_aborts_the_run_instead_of_resolving_concurrently(
     assert not any("INSERT INTO broker_identities" in s for s in stolen.executed)
 
 
+def test_a_refused_renewal_of_the_new_row_aborts_the_run(monkeypatch: Any) -> None:
+    """`renew` refuses a lapsed lease even when nobody has taken it yet: LeaseLost is no transient error, so no replay."""
+    import pytest
+
+    import scripts.resolve_brokers as rb
+
+    lapsed = _ResilientConn("lapsed")
+    lapsed.lease_rows = []
+    with pytest.raises(job_lease.LeaseLost, match="lease lost mid-run"):
+        rb._run_incremental(lapsed, [], [], 500, _hold(), reconnect=lambda: lapsed)
+    assert not any("INSERT INTO broker_identities" in s for s in lapsed.executed)
+    assert not any(s.startswith(_BEAT) for s in lapsed.executed)
+
+
+@pytest.mark.parametrize("write", [
+    lambda rb, c, hold: rb._attribute(c, "l.id = ANY(%(ids)s)", {"ids": [1]}, hold),
+    lambda rb, c, hold: rb._attach_singletons(c, hold),
+    lambda rb, c, hold: rb._apply_merges(c, [[1, 2]], hold=hold),
+])
+def test_each_write_transaction_ends_with_the_fence(write: Any) -> None:
+    """A lease that lapses inside a phase must not commit beside the next holder: the fence is the transaction's LAST
+    statement, so its row lock lasts until that commit, and a refused fence raises before the commit."""
+    import pytest
+
+    import scripts.resolve_brokers as rb
+
+    conn = _ResilientConn("conn")
+    conn.broker_of = {1: 10, 2: 20}
+    write(rb, conn, _hold())
+    assert _FENCE in conn.executed[-1]
+
+    refused = _ResilientConn("refused")
+    refused.broker_of = {1: 10, 2: 20}
+    refused.lease_rows = []
+    with pytest.raises(job_lease.LeaseLost):
+        write(rb, refused, _hold())
+
+
+def test_the_rollup_and_the_firm_names_end_with_the_fence(monkeypatch: Any) -> None:
+    """The sweep's two statements with no timeout at all: the likeliest place for a lease to lapse."""
+    import scripts.resolve_brokers as rb
+
+    _stub_full_sweep(monkeypatch, [])
+    monkeypatch.setattr(rb, "recompute_brokers", lambda cur, bids: cur.execute("ROLLUP"))
+    monkeypatch.setattr(rb, "_FIRM_DISPLAY_NAMES", "FIRM NAMES")
+    conn = _ResilientConn("conn")
+    rb._run_full(conn, [], [], True, 2, None, _hold(), reconnect=lambda: conn)
+    for statement in ("ROLLUP", "FIRM NAMES"):
+        assert _FENCE in conn.executed[conn.executed.index(statement) + 1], statement
+
+
+def test_the_merge_phase_hands_its_hold_to_the_apply(monkeypatch: Any) -> None:
+    """RED by: `_auto_merge` calling `_apply_merges` without the hold, which leaves the merge's commit unfenced."""
+    import scripts.resolve_brokers as rb
+
+    seen: list[Any] = []
+
+    def apply_merges(c: Any, groups: Any, **kw: Any) -> tuple[int, int, int]:
+        seen.append(kw["hold"])
+        return 0, 0, 0
+
+    monkeypatch.setattr(rb, "_apply_merges", apply_merges)
+    conn = _ResilientConn("conn")
+    conn.identity_rows = [(1, "sreality", "Jan Novak", 10, True, 10),
+                          (2, "idnes", "Novak Jan", 10, True, 10)]
+    hold = _hold()
+    rb._auto_merge(conn, 1, hold)
+    assert seen == [hold]
+
+
 def test_release_lock_falls_back_to_a_fresh_connection() -> None:
-    """main()'s `conn` is only rebound on a NORMAL return, so a run that
-    reconnected and then died non-transiently releases on the socket
-    run_resilient already closed — stranding the lock for a full staleness TTL
+    """The lease holds the connection it was taken on, so a run that reconnected
+    releases on the socket run_resilient already closed — stranding the lock for a full staleness TTL
     even though the process had a healthy path to the DB. The holder-guarded CAS
     is safe from any connection, so the release opens one of its own."""
     import scripts.resolve_brokers as rb
@@ -437,12 +523,12 @@ def test_firm_linking_gets_its_own_floor_when_attribution_ate_the_budget(
 
     monkeypatch.setattr(rb, "_broker_bearing_ids", lambda c, n: all_ids)
     monkeypatch.setattr(rb, "_attribute",
-                        lambda c, sel, params: attributed.append(params["ids"]))
+                        lambda c, sel, params, hold=None: attributed.append(params["ids"]))
     monkeypatch.setattr(rb, "_resolve_firms", lambda c, free, franchise: None)
     monkeypatch.setattr(rb, "_link_listings_firm",
                         lambda c, extra="", params=None: linked.append(params["ids"]))
-    monkeypatch.setattr(rb, "_attach_singletons", lambda c: 0)
-    monkeypatch.setattr(rb, "_auto_merge", lambda c, run_id: (0, 0, 0))
+    monkeypatch.setattr(rb, "_attach_singletons", lambda c, hold=None: 0)
+    monkeypatch.setattr(rb, "_auto_merge", lambda c, run_id, hold=None: (0, 0, 0))
     monkeypatch.setattr(rb, "recompute_brokers", lambda cur, bids: None)
     monkeypatch.setattr(rb, "_generate_merge_candidates", lambda c: 0)
 
@@ -476,11 +562,11 @@ def _stub_full_sweep(monkeypatch: Any, all_ids: list[int],
     monkeypatch.setattr(rb, "_sweep_state",
                         lambda c: (cursor, lap_swept, lap_started_at))
     monkeypatch.setattr(rb, "_attribute",
-                        lambda c, sel, params: attributed.append(params["ids"]))
+                        lambda c, sel, params, hold=None: attributed.append(params["ids"]))
     monkeypatch.setattr(rb, "_resolve_firms", lambda c, free, franchise: None)
     monkeypatch.setattr(rb, "_link_listings_firm", lambda c, extra="", params=None: None)
-    monkeypatch.setattr(rb, "_attach_singletons", lambda c: 0)
-    monkeypatch.setattr(rb, "_auto_merge", lambda c, run_id: merge_result)
+    monkeypatch.setattr(rb, "_attach_singletons", lambda c, hold=None: 0)
+    monkeypatch.setattr(rb, "_auto_merge", lambda c, run_id, hold=None: merge_result)
     monkeypatch.setattr(rb, "recompute_brokers", lambda cur, bids: None)
     monkeypatch.setattr(rb, "_generate_merge_candidates", lambda c: 0)
     return attributed
@@ -1600,7 +1686,7 @@ def test_the_sweep_skips_the_merge_step_when_the_switch_is_off(
     conn = _ResilientConn("full")
     _stub_full_sweep(monkeypatch, [1, 2])
     monkeypatch.setattr(rb, "_auto_merge",
-                        lambda c, run_id: calls.append("merge") or (7, 3, 1))
+                        lambda c, run_id, hold=None: calls.append("merge") or (7, 3, 1))
 
     stats, _ = rb._run_full(conn, [], [], False, 2, None, reconnect=lambda: conn)
     assert calls == []

@@ -296,7 +296,8 @@ for backlogs; the pool width from `JOB_CPUS`); the intake self-chain, its yield 
 GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted. (The full location resolve and the
 `location_resolve` `*/15` tick left GitHub in the location programme's W2, 2026-10-31: the worker
 sweeps itself; nothing to move.) The sweeps reach the runner on consolidated leases (operator ruling 2026-10-26):
-the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110.
+the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110, and the
+broker sweep's in #2108, with #2273 doing the same after gate #2111.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.
