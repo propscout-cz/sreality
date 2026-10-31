@@ -41,6 +41,7 @@ MOVERS_FILE: str = "movers.jsonl"
 WHAT_IF_FILE: str = "what_if.json"
 SCORER_FILE: str = "scorer.json"
 SHADOW_FILE: str = "shadow.json"
+GROUP_FILE: str = "group.json"
 D83_EDGES: tuple[str, ...] = ("merge_gained", "merge_lost", "copairs_gained", "copairs_lost")
 MAX_ADS: int = 60_000
 MAX_BLOCKS: int = 40
@@ -91,21 +92,70 @@ def in_apply_scope(conn: psycopg.Connection, listing_ids: Iterable[int]) -> list
     return sorted(int(row[0]) for row in rows if scope.outside(Member.read(row)) is None)
 
 
+def side_block(side: dict[str, Any] | None) -> str | None:
+    """A row's block at E300's grain: its quarter in a split city, else its town; None when
+    it has no town, or sits in a split city with no quarter (its candidates are the whole city)."""
+    if not side or side.get("obec_kod") is None:
+        return None
+    if int(side["obec_kod"]) not in SPLIT_CITY_OBEC_KODS:
+        return f"town:{int(side['obec_kod'])}"
+    if side.get("cast_obce_kod") is not None:
+        return f"quarter:{int(side['cast_obce_kod'])}"
+    return None
+
+
 def blocks_for(movers: Iterable[dict[str, Any]]) -> tuple[list[str], int]:
-    """Each mover's old and new block at E300's grain, and the split-city sides with no quarter."""
+    """Each mover's old and new block, and the split-city sides with no quarter (never exported)."""
     keys: dict[str, None] = {}
     left_out = 0
     for mover in movers:
         for side in (mover.get("old"), mover.get("new")):
-            if not side or side.get("obec_kod") is None:
-                continue
-            if int(side["obec_kod"]) not in SPLIT_CITY_OBEC_KODS:
-                keys[f"town:{int(side['obec_kod'])}"] = None
-            elif side.get("cast_obce_kod") is not None:
-                keys[f"quarter:{int(side['cast_obce_kod'])}"] = None
-            else:
-                left_out += 1  # its candidates are the whole city, which is never exported
+            if (block := side_block(side)) is not None:
+                keys[block] = None
+            elif side and side.get("obec_kod") is not None:
+                left_out += 1
     return list(keys), left_out
+
+
+def parse_group(text: str) -> tuple[int, int]:
+    """`i/n`, 1 <= i <= n: the i-th of n contiguous block groups."""
+    index, _, count = str(text).partition("/")
+    if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
+        raise argparse.ArgumentTypeError(f"--block-group must be i/n with 1 <= i <= n: {text!r}")
+    return int(index), int(count)
+
+
+def chunks(blocks: Iterable[str], count: int) -> list[list[str]]:
+    """The blocks sorted by key and cut into `count` contiguous groups, the first ones a block
+    longer when they do not divide evenly."""
+    ordered = sorted(blocks)
+    size, extra = divmod(len(ordered), count)
+    out, at = [], 0
+    for index in range(count):
+        step = size + (1 if index < extra else 0)
+        out.append(ordered[at:at + step])
+        at += step
+    return out
+
+
+def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int | None:
+    """The fewest groups whose every chunk fits both caps; None when one block alone does not."""
+    if any(ads > max_ads for ads in sizes.values()):
+        return None
+    for count in range(1, len(sizes) + 1):
+        if all(len(chunk) <= max_blocks and sum(sizes[b] for b in chunk) <= max_ads
+               for chunk in chunks(sizes, count)):
+            return count
+    return None
+
+
+def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
+    """The movers whose old block another group exports: not judged here, and not unjudged."""
+    chunk = set(group.get("blocks") or ())
+    if not chunk:
+        return set()
+    return {int(mover["listing_id"]) for mover in _jsonl(movers)
+            if (block := side_block(mover.get("old"))) is not None and block not in chunk}
 
 
 def block_sizes(conn: psycopg.Connection, blocks: list[str]) -> dict[str, int]:
@@ -176,29 +226,35 @@ def recent_same(rulings: Path, since: str = RECENT_SINCE) -> set[PairKey]:
     return {key for stamp, key in stamped if str(stamp or "") >= since and newest.get(key) == SAME}
 
 
-def judge(report: dict[str, Any], done: Override, *, together: set[PairKey],
-          recent: set[PairKey], what_if: dict[str, Any]) -> dict[str, Any]:
-    """PASS = E111 clean and no ruled pair moved against its ruling; D83 and recent pairs listed."""
+def judge(report: dict[str, Any], done: Override, *, base_e111: dict[str, Any],
+          together: set[PairKey], recent: set[PairKey], what_if: dict[str, Any],
+          elsewhere: set[int] = frozenset()) -> dict[str, Any]:
+    """PASS = no NEW operator negative inside a K-B family and no ruled pair moved against its
+    ruling; E111's standing state (both arms), D83 and the recent pairs are reported."""
     lists = report["d83"]["lists"]
     broken = ([row for row in lists["copairs_lost"] if row[2] == SAME]
               + [row for row in lists["copairs_gained"] if row[2] == DIFFERENT])
     honoured = ([row for row in lists["copairs_gained"] if row[2] == SAME]
                 + [row for row in lists["copairs_lost"] if row[2] == DIFFERENT])
-    revoked = bool(report["revocation"]["revoked"])
+    candidate_e111 = report["revocation"]
+    new = sorted({tuple(pair) for pair in candidate_e111["negatives"]}
+                 - {tuple(pair) for pair in base_e111["negatives"]})
     judged = {key for key in recent if key[0] in done.cohort and key[1] in done.cohort}
     split = judged & {(int(row[0]), int(row[1])) for row in broken}
     held = judged & together
-    unjudged_movers = len(done.listed - done.cohort)
+    unjudged_movers = len(done.listed - done.cohort - set(elsewhere))
     return {
-        "pass": not revoked and not broken,
+        "pass": not new and not broken,
         "partial": bool(what_if.get("limit")) or unjudged_movers > 0,
         "run": what_if,
-        "revoked": revoked,
+        "e111": {"base": base_e111, "candidate": candidate_e111,
+                 "new_negatives": [list(pair) for pair in new]},
         "broken_rulings": broken,
         "honoured_rulings": honoured,
         "movers_listed": len(done.listed),
         "movers_in_cohort": len(done.changed),
         "movers_unjudged": unjudged_movers,
+        "movers_elsewhere": len(set(elsewhere) & done.listed),
         "recent_same": {"pairs": len(recent), "judged": len(judged),
                         "held": len(held), "broken": len(split),
                         "apart_in_both": len(judged - held - split),
@@ -212,7 +268,9 @@ def judge(report: dict[str, Any], done: Override, *, together: set[PairKey],
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="autodedup.shadow", description=__doc__.splitlines()[0])
     parser.add_argument("shadow_dir", help="the directory `what_if` wrote movers.jsonl into")
-    parser.add_argument("--max-ads", type=int, default=MAX_ADS, help="refuse a larger cohort")
+    parser.add_argument("--block-group", type=parse_group, default=(1, 1), metavar="I/N",
+                        help="export and judge the i-th of n contiguous block groups")
+    parser.add_argument("--max-ads", type=int, default=MAX_ADS, help="refuse a larger group")
     parser.add_argument("--max-blocks", type=int, default=MAX_BLOCKS, help="refuse more blocks")
     args = parser.parse_args(argv)
     from scraper import db
@@ -226,17 +284,27 @@ def main(argv: list[str] | None = None) -> int:
         sizes = block_sizes(conn, blocks)
     finally:
         conn.close()
-    for block, ads in sizes.items():
-        print(f"[shadow] {block} {ads} ads")
-    total = sum(sizes.values())
-    print(f"[shadow] {len(sizes)} blocks, {total} ads; {left_out} split-city sides without a "
-          "quarter left out", flush=True)
-    if len(sizes) > args.max_blocks or total > args.max_ads:
-        print(f"[shadow] REFUSED: over --max-blocks {args.max_blocks} or --max-ads "
-              f"{args.max_ads}; narrow the ids (--scope apply, --limit) or raise a cap",
-              file=sys.stderr)
+    for block in sorted(sizes):
+        print(f"[shadow] {block} {sizes[block]} ads")
+    index, count = args.block_group
+    chunk = chunks(sizes, count)[index - 1]
+    ads = sum(sizes[block] for block in chunk)
+    needed = groups_needed(sizes, args.max_blocks, args.max_ads)
+    print(f"[shadow] {len(sizes)} blocks, {sum(sizes.values())} ads; {left_out} split-city sides "
+          f"without a quarter left out; group {index}/{count}: {len(chunk)} blocks, {ads} ads; "
+          f"groups needed under the caps: {needed if needed else 'none (one block is over)'}",
+          flush=True)
+    if len(chunk) > args.max_blocks or ads > args.max_ads:
+        advice = (f"dispatch --block-group i/{needed} for i in 1..{needed}" if needed
+                  else "narrow the ids or raise --max-ads")
+        print(f"[shadow] REFUSED: group {index}/{count} is over --max-blocks {args.max_blocks} "
+              f"or --max-ads {args.max_ads}; {advice}", file=sys.stderr)
         return 2
-    summary = export_cohort(db.connect_read_only, shadow_dir, blocks)
+    summary = export_cohort(db.connect_read_only, shadow_dir, chunk)
+    (shadow_dir / GROUP_FILE).write_text(json.dumps(
+        {"group": f"{index}/{count}", "blocks": chunk, "ads": ads,
+         "all_blocks": len(sizes), "all_ads": sum(sizes.values())},
+        indent=1, sort_keys=True), encoding="utf-8")
     print(json.dumps({**summary, "left_out": left_out}, indent=1, sort_keys=True))
     print(f"[shadow] base cohort: {shadow_dir / 'base' / ARTIFACT_NAME}")
     return 0

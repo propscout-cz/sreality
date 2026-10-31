@@ -142,11 +142,17 @@ def moved(old: dict[str, Any], new: dict[str, Any]) -> bool:
     return False
 
 
-def select_ids(conn: psycopg.Connection, sql: str) -> list[int]:
+# The ids query is the one statement that may scan a whole table (W3's over location_claims).
+IDS_TIMEOUT_S = 1200
+
+
+def select_ids(conn: psycopg.Connection, sql: str, timeout_s: int = IDS_TIMEOUT_S) -> list[int]:
     """An operator's SELECT (column 1 = id), one subquery on the extended protocol: no `COMMIT;`."""
-    _, rows = read(conn, f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids",
-                   binary=True)
-    return [int(row[0]) for row in rows]
+    with read_cursor(conn) as cur:
+        # SET LOCAL's bindable spelling: this statement's budget, gone with its transaction.
+        cur.execute("SELECT set_config('statement_timeout', %s, true)", (f"{int(timeout_s)}s",))
+        cur.execute(f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids", binary=True)
+        return [int(row[0]) for row in cur.fetchall()]
 
 
 def _line(record: dict[str, Any]) -> str:
@@ -196,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", choices=("all", "apply"), default="all",
                         help="apply = only the ids the live apply scope admits today")
     parser.add_argument("--limit", type=int, default=0, help="the lowest N ids only (0 = all)")
+    parser.add_argument("--ids-timeout-s", type=int, default=IDS_TIMEOUT_S,
+                        help="--ids-sql's statement budget; per-listing reads keep the default")
     parser.add_argument("--out", required=True, help="directory for positions.jsonl, movers.jsonl")
     parser.add_argument("--claims", choices=("none", "purge", "remine"), default="none")
     parser.add_argument("--contract", default=None, help="remine: the wave's contract file")
@@ -213,7 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         change = remine(contracts.parse_contract(Path(args.contract)), store, unmined)
     out = Path(args.out)
     with db.connect_read_only() as conn:
-        named = (select_ids(conn, args.ids_sql) if args.ids_sql is not None
+        named = (select_ids(conn, args.ids_sql, args.ids_timeout_s)
+                 if args.ids_sql is not None
                  else [int(t) for t in Path(args.ids).read_text(encoding="utf-8").split()])
         requested = sorted(set(named))
         scoped = in_apply_scope(conn, requested) if args.scope == "apply" else requested

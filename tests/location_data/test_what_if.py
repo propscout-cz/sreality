@@ -223,12 +223,16 @@ def test_run_writes_the_movers_and_only_the_movers(monkeypatch, tmp_path: Path):
 
 def test_an_operators_id_select_runs_as_one_wrapped_read_only_statement():
     """The workflow's free-text SELECT: wrapped as a subquery (no second statement, no
-    data-modifying CTE), sent on the extended protocol, inside the read path's transaction."""
+    data-modifying CTE), sent on the extended protocol, inside the read path's transaction, under
+    its own statement budget (`SET LOCAL`'s bindable spelling, gone with that transaction)."""
     conn = _FakeConn(rows=[(3,), (1,)])
-    assert what_if.select_ids(conn, " SELECT id FROM listings WHERE source LIKE 'r%';\n") == [3, 1]
-    (sql, _params, kwargs, in_transaction), = conn.executed
-    assert sql == "SELECT * FROM (\nSELECT id FROM listings WHERE source LIKE 'r%'\n) AS shadow_ids"
-    assert kwargs == {"binary": True} and in_transaction
+    assert what_if.select_ids(conn, " SELECT id FROM listings WHERE source LIKE 'r%';\n",
+                              timeout_s=1200) == [3, 1]
+    budget, select = conn.executed
+    assert budget[:2] == ("SELECT set_config('statement_timeout', %s, true)", ("1200s",))
+    assert select[0] == ("SELECT * FROM (\nSELECT id FROM listings WHERE source LIKE 'r%'\n)"
+                         " AS shadow_ids")
+    assert select[2] == {"binary": True} and budget[3] and select[3]
 
 
 def test_the_dry_run_and_the_shadow_share_one_read_path():
