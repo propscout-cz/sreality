@@ -185,7 +185,7 @@ production.
   its own liveness subject (migration 675); a clean stop deletes its row, and each beat forgets another
   deployment's rows and its own deployment's after an hour of silence. A replica that never registers never
   beats, so it has no row: a job main's registry puts on the runner with no live row is the `jobs` check's
-  `job-runner/registry` Problem an hour after the worker's boot (`jobs_runner_register_grace_s`), once the previous
+  `job-runner/registry` Problem 30 minutes after the worker's boot (`jobs_runner_register_grace_s`), once the previous
   measurement read it missing too. The two global in-flight thresholds are replaced by a test-pinned mirror of the
   worker's one pass budget (`LANE_PASS_BUDGET_S` = `LANE_PASS_TIMEOUT_SECONDS`): a lane is Watch at ⅔ and a
   Problem at 1×, a job Watch at ⅔ of its `timeout_s` and a Problem at the runner's recorded stop; one shape, two
