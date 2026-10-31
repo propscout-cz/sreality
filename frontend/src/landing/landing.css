@@ -476,3 +476,41 @@ h3 { font-size: 1.3rem; line-height: 1.25; letter-spacing: -0.01em; }
 .legal h2 { font-size: 1.35rem; margin-top: 36px; }
 .legal p, .legal li { color: var(--ink-2); }
 .legal ul { padding-left: 20px; }
+
+/* ---------- Feature 5: the Chrome extension (a browser window, drawn once in index.html's <defs> as #ext-mock) ----------
+ * Wide: the copy in two columns above, the window across the page. On a phone the window is cropped to the side sheet
+ * (.ext-crop, a second viewBox on the same drawing), so its text stays readable. */
+.feature.wide { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) {
+  .feature.wide { gap: 48px; }
+  .wide-copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 72px; align-items: start; }
+  .wide-copy .ticks { margin-top: 34px; }
+}
+.browser { flex-direction: column; align-items: center; }
+.browser > svg { width: 100%; height: auto; border-radius: 14px; box-shadow: 0 0 0 1px var(--rule-strong), 0 44px 80px -40px rgba(22, 24, 29, 0.5); }
+.ext-full { display: none; }
+.ext-crop { max-width: 440px; }
+@media (min-width: 720px) {
+  .ext-full { display: block; }
+  .ext-crop { display: none; }
+}
+.ext-index { position: relative; z-index: 2; width: 100%; max-width: 380px; margin-top: 18px; }
+@media (min-width: 960px) { .browser { display: block; } .ext-index { position: absolute; left: -22px; bottom: -40px; margin: 0; } }
+.ext-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ext-card .thumb { position: relative; height: 74px; border-radius: 7px; overflow: hidden; border: 1px solid var(--rule); }
+.ext-card .thumb > svg { width: 100%; height: 100%; }
+.ext-card .thumb.tone-ochre::after, .ext-card .thumb.tone-accent::after { content: ''; position: absolute; inset: 0; mix-blend-mode: multiply; }
+.ext-card .thumb.tone-ochre::after { background: rgba(181, 125, 24, 0.55); }
+.ext-card .thumb.tone-accent::after { background: rgba(31, 107, 92, 0.5); }
+.ext-card .ctrls { position: absolute; top: 4px; right: 4px; z-index: 1; display: flex; gap: 3px; }
+.ext-card .ctrls i { width: 17px; height: 17px; border-radius: 4px; background: rgba(252, 251, 248, 0.94); display: grid; place-items: center; color: var(--ink-2); }
+.ext-card .ctrls i svg { width: 11px; height: 11px; }
+.ext-card .ctrls i.on-ochre { background: var(--ochre); color: #fff; }
+.ext-card .ctrls i.on-accent { background: var(--accent); color: #fff; }
+.ext-card .ctrls i.on-ink { background: var(--ink); color: #fff; }
+.ext-card .mark { position: absolute; left: 6px; bottom: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 4px;
+  font: 600 10px/1.15 var(--sans); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+.ext-card .mark .num { color: #fff; border-color: #fff; width: 15px; height: 15px; font-size: 8.5px; }
+.ext-card .t { margin-top: 5px; font-size: 11px; line-height: 1.3; color: var(--ink-2); }
+.ext-card.dim .thumb { opacity: 0.3; }
+.ext-card.dim .t { color: var(--ink-3); }
