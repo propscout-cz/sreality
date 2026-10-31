@@ -97,4 +97,18 @@ from __future__ import annotations
 #      placement's radius is never below the placed-on entity's reach — the část's farthest
 #      door, the polygon's `containment_radius_m` (Praha 17.6 km where `obec` said 1 km).
 #      The bump re-queues the corpus.
-RESOLVER_VERSION = "resolver:v5.8"
+# v5.9 = the words decide (operator ruling 2026-10-30). A pin the portal DECLARES blurred that
+#      lies outside the obec the claims bound is not the position: `bind.place` leaves the row
+#      unplaced and FILL stands it at the named entity's own point (a bound část's doors, else
+#      the obec's point), its radius floored by that entity's reach (v5.8's rule). Every
+#      blur-declared label counts (bazos approximate_location, idnes no_exact_address, sreality
+#      street/ward/quarter/municipality/not_address, mmreality regional, maxima Circle/LineString,
+#      realitymix estimated); a blurred pin outside every Czech obec is set aside the same way,
+#      and CHECK then records `pin_outside_cz` or `country_conflict`. bazos stamps every pin
+#      "Přibližná lokalita" and places it on a postal-area point — one Kolín pin carried 143
+#      active ads from 34 obce — so 12,543 active bazos rows said one town and drew another,
+#      8.8 km off at r = 1 km (listing 19509113: Jestřabí Lhota, drawn in Kolín); ~2.9k of them
+#      bound a část and now publish the quarter grain the bind always had. The pin stays
+#      evidence (`pin_outside_obec` is still recorded); an exact or undeclared pin outside the
+#      town keeps the position as before. The bump re-queues the corpus.
+RESOLVER_VERSION = "resolver:v5.9"
