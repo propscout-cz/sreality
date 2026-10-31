@@ -7,7 +7,7 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0–W2 merged 2026-10-31, W3 and W4 built, the 696 apply owed)
+### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0–W4 merged 2026-10-31, 696 applied; gate #2203 due 2026-11-07)
 
 Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock per (account, family), advanced only
 by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
@@ -25,20 +25,23 @@ follow; Q4 the extension stays a sender; Q5 last-writer-wins.
       What it built differently: the design's § 12 build ledger.
 - [x] **W2: curation editors follow the server (#2200, SPA, PR #2209, merged 2026-10-31).** `lib/useServerDraft.ts`
       in the six editors; the kanban drag and phone pager holds (D3).
-- [ ] **W3: the curation clock (#2201, DB): built, the 696 apply owed.** Migration 696 (the number provisional until
-      the merge coordinator's claim; applied via MCP before the merge, W0 being live), census
-      `tests/test_curation_sync_census.py` (a)–(j), the live lane `tests/test_curation_clock_live.py`, the
-      `curation_sync` health alarm (`triggers`, `board_bumps`). What it built differently: the design's § 12 build
-      ledger.
-- [ ] **W4: the clock reader in the SPA (#2202): built, PR pending; merges after W3 (the 696 apply).**
+- [x] **W3: the curation clock (#2201, DB, PR #2217, merged 2026-10-31).** Migration 696, applied through the apply
+      workflow before the merge (run 41204108856, 13:07Z), census `tests/test_curation_sync_census.py`, the live lane
+      `tests/test_curation_clock_live.py`, the `curation_sync` health alarm (`triggers`, `board_bumps`). What it built
+      differently: the design's § 12 build ledger.
+- [x] **W4: the clock reader in the SPA (#2202, PR #2224, merged 2026-10-31).**
       `lib/curationSyncOwner.ts` (one owner per signed-in window, mounted by `AuthProvider` after the identity effect:
       5 s / 15 s while visible, at once on show, focus / online / the same-browser nudge, back-off, permanent-error
       mode, the first-answer age rule), `fetchCurationClock` (never acting) + its read-contract test, `isPhoneFrame()`,
       `applySyncQueryDefaults` called in `main.tsx`, the `reads` and `load` cells of `curation_sync`. What it built
       differently: the design's § 12 build ledger. After its deploy: the Railway status, the § 9 read-only check, the
       operator's two-window recipe, and the gate clock starts.
-- [ ] **Gate #2203**, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of statement time, no
-      clock deadlocks, the API error rate at baseline. Whoever closes it sets the index row back to 🟢.
+- [ ] **Post-review fixes (#2244): the six W2–W4 reviews' findings.** The viewing day and time as two drafts, the
+      pager's stuck holds, the nudge on every committed write, migration 701 (the service role reads the clock), census
+      (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
+- [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
+      statement time, no clock deadlocks, the API error rate at baseline. Whoever closes it sets the index row back
+      to 🟢.
 
 ### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
 
