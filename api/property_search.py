@@ -90,16 +90,21 @@ def cohort_where(args: Args) -> tuple[list[str], dict[str, Any]]:
     return where, params
 
 
-def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
-    """The FROM and WHERE a page and its count share, with their parameters."""
-    where, params = cohort_where(args)
-    params["hide_dismissed"] = not args.show_dismissed
+def lens_args(args: Args) -> dict[str, Any]:
+    """The reader's own lenses as Browse's cohort functions take them (migration 629): the dismissals and
+    setScope.scopeArgs over each scope, already in normalizeScope's form (SetScope), where an empty side is no side."""
+    params: dict[str, Any] = {"hide_dismissed": not args.show_dismissed}
     for name in _SETS:
-        # setScope.scopeArgs over a scope already in normalizeScope's form (SetScope): an empty side is no side.
         scope = getattr(args, name)
         params.update({f"{name}_set": scope.set if scope else None, f"{name}_in": (scope.in_ if scope else None) or None,
                        f"{name}_out": (scope.out if scope else None) or None})
-    return f"FROM {_SOURCE} l WHERE {' AND '.join(where) or 'true'}", params
+    return params
+
+
+def cohort(args: SearchArgs) -> tuple[str, dict[str, Any]]:
+    """The FROM and WHERE a page and its count share, with their parameters."""
+    where, params = cohort_where(args)
+    return f"FROM {_SOURCE} l WHERE {' AND '.join(where) or 'true'}", {**params, **lens_args(args)}
 
 
 def _order(args: SearchArgs) -> str:

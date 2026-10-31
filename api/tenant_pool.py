@@ -49,6 +49,11 @@ _TENANT_POOL_ENV = "TENANT_POOL_DB_URL"
 # role's pg_db_role_setting in production). SET ROLE never applies a role's settings, so without this the
 # API's reads ran on the 120 s server default. A constant, not a lookup: the CI replay's roles carry no settings.
 READ_BOUND = ("SET TRANSACTION READ ONLY", "SET LOCAL statement_timeout = '8s'")
+# The pool role logs in on the server's default path, which lacks `extensions`, where production keeps PostGIS (the CI
+# replay keeps it in `public`; a missing schema is ignored). PostgREST adds it to the SPA's path; without it here every
+# invoker function on PostGIS failed under the login (in_map_area, so all of Browse's reads: "type geography does not
+# exist").
+SEARCH_PATH = "SET LOCAL search_path = public, extensions"
 
 
 def bound_read(cur: psycopg.Cursor) -> None:
@@ -88,6 +93,7 @@ def tenant_transaction(
                 if method in ("GET", "HEAD"):
                     bound_read(cur)
                 cur.execute("SET LOCAL ROLE authenticated")
+                cur.execute(SEARCH_PATH)
                 # set_config(), NOT "SET LOCAL ... = %s": SET takes only a
                 # literal (a bind parameter is a syntax error), and f-string
                 # interpolation would be an injection surface — claims carry

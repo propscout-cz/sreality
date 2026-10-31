@@ -62,6 +62,14 @@ class PlaceSubject(HeldSubject):
     point: Place | None = Field(None, description="A place on the map, when the subject is no ad we hold.")
 
 
+def sentence(args: type[Args]) -> str:
+    """The subject sentence of a tool's description, naming only the categories `args` declares."""
+    declared = [c for c in CATEGORIES if c in args.model_fields]
+    return ("The subject is exactly one of property_id, listing_id or point. For a property or ad we hold, an unset "
+            f"{' or '.join(declared)} takes the subject's own value (null means every category); a point must state "
+            f"{' and '.join(declared)}.")
+
+
 def held_ad(conn: psycopg.Connection, subject: HeldSubject) -> int:
     """The ad a held subject stands for: the ad itself, or its property's canonical ad."""
     if subject.listing_id is not None:

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -92,12 +92,12 @@ class ContextIds(Args):
 
 
 def jsonable(value: Any) -> Any:
-    """A read value as a tool returns it, at any depth: timestamps in ISO form, numerics as floats."""
+    """A read value as a tool returns it, at any depth: dates and timestamps in ISO form, numerics as floats."""
     if isinstance(value, dict):
         return {k: jsonable(v) for k, v in value.items()}
     if isinstance(value, list):
         return [jsonable(v) for v in value]
-    if isinstance(value, datetime):
+    if isinstance(value, date):   # a datetime too
         return value.isoformat()
     return float(value) if isinstance(value, Decimal) else value
 

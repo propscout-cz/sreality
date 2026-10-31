@@ -123,7 +123,8 @@ def test_a_tenant_read_is_bounded_before_its_role_and_claims_are_issued(
     with tenant_pool.tenant_transaction({"sub": "a"}, act_as=None, method=method):
         pass
     bound = list(tenant_pool.READ_BOUND) if bounded else []
-    assert [sql for sql, _ in conn.executed][: len(bound) + 1] == [*bound, "SET LOCAL ROLE authenticated"]
+    assert [sql for sql, _ in conn.executed][: len(bound) + 2] == [
+        *bound, "SET LOCAL ROLE authenticated", "SET LOCAL search_path = public, extensions"]
     assert conn.tx == ["commit"]
 
 
