@@ -1956,7 +1956,7 @@ renumber.** Navigate by area:
     **PARKED (operator ruling 2026-10-20: "keep the scoring engine for now, but make sure it
     does not impact anything").** The crons were paused 2026-07-09 and the last level was
     written 2026-06-18 (~4% of properties). Code, tables, columns, data and the three
-    dispatch-only workflows (`condition_score_batches`, `condition_scores`, `seed_condition_settings`) are kept, and the Settings per-kraj toggle only scopes a manual
+    dispatch-only workflows (`condition_score_batches.yml`, `condition_scores.yml`, `seed_condition_settings.yml`) are kept, and the Settings per-kraj toggle only scopes a manual
     run. NO surface reads the levels: the four `*_condition_level_min/_max` filters left the
     registry (and so Browse, its URL, the Watchdog, every estimation cohort and the agent's
     tool schema; a saved Watchdog spec still deserialises them, and any value raises via

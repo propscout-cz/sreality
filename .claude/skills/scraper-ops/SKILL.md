@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, retry_unhashed, phash_attempts, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line, job_runner, scheduled_jobs, job_runs.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, phash_attempts, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line, job_runner, scheduled_jobs, job_runs.
 ---
 
 # Scraper operations
@@ -152,9 +152,8 @@ singletons + recomputes only changed properties; rule #20) and
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
-the images lane's bounded pHash retry (`scraper/image_phash.py` `retry_unhashed`: the image drain hashes the bytes in hand and writes
-`phash` in the `storage_path` UPDATE, so each pass re-fetches at most `PHASH_RETRY_BATCH` stored `phash IS NULL` rows; a failure counts in
-`images.phash_attempts`, and at `PHASH_MAX_ATTEMPTS` the row stays NULL for good), the runner's `clip`
+the images lane's bounded pHash retry (`scraper/image_phash.py`: the drain hashes the bytes in hand, so a pass re-fetches at most 50
+`phash IS NULL` rows; `images.phash_attempts` stops a row at 5 failures, NULL for good), the runner's `clip`
 job (`scripts/clip_tag_backfill.py`, every 15 min: zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into
 `image_clip_embeddings`, then in the same run a re-tag from STORED vectors when the taxonomy changes, per
 `app_settings.clip_taxonomy_retag_after`). Newest and
@@ -163,8 +162,7 @@ job (`scripts/clip_tag_backfill.py`, every 15 min: zero-shot CLIP room/plot tags
 versioned tag model, mig 490 — the tag is the argmax head) and `new_dedup_candidates.yml` (CPU, Level 0
 path C = same town + disposition/area; `estimate`/`verify` read only). **Read the matching `references/*-lane.md` before touching.**
 
-**There is NO scheduled dedup job any more** — the whole automatic decision layer (the engine, its queues,
-its batch warmer, its geo/byt-geo runs, the model-compare and vision A/B harnesses, the publication gate) was
+**There is NO scheduled dedup job any more** — the whole automatic decision layer was
 removed wholesale in the 2026-08 NEW DEDUP cutoff (architectural rule #15; `docs/design/new-dedup/CUTOFF.md`)
 and its workflows/scripts must never be resurrected; nothing auto-merges (merges are operator-ordered through
 `POST /properties/merge`; AUTODEDUP's `mode=apply` is dark until `app_settings.autodedup_apply_scope` names an area). The
@@ -253,21 +251,19 @@ nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`
 naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-delisting.md`.
 
-**Condition scoring is PARKED — an intentional pause, not a bug** (crons off since PR #730,
-2026-07-09; last level written 2026-06-18; operator ruling 2026-10-20: "keep the scoring engine
-for now, but make sure it does not impact anything"). Don't re-enable, schedule or backfill
+**Condition scoring is PARKED — an intentional pause, not a bug** (crons off since PR #730;
+last level written 2026-06-18; operator ruling 2026-10-20). Don't re-enable, schedule or backfill
 without explicit direction. Code, tables, the `listings.*_condition_level` columns and their data
 stay; NO surface reads the levels (no filter, agent fact or estimate — rule #14; the four level
 filters are `filter_compiler.RETIRED_FILTERS`). All three condition workflows are dispatch-only:
-`condition_score_batches.yml` (Anthropic Message Batches API, 50% cost; `submit` / `ingest` modes,
-both crons commented out) and the synchronous `condition_scores.yml` fallback — never run both at
-once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows —
-plus `seed_condition_settings.yml`, which loads the committed rubric and marker dictionary.
-The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase
-(its runner left `scraper.main` in C2-2). Scoring is **kraj-scoped and reuse-first** (migration
+`condition_score_batches.yml` (Batches API, 50% cost; `submit` / `ingest` modes) and the synchronous `condition_scores.yml` fallback — never run both at
+once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows;
+`seed_condition_settings.yml` loads the rubric and marker dictionary.
+The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase.
+Scoring is **kraj-scoped and reuse-first** (migration
 174): the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
 `app_settings.condition_scoring_enabled_region_ids` (the Settings page "Hodnocení stavu — kraje"
-toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_levels` copies a
+toggles; empty = none), and `propagate_condition_levels` copies a
 property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
 records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
@@ -494,10 +490,8 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `IMAGES STOP suspicious ...` when the transient-failure circuit-breaker trips (exit 0; the lane's next pass retries)
 - `IMAGES done downloaded=... errors=... taken_down=... source_unavailable=... attempted=... phash_missed=...` (`phash_missed` =
   stored but inline-unhashed, 0 in steady state; its cause is one `IMAGE phash_inline_failed` WARNING per kind per run)
-- `IMAGES lane downloaded=... phash_missed=... phash_retried=... phash_hashed=... phash_given_up=... cap=... stopped_suspicious=...`
-  per worker pass, the same counts in the heartbeat's `lanes.images.last` (`phash_retried` = rows re-fetched this pass, `phash_given_up` =
-  rows that reached the cap this pass, each with one `PHASH gave up id=...` WARNING naming the error; `UPDATE images SET phash_attempts = 0
-  WHERE id = ...` re-queues one, say after an R2 outage burned its attempts)
+- `IMAGES lane ... phash_retried=... phash_hashed=... phash_given_up=...` per worker pass, also in the heartbeat; a row given up logs one
+  `PHASH gave up id=...` WARNING, and `phash_attempts = 0` re-queues it (say after an R2 outage)
 
 A run ending with `errors > 0` is not necessarily a failure (single-listing fetch errors are
 tolerated). A run that did not emit a `RUN done` line is a real failure — check the GitHub
