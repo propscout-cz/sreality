@@ -44,10 +44,13 @@ async function request<T>(
   if (!API_BASE_URL) {
     return { ok: false, status: 0, detail: API_NOT_CONFIGURED_DETAIL };
   }
-  const token = await getAccessToken();
-  if (!token) {
+  const access = await getAccessToken();
+  if (access.kind === 'signed_out') {
     return { ok: false, status: 401, detail: NOT_SIGNED_IN_DETAIL };
   }
+  // The refresh got no answer: still signed in, so a plain retryable failure, never "sign in".
+  if (access.kind === 'retry') return { ok: false, status: 0, detail: access.detail };
+  const token = access.token;
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...((init.headers as Record<string, string> | undefined) ?? {}),

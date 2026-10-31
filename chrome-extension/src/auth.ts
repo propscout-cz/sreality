@@ -9,6 +9,7 @@
 import { DEFAULT_APPEARANCE, parseAppearance } from '../../frontend/src/lib/appearance';
 import { SUPABASE_URL } from './config';
 import { SESSION_KEY, decodeJwtPayload, type StoredSession } from './session';
+import { createTokenSource, type AccessToken } from './token_source';
 import type { AuthState } from './types';
 
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
@@ -25,9 +26,8 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 }
 
 const VERIFIER_KEY = 'pkceVerifier';
-/* Refresh a little before actual expiry so a request never races a token
- * that's valid-on-read but expired-on-arrival at the API. */
-const EXPIRY_SKEW_SECONDS = 60;
+/* A refresh that has not answered by then counts as no answer: the session is kept. */
+const REFRESH_DEADLINE_MS = 15_000;
 
 interface GoTrueTokenResponse {
   access_token: string;
@@ -186,58 +186,30 @@ export async function signInWithGoogle(): Promise<{ ok: true } | { ok: false; de
   return { ok: true };
 }
 
-/* At most one refresh in flight at a time — the lazy (per-request) and the
- * chrome.alarms-periodic refresh paths both call this, and Supabase's
- * refresh-token reuse-detection would log the user out if two refreshes
- * raced on the same (now-rotated) token. */
-let refreshInFlight: Promise<boolean> | null = null;
+/* The token for the next API call (token_source.ts): refreshed first when near expiry, the
+ * session kept through a network error, a timeout or a 5xx, cleared only when GoTrue refuses the
+ * refresh token. There is no periodic refresh: an MV3 worker loses its timers anyway, and the
+ * next call refreshes a session however long it sat idle. */
+const tokens = createTokenSource({
+  load: getStoredSession,
+  save: async (session) => { await chrome.storage.local.set({ [SESSION_KEY]: session }); },
+  clear: clearSession,
+  now: () => Math.floor(Date.now() / 1000),
+  refresh: async (refreshToken) => {
+    const res = await gotrueFetch('/token?grant_type=refresh_token', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token: refreshToken }),
+      signal: AbortSignal.timeout(REFRESH_DEADLINE_MS),
+    });
+    if (!res.ok) {
+      console.warn('[sreality-ext] session refresh failed:', extractGoTrueError(res.body) ?? res.status);
+    }
+    return res.status === 0 ? null : { status: res.status, body: res.body };
+  },
+});
 
-function refreshSingleFlight(): Promise<boolean> {
-  if (refreshInFlight == null) {
-    refreshInFlight = doRefresh().finally(() => { refreshInFlight = null; });
-  }
-  return refreshInFlight;
-}
-
-async function doRefresh(): Promise<boolean> {
-  const s = await getStoredSession();
-  if (s == null) return false;
-  const res = await gotrueFetch('/token?grant_type=refresh_token', {
-    method: 'POST',
-    body: JSON.stringify({ refresh_token: s.refresh_token }),
-  });
-  if (!res.ok) {
-    console.warn('[sreality-ext] session refresh failed:', extractGoTrueError(res.body) ?? res.status);
-    await clearSession();
-    return false;
-  }
-  await storeSession(res.body as GoTrueTokenResponse);
-  return true;
-}
-
-/* A valid access token, refreshing first if it's near/past expiry. Returns
- * null when signed out or the refresh failed (session cleared either way —
- * callers surface a "please sign in" state). */
-export async function getAccessToken(): Promise<string | null> {
-  const s = await getStoredSession();
-  if (s == null) return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (s.expires_at - now > EXPIRY_SKEW_SECONDS) return s.access_token;
-  const ok = await refreshSingleFlight();
-  if (!ok) return null;
-  const fresh = await getStoredSession();
-  return fresh?.access_token ?? null;
-}
-
-/* Called on a chrome.alarms tick (~30 min) so a long-idle service worker
- * still keeps the refresh token rotating — MV3 SW eviction kills any
- * in-memory auto-refresh timer, this is the periodic backstop for it. */
-export async function refreshIfSignedIn(): Promise<void> {
-  const s = await getStoredSession();
-  if (s == null) return;
-  const now = Math.floor(Date.now() / 1000);
-  if (s.expires_at - now > EXPIRY_SKEW_SECONDS) return;
-  await refreshSingleFlight();
+export function getAccessToken(): Promise<AccessToken> {
+  return tokens.accessToken();
 }
 
 export async function getAuthState(): Promise<AuthState> {

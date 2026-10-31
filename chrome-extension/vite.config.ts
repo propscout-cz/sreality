@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { EXTENSION_NAME } from '../frontend/src/lib/brand';
 // The portal-id rules (shared with the SPA's paste-a-link) are the single source
 // of truth for "which hosts we run on" — content_scripts.matches is computed from
-// them below; manifest.json's checked-in list is a template that
+// their page hosts below; manifest.json's checked-in list is a template that
 // frontend/src/lib/portalIds.test.ts keeps equal to them.
 import { PORTALS } from '../frontend/src/lib/portalIds';
 
@@ -136,8 +136,10 @@ export default defineConfig(({ mode }) => {
             originPermission(env.VITE_API_BASE_URL),
             originPermission(env.VITE_SUPABASE_URL),
           ].filter((o): o is string => o != null);
+          // Only the hosts that serve pages: a redirect-only host would add a site to
+          // the install warning and never run the script (portalIds.ts pageHosts).
           manifest.content_scripts[0].matches = PORTALS.flatMap((p) =>
-            p.hosts.map((h) => `https://${h}/*`),
+            p.pageHosts.map((h) => `https://${h}/*`),
           );
           /* Chrome only auto-updates when the offered version is STRICTLY greater
            * than the installed one, and the Web Store rejects re-uploading a

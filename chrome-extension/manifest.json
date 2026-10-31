@@ -14,22 +14,15 @@
     {
       "matches": [
         "https://www.sreality.cz/*",
-        "https://sreality.cz/*",
         "https://reality.bazos.cz/*",
         "https://www.bezrealitky.cz/*",
-        "https://bezrealitky.cz/*",
         "https://www.bezrealitky.com/*",
-        "https://bezrealitky.com/*",
         "https://reality.idnes.cz/*",
         "https://nemovitosti.maxima.cz/*",
         "https://www.remax-czech.cz/*",
-        "https://remax-czech.cz/*",
         "https://www.mmreality.cz/*",
-        "https://mmreality.cz/*",
         "https://www.ceskereality.cz/*",
-        "https://ceskereality.cz/*",
-        "https://realitymix.cz/*",
-        "https://www.realitymix.cz/*"
+        "https://realitymix.cz/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
