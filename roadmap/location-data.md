@@ -1274,7 +1274,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. **PR 2 built 2026-10-31**
   (no migration): the Location Quality page renders the stored row through Health's `HEALTH_QUERY`;
   its two routes, the toolkit aggregates, its thresholds, the audit waterfall's reader, the pin-audit
-  summary reader and the `!AUDIT POLOH` badge are deleted (product −870/+240, tests −449/+210). Owed:
+  summary reader and the `!AUDIT POLOH` badge are deleted (product −884/+251, tests −449/+224). Owed:
   migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c, awaits the
   operator's ruling; apply after PR 2 is deployed).
 - **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of

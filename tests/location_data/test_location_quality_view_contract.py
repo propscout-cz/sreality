@@ -296,12 +296,24 @@ def test_the_metric_vocabulary_is_the_gauges_closed_tuple() -> None:
 
 def test_the_location_quality_page_renders_the_registered_check() -> None:
     """W1 (ruling Q7): the page renders this gauge's STORED row through Health's own query, so
-    its key is the registry's and the registry's owner link is the page. RED by: renaming the
-    key on one side, or the page growing a read of its own again."""
-    from scripts.verify_pipeline import CHECKS
+    its key is the registry's and the registry's owner link is the page; its two bars read an
+    arm's facts by name (`at[source]?.street?.facts.grains`), so each arm must be one the gauge
+    emits and each fact one that arm writes. RED by: renaming a key, an arm or a fact on one
+    side (the bars would vanish silently behind their guard), or the page growing a read of its
+    own again."""
+    from scripts.verify_pipeline import CHECKS, THRESHOLDS
 
     page = (ROOT / "frontend" / "src" / "pages" / "LocationQuality.tsx").read_text(encoding="utf-8")
     key = re.search(r"const CHECK_KEY = '(\w+)'", page)
     assert key, "the page names no check key"
     assert next(c for c in CHECKS if c.key == key.group(1)).owner_path == "/location-quality"
     assert "...HEALTH_QUERY" in page and "/location/quality" not in page
+
+    bars = re.findall(r"at\[source\]\?\.(\w+)\?\.facts\.(\w+)", page)
+    assert {arm for arm, _ in bars} == {"street", "outside"}, bars
+    card = {("town", "ads"): (100, 0), ("outside", "position"): (1, 90),
+            ("grain", "address"): (60, 90), ("grain", "street"): (10, 0)}
+    cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, {}, "not read", THRESHOLDS)}
+    for arm, fact in bars:
+        assert arm in qc.LOCATION_PORTAL_CELLS, f"the gauge emits no {arm!r} arm"
+        assert fact in cells[f"bazos/{arm}"]["facts"], f"bazos/{arm} writes no {fact!r} fact"

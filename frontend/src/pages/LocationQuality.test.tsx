@@ -91,7 +91,8 @@ describe('LocationQuality scorecard', () => {
     const heads = within(screen.getByRole('table')).getAllByRole('columnheader').map((h) => h.textContent);
     expect(heads).toEqual(['Portal', 'town', 'outside', 'street']);
     expect(bazos).toHaveTextContent(/Problem\s*12,263\s*ads/);
-    expect(bazos).toHaveTextContent('61.5%');
+    /* Health's own verdict cell: an OK arm is a quiet dot, its line the cell's title. */
+    expect(within(bazos).getByTitle('bazos/street reads ok')).not.toHaveTextContent('61.5%');
     expect(screen.getByTestId('location-matrix-sreality')).toHaveTextContent(/Watch\s*48.3%/);
     const fleet = screen.getByTestId('location-fleet');
     expect(fleet).toHaveTextContent('served/town');
@@ -110,7 +111,8 @@ describe('LocationQuality scorecard', () => {
     expect(screen.getByRole('button', { name: 'Bazoš' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Grain · Bazoš')).toBeInTheDocument();
     expect(screen.getByText('pin_outside_obec')).toBeInTheDocument();
-    expect(screen.getByText('12 263')).toBeInTheDocument();
+    /* The matrix's figures, not a second number format. */
+    expect(screen.getByText('12,263')).toBeInTheDocument();
   });
 
   it('reads a row the view reads Not measured as Not measured, never its stored verdicts', async () => {

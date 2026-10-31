@@ -5604,7 +5604,7 @@ partitioning `located` by construction. And `label_cs` was **dropped**: wording 
 `frontend/src/lib/locationSteps.ts`, one file holding Czech and English for every key, so a better
 sentence costs no migration and a step cannot be renamed on one page only — and, one level down,
 the hidden set's two states carried ONE Czech name across the waterfall split, the filter pill,
-the header total and the note (the filter pill and the note since W1). Two operational constraints ride with the drop, both in 526's header:
+the header total and the note (since W1 only the filter pill: `STATE_LABEL` in `LocationPinAudit.tsx`). Two operational constraints ride with the drop, both in 526's header:
 the column is made NULLABLE **before** the producer is replaced and dropped only **after**, so the
 :25 cron cannot land between two statements and fail; and the migration is applied only once the
 merge commit's Railway `vite` rollout is green, because the bundle on `main` still selects

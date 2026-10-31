@@ -14,23 +14,24 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
-import CheckRow, { fmtValue, measuredLine } from '@/components/health/CheckRow';
+import CheckRow, { fmtNumber, fmtValue, measuredLine } from '@/components/health/CheckRow';
+import { MatrixCell } from '@/components/health/PortalMatrix';
 import Panel, { PanelGroup } from '@/components/Panel';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
 import StatusDot from '@/components/StatusDot';
-import { HEALTH_QUERY, HealthEmptyError, type HealthCell, type HealthRow } from '@/lib/healthChecks';
+import { HEALTH_QUERY, HealthEmptyError, tail, verdictOf, type HealthCell, type HealthRow } from '@/lib/healthChecks';
 import { portalShort } from '@/lib/portals';
 import {
   fetchInspector, fetchInspectorByNative, submitCorrection,
   LOCATION_SOURCES,
   type CorrectionResult, type Inspector,
 } from '../lib/locationQuality';
-import { fmtCount, fmtRelative } from '../lib/format';
+import { fmtRelative } from '../lib/format';
 
 const CHECK_KEY = 'location_town_coverage';
 
-/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars. */
+/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars, in the matrix's figures. */
 function BarList({ counts }: { counts: unknown }) {
   const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
     .filter((e): e is [string, number] => typeof e[1] === 'number');
@@ -54,7 +55,7 @@ function BarList({ counts }: { counts: unknown }) {
               />
             </span>
             <span className="text-right font-mono tabular-nums text-[0.78rem]">
-              {fmtCount(n)}
+              {fmtNumber(n)}
             </span>
           </div>
         );
@@ -65,9 +66,8 @@ function BarList({ counts }: { counts: unknown }) {
 
 /* ---------- the scorecard ---------- */
 
-/* Rows = the portals the cells name, columns = the subject after `${portal}/`, both in the
- * gauge's own order (no per-key table here); a subject naming no arm (an older result's shape)
- * is the portal's town. Fleet cells (portal null) are the strip. */
+/* Rows = the portals the cells name, columns = their arms (Health's `tail`), both in the gauge's
+ * own order (no per-key table here). Fleet cells (portal null) are the strip. */
 function pivot(cells: HealthCell[]) {
   const portals: string[] = [];
   const columns: string[] = [];
@@ -78,7 +78,7 @@ function pivot(cells: HealthCell[]) {
       fleet.push(c);
       continue;
     }
-    const arm = c.subject.startsWith(`${c.portal}/`) ? c.subject.slice(c.portal.length + 1) : 'town';
+    const arm = tail(c.subject, c.portal);
     if (!at[c.portal]) {
       at[c.portal] = {};
       portals.push(c.portal);
@@ -89,31 +89,19 @@ function pivot(cells: HealthCell[]) {
   return { portals, columns, at, fleet };
 }
 
-/* One verdict, the check's own; Not measured while the view reads the row Not measured (its
- * stored cells are history then, as on Health). OK says its word to screen readers only. */
-function Verdict({ cell, measured }: { cell: HealthCell | undefined; measured: boolean }) {
-  const status = measured && cell ? cell.status : 'unknown';
-  const value = measured && cell ? fmtValue(cell.value, cell.unit) : null;
-  return (
-    <span className="flex flex-wrap items-baseline gap-x-2" title={measured ? cell?.message : undefined}>
-      <StatusDot status={status} size="lg" word={status === 'ok' ? 'sr-only' : 'visible'} />
-      {value && <span className="font-mono tabular-nums text-[var(--color-ink)]">{value}</span>}
-    </span>
-  );
-}
-
 function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; onSource: (s: string) => void }) {
-  const measured = row.effective_status !== 'unknown';
   const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
-  const grains = at[source]?.street?.facts.grains;
-  const disputed = at[source]?.outside?.facts.disputed;
+  /* Every verdict is Health's (`verdictOf`); a stale row's facts are history, withheld as on Health. */
+  const current = row.effective_status !== 'unknown';
+  const grains = current ? at[source]?.street?.facts.grains : undefined;
+  const disputed = current ? at[source]?.outside?.facts.disputed : undefined;
   return (
     <>
       <Panel title="By portal">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="block w-full border-collapse text-sm md:table">
             <caption className="sr-only">Location quality by portal; a row picks the inspector&apos;s source</caption>
-            <thead>
+            <thead className="hidden md:table-header-group">
               <tr className="text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">
                 <th scope="col" className="py-1.5 pr-3 font-medium">Portal</th>
                 {columns.map((c) => (
@@ -121,24 +109,22 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block md:table-row-group">
               {portals.map((p) => (
                 <tr
                   key={p}
                   data-testid={`location-matrix-${p}`}
                   onClick={() => onSource(p)}
-                  className={`border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${p === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
+                  className={`block md:table-row border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${p === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
                 >
-                  <th scope="row" className="py-1.5 pr-3 text-left font-normal">
+                  <th scope="row" className="block py-1.5 pr-3 text-left font-normal md:table-cell">
                     {/* The keyboard path to the row's click: it bubbles there. */}
                     <button type="button" aria-pressed={p === source} className="text-sm text-[var(--color-ink)]">
                       {portalShort(p)}
                     </button>
                   </th>
                   {columns.map((c) => (
-                    <td key={c} className="py-1.5 pr-3 align-top text-[0.78rem]">
-                      <Verdict cell={at[p][c]} measured={measured} />
-                    </td>
+                    <MatrixCell key={c} label={c} portal={p} entry={verdictOf(row, at[p][c] ? [at[p][c]] : [])} />
                   ))}
                 </tr>
               ))}
@@ -150,16 +136,21 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
             data-testid="location-fleet"
             className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 border-t border-[var(--color-rule-soft)] pt-3 text-[0.78rem]"
           >
-            {fleet.map((c) => (
-              <li key={c.subject} className="flex items-baseline gap-x-2">
-                <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{c.subject}</span>
-                <Verdict cell={c} measured={measured} />
-              </li>
-            ))}
+            {fleet.map((c) => {
+              const v = verdictOf(row, [c]);
+              const value = v.cell ? fmtValue(v.cell.value, v.cell.unit) : null;
+              return (
+                <li key={c.subject} title={v.cell?.message} className="flex items-baseline gap-x-2">
+                  <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{c.subject}</span>
+                  <StatusDot status={v.status} size="sm" />
+                  {value && <span className="font-mono tabular-nums text-[var(--color-ink)]">{value}</span>}
+                </li>
+              );
+            })}
           </ul>
         )}
       </Panel>
-      {measured && (grains || disputed) ? (
+      {grains || disputed ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <Panel title={`Grain · ${portalShort(source)}`}>
             <BarList counts={grains} />
