@@ -935,8 +935,9 @@ rules. Identify which one a task belongs to before you start.
   ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
   pipeline" = null) written by the Pipeline tab's `BoardSwitcher` and checked against
   `GET /pipeline/shares` (`lib/pipelineShares.useBoardSelection`; a board the server no longer lists
-  resets to my own with a toast). `<ActingAs share>` is mounted in exactly two places: the Pipeline
-  tab on a shared board (desktop kanban and phone pages), and the desktop property page while the
+  resets to my own with a toast). `<ActingAs share>` is mounted by the Pipeline tab on a shared
+  board (desktop kanban and phone pages), by the new-property dialog opened from one, and by the
+  desktop property page while the
   active board is an EDIT share and "Upravit jako {email}" is on (`sreality.pipeline.editAsOwner`,
   sticky per device until "Ukončit" or any active-board change; the in-page banner sits under the
   header, never in the 3.5 rem bar; offered only once `GET /pipeline/shares` confirms the board). A
@@ -967,6 +968,19 @@ rules. Identify which one a task belongs to before you start.
   write-allowed exceptions (see Toolkit rule #5) are reachable only via the API. The one
   exception is the user's own Auth profile: `user_metadata.appearance` (`lib/theme.ts`, via
   `supabase.auth.updateUser`), client-writable, validated on read, never trusted server-side.
+- **Curation re-reads: ONE table→read map, ONE read scheduler** (`lib/curationSync.ts`,
+  `lib/revalidate.ts`; `docs/design/curation-sync.md`). `SYNC_TABLES` names, per curation table,
+  its family, its Browse lens and the reads that select it or a view or policy joining it — the
+  caller's own keys, or the owner's under the acting segment. A write names the tables it writes
+  (`revalidateTables`), never a hand-typed key list: ESLint bans `invalidateQueries` /
+  `refetchQueries` / `resetQueries` over the four curation key factories, and
+  `curationSync.test.ts` fails on a factory member no table feeds. `revalidate` OWES each read and
+  pays it only with a read that started after it was owed — at once for an active query, at the
+  next mount otherwise, never through `isInvalidated` — so a change can be delayed, never lost.
+  `holdReads` (every optimistic write's hold) parks what a pending write's keys owe and cancels
+  any full read that starts on them meanwhile (a page read passes). The identity effect calls
+  `resetReads` before `queryClient.clear()`; `refetchOnReconnect` is off under the curation roots
+  (`applySyncQueryDefaults`), the curation clock's read being their one reconnect path (W4).
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
@@ -3095,11 +3109,14 @@ renumber.** Navigate by area:
     hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
     `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and
     `useCollectionMembership(property_id)`; no surface hand-types a `useQuery` over either key),
-    and ONE revalidation in the same file, called by every writer: the menu, the collection page's
-    row-remove, BOTH collection DELETEs (migration 202
-    cascades memberships away) and the merge (operator state re-points `collection_properties`, so
-    the map's keys change). The hand-typed key lists it replaced had drifted — every one but the
-    menu forgot the shared map — the same failure `lib/browseInvalidation.ts` records for Browse. The
+    and ONE answer to "what does a collection write re-read": the tables it writes, through
+    `lib/curationSync`'s map (`revalidateTables`) — the menu and the collection page's row-remove
+    (`settleCollectionWrite`, `collection_properties`), BOTH collection DELETEs (`collections` and
+    `collection_properties`: migration 202 cascades memberships away), a share or leave
+    (`collection_shares`, which also moves whose shared notes the caller reads) and the merge
+    (the carriers re-point `collection_properties`, so the map's keys change). The hand-typed key
+    lists it replaced had drifted — every one but the menu forgot the shared map — the same failure
+    `lib/browseInvalidation.ts` records for Browse. The
     extension keeps its own single list and membership (`chrome-extension/src/store.ts`, shared by its
     panel and search-page cards), so this is an SPA-scoped claim.
     **`collections` is also a Browse COHORT FILTER** (`ListingFilters.collections`,
@@ -3134,9 +3151,10 @@ renumber.** Navigate by area:
     member map (`fetchPropertyTagMemberSet` under `curationKeys.propertyTagMembers`, the one
     `fetchMemberSet` reader both maps share — glyphs and the board read it; Browse's cohort no
     longer does), ONE scope (the `tags` entry of `CURATED_SETS`, AND over the in side), ONE
-    revalidation (`lib/tagCache.ts`, called by attach / detach / create / rename / delete; the
-    edit popover used to invalidate a `listing-tags` key that stopped existing at migration 202,
-    so a deleted tag stayed on the property page until staleTime), ONE assign list
+    re-read by table (`lib/curationSync`: `property_tags` for an attach / detach, `tags` for a
+    create / rename, both for a delete; the edit popover used to invalidate a `listing-tags` key
+    that stopped existing at migration 202, so a deleted tag stayed on the property page until
+    staleTime), ONE assign list
     (`components/curation/TagAssignList`: rows that attach or detach, a find-or-create box, the
     edit pencil — inline on the property page, a popover from the board card's chip row, a
     bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control filters and
@@ -3147,11 +3165,16 @@ renumber.** Navigate by area:
     cached Browse cohort that engages that lens re-judges the property in memory against the
     patched member maps — no longer matching, the row drops in place from every loaded page and
     the exact count drops by one (map, stats and counts re-read); an unknown member map or a
-    possible newcomer re-reads that cohort whole. Pipeline writes and dismissals settle at the
-    click (`settlePatches` inside `useOptimisticWrite`, rolled back on failure); collection and
-    tag writes (`settleCollectionWrite` / `settleTagWrite`) after the ack. It replaced the
-    `cohortScoped` / `pipelineScoped` / `collectionScoped` props. Whole-collection and tag
-    DELETEs and merges still revalidate broadly. The board offers its collection and tag chips by
+    possible newcomer re-reads that cohort whole. A map that said "out" before the write while the
+    list shows the row is the stale side only while one of its reads is still owed
+    (`lib/revalidate` `isOwed`): then that cohort re-reads whole and nothing drops; otherwise the
+    LIST is stale — a change made elsewhere, which a Browse list follows only at its next mount
+    (ruling Q3(a), 2026-10-31) — and the row is judged like any other. Pipeline writes and
+    dismissals settle at the click (`settlePatches` inside `useOptimisticWrite`, rolled back on
+    failure); collection and tag writes (`settleCollectionWrite` / `settleTagWrite`) after the ack,
+    under one momentary hold so no read lands between the member map and the Browse patches. It
+    replaced the `cohortScoped` / `pipelineScoped` / `collectionScoped` props. Whole-collection and
+    tag DELETEs and merges still revalidate broadly. The board offers its collection and tag chips by
     ONE rule (`lib/curatedSetOffer.ts`: sets with a member on the board plus any selected one,
     shown only when they could change the view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
@@ -3735,16 +3758,25 @@ renumber.** Navigate by area:
     until W3: a per-property `card(id)` cache duplicated a single row of `members`, so every
     write had a third shape to patch and every listing header paid its own read; collapsing it
     into `members` made the chokepoint smaller, which is the only sanctioned direction for it.
-    `lib/pipelineCache` holds the pure patches (`placeCard` / `dropCard`), the re-read list
-    (`PIPELINE_REVALIDATE`, joined by `lib/curationSettle`'s Browse patches and re-reads for the
-    `pipeline` lens; `revalidatePipeline` for a merge or split, which move cards between
-    properties) and the stage lookup `cachedStage`; the **write policy is ONE hook,
-    `lib/useOptimisticWrite`**, shared by
+    `lib/pipelineCache` holds the pure patches (`placeCard` / `dropCard`) and the stage lookup
+    `cachedStage`. **What any curation write re-reads is ONE map, paid by ONE scheduler**
+    (`lib/curationSync` `SYNC_TABLES`, `lib/revalidate`; docs/design/curation-sync.md): a card write
+    names its tables, `property_pipeline` and `property_dismissals` (a live stage lifts the
+    dismissal), joined by `lib/curationSettle`'s Browse patches and re-reads for the `pipeline` lens;
+    a stage edit names `pipeline_stages`, which reaches the members map too (its funnel badges read
+    the stage's label and code); a merge or split names every table the carriers move. The
+    **write policy is ONE hook, `lib/useOptimisticWrite`**, shared by
     every optimistic write in the SPA (pipeline, dismissals, the border-case flag, the autodedup
     verdict overlay, the admin toggles, the training-set marks, the preset reorder, the exam-review
-    edits): HOLD (cancel in-flight reads of
-    exactly the queries it patches, snapshot them) → patch → write → on failure roll back FROM
-    `onSettled`, BEFORE the re-read → revalidate (`revalidate(vars, failed, qc)`). Deliberately NOT `onError`, because the global
+    edits): HOLD (`holdReads`, inside the click: the reads in flight on exactly the queries it
+    patches are cancelled and owed, any full read that starts on them while the write is pending is
+    cancelled and owed too, and the patch is painted through a per-query ledger) → write → on
+    failure roll back FROM `onSettled`, BEFORE the re-read (the ledger repaints the base plus the
+    OTHER pending writes' patches, so overlapping writes roll back in any order with nothing erased
+    or resurrected) → revalidate AND release in one batch (`revalidate(vars, failed, qc)`): an owed
+    read is paid only by a read that started after it was owed, and a key another write still holds
+    is read once, after that write — the old unconditional invalidate let the first of two
+    overlapping writes repaint the second's patch away. Deliberately NOT `onError`, because the global
     `MutationCache.onError` (`lib/mutationCache`) stays silent for any mutation that defines its
     own — which is why a failed board drag used to snap back with no explanation. A site may still
     declare `onError`, but only to show its OWN message (inline text, the split's 409 prompt): the
@@ -3770,10 +3802,11 @@ renumber.** Navigate by area:
     listing BEFORE the CLIP-tag lateral instead of after. Three rules hold this
     in place. (1) **Decoration keys live in their own top-level `['hydration', …]` namespace** — never
     under `['pipeline']` — because every card write re-reads `['pipeline','board']` and
-    `['pipeline','members']` (`PIPELINE_REVALIDATE`) and the stage editor re-reads stages + board, so a
+    `['pipeline','members']` and the stage editor re-reads stages, board and members
+    (`lib/curationSync`), so a
     nested decoration key would refetch every thumbnail and broker on the board on every drag, making
     the split slower than the chain it replaced (`lib/hydration/hydration.test.ts` pins the
-    disjointness from every write sweep — pipeline, Browse, autodedup, dismissals). (2) **Decorations
+    disjointness from every write sweep — curation's `SYNC_ROOTS`, Browse, autodedup). (2) **Decorations
     reach `CardFace` by context, not props**, because it renders twice — in-column and inside the
     `DragOverlay` — and props would let those two mount points drift. (3) **Enrichment isolation is
     now structural**: a failed broker read cannot affect the board because it is not on the board's
