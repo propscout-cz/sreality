@@ -712,7 +712,7 @@ _LEASE_CADENCE = "30 seconds"
 _LEASE_RUNNER = "railway-realtime-worker"
 # The cutover (#2107): code from before this lease moved takes only the row of migration 279, so this code takes
 # that row FIRST and then the new one, in that order everywhere, so the two cannot deadlock. `_TRY_LEASE_SQL`,
-# `_RELEASE_LEASE_SQL`, `_LEASE_TTL`, `_try_lease`, `_wait_lease` and `_release_lease*` go once gate #2110 passes.
+# `_RELEASE_LEASE_SQL`, `_LEASE_TTL`, `_try_lease`, `_wait_lease` and `_release_lease*` go in #2267, once gate #2110 passes.
 _LEASE_TTL = "15 minutes"
 _LEASE_RETRY_SECONDS = 10.0
 # A dispatched sweep that cannot get the lease within this budget fails RED
