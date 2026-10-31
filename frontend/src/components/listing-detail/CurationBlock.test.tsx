@@ -6,9 +6,9 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, type QueryKey } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import type { ArtifactLink, Collection, Note, Tag } from '@/lib/types';
@@ -54,7 +54,9 @@ import {
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
-import { ActingAs, actingKey } from '@/lib/acting';
+import { ActingAs } from '@/lib/acting';
+import { revalidateTables, type SyncTable } from '@/lib/curationSync';
+import { isOwed } from '@/lib/revalidate';
 import { slotInstant, viewingSlot, viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
@@ -92,18 +94,25 @@ function renderBlock() {
   return renderWithReads();
 }
 
+/* A mounted reader of `queryKey` elsewhere on the page (Browse's note marks, say):
+ * `fn` counts how often the scheduler re-reads it. */
+function Watch({ queryKey, fn }: { queryKey: QueryKey; fn: () => Promise<unknown> }) {
+  useQuery({ queryKey, queryFn: fn, staleTime: Infinity });
+  return null;
+}
+
 /* Renders over whatever the mocks hold now, so a test can fail one read first. */
-function renderWithReads() {
+function renderWithReads(watch?: { queryKey: QueryKey; fn: () => Promise<unknown> }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
   const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <CurationBlock property_id={42} listing_id={900} />
+        {watch && <Watch {...watch} />}
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { ...view, invalidate };
+  return { ...view, qc };
 }
 
 /* The phone's tags + artifact link + notes: the desktop keeps the tags in the
@@ -164,17 +173,17 @@ describe('<CurationBlock> note counts', () => {
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue(NOTE as never);
     vi.mocked(deletePropertyNote).mockResolvedValue({ deleted: true } as never);
-    const { invalidate } = renderWithReads();
-    const counts = () =>
-      invalidate.mock.calls.filter(([f]) => f?.queryKey === curationKeys.noteCounts).length;
+    const counts = vi.fn(async () => new Map<number, number>());
+    renderWithReads({ queryKey: curationKeys.noteCounts, fn: counts });
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(1));
 
     await user.type(await screen.findByRole('textbox', { name: 'Poznámky' }), 'Volat v pondělí.');
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
-    await waitFor(() => expect(counts()).toBe(1));
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(2));
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     await user.click(screen.getByRole('button', { name: 'Smazat' }));
-    await waitFor(() => expect(counts()).toBe(2));
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(3));
   });
 });
 
@@ -267,16 +276,18 @@ describe('<CurationBlock> note attachments', () => {
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
     mockReads();
     vi.mocked(uploadAttachment).mockResolvedValue({} as never);
-    const { invalidate } = renderWithReads();
+    renderWithReads();
     const file = pdf();
 
-    dropOn(await savedNote(), [file]);
+    const note = await savedNote();
+    const reads = vi.mocked(listPropertyNotes).mock.calls.length;
+    dropOn(note, [file]);
     await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
       42, file, expect.objectContaining({ note_id: NOTE.id })));
     expect(createPropertyNote).not.toHaveBeenCalled();
     expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull();
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
-      queryKey: curationKeys.propertyNotes(42) }));
+    // The note and its files are one record: it is re-read.
+    await waitFor(() => expect(vi.mocked(listPropertyNotes).mock.calls.length).toBeGreaterThan(reads));
   });
 
   it('names a refused file and never sends it', async () => {
@@ -355,7 +366,10 @@ describe('<CurationBlock> artifact link', () => {
   it('offers "+ Odkaz na artefakt", opens a named field, and saves a link', async () => {
     const user = userEvent.setup();
     mockReads();
-    vi.mocked(setPropertyArtifactLink).mockResolvedValue(LINK);
+    vi.mocked(setPropertyArtifactLink).mockImplementation(async () => {
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+      return LINK;
+    });
     renderWithReads();
 
     expect(screen.queryByRole('textbox', { name: 'Odkaz na artefakt' })).toBeNull();
@@ -408,11 +422,15 @@ describe('<CurationBlock> artifact link', () => {
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
-  it('shows a saved link as a clickable anchor, and replaces it in place', async () => {
+  it('shows a saved link as a clickable anchor, and replaces it', async () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
-    vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/page' });
+    vi.mocked(setPropertyArtifactLink).mockImplementation(async () => {
+      const saved = { ...LINK, url: 'https://example.cz/page' };
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, saved]]));
+      return saved;
+    });
     renderWithReads();
 
     expect(await screen.findByRole('link', { name: 'claude.ai/artifact/abc123' })).toBeInTheDocument();
@@ -432,7 +450,10 @@ describe('<CurationBlock> artifact link', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
-    vi.mocked(deletePropertyArtifactLink).mockResolvedValue({ deleted: true });
+    vi.mocked(deletePropertyArtifactLink).mockImplementation(async () => {
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map());
+      return { deleted: true };
+    });
     renderWithReads();
 
     await user.click(await screen.findByRole('button', { name: 'Odebrat odkaz na artefakt' }));
@@ -647,7 +668,7 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
     vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    qc.setQueryData(curationKeys.noteCounts, new Map());
     vi.mocked(deletePropertyNote).mockResolvedValue({ deleted: true } as never);
     render(
       <QueryClientProvider client={qc}>
@@ -669,11 +690,11 @@ describe('<CurationBlock> shared notes', () => {
     // A note deleted as the owner re-reads the owner's notes, never Browse's note marks.
     fireEvent.click(within(note).getByRole('button', { name: 'Smazat poznámku' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Smazat' }));
+    const reads = vi.mocked(listPropertyNotes).mock.calls.length;
     await waitFor(() => expect(deletePropertyNote).toHaveBeenCalledWith(42, 11, { actAs: 'owner-1' }));
-    await waitFor(() =>
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.propertyNotes(42)) }),
-    );
-    expect(invalidate.mock.calls.some(([f]) => f?.queryKey === curationKeys.noteCounts)).toBe(false);
+    await waitFor(() => expect(vi.mocked(listPropertyNotes).mock.calls.length).toBeGreaterThan(reads));
+    expect(listPropertyNotes).toHaveBeenLastCalledWith(42, { actAs: 'owner-1' });
+    expect(isOwed(qc, curationKeys.noteCounts)).toBe(false);
   });
 
   it('speaks Czech on the phone: Sdílet s …, Sdíleno', async () => {
@@ -757,7 +778,8 @@ describe('<CurationBlock> viewings', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
-    const { invalidate } = renderWithReads();
+    const { qc } = renderWithReads();
+    qc.setQueryData(curationKeys.viewings, { data: [] });
 
     await user.click(await screen.findByRole('button', { name: 'Naplánovat prohlídku' }));
     const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
@@ -767,8 +789,8 @@ describe('<CurationBlock> viewings', () => {
     await user.click(screen.getByRole('button', { name: 'Uložit prohlídku' }));
     await waitFor(() =>
       expect(createPropertyNote).toHaveBeenCalledWith(42, sent('', false, '2030-05-14T12:30:00.000Z')));
-    // The Prohlídky tab reads the same notes: it is re-read too.
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.viewings }));
+    // The Prohlídky tab reads the same notes: it is re-read too, at its next mount.
+    await waitFor(() => expect(isOwed(qc, curationKeys.viewings)).toBe(true));
     expect(screen.queryByRole('group', { name: 'Termín prohlídky' })).toBeNull();
   });
 
@@ -822,5 +844,98 @@ describe('<CurationBlock> viewings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     expect(screen.getByText('Smazat prohlídku?')).toBeInTheDocument();
+  });
+});
+
+/* D3 (lib/useServerDraft): an open editor follows what it edits while the user has
+ * not touched it, and saves only what they changed — so an edit made elsewhere,
+ * re-read as the curation clock re-reads it, is never written back. */
+describe('<CurationBlock> editors follow the server while untouched', () => {
+  const VIEWING: Note = { ...NOTE, body: 'Vzít metr.', viewing_at: '2030-05-14T12:30:00+00:00' };
+  const changedElsewhere = (qc: QueryClient, table: SyncTable) =>
+    act(async () => {
+      await revalidateTables(qc, [table]);
+    });
+
+  beforeEach(() => {
+    vi.mocked(updatePropertyNote).mockReset().mockResolvedValue(NOTE as never);
+    vi.mocked(setPropertyArtifactLink).mockReset();
+  });
+
+  it('a note edited elsewhere shows in the open editor; moving the date sends the date alone', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    const { qc } = renderWithReads();
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
+
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...VIEWING, body: 'Vzít metr a baterku.' }] } as never);
+    await changedElsewhere(qc, 'property_notes');
+    await waitFor(() => expect(editor).toHaveValue('Vzít metr a baterku.'));
+
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '16:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() =>
+      expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-14T14:00:00.000Z' }));
+  });
+
+  it('a date moved elsewhere is followed, and a body edit sends the body alone', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
+    await user.clear(editor);
+    await user.type(editor, 'Nový text.');
+
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [{ ...VIEWING, body: 'Jinde.', viewing_at: '2030-05-15T12:30:00+00:00' }],
+    } as never);
+    await changedElsewhere(qc, 'property_notes');
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    await waitFor(() => expect(within(fields).getByLabelText('Den prohlídky')).toHaveValue('2030-05-15'));
+    expect(editor).toHaveValue('Nový text.');
+
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { body: 'Nový text.' }));
+  });
+
+  it('an artifact link changed elsewhere shows in the open field, and saving it writes nothing', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    expect(field).toHaveValue(LINK.url);
+
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, { ...LINK, url: 'https://example.cz/jinde' }]]));
+    await changedElsewhere(qc, 'property_artifact_links');
+    await waitFor(() => expect(field).toHaveValue('https://example.cz/jinde'));
+
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
+    expect(await screen.findByRole('link', { name: 'example.cz/jinde' })).toBeInTheDocument();
+    expect(setPropertyArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it('keeps a typed artifact link over a change made elsewhere, and saves it', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+    vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/moje' });
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    await user.clear(field);
+    await user.type(field, 'https://example.cz/moje');
+
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, { ...LINK, url: 'https://example.cz/jinde' }]]));
+    await changedElsewhere(qc, 'property_artifact_links');
+    expect(field).toHaveValue('https://example.cz/moje');
+
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
+    await waitFor(() => expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://example.cz/moje'));
   });
 });

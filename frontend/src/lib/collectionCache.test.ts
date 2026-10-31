@@ -15,11 +15,8 @@ vi.mock('./queries', async (orig) => ({
 }));
 
 import { listCollections } from './api';
-import {
-  revalidateCollections,
-  useCollectionMembership,
-  useCollections,
-} from './collectionCache';
+import { useCollectionMembership, useCollections } from './collectionCache';
+import { tableReads } from './curationSync';
 import { browseKeys } from './browseKeys';
 import { curationKeys, fetchPropertyCollectionMemberSet } from './queries';
 import type { Collection } from './types';
@@ -113,34 +110,20 @@ describe('collection read hooks', () => {
 });
 
 describe('collection revalidation contract', () => {
-  it('invalidates exactly the two global keys when no collection is named', () => {
-    /* The shared member map is pinned first on purpose: every membership writer
-     * but the save menu had hand-typed a key list that omitted it, which is the
-     * drift this helper exists to end (docs/architecture.md rule 18). */
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never);
-    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-    ]);
-  });
-
-  it("adds the named collection's own page when the write touches one", () => {
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never, { collection_id: 7 });
-    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-      curationKeys.collection(7),
-    ]);
+  /* The shared member map is pinned on purpose: every membership writer but the
+   * save menu had hand-typed a key list that omitted it (docs/architecture.md
+   * rule 18). The list is lib/curationSync's map now. */
+  it('a membership write re-reads the member map, the list and every collection page', () => {
+    const keys = tableReads(['collection_properties'], null);
+    expect(keys).toContainEqual(curationKeys.propertyCollectionMembers);
+    expect(keys).toContainEqual(curationKeys.collections);
+    expect(keys).toContainEqual(curationKeys.anyCollection);
   });
 
   /* What a membership change does to Browse is the settle's (lib/curationSettle):
-   * revalidating the collection reads never re-reads a Browse surface. */
+   * the collection reads never re-read a Browse surface. */
   it('never re-reads a Browse surface', () => {
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never, { collection_id: 7, shareChanged: true });
-    const roots = invalidateQueries.mock.calls.map(([arg]) => arg.queryKey[0]);
+    const roots = tableReads(['collections', 'collection_properties', 'collection_shares'], null).map(([r]) => r);
     for (const [root] of browseKeys.all) expect(roots).not.toContain(root);
   });
 });

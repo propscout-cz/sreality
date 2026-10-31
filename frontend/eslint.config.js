@@ -166,6 +166,26 @@ export default [
             'Do not redefine Field — import it from components/controls.tsx. The shared one names groups correctly (role="group" + aria-labelledby).',
         },
         {
+          // Curation re-reads go through ONE map and ONE scheduler
+          // (lib/curationSync `revalidateTables`, lib/revalidate `revalidate`):
+          // an owed read stays owed until a read issued after the change lands,
+          // and a key a pending write holds waits for it. A hand-typed
+          // invalidate over a curation key skips both — the drift that left
+          // StageManager's list without the members map. What this selector
+          // guarantees: no invalidateQueries / refetchQueries / resetQueries
+          // call names a member of the four curation key factories in its own
+          // arguments. Syntactic, like the bans above: a key built elsewhere
+          // and passed in slips through, and cache edits (cancelQueries,
+          // setQueriesData, removeQueries) over a curation key are not banned.
+          // curationSync.test.ts's key census guarantees the other half: every
+          // factory member sits under a key some SYNC_TABLES table feeds (or is
+          // in NOT_SYNCED), so a re-read by table reaches it; it checks no call.
+          selector:
+            "CallExpression[callee.property.name=/^(invalidateQueries|refetchQueries|resetQueries)$/] MemberExpression[object.name=/^(pipelineKeys|curationKeys|dismissalKeys|pipelineShareKeys)$/]",
+          message:
+            'Re-read curation through revalidateTables (lib/curationSync) or revalidate (lib/revalidate), never invalidateQueries / refetchQueries / resetQueries over a curation key.',
+        },
+        {
           // Thirteen hand-rolled modals shipped 12 Escape listeners (split 8
           // window / 4 document — which is why a nested pair double-closed), 5
           // scroll-lock copies and 6 drifted close glyphs; 6 of the 12 put the

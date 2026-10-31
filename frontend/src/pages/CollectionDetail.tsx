@@ -16,7 +16,9 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
+import { settleCollectionWrite } from '@/lib/collectionCache';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import {
@@ -186,7 +188,7 @@ function Header({
   const del = useMutation({
     mutationFn: () => deleteCollection(collection.id),
     onSuccess: () => {
-      revalidateCollections(qc);
+      void revalidateTables(qc, deletedTables('collections'));
       navigate(ROUTES.collections.build(), { replace: true });
     },
     onError: (err: Error) => setError(err.message || 'Failed to delete'),
@@ -307,7 +309,7 @@ function ViewerLine({ collection }: { collection: Collection }) {
     mutationFn: (account_id: string) => unshareCollection(collection.id, account_id),
     onSuccess: () => {
       navigate(ROUTES.collections.build(), { replace: true });
-      revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
+      void revalidateTables(qc, ['collection_shares']);
     },
   });
 
@@ -347,8 +349,11 @@ function HeaderEditor({
   onDone: () => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState(collection.name);
-  const [description, setDescription] = useState(collection.description ?? '');
+  /* Both fields follow the collection while untouched, and only what the user
+   * changed is saved: a rename made elsewhere is never written back (D3,
+   * lib/useServerDraft). */
+  const name = useServerDraft(collection.name, trimDraft);
+  const description = useServerDraft(collection.description ?? '', trimDraft);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const descriptionRef = useRef<HTMLInputElement>(null);
@@ -358,20 +363,21 @@ function HeaderEditor({
     (collection.is_system ? descriptionRef : nameRef).current?.focus();
   }, [collection.is_system]);
 
-  const dirty =
-    name.trim() !== collection.name ||
-    (description.trim() === '' ? null : description.trim()) !==
-      collection.description;
+  const nextName = name.edited();
+  const nextDescription = description.edited();
+  const dirty = nextName != null || nextDescription != null;
 
   const save = useMutation({
     mutationFn: () =>
       updateCollection(collection.id, {
-        name: name.trim(),
-        description: description.trim() === '' ? null : description.trim(),
+        ...(nextName != null && { name: nextName }),
+        /* A cleared description goes as '': PATCH /collections reads null as "not
+         * given" (coalesce), so null alone is refused and never clears it. */
+        ...(nextDescription != null && { description: nextDescription }),
       }),
     onSuccess: () => {
       setError(null);
-      revalidateCollections(qc, { collection_id: collection.id });
+      void revalidateTables(qc, ['collections']);
       onDone();
     },
     onError: (err: Error) => setError(err.message || 'Failed to save'),
@@ -391,8 +397,10 @@ function HeaderEditor({
         <input
           ref={nameRef}
           type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
+          value={name.value}
+          onChange={(e) => name.onChange(e.target.value)}
+          onFocus={name.onFocus}
+          onBlur={name.onBlur}
           maxLength={200}
           placeholder="Name"
           disabled={collection.is_system}
@@ -404,8 +412,10 @@ function HeaderEditor({
         <input
           ref={descriptionRef}
           type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          value={description.value}
+          onChange={(e) => description.onChange(e.target.value)}
+          onFocus={description.onFocus}
+          onBlur={description.onBlur}
           placeholder="Description (optional)"
           className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
         />
@@ -413,7 +423,7 @@ function HeaderEditor({
       <div className="flex items-center gap-3">
         <button
           type="button"
-          disabled={!dirty || save.isPending || name.trim().length === 0}
+          disabled={!dirty || save.isPending || name.value.trim().length === 0}
           onClick={() => save.mutate()}
           className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
@@ -459,7 +469,7 @@ function MonitorSwitch({
       updateCollection(collection.id, { monitoring_enabled: next }),
     onSuccess: () => {
       setError(null);
-      revalidateCollections(qc, { collection_id: collection.id });
+      void revalidateTables(qc, ['collections']);
     },
     onError: (err: Error) => setError(err.message || 'Failed to update'),
   });
@@ -520,8 +530,7 @@ function MonitorSwitch({
  * the panel "Sdílet · N" opens under the header. */
 function SharingBlock({ collection, id }: { collection: Collection; id: string }) {
   const qc = useQueryClient();
-  const changed = () =>
-    revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
+  const changed = () => revalidateTables(qc, ['collection_shares']);
   return (
     <ShareBlock
       id={id}

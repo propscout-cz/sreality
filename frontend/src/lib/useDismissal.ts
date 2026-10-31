@@ -7,10 +7,10 @@
  * NOT refetched, their exact counts drop one, and Stats and the map re-read.
  * Restoring re-reads every Browse read, because a hidden row has to come back
  * (and leave the phone's hidden roll), and so does a FAILED dismissal: its
- * rollback restores the lists as they were when it was clicked, which would
- * otherwise resurrect a neighbour dismissed successfully meanwhile. Both
- * writes go through lib/useOptimisticWrite (rollback from `onSettled`, never
- * `onError`).
+ * rollback takes back only its own patch (every other pending or confirmed
+ * patch stays painted), but a page that landed meanwhile may already hold it.
+ * Both writes go through lib/useOptimisticWrite (rollback from `onSettled`,
+ * never `onError`).
  */
 
 import { useQuery } from '@tanstack/react-query';
@@ -21,7 +21,8 @@ import { browseKeys } from '@/lib/browseKeys';
 import { browseReads, settlePatches, settleRereads } from '@/lib/curationSettle';
 import { dismissalKeys, fetchIsDismissed } from '@/lib/queries';
 import { dismissToast, pushToast } from '@/lib/toast';
-import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
+import { cachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
 /* One undo offer on screen at a time: an action toast stays until closed (so
  * its button stays reachable), and a triage run would otherwise stack them. */

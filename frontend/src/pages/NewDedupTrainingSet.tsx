@@ -25,7 +25,8 @@ import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { SegmentedBar } from '@/components/controls';
 import { pushToast } from '@/lib/toast';
 import { trainingSetKeys } from '@/lib/newDedupKeys';
-import { cachePatch, useOptimisticWrite, type CachePatch } from '@/lib/useOptimisticWrite';
+import { cachePatch, type CachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
 /* NEW DEDUP · Training set — a head's labels, in four trays.
  *
@@ -222,7 +223,8 @@ export default function NewDedupTrainingSet() {
   /* COUNTS MOVE ON THE CLICK, in tray terms. A mark change moves a row between
    * trays; the reserve is only ever entered or left by an explicit move. The
    * updaters are pure so the optimistic writes below hand them to
-   * useOptimisticWrite, which holds and snapshots the same keys it patches. */
+   * useOptimisticWrite, which holds the same keys it patches and can take a
+   * failed write's patch back out of them (lib/revalidate's ledger). */
   type HeadsData = typeof headsQ.data;
   type RowsData = typeof rowsQ.data;
   const withTrays = (deltas: Partial<Record<Tray, number>>) => (old: HeadsData): HeadsData =>

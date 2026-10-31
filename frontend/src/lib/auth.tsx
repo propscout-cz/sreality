@@ -13,6 +13,7 @@ import { resetActiveBoard } from './acting';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
+import { resetReads } from './revalidate';
 import { syncAppBadge } from './appBadge';
 import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
@@ -181,6 +182,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const prev = prevUserId.current;
     prevUserId.current = userId;
     if (prev !== null && prev !== userId) {
+      /* First the read scheduler's epoch (lib/revalidate): a hold, rollback or
+       * owed read of the previous account then paints and parks nothing here. */
+      resetReads(queryClient);
       queryClient.clear();
       /* The per-device pipeline board and "edit as owner" were the previous
        * account's pick (lib/acting): the next one starts on its own board. */

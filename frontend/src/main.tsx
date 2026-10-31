@@ -22,6 +22,11 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 60_000,
       gcTime: 5 * 60_000,
+      /* Off, and it stays off: a focus refetch would re-read every mounted
+       * query, market data included, at each alt-tab. Curation is to follow a
+       * change made elsewhere through the curation clock instead
+       * (docs/design/curation-sync.md, Decision 12); the rest follows its
+       * staleTime at the next mount. */
       refetchOnWindowFocus: false,
       /* One more attempt ONLY when it can help: a network blip or a
        * 502/503/504/520 (the API answers a busy database with 503 db_busy;
