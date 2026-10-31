@@ -1621,7 +1621,13 @@ renumber.** Navigate by area:
    failures still in the index). A given-up
    queue row is not dropped either: `enqueue_presence_checks` re-arms up to
    `PRESENCE_REARM_PER_WALK` = 50 given-up rows per nominating scope, source-wide, at VERIFY
-   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`.
+   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
+   that parses to NO listing content (no price, no area, no params, no images, no description) is a
+   failed fetch too, never a write: `portal_runner.content_free` turns such an item into an error
+   before the flush (2026-10-31; ceskereality's anti-bot interstitial had been written into 51 live
+   ads as content, blanking them and bumping `last_seen_at`; realitymix served a category page at a
+   detail URL the same way). Shape-keyed on the parsed `ScrapedListing`, never portal-keyed; sreality's
+   API payload fails JSON parsing instead.
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,
