@@ -3,7 +3,7 @@
  * W5's consumer rule: a listing reaches Browse, the map, the feed, the watchdog
  * and dedup only once the location store has an ANSWER for it. This page is that
  * exempted set, and it is a WORK QUEUE — a row leaves it the moment the resolver
- * lane places the listing, so the nav badge counts down on its own.
+ * lane places the listing.
  *
  * W15 (operator ruling, 2026-09-14) makes that EVERY listing in the database, not
  * only the ones a consumer surface would reach: the served set retired, and a
@@ -13,44 +13,30 @@
  * No map. The whole subject of the page is rows with no point to draw; the old
  * map drew their LEGACY coordinates, and migration 508 deleted those columns.
  *
- * Every number on the page comes from ONE payload (the summary RPC), so the
- * matrix, the totals and the list can never tell three different stories. The
- * list is a separate keyset read of the same relation under the same filters.
- *
- * THE WATERFALL (W14, migrations 523/524) sits above all of it and answers the
- * question the page used to leave open: what is this number a fraction OF. It
- * is the chain from every listing in the database (841 k) down to this set,
- * computed in the store by the same hourly refresh, from the same rule Browse
- * uses — so „skryté" is read against the whole database and never against
- * itself. Nothing on this side recomputes a step.
- *
  * TWO STATES (W7-b, migration 518), and the page always looks at exactly one:
  * "čeká na zpracování" is the lane still working (no verdict yet, queued for
  * one, or the ad changed after the verdict) — normal traffic; "zpracováno,
- * nerozhodnuto" is a finished verdict with no location — the issue. Both counts
- * are always in the header, so choosing one never hides the other's size, and
- * the nav badge counts only the issue.
+ * nerozhodnuto" is a finished verdict with no location — the issue.
+ *
+ * W1 (ruling Q7, nothing measured twice) deleted every count this page held of
+ * its own: the waterfall, the summary RPC's matrix, the two state totals and
+ * the split, and the nav badge. The location gauge's stored cells (Health, the
+ * Location Quality page) are the one location count; the one number here is
+ * the exact size of the filtered list, read with its first page.
  */
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import { SegmentedBar } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import Panel from '@/components/Panel';
 import Spinner from '@/components/Spinner';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { categoryMainLabelPlural, categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
-import { fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtPct } from '@/lib/format';
-import {
-  WATERFALL_KEY,
-  fetchLocationWaterfall,
-  groupWaterfall,
-  waterfallRefreshedAt,
-  type WaterfallStep,
-} from '@/lib/locationWaterfall';
-import { stepLabel, stepNote } from '@/lib/locationSteps';
+import { CATEGORY_MAIN_LABELS, categoryMainLabelPlural, categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
+import { fmtArea, fmtCount, fmtCzk, fmtDateSlash } from '@/lib/format';
+import { LOCATION_SOURCES } from '@/lib/locationQuality';
+import { stepLabel } from '@/lib/locationSteps';
 import { propertyPath } from '@/lib/listingUrl';
 import { portalLabel } from '@/lib/portals';
 import { useInfiniteList } from '@/lib/useInfiniteList';
@@ -58,18 +44,15 @@ import type { SortSpec } from '@/lib/queries';
 import type { KeysetCursor } from '@/lib/keyset';
 import {
   EMPTY_PIN_AUDIT_FILTERS,
-  PIN_AUDIT_TOTAL_KEY,
   PIN_AUDIT_PAGE_SIZE,
   PIN_AUDIT_QUALITIES,
   PIN_AUDIT_STATES,
   fetchPinAuditPage,
-  fetchPinAuditSummary,
-  summaryRowMatches,
   type PinAuditFilters,
+  type PinAuditPage,
   type PinAuditQuality,
   type PinAuditRow,
   type PinAuditState,
-  type PinAuditSummaryRow,
 } from '@/lib/pinAudit';
 import { Link } from 'react-router-dom';
 
@@ -123,11 +106,9 @@ const QUALITY_LABEL: Record<PinAuditQuality, string> = {
 /* The two states, in the operator's words and with the verdict attached: one of
  * them is a finding and the other is not, and the label has to say so.
  *
- * ONE NAME PER STATE ON THE WHOLE PAGE (W16). These two states are the waterfall's
- * `hidden` split as well as this list's filter, so the name comes from the shared
- * wording module and nothing here re-types it — the header total, the filter pill, the
- * note and the split row under "Bez rozhodnuté polohy" are the same number, and were
- * briefly reading two different Czech names for it. */
+ * ONE NAME PER STATE (W16): the name comes from the shared wording module
+ * (the waterfall's `hidden` split carried the same two states), and nothing
+ * here re-types it. */
 const STATE_LABEL: Record<PinAuditState, string> = {
   pending: stepLabel('hidden_pending', 'cs'),
   unresolved: stepLabel('hidden_unresolved', 'cs'),
@@ -165,83 +146,6 @@ const QUALITY_SHORT: Record<PinAuditQuality, string> = {
 const dash = (v: string | null | undefined): string =>
   v == null || v === '' ? '—' : v;
 
-/* ------------------------------------------------------------- the waterfall */
-
-/* The chain, as the store wrote it: label, count, what was lost at that step and
- * the share of the WHOLE database. Sub-rows are indented under their step. */
-function WaterfallTable({ steps }: { steps: WaterfallStep[] }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="text-[0.8rem] min-w-full">
-        <thead className={HEAD}>
-          <tr>
-            <th className={TH}>Krok</th>
-            <th className={`${TH} text-right`}>Počet</th>
-            <th className={`${TH} text-right`}>Ubylo zde</th>
-            <th className={`${TH} text-right`}>Podíl z databáze</th>
-          </tr>
-        </thead>
-        <tbody>
-          {steps.map(({ row, splits }) => {
-            const note = stepNote(row.step_key, 'cs');
-            const isChain = row.kind === 'chain';
-            const isHidden = row.step_key === 'hidden';
-            return (
-              <Fragment key={row.step_key}>
-                <tr className={ROW} data-testid={`waterfall-step-${row.step_key}`}>
-                  <td className={TD}>
-                    <span
-                      className={[
-                        isChain ? 'font-medium' : 'text-[var(--color-ink-2)]',
-                        isHidden ? 'text-[var(--color-copper)] font-medium' : '',
-                      ].join(' ')}
-                    >
-                      {isChain ? `${row.step_no}. ` : '↳ '}
-                      {stepLabel(row.step_key, 'cs')}
-                    </span>
-                    {note ? (
-                      <span className="block text-[0.72rem] leading-snug text-[var(--color-ink-3)] max-w-[44rem]">
-                        {note}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td
-                    className={`${NUM} ${isHidden ? 'text-[var(--color-copper)] font-medium' : ''}`}
-                  >
-                    {fmtCount(row.n)}
-                  </td>
-                  <td className={NUM}>
-                    {row.lost == null || row.lost === 0 ? (
-                      <span className="text-[var(--color-ink-4)]">—</span>
-                    ) : (
-                      `−${fmtCount(row.lost)}`
-                    )}
-                  </td>
-                  <td className={NUM}>{fmtPct(Number(row.share_pct), { digits: 1 })}</td>
-                </tr>
-                {splits.map((s) => (
-                  <tr key={s.step_key} data-testid={`waterfall-split-${s.step_key}`}>
-                    <td className={`${TD} pl-6 text-[var(--color-ink-3)]`}>
-                      · {stepLabel(s.step_key, 'cs')}
-                    </td>
-                    <td className={`${NUM} text-[var(--color-ink-2)]`}>
-                      {fmtCount(s.n)}
-                    </td>
-                    <td className={NUM} />
-                    <td className={`${NUM} text-[var(--color-ink-3)]`}>
-                      {fmtPct(Number(s.share_pct), { digits: 1 })}
-                    </td>
-                  </tr>
-                ))}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------- page */
 
 export default function LocationPinAudit() {
@@ -251,127 +155,23 @@ export default function LocationPinAudit() {
     direction: 'desc',
   });
 
-  const summary = useQuery({
-    queryKey: ['pin-audit', 'summary'],
-    queryFn: fetchPinAuditSummary,
-    staleTime: 5 * 60_000,
-  });
-
-  /* The whole chain, written by the same hourly refresh as the list below it
-   * (migration 523), so the two can never be as-of different hours. */
-  const waterfall = useQuery({
-    queryKey: WATERFALL_KEY,
-    queryFn: fetchLocationWaterfall,
-    staleTime: 5 * 60_000,
-  });
-  const waterfallSteps = useMemo(
-    () => groupWaterfall(waterfall.data ?? []),
-    [waterfall.data],
-  );
-
-  const rows: PinAuditSummaryRow[] = useMemo(
-    () => summary.data ?? [],
-    [summary.data],
-  );
-
-  /* The axes are read off the data, never hardcoded: a portal that stops
-   * appearing must vanish from the matrix rather than show a stale zero. Scoped
-   * to the selected state, so the matrix carries no all-dash row. */
-  const stateRows = useMemo(
-    () => rows.filter((r) => r.state === filters.state),
-    [rows, filters.state],
-  );
-  const sources = useMemo(
-    () => Array.from(new Set(stateRows.map((r) => r.source))).sort(),
-    [stateRows],
-  );
-  const categories = useMemo(
-    () => Array.from(new Set(stateRows.map((r) => r.category_main ?? ''))).sort(),
-    [stateRows],
-  );
-
-  /* Both state totals, always over the WHOLE payload — the header states the
-   * size of the set the operator is NOT looking at too, so switching can never
-   * be a surprise. */
-  const stateTotals = useMemo(() => {
-    const t: Record<PinAuditState, number> = { pending: 0, unresolved: 0 };
-    for (const r of rows) t[r.state] += r.n;
-    return t;
-  }, [rows]);
-
-  const matched = useMemo(
-    () => rows.filter((r) => summaryRowMatches(r, filters)),
-    [rows, filters],
-  );
-
-  const cell = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of matched) {
-      const k = `${r.source}|${r.category_main ?? ''}`;
-      m.set(k, (m.get(k) ?? 0) + r.n);
-    }
-    return m;
-  }, [matched]);
-
-  const totalMatched = useMemo(
-    () => matched.reduce((a, r) => a + r.n, 0),
-    [matched],
-  );
-  /* The split the ruling turns on, over the whole SELECTED state (not the
-   * current filters): how much of it is live ads, and how much a sibling
-   * listing could recover with no resolver change at all. */
-  const split = useMemo(() => {
-    let active = 0;
-    let delisted = 0;
-    let sibling = 0;
-    for (const r of rows.filter((x) => x.state === filters.state)) {
-      if (r.quality.startsWith('active_')) active += r.n;
-      else delisted += r.n;
-      if (r.sibling_has_pin) sibling += r.n;
-    }
-    return { active, delisted, sibling };
-  }, [rows, filters.state]);
-
-  /* ONE refresh time on the page, and it is the waterfall's: both relations are
-   * written by the same hourly function, and two timestamps would invite the
-   * question of which one the list is as-of. */
-  const refreshedAt = useMemo(
-    () =>
-      waterfallRefreshedAt(waterfall.data ?? []) ??
-      rows.find((r) => r.refreshed_at != null)?.refreshed_at ??
-      null,
-    [waterfall.data, rows],
-  );
-
   const filterKey = JSON.stringify(filters);
 
-  const list = useInfiniteList<PinAuditRow>({
+  const list = useInfiniteList<PinAuditRow, PinAuditPage>({
     queryKey: ['pin-audit', 'list', filterKey, sort.field, sort.direction],
-    queryFn: async (cursor, signal) => {
-      const page = await fetchPinAuditPage(
-        filters,
-        sort,
-        cursor as KeysetCursor | null,
-        { signal },
-      );
-      return { rows: page.rows, nextCursor: page.nextCursor ?? undefined };
-    },
+    queryFn: (cursor, signal) =>
+      fetchPinAuditPage(filters, sort, cursor as KeysetCursor | null, { signal }),
     pageSize: PIN_AUDIT_PAGE_SIZE,
     getRowId: (r) => r.listing_id,
   });
-
-  /* The nav badge holds its count for the whole session (the matview behind it
-   * refreshes hourly), so opening this page is where it gets re-read — the one
-   * moment the operator is actually looking at the number. */
-  const qc = useQueryClient();
-  useEffect(() => {
-    void qc.invalidateQueries({ queryKey: PIN_AUDIT_TOTAL_KEY });
-  }, [qc]);
+  const total = list.firstPage?.total ?? null;
+  /* One refresh across the relation (the hourly matview refresh): the list's own stamp. */
+  const refreshedAt = list.rows[0]?.refreshed_at ?? null;
 
   const toggle = <T extends string>(list: ReadonlyArray<T>, v: T): T[] =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
-  const err = summary.error ?? waterfall.error ?? list.error;
+  const err = list.error;
 
   return (
     <div className="px-6 pt-5 pb-10 max-w-screen-xl mx-auto">
@@ -387,56 +187,6 @@ export default function LocationPinAudit() {
         stránka ukazuje vždy jen jednu z nich: ty, které systém teprve čekají, a
         ty, u kterých už doběhl a polohu neurčil.
       </p>
-      <div className="mt-5">
-        <Panel
-          title="Vodopád"
-          lede={`Odkud se to číslo bere. Cesta od všech inzerátů v databázi až k těm skrytým — u každého kroku je vidět, kolik jich zbylo, kolik jich tam ubylo a jaký je to podíl z celé databáze. Skryté se tak čtou proti celku, ne samy proti sobě.${
-            refreshedAt ? ` Stav k ${fmtDateSlash(refreshedAt)}; přepočítává se každou hodinu.` : ''
-          }`}
-        >
-          {waterfall.isLoading ? (
-            <Spinner />
-          ) : waterfallSteps.length === 0 ? (
-            <p className="text-sm text-[var(--color-ink-3)]">Žádná data.</p>
-          ) : (
-            <WaterfallTable steps={waterfallSteps} />
-          )}
-        </Panel>
-      </div>
-
-      <div
-        className="mt-5 grid gap-1 text-[0.82rem] max-w-[52rem]"
-        data-testid="pin-audit-state-totals"
-      >
-        <p>
-          <span className="text-[var(--color-ink-2)]">{STATE_LABEL.pending}:</span>{' '}
-          <span className="font-medium tabular-nums">
-            {fmtCount(stateTotals.pending)}
-          </span>{' '}
-          <span className="text-[var(--color-ink-3)]">
-            — není problém, systém je zatím nezpracoval
-          </span>
-        </p>
-        <p>
-          <span className="text-[var(--color-ink-2)]">{STATE_LABEL.unresolved}:</span>{' '}
-          <span className="font-medium tabular-nums">
-            {fmtCount(stateTotals.unresolved)}
-          </span>{' '}
-          <span className="text-[var(--color-ink-3)]">— toto je problém</span>
-        </p>
-      </div>
-      <p className="mt-2 text-[0.78rem] text-[var(--color-ink-3)]">
-        Níže: {STATE_LABEL[filters.state]} · {fmtCount(split.active)} běží ·{' '}
-        {fmtCount(split.delisted)} stažených · u {fmtCount(split.sibling)} má
-        jiný inzerát téže nemovitosti polohu určenou
-        {' · '}seznam se obnovuje každou hodinu
-      </p>
-      <p className="mt-1 text-[0.78rem] text-[var(--color-ink-3)] max-w-[52rem]">
-        Těch {fmtCount(split.sibling)} by šlo zobrazit bez jakékoli změny v
-        určování polohy — stačilo by polohu převzít od sourozeneckého inzerátu
-        téže nemovitosti. To je samostatné rozhodnutí, zatím se tak neděje.
-      </p>
-
       {err ? <ErrorBanner message={err.message} /> : null}
 
       <div className="mt-6 grid gap-5">
@@ -446,7 +196,7 @@ export default function LocationPinAudit() {
             label="Skupina inzerátů"
             options={PIN_AUDIT_STATES.map((st) => ({
               value: st,
-              label: `${STATE_LABEL[st]} (${fmtCount(stateTotals[st])})`,
+              label: STATE_LABEL[st],
             }))}
             value={filters.state}
             /* Switching state drops the quality chips with it: they explain a
@@ -461,87 +211,8 @@ export default function LocationPinAudit() {
         </div>
 
         <Panel
-          title="Přehled"
-          lede="Řádky jsou portály, sloupce druhy nemovitosti. Číslo v buňce je počet skrytých inzerátů — po započtení filtrů níže. Kliknutím na buňku se filtr nastaví právě na ni."
-        >
-          {summary.isLoading ? (
-            <Spinner />
-          ) : sources.length === 0 ? (
-            <p className="text-sm text-[var(--color-ink-3)]">Žádná data.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="text-[0.8rem] min-w-full">
-                <thead className={HEAD}>
-                  <tr>
-                    <th className={TH}>Portál</th>
-                    {categories.map((c) => (
-                      <th key={c} className={`${TH} text-right`}>
-                        {categoryMainLabelPlural(c || null)}
-                      </th>
-                    ))}
-                    <th className={`${TH} text-right`}>Celkem</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sources.map((s) => {
-                    const rowTotal = categories.reduce(
-                      (a, c) => a + (cell.get(`${s}|${c}`) ?? 0),
-                      0,
-                    );
-                    return (
-                      <tr key={s} className={ROW} data-testid={`pin-audit-matrix-${s}`}>
-                        <td className={TD}>{portalLabel(s) ?? s}</td>
-                        {categories.map((c) => {
-                          const n = cell.get(`${s}|${c}`) ?? 0;
-                          return (
-                            <td key={c} className={NUM}>
-                              {n === 0 ? (
-                                <span className="text-[var(--color-ink-4)]">—</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="underline decoration-dotted underline-offset-2 hover:text-[var(--color-copper)]"
-                                  onClick={() =>
-                                    setFilters((f) => ({
-                                      ...f,
-                                      sources: [s],
-                                      categories: [c],
-                                    }))
-                                  }
-                                >
-                                  {fmtCount(n)}
-                                </button>
-                              )}
-                            </td>
-                          );
-                        })}
-                        <td className={`${NUM} font-medium`}>{fmtCount(rowTotal)}</td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="border-t border-[var(--color-rule-strong)]" data-testid="pin-audit-matrix-total">
-                    <td className={`${TD} font-medium`}>Celkem</td>
-                    {categories.map((c) => (
-                      <td key={c} className={`${NUM} font-medium`}>
-                        {fmtCount(
-                          sources.reduce(
-                            (a, s) => a + (cell.get(`${s}|${c}`) ?? 0),
-                            0,
-                          ),
-                        )}
-                      </td>
-                    ))}
-                    <td className={`${NUM} font-medium`}>{fmtCount(totalMatched)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        <Panel
           title="Filtry"
-          lede="Filtry platí pro přehled i seznam zároveň a vždy jen v rámci skupiny vybrané nahoře. Nevybrat nic znamená „bez omezení“."
+          lede="Filtry platí pro seznam a vždy jen v rámci skupiny vybrané nahoře. Nevybrat nic znamená „bez omezení“."
         >
           <div className="grid gap-3">
             <div>
@@ -549,7 +220,7 @@ export default function LocationPinAudit() {
                 Portál
               </p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {sources.map((s) => (
+                {LOCATION_SOURCES.map((s) => (
                   <Chip
                     key={s}
                     on={filters.sources.includes(s)}
@@ -567,7 +238,7 @@ export default function LocationPinAudit() {
                 Druh nemovitosti
               </p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {categories.map((c) => (
+                {Object.keys(CATEGORY_MAIN_LABELS).map((c) => (
                   <Chip
                     key={c}
                     on={filters.categories.includes(c)}
@@ -578,7 +249,7 @@ export default function LocationPinAudit() {
                       }))
                     }
                   >
-                    {categoryMainLabelPlural(c || null)}
+                    {categoryMainLabelPlural(c)}
                   </Chip>
                 ))}
               </div>
@@ -651,9 +322,16 @@ export default function LocationPinAudit() {
 
         <Panel
           title="Seznam"
-          lede="Jeden řádek = jeden inzerát. Název vede na jeho stránku u nás, odkaz „portál“ na původní inzerát. „Verdikt“ shrnuje, co o poloze ví nový systém."
+          lede={`Jeden řádek = jeden inzerát. Název vede na jeho stránku u nás, odkaz „portál“ na původní inzerát. „Verdikt“ shrnuje, co o poloze ví nový systém.${
+            refreshedAt ? ` Stav k ${fmtDateSlash(refreshedAt)}; přepočítává se každou hodinu.` : ''
+          }`}
         >
-          <div className="mb-2 flex items-center gap-3 text-[0.78rem] text-[var(--color-ink-3)]">
+          <div className="mb-2 flex flex-wrap items-center gap-3 text-[0.78rem] text-[var(--color-ink-3)]">
+            {total != null ? (
+              <span className="font-medium tabular-nums text-[var(--color-ink)]" data-testid="pin-audit-total">
+                {fmtCount(total)} inzerátů
+              </span>
+            ) : null}
             <span>Řadit podle:</span>
             {/* A click on the lit order flips its direction; another order starts newest first. */}
             <SegmentedBar
@@ -768,7 +446,7 @@ export default function LocationPinAudit() {
             hasNextPage={list.hasNextPage}
             isFetchingNextPage={list.isFetchingNextPage}
             loadedCount={list.loadedCount}
-            total={totalMatched}
+            total={total}
             loadingLabel="Načítám další…"
           />
         </Panel>

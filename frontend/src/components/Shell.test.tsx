@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -16,7 +16,6 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Shell from './Shell';
 import * as auth from '@/lib/auth';
 import * as api from '@/lib/api';
-import * as pinAudit from '@/lib/pinAudit';
 import { writeLastBrowseSearch } from '@/lib/lastBrowseView';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -26,10 +25,6 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -43,7 +38,6 @@ function Boom(): never {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,
@@ -131,52 +125,21 @@ describe('<Shell> Browse entry', () => {
   });
 });
 
-/* The hidden set is the Admin menu's first item, and the count of rows in it
- * rides on the Admin trigger (ruling P33, 2026-10-27) — but navigation can never
- * depend on that number arriving. The number is the ISSUE count (W7-b):
- * `fetchPinAuditTotal` asks for `state=unresolved` only, which
- * `lib/pinAudit.test.ts` pins on the read itself. */
+/* The hidden set is the Admin menu's first item (ruling P33, 2026-10-27). Its
+ * count left the Admin trigger with W1 (ruling Q7): the location gauge's stored
+ * cells on Health are the one location count, so the trigger is its name alone. */
 describe('<Shell> !AUDIT POLOH', () => {
-  const COUNTED = 'Admin 37052 inzerátů s nevyřešenou polohou';
-
-  it('the Admin trigger carries the audit count', async () => {
-    vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(37052);
-    renderShellWith(<p>page content</p>);
-    const trigger = within(screen.getByRole('navigation')).getByRole('button', { name: /^Admin/ });
-    await waitFor(() => expect(trigger).toHaveAccessibleName(COUNTED));
-  });
-
-  it('lives in the Admin menu, not the row, and the row does not repeat the count', async () => {
-    vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(37052);
+  it('lives in the Admin menu, not the row, and the trigger carries no count', async () => {
     const user = userEvent.setup();
     renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');
     const trigger = within(nav).getByRole('button', { name: /^Admin/ });
-    /* The count has landed before anything is read off the row. */
-    await waitFor(() => expect(trigger).toHaveAccessibleName(COUNTED));
+    expect(trigger).toHaveAccessibleName('Admin');
     expect(within(nav).queryByRole('link', { name: /AUDIT POLOH/ })).toBeNull();
     await user.click(trigger);
     const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
     expect(first).toHaveAccessibleName('!AUDIT POLOH');
     expect(first).toHaveAttribute('href', '/new-dedup/pin-audit');
-  });
-
-  it('still navigates when the count read fails', async () => {
-    vi.mocked(pinAudit.fetchPinAuditTotal).mockRejectedValue(new Error('nope'));
-    const user = userEvent.setup();
-    const { qc } = renderShellWith(<p>page content</p>);
-    /* Wait for the failure itself to settle and render, so a badge drawn on a
-     * FAILED read would be on screen by the time the name is read. */
-    await waitFor(() => expect(qc.getQueryState(pinAudit.PIN_AUDIT_TOTAL_KEY)?.status).toBe('error'));
-    await act(() => new Promise((r) => setTimeout(r, 0)));
-    const nav = screen.getByRole('navigation');
-    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
-    expect(trigger).toHaveAccessibleName('Admin');
-    await user.click(trigger);
-    expect(within(nav).getByRole('menuitem', { name: '!AUDIT POLOH' })).toHaveAttribute(
-      'href',
-      '/new-dedup/pin-audit',
-    );
   });
 
   /* Before the move the row entry lit on its own page and the trigger did not

@@ -12,17 +12,13 @@
  * and there is still no location — the issue. The four `quality` buckets refine
  * `unresolved` only; under `pending` there is no verdict to explain.
  *
- * Two reads, deliberately shaped so the page never counts anything itself:
- *   - `fetchPinAuditSummary` — one RPC returning (portal, type, bucket, n).
- *     ~120 rows, so the overview matrix AND every "how many match the current
- *     filters" number are sums over ONE payload. The three group-by columns are
- *     exactly the page's three filter axes (active/delisted is encoded in the
- *     bucket), so a filtered total can always be derived and can never disagree
- *     with the list.
- *   - `fetchPinAuditPage` — a keyset page of 100 rows. Keyset, not offset:
- *     `.range()` is banned outside fetchAllRows (it does not lift PostgREST's
- *     row cap), and the matview carries a (last_seen_at, listing_id) btree that
- *     the shared applyKeyset emits against directly.
+ * One read, `fetchPinAuditPage`: a keyset page of 100 rows, the first page
+ * carrying the exact count of the filtered list, so the page never counts
+ * anything itself. Keyset, not offset: `.range()` is banned outside
+ * fetchAllRows (it does not lift PostgREST's row cap), and the matview carries
+ * a (last_seen_at, listing_id) btree that the shared applyKeyset emits against
+ * directly. W1 deleted the summary RPC's reader and the nav badge: the location
+ * gauge's stored cells (Health) are the one location count.
  */
 
 import { supabase } from '@/lib/supabase';
@@ -100,17 +96,6 @@ export interface PinAuditRow {
   refreshed_at: string;
 }
 
-export interface PinAuditSummaryRow {
-  state: PinAuditState;
-  source: string;
-  category_main: string | null;
-  quality: PinAuditQuality;
-  sibling_has_pin: boolean;
-  n: number;
-  /* One value across the whole relation — the last refresh. */
-  refreshed_at: string | null;
-}
-
 export interface PinAuditFilters {
   /* NOT fail-open: every read is scoped to ONE state, because the two sets
    * answer different questions and a total over both means nothing. */
@@ -172,66 +157,11 @@ function applyPinAuditFilters<T extends FilterBuilder>(
   return q;
 }
 
-/* Does a summary row fall inside the filters? The same predicate the SQL
- * applies, so the matrix and the list can never disagree. */
-export function summaryRowMatches(
-  row: PinAuditSummaryRow,
-  f: PinAuditFilters,
-): boolean {
-  if (row.state !== f.state) return false;
-  if (f.sources.length > 0 && !f.sources.includes(row.source)) return false;
-  if (f.categories.length > 0 && !f.categories.includes(row.category_main ?? '')) {
-    return false;
-  }
-  if (
-    f.state === 'unresolved' &&
-    f.qualities.length > 0 &&
-    !f.qualities.includes(row.quality)
-  ) {
-    return false;
-  }
-  if (f.status === 'active' && !row.quality.startsWith('active_')) return false;
-  if (f.status === 'delisted' && !row.quality.startsWith('delisted_')) return false;
-  if (f.sibling === 'yes' && !row.sibling_has_pin) return false;
-  if (f.sibling === 'no' && row.sibling_has_pin) return false;
-  return true;
-}
-
-/* The nav badge's number: the `unresolved` rows, and ONLY those (W7-b). A badge
- * is an alarm, and counting `pending` too would make it climb every time the
- * scrapers do their job — the fastest way to teach the operator to ignore it.
- * A `head` request with an exact count, so PostgREST answers with the number in
- * the Content-Range header and zero rows: one cheap round trip, cheap enough to
- * sit in the app shell. The nav must never depend on it — a caller renders the
- * label alone when this throws. */
-export const PIN_AUDIT_TOTAL_KEY = ['pin-audit', 'total'] as const;
-
-export const fetchPinAuditTotal = async (
-  { signal }: PgReadOptions = {},
-): Promise<number> => {
-  const { count } = await pgRead(
-    supabase
-      .from(PIN_AUDIT_RELATION)
-      .select(TIEBREAK, { count: 'exact', head: true })
-      .eq('state', 'unresolved'),
-    { signal },
-  );
-  return count ?? 0;
-};
-
-export const fetchPinAuditSummary = async (
-  { signal }: PgReadOptions = {},
-): Promise<PinAuditSummaryRow[]> => {
-  const { data } = await pgRead<PinAuditSummaryRow[] | null>(
-    supabase.rpc('location_pin_audit_summary'),
-    { signal },
-  );
-  return data ?? [];
-};
-
 export interface PinAuditPage {
   rows: PinAuditRow[];
   nextCursor: KeysetCursor | null;
+  /* The filtered list's exact size, read with the first page only (null after). */
+  total: number | null;
 }
 
 export const fetchPinAuditPage = async (
@@ -242,7 +172,7 @@ export const fetchPinAuditPage = async (
 ): Promise<PinAuditPage> => {
   const base = supabase
     .from(PIN_AUDIT_RELATION)
-    .select(withKeysetColumns(ROW_COLS, sort, TIEBREAK));
+    .select(withKeysetColumns(ROW_COLS, sort, TIEBREAK), cursor == null ? { count: 'exact' } : undefined);
   const scoped = applyPinAuditFilters(base as unknown as FilterBuilder, f);
   const keyed = applyKeyset(
     scoped as unknown as KeysetBuilder,
@@ -250,10 +180,11 @@ export const fetchPinAuditPage = async (
     cursor,
     TIEBREAK,
   ) as unknown as typeof base;
-  const { data } = await pgRead<PinAuditRow[] | null>(keyed.limit(PIN_AUDIT_PAGE_SIZE), { signal });
+  const { data, count } = await pgRead<PinAuditRow[] | null>(keyed.limit(PIN_AUDIT_PAGE_SIZE), { signal });
   const rows = data ?? [];
   return {
     rows,
+    total: cursor == null ? count : null,
     nextCursor: nextCursorFrom(
       rows as unknown as Record<string, unknown>[],
       sort,
