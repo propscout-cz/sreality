@@ -879,6 +879,61 @@ def test_detail_drain_routes_gone_and_error(monkeypatch):
     assert agg["errors"] == 1 and agg["listings_inactive"] == 1
 
 
+class _ParsedPortal(_FakePortal):
+    """An HTML-family portal: fetch_detail hands the runner a parsed ScrapedListing."""
+
+    def __init__(self, listings, **kw):
+        super().__init__(**kw)
+        self._listings = listings
+
+    def fetch_detail(self, client, native_id, ref):
+        return DrainItem(native_id=native_id, kind="ok", payload={
+            "listing": self._listings[native_id], "html": "<html/>", "status": 200,
+            "url": f"https://fake/{native_id}"})
+
+
+def _scraped(native_id, **fields):
+    from scraper.scraped_listing import ScrapedListing
+    return ScrapedListing(source="fake", source_id_native=native_id,
+                          source_url=f"https://fake/{native_id}", **fields)
+
+
+def test_a_content_free_page_is_a_failed_fetch_not_a_write(monkeypatch):
+    """ceskereality's "Ujišťujeme se, že nejste robot!" interstitial (2026-10-30) parsed to a
+    ScrapedListing with no price, no area, no params, no images and no description, and the
+    drain wrote it into 51 live ads: blanked content, `last_seen_at` bumped, the queue row
+    completed as written. Such a page is a failed attempt: no write, no completion, the
+    queue's attempts bump, and the portal's failure seam is told, exactly as a fetch error."""
+    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("robot", None, None, None)]])
+    p = _ParsedPortal({
+        "ok": _scraped("ok", price_czk=4_500_000, usable_area=72.0, description="Byt 3+kk",
+                       raw={"params": {"Stav": "dobrý"}, "image_urls": ["https://img/1.jpg"]}),
+        "robot": _scraped("robot", raw={"params": {}, "image_urls": [],
+                                        "title": "Ujišťujeme se, že nejste robot!"}),
+    })
+    rc, agg = portal_runner.run_detail_drain(p, None, False, detail_workers=1, detail_rate=1.0)
+    assert rc == 0
+    assert p.calls["write"] == [["ok"]]
+    assert cap["complete"] == [["ok"]]
+    assert cap["fail"] == [["robot"]] and p.calls["failure"] == ["robot"]
+    assert agg["errors"] == 1 and agg["listings_scraped_new"] == 1
+
+
+def test_content_free_is_keyed_on_the_payloads_shape_not_the_portal():
+    """Only a parsed ScrapedListing can be judged content-free; sreality's API payload has
+    another shape and passes untouched. One stated fact of the five keeps a page."""
+    empty = {"params": {}, "image_urls": []}
+    assert portal_runner.content_free({"listing": _scraped("a", raw=empty)}) is True
+    assert portal_runner.content_free({"listing": _scraped("a", raw={})}) is True
+    assert portal_runner.content_free("2557083724") is False            # sreality: a FetchResult id
+    assert portal_runner.content_free({"listing": object()}) is False
+    for stated in ({"price_czk": 1}, {"usable_area": 1.0}, {"estate_area": 800.0},
+                   {"description": "Prodej"}, {"raw": {"params": {"k": "v"}}},
+                   {"raw": {"image_urls": ["u"]}}):
+        kw = {"raw": empty} | stated
+        assert portal_runner.content_free({"listing": _scraped("a", **kw)}) is False, stated
+
+
 def test_detail_drain_respects_max_claims(monkeypatch):
     cap = _patch_queue(monkeypatch, [[("1", None, None, None), ("2", None, None, None)]])
     p = _FakePortal()
