@@ -35,7 +35,7 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    - `remine` (W4): each listing of the contract's portal re-mined under `--contract` (payload via
      `claims_intake.extract_listing`, latest stored page via `claims_intake.scan_rows` +
      `page_readers.load_bodies` + `extract_pages`; entries projected by `contracts.entries_of`; claims
-     read back by `resolve_db.claim_from_intake`), then `what_if.written`, W3's one write and one read
+     read back by `resolve_db.claim_from_intake`), then `what_if.remined_read`, W3's one write and one read
      in Python: a mined portal claim replaces its type's portal claim, a tombstone (`absent: retract`)
      removes it, silence keeps it, a type the new contract stops declaring is not read, the operator's
      claim of a type still outranks. Re-mined claims get ids above every stored one (`NEW_CLAIM_ID`), as

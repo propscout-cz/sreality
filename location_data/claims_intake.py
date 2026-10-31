@@ -1555,11 +1555,11 @@ def drain_unmined_bodies(
                 refusals[reason] = refusals.get(reason, 0) + count
                 stats["refusals"] += count
             if not dry_run and batch_id is not None:
-                phase.name = "claims insert / enqueue"
-                inserted, enqueued = write_claims(cur, result.claims)
+                phase.name = "claims write / enqueue"
+                written, enqueued = write_claims(cur, result.claims)
                 phase.name = "mined stamp"
                 stamp_mined_bodies(cur, stamps)
-                stats["claims_inserted"] += inserted
+                stats["written"] += written
                 stats["enqueued"] += enqueued
         return _BodyBatch(batch_cursor, len(window), len(candidates), len(stamps),
                           len(result.claims))
@@ -1602,10 +1602,10 @@ def drain_unmined_bodies(
         extracted = stats["bodies_extracted"] - extracted_before
         extract_seconds = stats["body_extract_seconds"] - extract_before
         LOG.info("INTAKE bodies-first batch window=%d eligible=%d mined=%d claims=%d "
-                 "inserted=%d through_id=%d in %.1fs extract=%.1fs %.1f bodies/s "
+                 "written=%d through_id=%d in %.1fs extract=%.1fs %.1f bodies/s "
                  "(workers=%d)",
                  batch.selected, batch.eligible, batch.mined, batch.claims,
-                 stats["claims_inserted"], after_body_id, last_seconds, extract_seconds,
+                 stats["written"], after_body_id, last_seconds, extract_seconds,
                  extracted / extract_seconds if extract_seconds > 0 else 0.0,
                  page_readers.pool_width(extracted))
         if dry_run:
@@ -1679,9 +1679,9 @@ def drain_readings(
                 stats["refusals"] += count
             if mined and not dry_run and batch_id is not None:
                 phase.name = "readings write / stamp / enqueue"
-                changed, enqueued = write_claims(cur, result.claims)
+                written, enqueued = write_claims(cur, result.claims)
                 cur.execute(_STAMP_READINGS_SQL, {"readings": Jsonb(mined)})
-                stats["claims_inserted"] += changed
+                stats["written"] += written
                 stats["enqueued"] += enqueued
         return len(records)
 
@@ -1691,7 +1691,7 @@ def drain_readings(
                                     refusals=refusals, budget=budget)
         last_seconds = time.monotonic() - batch_started
         LOG.info("INTAKE readings batch selected=%d mined=%d written=%d in %.1fs",
-                 selected, stats["readings_mined"], stats["claims_inserted"], last_seconds)
+                 selected, stats["readings_mined"], stats["written"], last_seconds)
         if selected < READINGS_PER_BATCH or dry_run:  # a dry run stamps nothing: same rows
             break
 
@@ -1708,7 +1708,7 @@ def mine_readings(
     pass): one scoped selector, the unchanged write, under a batch row of its own lane. The
     hourly run stays the backstop (retries, the delisted-once rows, a pass this one missed)."""
     stats: dict[str, Any] = dict.fromkeys(
-        ("readings_mined", "claims", "claims_inserted", "enqueued", "refusals",
+        ("readings_mined", "claims", "written", "enqueued", "refusals",
          "lock_retries"), 0)
     with guarded(conn, statement_timeout) as cur:
         cur.execute(_BATCH_INSERT_SQL, {
@@ -1728,12 +1728,12 @@ def mine_readings(
         with suppress(Exception):  # never mask the exception being reported
             with guarded(conn, _FAILURE_STAMP_TIMEOUT_S) as cur:
                 cur.execute(_BATCH_FINISH_SQL, {
-                    **finish, "outcome": "failed", "row_count": stats["claims_inserted"],
+                    **finish, "outcome": "failed", "row_count": stats["written"],
                     "note": f"{type(exc).__name__}: {exc}"[:500]})
         raise
     with guarded(conn, statement_timeout) as cur:
         cur.execute(_BATCH_FINISH_SQL, {**finish, "outcome": "ok",
-                                        "row_count": stats["claims_inserted"], "note": None})
+                                        "row_count": stats["written"], "note": None})
     return stats
 
 
@@ -1847,7 +1847,7 @@ def run(
                                        DEFAULT_MAX_CLAIM_VALUE_BYTES)
     stats: dict[str, Any] = {
         "listings": 0, "claims": 0, "claims_payload": 0, "claims_page": 0,
-        "claims_inserted": 0, "enqueued": 0, "refusals": 0,
+        "written": 0, "enqueued": 0, "refusals": 0,
         "bodies_eligible": 0, "bodies_fetched": 0, "bodies_from_r2": 0,
         "bodies_mined": 0, "bodies_extracted": 0, "body_fetch_seconds": 0.0,
         "body_extract_seconds": 0.0, "bodies_batches": 0,
@@ -1943,11 +1943,11 @@ def run(
                     refusals[reason] = refusals.get(reason, 0) + count
                     stats["refusals"] += count
                 if not dry_run and batch_id is not None:
-                    phase.name = "claims insert / enqueue"
-                    inserted, enqueued = write_claims(cur, result.claims)
+                    phase.name = "claims write / enqueue"
+                    written, enqueued = write_claims(cur, result.claims)
                     phase.name = "mined stamp"
                     stamp_mined_bodies(cur, stamps)
-                    stats["claims_inserted"] += inserted
+                    stats["written"] += written
                     stats["enqueued"] += enqueued
             return batch_cursor
 
@@ -1983,13 +1983,13 @@ def run(
                     break
                 batch_id = _finish_and_open_full_batch(
                     conn, batch_id=batch_id, stats=stats,
-                    row_count=stats["claims_inserted"] - row_count_base,
+                    row_count=stats["written"] - row_count_base,
                     cursor_after_id=after_id, source=source, contract_id=contract_id,
                     note=note, statement_timeout=statement_timeout, lane=lane)
                 after_id, scan_mode = handoff, "full"
                 stats["full_walk_continued"] = True
                 stats["full_walk_cursor"] = handoff
-                row_count_base = stats["claims_inserted"]
+                row_count_base = stats["written"]
                 continue
             # ADVANCED ONLY HERE, after the transaction closed. The cursor that gets
             # stamped on the batch row — including by the failure path below — is the last
@@ -1997,11 +1997,11 @@ def run(
             # incremental run safe to resume from.
             after_id = batch_cursor
             last_seconds = time.monotonic() - batch_started
-            LOG.info("INTAKE progress listings=%d claims=%d payload=%d page=%d inserted=%d "
+            LOG.info("INTAKE progress listings=%d claims=%d payload=%d page=%d written=%d "
                      "bodies eligible=%d fetched=%d from_r2=%d mined=%d in %.1fs "
                      "extract=%.1fs refusals=%d through_id=%d batch=%.1fs",
                      stats["listings"], stats["claims"], stats["claims_payload"],
-                     stats["claims_page"], stats["claims_inserted"],
+                     stats["claims_page"], stats["written"],
                      stats["bodies_eligible"], stats["bodies_fetched"],
                      stats["bodies_from_r2"], stats["bodies_mined"],
                      stats["body_fetch_seconds"], stats["body_extract_seconds"],
@@ -2019,7 +2019,7 @@ def run(
                 with guarded(conn, _FAILURE_STAMP_TIMEOUT_S) as cur:
                     cur.execute(_BATCH_FINISH_SQL, {
                         "batch_id": batch_id, "outcome": "failed",
-                        "row_count": stats["claims_inserted"] - row_count_base,
+                        "row_count": stats["written"] - row_count_base,
                         "cursor_after_id": after_id,
                         **_bodies_cursor_stamp(stats),
                         "note": f"{type(exc).__name__}: {exc}"[:500],
@@ -2044,7 +2044,7 @@ def run(
             cur.execute(_BATCH_FINISH_SQL, {
                 "batch_id": batch_id,
                 "outcome": outcome,
-                "row_count": stats["claims_inserted"] - row_count_base,
+                "row_count": stats["written"] - row_count_base,
                 "cursor_after_id": after_id,
                 **_bodies_cursor_stamp(stats),
                 "note": f"scan_mode={scan_mode} listings={stats['listings']} "
@@ -2069,12 +2069,12 @@ def run(
     # ONE LINE THE OPERATOR CAN READ A RUN OFF. The per-batch progress lines say what the
     # run was doing; this says what it achieved and what is left.
     LOG.info("INTAKE summary mode=%s source=%s outcome=%s listings=%d payload_claims=%d "
-             "claims_inserted=%d bodies_mined=%d readings_mined=%d "
+             "written=%d bodies_mined=%d readings_mined=%d "
              "backlog_remaining=%s refusals=%s "
              "lock_retries=%d bodies=%.0fs (fetch %.0fs extract %.0fs) payload=%.0fs "
              "cursor=%d",
              mode, source or "*", outcome, stats["listings"], stats["claims_payload"],
-             stats["claims_inserted"], stats["bodies_mined"], stats["readings_mined"],
+             stats["written"], stats["bodies_mined"], stats["readings_mined"],
              stats["bodies_backlog_remaining"]
              if stats["bodies_backlog_remaining"] is not None else "?",
              ",".join(f"{r}={c}" for r, c in stats["refusal_reasons"].items()) or "none",

@@ -74,7 +74,7 @@ def _reading(conn: Any, listing_id: int, model: str, **slots: Any) -> int:
 
 
 def _mine(conn: Any) -> dict[str, Any]:
-    stats: dict[str, Any] = dict.fromkeys(("readings_mined", "claims", "claims_inserted",
+    stats: dict[str, Any] = dict.fromkeys(("readings_mined", "claims", "written",
                                            "enqueued", "refusals"), 0)
     ci.drain_readings(conn, source="bazos", entries_by_source=ci.load_entries(conn),
                       statement_timeout=20, budget=ci._Budget(None), batch_id=1,
@@ -118,7 +118,7 @@ def test_the_current_text_decides_and_a_reading_that_names_nothing_keeps_the_val
     _listing(conn, B, listing)                                 # A -> B, B not read yet:
     assert _mine(conn)["readings_mined"] == 0                  # no reading, the claims stay
     rb = _reading(conn, listing, "m1", town=TOWN, street="Palackého")
-    assert _mine(conn)["claims_inserted"] == 1                 # the street changed, the town not
+    assert _mine(conn)["written"] == 1                 # the street changed, the town not
     assert _claims(conn, listing, "street_name") == {"Palackého"}
     assert _stamps(conn, listing) == {ra: "bazos@10~", rb: "bazos@10"}
 
@@ -155,7 +155,7 @@ def test_a_contract_bump_re_mines_the_current_reading_and_settles_a_delisted_unr
     _mine(conn)
     conn.execute("UPDATE portal_contracts SET version = 11 WHERE source = 'bazos' AND is_active")
     stats = _mine(conn)
-    assert (stats["readings_mined"], stats["claims_inserted"]) == (1, 0)   # restated: no write
+    assert (stats["readings_mined"], stats["written"]) == (1, 0)   # restated: no write
     assert _stamps(conn, listing) == {older: None, current: "bazos@11"}
     assert _claims(conn, listing, "street_name") == {"Husova"}
     _listing(conn, B, listing, active=False)             # edited, then delisted before its read:
@@ -175,7 +175,7 @@ def test_a_scoped_pass_mines_only_the_listings_the_text_lane_just_read(conn):
     for listing in (read, waiting):
         _reading(conn, listing, "m1", town=TOWN, street="Husova")
     stats = ci.mine_readings(conn, [read], max_seconds=30, statement_timeout=20)
-    assert (stats["readings_mined"], stats["claims_inserted"]) == (1, 2)
+    assert (stats["readings_mined"], stats["written"]) == (1, 2)
     assert _claims(conn, read, "street_name") == {"Husova"} and not _claims(conn, waiting)
     assert conn.execute("SELECT outcome FROM location_claim_batches WHERE lane = %s ORDER BY id"
                         " DESC LIMIT 1", (ci.READINGS_FAST_LANE,)).fetchone() == ("ok",)

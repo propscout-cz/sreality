@@ -610,7 +610,7 @@ def test_mine_readings_scopes_the_drain_to_the_ids_under_a_batch_of_its_own_lane
 
     def drain(c, **kwargs):
         seen.update(kwargs)
-        kwargs["stats"].update(readings_mined=2, claims_inserted=5)
+        kwargs["stats"].update(readings_mined=2, written=5)
 
     monkeypatch.setattr(claims_intake, "drain_readings", drain)
     stats = claims_intake.mine_readings(conn, [7, 3], max_seconds=30, statement_timeout=60)

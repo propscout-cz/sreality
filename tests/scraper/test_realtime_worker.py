@@ -1731,7 +1731,7 @@ def test_location_resolve_pass_returns_early_when_stopping(monkeypatch):
 # ------------------------------------- location_intake_fast (W7-a): one lane, two schedules
 
 _FAST_STATS = {
-    "listings": 12, "claims_inserted": 34, "enqueued": 7,
+    "listings": 12, "written": 34, "enqueued": 7,
     "payload_seconds": 1.234, "cursor_after_id": 987654,
     "bodies_mined": 5, "bodies_seconds": 2.0, "bodies_pass_complete": True,
     "bodies_cursor_after_id": 4242,
@@ -1878,7 +1878,7 @@ def test_location_intake_fast_sync_runs_the_shared_scan_on_its_own_lane(
     assert schedule.pool is rw._intake_fast_pool()
     # The heartbeat's `last`: what the tick achieved and where it left BOTH keysets.
     assert out == {
-        "ran": True, "listings": 12, "claims_inserted": 34, "enqueued": 7,
+        "ran": True, "listings": 12, "written": 34, "enqueued": 7,
         "bodies_mined": 5, "bodies_complete": True, "seconds": 3.2,
         "cursor": 987654, "bodies_cursor": 4242,
     }
@@ -2503,7 +2503,7 @@ def _text_pass_that_read(monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> lis
 
     def mine(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
         handed.append((list(listing_ids), kwargs))
-        return {"readings_mined": len(listing_ids), "claims_inserted": 3}
+        return {"readings_mined": len(listing_ids), "written": 3}
 
     monkeypatch.setattr(claims_intake, "mine_readings", mine)
     return handed

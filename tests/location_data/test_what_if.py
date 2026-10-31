@@ -161,7 +161,7 @@ def test_a_remine_writes_as_the_one_write_and_reads_as_the_one_read():
              mm.claim(new + 2, "psc", source="realitymix", value_text="26701",
                       licence_class="odbl")]
     declared = frozenset({"coordinate", "obec_name", "precision_declaration", "psc"})
-    out = what_if.written(today, mined, {"precision_declaration"}, declared)
+    out = what_if.remined_read(today, mined, {"precision_declaration"}, declared)
     assert [c.id for c in out] == [2, 6, new]
 
 

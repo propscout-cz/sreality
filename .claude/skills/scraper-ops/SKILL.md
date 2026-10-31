@@ -354,7 +354,7 @@ Per-lane notes:
   `LOCATION_INTAKE_FAST_{ENABLED,INTERVAL_S,LAG_S,BUDGET_S}` (`1`/60/120/45), `ENABLED=0` idles.
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
-  claims_inserted, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
+  written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
 - **Location-refetch lane** (W8) — once a day (`LOCATION_REFETCH_INTERVAL_S` 86400, first tick 5 min
   after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)

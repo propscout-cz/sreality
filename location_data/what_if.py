@@ -125,8 +125,8 @@ def purge(conn: psycopg.Connection, claims: dict[int, list[Claim]]) -> dict[int,
             for listing_id, rows_ in out.items()}
 
 
-def written(today: list[Claim], mined: list[Claim], retracted: set[str],
-            declared: frozenset[str]) -> list[Claim]:
+def remined_read(today: list[Claim], mined: list[Claim], retracted: set[str],
+                 declared: frozenset[str]) -> list[Claim]:
     """W3's one write then its read, for one listing re-mined under `declared`: a mined portal
     claim replaces its type's portal claim, a tombstone removes it, silence keeps it; the
     operator's claim of a type still outranks."""
@@ -171,7 +171,7 @@ def remine(contract: contracts.PortalContract, store: page_readers.BodyStore,
                             outcome if outcome is not None else "body not fetched")
             new = [claim_from_intake(claim, NEW_CLAIM_ID + n)
                    for n, claim in enumerate(c for c in mined if not c.retract)]
-            out[scan.row.listing_id] = written(
+            out[scan.row.listing_id] = remined_read(
                 claims[scan.row.listing_id], new, {c.claim_type for c in mined if c.retract},
                 declared)
         LOG.info("WHAT-IF re-mined %d listings, %d with a stored page", len(scans), len(pages))
