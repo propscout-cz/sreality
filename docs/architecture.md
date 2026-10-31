@@ -1262,7 +1262,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
   build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
-  register one. The file names the two custom domains that exist, so removing one of those also takes it out of the
+  register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`, the landing page), so removing one of those also takes it out of the
   file (a plan errors on a declared domain Railway lacks). `REPO` must equal the services' GitHub source, or the plan
   shows a source change.
 - **What a plan cannot see:** with one replica in one region, a region change; and a custom domain's port. Both are
