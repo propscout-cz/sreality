@@ -24,6 +24,7 @@ import Notifications from './pages/Notifications';
 // session never downloads them.
 const Health = lazyChunk(() => import('./pages/Health'));
 const Costs = lazyChunk(() => import('./pages/Costs'));
+const Signups = lazyChunk(() => import('./pages/Signups'));
 const Scrapers = lazyChunk(() => import('./pages/Scrapers'));
 const Settings = lazyChunk(() => import('./pages/Settings'));
 const Datasets = lazyChunk(() => import('./pages/Datasets'));
@@ -141,6 +142,7 @@ export const routes: RouteObject[] = [
       { path: ROUTES.listingLegacy.childPath, element: <AdvertRedirect />, handle: { title: 'Property' } },
       { path: ROUTES.health.childPath, element: <AdminPage><Health /></AdminPage>, handle: { title: 'Health' } },
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
+      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
       { path: 'estimate', element: <Navigate to={ROUTES.estimations.build()} replace /> },
       { path: ROUTES.estimations.childPath, element: <EstimationList />, handle: { title: 'Estimations' } },
       {

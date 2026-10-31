@@ -676,6 +676,8 @@ rules. Identify which one a task belongs to before you start.
   keeps any 200 HTML page as its offline shell. Its waitlist form posts cross-origin to the API's open
   `POST /waitlist` (honeypot, rate limit, a 303 back to the page; `waitlist_signups`, mig 700), so it needs no CORS and
   works without JavaScript; the consent wording it shows is pinned to `api/waitlist.py` CONSENT_TEXTS by a test.
+  Admins read the list on the SPA's Sign-ups page (`pages/Signups.tsx`, Admin menu) through `GET /admin/waitlist`
+  (`require_admin`; the table stays service-role only).
   Marketing cookies are opt-in: the Meta Pixel is not fetched before "Přijmout", and with `META_PIXEL_ID` empty
   (`src/landing/consent.ts`) there is no tracker and no bar. Its mockups are redraws with invented listings: never a
   portal photo, a broker, an address or a person.
