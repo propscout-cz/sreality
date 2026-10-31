@@ -19,13 +19,16 @@
  * had already drifted out of sync once on which columns they selected.)
  *
  * Pure patch builders for useOptimisticWrite, which holds the same two caches
- * it patches and rolls them back from `onSettled` (lib/usePipelineCard).
+ * it patches and rolls them back from `onSettled` (lib/usePipelineCard). What a
+ * card write re-reads is lib/curationSync's: the tables it writes,
+ * `property_pipeline` and `property_dismissals` (a card at a live stage lifts the
+ * caller's dismissal, api/dismissals.py).
  */
 
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 
 import { actingKey } from '@/lib/acting';
-import { dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
+import { pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
@@ -79,24 +82,6 @@ export function dropCard(property_id: number, actAs: string | null = null): Cach
       prev?.filter((c) => c.property_id !== property_id),
     ),
   ];
-}
-
-/* Re-read the truth after any write, successful or not. Dismissals are re-read
- * too: adding a card lifts the caller's dismissal. */
-export const PIPELINE_REVALIDATE: readonly QueryKey[] = [
-  pipelineKeys.members,
-  pipelineKeys.board,
-  dismissalKeys.all,
-];
-
-/* The same list under an acting identity (lib/acting): the owner's entries. */
-export const pipelineRevalidate = (actAs: string | null): readonly QueryKey[] =>
-  actAs ? PIPELINE_REVALIDATE.map((k) => actingKey(actAs, k)) : PIPELINE_REVALIDATE;
-
-/* The same re-read for a write that is not a card write: a merge or split moves
- * cards between properties (the Browse merge, lib/mergedAdverts.refreshAfterSplit). */
-export function revalidatePipeline(qc: QueryClient): void {
-  for (const queryKey of PIPELINE_REVALIDATE) void qc.invalidateQueries({ queryKey });
 }
 
 /* The stage a write lands on, read from the shared stage list already in cache.

@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createCollection, deleteCollection } from '@/lib/api';
-import { revalidateCollections, useCollections } from '@/lib/collectionCache';
+import { useCollections } from '@/lib/collectionCache';
+import { revalidateTables } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import { BellGlyph } from '@/components/CollectionSaveMenu';
 import { Field } from '@/components/controls';
@@ -54,7 +55,7 @@ function CollectionsDesktop() {
         <div className="mt-3">
           <AddCollectionCard
             existing={mine.map((c) => c.name.toLowerCase())}
-            onCreated={() => revalidateCollections(qc)}
+            onCreated={() => void revalidateTables(qc, ['collections'])}
           />
         </div>
         {!listQ.error && shared.length > 0 && <SharedWithMe items={shared} />}
@@ -306,7 +307,8 @@ function CollectionRow({ c }: { c: Collection }) {
 
   const del = useMutation({
     mutationFn: () => deleteCollection(c.id),
-    onSuccess: () => revalidateCollections(qc),
+    // Migration 202 cascades its memberships away.
+    onSuccess: () => void revalidateTables(qc, ['collections', 'collection_properties']),
   });
 
   return (

@@ -55,8 +55,9 @@ async function mergeAnswered(status: number, body: unknown) {
   const { curationKeys } = await import('./queries');
   const qc = new QueryClient({ mutationCache: createMutationCache() });
   qc.setQueryData(curationKeys.noteCounts, {});
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
-  const noteCountsStale = () => qc.getQueryState(curationKeys.noteCounts)?.isInvalidated;
+  const { isOwed } = await import('./revalidate');
+  /* Owed: re-read at the note marks' next mount (lib/revalidate). */
+  const noteCountsStale = () => isOwed(qc, curationKeys.noteCounts);
   const onMerged = vi.fn();
   const wrapper = ({ children }: { children: ReactNode }) => (
     <MemoryRouter>
@@ -65,11 +66,11 @@ async function mergeAnswered(status: number, body: unknown) {
   );
   const { result } = renderHook(() => useMergeProperties(onMerged), { wrapper });
   const merge = (letters: Letters = { 10: 'A', 20: 'A' }) => result.current.mutateAsync(letters);
-  return { merge, sent, invalidate, noteCountsStale, onMerged };
+  return { merge, sent, noteCountsStale, onMerged };
 }
 
 it('posts the statement, toasts the one receipt, refreshes what the merge moved and closes merge mode', async () => {
-  const { merge, sent, invalidate, noteCountsStale, onMerged } = await mergeAnswered(200, {
+  const { merge, sent, noteCountsStale, onMerged } = await mergeAnswered(200, {
     letters: { A: letter(10, 20, { carried: { notes: 2, pipeline: null, collections: [], tags: [] } }) },
   });
   await act(() => merge());
@@ -77,7 +78,6 @@ it('posts the statement, toasts the one receipt, refreshes what the merge moved 
   const [[kind, message, ttl, action]] = vi.mocked(toast.pushToast).mock.calls;
   expect([kind, message, ttl, action?.label]).toEqual(
     ['ok', 'Sloučeno do nemovitosti #10. Přesunuto: 2 poznámky.', 0, 'Otevřít #10']);
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['curation'] });
   expect(noteCountsStale()).toBe(true);
   expect(onMerged).toHaveBeenCalledTimes(1);
 });

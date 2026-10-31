@@ -21,6 +21,7 @@ import { PHOTO_DARK } from '@/components/phone/CardPhotoStrip';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { deleteAttachment, fetchAttachmentBlob, listAttachments, uploadAttachment } from '@/lib/api';
 import { attachmentProblem, isPreviewableImage } from '@/lib/attachments';
+import { revalidateTables } from '@/lib/curationSync';
 import { fmtShortDate } from '@/lib/format';
 import { curationKeys } from '@/lib/queries';
 import { canShareFiles, shareFiles } from '@/lib/shareFiles';
@@ -64,7 +65,6 @@ export default function PropertyPhotos({
   const qc = useQueryClient();
   const actAs = useActAs();
   /* Under the notes' key: a note's write re-reads the photos, and a photo's write the notes. */
-  const notesKey = actingKey(actAs, curationKeys.propertyNotes(property_id));
   const filesQ = useQuery({
     queryKey: actingKey(actAs, curationKeys.propertyFiles(property_id)),
     queryFn: () => listAttachments(property_id, ...actOpts(actAs)),
@@ -89,7 +89,7 @@ export default function PropertyPhotos({
   const originals = useOriginals(property_id, actAs);
   const roll = useRef<HTMLUListElement>(null);
 
-  const refresh = () => qc.invalidateQueries({ queryKey: notesKey });
+  const refresh = () => revalidateTables(qc, ['property_attachments'], actAs);
 
   const add = async (files: File[]) => {
     if (progress != null) return; // one batch at a time (a drop while uploading)

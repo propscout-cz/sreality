@@ -1,35 +1,22 @@
-/* The single source of truth for "which caches a tag write must refresh" — the
- * tag analogue of lib/collectionCache, for the same reason: the key list was
- * hand-typed per writer and drifted. The rename/recolour/delete popover
- * invalidated a `listing-tags` key that stopped existing when migration 202
- * re-keyed curation to properties, so a deleted tag stayed on the property page
- * until the query went stale on its own. Import and call this instead. */
+/* A landed tag attach / detach. Which reads any other tag write moves is
+ * lib/curationSync's map (`revalidateTables(qc, ['tags'], actAs)`; a delete also
+ * writes `property_tags`, migration 202's cascade). The hand-typed list that
+ * lived here once re-read a `listing-tags` key migration 202 had retired, so a
+ * deleted tag stayed on the property page until the query went stale. */
 
 import type { QueryClient } from '@tanstack/react-query';
 
-import { actingKey } from '@/lib/acting';
 import { settleMemberWrite } from '@/lib/curationSettle';
-import { curationKeys } from '@/lib/queries';
-
-/** Re-read tags after ANY tag write: an attach / detach moves the member map,
- * a create / rename / recolour / delete changes the index (a delete cascades
- * its memberships away too, migration 202), and a merge re-points
- * `property_tags` onto the survivor (rule #18). `actAs`: the owner's entries
- * (lib/acting), never the caller's. */
-export function revalidateTags(qc: QueryClient, actAs: string | null = null): void {
-  qc.invalidateQueries({ queryKey: actingKey(actAs, curationKeys.propertyTagMembers) });
-  qc.invalidateQueries({ queryKey: actingKey(actAs, curationKeys.tags) });
-}
+import { tableReads } from '@/lib/curationSync';
 
 /** One tag attached to / detached from one property, landed: settled in the
- * Browse reads (lib/curationSettle, ruling 9), then the tag reads re-read. */
+ * Browse reads (lib/curationSettle, ruling 9) and the member map, with the tag
+ * reads (`property_tags`) owed in the same hold. `actAs`: the owner's entries
+ * (lib/acting), never the caller's. */
 export const settleTagWrite = (
   qc: QueryClient,
   property_id: number,
   tag_id: number,
   member: boolean,
   actAs: string | null = null,
-) =>
-  settleMemberWrite(qc, 'tags', property_id, tag_id, member, actAs).then(() =>
-    revalidateTags(qc, actAs),
-  );
+): void => settleMemberWrite(qc, 'tags', property_id, tag_id, member, actAs, tableReads(['property_tags'], actAs));

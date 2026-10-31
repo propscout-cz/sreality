@@ -5,7 +5,7 @@
  *
  * Reads and writes are the desktop page's own: `useCollections`,
  * `createCollection` (monitoring off — it is switched on the collection's page, Q11, P31),
- * then `revalidateCollections` so every collection glyph on
+ * then `revalidateTables(qc, ['collections'])` so every collection glyph on
  * every card hears about the new list. Rename, delete, monitoring and sharing
  * have no control here on purpose; the footer says where they live. Collections
  * someone shared with me follow under "Sdílené se mnou", read-only. */
@@ -19,7 +19,8 @@ import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { BellIcon, ChevronIcon, PlusIcon } from '@/components/phone/phoneIcons';
 import { createCollection } from '@/lib/api';
-import { revalidateCollections, useCollections } from '@/lib/collectionCache';
+import { useCollections } from '@/lib/collectionCache';
+import { revalidateTables } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import { dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import { czPlural, fmtCount } from '@/lib/format';
@@ -198,7 +199,7 @@ function NewCollectionSheet({ existing, onClose }: { existing: string[]; onClose
   const create = useMutation({
     mutationFn: (n: string) => createCollection({ name: n, description: null, monitoring_enabled: false }),
     onSuccess: (c) => {
-      revalidateCollections(qc);
+      void revalidateTables(qc, ['collections']);
       pushToast('ok', `Sbírka „${c.name}“ je založená.`);
       onClose();
     },

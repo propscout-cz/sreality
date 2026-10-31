@@ -3,7 +3,7 @@
  * that property — a row it no longer belongs to drops IN PLACE (no page is
  * re-read), the exact count drops one, map and stats re-read. */
 
-import { QueryClient, QueryClientProvider, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -13,6 +13,10 @@ import { browseReads, settleMemberWrite, settlePatches, settleRereads, type Cura
 import { DEFAULT_FILTERS, type ListingFilters } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, type PipelineMembers } from './queries';
 import type { SetScope } from './setScope';
+import { placeCard } from './pipelineCache';
+import { isOwed, revalidate } from './revalidate';
+import type { PipelineStage } from './types';
+import { useOptimisticWrite } from './useOptimisticWrite';
 import { useInfiniteList } from './useInfiniteList';
 
 type Page = { rows: { property_id: number }[]; fetched?: number };
@@ -52,6 +56,13 @@ function settle(qc: QueryClient, lens: CurationLens, paint: () => void) {
 
 const invalidated = (spy: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) =>
   spy.mock.calls.map(([arg]) => (arg as { queryKey: QueryKey }).queryKey);
+
+/* The Browse roots `seed` caches, and which of them a cohort owes a read on. */
+const SEEDED_ROOTS = ['cards', 'map', 'stats', 'browse-count'];
+const owedRoots = (qc: QueryClient, f: ListingFilters) =>
+  SEEDED_ROOTS.filter((root) =>
+    qc.getQueryCache().findAll({ queryKey: [root, f] }).some((q) => isOwed(qc, q.queryKey)),
+  );
 
 describe('the settle', () => {
   it('drops a funnelled property from every loaded page of a "Mimo pipeline" cohort, in place', () => {
@@ -137,43 +148,58 @@ describe('the settle', () => {
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[3]]);
   });
 
-  it('cannot judge without the member map: that cohort re-reads whole, nothing drops', async () => {
+  it('cannot judge without the member map: that cohort re-reads whole, nothing drops', () => {
     const qc = new QueryClient();
     const f = filters({ collections: scope({ set: 'out' }) });
     seed(qc, f, [[P]]);
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleMemberWrite(qc, 'collections', P, 4, true);
+    settleMemberWrite(qc, 'collections', P, 4, true);
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[P]]);
-    expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
+    expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS);
   });
 
-  it('a property that newly matches a cohort it is not loaded in re-reads that cohort', async () => {
+  it('a property that newly matches a cohort it is not loaded in re-reads that cohort', () => {
     const qc = new QueryClient();
     const f = filters({ collections: scope({ in: [4] }) });
     seed(qc, f, [[1, 2]]);
     qc.setQueryData(curationKeys.propertyCollectionMembers, new Map<number, number[]>());
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleMemberWrite(qc, 'collections', P, 4, true);
+    settleMemberWrite(qc, 'collections', P, 4, true);
 
-    expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
+    expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS);
   });
 
-  it('a stale member map never drops a row the server shows: that cohort re-reads whole', async () => {
+  it('a stale member map never drops a row the server shows: that cohort re-reads whole', () => {
     const qc = new QueryClient();
     const f = filters({ tags: scope({ in: [1, 2] }) });
     seed(qc, f, [[P, 3]]);
-    // The server shows P (tags 1 AND 2); this map missed tag 2, attached elsewhere.
+    // The server shows P (tags 1 AND 2); this map missed tag 2, attached elsewhere,
+    // and its re-read is still owed: the MAP is the stale side.
     qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]));
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    void revalidate(qc, [curationKeys.propertyTagMembers]);
 
-    await settleMemberWrite(qc, 'tags', P, 3, true);
+    settleMemberWrite(qc, 'tags', P, 3, true);
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[P, 3]]);
     expect(qc.getQueryData(browseKeys.count(f))).toBe(50);
-    expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
+    expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS);
+  });
+
+  /* The same "no" with no member read owed: the map is current, so the LIST is
+   * the stale side — a change made elsewhere it follows only at its next mount
+   * (ruling Q3(a)). A click that leaves the row out drops it like any other. */
+  it('a list shown against a current map is the stale side: the row drops in place, the aggregates re-read', () => {
+    const qc = new QueryClient();
+    const f = filters({ tags: scope({ in: [1, 2] }) });
+    seed(qc, f, [[P, 3]]);
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]));
+
+    settleMemberWrite(qc, 'tags', P, 3, true);
+
+    expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[3]]);
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+    expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS.filter((root) => root !== 'cards'));
   });
 
   it('a page that lost a row keeps the length it was read with, so the list pages on', async () => {
@@ -274,3 +300,66 @@ describe('the member map', () => {
     expect(qc.getQueryData(curationKeys.propertyTagMembers)).toEqual(new Map());
   });
 });
+
+/* A change made elsewhere re-reads a cohort's count while a click on that cohort
+ * is in flight: neither that read nor one started during the write may land
+ * over the click's patch with a pre-write count, and the count is the server's
+ * once the write has settled (the scheduler's holds, lib/revalidate). */
+describe('a remote re-read during a click', () => {
+  it('never lands over the settle, and the count is right after it', async () => {
+    const f = filters({ pipeline: scope({ set: 'out' }) });
+    const ENTRY: PipelineStage = {
+      id: 5, key: 'review', label: '5', position: 1, color: 'copper', is_terminal: false, is_entry: true, code: '5',
+    };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    seed(qc, f, [[P, 1]], 50);
+    qc.setQueryData(pipelineKeys.members, members([]));
+    const server = { count: 50 };
+    const remote = [deferred<number>(), deferred<number>()];
+    const count = vi
+      .fn()
+      .mockReturnValueOnce(remote[0].promise)
+      .mockReturnValueOnce(remote[1].promise)
+      .mockImplementation(async () => server.count);
+    const write = deferred<string>();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    const { result } = renderHook(
+      () => {
+        useQuery({ queryKey: browseKeys.count(f), queryFn: count, staleTime: Infinity });
+        return useOptimisticWrite({
+          mutationKey: ['write', 'pipeline', 'add'],
+          mutationFn: (_: number) => write.promise,
+          patch: (id, c) => [...placeCard(id, ENTRY), ...settlePatches(c, id, 'pipeline')],
+          revalidate: (id, failed, c) => settleRereads(c, id, 'pipeline', failed),
+        });
+      },
+      { wrapper },
+    );
+
+    void revalidate(qc, [browseKeys.count(f)]); // the remote re-read, in flight at the click
+    act(() => result.current.mutate(P));
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+    void qc.invalidateQueries({ queryKey: browseKeys.count(f) }); // another, during the write
+    await act(async () => {
+      remote[0].resolve(50);
+      remote[1].resolve(50);
+    });
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+
+    server.count = 49;
+    await act(async () => write.resolve('ok'));
+    await waitFor(() => expect(count).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(qc.getQueryState(browseKeys.count(f))?.fetchStatus).toBe('idle'));
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+    expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1]]);
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}

@@ -166,6 +166,20 @@ export default [
             'Do not redefine Field — import it from components/controls.tsx. The shared one names groups correctly (role="group" + aria-labelledby).',
         },
         {
+          // Curation re-reads go through ONE map and ONE scheduler
+          // (lib/curationSync `revalidateTables`, lib/revalidate `revalidate`):
+          // an owed read stays owed until a read issued after the change lands,
+          // and a key a pending write holds waits for it. A hand-typed
+          // invalidate over a curation key skips both — the drift that left
+          // StageManager's list without the members map. Syntactic, like the
+          // bans above: a key built elsewhere and passed in still slips
+          // through; curationSync.test.ts's key census is the gate.
+          selector:
+            "CallExpression[callee.property.name=/^(invalidateQueries|refetchQueries|resetQueries)$/] MemberExpression[object.name=/^(pipelineKeys|curationKeys|dismissalKeys|pipelineShareKeys)$/]",
+          message:
+            'Re-read curation through revalidateTables (lib/curationSync) or revalidate (lib/revalidate), never invalidateQueries / refetchQueries / resetQueries over a curation key.',
+        },
+        {
           // Thirteen hand-rolled modals shipped 12 Escape listeners (split 8
           // window / 4 document — which is why a nested pair double-closed), 5
           // scroll-lock copies and 6 drifted close glyphs; 6 of the 12 put the

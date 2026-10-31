@@ -3,12 +3,21 @@
  * toggles, the training-set marks, the preset reorder and the exam-review
  * edits all go through this hook.
  *
- *   hold  →  patch  →  write  →  (failed? roll back)  →  revalidate
+ *   hold  →  patch  →  write  →  (failed? roll back)  →  revalidate + release
  *
- * HOLD: a cache patch first cancels the in-flight reads of the queries it is
- * about to change — a read that lands after the patch would otherwise undo it —
- * and snapshots them. The filters held and the filters written are the same
- * list, so the two cannot drift and no site can forget the cancel.
+ * HOLD (lib/revalidate `holdReads`): inside the click, with no await, the
+ * queries a patch changes are held — their in-flight reads cancelled and owed,
+ * any read that starts on them while the write is in flight cancelled and owed
+ * too — and the patch is painted through the scheduler's ledger. The filters
+ * held and the filters written are the same list, so the two cannot drift and
+ * no site can forget the cancel. Overlapping writes compose: a rollback drops
+ * its own patch and repaints the rest, and a settle's re-read of a key another
+ * write still holds waits for that write (TkDodo's "invalidate only when the
+ * last one settles", enforced by the cache).
+ *
+ * REVALIDATE + RELEASE in one batch: the settle owes its keys and lets its hold
+ * go in the same call, so a key both parked by the hold and named by the settle
+ * is read once.
  *
  * ROLLBACK FROM `onSettled`, NEVER `onError`. React Query's global
  * MutationCache.onError (lib/mutationCache) is the app's only "the write
@@ -51,7 +60,14 @@ import {
   type UseMutationResult,
 } from '@tanstack/react-query';
 
+import { holdReads, revalidate as owe, type Hold, type Revalidation } from '@/lib/revalidate';
+
 export type Rollback = () => void;
+
+/* What onMutate hands onSettled: the hold of a cache patch, or the undo of a React-state paint. */
+export type WriteContext = { hold: Hold; rollback?: undefined } | { rollback: Rollback; hold?: undefined };
+
+type ReadList = readonly (Revalidation | QueryKey)[];
 
 /** One optimistic cache write: which queries (prefix unless `exact`) and the value each holds while in flight. */
 export interface CachePatch {
@@ -75,8 +91,8 @@ export interface OptimisticWrite<V, R> {
   /** CachePatch[]: the hook holds those queries, then writes them.
    *  Rollback: a store the query cache can't see (React state) was already painted; this undoes it. */
   patch?: (vars: V, qc: QueryClient) => readonly CachePatch[] | Rollback;
-  /** Prefixes re-read after every settle; `failed` lets a site widen the re-read on failure. */
-  revalidate?: readonly QueryKey[] | ((vars: V, failed: boolean, qc: QueryClient) => readonly QueryKey[]);
+  /** Reads owed after every settle (prefixes unless `exact`); `failed` lets a site widen them on failure. */
+  revalidate?: ReadList | ((vars: V, failed: boolean, qc: QueryClient) => ReadList);
   /** Pure function of vars; what `pendingFor` is asked about. */
   pendingKey?: (vars: V) => PendingKey;
   onSuccess?: (data: R, vars: V) => void;
@@ -85,17 +101,9 @@ export interface OptimisticWrite<V, R> {
   onError?: (error: Error, vars: V) => void;
 }
 
-export type OptimisticWriteResult<V, R> = UseMutationResult<R, Error, V, Rollback> & {
+export type OptimisticWriteResult<V, R> = UseMutationResult<R, Error, V, WriteContext> & {
   pendingFor: (key: PendingKey) => boolean;
 };
-
-async function holdQueries(qc: QueryClient, filters: readonly QueryFilters[]): Promise<Rollback> {
-  await Promise.all(filters.map((f) => qc.cancelQueries(f)));
-  const saved = filters.flatMap((f) => qc.getQueriesData(f));
-  return () => {
-    for (const [key, data] of saved) qc.setQueryData(key, data);
-  };
-}
 
 /* ── The pending index ────────────────────────────────────────────────────
  * One per MutationCache, one cache subscription however many hooks mount. A
@@ -185,27 +193,27 @@ export function useOptimisticWrite<V = void, R = unknown>({
   onError,
 }: OptimisticWrite<V, R>): OptimisticWriteResult<V, R> {
   const qc = useQueryClient();
-  const mutation = useMutation<R, Error, V, Rollback>({
+  const mutation = useMutation<R, Error, V, WriteContext>({
     mutationKey,
     meta: pendingKey && { [PENDING_META]: pendingKey },
     // query-core passes a 2nd context argument; strip it so the write functions
     // are called with the variables alone.
     mutationFn: (vars) => mutationFn(vars),
-    onMutate: async (vars) => {
+    // Synchronous, both forms: the paint lands inside the click.
+    onMutate: (vars) => {
       const painted = patch ? patch(vars, qc) : [];
-      // Sync: a React-state paint lands inside the click.
-      if (typeof painted === 'function') return painted;
-      const rollback = await holdQueries(qc, painted.map((p) => p.filters));
-      for (const p of painted) qc.setQueriesData(p.filters, p.update);
-      return rollback;
+      if (typeof painted === 'function') return { rollback: painted };
+      const filters: QueryFilters[] = painted.map((p) => p.filters);
+      return { hold: holdReads(qc, filters, painted) };
     },
     onSuccess: onSuccess && ((data, vars) => onSuccess(data, vars)),
     // Undefined unless the site owns the message — see the header.
     onError: onError && ((error, vars) => onError(error, vars)),
-    onSettled: (_data, error, vars, rollback) => {
-      if (error) rollback?.(); // before the re-read
+    onSettled: (_data, error, vars, ctx) => {
+      if (error) (ctx?.hold?.rollback ?? ctx?.rollback)?.(); // before the re-read
       const keys = typeof revalidate === 'function' ? revalidate(vars, error != null, qc) : revalidate;
-      for (const queryKey of keys) void qc.invalidateQueries({ queryKey });
+      // Not returned: the write is settled now, not when its re-read lands.
+      void owe(qc, keys, { release: ctx?.hold });
     },
   });
 

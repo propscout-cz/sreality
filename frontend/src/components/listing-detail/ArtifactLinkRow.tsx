@@ -9,10 +9,9 @@ import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, deletePropertyArtifactLink, setPropertyArtifactLink } from '@/lib/api';
 import { artifactLinkLabel, safeHttpUrl } from '@/lib/artifactLink';
-import { actingKey, actOpts, useActAs } from '@/lib/acting';
-import { curationKeys } from '@/lib/queries';
+import { actOpts, useActAs } from '@/lib/acting';
+import { revalidateTables } from '@/lib/curationSync';
 import { useArtifactLinks } from '@/lib/useArtifactLinks';
-import type { ArtifactLink } from '@/lib/types';
 import { fmtAbsolute } from '@/lib/format';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
@@ -35,28 +34,22 @@ export default function ArtifactLinkRow({
   const qc = useQueryClient();
   const labelId = useId();
   const actAs = useActAs();
-  const key = actingKey(actAs, curationKeys.artifactLinks);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /* The one whole-set read every surface shares; this row patches it in place. */
+  /* The one whole-set read every surface shares; a write re-reads it (lib/curationSync),
+   * and the row closes once the read has landed, so it never shows the old link. */
   const linkQ = useArtifactLinks();
   const link = linkQ.data?.get(property_id) ?? null;
   const failed = readFailed(linkQ);
-  const patch = (next: ArtifactLink | null) =>
-    qc.setQueryData<Map<number, ArtifactLink>>(key, (prev) => {
-      const map = new Map(prev);
-      if (next) map.set(property_id, next);
-      else map.delete(property_id);
-      return map;
-    });
+  const reread = () => revalidateTables(qc, ['property_artifact_links'], actAs);
 
   const save = useMutation({
     mutationFn: (url: string) => setPropertyArtifactLink(property_id, url, ...actOpts(actAs)),
-    onSuccess: (saved) => {
-      patch(saved);
+    onSuccess: async () => {
+      await reread();
       setEditing(false);
       setError(null);
     },
@@ -65,8 +58,8 @@ export default function ArtifactLinkRow({
 
   const remove = useMutation({
     mutationFn: () => deletePropertyArtifactLink(property_id, ...actOpts(actAs)),
-    onSuccess: () => {
-      patch(null);
+    onSuccess: async () => {
+      await reread();
       setConfirmingRemove(false);
       setDraft('');
       setError(null);

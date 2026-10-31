@@ -27,7 +27,7 @@ import { useCallback, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { actOpts, useActAs } from '@/lib/acting';
 import { deleteTag, updateTag } from '@/lib/api';
-import { revalidateTags } from '@/lib/tagCache';
+import { revalidateTables } from '@/lib/curationSync';
 import type { Tag, TagColor } from '@/lib/types';
 import AnchoredPopover from '@/components/AnchoredPopover';
 import TagColorPicker from '@/components/TagColorPicker';
@@ -132,7 +132,7 @@ function Popover({
       ),
     onSuccess: () => {
       setError(null);
-      revalidateTags(qc, actAs);
+      void revalidateTables(qc, ['tags'], actAs);
       onClose();
     },
     onError: (err: Error) => setError(err.message || 'Failed to save'),
@@ -141,7 +141,8 @@ function Popover({
   const del = useMutation({
     mutationFn: () => deleteTag(tag.id, ...actOpts(actAs)),
     onSuccess: () => {
-      revalidateTags(qc, actAs);
+      // Migration 202 cascades a deleted tag's memberships away.
+      void revalidateTables(qc, ['tags', 'property_tags'], actAs);
       onDeleted?.(tag.id);
       onClose();
     },

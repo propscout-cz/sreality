@@ -1,17 +1,12 @@
-/* The one home of the collection READS and of "which caches a collection WRITE
- * must refresh"; import from here instead of re-typing either.
- *
- * Reads: every surface takes the collection list and the whole-set member map
+/* The one home of the collection READS; import from here instead of re-typing
+ * them. Every surface takes the collection list and the whole-set member map
  * from the three hooks below — fourteen hand-typed useQuery copies over the two
  * keys had grown in twelve files, each re-deriving one property's Set.
  *
- * Writes: the curation analogue of lib/browseInvalidation, for the reason its
- * header records — the key list was hand-typed per call site and drifted. Every
- * writer but the menu had lost the shared member map (a property-page chip row
- * since deleted, the collection page's row-remove, both collection DELETEs, and
- * the merge, which invalidated no curation key at all), so a membership change
- * left every Browse card glyph painting the old state until the query went
- * stale on its own. */
+ * Which reads a collection WRITE moves is lib/curationSync's map, by the table
+ * the write touches (`revalidateTables`): the hand-typed list that lived here
+ * had lost the shared member map at every writer but the menu, and re-read
+ * acting variants no reader holds. */
 
 import { useMemo } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
@@ -20,6 +15,7 @@ import { listCollections } from '@/lib/api';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
 import { settleMemberWrite } from '@/lib/curationSettle';
+import { tableReads } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import type { Collection } from '@/lib/types';
 
@@ -106,47 +102,23 @@ export function useCollectionMembership(property_id: number) {
   return { ids, mine, shared, byId, saved: mine.size > 0, ready, query };
 }
 
-/** Re-read collections after ANY collection write — one idiom per call site,
- * metadata included. The member map is in the list because a property-grain
- * add/remove, a collection DELETE (migration 202 cascades its memberships away)
- * and a merge (property_carriers re-points collection_properties onto the
- * survivor) each change it. Pass `collection_id` when the write names one
- * collection, so its own page refetches too. What a membership change does to
- * the Browse reads is `settleCollectionWrite`'s job, not this one's.
- *
- * `shareChanged` marks a share, revoke or leave: it changes which other
- * authors' shared notes the caller can read (migration 610), so every note
- * list and the Browse note counts re-read too. */
-export function revalidateCollections(
-  qc: QueryClient,
-  {
-    collection_id,
-    shareChanged = false,
-    actAs = null,
-  }: { collection_id?: number; shareChanged?: boolean; actAs?: string | null } = {},
-): void {
-  const key = (k: readonly unknown[]) => actingKey(actAs, k);
-  qc.invalidateQueries({ queryKey: key(curationKeys.propertyCollectionMembers) });
-  qc.invalidateQueries({ queryKey: key(curationKeys.collections) });
-  if (collection_id != null) {
-    qc.invalidateQueries({ queryKey: key(curationKeys.collection(collection_id)) });
-  }
-  if (shareChanged) {
-    qc.invalidateQueries({ queryKey: key(curationKeys.allPropertyNotes) });
-    qc.invalidateQueries({ queryKey: key(curationKeys.noteCounts) });
-  }
-}
-
 /** One property added to / removed from one collection, landed: settled in the
- * Browse reads (lib/curationSettle, ruling 9), then the collection reads re-read.
- * Acting (`actAs`), only the owner's entries move: Browse never acts. */
+ * Browse reads (lib/curationSettle, ruling 9) and the member map, with the
+ * collection reads (lib/curationSync, `collection_properties`) owed in the same
+ * hold. Acting (`actAs`), only the owner's entries move: Browse never acts. */
 export const settleCollectionWrite = (
   qc: QueryClient,
   property_id: number,
   collection_id: number,
   member: boolean,
   actAs: string | null = null,
-) =>
-  settleMemberWrite(qc, 'collections', property_id, collection_id, member, actAs).then(() =>
-    revalidateCollections(qc, { collection_id, actAs }),
+): void =>
+  settleMemberWrite(
+    qc,
+    'collections',
+    property_id,
+    collection_id,
+    member,
+    actAs,
+    tableReads(['collection_properties'], actAs),
   );
