@@ -1897,6 +1897,38 @@
           "type": "number",
           "default": "0",
           "options": null
+        },
+        {
+          "name": "ids_r2_key",
+          "description": "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        },
+        {
+          "name": "ids_timeout_s",
+          "description": "ids_sql's own statement budget, seconds (the per-listing reads keep the default)",
+          "required": false,
+          "type": "number",
+          "default": "1200",
+          "options": null
+        },
+        {
+          "name": "group",
+          "description": "i/n: export and judge the i-th of n contiguous block groups (1/1 prints n when over the caps)",
+          "required": false,
+          "type": "string",
+          "default": "1/1",
+          "options": null
+        },
+        {
+          "name": "positions_run_id",
+          "description": "Reuse that run's positions, movers and what_if.json and skip step 1 (one wave, several groups)",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
         }
       ],
       "secrets": [
@@ -1909,7 +1941,7 @@
       "concurrencyGroup": "location-wave-shadow",
       "cancelInProgress": false,
       "timeoutMinutes": 300,
-      "permissions": "contents: read",
+      "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_wave_shadow.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_wave_shadow.yml"
     },

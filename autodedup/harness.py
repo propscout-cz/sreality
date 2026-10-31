@@ -863,23 +863,36 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     report = evaluate_and_report(root / "candidate", rulings, out, base=root / "base")
     if report is None:
         return 1
-    run_file = positions.with_name(shadow.WHAT_IF_FILE)
+    run_file, group_file = (positions.with_name(name)
+                            for name in (shadow.WHAT_IF_FILE, shadow.GROUP_FILE))
+    group = json.loads(group_file.read_text(encoding="utf-8")) if group_file.is_file() else {}
+    # E111 reports and never decides (PROGRAM.md E111): a negative the base already holds is the
+    # live state, so only one the move created can fail the wave.
+    base_e111 = revocation.check_rows(evaluation.read_run(root / "base").rows.values(),
+                                      evaluation.read_rulings(rulings)).to_json()
     verdict = shadow.judge(
-        report, done, together=evaluation.read_run(root / "candidate").co_pairs(),
+        report, done, base_e111=base_e111,
+        together=evaluation.read_run(root / "candidate").co_pairs(),
         recent=shadow.recent_same(rulings, args.recent_since),
-        what_if=json.loads(run_file.read_text(encoding="utf-8")) if run_file.is_file() else {})
+        what_if=json.loads(run_file.read_text(encoding="utf-8")) if run_file.is_file() else {},
+        elsewhere=shadow.outside_group(positions.with_name(shadow.MOVERS_FILE), group))
     verdict["recent_same"]["since"] = args.recent_since
+    verdict["group"] = group.get("group", "1/1")
     (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
                                            encoding="utf-8")
-    facts = verdict["run"]
+    facts, e111 = verdict["run"], verdict["e111"]
     print(f"shadow {'PASS' if verdict['pass'] else 'FAIL'}"
-          f"{' PARTIAL' if verdict['partial'] else ''}"
+          f"{' PARTIAL' if verdict['partial'] else ''}  group {verdict['group']}"
           f"  ids {facts.get('requested', '?')} requested, scope {facts.get('scope', '?')}, "
           f"limit {facts.get('limit', '?')}"
           f"  movers in cohort {verdict['movers_in_cohort']} of {verdict['movers_listed']}"
-          f"  E111 {'REVOKED' if verdict['revoked'] else 'clean'}"
+          f" ({verdict['movers_elsewhere']} in other groups)"
+          f"  E111 base {len(e111['base']['negatives'])} / candidate "
+          f"{len(e111['candidate']['negatives'])}, new {len(e111['new_negatives'])}"
           f"  rulings broken {len(verdict['broken_rulings'])}"
           f"  newly honoured {len(verdict['honoured_rulings'])}", file=out)
+    for lo, hi in e111["new_negatives"]:
+        print(f"  NEW E111 NEGATIVE {lo} x {hi}", file=out)
     print(f"  recent same pairs {json.dumps(verdict['recent_same'], sort_keys=True)}", file=out)
     for lo, hi, ruling, _ in verdict["broken_rulings"]:
         print(f"  BROKEN {lo} x {hi} ({ruling})", file=out)
