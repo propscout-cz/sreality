@@ -258,10 +258,11 @@ naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-
 for now, but make sure it does not impact anything"). Don't re-enable, schedule or backfill
 without explicit direction. Code, tables, the `listings.*_condition_level` columns and their data
 stay; NO surface reads the levels (no filter, agent fact or estimate — rule #14; the four level
-filters are `filter_compiler.RETIRED_FILTERS`). All six condition workflows are dispatch-only:
+filters are `filter_compiler.RETIRED_FILTERS`). All three condition workflows are dispatch-only:
 `condition_score_batches.yml` (Anthropic Message Batches API, 50% cost; `submit` / `ingest` modes,
 both crons commented out) and the synchronous `condition_scores.yml` fallback — never run both at
-once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
+once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows —
+plus `seed_condition_settings.yml`, which loads the committed rubric and marker dictionary.
 The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase
 (its runner left `scraper.main` in C2-2). Scoring is **kraj-scoped and reuse-first** (migration
 174): the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in

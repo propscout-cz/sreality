@@ -16,9 +16,8 @@ source of truth for the extraction, we cache locally so the operator
 can iterate on the aggregator + rubric without re-billing per pass.
 
 This function is the per-listing primitive. The fleet-level discovery
-loop lives in `scripts/discover_condition_markers.py`, and the
-post-hoc deduplication / clustering lives in
-`scripts/aggregate_condition_markers.py`.
+loop and the post-hoc clustering were one-off scripts, deleted under
+Actions exit R6a (#2018); git history holds them if mining ever resumes.
 """
 
 from __future__ import annotations

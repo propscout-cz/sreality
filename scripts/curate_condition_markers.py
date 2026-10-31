@@ -1,7 +1,7 @@
 """Phase A curator — apply the whitelist rule to the raw marker dictionary.
 
-The raw `data/condition_markers_v1.json` (output of
-`scripts/aggregate_condition_markers.py`) contains every cluster the
+The raw `data/condition_markers_v1.json` (output of the Phase A
+aggregator, a one-off deleted under Actions exit R6a) contains every cluster the
 aggregator found — including singletons, structure-type leaks
 ("cihlová stavba", "cihlový dům" — already covered by
 `listings.building_type`), and amenity leaks ("sprchový kout",
