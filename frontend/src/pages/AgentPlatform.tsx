@@ -26,7 +26,7 @@ function TicketLink({ n }: { n: number }) {
 
 function StateChip({ built, children }: { built: boolean; children: string }) {
   return (
-    <span className={`inline-block rounded-[var(--radius-xs)] border px-1.5 py-px font-mono text-xs break-all ${built
+    <span className={`inline-block rounded-[var(--radius-xs)] border px-1.5 py-px font-mono text-xs [overflow-wrap:anywhere] ${built
       ? 'border-[var(--color-rule-strong)] text-[var(--color-ink)]'
       : 'border-dashed border-[var(--color-rule-strong)] text-[var(--color-ink-3)]'}`}>
       {children}
@@ -140,7 +140,7 @@ function RunDiagram() {
       </div>
       <Legend />
       <figcaption className="max-w-[52rem] text-[0.78rem] leading-relaxed text-[var(--color-ink-3)]">
-        The only path that writes to your data is your Apply click, in copper. The worker reads, computes and proposes.
+        The only path that writes to your data is your Apply click, the coloured arrows. The worker reads, computes and proposes.
         The result check is where an invented property or an unregistered action gets refused.
       </figcaption>
     </figure>
@@ -259,7 +259,7 @@ export default function AgentPlatform() {
                     <td className={`${TD} whitespace-nowrap font-medium text-[var(--color-ink)]`}>{s.name}</td>
                     <td className={`${TD} text-[var(--color-ink-2)]`}>{s.job}</td>
                     <td className={`${TD} text-[var(--color-ink-2)]`}>{s.change}</td>
-                    <td className={TD}><StateChip built={isBuilt(s.builtBy)}>{isBuilt(s.builtBy) ? 'live' : 'not created'}</StateChip></td>
+                    <td className={`${TD} whitespace-nowrap`}><StateChip built={isBuilt(s.builtBy)}>{isBuilt(s.builtBy) ? 'live' : 'not created'}</StateChip></td>
                   </tr>
                 ))}
               </tbody>
