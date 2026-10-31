@@ -34,8 +34,8 @@ def flat_routes() -> list[APIRoute]:
 
 
 def method_routes() -> list[tuple[str, str, APIRoute]]:
-    """Every (method, path, route) the live app serves, HEAD and OPTIONS dropped."""
-    return [(m, r.path, r) for r in flat_routes() for m in sorted(r.methods - {"HEAD", "OPTIONS"})]
+    """Every (method, path, route) the live app serves."""
+    return [(m, r.path, r) for r in flat_routes() for m in sorted(r.methods)]
 
 
 def dependants(route: APIRoute) -> Iterator[Dependant]:
