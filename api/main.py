@@ -1368,7 +1368,7 @@ def delete_property_tag(
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# Every route runs on the JWT-scoped `TenantConn`; the SPA reads membership
 # itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")

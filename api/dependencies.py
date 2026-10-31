@@ -293,7 +293,7 @@ def account_scope(
     therefore never widen scope to another account's rows). Fails CLOSED at every
     branch — `_bearer` raises; nothing degrades to a wider or narrower row set.
 
-    Why not require_token + tenant_conn: `listings` is RLS-enabled-with-zero-policies,
+    Why not require_token + `TenantConn`: `listings` is RLS-enabled-with-zero-policies,
     so the /estimations list query (which LEFT JOINs it for locality_display) returns
     NULL for every row on a tenant connection — silently, no error. The service-role
     connection plus an explicit predicate is the only shape that scopes without
