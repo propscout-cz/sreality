@@ -1,49 +1,51 @@
-/* Location quality — the operator's read of `listing_location`, the location
- * program's one answer table (migration 501). Admin-only; every read goes
- * through the identity-gated `/location/*` API (the location tables are
- * service-role-only). Every precision panel states its grain — mixing listing-
- * and property-grain precision is a lie by aggregation (§5.5.4).
+/* Location quality — the `location_town_coverage` gauge's STORED cells (view
+ * location_quality_by_source, migration 698, judged by scripts/checks/quality.py), read through
+ * the Health page's own query (lib/healthChecks HEALTH_QUERY): the two pages show identical
+ * numbers by construction, and Acknowledge patches the one cache entry. Ruling Q7: nothing is
+ * measured twice and the page holds no threshold; every status is the check's, every value the
+ * count or share that colours it. Admin-only (the health view returns no row to anyone else).
+ * Below the scorecard, the listing inspector and operator corrections over the admin-gated
+ * `/location/*` API (detail by id).
  *
- * W2-b deleted three panels with the columns under them: the pin-sharing
- * histogram and its collision-class list (the epoch that produced them is gone;
- * the shared-pin count is a read-time aggregate W3 computes in the browse_list
- * rebuild, where the map needs it), the position-source / admin-assignment
- * mixes, and the frozen labelled sample (two tables whose purpose was scoring
- * old-vs-new precision, and "new" is the only system now). What is left is the
- * two axes a consumer asks — granularity and match confidence — over a totals
- * row whose centre of gravity is rule 25's invariant: every active Czech
- * listing has a town.
- *
- * Visual note: enum mixes are single-hue horizontal bars — magnitude of one
- * measure, so one hue; identity color would be noise. */
+ * Visual note: a class mix is single-hue horizontal bars — magnitude of one measure, so one
+ * hue; identity color would be noise. */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
+import CheckRow, { fmtValue, measuredLine } from '@/components/health/CheckRow';
 import Panel, { PanelGroup } from '@/components/Panel';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
+import StatusDot from '@/components/StatusDot';
+import { HEALTH_QUERY, HealthEmptyError, type HealthCell, type HealthRow } from '@/lib/healthChecks';
+import { portalShort } from '@/lib/portals';
 import {
-  fetchCorpusSummary, fetchInspector, fetchInspectorByNative, fetchSourceOverview,
-  submitCorrection,
+  fetchInspector, fetchInspectorByNative, submitCorrection,
   LOCATION_SOURCES,
-  type CorrectionResult, type Inspector, type MixRow, type SourceOverview,
+  type CorrectionResult, type Inspector,
 } from '../lib/locationQuality';
 import { fmtCount, fmtRelative } from '../lib/format';
 
-function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
+const CHECK_KEY = 'location_town_coverage';
+
+/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars. */
+function BarList({ counts }: { counts: unknown }) {
+  const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
+    .filter((e): e is [string, number] => typeof e[1] === 'number');
+  const total = rows.reduce((a, [, n]) => a + n, 0);
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--color-ink-3)]">No rows.</p>;
   }
   return (
     <div className="space-y-1.5">
-      {rows.map((r) => {
-        const pct = total ? (100 * r.n) / total : 0;
+      {rows.map(([value, n]) => {
+        const pct = total ? (100 * n) / total : 0;
         return (
-          <div key={r.value ?? 'null'} className="flex items-center gap-2">
+          <div key={value} className="flex items-center gap-2">
             <span className="w-44 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
-              {r.value ?? '∅'}
+              {value}
             </span>
             <span className="h-2 flex-1 rounded-full bg-[var(--color-rule-soft)]">
               <span
@@ -52,7 +54,7 @@ function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
               />
             </span>
             <span className="text-right font-mono tabular-nums text-[0.78rem]">
-              {fmtCount(r.n)}
+              {fmtCount(n)}
             </span>
           </div>
         );
@@ -61,54 +63,112 @@ function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
   );
 }
 
-/* ---------- source overview panels ---------- */
+/* ---------- the scorecard ---------- */
 
-function OverviewPanels({ ov }: { ov: SourceOverview }) {
-  const t = ov.totals;
-  const pct = (n: number) => (t.active_rows ? `${((100 * n) / t.active_rows).toFixed(1)}%` : '—');
+/* Rows = the portals the cells name, columns = the subject after `${portal}/`, both in the
+ * gauge's own order (no per-key table here); a subject naming no arm (an older result's shape)
+ * is the portal's town. Fleet cells (portal null) are the strip. */
+function pivot(cells: HealthCell[]) {
+  const portals: string[] = [];
+  const columns: string[] = [];
+  const at: Record<string, Record<string, HealthCell>> = {};
+  const fleet: HealthCell[] = [];
+  for (const c of cells) {
+    if (c.portal == null) {
+      fleet.push(c);
+      continue;
+    }
+    const arm = c.subject.startsWith(`${c.portal}/`) ? c.subject.slice(c.portal.length + 1) : 'town';
+    if (!at[c.portal]) {
+      at[c.portal] = {};
+      portals.push(c.portal);
+    }
+    if (!columns.includes(arm)) columns.push(arm);
+    at[c.portal][arm] = c;
+  }
+  return { portals, columns, at, fleet };
+}
+
+/* One verdict, the check's own; Not measured while the view reads the row Not measured (its
+ * stored cells are history then, as on Health). OK says its word to screen readers only. */
+function Verdict({ cell, measured }: { cell: HealthCell | undefined; measured: boolean }) {
+  const status = measured && cell ? cell.status : 'unknown';
+  const value = measured && cell ? fmtValue(cell.value, cell.unit) : null;
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-2" title={measured ? cell?.message : undefined}>
+      <StatusDot status={status} size="lg" word={status === 'ok' ? 'sr-only' : 'visible'} />
+      {value && <span className="font-mono tabular-nums text-[var(--color-ink)]">{value}</span>}
+    </span>
+  );
+}
+
+function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; onSource: (s: string) => void }) {
+  const measured = row.effective_status !== 'unknown';
+  const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
+  const grains = at[source]?.street?.facts.grains;
+  const disputed = at[source]?.outside?.facts.disputed;
   return (
     <>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        <Stat label="Active rows" value={fmtCount(t.active_rows)} />
-        <Stat label="With a town" value={pct(t.with_obec_kod)} hint={`${fmtCount(t.with_obec_kod)} rows`} />
-        <Stat label="≥ building" value={pct(t.building_or_better)} hint={`${fmtCount(t.building_or_better)} rows`} />
-        <Stat label="≥ street" value={pct(t.street_or_better)} hint={`${fmtCount(t.street_or_better)} rows`} />
-        <Stat label="kód ADM" value={pct(t.with_adm_kod)} hint={`${fmtCount(t.with_ulice_kod)} with a street code`} />
-        <Stat label="Disputed" value={fmtCount(t.disputed)} status={t.disputed ? 'fail' : undefined} />
-      </div>
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Panel title="Granularity × count (listing grain)">
-          <BarList rows={ov.mixes.granularity ?? []} total={t.active_rows} />
-        </Panel>
-        <Panel title="Match confidence">
-          <BarList rows={ov.mixes.match_confidence ?? []} total={t.active_rows} />
-        </Panel>
-      </div>
-
-      <div className="mt-4">
-        <Panel
-          title="Registry version"
-          accessory={ov.current_registry ? (
-            <span className="text-[0.7rem] text-[var(--color-ink-3)]">
-              current: <span className="font-mono">{ov.current_registry.label}</span>
-            </span>
-          ) : undefined}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Stat
-              label="On an older registry"
-              value={pct(t.stale_registry)}
-              hint={`${fmtCount(t.stale_registry)} rows`}
-              status={t.active_rows > 0 && t.stale_registry > t.active_rows / 2 ? 'fail' : undefined}
-            />
-          </div>
-          <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">
-            Rows on an older registry version re-resolve on the next drain after a registry load —
-            a growing stale share means the drain is behind, not that data got worse.
-          </p>
-        </Panel>
-      </div>
+      <Panel title="By portal">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <caption className="sr-only">Location quality by portal; a row picks the inspector&apos;s source</caption>
+            <thead>
+              <tr className="text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">
+                <th scope="col" className="py-1.5 pr-3 font-medium">Portal</th>
+                {columns.map((c) => (
+                  <th key={c} scope="col" className="py-1.5 pr-3 font-medium">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {portals.map((p) => (
+                <tr
+                  key={p}
+                  data-testid={`location-matrix-${p}`}
+                  onClick={() => onSource(p)}
+                  className={`border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${p === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
+                >
+                  <th scope="row" className="py-1.5 pr-3 text-left font-normal">
+                    {/* The keyboard path to the row's click: it bubbles there. */}
+                    <button type="button" aria-pressed={p === source} className="text-sm text-[var(--color-ink)]">
+                      {portalShort(p)}
+                    </button>
+                  </th>
+                  {columns.map((c) => (
+                    <td key={c} className="py-1.5 pr-3 align-top text-[0.78rem]">
+                      <Verdict cell={at[p][c]} measured={measured} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {fleet.length > 0 && (
+          <ul
+            data-testid="location-fleet"
+            className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 border-t border-[var(--color-rule-soft)] pt-3 text-[0.78rem]"
+          >
+            {fleet.map((c) => (
+              <li key={c.subject} className="flex items-baseline gap-x-2">
+                <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{c.subject}</span>
+                <Verdict cell={c} measured={measured} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+      {measured && (grains || disputed) ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title={`Grain · ${portalShort(source)}`}>
+            <BarList counts={grains} />
+          </Panel>
+          <Panel title={`Disputed classes · ${portalShort(source)}`}>
+            <BarList counts={disputed} />
+          </Panel>
+        </div>
+      ) : null}
     </>
   );
 }
@@ -302,21 +362,13 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
 
 export default function LocationQuality() {
   const [source, setSource] = useState<string>('bezrealitky');
-  const overview = useQuery({
-    queryKey: ['location', 'overview', source],
-    queryFn: () => fetchSourceOverview(source),
-    staleTime: 60_000,
+  /* The Health page's own entry (same key, same poll): identical numbers by construction. */
+  const health = useQuery({
+    ...HEALTH_QUERY,
+    select: (rows: HealthRow[]) => rows.find((r) => r.check_key === CHECK_KEY) ?? null,
   });
-  const summary = useQuery({
-    queryKey: ['location', 'summary'],
-    queryFn: fetchCorpusSummary,
-    staleTime: 5 * 60_000,
-  });
-  const ov = overview.data?.data;
-  const summaryRows = summary.data?.data.sources ?? [];
-  const refreshedAt = overview.dataUpdatedAt
-    ? fmtRelative(new Date(overview.dataUpdatedAt).toISOString())
-    : null;
+  const row = health.data;
+  const when = row ? measuredLine(row) : null;
 
   return (
     <div className="px-6 pt-5 pb-8 max-w-screen-2xl mx-auto">
@@ -324,8 +376,8 @@ export default function LocationQuality() {
         <div>
           <h1 className="text-2xl leading-tight">Location quality</h1>
           <p className="text-sm text-[var(--color-ink-2)]">
-            Read entirely from <span className="font-mono">listing_location</span> (listing grain)
-            {refreshedAt ? <> · refreshed {refreshedAt}</> : null}
+            The stored cells of <span className="font-mono">{CHECK_KEY}</span>, as Health shows them
+            {when ? <> · <span title={when.title}>{when.text}</span></> : null}
           </p>
         </div>
         <Field label="Source" as="control">
@@ -340,63 +392,29 @@ export default function LocationQuality() {
       </header>
 
       <div className="mt-4 space-y-4">
-
-        {overview.error ? <ErrorBanner message={overview.error.message} /> : null}
-        {overview.isLoading && !ov ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={64} />)}
-            </div>
-            <Skeleton height={280} />
-          </div>
-        ) : ov ? <OverviewPanels ov={ov} /> : null}
+        {health.isPending ? (
+          <Skeleton height={280} />
+        ) : row === undefined ? (
+          <ErrorBanner
+            title={health.error instanceof HealthEmptyError ? 'Empty read:' : 'Failed to load:'}
+            message={health.error?.message ?? 'The health view did not answer.'}
+            onRetry={() => void health.refetch()}
+            retryLabel="Retry"
+          />
+        ) : row ? (
+          <>
+            <Scorecard row={row} source={source} onSource={setSource} />
+            <Panel title="As on Health">
+              <CheckRow row={{ ...row, owner_path: '' }} />
+            </Panel>
+          </>
+        ) : (
+          <p className="text-sm text-[var(--color-ink-3)]">
+            The health read holds no <span className="font-mono">{CHECK_KEY}</span> check.
+          </p>
+        )}
 
         <InspectorSection source={source} />
-
-        <Panel title="All sources (active listings, listing grain)">
-          {summary.error ? <ErrorBanner message={summary.error.message} /> : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm max-w-3xl">
-                <thead>
-                  <tr className="text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">
-                    <th className="py-1.5 pr-3 font-medium">Source</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">Active</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">With a town</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">≥ building</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">≥ street</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">kód ADM</th>
-                    <th className="py-1.5 font-medium text-right">Disputed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summaryRows.map((r) => (
-                    <tr
-                      key={r.source}
-                      className={`border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${r.source === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
-                      onClick={() => setSource(r.source)}
-                    >
-                      <td className="py-1.5 pr-3">{r.source}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{fmtCount(r.active_rows)}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.with_obec_kod) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.building_or_better) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.street_or_better) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.with_adm_kod) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 text-right font-mono tabular-nums">{fmtCount(r.disputed)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
       </div>
     </div>
   );

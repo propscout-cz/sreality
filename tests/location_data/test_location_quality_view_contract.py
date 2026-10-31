@@ -292,3 +292,16 @@ def _vocabulary() -> set[tuple[str, str]]:
 def test_the_metric_vocabulary_is_the_gauges_closed_tuple() -> None:
     assert _vocabulary() == set(qc.LOCATION_VIEW_VOCABULARY)
     assert len(set(qc.LOCATION_VIEW_VOCABULARY)) == len(qc.LOCATION_VIEW_VOCABULARY)
+
+
+def test_the_location_quality_page_renders_the_registered_check() -> None:
+    """W1 (ruling Q7): the page renders this gauge's STORED row through Health's own query, so
+    its key is the registry's and the registry's owner link is the page. RED by: renaming the
+    key on one side, or the page growing a read of its own again."""
+    from scripts.verify_pipeline import CHECKS
+
+    page = (ROOT / "frontend" / "src" / "pages" / "LocationQuality.tsx").read_text(encoding="utf-8")
+    key = re.search(r"const CHECK_KEY = '(\w+)'", page)
+    assert key, "the page names no check key"
+    assert next(c for c in CHECKS if c.key == key.group(1)).owner_path == "/location-quality"
+    assert "...HEALTH_QUERY" in page and "/location/quality" not in page

@@ -5,8 +5,9 @@
  * read. The browser holds no threshold and no per-key table: sections, labels, units, order and
  * owner links come from the registry, every status from the checks themselves.
  *
- * Only the lazy Health chunk imports this module. Keep it out of lib/queries.ts and lib/api.ts:
- * both are first-visit JS, which has a blocking size budget (scripts/bundle-budget.mjs). */
+ * Only lazy chunks import this module (Health; Location quality, which renders the location
+ * gauge's row through HEALTH_QUERY). Keep it out of lib/queries.ts and lib/api.ts: both are
+ * first-visit JS, which has a blocking size budget (scripts/bundle-budget.mjs). */
 import { matchRoutes } from 'react-router-dom';
 import { routes } from '@/routes';
 import { apiPost } from '@/lib/api';
