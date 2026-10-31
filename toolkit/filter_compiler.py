@@ -11,7 +11,8 @@ that grants filters on a relation, the spellings that relation needs where it la
 `api/notifications._build_match_clauses` (`properties_public`: the served and published
 predicates, the map box and the place chips) and `api/property_search` (Browse's own source,
 `browse_list_visible`: the map box, the place chips and the caller's own lenses; its `cohort_where`, without the
-lenses, is the broker board's cohort over `browse_list`).
+lenses, is the broker board's cohort over `browse_list`). `SOLD_GRAIN` is the registered sales' relation
+(`api/market_evidence`).
 """
 
 from __future__ import annotations
@@ -188,8 +189,8 @@ def _city_index_rules(
     if not v:
         return []
     # ONE SQL function owns rule evaluation (migration 436). All three consumers --
-    # Browse (a client-resolved obec array), Stats (the same call inside
-    # browse_stats_properties) and this matcher -- reduce to `obec_id = ANY(...)`,
+    # Browse and Stats (a client-resolved obec array, browse_stats_properties' obec_ids_filter;
+    # api/stats_pivot resolves it the same way) and this matcher -- reduce to `obec_id = ANY(...)`,
     # a form with nothing left to diverge on (rule 16). Migration 374's own header
     # records two divergences found between the three hand-maintained copies this
     # replaces, including an operator-chosen op silently re-interpreted as >=.
@@ -293,6 +294,9 @@ BROWSE_GRAIN = FilterGrain(
     hooks=MappingProxyType({**_PORTAL_RULE, "status": _modifier,
                             "tom_observed_only": _only("l.tom_observed")}),
 )
+# The registered sales: `public.sold_comparables` (migration 545) returns every column its agenda filters
+# (tests/test_sold_comps_read_surface.py).
+SOLD_GRAIN = FilterGrain(agenda=Agenda.SOLD, exprs=MappingProxyType({}), caller_renders=frozenset())
 
 
 # --- the compile -----------------------------------------------------------------------

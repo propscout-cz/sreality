@@ -2504,7 +2504,10 @@ renumber.** Navigate by area:
     the transit corridor) and for the agents' `search_properties` (`BROWSE_GRAIN` over Browse's own
     source `browse_list_visible` under the reader's login, adapter `api/property_search`, which adds
     the map box, the place chips, the reader's own lenses in `setScope.ts` normalizeScope's form and
-    the one-portal order of Q49 b; without the lenses, `cohort_where`, the broker board's cohort). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
+    the one-portal order of Q49 b; without the lenses, `cohort_where`, the broker board's cohort and the agents'
+    achieved prices), and for the registered sales (`SOLD_GRAIN` over `sold_comparables`, adapter
+    `api/market_evidence`). The agents' cohort statistics are not compiled: `api/stats_pivot.pivot_args` hands
+    `browse_stats_properties` the dashboard's own arguments (a census maps every parameter or names why not). Browse itself is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
