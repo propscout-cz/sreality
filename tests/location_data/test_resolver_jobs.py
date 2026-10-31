@@ -873,9 +873,9 @@ def _enqueue_ctes() -> dict[str, str]:
 
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
-    from location_data import claims_intake, contracts
+    from location_data import claims_store, contracts
     return {
-        "claims_intake._WRITE_CLAIMS_SQL": claims_intake._WRITE_CLAIMS_SQL,
+        "claims_store._WRITE_CLAIMS_SQL": claims_store._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
     }
 

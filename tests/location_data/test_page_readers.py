@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from location_data import claims_intake, page_readers, payloads
+from location_data import claims_intake, claims_store, page_readers, payloads
 from location_data.claims_common import (
     ARCHIVED_COORDINATE_RULES,
     SUBSTRATE_ARCHIVED_HTML,
@@ -33,7 +33,7 @@ from location_data.claims_common import (
     _base,
     coordinate_verdict,
 )
-from location_data.claims_intake import (
+from location_data.claims_store import (
     DEFAULT_WRITE_CHUNK_BYTES,
     DEFAULT_WRITE_CHUNK_ROWS,
     chunk_rows,
@@ -317,7 +317,7 @@ def test_to_row_and_the_recordset_column_list_stay_in_lockstep():
     """`Claim.to_row()` feeds `jsonb_to_recordset(...) AS x(...)` positionally by NAME; a
     field added to one and not the other silently writes NULL forever."""
     columns = re.search(r"jsonb_to_recordset\(%\(rows\)s::jsonb\) AS x\((.*?)\)\n",
-                        claims_intake._WRITE_CLAIMS_SQL, re.S)
+                        claims_store._WRITE_CLAIMS_SQL, re.S)
     assert columns
     declared = re.findall(r"(\w+)\s+(?:bigint|text|timestamptz|numeric|jsonb|integer|boolean)",
                           columns.group(1))
@@ -345,14 +345,14 @@ def test_the_insert_column_list_and_its_select_have_the_same_arity():
     both halves from 42 columns to 18 in one edit, which is exactly the shape this pins; W3
     took the fingerprint out (17)."""
     insert = re.search(r"INSERT INTO location_claims AS c \((.*?)\)\s*SELECT (.*?)\s*FROM one o",
-                       claims_intake._WRITE_CLAIMS_SQL, re.S)
+                       claims_store._WRITE_CLAIMS_SQL, re.S)
     assert insert
     assert len(_top_level_items(insert.group(1))) == len(_top_level_items(insert.group(2)))
 
     assert len(_top_level_items(insert.group(1))) == 17
 
     # The re-sight observation CTE went with its table (rule 25): 263 M rows nobody read.
-    assert "location_claim_observations" not in claims_intake._WRITE_CLAIMS_SQL
+    assert "location_claim_observations" not in claims_store._WRITE_CLAIMS_SQL
 
 
 # ------------------------------------------------------------------ chunking bounds

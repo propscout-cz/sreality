@@ -4778,7 +4778,7 @@ that FIRST stated its value. For each listing, claim type and author (`licence_c
 `operator`) it holds ONE claim, the value that author stated most recently (`location_claims_key`);
 the operator outranks the portal at the read (ruling Q5). Columns: identity, the contract entry, five
 typed value slots, the declared-precision trio (`claim_fingerprint` is dead, dropped by migration
-700). ONE statement writes it for both producers, `claims_intake.write_claims` (the lane below and
+700). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
 `location_data/operator_corrections.py`): `INSERT … ON CONFLICT (listing_id, claim_type,
 licence_class) DO UPDATE … WHERE` one of the eight value columns `IS DISTINCT FROM` the stored one, so
 an unchanged re-mine or a bump that restates a value writes and enqueues NOTHING, a changed value is an

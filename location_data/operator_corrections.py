@@ -3,7 +3,7 @@
 One of the two claim producers (the contract-driven claim lane, over its three substrates,
 and operator input). A correction is the listing's ONE operator claim of its type
 (`surface='operator_input'`, `extraction_method='operator_manual'`, `licence_class='operator'`,
-`claim_confidence='exact'`), written through the lane's own `claims_intake.write_claims` (W3):
+`claim_confidence='exact'`), written through the one write, `claims_store.write_claims` (W3):
 a new value replaces the operator's previous one, the same value twice writes and enqueues
 nothing, and the resolver's read puts it ahead of the portal's claim of that type. No retract
 or re-mine reaches it: both act only on claims that carry a `contract_entry_id`.
@@ -24,7 +24,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from location_data.claims_common import Claim
-from location_data.claims_intake import write_claims
+from location_data.claims_store import write_claims
 
 LOG = logging.getLogger("location.operator_corrections")
 

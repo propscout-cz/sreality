@@ -1274,7 +1274,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
 - **W3 — one current claim per fact — built 2026-10-31** (#2223; PR-1 migration 699, PR-2 migration 700;
   `resolver:v5.9.1`; merges after W4's #2220). `location_claims` holds ONE claim per listing, claim type and
-  author (`location_claims_key`): ONE keyed upsert, `claims_intake.write_claims`, writes it for the lane and
+  author (`location_claims_key`): ONE keyed upsert, `claims_store.write_claims`, writes it for the lane and
   the operator (whose hand copy goes), only when a value changes (in place; A → B → A ends on A; the enqueue
   only for a changed listing), provenance the entry that FIRST stated the value. ONE read, `DISTINCT ON
   (listing_id, claim_type)` operator first, no version window. Deleted: BIND's seven tie rules (pin

@@ -21,7 +21,6 @@ from location_data.claims_intake import (
     _BATCH_INSERT_SQL,
     _BODIES_RESUME_SQL,
     _BODY_JOIN,
-    _WRITE_CLAIMS_SQL,
     _FROM_LISTINGS,
     _LISTINGS_FULL_SQL,
     _LISTINGS_INCREMENTAL_SQL,
@@ -39,8 +38,8 @@ from location_data.claims_intake import (
     MIN_BATCH_SIZE,
     _row_from_record,
     extract_listing,
-    write_claims,
 )
+from location_data.claims_store import _WRITE_CLAIMS_SQL, write_claims
 from tests.location_data.claim_intake_fixtures import (
     SREALITY_POST_CUTOVER,
     SREALITY_TRUNCATED,

@@ -18,6 +18,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from location_data import claims_intake as ci
+from location_data.claims_store import write_claims
 from location_data import contracts
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -102,7 +103,7 @@ def test_the_current_text_decides_and_a_reading_that_names_nothing_keeps_the_val
                     surface="operator_input", extraction_method="operator_manual"),
             ci._base(entries["bzs.det.psc"], row, value_text="50011")]
     with conn.cursor() as cur:
-        ci.write_claims(cur, [stale, *kept])
+        write_claims(cur, [stale, *kept])
     kept_rows = {("obec_name", "Kbel"), ("psc", "50011")}
     ra = _reading(conn, listing, "m1", town=TOWN, street="Husova")
 

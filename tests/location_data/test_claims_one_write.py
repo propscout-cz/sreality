@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 
-from location_data import claims_intake
+from location_data import claims_store
 
-_SQL = " ".join(claims_intake._WRITE_CLAIMS_SQL.split())
+_SQL = " ".join(claims_store._WRITE_CLAIMS_SQL.split())
 _VALUE_COLUMNS = ("value_text", "value_num", "value_geom", "value_jsonb",
                   "declared_precision_label", "declared_radius_m", "blur_evidence",
                   "subject_scoped")

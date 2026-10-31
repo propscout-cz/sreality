@@ -15,7 +15,7 @@ import psycopg
 import pytest
 
 from location_data import claims_intake as ci
-from location_data import contracts
+from location_data import claims_store, contracts
 from location_data.resolver import resolve_db
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -55,7 +55,7 @@ def _operator(claim: ci.Claim, value: str, at: datetime = T0) -> ci.Claim:
 
 def _write(conn: Any, *claims: ci.Claim, reason: str = "claim_insert") -> tuple[int, int]:
     with conn.cursor() as cur:
-        return ci.write_claims(cur, list(claims), reason)
+        return claims_store.write_claims(cur, list(claims), reason)
 
 
 def _stored(conn: Any, listing: int) -> dict[tuple[str, str], tuple[Any, ...]]:

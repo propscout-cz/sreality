@@ -191,10 +191,10 @@ def test_the_one_claim_write_inserts_exactly_the_kept_columns():
     """Location W3: ONE statement writes every claim (the lane's three substrates and the
     operator), and it names every kept column but the serial `id` and the fingerprint
     nothing computes any more (migration 700 drops it)."""
-    from location_data import claims_intake, operator_corrections
+    from location_data import claims_store, operator_corrections
 
     columns = re.search(r"INSERT INTO location_claims AS c \(([^)]*)\)",
-                        claims_intake._WRITE_CLAIMS_SQL)
+                        claims_store._WRITE_CLAIMS_SQL)
     assert columns
     written = {c.strip() for c in columns.group(1).replace("\n", " ").split(",")}
     assert written == KEPT_COLUMNS - {"id", "claim_fingerprint"}, sorted(written)

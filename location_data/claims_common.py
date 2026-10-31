@@ -322,7 +322,7 @@ class Claim:
     retract: bool = False
 
     def to_row(self) -> dict[str, Any]:
-        """The one write's recordset row (`claims_intake._WRITE_CLAIMS_SQL`): what is stored."""
+        """The one write's recordset row (`claims_store._WRITE_CLAIMS_SQL`): what is stored."""
         return {
             "listing_id": self.listing_id,
             "source": self.source,

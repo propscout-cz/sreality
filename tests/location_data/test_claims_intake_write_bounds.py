@@ -14,16 +14,18 @@ import json
 from location_data.claims_intake import (
     DEFAULT_MAX_CLAIM_VALUE_BYTES,
     Entry,
-    DEFAULT_WRITE_CHUNK_BYTES,
-    DEFAULT_WRITE_CHUNK_ROWS,
     MAX_CLAIM_VALUE_BYTES_ENV,
-    WRITE_CHUNK_BYTES_ENV,
-    WRITE_CHUNK_ROWS_ENV,
     Claim,
     IntakeResult,
-    chunk_rows,
     claim_value_bytes,
     extract_listing,
+)
+from location_data.claims_store import (
+    DEFAULT_WRITE_CHUNK_BYTES,
+    DEFAULT_WRITE_CHUNK_ROWS,
+    WRITE_CHUNK_BYTES_ENV,
+    WRITE_CHUNK_ROWS_ENV,
+    chunk_rows,
     write_claims,
 )
 from tests.location_data.claim_intake_fixtures import (

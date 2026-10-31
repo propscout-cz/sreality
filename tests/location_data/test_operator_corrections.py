@@ -1,7 +1,7 @@
 """Offline contract tests for the W1v operator-correction producer.
 
 No DB. Since location W3 the operator writes through the lane's own one write
-(`claims_intake.write_claims`): one claim per listing and type with licence `operator`,
+(`claims_store.write_claims`): one claim per listing and type with licence `operator`,
 which the resolver's read puts ahead of the portal's. The vocabulary discipline stays.
 """
 
@@ -67,6 +67,17 @@ def test_the_operator_writes_one_operator_claim_through_the_one_write(
     assert not claim.retract
     assert (result["written"], result["enqueued"]) == (True, True)
     assert "restatement" not in result
+
+
+def test_the_correction_route_never_imports_the_intake_lane() -> None:
+    """The one write lives in `claims_store`, so the API's correction route pays for one small
+    module, not the 2,000-line intake lane and its page readers."""
+    import ast
+
+    tree = ast.parse(Path(oc.__file__).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert "location_data.claims_store" in imported
+    assert "location_data.claims_intake" not in imported
 
 
 def test_every_allowed_claim_type_has_an_operator_policy_row():

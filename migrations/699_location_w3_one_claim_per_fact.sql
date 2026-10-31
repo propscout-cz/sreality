@@ -5,7 +5,7 @@
 --   later copy of one (listing, claim type, author) fact, 99.68 % of them the same value restated under a newer version,
 --   and the resolver needed a per-type version window and seven tie rules to pick one answer. From W3 the store holds
 --   ONE claim per key, the value that author stated most recently: one keyed upsert writes it
---   (location_data.claims_intake.write_claims, shared by the operator) and one DISTINCT ON reads it, the operator first
+--   (location_data.claims_store.write_claims, shared by the operator) and one DISTINCT ON reads it, the operator first
 --   (location_data.resolver.resolve_db._claims_sql). The author IS the licence class (portal | operator). This file
 --   gives the key its index. The ≈ 8.8 M surplus rows go BEFORE it, in the batched purge.
 --
@@ -85,7 +85,7 @@ commit;
 
 comment on index location_claims_key is
   'W3 (migration 699): ONE claim per listing, claim type and author (licence class). The ON CONFLICT target of '
-  'location_data.claims_intake.write_claims, the one write; the resolver read DISTINCT ON its leading columns.';
+  'location_data.claims_store.write_claims, the one write; the resolver read DISTINCT ON its leading columns.';
 
 drop index concurrently if exists location_claims_listing;
 

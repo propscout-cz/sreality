@@ -479,7 +479,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
   `location_claims` holds ONE claim per (listing, claim type, licence class) (W3, mig 699): one
-  keyed upsert (`claims_intake.write_claims`) writes only when a value changes, in place; the
+  keyed upsert (`claims_store.write_claims`) writes only when a value changes, in place; the
   resolver reads one per type, operator first. A wrong contract is RETRACTED (DELETE + re-resolve
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
   `location_claims_retire.yml` ran once more for W3's purge, deleted in PR-2. The live set is `location_claims`,

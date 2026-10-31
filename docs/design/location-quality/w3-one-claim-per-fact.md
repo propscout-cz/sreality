@@ -191,7 +191,7 @@ Troubky-Zdislavice): the deletion costs served quality today.
   realitymix Nominatim branch in `page_readers`, has emitted 0 rows ever and stays a class the resolver
   never reads; it gets its own key slot, so it can never overwrite a portal claim.)
 - **One statement, both writers.** `claims_intake` (payload, page body, reading) and
-  `operator_corrections` call the same function, `claims_intake.write_claims(cur, claims, reason)`,
+  `operator_corrections` call the same function, `claims_store.write_claims(cur, claims, reason)`,
   which runs the same SQL. `operator_corrections._OPERATOR_CLAIM_SQL` (operator_corrections.py:76-153,
   the hand copy) goes; the operator builds a `Claim` and passes `reason='operator_edit'`.
 
@@ -267,7 +267,8 @@ SELECT (SELECT count(*) FROM up), (SELECT count(*) FROM gone), (SELECT count(*) 
   its ON CONFLICT: when the conflicting body was not the key's newest-observed body before this
   sighting, `contract_version = NULL`, so the bodies pass re-mines A after A→B→A (14 keys measured).
 
-**As built (§ 2.1).** `claims_intake._WRITE_CLAIMS_SQL` + `write_claims(cur, claims, reason)`, chunked
+**As built (§ 2.1).** `location_data/claims_store.py` holds the one write and nothing else (so the
+operator's API route does not import the intake lane): `_WRITE_CLAIMS_SQL` + `write_claims(cur, claims, reason)`, chunked
 by listing (a key never spans two statements) and returning (changed, enqueued). The recordset also
 carries `claim_confidence` (ruling R6: 'exact' for the operator, NULL else), set with the value. The
 readings half calls the same write and then stamps its readings in the same transaction (one statement
