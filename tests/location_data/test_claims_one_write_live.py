@@ -100,6 +100,24 @@ def test_a_restated_value_writes_nothing_and_a_changed_one_updates_in_place(conn
     assert _stored(conn, listing)[("psc", "portal")][:2] == (row_id, "50011")
 
 
+def test_a_sub_metre_pin_move_is_a_change(conn: Any) -> None:
+    """Change detection on a pin rides `value_geom IS DISTINCT FROM`, and geometry equality is
+    exact on PostGIS >= 2.4 (not a bounding-box test): a payload pin carries no `value_text`, so
+    this is the only thing that sees it move. ~7 cm here; restating it exactly writes nothing."""
+    from location_data.claims_common import point_wkt
+
+    listing = _listing(conn)
+    pin = _claim(conn, listing, "bzs.det.link_pin", value_geom_wkt=point_wkt(50.08, 14.4))
+    assert pin.value_text is None
+    assert _write(conn, pin) == (1, 1)
+    moved = replace(pin, value_geom_wkt=point_wkt(50.08, 14.400001),
+                    first_observed_at=T0 + timedelta(hours=1))
+    assert _write(conn, moved) == (1, 1)
+    assert _write(conn, replace(moved, first_observed_at=T0 + timedelta(hours=2))) == (0, 0)
+    assert conn.execute("SELECT ST_X(value_geom) FROM location_claims WHERE listing_id = %s",
+                        (listing,)).fetchone()[0] == 14.400001
+
+
 def test_two_claims_of_one_key_in_one_batch_keep_the_later_observation(conn: Any) -> None:
     listing = _listing(conn)
     early = _claim(conn, listing, "bzs.txt.street", T0, value_text="Husova")
