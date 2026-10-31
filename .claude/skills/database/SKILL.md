@@ -478,11 +478,11 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
-  `location_claims` (19 cols) is **never UPDATEd** — rows are inserted, or DELETEd (a superseded
-  reading in `claims_intake`, a retraction, a retirement). The resolver reads only
-  ACTIVE-contract + operator claims, so a wrong contract is RETRACTED (DELETE + re-resolve enqueue,
-  `contracts.py --retract`) and a merely SUPERSEDED version's claims are deleted with NO enqueue by
-  `location_claims_retire.yml` (backup to R2 `backups/retired-claims/`, then keyset batches) — run it after a retirement. The live set is `location_claims`,
+  `location_claims` holds ONE claim per (listing, claim type, licence class) (W3, mig 699): one
+  keyed upsert (`claims_intake.write_claims`) writes only when a value changes, in place; the
+  resolver reads one per type, operator first. A wrong contract is RETRACTED (DELETE + re-resolve
+  enqueue, `contracts.py --retract`), then that source is re-mined in full.
+  `location_claims_retire.yml` ran once more for W3's purge, deleted in PR-2. The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound
