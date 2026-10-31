@@ -41,7 +41,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2063, done: true, title: 'Search, dossier, your own context and brokers, read as the screens read them' },
       { n: 2064, done: true, title: 'Cohort statistics and achieved prices' },
       { n: 2065, done: true, title: 'Agent folders, the generic loop, the result check, a local runner' },
-      { n: 2179, done: false, title: 'Models keep their own reply blocks across tool calls' },
+      { n: 2179, done: true, title: 'Models keep their own reply blocks across tool calls' },
       { n: 2066, done: false, title: 'Structured photo assessment with a cache' },
       { n: 2067, done: false, title: 'Valuo as a capped, recorded paid tool' },
       { n: 2068, done: false, title: 'Agent Python on Claude\'s hosted code execution' },

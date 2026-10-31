@@ -36,7 +36,8 @@ can wait for its text. The folder's sha covers every file and is recorded with e
    one journal step.
 4. A run stops when it reaches `max_iterations`, `max_cost_usd` or the wall clock (checked before each model and
    tool call; an answer that arrives late is still checked). A reply that did not end on its tool calls (cut off at
-   its limit, or a refusal) also ends the run; nothing in it is executed.
+   its limit, a refusal, a full context window) also ends the run, under that name; nothing in it is executed. A
+   reply with tool calls goes back to the model as its provider wrote it, thinking included.
 5. Before each model call, the reply's token limit (16,000 at most; it includes the model's thinking) is lowered
    until even the worst case fits the money left. When that leaves fewer than 4,096 tokens, the run stops on
    `max_cost`.
