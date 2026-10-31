@@ -30,33 +30,8 @@ def _contract(source: str) -> contracts.PortalContract:
 
 
 def entries_for(source: str) -> list[Entry]:
-    """The real git contract, projected into the shape the extractor reads from the DB.
-
-    Entry ids are assigned in file order, which is exactly what the deploy projection does
-    (`bigserial`), so a test can assert on `contract_entry_id` stability.
-    """
-    contract = _contract(source)
-    return [
-        Entry(
-            id=1000 + index,
-            source=contract.source,
-            contract_id=1,
-            contract_version=contract.version,
-            entry_id=entry.entry_id,
-            surface=entry.surface,
-            page_kind=entry.page_kind,
-            locator=entry.locator,
-            claim_type=entry.claim_type,
-            extraction_method=entry.extraction_method,
-            subject_scope=entry.subject_scope,
-            transform=tuple(entry.transform),
-            precision_map=entry.precision_map,
-            default_blur_evidence=entry.default_blur_evidence,
-            default_licence_class=entry.default_licence_class,
-            guards=tuple(entry.guards),
-        )
-        for index, entry in enumerate(contract.entries)
-    ]
+    """The real git contract, projected into the shape the extractor reads from the DB."""
+    return contracts.entries_of(_contract(source))
 
 
 def listing(

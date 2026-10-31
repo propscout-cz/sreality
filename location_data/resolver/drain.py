@@ -80,9 +80,9 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 import psycopg
 
@@ -160,8 +160,8 @@ UPDATE dirty_locations
 # for all 9,201 (a `mod()` filter took 21.9 s per 250, 2026-09-30); hash order, so a run cut
 # short by its budget has still covered a spread of ids.
 _SAMPLE_SQL = """
-SELECT listing_id, obec_kod, cast_obce_kod, house_number_cp, granularity::text,
-       ST_Y(geom), ST_X(geom)
+SELECT listing_id, obec_kod, cast_obce_kod, house_number_cp, granularity::text AS granularity,
+       ST_Y(geom) AS lat, ST_X(geom) AS lon
   FROM listing_location
  WHERE listing_id = ANY(coalesce(%s::bigint[], ARRAY(
        SELECT generate_series(7, max(listing_id), 100) FROM listing_location)))
@@ -885,48 +885,85 @@ def _write_slice(conn: psycopg.Connection, resolutions: list[Any]) -> None:
         )
 
 
+# A no-write caller's change to a page's claims before the four steps (the wave shadow's W3
+# purge, W4 re-mine): listing id -> claims in, the same shape out.
+ClaimChange = Callable[[psycopg.Connection, dict[int, list[Claim]]], dict[int, list[Claim]]]
+
+
+def recompute(
+    conn: psycopg.Connection, listing_ids: Sequence[int], *, batch_size: int = DEFAULT_BATCH,
+    deadline: float | None = None, claim_change: ClaimChange | None = None,
+) -> Iterator[tuple[list[int], list[Any] | Exception]]:
+    """The no-write read path (prefetch, claim change, warm, resolve); a failed page is yielded."""
+    timeout_s = _batch_timeout_s()
+    with _bounded(conn, timeout_s):
+        registry_version_id, registry_label = resolve_db.current_registry_version(conn)
+    cache = resolve_db.RunCache()
+    ctx = _context(conn, registry_version_id, cache)
+    for at in range(0, len(listing_ids), batch_size):
+        if deadline is not None and time.monotonic() >= deadline:
+            return
+        page = [int(i) for i in listing_ids[at : at + batch_size]]
+        try:
+            with _bounded(conn, timeout_s):
+                slice_ = _prefetch(conn, page, timeout_s=_prefetch_timeout_s(),
+                                   restore_s=timeout_s)
+                if claim_change is not None:
+                    slice_.claims = claim_change(conn, {i: slice_.claims.get(i, []) for i in page})
+                with contextlib.suppress(Exception), conn.transaction():
+                    _warm(slice_, ctx, cache)
+                new = [_compute_one(i, ctx, registry_label, slice_) for i in page]
+        except Exception as exc:  # noqa: BLE001 - one page, never the caller's report
+            yield page, exc
+            continue
+        yield page, new
+
+
 def dry_run(
     conn: psycopg.Connection, *, batch_size: int = DEFAULT_BATCH,
     max_seconds: int = DEFAULT_MAX_SECONDS, only_listing_id: int | None = None,
 ) -> dict[str, Counter[str]]:
-    """Re-resolve the sample and compare each answer with the row it would replace. Writes
-    nothing, so it needs no lease and claims no queue row. A page that fails is counted and
-    skipped, and the deadline ends the loop, never the report."""
+    """Re-resolve the sample and compare each answer with the row it would replace."""
     deadline = time.monotonic() + max_seconds
-    timeout_s = _batch_timeout_s()
-    with _bounded(conn, timeout_s) as cur:
-        registry_version_id, registry_label = resolve_db.current_registry_version(conn)
+    with _bounded(conn, _batch_timeout_s()) as cur:
         cur.execute(_SAMPLE_SQL, (None if only_listing_id is None else [only_listing_id],))
-        stored = cur.fetchall()
-    cache = resolve_db.RunCache()
-    ctx = _context(conn, registry_version_id, cache)
-    tally: dict[str, Counter[str]] = {"*": Counter(of=len(stored))}
-    for at in range(0, len(stored), batch_size):
-        rows = stored[at : at + batch_size]
-        if time.monotonic() >= deadline:
-            break
-        try:
-            with _bounded(conn, timeout_s):
-                slice_ = _prefetch(conn, [int(r[0]) for r in rows],
-                                   timeout_s=_prefetch_timeout_s(), restore_s=timeout_s)
-                with contextlib.suppress(Exception), conn.transaction():
-                    _warm(slice_, ctx, cache)
-                new = [_compute_one(int(r[0]), ctx, registry_label, slice_) for r in rows]
-        except Exception as exc:  # noqa: BLE001 - one page, never the report
-            tally["*"]["failed"] += len(rows)
-            LOG.warning("SAMPLE rows %d.. failed: %s", at, exc)
+        names = [column.name for column in cur.description or ()]
+        stored = {row.listing_id: row for row in
+                  (StoredRow.of(dict(zip(names, values))) for values in cur.fetchall())}
+    counts: dict[str, Counter[str]] = {"*": Counter(of=len(stored))}
+    for page, new in recompute(conn, list(stored), batch_size=batch_size, deadline=deadline):
+        if isinstance(new, Exception):
+            counts["*"]["failed"] += len(page)
+            LOG.warning("SAMPLE page from listing %d failed: %s", page[0], new)
             continue
-        for row, item in zip(rows, new):
-            _tally(tally.setdefault(item.source, Counter()), row, item)
-    for source, counts in sorted(tally.items()):
-        LOG.info("SAMPLE source=%s %s", source, " ".join(f"{k}={v}" for k, v in counts.items()))
-    return tally
+        for listing_id, item in zip(page, new):
+            tally(counts.setdefault(item.source, Counter()), stored[listing_id], item)
+    for source, kept in sorted(counts.items()):
+        LOG.info("SAMPLE source=%s %s", source, " ".join(f"{k}={v}" for k, v in kept.items()))
+    return counts
 
 
-def _tally(counts: Counter[str], stored: Sequence[Any], new: Any) -> None:
-    """One stored row against its re-resolution, keys in report order. A granularity change
-    also counts under its own `old>new` key, so the report says which way the rows moved."""
-    _, obec_kod, part_kod, cp, granularity, lat, lon = stored
+class StoredRow(NamedTuple):
+    """The stored answer a re-resolution is compared with, by column name."""
+
+    listing_id: int | None
+    obec_kod: int | None
+    cast_obce_kod: int | None
+    house_number_cp: str | None
+    granularity: str | None
+    lat: float | None
+    lon: float | None
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> "StoredRow":
+        """These fields by name off any `listing_location` read (`_SAMPLE_SQL`, the cohort's)."""
+        return cls(**{name: row.get(name) for name in cls._fields})
+
+
+def tally(counts: Counter[str], stored: StoredRow, new: Any) -> None:
+    """One stored row against its re-resolution; a granularity change also counts as `old>new`."""
+    obec_kod, part_kod, cp = stored.obec_kod, stored.cast_obce_kod, stored.house_number_cp
+    granularity, lat, lon = stored.granularity, stored.lat, stored.lon
     moved = distance_between(None if lat is None else (lat, lon),
                              None if new.lat is None else (new.lat, new.lon))
     counts.update({
