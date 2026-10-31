@@ -3,7 +3,7 @@
 Wave W3 of the location data quality programme (`PROGRAM.md`; rulings Q4, Q5, Q13; order Q14:
 W0 → W1 → W2 → W7 → W8 → W4 → **W3** → W3b → W5 → W5b → W6). Ticket #2223. Built on branch
 `feature/location-w3-one-claim-per-fact` (PR-1: migration 699, `resolver:v5.9.1`; it carries W4's
-#2220 and merges after it); PR-2 is migration 700 and the purge's deletion. §§ 1–2 are the design as
+#2220 and merges after it); PR-2 is migration 702 and the purge's deletion. §§ 1–2 are the design as
 reviewed, with "As built" notes where the build differs or adds; §§ 3–6 and 8 are the as-built record.
 Every production number was read on 2026-10-31 between 13:10Z and 14:30Z through the Supabase MCP,
 SELECT only (code read at `main` bddea095d). `location_claims` was never scanned unfiltered except once
@@ -449,7 +449,7 @@ Measured on the branch: every W3 commit (`git log --grep '#2223' --no-merges`), 
 | This design doc (new file) | +677 | 0 | +677 |
 
 Against the plan's −1,100: the retire script, workflow and test (≈ −700) stay in PR-1, re-aimed as the
-purge, and go in PR-2 with migration 700 (+≈ 20); the two follow-ups the coordinator added after the
+purge, and go in PR-2 with migration 702 (+≈ 20); the two follow-ups the coordinator added after the
 design (the R4 sweep arm, the wave shadow's raw purge) are +326 / −107 (code +155 / −42). Where it went: `bind.py` −64,
 `resolve_db.py` −69, `operator_corrections.py` −99, `claims_common.py` −57, `claims_intake.py` −39, the
 fingerprint test −189, the operator NOT NULL test −53, the version-window tests −77; the one write
@@ -461,7 +461,7 @@ Rules: 7 tie rules → 0; 4 supersession paths → 2; 2 identities per row → 1
 
 ## 4. Migrations and the purge (as built)
 
-Two numbered files: **699** in PR-1, **700** in PR-2 (drafted below as text; append-only numbering, so
+Two numbered files: **699** in PR-1, **702** in PR-2 (700 went to the waitlist table, 701 to curation; claimed 2026-10-31 17:00Z) (drafted below as text; append-only numbering, so
 PR-2 adds the file). Destructive steps are pre-approved by Q13, each with an R2 backup and a receipt.
 Nothing here assumes migration 697 (W2's three-reason CHECK and `dirty_locations_claim` index): every
 reason W3 writes (`claim_insert`, `operator_edit`, `full_sweep`) is valid before and after it.
@@ -527,7 +527,7 @@ create index concurrently if not exists location_claims_listing
   on location_claims (listing_id, claim_type, first_observed_at desc);
 drop index concurrently if exists location_claims_key;
 ```
-`claim_fingerprint` stays nullable (the old writer fills it; nothing needs NOT NULL). After 700 (PR-2) a
+`claim_fingerprint` stays nullable (the old writer fills it; nothing needs NOT NULL). After 702 (PR-2) a
 code revert is not possible without restoring the column from the backup.
 
 ### Step 3: merge PR-1 (after W4's #2220), Railway rolls out worker + API
@@ -556,7 +556,7 @@ first. The three contract bumps declare the same claim types as their predecesso
   '') <> '');` — expect ≈ 1,915 rows. Run it after the deploy: the old text lane would re-store an empty
   answer as a reading.
 
-### Step 6: migration 700 (PR-2, after one green intake tick on the new code)
+### Step 6: migration 702 (PR-2, after one green intake tick on the new code)
 ```sql
 -- 700_location_w3_drop_fingerprint.sql (PR-2; destructive, covered by the Step 1 backup)
 set lock_timeout = '5s';
