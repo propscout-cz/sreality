@@ -431,8 +431,8 @@ API service:
 - `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
   since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
   `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
-- `CORS_ALLOW_ORIGINS` — CSV of allowed origins: the SPA's and each Chrome extension ID's `chrome-extension://<id>`
-  (its manifest grants no host permission). Kept: the operator edits the value in Railway, never an agent.
+- `CORS_ALLOW_ORIGINS` — CSV: the SPA origin + each extension ID's `chrome-extension://<id>` (no host
+  permissions). Kept: the operator edits it in Railway, never an agent.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
   of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
   held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
