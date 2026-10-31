@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service (#2025 PR-1) and the move of its first three jobs (#2025 PR-2) in review. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service (#2025 PR-1) and the move of its first three jobs (#2025 PR-2) in review, R6a's ruled deletions and the pHash retry in the images lane (#2018) in review. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
