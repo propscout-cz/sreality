@@ -1,7 +1,8 @@
 """The readings half (W3), EXECUTED against the replayed schema — CI's migrations lane
 (`TEST_DATABASE_URL`); every test rolls back; locally it skips. Only a real database shows which
 reading is CURRENT (the hash in SQL, migration 581's stamp, the lane's version) and what the one
-write deletes, so each trace the stamp exists for is walked: a headline that reverts (A -> B -> A),
+write keeps (W3: one claim per key, a silent reading keeps the value), so each trace the stamp
+exists for is walked: a headline that reverts (A -> B -> A),
 a model rolled back (M1 -> M2 -> M1), a contract bump, a delisted text never read, a wanted ad.
 """
 
@@ -73,7 +74,7 @@ def _reading(conn: Any, listing_id: int, model: str, **slots: Any) -> int:
 
 def _mine(conn: Any) -> dict[str, Any]:
     stats: dict[str, Any] = dict.fromkeys(("readings_mined", "claims", "claims_inserted",
-                                           "enqueued", "claims_superseded", "refusals"), 0)
+                                           "enqueued", "refusals"), 0)
     ci.drain_readings(conn, source="bazos", entries_by_source=ci.load_entries(conn),
                       statement_timeout=20, budget=ci._Budget(None), batch_id=1,
                       dry_run=False, stats=stats, refusals={})
@@ -92,7 +93,7 @@ def _stamps(conn: Any, listing_id: int) -> dict[int, str | None]:
                              (listing_id,)).fetchall())
 
 
-def test_the_current_text_decides_and_supersession_spares_other_types_and_the_operator(conn):
+def test_the_current_text_decides_and_a_reading_that_names_nothing_keeps_the_values(conn):
     listing = _listing(conn, A)
     entries = {e.entry_id: e for e in ci.load_entries(conn)["bazos"]}
     row = ci.ListingRow(listing, "bazos", "n", {}, datetime.now(UTC))
@@ -101,7 +102,7 @@ def test_the_current_text_decides_and_supersession_spares_other_types_and_the_op
                     surface="operator_input", extraction_method="operator_manual"),
             ci._base(entries["bzs.det.psc"], row, value_text="50011")]
     with conn.cursor() as cur:
-        ci.write_result(cur, ci.IntakeResult(claims=[stale, *kept]))
+        ci.write_claims(cur, [stale, *kept])
     kept_rows = {("obec_name", "Kbel"), ("psc", "50011")}
     ra = _reading(conn, listing, "m1", town=TOWN, street="Husova")
 
@@ -116,7 +117,7 @@ def test_the_current_text_decides_and_supersession_spares_other_types_and_the_op
     _listing(conn, B, listing)                                 # A -> B, B not read yet:
     assert _mine(conn)["readings_mined"] == 0                  # no reading, the claims stay
     rb = _reading(conn, listing, "m1", town=TOWN, street="Palackého")
-    assert _mine(conn)["claims_superseded"] == 1
+    assert _mine(conn)["claims_inserted"] == 1                 # the street changed, the town not
     assert _claims(conn, listing, "street_name") == {"Palackého"}
     assert _stamps(conn, listing) == {ra: "bazos@9~", rb: "bazos@9"}
 
@@ -127,8 +128,9 @@ def test_the_current_text_decides_and_supersession_spares_other_types_and_the_op
 
     _listing(conn, ("Koupím byt", "Koupím byt v Hradci Králové."), listing)
     _reading(conn, listing, "m1", ad_kind="wanted", town=TOWN)
-    _mine(conn)                                                # V3: it names nothing, so
-    assert _claims(conn, listing) == kept_rows                 # the town falls to the PSČ
+    _mine(conn)                                                # V3: it names nothing, and
+    assert _claims(conn, listing) == kept_rows | {             # under ruling Q4 = A a silent
+        ("obec_name", "Hradec Králové"), ("street_name", "Husova")}   # reading keeps them
 
 
 def test_a_model_rolled_back_publishes_its_own_reading_again(conn):
@@ -152,7 +154,7 @@ def test_a_contract_bump_re_mines_the_current_reading_and_settles_a_delisted_unr
     _mine(conn)
     conn.execute("UPDATE portal_contracts SET version = 10 WHERE source = 'bazos' AND is_active")
     stats = _mine(conn)
-    assert (stats["readings_mined"], stats["claims_superseded"]) == (1, 1)
+    assert (stats["readings_mined"], stats["claims_inserted"]) == (1, 0)   # restated: no write
     assert _stamps(conn, listing) == {older: None, current: "bazos@10"}
     assert _claims(conn, listing, "street_name") == {"Husova"}
     _listing(conn, B, listing, active=False)             # edited, then delisted before its read:

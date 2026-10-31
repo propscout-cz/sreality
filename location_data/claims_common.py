@@ -302,7 +302,7 @@ class Claim:
     extraction_method: str
     extractor_id: str
     extractor_version: str
-    contract_entry_id: int
+    contract_entry_id: int | None
     first_observed_at: datetime
     blur_evidence: str
     licence_class: str
@@ -322,39 +322,32 @@ class Claim:
     # NULL on every claim this lane writes since W3 deleted the headline's `low` (only the
     # operator writes one, 'exact'); the column goes with a later, destructive migration.
     claim_confidence: str | None = None
+    # A TOMBSTONE (location W3): the page states the fact's absence (`html_marker`'s
+    # `absent: retract`), so the one write deletes this key's claim instead of storing a value.
+    retract: bool = False
 
     def to_row(self) -> dict[str, Any]:
-        row = {
+        """The one write's recordset row (`claims_intake._WRITE_CLAIMS_SQL`): what is stored."""
+        return {
             "listing_id": self.listing_id,
             "source": self.source,
-            "source_id_native": self.source_id_native,
             "first_observed_at": self.first_observed_at.isoformat(),
             "claim_type": self.claim_type,
             "surface": self.surface,
-            "page_kind": self.page_kind,
             "extraction_method": self.extraction_method,
-            "extractor_id": self.extractor_id,
-            "extractor_version": self.extractor_version,
             "contract_entry_id": self.contract_entry_id,
             "value_text": self.value_text,
             "value_num": self.value_num,
             "value_geom_wkt": self.value_geom_wkt,
-            "value_shape_wkt": self.value_shape_wkt,
             "value_jsonb": self.value_jsonb,
-            "distance_m": self.distance_m,
-            "travel_mode": self.travel_mode,
-            "target_text": self.target_text,
             "declared_precision_label": self.declared_precision_label,
-            "declared_confidence": self.declared_confidence,
             "declared_radius_m": self.declared_radius_m,
             "claim_confidence": self.claim_confidence,
             "blur_evidence": self.blur_evidence,
             "licence_class": self.licence_class,
-            "legacy_source_column": self.legacy_source_column,
             "subject_scoped": self.subject_scoped,
+            "retract": self.retract,
         }
-        return row
-
 
 
 @dataclass(slots=True)
@@ -902,50 +895,6 @@ def payload_hash(raw: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(raw, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     ).hexdigest()
-
-
-# ------------------------------------------------------------------ value_norm mirror
-
-# Characters where PostgreSQL's `unaccent` DICTIONARY and Python's NFKD combining-mark
-# strip disagree: the dictionary expands or maps them (ß->ss, æ->ae, ø->o, đ->d, ł->l …)
-# while NFKD leaves them intact, so the Python mirror would fold them to a space instead.
-# They are rare in Czech and NOT rare in this corpus — the program exists partly to find
-# the German, Polish and Nordic addresses hiding in it (remax 442804 is in Poland; bazos
-# has an 835-row `Zahraničí` bucket). This set is why `claim_fingerprint` is computed in
-# SQL and never in Python: a mirror that drifts on exactly the foreign cohort would make
-# the unique index stop deduping, silently, in an append-only table.
-MIRROR_UNSAFE_CHARS = frozenset("ßæÆœŒøØđĐłŁðÐþÞħĦŧŦıĸŉ")
-
-
-def mirror_is_faithful(value: str | None) -> bool:
-    """True when the Python mirror provably agrees with `location_value_norm()`."""
-    return value is None or not (MIRROR_UNSAFE_CHARS & set(value))
-
-
-def value_norm_mirror(value: str | None) -> str | None:
-    """DIAGNOSTIC ONLY — never on the write path.
-
-    Mirrors migration 382's
-    `nullif(btrim(regexp_replace(lower(unaccent(p_value)), '[^a-z0-9]+', ' ', 'g')), '')`
-    so a dry run can show what a claim's `value_norm` will become and so the parity test
-    has something to compare. The authoritative definition is the SQL function; see
-    `_CLAIM_FINGERPRINT_SQL`.
-    """
-    if value is None:
-        return None
-    try:
-        from location_data.name_index import normalize_name
-    except ImportError:  # the RÚIAN loader (PR #1010) is not merged yet
-        import re
-        import unicodedata
-
-        def normalize_name(raw: str) -> str:
-            stripped = "".join(
-                ch for ch in unicodedata.normalize("NFKD", raw)
-                if not unicodedata.combining(ch))
-            return re.sub(r"[^0-9a-z]+", " ", stripped.lower()).strip()
-
-    return normalize_name(value) or None
 
 
 # ------------------------------------------------------------------ claim stamping

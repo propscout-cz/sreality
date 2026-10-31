@@ -31,7 +31,6 @@
           "extraction_method": "legacy_column",
           "snapshot_anchor": "unanchored_legacy",
           "value_text": "Bilovec",
-          "value_norm": "bilovec",
           "value_num": null,
           "value_geom_wkt": null,
           "value_shape_wkt": null,

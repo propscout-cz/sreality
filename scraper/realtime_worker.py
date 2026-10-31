@@ -2016,11 +2016,10 @@ def _readings_fast(conn: Any, listing_ids: list[int]) -> dict[str, Any]:
         LOG.warning("INTAKE readings fast ids=%d failed: %s", len(listing_ids), str(exc)[:200])
         return {"ids": len(listing_ids), "error": str(exc)[:200]}
     seconds = time.monotonic() - started
-    LOG.info("INTAKE readings fast ids=%d mined=%d superseded=%d in %.1fs", len(listing_ids),
-             stats["readings_mined"], stats["claims_superseded"], seconds)
+    LOG.info("INTAKE readings fast ids=%d mined=%d written=%d in %.1fs", len(listing_ids),
+             stats["readings_mined"], stats["claims_inserted"], seconds)
     return {"ids": len(listing_ids), "mined": stats["readings_mined"],
-            "inserted": stats["claims_inserted"], "superseded": stats["claims_superseded"],
-            "seconds": round(seconds, 1)}
+            "written": stats["claims_inserted"], "seconds": round(seconds, 1)}
 
 
 async def _text_extract_pass(

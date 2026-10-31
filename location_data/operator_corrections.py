@@ -1,44 +1,30 @@
 """Location W1v: the OPERATOR claim producer (03 S7 rank 1, 05 5.5.5).
 
-One of the two claim producers (the contract-driven claim lane, over its three
-substrates, and operator input). A correction is an appended
-`location_claims` row - `surface='operator_input'`,
-`extraction_method='operator_manual'`, `licence_class='operator'`,
-`claim_confidence='exact'` - never an UPDATE of anything: a wrong correction
-is superseded by a newer one (S7 breaks operator-vs-operator ties by recency),
-and no DELETE reaches it: supersession, `--retract` and the retire script
-delete only claims that carry a `contract_entry_id`, which an operator claim never does.
+One of the two claim producers (the contract-driven claim lane, over its three substrates,
+and operator input). A correction is the listing's ONE operator claim of its type
+(`surface='operator_input'`, `extraction_method='operator_manual'`, `licence_class='operator'`,
+`claim_confidence='exact'`), written through the lane's own `claims_intake.write_claims` (W3):
+a new value replaces the operator's previous one, the same value twice writes and enqueues
+nothing, and the resolver's read puts it ahead of the portal's claim of that type. No retract
+or re-mine reaches it: both act only on claims that carry a `contract_entry_id`.
 
-Two deliberate choices, both learned from the intake lane:
-
-* The `dirty_locations` enqueue is UNCONDITIONAL, not gated on the insert CTE.
-  `claim_fingerprint` is time-free, so a correction that RESTATES an earlier
-  operator value (A -> B -> A) collides with the original claim's fingerprint
-  and inserts nothing - an `ins`-gated enqueue would never fire and the
-  operator would see a dead button. The enqueue is the whole record of the
-  restatement now - migration 498 dropped the observation series. It also
-  BUMPS an existing queue row rather than skipping it (W2-a2), so a correction
-  to a listing the drain is resolving right now is not swallowed.
-* `value_norm` and the fingerprint are computed in SQL by the named migration
-  functions (`location_value_norm`, `location_claim_fingerprint`), exactly as
-  the intake does - a Python mirror drifts on the foreign-address cohort and a
-  drifted fingerprint does not conflict, it inserts. Both still take the FULL
-  01 4.2.1 tuple; migration 498 stopped STORING eleven of its inputs, and
-  still hashing them is what keeps every fingerprint already on disk valid.
-
-The synchronous projection refresh (05 5.5.5: operator-initiated changes are
-visible on the next read) is `resolve_now()` = `drain.run(only_listing_id=)`;
-`submit_correction` callers invoke it after the claim transaction commits. If
-it fails, the unconditional enqueue guarantees the */15 drain converges.
+The synchronous projection refresh (05 5.5.5: operator-initiated changes are visible on the
+next read) is `resolve_now()` = `drain.run(only_listing_id=)`; `submit_correction` callers
+invoke it after the claim transaction commits. If it fails, the enqueue in the write
+guarantees the drain converges.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+
+from location_data.claims_common import Claim
+from location_data.claims_intake import write_claims
 
 LOG = logging.getLogger("location.operator_corrections")
 
@@ -72,84 +58,6 @@ class UnknownListingError(CorrectionError):
 class UnknownKodAdmError(CorrectionError):
     pass
 
-
-# Single-row variant of claims_intake._CLAIM_WRITE_SQL. Same CTE shape, same
-# named functions, same ON CONFLICT target - but the enqueue reads the INPUT
-# row, not `ins` (see module docstring). Kept inline rather than imported so
-# the two lanes can diverge without hidden coupling; the fingerprint CALL is
-# what must never be re-transcribed, and both statements use the migration 386
-# function for it.
-#
-# The enqueue BUMPS (W2-a2), on top of being unconditional: an operator edit to a listing
-# whose row is already queued — or in a slice the drain is resolving right now — must not be
-# swallowed, and read-your-writes is the whole point of the correction button.
-_OPERATOR_CLAIM_SQL = """
-    WITH input AS (
-        SELECT %(listing_id)s::bigint AS listing_id, %(source)s::text AS source,
-               %(source_id_native)s::text AS source_id_native,
-               now() AS first_observed_at,
-               %(claim_type)s::text AS claim_type,
-               'operator_input'::text AS surface, 'none'::text AS page_kind,
-               'operator_manual'::text AS extraction_method,
-               %(extractor_id)s::text AS extractor_id,
-               %(extractor_version)s::text AS extractor_version,
-               NULL::bigint AS contract_entry_id,
-               %(value_text)s::text AS value_text,
-               NULL::numeric AS value_num, NULL::text AS value_geom_wkt,
-               NULL::text AS value_shape_wkt, NULL::jsonb AS value_jsonb,
-               NULL::integer AS distance_m, NULL::text AS travel_mode,
-               NULL::text AS target_text,
-               NULL::text AS declared_precision_label,
-               NULL::text AS declared_confidence, NULL::numeric AS declared_radius_m,
-               'exact'::text AS claim_confidence,
-               'none'::text AS blur_evidence, 'operator'::text AS licence_class,
-               NULL::text AS legacy_source_column, true AS subject_scoped
-    ), typed AS (
-        SELECT i.*,
-               location_value_norm(i.value_text) AS value_norm,
-               NULL::geometry AS geom, NULL::geometry AS shape
-        FROM input i
-    ), fingerprinted AS (
-        SELECT t.*,
-               location_claim_fingerprint(
-                   t.listing_id, t.source, t.source_id_native,
-                   t.claim_type, t.surface, t.page_kind, t.extraction_method,
-                   t.extractor_id, t.extractor_version, t.contract_entry_id,
-                   t.value_norm, t.value_text,
-                   t.value_num, t.geom, t.shape,
-                   t.value_jsonb, t.distance_m, t.travel_mode, t.target_text,
-                   t.declared_precision_label, t.declared_confidence, t.declared_radius_m,
-                   t.legacy_source_column) AS claim_fingerprint
-        FROM typed t
-    ), ins AS (
-        INSERT INTO location_claims (
-            listing_id, source, first_observed_at, claim_type, surface,
-            extraction_method, contract_entry_id, value_text, value_num, value_geom,
-            value_jsonb, declared_precision_label, declared_radius_m, claim_confidence,
-            blur_evidence, licence_class, subject_scoped, claim_fingerprint)
-        SELECT f.listing_id, f.source, f.first_observed_at,
-               f.claim_type::location_claim_type,
-               f.surface::location_claim_surface,
-               f.extraction_method::location_extraction_method,
-               f.contract_entry_id, f.value_text, f.value_num, f.geom, f.value_jsonb,
-               f.declared_precision_label, f.declared_radius_m,
-               f.claim_confidence::match_confidence,
-               f.blur_evidence::blur_evidence, f.licence_class::licence_class,
-               f.subject_scoped, f.claim_fingerprint
-        FROM fingerprinted f
-        ON CONFLICT (claim_fingerprint) DO NOTHING
-        RETURNING id
-    ), enqueued AS (
-        INSERT INTO dirty_locations (listing_id, reason)
-        VALUES (%(listing_id)s, 'operator_edit')
-        ON CONFLICT (listing_id) DO UPDATE
-           SET enqueued_at = now(), reason = EXCLUDED.reason,
-               attempts = 0, next_eligible_at = now()
-        RETURNING listing_id
-    )
-    SELECT (SELECT count(*) FROM ins)      AS inserted,
-           (SELECT count(*) FROM enqueued) AS enqueued
-"""
 
 _KOD_ADM_SQL = """
     SELECT ap.kod_adm,
@@ -187,7 +95,7 @@ def submit_correction(
     value_text: str,
     note: str | None = None,
 ) -> dict[str, Any]:
-    """Append one operator claim + unconditional dirty enqueue. One transaction."""
+    """Write the listing's operator claim of this type (+ enqueue on change). One transaction."""
     if claim_type not in ALLOWED_CLAIM_TYPES:
         raise CorrectionError(
             f"claim_type {claim_type!r} not correctable; allowed: "
@@ -218,8 +126,15 @@ def submit_correction(
                 f"kod ADM {value_text} is not a current address point in the RUIAN mirror"
             )
 
+    claim = Claim(
+        listing_id=listing_id, source=listing["source"],
+        source_id_native=listing["source_id_native"], claim_type=claim_type,
+        surface="operator_input", page_kind="none", extraction_method="operator_manual",
+        extractor_id=EXTRACTOR_ID, extractor_version=EXTRACTOR_VERSION, contract_entry_id=None,
+        first_observed_at=datetime.now(UTC), blur_evidence="none", licence_class="operator",
+        value_text=value_text, subject_scoped=True, claim_confidence="exact")
     with conn.transaction():
-        with conn.cursor(row_factory=dict_row) as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO location_claim_batches
@@ -228,38 +143,24 @@ def submit_correction(
                 """,
                 (listing["source"], EXTRACTOR_VERSION, note),
             )
-            cur.execute(
-                _OPERATOR_CLAIM_SQL,
-                {
-                    "listing_id": listing_id,
-                    "source": listing["source"],
-                    "source_id_native": listing["source_id_native"],
-                    "claim_type": claim_type,
-                    "value_text": value_text,
-                    "extractor_id": EXTRACTOR_ID,
-                    "extractor_version": EXTRACTOR_VERSION,
-                },
-            )
-            counts = cur.fetchone()
+            written, enqueued = write_claims(cur, [claim], reason="operator_edit")
 
-    result: dict[str, Any] = {
+    return {
         "listing_id": listing_id,
         "source": listing["source"],
         "claim_type": claim_type,
         "value_text": value_text,
-        "inserted": counts["inserted"] == 1,
-        "restatement": counts["inserted"] == 0,
-        "enqueued": counts["enqueued"] == 1,
+        "written": written == 1,
+        "enqueued": enqueued == 1,
         "registry_echo": registry_echo,
         "resolved": False,
         "projection": None,
     }
-    return result
 
 
 def resolve_now(conn: psycopg.Connection, listing_id: int) -> bool:
     """Synchronous single-listing resolve (05 5.5.5). Best-effort: on failure the
-    unconditional enqueue guarantees the */15 drain converges."""
+    write's enqueue guarantees the drain converges."""
     try:
         from location_data.resolver import drain
 

@@ -2,8 +2,8 @@
 
 WHAT THIS LANE IS (rule 25: one store, one lane, twelve claim types, no flags)
   * THREE HALVES, all bounded by the run budget, in this order every hour:
-      - READINGS FIRST (W3, hourly only), so a reading supersedes before a body enqueues:
-        each listing's CURRENT stored reading not checked at the active contract;
+      - READINGS FIRST (W3, hourly only): each listing's CURRENT stored reading not
+        checked at the active contract;
       - THEN BODIES: the unmined latest detail bodies of active page-portal listings,
         drained straight out of `portal_raw_payloads` in 1 500-row batches on a keyset
         over `p.id` that CONTINUES across runs (W6-b) — these two share half the budget.
@@ -17,8 +17,7 @@ WHAT THIS LANE IS (rule 25: one store, one lane, twelve claim types, no flags)
         `(source, source_id_native)`, fetched from R2 and scoped by the contract's exclusion
         zones — the 14 page readers in `location_data.page_readers`;
       - the STORED READING: the text lane's answer about where the property is
-        (`listing_description_enrichments`, reader `location_data.text_reading`); a mined
-        reading SUPERSEDES the listing's other claims of the types it declares.
+        (`listing_description_enrichments`, reader `location_data.text_reading`).
   * Contract-driven: every claim is stamped with the `portal_contract_entries` row that
     produced it, and the extractor executes exactly those entries whose `locator` names a
     reader from `READERS`. A name in NO registry is a hard refusal (a real deploy error).
@@ -51,9 +50,9 @@ THE LICENCE LADDER RUNS FIRST (§6.1.2, and it is a filter, not an audit)
     claim, ever. Both substrates emit `licence_class = 'portal'` and nothing else.
 
 WHAT IT WRITES, AND ONLY THAT
-  `location_claims` (deduped on `claim_fingerprint`; the readings half also DELETEs the
-  claims a new reading supersedes), `dirty_locations` (the resolver's queue, inside the
-  same transaction), `location_claim_batches` (this lane's run ledger and cursor), and the
+  `location_claims` through `write_claims`, ONE claim per listing, claim type and author,
+  written only when its value changed (W3), `dirty_locations` (the resolver's queue, inside
+  the same statement), `location_claim_batches` (this lane's run ledger and cursor), and the
   mined-version stamps on the bodies and readings it mined.
   Refusals — a class-E page pin, an oversized value, a subject miss — are COUNTED and
   logged once per reason per batch. (`location_claim_observations`, `location_claim_absences`
@@ -94,7 +93,6 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     EMITTABLE_LICENCE_CLASSES,
     GUARD_CZ_BBOX,
     GUARDS,
-    MIRROR_UNSAFE_CHARS,
     MAX_CLAIM_VALUE_BYTES_ENV,
     SOURCES,
     SUBSTRATE_ARCHIVED_HTML,
@@ -117,10 +115,8 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     guard_admits,
     json_pointer,
     locator_reads,
-    mirror_is_faithful,
     point_wkt,
     sreality_payload_shape,
-    value_norm_mirror,
 )
 from scraper import db
 from scraper.cpus import job_cpus
@@ -149,8 +145,8 @@ WAVE = "W1"
 # keysets never read each other's position. That separation is also the SAFETY: the short
 # lag can skip a snapshot id allocated by a transaction that commits late (the bigserial
 # race `_SNAPSHOT_SEED_SQL` explains), and the hourly run — still 15 minutes back, on its
-# own cursor — re-reads that id within the hour. Mining a listing twice is free: claim
-# fingerprints are ON CONFLICT DO NOTHING and the enqueue is a bump (W2-a2).
+# own cursor — re-reads that id within the hour. Mining a listing twice is free: the one
+# write changes nothing that did not change (W3) and the enqueue is a bump (W2-a2).
 FAST_LANE = "location_claims_intake_fast"
 # W4: the readings half SCOPED to what the text lane just read, on the worker after each pass.
 # Its own lane string, because `_BODIES_RESUME_SQL` reads the newest finished row of a lane —
@@ -707,7 +703,7 @@ _LISTINGS_FULL_SQL = (
 #
 # The WINDOW is a keyset slice of the snapshot LOG, not of `listings`, deduped to one row per
 # listing afterwards: the readers read `listings.raw_json`, the CURRENT payload, so a listing
-# that changed five times would otherwise yield five identical fingerprints.
+# that changed five times would otherwise be mined five times over.
 #
 # THE SOURCE FILTER LIVES INSIDE THE WINDOW. Outside, a source-scoped run whose window held
 # no row for that portal would return zero listings — indistinguishable from "the log is
@@ -835,99 +831,90 @@ _STAMP_MINED_SQL = """
     WHERE p.id = v.id
 """
 
-# THE ENQUEUE BUMPS, IT DOES NOT SKIP (W2-a2). `DO NOTHING` here was silent data loss: on
-# 2026-09-12 the nine contract bumps re-mined ~60k listings that were ALREADY queued from the
-# previous sweep, so every enqueue was a no-op, the drain resolved them from the OLD claims
-# and deleted the queue row. 384,500 answer rows, 135 with a town. Bumping `enqueued_at`
-# re-arms the row against an in-flight slice (the drain's delete is bounded by the
-# `enqueued_at` it claimed) and clears any backoff the previous attempt left behind.
-# One statement, so the claim insert and the dirty_locations enqueue are atomic together
-# (03 §3.2: the enqueue happens INSIDE the claim-insert transaction; it is the only
-# coupling between intake and resolution).
-#
-# claim_fingerprint is computed in SQL, deliberately, and by a NAMED FUNCTION rather than
-# an expression pasted here, because `value_norm` is written by `location_value_norm()`
-# (migration 382) = `lower(unaccent(...))`, and PostgreSQL's `unaccent` dictionary is NOT
-# Python's NFKD combining-mark strip (it additionally expands ß→ss, ø→o, đ→d, ł→l …). A
-# Python mirror would drift on exactly the foreign-address cohort this program exists to
-# detect, and a drifted fingerprint does not conflict — it inserts.
-#
-# The tuple is 01 §4.2.1's, in its order, and is TIME-FREE.
-#
-# IT IS ALSO WIDER THAN THE TABLE (W1-b, migration 498). Eleven of its inputs —
-# source_id_native, page_kind, extractor_id, extractor_version, value_norm, shape,
-# distance_m, travel_mode, target_text, declared_confidence, legacy_source_column — are not
-# STORED, but the readers still compute them and they still enter the hash. That is what
-# keeps 5 M existing fingerprints valid: narrowing the tuple would re-dialect every one of
-# them, and a re-dialected fingerprint does not conflict, it inserts. The recordset below
-# carries the fingerprint's inputs and the stored columns, nothing else.
-_CLAIM_FINGERPRINT_SQL = """
-    location_claim_fingerprint(
-        t.listing_id, t.source, t.source_id_native,
-        t.claim_type, t.surface, t.page_kind, t.extraction_method,
-        t.extractor_id, t.extractor_version, t.contract_entry_id,
-        t.value_norm, t.value_text,
-        t.value_num, t.geom, t.shape,
-        t.value_jsonb, t.distance_m, t.travel_mode, t.target_text,
-        t.declared_precision_label, t.declared_confidence, t.declared_radius_m,
-        t.legacy_source_column)
-"""
-
-_CLAIM_INSERT_CTES = f"""
+# THE ONE WRITE (location W3, migration 699). For each listing, claim type and author
+# (`licence_class`: the portal or the operator) the store holds ONE claim: the value that author
+# stated most recently. Both producers, this lane and `operator_corrections`, run this statement.
+#  * It writes only on CHANGE: an unchanged re-mine, and every contract bump that restates the
+#    same value, creates no row version and enqueues nothing. A changed value is an UPDATE in
+#    place (the claim keeps its id; `claim_set_hash` hashes value + `first_observed_at`, so the
+#    listing re-resolves). A -> B -> A writes twice and ends on A.
+#  * Provenance is the entry that FIRST stated the current value: `contract_entry_id`, `surface`,
+#    `extraction_method` and `first_observed_at` move only with the value. So it is provenance,
+#    not admissibility (the read has no version filter), and `contracts.retract <portal>@N`
+#    deletes every value N first stated, re-confirmed later or not: a retract, like an
+#    activation, is followed by one full re-mine of that source.
+#  * Silence keeps the value (ruling Q4 = A): a reader that emits nothing for a type writes
+#    nothing. A value goes only when the same author states another one, when the operator
+#    outranks it (at read), by `contracts.retract`, or by a TOMBSTONE (`Claim.retract`: a marker
+#    whose page states the fact's absence, `gone` below).
+#  * The enqueue BUMPS, it does not skip (W2-a2: `DO NOTHING` once let the drain resolve 60 k
+#    re-mined listings from their OLD claims), and it is in the same statement as the write
+#    (the only coupling between intake and resolution).
+_WRITE_CLAIMS_SQL = """
     WITH input AS (
         SELECT * FROM jsonb_to_recordset(%(rows)s::jsonb) AS x(
-            listing_id bigint, source text, source_id_native text,
-            first_observed_at timestamptz,
-            claim_type text, surface text, page_kind text, extraction_method text,
-            extractor_id text, extractor_version text, contract_entry_id bigint,
-            value_text text, value_num numeric, value_geom_wkt text, value_shape_wkt text,
-            value_jsonb jsonb, distance_m integer, travel_mode text, target_text text,
-            declared_precision_label text, declared_confidence text,
-            declared_radius_m numeric, claim_confidence text,
-            blur_evidence text, licence_class text,
-            legacy_source_column text, subject_scoped boolean)
-    ), typed AS (
-        SELECT i.*,
-               location_value_norm(i.value_text) AS value_norm,
-               CASE WHEN i.value_geom_wkt IS NULL THEN NULL
-                    ELSE ST_GeomFromText(i.value_geom_wkt, 4326) END AS geom,
-               CASE WHEN i.value_shape_wkt IS NULL THEN NULL
-                    ELSE ST_GeomFromText(i.value_shape_wkt, 4326) END AS shape
-        FROM input i
-    ), fingerprinted AS (
-        SELECT t.*, {_CLAIM_FINGERPRINT_SQL} AS claim_fingerprint FROM typed t
-    ), deduped AS (
-        SELECT DISTINCT ON (claim_fingerprint) * FROM fingerprinted ORDER BY claim_fingerprint
-    ), ins AS (
-        INSERT INTO location_claims (
+            listing_id bigint, source text, first_observed_at timestamptz,
+            claim_type text, surface text, extraction_method text, contract_entry_id bigint,
+            value_text text, value_num numeric, value_geom_wkt text, value_jsonb jsonb,
+            declared_precision_label text, declared_radius_m numeric, claim_confidence text,
+            blur_evidence text, licence_class text, subject_scoped boolean, retract boolean)
+    ), one AS (
+        SELECT DISTINCT ON (listing_id, claim_type, licence_class) * FROM input
+         ORDER BY listing_id, claim_type, licence_class, first_observed_at DESC
+    ), up AS (
+        INSERT INTO location_claims AS c (
             listing_id, source, first_observed_at, claim_type, surface,
             extraction_method, contract_entry_id, value_text, value_num, value_geom,
             value_jsonb, declared_precision_label, declared_radius_m, claim_confidence,
-            blur_evidence, licence_class, subject_scoped, claim_fingerprint)
-        SELECT d.listing_id, d.source, d.first_observed_at,
-               d.claim_type::location_claim_type,
-               d.surface::location_claim_surface,
-               d.extraction_method::location_extraction_method,
-               d.contract_entry_id, d.value_text, d.value_num, d.geom, d.value_jsonb,
-               d.declared_precision_label, d.declared_radius_m,
-               d.claim_confidence::match_confidence,
-               d.blur_evidence::blur_evidence, d.licence_class::licence_class,
-               d.subject_scoped, d.claim_fingerprint
-        FROM deduped d
-        ON CONFLICT (claim_fingerprint) DO NOTHING
-        RETURNING id, listing_id
-    )"""
-_ENQUEUE_CTE = """, enqueued AS (
+            blur_evidence, licence_class, subject_scoped)
+        SELECT o.listing_id, o.source, o.first_observed_at,
+               o.claim_type::location_claim_type, o.surface::location_claim_surface,
+               o.extraction_method::location_extraction_method, o.contract_entry_id,
+               o.value_text, o.value_num,
+               CASE WHEN o.value_geom_wkt IS NULL THEN NULL
+                    ELSE ST_GeomFromText(o.value_geom_wkt, 4326) END,
+               o.value_jsonb, o.declared_precision_label, o.declared_radius_m,
+               o.claim_confidence::match_confidence, o.blur_evidence::blur_evidence,
+               o.licence_class::licence_class, o.subject_scoped
+          FROM one o
+         WHERE NOT coalesce(o.retract, false)
+        ON CONFLICT (listing_id, claim_type, licence_class) DO UPDATE SET
+               source = EXCLUDED.source, first_observed_at = EXCLUDED.first_observed_at,
+               surface = EXCLUDED.surface, extraction_method = EXCLUDED.extraction_method,
+               contract_entry_id = EXCLUDED.contract_entry_id,
+               value_text = EXCLUDED.value_text, value_num = EXCLUDED.value_num,
+               value_geom = EXCLUDED.value_geom, value_jsonb = EXCLUDED.value_jsonb,
+               declared_precision_label = EXCLUDED.declared_precision_label,
+               declared_radius_m = EXCLUDED.declared_radius_m,
+               claim_confidence = EXCLUDED.claim_confidence,
+               blur_evidence = EXCLUDED.blur_evidence, subject_scoped = EXCLUDED.subject_scoped
+         WHERE (c.value_text, c.value_num, c.value_geom, c.value_jsonb,
+                c.declared_precision_label, c.declared_radius_m, c.blur_evidence,
+                c.subject_scoped)
+               IS DISTINCT FROM
+               (EXCLUDED.value_text, EXCLUDED.value_num, EXCLUDED.value_geom,
+                EXCLUDED.value_jsonb, EXCLUDED.declared_precision_label,
+                EXCLUDED.declared_radius_m, EXCLUDED.blur_evidence, EXCLUDED.subject_scoped)
+        RETURNING c.listing_id
+    ), gone AS (
+        DELETE FROM location_claims c
+         USING one o
+         WHERE o.retract AND c.listing_id = o.listing_id
+           AND c.claim_type = o.claim_type::location_claim_type
+           AND c.licence_class = o.licence_class::licence_class
+        RETURNING c.listing_id
+    ), enqueued AS (
         INSERT INTO dirty_locations (listing_id, reason)
-        SELECT DISTINCT listing_id, 'claim_insert' FROM {changed}
+        SELECT DISTINCT listing_id, %(reason)s::text
+          FROM (SELECT listing_id FROM up UNION ALL SELECT listing_id FROM gone) changed
         ON CONFLICT (listing_id) DO UPDATE
            SET enqueued_at = now(), reason = EXCLUDED.reason,
                attempts = 0, next_eligible_at = now()
         RETURNING listing_id
-    )"""
-_CLAIM_WRITE_SQL = (_CLAIM_INSERT_CTES + _ENQUEUE_CTE.format(changed="ins") + """
-    SELECT (SELECT count(*) FROM ins), (SELECT count(*) FROM enqueued)
-""")
+    )
+    SELECT (SELECT count(*) FROM up) + (SELECT count(*) FROM gone),
+           (SELECT count(*) FROM enqueued)
+"""
 
 # THE READINGS HALF (W3, final-plan D1/D5). A listing's CURRENT reading is its successful
 # location reading of its CURRENT advert text (hashed by the text lane's own SQL), at the lane's
@@ -981,36 +968,19 @@ def _unmined_readings_sql(scoped: bool) -> str:
 _UNMINED_READINGS_SQL = _unmined_readings_sql(scoped=False)
 _SCOPED_READINGS_SQL = _unmined_readings_sql(scoped=True)
 
-# ONE STATEMENT per batch, each reading's four acts in it: insert its claims; DELETE the
-# listing's other same-source, non-operator claims of the reading entries' types (SUPERSESSION,
-# readings only — a degraded page must never delete a town); stamp the listing's readings (a
-# same-text one cleared, to be mined once preferred); enqueue. `reading_id` null: stamped only.
+# The readings' CHECKED stamp, in the batch transaction beside the claims they produced (so a
+# rolled-back batch is re-mined): plain on the reading it MINED, '~' on one of another text (a
+# same-text one cleared, to be mined once preferred). `reading_id` null: stamped only.
 _CHECKED = ("CASE WHEN e.id = m.reading_id THEN m.stamp"
             " WHEN e.text_hash IS DISTINCT FROM cur.text_hash THEN m.stamp || '~' END")
-_READING_WRITE_SQL = (_CLAIM_INSERT_CTES + f""", mined AS (
-        SELECT * FROM jsonb_to_recordset(%(readings)s::jsonb) AS m(
-            listing_id bigint, source text, reading_id bigint, stamp text, claim_types text[])
-    ), superseded AS (
-        DELETE FROM location_claims c
-         USING mined m
-         WHERE c.listing_id = m.listing_id AND c.source = m.source
-           AND m.reading_id IS NOT NULL AND c.contract_entry_id IS NOT NULL
-           AND c.claim_type::text = ANY(m.claim_types)
-           AND NOT EXISTS (SELECT 1 FROM fingerprinted f
-                            WHERE f.claim_fingerprint = c.claim_fingerprint)
-        RETURNING c.listing_id
-    ), stamped AS (
-        UPDATE listing_description_enrichments e SET mined_contract_version = {_CHECKED}
-          FROM mined m LEFT JOIN listing_description_enrichments cur ON cur.id = m.reading_id
-         WHERE e.listing_id = m.listing_id AND {_READING}
-           AND e.mined_contract_version IS DISTINCT FROM {_CHECKED}
-        RETURNING e.id
-    ), changed AS (
-        SELECT listing_id FROM ins UNION SELECT listing_id FROM superseded
-    )""" + _ENQUEUE_CTE.format(changed="changed") + """
-    SELECT (SELECT count(*) FROM ins), (SELECT count(*) FROM enqueued),
-           (SELECT count(*) FROM superseded)
-""")
+_STAMP_READINGS_SQL = f"""
+    UPDATE listing_description_enrichments e SET mined_contract_version = {_CHECKED}
+      FROM jsonb_to_recordset(%(readings)s::jsonb) AS m(listing_id bigint, reading_id bigint,
+                                                         stamp text)
+      LEFT JOIN listing_description_enrichments cur ON cur.id = m.reading_id
+     WHERE e.listing_id = m.listing_id AND {_READING}
+       AND e.mined_contract_version IS DISTINCT FROM {_CHECKED}
+"""
 
 
 # ------------------------------------------------------------------ db plumbing
@@ -1049,8 +1019,8 @@ def running_batch_id(
 # ------------------------------------------------------------------ lock resilience (W12)
 
 # A batch that lost a LOCK lost a race, not its data: the transaction rolled back on the way
-# out, the keyset cursor has not moved, and re-running it writes the same rows (claim
-# fingerprints are ON CONFLICT DO NOTHING, the enqueue is a bump). So the same batch runs
+# out, the keyset cursor has not moved, and re-running it writes the same rows (the one
+# write is keyed and change-only, the enqueue is a bump). So the same batch runs
 # again — the intake never skips rows to make progress. Everything else, a lost connection
 # above all, is raised for `run()` to stamp `failed` on, exactly as before: the workflow
 # restarts and the cursor is where the last committed batch left it.
@@ -1207,11 +1177,9 @@ def chunk_rows(
     serialized-byte budget (the one that actually matters, because a batch's row count says
     nothing about its bytes).
 
-    The listing boundary is what makes chunking SEMANTICS-PRESERVING, not merely smaller.
-    `claim_fingerprint`'s tuple (01 §4.2.1) begins with `listing_id, source,
-    source_id_native`, so two fingerprint-equal claims are necessarily the same listing's.
-    Keeping a listing's rows in one array therefore keeps every fingerprint-equal set inside
-    ONE statement, where `DISTINCT ON (claim_fingerprint)` still arbitrates it.
+    The listing boundary is what makes chunking SEMANTICS-PRESERVING, not merely smaller:
+    the claim key leads with `listing_id`, so one key never spans two statements and the
+    write's `DISTINCT ON` still arbitrates it.
 
     A group that exceeds `max_bytes` on its own is still emitted (a budget cannot split an
     array element) — that case is what `_refuse_oversized` exists to keep out of reach.
@@ -1230,24 +1198,24 @@ def chunk_rows(
         yield chunk
 
 
-def write_result(cur: psycopg.Cursor, result: IntakeResult) -> tuple[int, int]:
-    """Write one scan batch's claims. Returns (inserted, enqueued).
+def write_claims(
+    cur: psycopg.Cursor, claims: Sequence[Claim], reason: str = "claim_insert",
+) -> tuple[int, int]:
+    """THE one write of `location_claims` (W3), both producers' -> (claims changed, enqueued).
 
-    The caller's transaction is unchanged — every chunk is flushed inside it, so the batch
-    is still all-or-nothing and a failure still rolls the whole batch back. Claims are the
-    only rows this lane writes; a refusal is a counter, not a row.
+    Inside the caller's transaction: every chunk is flushed in it, so a batch stays
+    all-or-nothing. `reason` is the `dirty_locations` reason of the listings it changed.
     """
     max_rows = env_positive_int(WRITE_CHUNK_ROWS_ENV, DEFAULT_WRITE_CHUNK_ROWS)
     max_bytes = env_positive_int(WRITE_CHUNK_BYTES_ENV, DEFAULT_WRITE_CHUNK_BYTES)
-    inserted = enqueued = 0
-    claim_rows = [c.to_row() for c in result.claims]
-    claim_rows.sort(key=lambda r: r["listing_id"])
-    for chunk in chunk_rows(claim_rows, max_rows=max_rows, max_bytes=max_bytes):
-        cur.execute(_CLAIM_WRITE_SQL, {"rows": Jsonb(chunk)})
-        chunk_inserted, chunk_enqueued = (int(x) for x in cur.fetchone())
-        inserted += chunk_inserted
+    changed = enqueued = 0
+    rows = sorted((c.to_row() for c in claims), key=lambda r: r["listing_id"])
+    for chunk in chunk_rows(rows, max_rows=max_rows, max_bytes=max_bytes):
+        cur.execute(_WRITE_CLAIMS_SQL, {"rows": Jsonb(chunk), "reason": reason})
+        chunk_changed, chunk_enqueued = (int(x) for x in cur.fetchone())
+        changed += chunk_changed
         enqueued += chunk_enqueued
-    return inserted, enqueued
+    return changed, enqueued
 
 
 def stamp_mined_bodies(cur: psycopg.Cursor, stamps: list[dict[str, Any]]) -> None:
@@ -1726,7 +1694,7 @@ def drain_unmined_bodies(
                 stats["refusals"] += count
             if not dry_run and batch_id is not None:
                 phase.name = "claims insert / enqueue"
-                inserted, enqueued = write_result(cur, result)
+                inserted, enqueued = write_claims(cur, result.claims)
                 phase.name = "mined stamp"
                 stamp_mined_bodies(cur, stamps)
                 stats["claims_inserted"] += inserted
@@ -1820,7 +1788,6 @@ def drain_readings(
             LOG.warning("INTAKE readings half skipped: migration 581 is not applied")
             return
     stamps = [f"{s}@{entries[0].contract_version}" for s, entries in scope.items()]
-    types = {s: sorted({e.claim_type for e in entries}) for s, entries in scope.items()}
     model = text_lane.resolve_model(conn)
     params = {"sources": list(scope), "stamps": stamps, "cap": READINGS_PER_BATCH,
               "version": text_lane.extractor_version(model) if model else None}
@@ -1842,21 +1809,18 @@ def drain_readings(
                     result.extend(extract_listing(row, scope[src], reading=reading,
                                                   max_value_bytes=max_value_bytes))
                     stats["readings_mined"] += 1
-                mined.append({"listing_id": int(listing_id), "source": src, "stamp": stamp,
-                              "reading_id": reading_id, "claim_types": types[src]})
+                mined.append({"listing_id": int(listing_id), "stamp": stamp,
+                              "reading_id": reading_id})
             stats["claims"] += len(result.claims)
             for reason, count in result.refusals.items():
                 refusals[reason] = refusals.get(reason, 0) + count
                 stats["refusals"] += count
             if mined and not dry_run and batch_id is not None:
-                phase.name = "readings insert / supersede / stamp / enqueue"
-                cur.execute(_READING_WRITE_SQL, {
-                    "rows": Jsonb([c.to_row() for c in result.claims]),
-                    "readings": Jsonb(mined)})
-                inserted, enqueued, superseded = (int(x) for x in cur.fetchone())
-                stats["claims_inserted"] += inserted
+                phase.name = "readings write / stamp / enqueue"
+                changed, enqueued = write_claims(cur, result.claims)
+                cur.execute(_STAMP_READINGS_SQL, {"readings": Jsonb(mined)})
+                stats["claims_inserted"] += changed
                 stats["enqueued"] += enqueued
-                stats["claims_superseded"] += superseded
         return len(records)
 
     while budget.room_for(last_seconds, schedule.bodies_budget_share):
@@ -1864,8 +1828,8 @@ def drain_readings(
         selected = _with_lock_retry(reading_batch, family="readings", stats=stats,
                                     refusals=refusals, budget=budget)
         last_seconds = time.monotonic() - batch_started
-        LOG.info("INTAKE readings batch selected=%d mined=%d superseded=%d in %.1fs",
-                 selected, stats["readings_mined"], stats["claims_superseded"], last_seconds)
+        LOG.info("INTAKE readings batch selected=%d mined=%d written=%d in %.1fs",
+                 selected, stats["readings_mined"], stats["claims_inserted"], last_seconds)
         if selected < READINGS_PER_BATCH or dry_run:  # a dry run stamps nothing: same rows
             break
 
@@ -1882,8 +1846,8 @@ def mine_readings(
     pass): one scoped selector, the unchanged write, under a batch row of its own lane. The
     hourly run stays the backstop (retries, the delisted-once rows, a pass this one missed)."""
     stats: dict[str, Any] = dict.fromkeys(
-        ("readings_mined", "claims", "claims_inserted", "enqueued", "claims_superseded",
-         "refusals", "lock_retries"), 0)
+        ("readings_mined", "claims", "claims_inserted", "enqueued", "refusals",
+         "lock_retries"), 0)
     with guarded(conn, statement_timeout) as cur:
         cur.execute(_BATCH_INSERT_SQL, {
             "lane": READINGS_FAST_LANE, "source": None, "extractor_version": INTAKE_VERSION,
@@ -2028,7 +1992,7 @@ def run(
         "bodies_seconds": 0.0, "bodies_pass_complete": False,
         "bodies_backlog_remaining": None, "payload_seconds": 0.0,
         "bodies_resumed_from_id": 0, "bodies_cursor_after_id": 0,
-        "bodies_cursor_versions": None, "readings_mined": 0, "claims_superseded": 0,
+        "bodies_cursor_versions": None, "readings_mined": 0,
         "full_walk_continued": False, "full_walk_cursor": None, "lock_retries": 0,
         "stopped_early": False, "reached_end": False, "resumed_from_id": after_id,
     }
@@ -2045,7 +2009,7 @@ def run(
         # 250 000 rows behind. The fast schedule inverts it (W7-a2) — the JSON half is what
         # a minute-old listing needs, and the bodies pass takes the remainder of the budget.
         def drain_bodies() -> None:
-            if schedule.readings:  # FIRST: a mined reading supersedes before a body enqueues
+            if schedule.readings:
                 drain_readings(
                     conn, source=source, entries_by_source=entries_by_source,
                     statement_timeout=statement_timeout, budget=budget, batch_id=batch_id,
@@ -2118,7 +2082,7 @@ def run(
                     stats["refusals"] += count
                 if not dry_run and batch_id is not None:
                     phase.name = "claims insert / enqueue"
-                    inserted, enqueued = write_result(cur, result)
+                    inserted, enqueued = write_claims(cur, result.claims)
                     phase.name = "mined stamp"
                     stamp_mined_bodies(cur, stamps)
                     stats["claims_inserted"] += inserted
@@ -2243,13 +2207,12 @@ def run(
     # ONE LINE THE OPERATOR CAN READ A RUN OFF. The per-batch progress lines say what the
     # run was doing; this says what it achieved and what is left.
     LOG.info("INTAKE summary mode=%s source=%s outcome=%s listings=%d payload_claims=%d "
-             "claims_inserted=%d bodies_mined=%d readings_mined=%d superseded=%d "
+             "claims_inserted=%d bodies_mined=%d readings_mined=%d "
              "backlog_remaining=%s refusals=%s "
              "lock_retries=%d bodies=%.0fs (fetch %.0fs extract %.0fs) payload=%.0fs "
              "cursor=%d",
              mode, source or "*", outcome, stats["listings"], stats["claims_payload"],
              stats["claims_inserted"], stats["bodies_mined"], stats["readings_mined"],
-             stats["claims_superseded"],
              stats["bodies_backlog_remaining"]
              if stats["bodies_backlog_remaining"] is not None else "?",
              ",".join(f"{r}={c}" for r, c in stats["refusal_reasons"].items()) or "none",

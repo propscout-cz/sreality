@@ -797,11 +797,10 @@ def _enqueue_ctes() -> dict[str, str]:
 
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
-    from location_data import claims_intake, contracts, operator_corrections
+    from location_data import claims_intake, contracts
     return {
-        "claims_intake._CLAIM_WRITE_SQL": claims_intake._CLAIM_WRITE_SQL,
+        "claims_intake._WRITE_CLAIMS_SQL": claims_intake._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
-        "operator_corrections._OPERATOR_CLAIM_SQL": operator_corrections._OPERATOR_CLAIM_SQL,
     }
 
 
@@ -835,7 +834,7 @@ def test_the_bump_only_touches_columns_dirty_locations_actually_has():
                        "last_error", "next_eligible_at"}, columns
     assert "next_eligible_at timestamptz not null" in " ".join(body.split())
     for sql in _enqueue_ctes().values():
-        clause = " ".join(sql.split()).lower().split("do update")[1]
+        clause = " ".join(sql.split()).lower().split("on conflict (listing_id) do update")[1]
         assert "next_eligible_at = null" not in clause
 
 

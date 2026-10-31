@@ -26,7 +26,6 @@
           "extraction_method": "portal_structured_field",
           "snapshot_anchor": "unanchored_latest_fetch",
           "value_text": "Prodej bytu 2+1 Hodonín",
-          "value_norm": "prodej bytu 2 1 hodonin",
           "value_num": null,
           "value_geom_wkt": null,
           "value_shape_wkt": null,

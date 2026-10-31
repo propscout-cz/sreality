@@ -36,7 +36,6 @@ from location_data.claims_intake import (
     ListingRow,
     extract_listing,
     reading_entries,
-    value_norm_mirror,
 )
 from location_data.text_reading import Reading
 from location_data.page_readers import (
@@ -209,12 +208,11 @@ def bodies_for(source: str) -> dict[str, tuple[Body, ...]]:
 # identity or wall-clock rather than extraction behaviour: `listing_id` / `source` /
 # `source_id_native` (the golden's own key), `contract_entry_id` (a bigserial the DB
 # assigns), `extractor_version` (the golden header's `contract_version`) and
-# `first_observed_at` (the fixture's clock). `value_norm` is the diagnostic mirror of the
-# generated column, included because a normalisation change is exactly the kind of silent
-# drift this gate exists to surface.
+# `first_observed_at` (the fixture's clock). A tombstone (`retract`, W3) is recorded only
+# where a reader emits one, so a golden without one reads as before.
 _CLAIM_FIELDS = (
     "claim_type", "surface", "page_kind", "extraction_method",
-    "value_text", "value_norm", "value_num", "value_geom_wkt", "value_shape_wkt",
+    "value_text", "value_num", "value_geom_wkt", "value_shape_wkt",
     "value_jsonb", "distance_m", "travel_mode", "target_text",
     "declared_precision_label", "declared_confidence", "declared_radius_m",
     "claim_confidence", "blur_evidence", "licence_class",
@@ -225,8 +223,9 @@ _CLAIM_FIELDS = (
 def project_claim(claim: Claim) -> dict[str, Any]:
     projected: dict[str, Any] = {"extractor_id": claim.extractor_id}
     for name in _CLAIM_FIELDS:
-        projected[name] = (value_norm_mirror(claim.value_text) if name == "value_norm"
-                           else getattr(claim, name))
+        projected[name] = getattr(claim, name)
+    if claim.retract:
+        projected["retract"] = True
     return projected
 
 

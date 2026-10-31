@@ -2466,8 +2466,7 @@ def _text_pass_that_read(monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> lis
 
     def mine(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
         handed.append((list(listing_ids), kwargs))
-        return {"readings_mined": len(listing_ids), "claims_inserted": 3,
-                "claims_superseded": 1}
+        return {"readings_mined": len(listing_ids), "claims_inserted": 3}
 
     monkeypatch.setattr(claims_intake, "mine_readings", mine)
     return handed
@@ -2483,8 +2482,8 @@ def test_a_text_pass_that_read_listings_mines_those_readings_at_once(
     assert handed == [([11, 12], {"max_seconds": rw.LOCATION_READINGS_FAST_BUDGET_S,
                                   "statement_timeout": 60})]
     assert "listing_ids" not in last
-    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["superseded"] == 1
-    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 superseded=1")
+    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["written"] == 3
+    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 written=3")
                for r in caplog.records)
 
 

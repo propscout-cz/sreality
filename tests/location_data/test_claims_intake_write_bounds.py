@@ -24,7 +24,7 @@ from location_data.claims_intake import (
     chunk_rows,
     claim_value_bytes,
     extract_listing,
-    write_result,
+    write_claims,
 )
 from tests.location_data.claim_intake_fixtures import (
     OBSERVED_AT,
@@ -58,8 +58,6 @@ class _Cursor:
         return [p["rows"].obj for sql, p in self.executed if table in sql]
 
 
-# source_id_native, page_kind, extractor_id and extractor_version are not columns since
-# migration 498, but the fingerprint still hashes them, so a claim still carries them.
 def _claim(listing_id: int, *, value_text: str | None = None,
            value_jsonb: object | None = None, claim_type: str = "street_name") -> Claim:
     return Claim(
@@ -88,7 +86,7 @@ def test_a_batch_over_the_byte_budget_is_flushed_in_several_statements(monkeypat
         claims=[_claim(i, value_text="x" * 2000) for i in range(200)])
 
     cur = _Cursor()
-    inserted, enqueued = write_result(cur, result)
+    changed, enqueued = write_claims(cur, result.claims)
 
     arrays = cur.arrays("INSERT INTO location_claims")
     assert len(arrays) > 1
@@ -97,11 +95,10 @@ def test_a_batch_over_the_byte_budget_is_flushed_in_several_statements(monkeypat
     # Every chunk fits the budget, and the counters are the SUM over chunks - a chunked
     # write that reported only its last statement would silently under-count the batch row.
     assert all(_array_bytes(a) <= 64 * 1024 for a in arrays)
-    assert (inserted, enqueued) == (200, len(arrays))
-    # `rows` is the ONLY parameter now: W1-b dropped `location_claims.batch_id`, so the
-    # claim is no longer a child of the run ledger (`location_claim_batches` stays — it is
-    # the lane's cursor).
-    assert all(set(p) == {"rows"} for _, p in cur.executed)
+    assert (changed, enqueued) == (200, len(arrays))
+    # `rows` and the queue `reason` are the only parameters: W1-b dropped
+    # `location_claims.batch_id`, so a claim is no child of the run ledger.
+    assert all(set(p) == {"rows", "reason"} for _, p in cur.executed)
 
 
 def test_the_row_count_is_the_second_bound(monkeypatch):
@@ -111,7 +108,7 @@ def test_the_row_count_is_the_second_bound(monkeypatch):
     result = IntakeResult(claims=[_claim(i, value_text="Dlouhá") for i in range(200)])
 
     cur = _Cursor()
-    write_result(cur, result)
+    write_claims(cur, result.claims)
 
     arrays = cur.arrays("INSERT INTO location_claims")
     assert len(arrays) == 4 and all(len(a) == 50 for a in arrays)
@@ -122,19 +119,16 @@ def test_a_batch_inside_both_bounds_is_still_one_statement():
     result = IntakeResult(claims=[_claim(i, value_text="Dlouhá") for i in range(50)])
 
     cur = _Cursor()
-    write_result(cur, result)
+    write_claims(cur, result.claims)
 
     assert len(cur.arrays("INSERT INTO location_claims")) == 1
 
 
 def test_a_chunk_boundary_never_splits_one_listing():
-    """THE reviewer's-eye invariant. `claim_fingerprint` is computed in SQL over a tuple
-    that starts with (listing_id, source, source_id_native), so two fingerprint-equal claims
-    are necessarily one listing's. Keeping a listing whole keeps every fingerprint-equal set
-    inside ONE statement, where `DISTINCT ON (claim_fingerprint)` arbitrates it. Split them
-    and the second copy would find the first already committed by an earlier statement in
-    the same transaction, join the `resighted` cohort, and append an observation row for a
-    claim this very batch created."""
+    """THE reviewer's-eye invariant. The claim key starts with `listing_id`, so keeping a
+    listing whole keeps every key inside ONE statement, where the write's `DISTINCT ON`
+    arbitrates it: split, the later chunk would overwrite the earlier one's claim by
+    statement order instead of by observation."""
     rows = [{"listing_id": i // 4, "n": i} for i in range(40)]
 
     chunks = list(chunk_rows(rows, max_rows=3, max_bytes=10 ** 9))
@@ -167,7 +161,7 @@ def test_the_chunk_bounds_are_env_overridable_and_reject_nonsense(monkeypatch):
     result = IntakeResult(claims=[_claim(i, value_text="Dlouhá") for i in range(3)])
 
     cur = _Cursor()
-    write_result(cur, result)
+    write_claims(cur, result.claims)
 
     assert len(cur.arrays("INSERT INTO location_claims")) == 1
     assert DEFAULT_WRITE_CHUNK_ROWS == 5_000
