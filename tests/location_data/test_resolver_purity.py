@@ -7,8 +7,7 @@ clock, a socket or an RNG. The core's ONLY notion of "now" is
 `now()`.
 
 The three JOB modules are excluded by name and by nothing else: they are allowed a clock
-(a drain budget), a connection and a lease id (the wave shadow's `what_if` a connection),
-and they are the only modules that are.
+(a drain budget), a connection and a lease id, and they are the only modules that are.
 `as_of` is gone with the policy evaluator that read it — nothing in the four steps has a
 notion of "now" at all now, not even a derived one.
 """
@@ -23,7 +22,7 @@ import pytest
 _PACKAGE = Path(__file__).resolve().parents[2] / "location_data" / "resolver"
 
 # Jobs, not the resolver: they own the DB connection, the run budget and the lease.
-_JOB_MODULES = {"drain.py", "resolve_db.py", "what_if.py"}
+_JOB_MODULES = {"drain.py", "resolve_db.py", "lease.py"}
 
 _FORBIDDEN_ATTRS = {
     ("datetime", "now"), ("datetime", "utcnow"), ("datetime", "today"),

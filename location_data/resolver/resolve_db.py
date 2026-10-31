@@ -52,6 +52,8 @@ from typing import Any
 
 import psycopg
 
+from location_data.claims_common import Claim as IntakeClaim
+from location_data.claims_common import wkt_point
 from location_data.resolver import composite
 from location_data.resolver.types import (
     AddressPoint,
@@ -69,7 +71,8 @@ _CURRENT_REGISTRY_SQL = "SELECT id, label FROM registry_versions WHERE is_curren
 # resolution, each constrained `<> 'ephemeral_display_only'`. `listing_location` has no such
 # column, because the guard moved one step upstream and became stronger: a Mapy-class
 # coordinate is not refused at write time, it is never READ.
-_ADMISSIBLE_LICENCE_CLASSES = "('portal', 'operator')"
+ADMISSIBLE_LICENCE_CLASSES: tuple[str, ...] = ("portal", "operator")
+_ADMISSIBLE_LICENCE_CLASSES = "(" + ", ".join(f"'{c}'" for c in ADMISSIBLE_LICENCE_CLASSES) + ")"
 
 # AND SO DOES THE CONTRACT-VERSION RAIL — BUT A BUMP MUST NEVER BLACK A LISTING OUT (W11),
 # AND A HALF-FINISHED RE-MINE MUST NEVER BLANK ONE (W18-b).
@@ -586,6 +589,22 @@ def _claim(row: Sequence[Any]) -> Claim:
         declared_radius_m=None if row[14] is None else float(row[14]),
         blur_evidence=row[15], subject_scoped=row[16],
     )
+
+
+def claim_from_intake(claim: IntakeClaim, claim_id: int) -> Claim:
+    """An intake claim as `_claim` would read its stored row back (the wave shadow's re-mine)."""
+    lat, lon = wkt_point(claim.value_geom_wkt) if claim.value_geom_wkt else (None, None)
+    return Claim(
+        id=claim_id, listing_id=claim.listing_id, source=claim.source,
+        claim_type=claim.claim_type, surface=claim.surface,
+        extraction_method=claim.extraction_method, licence_class=claim.licence_class,
+        observed_at=claim.first_observed_at, value_text=claim.value_text,
+        value_num=None if claim.value_num is None else float(claim.value_num),
+        lat=lat, lon=lon, value_jsonb=claim.value_jsonb or {},
+        declared_precision_label=claim.declared_precision_label,
+        declared_radius_m=None if claim.declared_radius_m is None
+        else float(claim.declared_radius_m),
+        blur_evidence=claim.blur_evidence, subject_scoped=claim.subject_scoped)
 
 
 def load_claims(conn: psycopg.Connection, listing_id: int) -> list[Claim]:

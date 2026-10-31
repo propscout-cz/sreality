@@ -779,17 +779,19 @@ def decide_explicit(
     return out
 
 
-def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
-    """M1-M5 of one run against one rulings file, and with `--base` the D83 read lists."""
-    run_dir = Path(args.run_dir)
+def evaluate_and_report(run_dir: Path, rulings_dir: str | Path, out: Any, *,
+                        base: str | Path | None = None, reference: str | Path | None = None,
+                        artifact: str | Path | None = None, out_dir: str | Path | None = None,
+                        ) -> dict[str, Any] | None:
+    """M1-M5 of one run against the rulings (D83 lists with `base`), written and printed."""
     summary = json.loads((run_dir / RUN_FILE).read_text(encoding="utf-8"))
-    artifact = args.artifact or summary.get("artifact")
+    artifact = artifact or summary.get("artifact")
     if not artifact or not Path(artifact).is_file():
         print(f"no cohort artifact {artifact!r}: pass --artifact", file=sys.stderr)
-        return 1
+        return None
     dataset = load(artifact)
     run_view = evaluation.read_run(run_dir)
-    rulings = evaluation.read_rulings(args.rulings)
+    rulings = evaluation.read_rulings(rulings_dir)
     ids = set(dataset.listings)
     unstored = [key for key in rulings
                 if key[0] in ids and key[1] in ids and key not in run_view.rows]
@@ -808,23 +810,22 @@ def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
     else:
         explicit = decide_explicit(dataset, *engine, unstored)
     report: dict[str, Any] = {
-        "run": str(run_dir), "rulings": str(args.rulings), "artifact": str(artifact),
+        "run": str(run_dir), "rulings": str(rulings_dir), "artifact": str(artifact),
         "explicit_pairs": len(explicit),
         **({"explicit_skipped": skipped} if skipped else {}),
         "metrics": evaluation.measure(run_view, rulings, ids, explicit),
         # E111: E110 names the event that revokes it, so every evaluation COUNTS it.
         "revocation": revocation.check_rows(run_view.rows.values(), rulings).to_json(),
     }
-    if args.base:
+    if base:
         report["d83"] = evaluation.read_lists(
-            evaluation.read_run(args.base), run_view, rulings,
-            evaluation.read_reference(args.reference))
-        report["base"] = str(args.base)
-    target = Path(args.out or run_dir) / "evaluate.json"
+            evaluation.read_run(base), run_view, rulings, evaluation.read_reference(reference))
+        report["base"] = str(base)
+    target = Path(out_dir or run_dir) / "evaluate.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")
     metrics = report["metrics"]
-    print(f"evaluate {run_dir}  rulings {args.rulings}  ({metrics['M5_coverage']['verdict']})",
+    print(f"evaluate {run_dir}  rulings {rulings_dir}  ({metrics['M5_coverage']['verdict']})",
           file=out)
     for name in ("M1_precision", "M2_recall", "M3_purity", "M5_coverage"):
         print(f"  {name:<14}{json.dumps(metrics[name], sort_keys=True)}", file=out)
@@ -834,9 +835,17 @@ def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
               file=out)
     if "d83" in report:
         counts = {k: v for k, v in report["d83"]["counts"].items() if not isinstance(v, dict)}
-        print(f"  D83 vs {args.base}  {json.dumps(counts, sort_keys=True)}", file=out)
+        print(f"  D83 vs {base}  {json.dumps(counts, sort_keys=True)}", file=out)
     print(f"wrote {target}", file=out)
-    return 0
+    return report
+
+
+def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
+    """M1-M5 of one run against one rulings file, and with `--base` the D83 read lists."""
+    report = evaluate_and_report(Path(args.run_dir), args.rulings, out, base=args.base,
+                                 reference=args.reference, artifact=args.artifact,
+                                 out_dir=args.out)
+    return 0 if report is not None else 1
 
 
 def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
@@ -844,29 +853,34 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     scorer = json.loads(Path(args.scorer).read_text(encoding="utf-8"))
     settings = Settings.from_dict(scorer["settings"])
     model = model_of_version(scorer.get("model_version"))
-    root, rulings = Path(args.out), Path(args.rulings)
+    root, rulings, positions = Path(args.out), Path(args.rulings), Path(args.positions)
     candidate = root / "candidate" / "cohort.jsonl.gz"
-    movers = shadow.override(Path(args.artifact), Path(args.positions), candidate)
+    done = shadow.override(Path(args.artifact), positions, candidate)
     links = (load_must_not_link(str(rulings / MUST_NOT_LINK_FILE)),
              load_must_not_link(str(rulings / MUST_LINK_FILE)))
     for arm, artifact in (("base", args.artifact), ("candidate", candidate)):
         run_and_report(artifact, root / arm, settings, model, *links, out)
-    cmd_evaluate(argparse.Namespace(run_dir=str(root / "candidate"), rulings=str(rulings),
-                                    base=str(root / "base"), reference=None, artifact=None,
-                                    out=None), out)
-    report = json.loads((root / "candidate" / "evaluate.json").read_text(encoding="utf-8"))
-    verdict = shadow.judge(report, movers)
-    # A mover outside every exported block (no row today, a split-city row with no quarter) is
-    # in neither arm: the gap is printed, never hidden.
-    verdict["movers_listed"] = sum(1 for line in Path(args.positions).open(encoding="utf-8")
-                                   if line.strip())
+    report = evaluate_and_report(root / "candidate", rulings, out, base=root / "base")
+    if report is None:
+        return 1
+    run_file = positions.with_name(shadow.WHAT_IF_FILE)
+    verdict = shadow.judge(
+        report, done, together=evaluation.read_run(root / "candidate").co_pairs(),
+        recent=shadow.recent_same(rulings, args.recent_since),
+        what_if=json.loads(run_file.read_text(encoding="utf-8")) if run_file.is_file() else {})
+    verdict["recent_same"]["since"] = args.recent_since
     (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
                                            encoding="utf-8")
-    print(f"shadow {'PASS' if verdict['pass'] else 'FAIL'}  movers in cohort "
-          f"{verdict['movers_in_cohort']} of {verdict['movers_listed']}"
+    facts = verdict["run"]
+    print(f"shadow {'PASS' if verdict['pass'] else 'FAIL'}"
+          f"{' PARTIAL' if verdict['partial'] else ''}"
+          f"  ids {facts.get('requested', '?')} requested, scope {facts.get('scope', '?')}, "
+          f"limit {facts.get('limit', '?')}"
+          f"  movers in cohort {verdict['movers_in_cohort']} of {verdict['movers_listed']}"
           f"  E111 {'REVOKED' if verdict['revoked'] else 'clean'}"
           f"  rulings broken {len(verdict['broken_rulings'])}"
           f"  newly honoured {len(verdict['honoured_rulings'])}", file=out)
+    print(f"  recent same pairs {json.dumps(verdict['recent_same'], sort_keys=True)}", file=out)
     for lo, hi, ruling, _ in verdict["broken_rulings"]:
         print(f"  BROKEN {lo} x {hi} ({ruling})", file=out)
     for name, rows in verdict["d83_touching_movers"].items():
@@ -1036,12 +1050,14 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser = sub.add_parser(
         "shadow", help="a location wave's movers, base vs candidate under the live scorer")
     shadow_parser.add_argument("artifact", help="the base cohort.jsonl.gz (`autodedup.shadow`)")
-    shadow_parser.add_argument("positions", help="positions.jsonl (`resolver.what_if`)")
+    shadow_parser.add_argument("positions", help="positions.jsonl (`location_data.what_if`)")
     shadow_parser.add_argument("rulings", help="the labels export directory")
     shadow_parser.add_argument("--scorer", required=True, help="scorer.json (`autodedup.shadow`)")
     shadow_parser.add_argument("--out", required=True, help="directory for both arms")
     shadow_parser.add_argument("--show", type=int, default=50,
                                help="D83 edges printed per list (all are in shadow.json)")
+    shadow_parser.add_argument("--recent-since", default=shadow.RECENT_SINCE,
+                               help="the recent `same` rulings reported apart (ISO date)")
     shadow_parser.set_defaults(func=cmd_shadow)
 
     fit = sub.add_parser("fit", help="fit and calibrate a model from labels (PROGRAM.md §6)")

@@ -1,12 +1,14 @@
 """A location wave's movers, computed without a write: step 1 of the wave shadow.
 
-    python -m location_data.resolver.what_if --ids ids.txt --out shadow/w4 \\
+    python -m location_data.what_if --ids-sql "<SELECT id ...>" --scope apply --out shadow/w4 \\
         --claims remine --contract shadow/w4/realitymix@8.yaml
 
 Re-resolves an id list with this checkout's resolver over `drain.recompute` on a READ ONLY
-connection, after the wave's claim change (`none` W5/W5b/W6, `purge` W3, `remine` W4). A mover's row
-differs from today's `COHORT_LOCATION_SQL` row; `positions.jsonl` holds its new row in that read's
-columns, `movers.jsonl` old beside new. Design: `docs/design/location-quality/wave-shadow.md`.
+connection, after the wave's claim change (`none` W5/W5b/W6, `purge` W3, `remine` W4); SQL goes
+only through `autodedup.shadow.read_cursor`. A mover's row differs from today's
+`COHORT_LOCATION_SQL` row; `positions.jsonl` holds its new row in that read's columns,
+`movers.jsonl` old beside new, `what_if.json` the run.
+Design: `docs/design/location-quality/wave-shadow.md`.
 """
 
 from __future__ import annotations
@@ -25,6 +27,14 @@ from typing import Any
 import psycopg
 
 from autodedup.export_sql import COHORT_LOCATION_SQL
+from autodedup.shadow import (
+    MOVERS_FILE,
+    POSITIONS_FILE,
+    WHAT_IF_FILE,
+    in_apply_scope,
+    read,
+    read_cursor,
+)
 from location_data import claims_intake, contracts, page_readers, payloads
 from location_data.claims_common import (
     DEFAULT_MAX_CLAIM_VALUE_BYTES,
@@ -32,15 +42,13 @@ from location_data.claims_common import (
     IntakeResult,
     env_positive_int,
 )
-from location_data.claims_common import Claim as IntakeClaim
 from location_data.resolver import drain, projection
+from location_data.resolver.resolve_db import ADMISSIBLE_LICENCE_CLASSES, claim_from_intake
 from location_data.resolver.types import Claim, Resolution
 from scraper import db
 
-LOG = logging.getLogger("location_data.resolver.what_if")
+LOG = logging.getLogger("location_data.what_if")
 
-POSITIONS_FILE = "positions.jsonl"
-MOVERS_FILE = "movers.jsonl"
 # A re-mined claim is inserted after every stored one, and the resolver orders claims by id.
 NEW_CLAIM_ID = 10**12
 # The store keeps the radius as `numeric`, which rounds a float to 15 digits on the way in.
@@ -65,10 +73,8 @@ def purge(conn: psycopg.Connection, claims: dict[int, list[Claim]]) -> dict[int,
 
 def restate(today: list[Claim], mined: list[Claim], source: str,
             declared: frozenset[str]) -> list[Claim]:
-    """Today's claims once a bump of `source`'s contract mined `mined`, as `_claims_sql` reads."""
-    # Per claim type the newest version wins: the re-mine's where it stated the type, today's
-    # otherwise. A type the new contract no longer declares is not read; operator claims and
-    # another portal's are untouched.
+    """`_claims_sql` after `source`'s bump mined `mined`: per declared type, newest admissible."""
+    mined = [claim for claim in mined if claim.licence_class in ADMISSIBLE_LICENCE_CLASSES]
     stated = {claim.claim_type for claim in mined}
     kept = [claim for claim in today
             if claim.licence_class == "operator" or claim.source != source
@@ -76,28 +82,9 @@ def restate(today: list[Claim], mined: list[Claim], source: str,
     return kept + mined
 
 
-def as_resolver_claim(claim: IntakeClaim, claim_id: int) -> Claim:
-    """An intake claim as `location_claims` hands it back to the resolver (`resolve_db._claim`)."""
-    lat = lon = None
-    if claim.value_geom_wkt:
-        lon, lat = (float(v) for v in claim.value_geom_wkt.removeprefix("POINT(")
-                    .removesuffix(")").split())
-    return Claim(
-        id=claim_id, listing_id=claim.listing_id, source=claim.source,
-        claim_type=claim.claim_type, surface=claim.surface,
-        extraction_method=claim.extraction_method, licence_class=claim.licence_class,
-        observed_at=claim.first_observed_at, value_text=claim.value_text,
-        value_num=None if claim.value_num is None else float(claim.value_num),
-        lat=lat, lon=lon, value_jsonb=claim.value_jsonb or {},
-        declared_precision_label=claim.declared_precision_label,
-        declared_radius_m=None if claim.declared_radius_m is None
-        else float(claim.declared_radius_m),
-        blur_evidence=claim.blur_evidence, subject_scoped=claim.subject_scoped)
-
-
-def remine(contract: contracts.PortalContract, store: page_readers.BodyStore
-           ) -> drain.ClaimChange:
-    """W4: the contract's portal re-mined under it, payload and latest stored page alike."""
+def remine(contract: contracts.PortalContract, store: page_readers.BodyStore,
+           unmined: set[int]) -> drain.ClaimChange:
+    """W4: the contract's portal re-mined under it; a page that would not mine joins `unmined`."""
     entries = contracts.entries_of(contract)
     registers = {contract.source: page_readers.ScopeRegister.from_zones(
         contract.source, contract.exclusion_zones)}
@@ -106,7 +93,7 @@ def remine(contract: contracts.PortalContract, store: page_readers.BodyStore
 
     def change(conn: psycopg.Connection, claims: dict[int, list[Claim]]
                ) -> dict[int, list[Claim]]:
-        with conn.transaction(), conn.cursor() as cur:
+        with read_cursor(conn) as cur:
             scans = [scan for scan in claims_intake.scan_rows(cur, list(claims))
                      if scan.row.source == contract.source]
             bodies, _ = page_readers.load_bodies(
@@ -120,12 +107,13 @@ def remine(contract: contracts.PortalContract, store: page_readers.BodyStore
         for scan in scans:
             mined = claims_intake.extract_listing(scan.row, entries).claims
             outcome = outcomes.get(scan.row.listing_id)
-            if isinstance(outcome, IntakeResult):
+            if isinstance(outcome, IntakeResult) and "scope_incomplete" not in outcome.refusals:
                 mined += outcome.claims
-            elif outcome is not None:
-                LOG.warning("WHAT-IF page not re-mined listing_id=%d: %s",
-                            scan.row.listing_id, outcome)
-            new = [as_resolver_claim(claim, NEW_CLAIM_ID + n) for n, claim in enumerate(mined)]
+            elif scan.body is not None:
+                unmined.add(scan.row.listing_id)
+                LOG.warning("WHAT-IF page not re-mined listing_id=%d: %s", scan.row.listing_id,
+                            outcome if outcome is not None else "body not fetched")
+            new = [claim_from_intake(claim, NEW_CLAIM_ID + n) for n, claim in enumerate(mined)]
             out[scan.row.listing_id] = restate(claims[scan.row.listing_id], new,
                                                contract.source, declared)
         LOG.info("WHAT-IF re-mined %d listings, %d with a stored page", len(scans), len(pages))
@@ -154,13 +142,11 @@ def moved(old: dict[str, Any], new: dict[str, Any]) -> bool:
     return False
 
 
-def _stored(conn: psycopg.Connection, listing_ids: list[int]
-            ) -> tuple[list[str], dict[int, dict[str, Any]]]:
-    """Today's rows as the cohort export reads them, and that read's column names."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(COHORT_LOCATION_SQL, {"ids": listing_ids})
-        names = [column.name for column in cur.description or ()]
-        return names, {int(row[0]): dict(zip(names, row)) for row in cur.fetchall()}
+def select_ids(conn: psycopg.Connection, sql: str) -> list[int]:
+    """An operator's SELECT (column 1 = id), one subquery on the extended protocol: no `COMMIT;`."""
+    _, rows = read(conn, f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids",
+                   binary=True)
+    return [int(row[0]) for row in rows]
 
 
 def _line(record: dict[str, Any]) -> str:
@@ -173,45 +159,33 @@ def run(conn: psycopg.Connection, listing_ids: Sequence[int], out_dir: Path, *,
         ) -> dict[str, Counter[str]]:
     """Positions and movers for `listing_ids`; returns the dry run's tally per portal."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_RANK_SQL)
-        ranks = {str(g): (int(rank), bool(grain)) for g, rank, grain in cur.fetchall()}
-    tally: dict[str, Counter[str]] = {"*": Counter(of=len(listing_ids))}
+    _, rows = read(conn, _RANK_SQL)
+    ranks = {str(g): (int(rank), bool(grain)) for g, rank, grain in rows}
+    counts: dict[str, Counter[str]] = {"*": Counter(of=len(listing_ids))}
     with (out_dir / POSITIONS_FILE).open("w", encoding="utf-8") as positions, \
             (out_dir / MOVERS_FILE).open("w", encoding="utf-8") as movers:
         for page, new in drain.recompute(conn, listing_ids, batch_size=batch_size,
                                          claim_change=claim_change):
             if isinstance(new, Exception):
-                tally["*"]["failed"] += len(page)
+                counts["*"]["failed"] += len(page)
                 LOG.warning("WHAT-IF page from listing %d failed: %s", page[0], new)
                 continue
-            names, stored = _stored(conn, page)
+            names, stored = read(conn, COHORT_LOCATION_SQL, {"ids": page})
+            today = {int(values[0]): dict(zip(names, values)) for values in stored}
             for item in new:
-                full, old = position_row(item, ranks), stored.get(item.listing_id)
+                full, old = position_row(item, ranks), today.get(item.listing_id)
                 row = {name: full.get(name) for name in names}
-                counts = tally.setdefault(item.source, Counter())
-                drain._tally(counts, (item.listing_id, *((old or {}).get(k) for k in (
-                    "obec_kod", "cast_obce_kod", "house_number_cp", "granularity", "lat", "lon"))),
-                    item)
+                kept = counts.setdefault(item.source, Counter())
+                drain.tally(kept, drain.StoredRow.of(old or {}), item)
                 if old is not None and not moved(old, row):
                     continue
-                counts["movers"] += 1
+                kept["movers"] += 1
                 positions.write(_line(row))
                 movers.write(_line({"listing_id": item.listing_id, "source": item.source,
                                     "old": old, "new": row}))
-    for source, counts in sorted(tally.items()):
-        LOG.info("WHAT-IF source=%s %s", source, " ".join(f"{k}={v}" for k, v in counts.items()))
-    return tally
-
-
-def select_ids(conn: psycopg.Connection, sql: str) -> list[int]:
-    """The listing ids an operator's SELECT names (first column), as one read-only statement."""
-    # A subquery admits no second statement and no data-modifying CTE, and the extended protocol
-    # (`binary=True`) refuses a multi-statement string, so a `COMMIT; ...` cannot leave the
-    # READ ONLY transaction (the simple protocol would run it).
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids", binary=True)
-        return [int(row[0]) for row in cur.fetchall()]
+    for source, kept in sorted(counts.items()):
+        LOG.info("WHAT-IF source=%s %s", source, " ".join(f"{k}={v}" for k, v in kept.items()))
+    return counts
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -219,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--ids", help="a file of listing ids, whitespace-separated")
     source.add_argument("--ids-sql", help="a SELECT whose first column is the listing id")
+    parser.add_argument("--scope", choices=("all", "apply"), default="all",
+                        help="apply = only the ids the live apply scope admits today")
     parser.add_argument("--limit", type=int, default=0, help="the lowest N ids only (0 = all)")
     parser.add_argument("--out", required=True, help="directory for positions.jsonl, movers.jsonl")
     parser.add_argument("--claims", choices=("none", "purge", "remine"), default="none")
@@ -226,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=drain.DEFAULT_BATCH)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    unmined: set[int] = set()
     change: drain.ClaimChange | None = purge if args.claims == "purge" else None
     if args.claims == "remine":
         if not args.contract:
@@ -233,15 +210,26 @@ def main(argv: list[str] | None = None) -> int:
         store = payloads.open_store()
         if store is None:
             raise SystemExit("--claims remine reads the stored bodies from R2: set R2_*")
-        change = remine(contracts.parse_contract(Path(args.contract)), store)
+        change = remine(contracts.parse_contract(Path(args.contract)), store, unmined)
+    out = Path(args.out)
     with db.connect_read_only() as conn:
-        ids = sorted(set(select_ids(conn, args.ids_sql) if args.ids_sql is not None else
-                         (int(t) for t in Path(args.ids).read_text(encoding="utf-8").split())))
-        ids = ids[:args.limit] if args.limit > 0 else ids
-        LOG.info("WHAT-IF %d listing ids", len(ids))
-        tally = run(conn, ids, Path(args.out), claim_change=change, batch_size=args.batch_size)
+        named = (select_ids(conn, args.ids_sql) if args.ids_sql is not None
+                 else [int(t) for t in Path(args.ids).read_text(encoding="utf-8").split()])
+        requested = sorted(set(named))
+        scoped = in_apply_scope(conn, requested) if args.scope == "apply" else requested
+        ids = scoped[:args.limit] if args.limit > 0 else scoped
+        LOG.info("WHAT-IF %d ids requested, %d in scope %s, %d run", len(requested), len(scoped),
+                 args.scope, len(ids))
+        counts = run(conn, ids, out, claim_change=change, batch_size=args.batch_size)
+    counts["*"]["failed"] += len(unmined)
+    movers = sum(kept["movers"] for name, kept in counts.items() if name != "*")
+    (out / WHAT_IF_FILE).write_text(json.dumps({
+        "requested": len(requested), "scope": args.scope, "in_scope": len(scoped),
+        "limit": args.limit, "ids": len(ids), "claims": args.claims,
+        "failed": counts["*"]["failed"], "unmined": sorted(unmined)[:100], "movers": movers,
+    }, indent=1, sort_keys=True), encoding="utf-8")
     # A shadow over part of its ids is not a shadow: the operator re-runs, never judges it.
-    return 1 if tally["*"]["failed"] else 0
+    return 1 if counts["*"]["failed"] else 0
 
 
 if __name__ == "__main__":  # pragma: no cover

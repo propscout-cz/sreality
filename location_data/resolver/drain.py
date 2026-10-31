@@ -80,9 +80,9 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 import psycopg
 
@@ -160,8 +160,8 @@ UPDATE dirty_locations
 # for all 9,201 (a `mod()` filter took 21.9 s per 250, 2026-09-30); hash order, so a run cut
 # short by its budget has still covered a spread of ids.
 _SAMPLE_SQL = """
-SELECT listing_id, obec_kod, cast_obce_kod, house_number_cp, granularity::text,
-       ST_Y(geom), ST_X(geom)
+SELECT listing_id, obec_kod, cast_obce_kod, house_number_cp, granularity::text AS granularity,
+       ST_Y(geom) AS lat, ST_X(geom) AS lon
   FROM listing_location
  WHERE listing_id = ANY(coalesce(%s::bigint[], ARRAY(
        SELECT generate_series(7, max(listing_id), 100) FROM listing_location)))
@@ -894,9 +894,7 @@ def recompute(
     conn: psycopg.Connection, listing_ids: Sequence[int], *, batch_size: int = DEFAULT_BATCH,
     deadline: float | None = None, claim_change: ClaimChange | None = None,
 ) -> Iterator[tuple[list[int], list[Any] | Exception]]:
-    """The no-write read path (`--dry-run`, `what_if`): prefetch, claim change, warm, resolve."""
-    # SELECTs only: no lease, no queue row. A failed page comes back as its exception, and the
-    # deadline ends the walk, never the caller's report.
+    """The no-write read path (prefetch, claim change, warm, resolve); a failed page is yielded."""
     timeout_s = _batch_timeout_s()
     with _bounded(conn, timeout_s):
         registry_version_id, registry_label = resolve_db.current_registry_version(conn)
@@ -929,24 +927,43 @@ def dry_run(
     deadline = time.monotonic() + max_seconds
     with _bounded(conn, _batch_timeout_s()) as cur:
         cur.execute(_SAMPLE_SQL, (None if only_listing_id is None else [only_listing_id],))
-        stored = {int(row[0]): row for row in cur.fetchall()}
-    tally: dict[str, Counter[str]] = {"*": Counter(of=len(stored))}
+        names = [column.name for column in cur.description or ()]
+        stored = {row.listing_id: row for row in
+                  (StoredRow.of(dict(zip(names, values))) for values in cur.fetchall())}
+    counts: dict[str, Counter[str]] = {"*": Counter(of=len(stored))}
     for page, new in recompute(conn, list(stored), batch_size=batch_size, deadline=deadline):
         if isinstance(new, Exception):
-            tally["*"]["failed"] += len(page)
+            counts["*"]["failed"] += len(page)
             LOG.warning("SAMPLE page from listing %d failed: %s", page[0], new)
             continue
         for listing_id, item in zip(page, new):
-            _tally(tally.setdefault(item.source, Counter()), stored[listing_id], item)
-    for source, counts in sorted(tally.items()):
-        LOG.info("SAMPLE source=%s %s", source, " ".join(f"{k}={v}" for k, v in counts.items()))
-    return tally
+            tally(counts.setdefault(item.source, Counter()), stored[listing_id], item)
+    for source, kept in sorted(counts.items()):
+        LOG.info("SAMPLE source=%s %s", source, " ".join(f"{k}={v}" for k, v in kept.items()))
+    return counts
 
 
-def _tally(counts: Counter[str], stored: Sequence[Any], new: Any) -> None:
-    """One stored row against its re-resolution, keys in report order. A granularity change
-    also counts under its own `old>new` key, so the report says which way the rows moved."""
-    _, obec_kod, part_kod, cp, granularity, lat, lon = stored
+class StoredRow(NamedTuple):
+    """The stored answer a re-resolution is compared with, by column name."""
+
+    listing_id: int | None
+    obec_kod: int | None
+    cast_obce_kod: int | None
+    house_number_cp: str | None
+    granularity: str | None
+    lat: float | None
+    lon: float | None
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> "StoredRow":
+        """These fields by name off any `listing_location` read (`_SAMPLE_SQL`, the cohort's)."""
+        return cls(**{name: row.get(name) for name in cls._fields})
+
+
+def tally(counts: Counter[str], stored: StoredRow, new: Any) -> None:
+    """One stored row against its re-resolution; a granularity change also counts as `old>new`."""
+    obec_kod, part_kod, cp = stored.obec_kod, stored.cast_obce_kod, stored.house_number_cp
+    granularity, lat, lon = stored.granularity, stored.lat, stored.lon
     moved = distance_between(None if lat is None else (lat, lon),
                              None if new.lat is None else (new.lat, new.lon))
     counts.update({

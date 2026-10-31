@@ -700,7 +700,7 @@ _LISTINGS_FULL_SQL = (
 """)
 
 # An explicit listing set in the scan's record shape: the wave shadow re-mines these
-# (`resolver.what_if`), reading the same latest stored body the lane would.
+# (`location_data.what_if`), reading the same latest stored body the lane would.
 _LISTINGS_BY_ID_SQL = (
     _SELECT_COLUMNS + " NULL::bigint\n"
     + _FROM_LISTINGS + _BODY_JOIN + """

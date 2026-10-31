@@ -1835,8 +1835,8 @@
     },
     {
       "filename": "location_wave_shadow.yml",
-      "name": "Ops: Location wave shadow (the autodedup gate)",
-      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6) runs its movers through the autodedup harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
+      "name": "Ops: Location wave shadow (the engine gate)",
+      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6) runs its movers through the engine's harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1872,6 +1872,17 @@
           "options": null
         },
         {
+          "name": "scope",
+          "description": "apply = only the ids the live apply scope admits today; all = every id",
+          "required": true,
+          "type": "choice",
+          "default": "apply",
+          "options": [
+            "apply",
+            "all"
+          ]
+        },
+        {
           "name": "ids_sql",
           "description": "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)",
           "required": false,
@@ -1893,7 +1904,6 @@
         "R2_ACCOUNT_ID",
         "R2_BUCKET_NAME",
         "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_SESSION_URL",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": "location-wave-shadow",

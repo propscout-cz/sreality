@@ -395,10 +395,8 @@ def connect_session(
 
 
 def connect_read_only() -> psycopg.Connection:
-    """`connect_session()` whose every `conn.transaction()` opens as BEGIN READ ONLY."""
-    # Transaction-scoped: a session `SET` would leak to the next client of a pooler backend. A
-    # statement outside a transaction block is not covered; the wave shadow runs none.
-    conn = connect_session()
+    """`connect()` whose every `conn.transaction()` opens BEGIN READ ONLY (never a leaky `SET`)."""
+    conn = connect()
     conn.read_only = True
     return conn
 

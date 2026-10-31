@@ -454,8 +454,8 @@ def test_the_dry_run_counts_what_a_rule_change_does_to_the_stored_row():
     new = core.resolve([mm.claim(1, "obec_name", value_text="Praha")], mm.context(),
                        resolver_version="v", registry_version=REGISTRY)
     counts: Counter[str] = Counter()
-    drain._tally(counts, (1, 599212, 490067, "8", "street", 50.3, 14.4), new)
-    drain._tally(counts, (2, 554782, None, None, "obec", new.lat, new.lon), new)
+    drain.tally(counts, drain.StoredRow(1, 599212, 490067, "8", "street", 50.3, 14.4), new)
+    drain.tally(counts, drain.StoredRow(2, 554782, None, None, "obec", new.lat, new.lon), new)
     assert counts == Counter({"n": 2, "town": 1, "part": 1, "number_lost": 1,
                               "moved_300m": 1, "granularity": 1, "street>obec": 1})
 

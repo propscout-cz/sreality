@@ -5227,17 +5227,17 @@ places the row at the wrong town's point; there is no boundary tolerance, so a b
 town line moves to the town's point; autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
 town and část points (re-decided lazily, never forced).
 
-**A WAVE THAT MOVES POSITIONS IS SHADOWED THROUGH AUTODEDUP BEFORE IT DEPLOYS** (the location programme's
+**A WAVE THAT MOVES POSITIONS IS SHADOWED THROUGH THE ENGINE BEFORE IT DEPLOYS** (the location programme's
 standing gate, W3/W4/W5/W5b/W6; `docs/design/location-quality/wave-shadow.md`). The engine reads every
 position field through `COHORT_LOCATION_SQL` and `export.build_location`, in the export and the live lane
 alike, so the seam is the cohort artifact and `DECISION_MODULES` never change for it. Three commands, no
-production write: `location_data.resolver.what_if` re-resolves an id list with the wave's resolver and claim
-change (`none`, W3's `purge`, W4's `remine` under the bumped contract) over `drain.recompute`, the dry run's
-read path, on `db.connect_read_only()`, and writes the movers; `autodedup.shadow` exports their old and new
-blocks, the rulings and the live scorer in-process (no `autodedup.iterations` row); `harness shadow`
-rewrites the movers' blocks, runs base and candidate under the live scorer and the operator's links, and
-passes only when E111 is clean and no ruled pair moved against its ruling. D83 edges touching a mover are
-printed, never judged.
+production write (every statement in a READ ONLY transaction on `db.connect_read_only()`):
+`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W3's
+`purge`, W4's `remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
+writes the movers; `autodedup.shadow` sizes their old and new blocks (capped) and exports them, the rulings
+and the live scorer in-process (no `autodedup.iterations` row); `harness shadow` rewrites the movers'
+blocks, runs base and candidate under the live scorer and the operator's links, and passes only when E111
+is clean and no ruled pair moved against its ruling. D83 edges touching a mover are printed, never judged.
 
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named

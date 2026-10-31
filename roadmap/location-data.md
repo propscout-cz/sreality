@@ -1240,15 +1240,18 @@ component is slimmed twice — each wave rewrites one component and slims its st
   ~08–10Z (not 03:17), so `location_resolve.yml mode=full-resolve` is dispatched right after the deploy.
 - **The wave shadow — the programme's standing gate instrument, 2026-10-31** (#2225; as built:
   `docs/design/location-quality/wave-shadow.md`). A wave that moves positions or quarter codes (W3, W4, W5,
-  W5b, W6) runs its movers through autodedup before it deploys, with no production write and no brake:
-  `location_data.resolver.what_if` (post-wave positions over `drain.recompute`, the dry run's read path, now
-  shared; claim change `none` / `purge` / `remine`) → `autodedup.shadow` (the movers' blocks, the rulings and
-  the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111 clean and no
-  ruled pair moved against its ruling; D83 edges touching a mover printed). "Approved-split sessions" in
-  PROGRAM.md now reads as the rulings ledger inside the affected blocks. First use: W4 (PR #2220), then W3.
-  Not yet run against production (no local DB/R2 credentials in the building session); it runs where the
-  secrets live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
-  `backup_before_drop.yml`).
+  W5b, W6) runs its movers through the engine before it deploys, with no production write and no brake:
+  `location_data.what_if` (post-wave positions over `drain.recompute`, the dry run's read path, now shared;
+  claim change `none` / `purge` / `remine`) → `autodedup.shadow` (the movers' blocks, sized and capped, the
+  rulings and the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111
+  clean and no ruled pair moved against its ruling; PARTIAL when ids were cut or a mover sat outside the
+  cohort; the recent `same` rulings counted apart; D83 edges touching a mover printed). "Approved-split
+  sessions" in PROGRAM.md now reads as the rulings ledger inside the affected blocks. Runs where the secrets
+  live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
+  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. `what_if.restate` and `what_if.purge` are
+  **deleted when W3 lands** (W3 replaces the read; `what_if --claims purge` then reads all claims raw and
+  applies the keeper rule). Owed before W5's shadow: an id-grain export block for movers that sit in no
+  block today (Praha rows gaining a quarter).
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

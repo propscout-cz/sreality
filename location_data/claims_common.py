@@ -786,6 +786,12 @@ def point_wkt(lat: float, lon: float) -> str:
     return f"POINT({lon!r} {lat!r})"
 
 
+def wkt_point(wkt: str) -> tuple[float, float]:
+    """`point_wkt`'s inverse: (lat, lon)."""
+    lon, lat = (float(v) for v in wkt.removeprefix("POINT(").removesuffix(")").split())
+    return lat, lon
+
+
 def envelope_wkt(lat_min: float, lon_min: float, lat_max: float, lon_max: float) -> str:
     corners = (
         (lon_min, lat_min), (lon_max, lat_min), (lon_max, lat_max),

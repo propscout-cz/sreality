@@ -46,7 +46,7 @@ from location_data.claims_common import apply_transforms
 from location_data.claims_intake import Entry, ListingRow
 from location_data.html_scope import ScopeRegister, ScopedDocument, scope_html
 from location_data.resolver import check
-from location_data.resolver.what_if import as_resolver_claim
+from location_data.resolver.resolve_db import claim_from_intake
 from location_data.page_readers import (
     PAGE_READERS,
     ArchivedPayload,
@@ -847,4 +847,4 @@ def test_the_foreign_body_claims_a_country_the_resolver_maps_and_a_town_that_can
         read("id.det.subject_feature", document, native=FOREIGN_NATIVE)
     # The claim as the resolver reads it: a bare alpha-2 IS the code, and HR is not CZ, so
     # CHECK answers `foreign` with `country_code='HR'` instead of `undetermined`.
-    assert check.country_codes([as_resolver_claim(claims["id.det.country"][0], 1)], {}) == {"HR"}
+    assert check.country_codes([claim_from_intake(claims["id.det.country"][0], 1)], {}) == {"HR"}

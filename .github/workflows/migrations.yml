@@ -192,6 +192,7 @@ jobs:
       # completeness read are PostGIS and anti-join answers, not SQL shapes; so W3's readings half.
       # test_map_overlays_live joins because migration 600's tile renderer is plpgsql: its
       # PostGIS calls resolve only when it runs, and only real tiles show the layers it writes.
+      # test_connect_read_only_live joins because the wave shadow's "no write" is the server's refusal.
       - name: PREPARE every SQL statement against the replayed schema
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -201,6 +202,7 @@ jobs:
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/test_map_overlays_live.py \
+                 tests/scraper/test_connect_read_only_live.py \
                  tests/toolkit/test_dedup_candidates_sql.py -q
 
       - name: Tenant-isolation sweep (RLS cross-tenant denial, Phase 1)

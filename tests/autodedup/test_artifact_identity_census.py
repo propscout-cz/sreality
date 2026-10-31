@@ -35,6 +35,8 @@ LANE_WRITERS: tuple[str, ...] = (
     "rt_lease.py", "score_lane.py",
     "score_sql.py",
     "seals.py",
+    # The wave shadow: scorer.json / shadow.json and the exports it drives are a workflow artifact.
+    "shadow.py",
 )
 
 # Columns and claim names that identify a PERSON — the operator or a broker.
