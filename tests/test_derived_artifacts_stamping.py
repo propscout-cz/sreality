@@ -384,12 +384,7 @@ def test_no_registry_producer_names_a_workflow_file(registry):
 
 
 def test_no_artifact_of_a_runner_job_is_hosted_on_github(conn):
-    """RED by: `map_overlay_tiles` reading `github-actions` after its job moved (until 702).
-
-    Health gives a `github-actions` row 18 h of delivery slack and names the host in its message,
-    so a row left behind when its job moves is judged against the wrong scheduler. A job's move PR
-    re-hosts its row.
-    """
+    """RED by: `map_overlay_tiles` reading `github-actions` after its job moved (until 702): a move PR re-hosts its row."""
     from scraper.jobs import runner_jobs
 
     moved = {f"{job.argv[0].replace('.', '/')}.py": job.name for job in runner_jobs()}
