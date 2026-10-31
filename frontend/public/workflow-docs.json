@@ -1900,6 +1900,76 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_resolve.yml"
     },
     {
+      "filename": "location_wave_shadow.yml",
+      "name": "Ops: Location wave shadow (the autodedup gate)",
+      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6) runs its movers through the autodedup harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
+      "manual": true,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "wave",
+          "description": "A label for the artifact name (a-z 0-9 -), e.g. w4-realitymix-v8",
+          "required": true,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "claims",
+          "description": "The wave's claim change: none (W5/W5b/W6), remine (W4), purge (W3)",
+          "required": true,
+          "type": "choice",
+          "default": "none",
+          "options": [
+            "none",
+            "remine",
+            "purge"
+          ]
+        },
+        {
+          "name": "contract_ref",
+          "description": "remine: <git ref>:<path> of the wave's contract, read with git show",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        },
+        {
+          "name": "ids_sql",
+          "description": "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)",
+          "required": false,
+          "type": "string",
+          "default": "SELECT l.id FROM listings l WHERE l.source = 'realitymix' AND l.is_active AND EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'coordinate') AND NOT EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'precision_declaration' AND c.value_text = 'estimated')",
+          "options": null
+        },
+        {
+          "name": "limit",
+          "description": "Only the lowest N ids (0 = all)",
+          "required": false,
+          "type": "number",
+          "default": "0",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "R2_ACCESS_KEY_ID",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET_NAME",
+        "R2_SECRET_ACCESS_KEY",
+        "SUPABASE_DB_SESSION_URL",
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": "location-wave-shadow",
+      "cancelInProgress": false,
+      "timeoutMinutes": 300,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_wave_shadow.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_wave_shadow.yml"
+    },
+    {
       "filename": "migrations.yml",
       "name": "CI: schema replay + SQL correctness",
       "description": "Two gates on one throwaway Postgres, hermetic (no secrets, never touches prod):",

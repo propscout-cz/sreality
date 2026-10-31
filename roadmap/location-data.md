@@ -1246,7 +1246,9 @@ component is slimmed twice — each wave rewrites one component and slims its st
   the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111 clean and no
   ruled pair moved against its ruling; D83 edges touching a mover printed). "Approved-split sessions" in
   PROGRAM.md now reads as the rulings ledger inside the affected blocks. First use: W4 (PR #2220), then W3.
-  Not yet run against production (no local DB/R2 credentials in the building session).
+  Not yet run against production (no local DB/R2 credentials in the building session); it runs where the
+  secrets live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
+  `backup_before_drop.yml`).
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

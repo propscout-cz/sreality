@@ -176,6 +176,16 @@ def test_run_writes_the_movers_and_only_the_movers(monkeypatch, tmp_path: Path):
     assert tally["sreality"]["movers"] == 2 and tally["*"]["failed"] == 1
 
 
+def test_an_operators_id_select_runs_as_one_wrapped_read_only_statement():
+    """The workflow's free-text SELECT: wrapped as a subquery (no second statement, no
+    data-modifying CTE) and sent on the extended protocol, which refuses `COMMIT; ...`."""
+    conn = _FakeConn(rows=[(3,), (1,)])
+    assert what_if.select_ids(conn, " SELECT id FROM listings WHERE source LIKE 'r%';\n") == [3, 1]
+    sql, kwargs = conn.executed[-1]
+    assert sql == "SELECT * FROM (\nSELECT id FROM listings WHERE source LIKE 'r%'\n) AS shadow_ids"
+    assert kwargs == {"binary": True} and conn.in_transaction
+
+
 def test_the_dry_run_and_the_shadow_share_one_read_path():
     """`recompute` is the one prefetch -> change -> warm -> four steps loop; the dry run is a
     caller of it, not a second copy."""
@@ -191,8 +201,8 @@ def test_the_dry_run_and_the_shadow_share_one_read_path():
 
 
 class _FakeCursor:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.rows = rows
+    def __init__(self, rows: list[tuple[Any, ...]], executed: list[Any]) -> None:
+        self.rows, self.executed = rows, executed
 
     def __enter__(self) -> "_FakeCursor":
         return self
@@ -200,8 +210,8 @@ class _FakeCursor:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def execute(self, sql: str, params: Any = None) -> None:
-        return None
+    def execute(self, sql: str, params: Any = None, **kwargs: Any) -> None:
+        self.executed.append((sql, kwargs))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.rows
@@ -209,11 +219,12 @@ class _FakeCursor:
 
 class _FakeConn:
     def __init__(self, rows: list[tuple[Any, ...]] | None = None) -> None:
-        self.rows = rows or []
+        self.rows, self.executed, self.in_transaction = rows or [], [], False
 
     @contextmanager
     def transaction(self):
+        self.in_transaction = True
         yield self
 
     def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self.rows)
+        return _FakeCursor(self.rows, self.executed)

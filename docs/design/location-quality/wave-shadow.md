@@ -53,6 +53,7 @@ the blocking probes (`blocking.probes_town_key`, E300), `features` (`dist_norm`,
 ## Running it for a wave (W4, realitymix@8, #2219 / PR #2220)
 Needs `SUPABASE_DB_URL` (or `SUPABASE_DB_SESSION_URL`) and, for `remine`, the `R2_*` variables (the bodies
 live in R2). Run from a checkout carrying this tool; the wave's contract comes from its branch.
+`what_if --ids-sql "<SELECT>" [--limit N]` reads the ids itself (read-only) instead of `--ids <file>`.
 ```bash
 mkdir -p shadow/w4
 git show origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml > shadow/w4/realitymix@8.yaml
@@ -73,6 +74,22 @@ python3 -m autodedup.shadow shadow/w4
 python3 -m autodedup.harness shadow shadow/w4/base/cohort.jsonl.gz shadow/w4/positions.jsonl \
     shadow/w4/labels --scorer shadow/w4/scorer.json --out shadow/w4/judge
 ```
+The same three steps run where the secrets live, as a dispatch-only workflow
+(`.github/workflows/location_wave_shadow.yml`: no cron, one run at a time, 300 minutes; dispatchable once
+it is on `main`, GitHub's rule for a new `workflow_dispatch`):
+```bash
+gh workflow run location_wave_shadow.yml --ref main -f wave=w4-realitymix-v8 \
+    -f claims=remine -f limit=50 \
+    -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
+```
+`ids_sql` defaults to the W4 selection above (edit it, or add a `LIMIT`); it runs as ONE statement wrapped
+in a subquery, on the extended protocol, inside a READ ONLY transaction (`what_if.select_ids`), so no input
+reaches a writable path. No movers: steps 2 and 3 are skipped and the run ends green. The artifact
+`wave-shadow-<wave>-<run id>` (30 days) holds `positions.jsonl`, `movers.jsonl`, `scorer.json` and
+`judge/` (both arms' `run.json`, `clusters.json`, `pairs.jsonl.gz`, `evaluate.json`, and `shadow.json`),
+never a cohort artifact. `--ref` decides the resolver: W4 changes only a contract, so `main`; W5, W5b and
+W6 dispatch from their own branch once it has merged `main`.
+
 W3: `--claims purge`; W5, W5b, W6: `--claims none` from the wave's branch. Size it before step 2: the
 export prints its block count, and a block costs what its town does (Pardubice: 7,252 ads, 107 MB,
 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about 2.4 GB). A wide

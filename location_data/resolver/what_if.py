@@ -204,9 +204,22 @@ def run(conn: psycopg.Connection, listing_ids: Sequence[int], out_dir: Path, *,
     return tally
 
 
+def select_ids(conn: psycopg.Connection, sql: str) -> list[int]:
+    """The listing ids an operator's SELECT names (first column), as one read-only statement."""
+    # A subquery admits no second statement and no data-modifying CTE, and the extended protocol
+    # (`binary=True`) refuses a multi-statement string, so a `COMMIT; ...` cannot leave the
+    # READ ONLY transaction (the simple protocol would run it).
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids", binary=True)
+        return [int(row[0]) for row in cur.fetchall()]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="a location wave's movers, without a write")
-    parser.add_argument("--ids", required=True, help="a file of listing ids, whitespace-separated")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ids", help="a file of listing ids, whitespace-separated")
+    source.add_argument("--ids-sql", help="a SELECT whose first column is the listing id")
+    parser.add_argument("--limit", type=int, default=0, help="the lowest N ids only (0 = all)")
     parser.add_argument("--out", required=True, help="directory for positions.jsonl, movers.jsonl")
     parser.add_argument("--claims", choices=("none", "purge", "remine"), default="none")
     parser.add_argument("--contract", default=None, help="remine: the wave's contract file")
@@ -221,8 +234,11 @@ def main(argv: list[str] | None = None) -> int:
         if store is None:
             raise SystemExit("--claims remine reads the stored bodies from R2: set R2_*")
         change = remine(contracts.parse_contract(Path(args.contract)), store)
-    ids = [int(token) for token in Path(args.ids).read_text(encoding="utf-8").split()]
     with db.connect_read_only() as conn:
+        ids = sorted(set(select_ids(conn, args.ids_sql) if args.ids_sql is not None else
+                         (int(t) for t in Path(args.ids).read_text(encoding="utf-8").split())))
+        ids = ids[:args.limit] if args.limit > 0 else ids
+        LOG.info("WHAT-IF %d listing ids", len(ids))
         tally = run(conn, ids, Path(args.out), claim_change=change, batch_size=args.batch_size)
     # A shadow over part of its ids is not a shadow: the operator re-runs, never judges it.
     return 1 if tally["*"]["failed"] else 0
