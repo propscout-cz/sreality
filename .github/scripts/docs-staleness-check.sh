@@ -34,4 +34,14 @@ warn_if_stale '^api/llm_client\.py$|^api/providers/'             llm-pipelines  
 warn_if_stale '^scraper/|^\.github/workflows/.*index_walk' scraper-ops "scraper/ or an index-walk workflow"
 warn_if_stale '^scripts/verify_pipeline\.py$|^scripts/checks/|^toolkit/system_alerts\.py$|^scripts/health_canary\.py$|^scripts/record_workflow_failures\.py$|^scripts/failure_signature\.py$|^\.github/workflows/verify_pipeline\.yml$' scraper-ops "the health check harness, its ladder, the canary or its workflow"
 
+# The admin Agent platform page states each ticket of the programme; the PR that closes one moves it there.
+agent_map='frontend/src/lib/agentPlatformMap.ts'
+if ! grep -qx "$agent_map" <<< "$changed"; then
+  for n in $(grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' <<< "${PR_BODY:-}" | grep -oE '[0-9]+'); do
+    if grep -qE "\bn: ${n}, done: false" "$agent_map"; then
+      echo "::warning::This PR closes #${n} but doesn't touch ${agent_map}: flip its done so the admin Agent platform page stays true."
+    fi
+  done
+fi
+
 exit 0
