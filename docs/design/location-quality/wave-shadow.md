@@ -59,17 +59,25 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
 2. **Size, then export**: `python3 -m autodedup.shadow <dir>`. Blocks = each mover's old and new block at
    E300's grain (`blocks_for`: the quarter in Praha, Brno and Ostrava, the town elsewhere; a split-city side
    with no quarter would export the whole city, so it is left out and counted). It prints every block with
-   its ad count first (`block_sizes`, the export's own selection) and refuses, exit 2, above
-   `--max-blocks` (40) or `--max-ads` (60,000). Then the cohort, the rulings and the live generation's
-   scorer (`RT_CALIBRATION_SCORER_SQL`, generation `rt`) into `scorer.json`.
+   its ad count first (`block_sizes`, the export's own selection) and the fewest groups that fit the caps.
+   `--block-group i/n` (default 1/1) sorts the blocks by key, cuts them into n contiguous groups and
+   exports and judges group i only; `--max-blocks` (40) and `--max-ads` (60,000) apply to that group, and
+   a group over them is refused with exit 2, naming the n to dispatch. Then the group's cohort, the rulings
+   and the live generation's scorer (`RT_CALIBRATION_SCORER_SQL`, generation `rt`) into `scorer.json`, and
+   the group into `group.json`.
 3. **The gate**: `python3 -m autodedup.harness shadow` (DB-free). `shadow.override` rewrites the movers'
    blocks with `build_location` (other records byte-identical); both arms run under the live scorer with
    the labels' `must_not_link.jsonl` / `must_link.jsonl` (the same body as `harness run`); then
    `evaluate --base`; `shadow.judge` writes `shadow.json` and sets the exit code.
-   **PASS** = E111 clean on the candidate and no ruled pair moved against its ruling (a `same` pair the
-   base held together split, a `different` pair newly joined). A ruling newly honoured is reported, not
-   failed. **PARTIAL** labels a verdict whenever `limit` cut the ids or a mover sat in no exported block
-   (`movers in cohort M of N`); it is still judged. The 413-style recent `same` rulings (newest word
+   **PASS** = no NEW operator negative inside a K-B family and no ruled pair moved against its ruling (a
+   `same` pair the base held together split, a `different` pair newly joined). E111 runs on BOTH arms
+   (`revocation.check_rows` over the base's rows too) and fails only on a negative the candidate holds
+   and the base does not: E111 reports and never decides (autodedup PROGRAM.md E111), so a negative
+   already inside a family is today's state, printed as `E111 base N / candidate M, new K` with the pairs
+   in `shadow.json` (run 41213246616's FAIL was that standing state). A ruling newly honoured is
+   reported, not failed. **PARTIAL** labels a verdict whenever `limit` cut the ids or a mover sat in no
+   exported block (`movers in cohort M of N`); it is still judged. A mover whose old block another group
+   exports counts as in another group, never unjudged. The 413-style recent `same` rulings (newest word
    `same`, written since `--recent-since`, default 2026-10-27) are counted apart: judged, held, broken,
    apart in both, unjudged (an ad outside the cohort: printed, never a fail). D83 edges
    (`merge_gained/lost`, `copairs_gained/lost`) touching a mover are printed for the operator (`--show`,
@@ -85,10 +93,35 @@ gh workflow run location_wave_shadow.yml --ref main -f wave=w4-realitymix-v8 \
     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
 ```
 The ids_sql input defaults to the W4 candidates (active realitymix ads with a pin and no `estimated`
-declaration); edit it or add a `LIMIT`. No movers: steps 2 and 3 are skipped and the run ends green. The
-artifact `wave-shadow-<wave>-<run id>` (30 days) holds `positions.jsonl`, `movers.jsonl`, `what_if.json`,
-`scorer.json` and `judge/` (both arms' `run.json`, `clusters.json`, `pairs.jsonl.gz`, `evaluate.json`,
-and `shadow.json`), never a cohort artifact. `--ref` decides the resolver: W4 changes only a contract, so
+declaration); edit it or add a `LIMIT`. It runs under its own statement budget, the ids_timeout_s input
+(default 1200 s; `what_if --ids-timeout-s`), set with `set_config('statement_timeout', ..., true)` inside
+its READ ONLY transaction, so it ends with that statement and the per-listing reads keep the
+connection's default (W3's whole-table aggregate over `location_claims` outran the 2-minute default in
+run 41217039410). No movers: steps 2 and 3 are skipped and the run ends green. The artifact
+`wave-shadow-<wave>-<run id>` (30 days) holds `positions.jsonl`, `movers.jsonl`, `what_if.json`,
+`group.json`, `scorer.json` and `judge/` (both arms' `run.json`, `clusters.json`, `pairs.jsonl.gz`, the
+candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
+
+**A wave whose ids are a full scan** reads them from R2 instead: the ids_r2_key input (`what_if
+--ids-r2-key`) fetches a gzipped list, one listing id per line, with step 1's `R2_*` credentials
+(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`. W3: dispatch the purge
+dry run, which writes `backups/w3-claims/<UTC date>/w3_shadow_ids_<run>_<attempt>.txt.gz`; read the key
+from its log; dispatch the shadow:
+```bash
+gh workflow run location_wave_shadow.yml --ref <the W3 ref> -f wave=w3 -f claims=purge \
+    -f scope=apply -f group=1/1 -f ids_r2_key=backups/w3-claims/<date>/w3_shadow_ids_<run>_<attempt>.txt.gz
+```
+
+**A wave too wide for one runner** runs in block groups over ONE set of positions:
+1. Dispatch with `group=1/1`. Step 1 computes the positions; step 2 prints every block with its ad count
+   and `groups needed under the caps: n`, and exits 2 when 1/1 is over them (the artifact still uploads).
+2. Dispatch groups `1/n` .. `n/n` with `positions_run_id=<that run's id>`: each run downloads that run's
+   artifact (`gh run download`), skips step 1 (its ids, scope and limit come from that `what_if.json`),
+   and exports and judges its group. The wave passes when every group passes.
+```bash
+gh workflow run location_wave_shadow.yml --ref main -f wave=w4-g2 -f group=2/3 \
+    -f positions_run_id=<run id of the 1/1 dispatch>
+``` `--ref` decides the resolver: W4 changes only a contract, so
 `main`; W5, W5b and W6 dispatch from their own branch once it has merged `main`.
 
 By hand, with `SUPABASE_DB_URL` and (for `remine`) the `R2_*` variables:

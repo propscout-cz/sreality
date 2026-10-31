@@ -1,4 +1,4 @@
-/* The waterfall reader (migration 523).
+/* The waterfall's grouping (migration 523), as the dedup candidates funnel reads it.
  *
  * Two properties, and each is a way the page could quietly mislead the operator:
  *   - the steps come back in the store's order, with their sub-rows nested under
@@ -11,13 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  groupWaterfall,
-  waterfallRefreshedAt,
-  type WaterfallRow,
-} from './locationWaterfall';
-
-const AT = '2026-09-14T19:25:00Z';
+import { groupWaterfall, type WaterfallRow } from './locationWaterfall';
 
 const row = (
   step_no: number,
@@ -36,7 +30,6 @@ const row = (
   n,
   lost,
   share_pct: Math.round((n / 841428) * 100_000) / 1000,
-  refreshed_at: AT,
 });
 
 /* Production, 2026-09-14. Deliberately NOT in step order — the store publishes an
@@ -110,10 +103,5 @@ describe('groupWaterfall', () => {
     /* And it is a share of the DATABASE, not of itself — 1.4 %, not 100 %. */
     const hidden = ROWS.find((r) => r.step_key === 'hidden')!;
     expect(hidden.share_pct).toBeCloseTo(1.435, 2);
-  });
-
-  it('reports one refresh time for the whole chain', () => {
-    expect(waterfallRefreshedAt(ROWS)).toBe(AT);
-    expect(waterfallRefreshedAt([])).toBeNull();
   });
 });

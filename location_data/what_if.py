@@ -14,6 +14,7 @@ Design: `docs/design/location-quality/wave-shadow.md`.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import logging
 import sys
@@ -204,11 +205,22 @@ def moved(old: dict[str, Any], new: dict[str, Any]) -> bool:
     return False
 
 
-def select_ids(conn: psycopg.Connection, sql: str) -> list[int]:
+# The ids query is the one statement that may scan a whole table (W3's over location_claims).
+IDS_TIMEOUT_S = 1200
+
+
+def select_ids(conn: psycopg.Connection, sql: str, timeout_s: int = IDS_TIMEOUT_S) -> list[int]:
     """An operator's SELECT (column 1 = id), one subquery on the extended protocol: no `COMMIT;`."""
-    _, rows = read(conn, f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids",
-                   binary=True)
-    return [int(row[0]) for row in rows]
+    with read_cursor(conn) as cur:
+        # SET LOCAL's bindable spelling: this statement's budget, gone with its transaction.
+        cur.execute("SELECT set_config('statement_timeout', %s, true)", (f"{int(timeout_s)}s",))
+        cur.execute(f"SELECT * FROM (\n{sql.strip().rstrip(';')}\n) AS shadow_ids", binary=True)
+        return [int(row[0]) for row in cur.fetchall()]
+
+
+def ids_from_r2(store: page_readers.BodyStore, key: str) -> list[int]:
+    """A gzipped id list, one per line, from R2 (what the W3 purge's dry run writes)."""
+    return [int(token) for token in gzip.decompress(store.download_bytes(key)).decode().split()]
 
 
 def _line(record: dict[str, Any]) -> str:
@@ -255,9 +267,12 @@ def main(argv: list[str] | None = None) -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--ids", help="a file of listing ids, whitespace-separated")
     source.add_argument("--ids-sql", help="a SELECT whose first column is the listing id")
+    source.add_argument("--ids-r2-key", help="an R2 object of listing ids, gzipped, one per line")
     parser.add_argument("--scope", choices=("all", "apply"), default="all",
                         help="apply = only the ids the live apply scope admits today")
     parser.add_argument("--limit", type=int, default=0, help="the lowest N ids only (0 = all)")
+    parser.add_argument("--ids-timeout-s", type=int, default=IDS_TIMEOUT_S,
+                        help="--ids-sql's statement budget; per-listing reads keep the default")
     parser.add_argument("--out", required=True, help="directory for positions.jsonl, movers.jsonl")
     parser.add_argument("--claims", choices=("none", "purge", "remine"), default="none")
     parser.add_argument("--contract", default=None, help="remine: the wave's contract file")
@@ -266,17 +281,21 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     unmined: set[int] = set()
     change: drain.ClaimChange | None = purge if args.claims == "purge" else None
+    if args.claims == "remine" and not args.contract:
+        parser.error("--claims remine needs --contract <the wave's contract file>")
+    store = payloads.open_store() if args.claims == "remine" or args.ids_r2_key else None
+    if store is None and (args.claims == "remine" or args.ids_r2_key):
+        raise SystemExit("--claims remine and --ids-r2-key read from R2: set R2_*")
     if args.claims == "remine":
-        if not args.contract:
-            parser.error("--claims remine needs --contract <the wave's contract file>")
-        store = payloads.open_store()
-        if store is None:
-            raise SystemExit("--claims remine reads the stored bodies from R2: set R2_*")
         change = remine(contracts.parse_contract(Path(args.contract)), store, unmined)
     out = Path(args.out)
     with db.connect_read_only() as conn:
-        named = (select_ids(conn, args.ids_sql) if args.ids_sql is not None
-                 else [int(t) for t in Path(args.ids).read_text(encoding="utf-8").split()])
+        if args.ids_sql is not None:
+            named = select_ids(conn, args.ids_sql, args.ids_timeout_s)
+        elif args.ids_r2_key:
+            named = ids_from_r2(store, args.ids_r2_key)
+        else:
+            named = [int(t) for t in Path(args.ids).read_text(encoding="utf-8").split()]
         requested = sorted(set(named))
         scoped = in_apply_scope(conn, requested) if args.scope == "apply" else requested
         ids = scoped[:args.limit] if args.limit > 0 else scoped
@@ -288,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     (out / WHAT_IF_FILE).write_text(json.dumps({
         "requested": len(requested), "scope": args.scope, "in_scope": len(scoped),
         "limit": args.limit, "ids": len(ids), "claims": args.claims,
+        "ids_r2_key": args.ids_r2_key,
         "failed": counts["*"]["failed"], "unmined": sorted(unmined)[:100], "movers": movers,
     }, indent=1, sort_keys=True), encoding="utf-8")
     # A shadow over part of its ids is not a shadow: the operator re-runs, never judges it.

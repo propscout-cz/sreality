@@ -1,10 +1,8 @@
-/* The two reads that carry W7-b's state (migration 518).
+/* The list read that carries W7-b's state (migration 518).
  *
- * The nav badge is an ALARM: it must count the listings the system finished and
- * could not place, and never the ones it simply has not reached yet — otherwise
- * it climbs every time the scrapers do their job and the operator learns to
- * ignore it. And every list read is scoped to exactly one state, because a total
- * over both answers no question anyone asked.
+ * Every list read is scoped to exactly one state, because a total over both
+ * answers no question anyone asked; the first page alone carries the exact count
+ * of the filtered list (W1 deleted the summary RPC's reader and the nav badge).
  *
  * The stub records the PostgREST chain instead of hitting a server: every method
  * returns the same recorder and the recorder is thenable, so the builder's real
@@ -46,9 +44,6 @@ vi.mock('@/lib/supabase', () => ({
 import {
   EMPTY_PIN_AUDIT_FILTERS,
   fetchPinAuditPage,
-  fetchPinAuditTotal,
-  summaryRowMatches,
-  type PinAuditSummaryRow,
 } from '@/lib/pinAudit';
 
 const eqCalls = (): Call[] => stub.calls.filter(([m]) => m === 'eq');
@@ -59,10 +54,15 @@ describe('pinAudit reads', () => {
     stub.calls.length = 0;
   });
 
-  it('counts only the unresolved rows for the nav badge', async () => {
-    const n = await fetchPinAuditTotal();
-    expect(n).toBe(7);
-    expect(eqCalls()).toContainEqual(['eq', ['state', 'unresolved']]);
+  it('counts the filtered list exactly on its first page only', async () => {
+    const sort = { field: 'last_seen_at', direction: 'desc' } as const;
+    const first = await fetchPinAuditPage(EMPTY_PIN_AUDIT_FILTERS, sort, null);
+    expect(first.total).toBe(7);
+    expect(stub.calls.find(([m]) => m === 'select')?.[1][1]).toEqual({ count: 'exact' });
+    stub.calls.length = 0;
+    const next = await fetchPinAuditPage(EMPTY_PIN_AUDIT_FILTERS, sort, { value: '2026-10-31', id: 1 });
+    expect(next.total).toBeNull();
+    expect(stub.calls.find(([m]) => m === 'select')?.[1][1]).toBeUndefined();
   });
 
   it('defaults the page to the issue, not to the waiting room', () => {
@@ -98,29 +98,5 @@ describe('pinAudit reads', () => {
       null,
     );
     expect(inCalls()).toContainEqual(['in', ['quality', ['active_no_claims']]]);
-  });
-
-  it('matches the summary payload the same way the SQL does', () => {
-    const row: PinAuditSummaryRow = {
-      state: 'pending',
-      source: 'sreality',
-      category_main: 'byt',
-      quality: 'active_no_claims',
-      sibling_has_pin: false,
-      n: 3,
-      refreshed_at: null,
-    };
-    expect(summaryRowMatches(row, EMPTY_PIN_AUDIT_FILTERS)).toBe(false);
-    expect(
-      summaryRowMatches(row, { ...EMPTY_PIN_AUDIT_FILTERS, state: 'pending' }),
-    ).toBe(true);
-    /* A quality chip left over from the other state cannot hide a pending row. */
-    expect(
-      summaryRowMatches(row, {
-        ...EMPTY_PIN_AUDIT_FILTERS,
-        state: 'pending',
-        qualities: ['delisted_unresolved'],
-      }),
-    ).toBe(true);
   });
 });

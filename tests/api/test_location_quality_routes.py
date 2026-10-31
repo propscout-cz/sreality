@@ -20,21 +20,6 @@ from location_data.claims_common import SOURCES
 from toolkit import location_quality
 
 
-class _NoDbTxn:
-    def __enter__(self) -> "_NoDbTxn":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-
-class _NoDbConn:
-    """Enough of a connection for a route that validates before it reads."""
-
-    def transaction(self) -> _NoDbTxn:
-        return _NoDbTxn()
-
-
 def _client(claims: dict):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: claims
@@ -55,8 +40,6 @@ def admin_client():
 
 def test_every_location_route_403s_a_plain_user(client):
     for method, path in [
-        ("GET", "/location/quality/summary"),
-        ("GET", "/location/quality/source/bezrealitky"),
         ("GET", "/location/listing/1"),
         ("GET", "/location/listing/by-native/bezrealitky/abc"),
         ("POST", "/location/corrections"),
@@ -67,31 +50,21 @@ def test_every_location_route_403s_a_plain_user(client):
 
 def test_unknown_source_is_a_404_not_a_scan(admin_client, monkeypatch):
     called = []
-    monkeypatch.setattr(location_quality, "source_overview",
-                        lambda conn, source: called.append(source) or {"data": {}})
-    res = admin_client.get("/location/quality/source/example-portal")
+    monkeypatch.setattr(location_quality, "listing_inspector",
+                        lambda conn, **kw: called.append(kw) or {"data": {}})
+    res = admin_client.get("/location/listing/by-native/example-portal/x")
     assert res.status_code == 404
     assert called == []
-
-
-def test_source_overview_passes_through(admin_client, monkeypatch):
-    monkeypatch.setattr(
-        location_quality, "source_overview",
-        lambda conn, source: {"data": {"source": source}, "metadata": {}},
-    )
-    res = admin_client.get("/location/quality/source/bezrealitky")
-    assert res.status_code == 200
-    assert res.json()["data"]["source"] == "bezrealitky"
 
 
 @pytest.mark.parametrize("source", SOURCES)
 def test_every_location_source_is_accepted(admin_client, monkeypatch, source):
     """The picker offers `claims_common.SOURCES` (the tenth portal, `web`, included)."""
     monkeypatch.setattr(
-        location_quality, "source_overview",
-        lambda conn, source: {"data": {"source": source}, "metadata": {}},
+        location_quality, "listing_inspector",
+        lambda conn, **kw: {"data": {"source": kw["source"]}, "metadata": {}},
     )
-    res = admin_client.get(f"/location/quality/source/{source}")
+    res = admin_client.get(f"/location/listing/by-native/{source}/x")
     assert res.status_code == 200 and res.json()["data"]["source"] == source
 
 
@@ -101,8 +74,11 @@ def test_the_deleted_route_families_are_gone(admin_client):
     W1-b: `/quality/w1v-gate` read `location_claims_live` + a dropped claim type, and
     `/sample/{source}/score-shadow` scored a contract state that no longer exists.
     W2-b: the whole frozen-labelled-sample family (its two tables are dropped) and the
-    whole compare bench (its pg_cron cohort joined both dropped projections)."""
+    whole compare bench (its pg_cron cohort joined both dropped projections).
+    W1: the two aggregates, folded into the gauge's stored cells."""
     for path in (
+        "/location/quality/summary",
+        "/location/quality/source/bezrealitky",
         "/location/quality/w1v-gate",
         "/location/sample/bezrealitky",
         "/location/sample/bezrealitky/score",

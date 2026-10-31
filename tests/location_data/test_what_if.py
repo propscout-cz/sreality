@@ -7,6 +7,7 @@ git contract against a page in the shape realitymix serves, and nothing here rea
 from __future__ import annotations
 
 import ast
+import gzip
 import inspect
 import json
 import re
@@ -257,12 +258,28 @@ def test_run_writes_the_movers_and_only_the_movers(monkeypatch, tmp_path: Path):
 
 def test_an_operators_id_select_runs_as_one_wrapped_read_only_statement():
     """The workflow's free-text SELECT: wrapped as a subquery (no second statement, no
-    data-modifying CTE), sent on the extended protocol, inside the read path's transaction."""
+    data-modifying CTE), sent on the extended protocol, inside the read path's transaction, under
+    its own statement budget (`SET LOCAL`'s bindable spelling, gone with that transaction)."""
     conn = _FakeConn(rows=[(3,), (1,)])
-    assert what_if.select_ids(conn, " SELECT id FROM listings WHERE source LIKE 'r%';\n") == [3, 1]
-    (sql, _params, kwargs, in_transaction), = conn.executed
-    assert sql == "SELECT * FROM (\nSELECT id FROM listings WHERE source LIKE 'r%'\n) AS shadow_ids"
-    assert kwargs == {"binary": True} and in_transaction
+    assert what_if.select_ids(conn, " SELECT id FROM listings WHERE source LIKE 'r%';\n",
+                              timeout_s=1200) == [3, 1]
+    budget, select = conn.executed
+    assert budget[:2] == ("SELECT set_config('statement_timeout', %s, true)", ("1200s",))
+    assert select[0] == ("SELECT * FROM (\nSELECT id FROM listings WHERE source LIKE 'r%'\n)"
+                         " AS shadow_ids")
+    assert select[2] == {"binary": True} and budget[3] and select[3]
+
+
+def test_an_r2_id_list_is_read_as_the_w3_dry_run_writes_it():
+    """Gzipped, one listing id per line: W3's ids_sql is a full scan of 14.8 M claims, so its
+    purge dry run writes the movers' ids to R2 and the shadow reads them back."""
+    class Store:
+        def download_bytes(self, key: str) -> bytes:
+            assert key == "backups/w3-claims/2026-11-01/w3_shadow_ids_1_1.txt.gz"
+            return gzip.compress(b"101\n7\n\n42\n")
+
+    assert what_if.ids_from_r2(Store(), "backups/w3-claims/2026-11-01/w3_shadow_ids_1_1.txt.gz") \
+        == [101, 7, 42]
 
 
 def test_the_dry_run_and_the_shadow_share_one_read_path():
