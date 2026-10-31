@@ -41,8 +41,8 @@ LEGACY: dict[str, Ledgered] = {
         "S1 property_maintenance_lease (mig 279): the cutover row beside the job_lease row (rule 20)",
         "#2267 drops it once gate #2110 passes"),
     "scripts/resolve_brokers.py": Ledgered(
-        "S2 broker_resolution_lock (mig 192): the broker lane and the daily full resolve",
-        "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),
+        "S2 broker_resolution_lock (mig 192): the cutover row beside the job_lease row",
+        "#2273 drops it once gate #2111 passes"),
 }
 
 

@@ -54,10 +54,11 @@ import os
 import sys
 import time
 import uuid
-from collections.abc import Callable, Set as AbstractSet
+from collections.abc import Callable, Iterator, Set as AbstractSet
+from contextlib import contextmanager
 from typing import Any, TypeVar
 
-from scraper import db
+from scraper import db, job_lease
 from toolkit import broker_resolver as R
 from toolkit.broker_sources import BROKER_SOURCE_NAMES, attribution_statements, dirty_repointed
 
@@ -419,10 +420,12 @@ def _settings(conn: Any) -> tuple[list[str], list[str], bool]:
     return free, franchise, enabled
 
 
-# Pooler-safe mutual exclusion (migration 192). A session pg_advisory_lock is
-# unreliable through the transaction-mode pooler, so we claim a single lock row
-# instead; the holder heartbeats during a long run and a stale heartbeat lets a
-# later run take over after a SIGKILL.
+# ONE LEASE keeps the broker lane, the daily full resolve and a hand run apart: the
+# `broker_resolution` row of scheduled_jobs, held through scraper/job_lease.py, its holder
+# prefixed with the mode (`incremental:` / `full:`). The lane skips while it is held; the full
+# resolve waits. The holder renews during a long run, and a lapsed lease lets a later run take
+# over after a SIGKILL. Every explicit write transaction ends with job_lease.fence, so none
+# commits under a lease that lapsed mid-phase; the autocommit phases are idempotent and replay.
 # 10 -> 20 minutes. The TTL must exceed the longest gap between two heartbeats,
 # and the beat is the first statement of each RETRIED attempt (see _resilient_step),
 # so the real bound is ONE attempt plus run_resilient's backoff. The worst measured
@@ -432,11 +435,20 @@ def _settings(conn: Any) -> tuple[list[str], list[str], bool]:
 # ~2.4x margin over that attempt and still sits far under the 110-min job timeout,
 # so a genuinely dead holder is still cleared within one incremental tick or two.
 _LOCK_STALE_MIN = 20
+BROKER_LEASE = "broker_resolution"
+_LEASE_TTL_S = _LOCK_STALE_MIN * 60
+# Both describe the row only, for whichever writer creates it first.
+_LEASE_CADENCE = "30 seconds"
+_LEASE_RUNNER = "railway-realtime-worker"
+# The cutover (#2108): code from before this lease moved takes only the row of migration 192, so this code takes
+# that row FIRST and then the new one, each waiting up to its own bound, and gives them back in reverse, so the two
+# cannot deadlock. `_try_acquire_lock`, `_acquire_lock_blocking`, `_heartbeat_lock`, `_release_lock*` and
+# `_LOCK_POLL_SECONDS` go in #2273, once gate #2111 passes.
 _LOCK_POLL_SECONDS = 10
 # > the stale window, so the full sweep always outwaits a dead holder rather than
 # aborting RED with no work done. Raised with _LOCK_STALE_MIN — the two are one
-# decision. The wait is anchored at process start and the attribution budget
-# (--max-seconds) is anchored there too, so a long wait eats attribution time
+# decision. Each row waits up to this bound in turn. The attribution budget
+# (--max-seconds) is anchored at process start, so a long wait eats attribution time
 # rather than extending the job.
 _LOCK_WAIT_MAX_SECONDS = 1260
 
@@ -474,8 +486,7 @@ def _heartbeat_lock(conn: Any, holder: str) -> None:
     concurrently against a holder that thinks it is alone. Fail loud instead —
     RuntimeError is not an OperationalError, so db.run_resilient re-raises it
     immediately rather than replaying into the race, and _release_lock's own CAS
-    guard stops us clearing the new holder's lock on the way out. Mirrors
-    recompute_property_stats._renew_lease.
+    guard stops us clearing the new holder's lock on the way out.
     """
     with conn.cursor() as cur:
         cur.execute("UPDATE broker_resolution_lock SET heartbeat_at=now() WHERE id=1 AND holder=%(h)s",
@@ -501,11 +512,9 @@ def _release_lock(conn: Any, holder: str,
     never depended on the release landing — the CAS guard plus the lock's staleness
     TTL are what make takeover safe.
 
-    The fallback exists because the handle the caller holds can be a DEAD socket even
-    when the process still has a healthy path to the DB: the drivers only hand their
-    live connection back on a normal return, so a phase that reconnected and then died
-    on something non-transient leaves main() releasing on the connection run_resilient
-    already closed. One fresh connection, one holder-guarded CAS, close it again — the
+    The fallback exists because the handle the lease holds can be a DEAD socket even
+    when the process still has a healthy path to the DB: it is the connection the lease
+    was taken on, which run_resilient closed if a phase reconnected. One fresh connection, one holder-guarded CAS, close it again — the
     CAS makes the release safe from any connection."""
     exc: BaseException | None = None
     try:
@@ -533,7 +542,44 @@ def _release_lock(conn: Any, holder: str,
                 "staleness TTL", holder, _LOCK_STALE_MIN, exc_info=exc)
 
 
-def _attribute(conn: Any, sel: str, params: dict[str, Any]) -> None:
+def _renew_lock(conn: Any, hold: job_lease.Hold) -> None:
+    """Renews both rows between transactions; a lost lease raises an error run_resilient does not replay."""
+    if not job_lease.renew(conn, hold):
+        raise job_lease.LeaseLost("broker resolution lease lost mid-run (it lapsed or another run took it) — "
+                                  "aborting rather than resolving concurrently")
+    _heartbeat_lock(conn, hold.holder)
+
+
+def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
+    """The last statement of a transaction under the lease; a caller with no lease (a test) has nothing to fence."""
+    if hold is not None:
+        job_lease.fence(conn, hold)
+
+
+@contextmanager
+def _resolution_lease(
+    conn: Any, mode: str, *, wait_s: float = 0.0,
+    reconnect: Callable[[], Any] = db.connect,
+) -> Iterator[job_lease.Hold | None]:
+    """Yields this run's hold on the resolution lease, or None when another run holds it (past `wait_s`) or it is
+    paused. The cutover row comes first and goes last."""
+    holder = f"{mode}:{job_lease.holder_id()}"
+    if wait_s:
+        acquired = _acquire_lock_blocking(conn, holder, mode, time.monotonic() + wait_s)
+    else:
+        acquired = _try_acquire_lock(conn, holder, mode)
+    if not acquired:
+        yield None
+        return
+    try:
+        with job_lease.held(conn, BROKER_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
+                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s, connect=reconnect) as hold:
+            yield hold
+    finally:
+        _release_lock(conn, holder, reconnect)
+
+
+def _attribute(conn: Any, sel: str, params: dict[str, Any], hold: job_lease.Hold | None = None) -> None:
     """Run every registered source's attribution over one listings selector.
 
     Source selection is a literal inside each statement, so a single-portal chunk
@@ -550,6 +596,7 @@ def _attribute(conn: Any, sel: str, params: dict[str, Any]) -> None:
         cur.execute("SET LOCAL statement_timeout = 0")
         for sql in _ATTRIBUTION_SQL:
             cur.execute(sql.format(sel=sel), params)
+        _fence(conn, hold)
 
 
 def _resolve_firms(conn: Any, free: list[str], franchise: list[str]) -> None:
@@ -568,13 +615,14 @@ def _link_listings_firm(conn: Any, extra: str = "", params: dict[str, Any] | Non
         cur.execute(_LINK_LISTINGS_FIRM.format(extra=extra), params or {})
 
 
-def _attach_singletons(conn: Any) -> int:
+def _attach_singletons(conn: Any, hold: job_lease.Hold | None = None) -> int:
     """Give every identity with no broker its own, dirtying its adverts' properties in the same
     transaction: the broker book (migration 692) is per canonical broker, so they gain a row."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_SINGLETON_ATTACH)
         attached = [int(r[0]) for r in cur.fetchall()]
         dirty_repointed(cur, attached)
+        _fence(conn, hold)
         return len(attached)
 
 
@@ -614,7 +662,7 @@ def _shared_contacts(contacts: list[R.Contact], pairs: list[tuple[int, int]],
     return out
 
 
-def _auto_merge(conn: Any, run_id: int) -> tuple[int, int, int]:
+def _auto_merge(conn: Any, run_id: int, hold: job_lease.Hold | None = None) -> tuple[int, int, int]:
     """Form name-gated broker groups and apply reversible merges (portal-agnostic).
 
     Loads the whole identity + contact corpus (both maps the rule consults are
@@ -652,7 +700,8 @@ def _auto_merge(conn: Any, run_id: int) -> tuple[int, int, int]:
     auto, dropped, oversized = _apply_merges(conn, decision.auto_merge_groups,
                                              suppressed_pairs=blocked,
                                              group_bridges=decision.group_bridges,
-                                             group_reasons=decision.group_reasons)
+                                             group_reasons=decision.group_reasons,
+                                             hold=hold)
     # An auto-merged group leaves its old review card sitting at 'proposed' with
     # only one surviving broker behind it — the UI renders it thin and the merge
     # button can only ever answer 409. Retire those the moment the merges land,
@@ -922,6 +971,7 @@ def _apply_merges(conn: Any, groups: list[list[int]], *,
                   suppressed_pairs: AbstractSet[tuple[int, int]] | None = None,
                   group_bridges: dict[tuple[int, ...], tuple[str, str]] | None = None,
                   group_reasons: dict[tuple[int, ...], str] | None = None,
+                  hold: job_lease.Hold | None = None,
                   ) -> tuple[int, int]:
     """Unify each BROKER component onto one survivor broker, set-based.
 
@@ -1066,6 +1116,7 @@ def _apply_merges(conn: Any, groups: list[list[int]], *,
             "FROM unnest(%(l)s::bigint[], %(s)s::bigint[]) AS d(l, s) WHERE b.id = d.l",
             {"l": list(losers), "s": list(losers.values())},
         )
+        _fence(conn, hold)
     return len(losers), dropped, oversized
 
 
@@ -1428,7 +1479,7 @@ def _rotate_from_cursor(ids: list[int], last_id: int | None) -> list[int]:
 
 
 def _resilient_step(
-    conn: Any, reconnect: Callable[[], Any], holder: str = "",
+    conn: Any, reconnect: Callable[[], Any], hold: job_lease.Hold | None = None,
 ) -> tuple[Callable[..., Any], Callable[[], Any]]:
     """Return (`step`, `live`) — `step(op, label, attempts=None)` runs op through
     db.run_resilient and REBINDS the live connection internally (run_resilient may
@@ -1441,7 +1492,7 @@ def _resilient_step(
     phase — the exact failure this wave exists to remove. Every op passed in must be
     idempotent; it is re-run from the top on retry.
 
-    `holder` (when set) makes the lock heartbeat the FIRST statement of EVERY attempt,
+    `hold` (when set) makes the lease renewal the FIRST statement of EVERY attempt,
     inside the retried op. It used to be a step of its own before each phase, which
     meant a retried phase re-ran from the top with NO intervening beat: one replay of
     the 8.4-min merge phase left the lock unrefreshed for ~17 min and a `*/10`
@@ -1459,8 +1510,8 @@ def _resilient_step(
 
     def step(op: Callable[[Any], _T], label: str, attempts: int | None = None) -> _T:
         def _with_beat(c: Any) -> _T:
-            if holder:
-                _heartbeat_lock(c, holder)
+            if hold is not None:
+                _renew_lock(c, hold)
             return op(c)
 
         budget = {} if attempts is None else {"attempts": attempts}
@@ -1472,12 +1523,11 @@ def _resilient_step(
 
 
 def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool,
-              batch_size: int, deadline: float | None, holder: str = "", *,
+              batch_size: int, deadline: float | None, hold: job_lease.Hold | None = None, *,
               reconnect: Callable[[], Any]) -> tuple[dict[str, int], Any]:
     """Run the daily reconcile. Returns (stats, live_conn) — the connection may be a
-    FRESH one if a phase rode out a pooler drop, so main() must rebind before
-    releasing the lock on it."""
-    step, live = _resilient_step(conn, reconnect, holder)
+    FRESH one if a phase rode out a pooler drop."""
+    step, live = _resilient_step(conn, reconnect, hold)
 
     # NOT wrapped: the run-row INSERT is the one non-idempotent statement here (a
     # replay would open a second broker_resolution_runs row) and it is the first
@@ -1510,7 +1560,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
     complete = True
     for i in range(0, len(walk), batch_size):
         chunk = walk[i:i + batch_size]
-        step(lambda c, ids=chunk: _attribute(c, "l.id = ANY(%(ids)s)", {"ids": ids}),
+        step(lambda c, ids=chunk: _attribute(c, "l.id = ANY(%(ids)s)", {"ids": ids}, hold),
              "resolve.attribute", attempts=2)
         last_swept = chunk[-1]
         swept += len(chunk)
@@ -1564,7 +1614,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
             LOG.warning("RESOLVE full: time budget reached during firm linking at %d/%d ids",
                         i, len(walk))
             break
-    attached = step(_attach_singletons, "resolve.singletons")
+    attached = step(lambda c: _attach_singletons(c, hold), "resolve.singletons")
     LOG.info("RESOLVE full attribution+firms done elapsed=%.1fs", time.monotonic() - t0)
 
     # Merge BEFORE the rollups so dsc / membership reflect the unified
@@ -1583,7 +1633,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
     # the useful replay (a pooler drop, a passing lock wait) and bounds the tail at
     # ~50 min. Same reasoning, same number as recompute's _BATCH_RESILIENT_ATTEMPTS.
     if auto_merge:
-        auto_merges, queued, suppressed = step(lambda c: _auto_merge(c, run_id),
+        auto_merges, queued, suppressed = step(lambda c: _auto_merge(c, run_id, hold),
                                                "resolve.merge", attempts=2)
         LOG.info("RESOLVE full merge done auto=%d queued=%d suppressed=%d elapsed=%.1fs",
                  auto_merges, queued, suppressed, time.monotonic() - t0)
@@ -1605,6 +1655,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
         with c.transaction(), c.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = 0")
             recompute_brokers(cur, None)
+            _fence(c, hold)
 
     step(_broker_rollup, "resolve.broker_rollup", attempts=2)
 
@@ -1612,6 +1663,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
         with c.transaction(), c.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = 0")
             cur.execute(_FIRM_DISPLAY_NAMES)
+            _fence(c, hold)
 
     step(_firm_names, "resolve.firm_names", attempts=2)
     LOG.info("RESOLVE full rollups done elapsed=%.1fs", time.monotonic() - t0)
@@ -1644,15 +1696,15 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
 
 
 def _run_incremental(conn: Any, free: list[str], franchise: list[str],
-                     batch_size: int, holder: str = "", *,
+                     batch_size: int, hold: job_lease.Hold | None = None, *,
                      reconnect: Callable[[], Any]) -> tuple[dict[str, int], Any]:
     """Drain the dirty queue. Returns (stats, live_conn) — see _run_full.
 
-    `holder` heartbeats the lock inside every retried phase (see _resilient_step).
+    `hold` is renewed inside every retried phase (see _resilient_step).
     A pass normally runs seconds against a 20-min staleness window, but nothing
     guaranteed that: main() acquired the lock and then never refreshed it, so a
     pass that spent its time in retries could be declared stale while alive."""
-    step, live = _resilient_step(conn, reconnect, holder)
+    step, live = _resilient_step(conn, reconnect, hold)
     with conn.cursor() as cur:
         cur.execute("SELECT now()")
         cutoff = cur.fetchone()[0]
@@ -1679,15 +1731,15 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
     # after a pooler drop redoes exactly the same work rather than losing it. Note
     # what "claim" does NOT mean here: _CLAIM_DIRTY is a plain SELECT on an autocommit
     # connection — no row lock, no claim marker, nothing another run would respect.
-    # Exclusion comes from broker_resolution_lock; the scoped _DELETE_DIRTY is what keeps a concurrent
+    # Exclusion comes from the broker_resolution lease; the scoped _DELETE_DIRTY is what keeps a concurrent
     # enqueue safe. The 2026-08-10 23:10 red died on the rollup below with
     # 'SSL connection has been closed'.
     ids = sorted(claimed)
-    step(lambda c: _attribute(c, "l.id = ANY(%(ids)s)", {"ids": ids}), "resolve.attribute")
+    step(lambda c: _attribute(c, "l.id = ANY(%(ids)s)", {"ids": ids}, hold), "resolve.attribute")
     step(lambda c: _resolve_firms(c, free, franchise), "resolve.firms")
     step(lambda c: _link_listings_firm(c, "AND l.id = ANY(%(ids)s)", {"ids": ids}),
          "resolve.link_firm")
-    step(_attach_singletons, "resolve.singletons")
+    step(lambda c: _attach_singletons(c, hold), "resolve.singletons")
     bids = step(lambda c: _affected(c, ids), "resolve.affected")
 
     def _rollups_and_finalize(c: Any) -> None:
@@ -1715,25 +1767,22 @@ def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
     if reconnect is None:
         reconnect = db.connect
     free, franchise, _auto_merge = _settings(conn)
-    holder = f"incremental-{uuid.uuid4()}"
-    if not _try_acquire_lock(conn, holder, "incremental"):
-        LOG.info("RESOLVE skip mode=incremental: lock held by another resolution run")
-        return {"skipped": True, "attributed": 0, "brokers": 0}
     attributed = brokers = passes = 0
-    try:
+    with _resolution_lease(conn, "incremental", reconnect=reconnect) as hold:
+        if hold is None:
+            LOG.info("RESOLVE skip mode=incremental: lock held by another resolution run")
+            return {"skipped": True, "attributed": 0, "brokers": 0}
         # Each inner pass claims up to batch_size ids at its own cutoff; a full
         # claim means the queue may hold more. The cap is a runaway backstop
         # (50 × 5,000 ids), far above any real backlog.
         while True:
             res, conn = _run_incremental(conn, free, franchise, batch_size,
-                                         holder, reconnect=reconnect)
+                                         hold, reconnect=reconnect)
             attributed += res["attributed"]
             brokers += res["brokers"]
             passes += 1
             if res["attributed"] < batch_size or passes >= 50:
                 break
-    finally:
-        _release_lock(conn, holder, reconnect)
     return {"skipped": False, "attributed": attributed, "brokers": brokers, "passes": passes}
 
 
@@ -1791,28 +1840,20 @@ def main() -> int:
                     time.monotonic() - started)
             return 0
 
-        # Pooler-safe mutual exclusion (migration 192). The full sweep waits,
-        # taking over only a stale (dead-holder) lock — it is the reconcile that
-        # must run (the incremental instead yields inside run_incremental_pass:
-        # its work is subsumed by whatever holds the lock).
-        holder = f"{mode}-{uuid.uuid4()}"
-        if not _acquire_lock_blocking(conn, holder, mode, started + _LOCK_WAIT_MAX_SECONDS):
-            LOG.error("RESOLVE abort mode=full: could not acquire lock within %ds", _LOCK_WAIT_MAX_SECONDS)
-            return 1
-
-        try:
-            # Rebind conn: a phase that rode out a pooler drop hands back a FRESH
-            # connection, and the release below must run on the live one.
-            res, conn = _run_full(conn, free, franchise, auto_merge, args.batch_size,
-                                  deadline, holder, reconnect=reconnect)
+        # The full sweep waits, taking over only a lapsed (dead-holder) lease — it is
+        # the reconcile that must run (the incremental instead yields inside
+        # run_incremental_pass: its work is subsumed by whatever holds the lease).
+        with _resolution_lease(conn, mode, wait_s=_LOCK_WAIT_MAX_SECONDS, reconnect=reconnect) as hold:
+            if hold is None:
+                LOG.error("RESOLVE abort mode=full: the lease is still held or paused after %ds of waiting",
+                          _LOCK_WAIT_MAX_SECONDS)
+                return 1
+            res, _ = _run_full(conn, free, franchise, auto_merge, args.batch_size,
+                               deadline, hold, reconnect=reconnect)
             LOG.info("RESOLVE full done attached=%d auto_merges=%d queued=%d "
                      "suppressed=%d elapsed=%.1fs",
                      res["attached"], res["auto_merges"], res["queued"],
                      res["suppressed"], time.monotonic() - started)
-        finally:
-            # `conn` is only rebound on a normal return, so on a raise it can be the
-            # socket run_resilient already closed — hence the reconnect fallback.
-            _release_lock(conn, holder, reconnect)
     return 0
 
 

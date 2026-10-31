@@ -321,7 +321,7 @@ Per-lane notes:
   run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
   recompute affected brokers' names, contacts, firm and memberships (one merged statement, no counts: every broker
   number is the book's, mig 693 dropped the old count book; an identity attach or merge dirties its properties,
-  rule 20); `broker_resolution_lock` serializes.
+  rule 20); `broker_resolution` lease serializes.
 - **Estimation job lane** (migration 349, Wave 1 W1-3 / Phase 1 Amendment A10) — moves agent +
   deterministic rent-estimate EXECUTION off the FastAPI request threadpool (a 240 s agent run used
   to pin a Starlette token; a deploy SIGTERM killed paid runs mid-flight). Claims one `pending`

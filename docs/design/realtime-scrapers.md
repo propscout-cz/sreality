@@ -627,7 +627,7 @@ Four changes, each closing one link:
   and a drain's lease is sized to its claims (`min(20, max_claims)`; the worker caps
   `max_claims` at what is waiting) instead of 20 slots per pass whatever the work.
 - **Probe and drain hold pass locks** like the five lanes that already did, and so does the broker
-  lane (Broker Unify W3; an abandoned pass's `broker_resolution_lock` row goes stale, so the lease
+  lane (Broker Unify W3; an abandoned pass's `broker_resolution` lease lapses, so the lease
   alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine; the notifications lane's, notifications W2a, ten)
   through one `_PassLock`: each pass runs in ONE thread, so a lane leaks at most one; a skipped pass
   records `previous_pass_running`. While an abandoned pass still holds its lock, the lane's
