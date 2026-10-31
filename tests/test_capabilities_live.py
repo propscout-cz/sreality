@@ -218,6 +218,19 @@ def test_a_tool_reads_read_only_at_authenticateds_8s_and_leaves_the_service_conn
     assert _session(svc) == ("off", True)
 
 
+@pytest.mark.usefixtures("tenant_pool_db")
+def test_a_tenant_read_resolves_postgis_where_production_keeps_it(
+        svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replay keeps PostGIS in `public`, so only the path itself can be pinned here: the pool role's own default
+    lacks `extensions`, and in_map_area (every Browse read) failed under the login in production without it."""
+    def path(ctx: Context, args: _Bare) -> dict[str, Any]:
+        with ctx.conn.cursor() as cur:
+            cur.execute("SELECT current_setting('search_path')")
+            return {"data": cur.fetchone()[0]}
+    _probe(monkeypatch, Tenancy.TENANT, path)
+    assert _call_as_a(svc, users)["data"] == "public, extensions"
+
+
 @TENANCIES
 @pytest.mark.parametrize("swallowed", [False, True])
 @pytest.mark.usefixtures("tenant_pool_db")
