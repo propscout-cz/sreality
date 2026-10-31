@@ -5239,7 +5239,12 @@ through `drain.reconcile` whenever its (resolver version, registry label) pair c
 listings first — and the drain claims evidence rows (`claim_insert`, `operator_edit`) ahead of the
 sweep's; the GitHub `location_resolve.yml` lane, the lane's flag and every hand dispatch are gone,
 and so is the nightly red-line arm (13,224 townless rows re-resolved a day, 99.8 % inactive, 0 towns
-gained): a row changes only when evidence, code or the register changes. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
+gained): a row changes only when evidence, code or the register changes. Since W3 (ruling R4) the
+reconcile key also carries each active contract's DECLARED claim types (`_DECLARED_TYPES_SQL`), the
+one contract fact the claim read asks: a portal whose set moved has every listing re-resolved
+(`_PORTAL_SWEEP_SQL`); a bump declaring the same types moves nothing (its re-mine enqueues what it
+changes), and a portal a retract left with no active contract is not swept until one returns
+(sweeping it would blank it). Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
 operator edit) is `ON CONFLICT (listing_id) DO UPDATE SET enqueued_at = now(), attempts = 0,
 next_eligible_at = now()`, and every statement that FINISHES a queue row (both deletes and the
 failure stamp) is bounded by the `enqueued_at` the slice claimed, so evidence arriving mid-slice

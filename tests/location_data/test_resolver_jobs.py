@@ -56,6 +56,8 @@ class _FakeCursor:
             self._result = [(7, REGISTRY)]
         elif text.startswith("select coalesce(max(id), 0) from listings"):
             self._result = [(self.state.get("max_listing_id", 0),)]
+        elif text.startswith("select pc.source, string_agg"):
+            self._result = list(self.state.get("declared", []))
         else:
             self._result = []
 
@@ -217,6 +219,64 @@ def test_reconcile_sweeps_once_per_version_pair_and_retries_a_cut_sweep(monkeypa
     monkeypatch.setattr(drain, "RESOLVER_VERSION", "resolver:v-next")
     assert drain.reconcile(conn, stop=never)["pair"] == ["resolver:v-next", "ruian:B"]
     assert calls[0][0] == "ruian:A" and all(c[1] is never for c in calls)
+
+
+def test_reconcile_re_resolves_a_portal_whose_active_contract_declares_other_types(monkeypatch):
+    """W3 (ruling R4): the read asks the contracts one thing, which claim types each portal's
+    ACTIVE contract declares, so a change there is part of what reconcile compares. A portal
+    whose set moved has every listing re-resolved; a bump declaring the same types moves
+    nothing (its re-mine enqueues what it changes); a portal a retract left with no active
+    contract reads nothing and is never swept to blank — it is swept when a contract returns."""
+    portal_sweeps: list[list[str]] = []
+
+    def portal_sweep(conn, sources, *, stop):
+        portal_sweeps.append(list(sources))
+        return 9
+
+    monkeypatch.setattr(drain, "enqueue_full_sweep", lambda conn, **kw: 0)
+    monkeypatch.setattr(drain, "enqueue_portal_sweep", portal_sweep)
+    monkeypatch.setattr(drain, "_SWEPT_PAIR", None)
+    monkeypatch.setattr(drain, "_SWEPT_DECLARED", None)
+    monkeypatch.setattr(drain.resolve_db, "current_registry_version", lambda conn: (7, "ruian:A"))
+    state = _state()
+    conn = _FakeConn(state)
+    pair = [RESOLVER_VERSION, "ruian:A"]
+
+    def never() -> bool:
+        return False
+
+    def contracts(**declared: str) -> None:
+        state["declared"] = sorted(declared.items())
+
+    contracts(bazos="obec_name,psc", idnes="obec_name")
+    assert drain.reconcile(conn, stop=never) == {"pair": pair, "rows": 0, "complete": True}
+    assert drain.reconcile(conn, stop=never) is None            # a same-type bump: nothing
+    contracts(bazos="obec_name", idnes="obec_name")             # bazos stops declaring psc
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": ["bazos"], "rows": 9, "complete": True}
+    contracts(idnes="obec_name")                                # bazos retracted, no contract
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": [], "rows": 0, "complete": True}
+    contracts(bazos="obec_name", idnes="obec_name")             # a corrected bazos activated
+    assert drain.reconcile(conn, stop=never)["contracts"] == ["bazos"]
+    assert portal_sweeps == [["bazos"], ["bazos"]]
+    assert any(t.startswith("select pc.source, string_agg") for t, _ in state["executed"])
+
+
+def test_the_portal_sweep_is_the_sweeps_twin_for_named_portals():
+    """Every listing of the named portals, versions current or not, with the sweep's own
+    manners: an MVCC skip of a queued row, DO NOTHING, the backfill reason, two walks."""
+    flat = " ".join(drain._PORTAL_SWEEP_SQL.split()).lower()
+    assert "where l.source = any(%s::text[]) and l.is_active = %s and l.id > %s and l.id <= %s" in flat
+    assert "not exists (select 1 from dirty_locations d where d.listing_id = l.id)" in flat
+    assert "on conflict (listing_id) do nothing" in flat and "'full_sweep'" in flat
+    declared = " ".join(drain._DECLARED_TYPES_SQL.split()).lower()
+    assert "where pc.is_active" in declared and "group by pc.source" in declared
+    state = _state(max_listing_id=300_000)
+    assert drain.enqueue_portal_sweep(_FakeConn(state), ["bazos"], window=250_000) == 0
+    assert [p for _, p in _sweep_windows(state)] == [
+        (["bazos"], True, 0, 250_000), (["bazos"], True, 250_000, 300_000),
+        (["bazos"], False, 0, 250_000), (["bazos"], False, 250_000, 300_000)]
 
 
 def test_a_window_retries_a_lock_wait_then_gives_up_loudly(monkeypatch):

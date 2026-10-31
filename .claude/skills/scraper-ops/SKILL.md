@@ -335,7 +335,7 @@ Per-lane notes:
   `POST /estimations` route rows to the lane instead of an in-process BackgroundTask, so the
   cutover (and rollback) is one setting, no deploy.
 - **Location-resolve lane** (the ONLY resolver runtime since 2026-10-31, Q9; GH lane and flag
-  gone). A pass sweeps when (resolver version, registry label) changed (`drain.reconcile`;
+  gone). A pass sweeps when (resolver version, registry label, declared types) moved (`drain.reconcile`;
   heartbeat `lanes.location_resolve.swept`), else drains, evidence first. One control:
   `realtime_location_resolve_interval_seconds` (absent 15 s, 0 idles). Live tuning:
   `realtime_location_resolve_{interval_seconds,max_seconds,batch_size}` (15/240/250), interval `0`
