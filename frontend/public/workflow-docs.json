@@ -1899,6 +1899,14 @@
           "options": null
         },
         {
+          "name": "ids_r2_key",
+          "description": "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        },
+        {
           "name": "ids_timeout_s",
           "description": "ids_sql's own statement budget, seconds (the per-listing reads keep the default)",
           "required": false,

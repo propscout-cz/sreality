@@ -10,6 +10,7 @@ name: "Ops: Location wave shadow (the engine gate)"
 #   gh workflow run location_wave_shadow.yml -f wave=w4 -f claims=remine -f scope=apply -f limit=50 \
 #     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
 #   gh workflow run location_wave_shadow.yml -f wave=w4 -f group=2/3 -f positions_run_id=<that run>
+#   gh workflow run location_wave_shadow.yml -f wave=w3 -f claims=purge -f ids_r2_key=<the dry run's key>
 #
 # Steps (docs/design/location-quality/wave-shadow.md): `what_if` re-resolves the listings
 # `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
@@ -58,6 +59,11 @@ on:
         required: false
         default: 0
         type: number
+      ids_r2_key:
+        description: "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored"
+        required: false
+        default: ""
+        type: string
       ids_timeout_s:
         description: "ids_sql's own statement budget, seconds (the per-listing reads keep the default)"
         required: false
@@ -134,9 +140,11 @@ jobs:
           IDS_SQL: ${{ inputs.ids_sql }}
           LIMIT: ${{ inputs.limit }}
           IDS_TIMEOUT_S: ${{ inputs.ids_timeout_s }}
+          IDS_R2_KEY: ${{ inputs.ids_r2_key }}
         run: |
-          args=(--ids-sql "$IDS_SQL" --ids-timeout-s "${IDS_TIMEOUT_S:-1200}" --scope "$SCOPE"
-                --limit "${LIMIT:-0}" --claims "$CLAIMS" --out shadow)
+          args=(--scope "$SCOPE" --limit "${LIMIT:-0}" --claims "$CLAIMS" --out shadow)
+          if [ -n "$IDS_R2_KEY" ]; then args+=(--ids-r2-key "$IDS_R2_KEY")
+          else args+=(--ids-sql "$IDS_SQL" --ids-timeout-s "${IDS_TIMEOUT_S:-1200}"); fi
           if [ -s "$RUNNER_TEMP/contract.yaml" ]; then args+=(--contract "$RUNNER_TEMP/contract.yaml"); fi
           python -m location_data.what_if "${args[@]}"
           echo "movers=$(grep -c . shadow/movers.jsonl || true)" >> "$GITHUB_OUTPUT"

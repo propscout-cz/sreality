@@ -99,6 +99,16 @@ run 41217039410). No movers: steps 2 and 3 are skipped and the run ends green. T
 `group.json`, `scorer.json` and `judge/` (both arms' `run.json`, `clusters.json`, `pairs.jsonl.gz`, the
 candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
 
+**A wave whose ids are a full scan** reads them from R2 instead: the ids_r2_key input (`what_if
+--ids-r2-key`) fetches a gzipped list, one listing id per line, with step 1's `R2_*` credentials
+(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`. W3: dispatch the purge
+dry run, which writes `backups/w3-claims/<UTC date>/w3_shadow_ids_<run>_<attempt>.txt.gz`; read the key
+from its log; dispatch the shadow:
+```bash
+gh workflow run location_wave_shadow.yml --ref <the W3 ref> -f wave=w3 -f claims=purge \
+    -f scope=apply -f group=1/1 -f ids_r2_key=backups/w3-claims/<date>/w3_shadow_ids_<run>_<attempt>.txt.gz
+```
+
 **A wave too wide for one runner** runs in block groups over ONE set of positions:
 1. Dispatch with `group=1/1`. Step 1 computes the positions; step 2 prints every block with its ad count
    and `groups needed under the caps: n`, and exits 2 when 1/1 is over them (the artifact still uploads).
