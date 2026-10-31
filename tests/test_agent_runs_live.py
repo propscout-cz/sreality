@@ -22,11 +22,11 @@ from api.agents.definition import load
 from api.capabilities import registry
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.filter_args import Args
-from api.providers import Completion, ModelPrice
+from api.providers import Completion, HostedFile, ModelPrice
 from tests._live_property import REQUIRED_DB, db_url, signups
 from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
-from tests.api._agent_fixtures import frontmatter, reply, write_folder
+from tests.api._agent_fixtures import ScriptedCodeProvider, code_reply, frontmatter, reply, write_folder
 from tests.api._fakes import _ScriptedProvider
 
 pytestmark = REQUIRED_DB
@@ -659,6 +659,71 @@ def test_a_definition_gone_since_submit_fails_the_run_with_its_reason(svc: psyco
     monkeypatch.setattr(executor, "SKILLS_DIR", empty)
     assert _work_on(_Model()).state == "failed"
     assert AGENT in _run(svc, run_id)["error"]
+
+
+@pytest.mark.parametrize("stop", ["refusal", "model_context_window_exceeded", "max_tokens"])
+def test_a_reply_that_ends_without_an_answer_is_terminal_with_its_stop_reason(svc: psycopg.Connection, world: dict[str, Any],
+                                                                              stop: str) -> None:
+    run_id = _submit(svc, world, "a")
+    assert _work_on(_Model(reply((SUBMIT, {"markdown": "half"}), stop=stop))) == executor.Worked("failed", run_id)
+    row = _run(svc, run_id)
+    assert (row["status"], row["stop_reason"], row["attempts"], row["result_markdown"]) == ("failed", stop, 1, None)
+    assert stop in row["error"] and row["finished_at"] and row["lease_until"] is None
+    assert _work_on(_Model()) == executor.Worked("idle"), "terminal: nothing goes back on the queue"
+
+
+OPUS = "claude-opus-5-5"
+REPORT = HostedFile(name="report.csv", media_type="text/csv", data=b"secret-bytes,of,a,report")
+
+
+def _code_world(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = tmp_path / uuid.uuid4().hex
+    write_folder(root, meta=frontmatter(AGENT, allowed_tools=[OWN_CONTEXT], code=True, preferred_model={"anthropic": OPUS},
+                                        limits={"max_iterations": 6, "max_cost_usd": 5.0, "wall_clock_timeout_s": 60}))
+    monkeypatch.setattr(executor, "SKILLS_DIR", root)
+
+
+def _code_model(*replies: Completion, stop: threading.Event | None = None) -> ScriptedCodeProvider:
+    return ScriptedCodeProvider(list(replies), files={"file_out_1": REPORT}, prices={OPUS: CHEAP})
+
+
+def test_a_code_run_stores_its_files_names_never_their_bytes(svc: psycopg.Connection, world: dict[str, Any], tmp_path: Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2073 owns where the bytes go; the row names them, the diary holds their facts, and neither holds a byte."""
+    _code_world(world, monkeypatch, tmp_path)
+    run_id = _submit(svc, world, "a")
+    answer = (SUBMIT, {"markdown": "Here.", "files": ["report.csv"]})
+    model = _code_model(code_reply(files=("file_out_1",), stop="pause_turn"), code_reply(answer))
+    assert executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=_connect) == executor.Worked("succeeded", run_id)
+    row = _run(svc, run_id)
+    assert row["files"] == ["report.csv"] and row["result_markdown"] == "Here."
+    steps = _steps(svc, run_id)
+    assert [s["kind"] for s in steps] == ["model", "file", "model", "tool"], "a pause is its own model step"
+    assert steps[1]["payload"]["output"]["name"] == "report.csv" and steps[1]["payload"]["output"]["bytes"] == len(REPORT.data)
+    assert steps[3]["payload"]["output"]["files"] == [{"name": "report.csv", "media_type": "text/csv", "bytes": len(REPORT.data)}]
+    assert "secret-bytes" not in json.dumps([s["payload"] for s in steps]) + json.dumps([s["summary"] for s in steps], default=str)
+    assert "secret-bytes" not in str(row)
+    assert svc.execute("SELECT count(*) FROM llm_calls WHERE agent_run_id = %s", (run_id,)).fetchone()[0] == 2
+    assert model.deleted == ["file_out_1"]
+
+
+def test_a_stopped_code_run_leaves_nothing_at_the_provider_and_its_retry_starts_over(svc: psycopg.Connection, world: dict[str, Any],
+                                                                                     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _code_world(world, monkeypatch, tmp_path)
+    run_id = _submit(svc, world, "a")
+    stop = threading.Event()
+
+    class _Stopping(ScriptedCodeProvider):
+        def file_info(self, file_id: str) -> Any:
+            stop.set()
+            return super().file_info(file_id)
+    first = _Stopping([code_reply(files=("file_out_1",), stop="pause_turn")], files={"file_out_1": REPORT}, prices={OPUS: CHEAP})
+    assert executor.work_once(providers={"anthropic": first}, stop=stop, connect=_connect) == executor.Worked("released", run_id)
+    assert first.deleted == ["file_out_1"]
+    second = _code_model(code_reply((SUBMIT, {"markdown": "Done."})))
+    assert executor.work_once(providers={"anthropic": second}, stop=threading.Event(), connect=_connect) == executor.Worked("succeeded", run_id)
+    assert second.hosted[0].container is None
+    assert _run(svc, run_id)["attempts"] == 2
 
 
 def _swap_agent(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tools: list[str], **limits: Any) -> None:

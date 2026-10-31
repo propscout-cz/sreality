@@ -71,7 +71,7 @@ create table agent_run_steps (
   account_id  uuid        not null,
   attempt     integer     not null,
   n           integer     not null,
-  kind        text        not null check (kind in ('model', 'tool')),
+  kind        text        not null check (kind in ('model', 'tool', 'file')),
   name        text        not null,
   input_sha   text        not null,
   summary     text        not null,

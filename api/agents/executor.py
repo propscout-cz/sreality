@@ -352,7 +352,8 @@ def _finish(conn: psycopg.Connection, run: _Claimed, status: Literal["succeeded"
         "status": status, "stop_reason": stop_reason, "error": error,
         "result_markdown": _storable(answer.markdown) if answer else None,
         "cited_property_ids": list(answer.cited_property_ids) if answer else [],
-        "files": _storable(list(answer.files)) if answer else [],
+        # Names only: the bytes are #2073's to store, and the diary holds each file's facts.
+        "files": [_no_nul(file.name) for file in answer.files] if answer else [],
         "proposals": Jsonb(_storable(answer.proposed_actions) if answer else []),
         "output": Jsonb(_storable(answer.output)) if answer and answer.output is not None else None,
     }

@@ -140,7 +140,7 @@ _OVERLOADED = ProviderError("anthropic call failed: overloaded", status=529)
 @pytest.mark.parametrize("error", [
     ProviderError("rate limited", status=429),
     _OVERLOADED,
-    ProviderError("bad gateway", status=502),
+    ProviderError("service unavailable", status=503),
 ])
 def test_one_rate_limit_or_overload_does_not_end_the_run(error: ProviderError) -> None:
     timeline = _Time()

@@ -221,19 +221,16 @@ class ProviderError(Exception):
         self.status = status
 
 
-_TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+# Refused before any work, so sending it again spends nothing. Not a broken connection, a timeout or another 5xx: those
+# may have billed (a code call up to ten samples) with no usage to show for it, so a retry could pass a cap unseen.
+_REFUSED_UNSPENT = frozenset({429, 503, 529})
 
 
 def is_transient(error: ProviderError) -> bool:
-    """A rate limit, an overload or a broken connection: worth the same request again. Read off the SDK's exception by
-    its attributes and class names, since each SDK is imported only when its provider is used."""
+    """A rate limit or an overload: safe to send again. Read off the SDK's exception by attribute, since each SDK is
+    imported only when its provider is used."""
     cause = error.__cause__
-    status = error.status or getattr(cause, "status_code", None) or getattr(cause, "code", None)
-    if isinstance(status, int):
-        return status in _TRANSIENT_STATUS
-    if cause is None:
-        return False
-    return any("Timeout" in c.__name__ or "Connect" in c.__name__ for c in type(cause).__mro__)
+    return (error.status or getattr(cause, "status_code", None) or getattr(cause, "code", None)) in _REFUSED_UNSPENT
 
 
 class CompletionProvider(Protocol):

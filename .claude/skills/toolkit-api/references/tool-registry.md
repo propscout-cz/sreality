@@ -184,11 +184,20 @@ words, a generic line otherwise (the details are in the log and `llm_calls.error
 **A database error** on the ledger, on a live connection or a dead one, writes no verdict: `work_once` returns `lost` and
 the lease lapses into the interruption above.
 
-**The model call.** `loop.run` retries a transient failure (`providers.is_transient`: 408, 429, 5xx, 529, a broken
-connection) up to three times inside the step, waiting about 2, 8 and 30 s, every wait and try inside the wall clock; a
-failed try bills nothing, so the call's budget check still holds. Each try gets `timeout_s`, what the wall clock has left,
-with no SDK retry under it. A call that outlasts the wall clock ends the run as the loop's `timeout`. Anything else
-not transient, or the last retry's failure, raises and fails the run.
+**The model call.** `loop.run` retries a provider's refusal (`providers.is_transient`: 429, 503, 529) up to three times
+inside the step, waiting about 2, 8 and 30 s, every wait and try inside the wall clock. The retry is the same request: a
+`pause_turn` continuation's paused reply and its container too. A refusal bills nothing, so the budget check stands. A broken
+connection, a timeout or another 5xx is not retried: it may have billed (a code call up to ten samples) with no usage to
+show, so a retry could pass a cap unseen; it fails the run. Each try gets `timeout_s`, what the wall clock has left,
+beside `hosted_code` and with no SDK retry under it: it is what bounds one code call, since the wall clock is read
+only between calls. A call that outlasts the wall clock ends the run as the loop's `timeout`. A `pause_turn` is its own
+billed call under every cap. A reply ending `refusal`, `model_context_window_exceeded` or `max_tokens` is terminal:
+`failed`, its stop reason on the row.
+
+**Files.** `agent_runs.files` holds names only; a `file` step holds a produced file's facts; the bytes go when the run
+ends until #2073 stores them. Each attempt has its own `RunFiles`, messages and container, and deletes what it put at the
+provider when it ends, a lease lost or a SIGTERM included: a retry uploads its inputs afresh and cannot name a deleted
+one. `work_once` passes no inputs yet (#2073).
 
 **The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger (a DELETE
 passes only once its run is gone, the cascade from an account's deletion): an input
