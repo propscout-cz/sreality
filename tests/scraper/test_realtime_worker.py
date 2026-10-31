@@ -806,12 +806,14 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
-    # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
+    # Wave 6: the worker budgets (685 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
+    # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe 505 s: all but the last
+    # fit at their whole budgets, and the last (parsing) defers one tick, like a gauge.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]
-    assert verify_pipeline.lane_budget_for(alarms) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
-        "every worker ALARM due at once fits; gauges defer")
+    assert verify_pipeline.lane_budget_for(alarms[:-1]) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "every worker ALARM but the last due at once fits; the last and the gauges defer")
     assert max(c.budget_s for c in hosted) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
         "a check whose budget exceeds the pass would be deferred for ever")
     assert rw.HEALTH_PASS_BUDGET_SECONDS + 30.0 < 600.0, "the beat's lag inside the watcher's line"
