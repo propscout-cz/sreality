@@ -980,13 +980,23 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 #
 # Curation sync (docs/design/curation-sync.md § 3.9, migration 696): twelve deferred constraint triggers are the
 # curation clock's only writer, so a trigger disabled by a hygiene migration, or a bump that stopped landing, leaves
-# every open window showing stale curation with no error anywhere. Both cells are should-never-happen:
+# every open window showing stale curation with no error anywhere. Two cells are should-never-happen:
 #   triggers     Problem unless exactly CURATION_CLOCK_TRIGGERS triggers on bump_curation_clock() are enabled and
 #                initially deferred (the writer kill switch turns it red by intent while it is in force).
 #   board_bumps  Problem when a property_pipeline_events row of the last 24 h has no board clock row of its account
 #                changed at or after it. Exact: an event is written only in the transaction of a card change
 #                (api/pipeline.py), whose commit bumps board at clock_timestamp() >= the event's now(); the 696 seed
 #                stamps every account at the apply, so events before it hold too.
+# Two watch the clock's READER (W4), from pg_stat_statements (Not measured without it, as in CI's replayed schema,
+# or when the worker sees authenticated's statement text masked, lacking pg_read_all_stats), never paged: the
+# browser's read is a statement run as authenticated naming curation_clock_public.
+#   reads        Watch when its call count has not advanced for CURATION_CLOCK_QUIET_H: no signed-in window follows
+#                curation (the reader kill switch, a dead read in the SPA, or nobody signed in). `quiet_since` rides
+#                the cell's facts from one result to the next (previous_result); fewer calls under the same reset (an
+#                evicted entry) is no advance, a reset with calls since is one.
+#   load         Watch when its share of all statement time between this measurement and the previous one is at
+#                least CURATION_CLOCK_LOAD_PCT: the planned trigger to re-cost the interval (§ 3.8). A statistics
+#                reset, or a first measurement, takes a baseline and judges nothing.
 
 _CURATION_TRIGGERS_SQL = """
 select count(*) filter (where t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable and t.tginitdeferred),
@@ -1011,6 +1021,23 @@ select count(*) filter (where e.missed), count(distinct e.account_id) filter (wh
 """
 
 
+# Cumulative since the statistics' reset: the clock read's calls and execution time, all statements' time, the reset,
+# and authenticated's entries whose text the worker may not read (no pg_read_all_stats: the pattern cannot match them).
+_CURATION_STATEMENTS_SQL = """
+select coalesce(sum(s.calls) filter (where s.browser and s.named), 0)::bigint,
+       coalesce(sum(s.total_exec_time) filter (where s.browser and s.named), 0)::float8,
+       coalesce(sum(s.total_exec_time), 0)::float8,
+       (select i.stats_reset from pg_stat_statements_info i),
+       count(*) filter (where s.browser and s.masked)
+  from (select p.calls, p.total_exec_time, p.userid = to_regrole('authenticated')::oid as browser,
+               p.query ilike %(relation)s as named, p.query = '<insufficient privilege>' as masked
+          from pg_stat_statements p) s
+"""
+# pg_stat_statements is the platform's extension, not a migration's: absent, unreadable or not preloaded.
+_STATEMENTS_UNREADABLE = (_pg_errors.UndefinedTable, _pg_errors.InsufficientPrivilege,
+                          _pg_errors.ObjectNotInPrerequisiteState, _pg_errors.InvalidSchemaName)
+
+
 def _curation_triggers_cell(conn: Any, expected: int) -> dict[str, Any]:
     armed, found, off = fetchone(conn, _CURATION_TRIGGERS_SQL)
     armed, found, off = int(armed or 0), int(found or 0), sorted(off or [])
@@ -1025,27 +1052,99 @@ def _curation_triggers_cell(conn: Any, expected: int) -> dict[str, Any]:
         "(red by intent while the writer kill switch is in force)"), value=armed, unit="triggers", facts=facts)
 
 
-def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Does every committed curation change still move the curation clock? Its triggers, and the board's bumps."""
-    at = _now(conn)
-    cells = [_curation_triggers_cell(conn, int(thresholds["CURATION_CLOCK_TRIGGERS"]))]
-    not_measured: dict[str, str] = {}
-    try:
-        missed, accounts, first, events = fetchone(conn, _CURATION_BOARD_BUMPS_SQL)
-    except _pg_errors.UndefinedTable as exc:
-        not_measured["board_bumps"] = f"the curation clock is absent ({_oneline(exc)})"
-        return _result("curation_sync", cells, not_measured)
+def _curation_board_bumps_cell(conn: Any, at: _dt.datetime) -> dict[str, Any]:
+    missed, accounts, first, events = fetchone(conn, _CURATION_BOARD_BUMPS_SQL)
     missed, accounts, events = int(missed or 0), int(accounts or 0), int(events or 0)
     facts = {"events_24h": events, "accounts": accounts, "first_missed_at": _iso(_as_utc(first))}
     if missed:
         oldest = _ago((at - _as_utc(first)).total_seconds())
-        cells.append(_cell("board_bumps", "fail", (
+        return _cell("board_bumps", "fail", (
             f"{missed} of {events} card events of the last 24 h ({accounts} accounts, the oldest {oldest} ago) "
             "have no board clock bump at or after them: a committed card change moved no clock, so other open "
-            "windows never re-read it"), value=missed, unit="events", facts=facts))
-    else:
-        cells.append(_cell("board_bumps", "ok", f"every one of the {events} card events of the last 24 h bumped "
-                           "its account's board clock", value=0, unit="events", facts=facts))
+            "windows never re-read it"), value=missed, unit="events", facts=facts)
+    return _cell("board_bumps", "ok", f"every one of the {events} card events of the last 24 h bumped "
+                 "its account's board clock", value=0, unit="events", facts=facts)
+
+
+def _facts(cells: dict[str, dict[str, Any]], subject: str) -> dict[str, Any]:
+    """A stored cell's facts, or none."""
+    return (cells.get(subject) or {}).get("facts") or {}
+
+
+def _curation_reads_cell(calls: int, reset: str | None, previous: dict[str, Any], at: _dt.datetime,
+                         quiet_h: float) -> dict[str, Any]:
+    """Watch once the clock read's call count has stood still for `quiet_h` (an evicted entry is no advance)."""
+    before = previous.get("calls")
+    same_reset = reset == previous.get("stats_reset")
+    advanced = before is not None and calls > (int(before) if same_reset else 0)
+    since = None if before is None or advanced else _as_utc(previous.get("quiet_since"))
+    since = since or at
+    quiet_s = (at - since).total_seconds()
+    facts = {"calls": calls, "quiet_since": _iso(since), "stats_reset": reset}
+    value = round(quiet_s / 3600, 1)
+    if quiet_s >= quiet_h * 3600:
+        return _cell("reads", "warn", (
+            f"no browser has read the curation clock for {_ago(quiet_s)} (its count stood at {calls} since "
+            f"{_stamp(since)}): no signed-in window follows curation. The reader kill switch is in force, the SPA "
+            "no longer sends the read, or nobody was signed in"), value=value, unit="h", facts=facts)
+    if before is None:
+        return _cell("reads", "ok", f"watching the clock read from now ({calls} calls so far)", value=value,
+                     unit="h", facts=facts)
+    if advanced:
+        return _cell("reads", "ok", f"the browsers read the curation clock ({calls} calls)", value=value,
+                     unit="h", facts=facts)
+    return _cell("reads", "ok", f"no clock read for {_ago(quiet_s)} (Watch at {quiet_h:g} h)", value=value,
+                 unit="h", facts=facts)
+
+
+def _curation_load_cell(clock_ms: float, all_ms: float, reset: str | None, previous: dict[str, Any],
+                        watch_pct: float) -> dict[str, Any]:
+    """Watch when the clock read took at least `watch_pct` % of all statement time since the previous measurement."""
+    facts: dict[str, Any] = {"clock_ms": round(clock_ms, 1), "all_ms": round(all_ms, 1), "stats_reset": reset}
+    prev_clock, prev_all = previous.get("clock_ms"), previous.get("all_ms")
+    spent = None if prev_all is None or reset != previous.get("stats_reset") else all_ms - float(prev_all)
+    took = None if prev_clock is None else clock_ms - float(prev_clock)
+    if spent is None or took is None or spent <= 0 or took < 0:
+        return _cell("load", "unknown", "Not measured: a baseline taken now; the share is judged between two "
+                     "measurements", unit="%", facts=facts)
+    share = took / spent * 100
+    facts["share_pct"] = round(share, 3)
+    if share >= watch_pct:
+        return _cell("load", "warn", (
+            f"the clock read took {share:.1f} % of all statement time since the previous measurement (Watch at "
+            f"{watch_pct:g} %): re-cost the interval (docs/design/curation-sync.md § 3.8)"),
+            value=round(share, 2), unit="%", facts=facts)
+    return _cell("load", "ok", f"the clock read took {share:.2f} % of all statement time since the previous "
+                 "measurement", value=round(share, 2), unit="%", facts=facts)
+
+
+def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """Does every committed curation change still move the curation clock, and does any window still read it?"""
+    at = _now(conn)
+    cells = [_curation_triggers_cell(conn, int(thresholds["CURATION_CLOCK_TRIGGERS"]))]
+    not_measured: dict[str, str] = {}
+    try:
+        cells.append(_curation_board_bumps_cell(conn, at))
+    except _pg_errors.UndefinedTable as exc:
+        not_measured["board_bumps"] = f"the curation clock is absent ({_oneline(exc)})"
+    try:
+        row = fetchone(conn, _CURATION_STATEMENTS_SQL, {"relation": "%curation_clock_public%"})
+    except _STATEMENTS_UNREADABLE as exc:
+        why = f"pg_stat_statements cannot be read here ({_oneline(exc)})"
+        not_measured.update(reads=why, load=why)
+        return _result("curation_sync", cells, not_measured)
+    calls, clock_ms, all_ms, reset, masked = row or (0, 0.0, 0.0, None, 0)
+    if masked:
+        why = (f"the worker cannot read other roles' statement text ({int(masked)} entries of authenticated show "
+               "<insufficient privilege>; grant it pg_read_all_stats)")
+        not_measured.update(reads=why, load=why)
+        return _result("curation_sync", cells, not_measured)
+    reset_at = _iso(_as_utc(reset))
+    previous = _previous_result(conn, "curation_sync")[1]
+    cells.append(_curation_reads_cell(int(calls or 0), reset_at, _facts(previous, "reads"), at,
+                                      float(thresholds["CURATION_CLOCK_QUIET_H"])))
+    cells.append(_curation_load_cell(float(clock_ms or 0), float(all_ms or 0), reset_at, _facts(previous, "load"),
+                                     float(thresholds["CURATION_CLOCK_LOAD_PCT"])))
     return _result("curation_sync", cells, not_measured)
 
 

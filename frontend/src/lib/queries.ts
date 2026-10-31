@@ -39,6 +39,7 @@ import type {
   SoldCoverage,
 } from './types';
 import type { BorderCase } from './api';
+import type { ClockRow } from './curationSync';
 
 export const CARD_PAGE_SIZE = 24;
 
@@ -1876,6 +1877,23 @@ export const pipelineKeys = {
  * acting-prefixed: sharing is always the caller's own (lib/acting). */
 export const pipelineShareKeys = {
   all: ['pipeline-shares'] as const,
+};
+
+/* The curation clock (migration 696): one row per (account, family) the caller
+ * follows, read by lib/curationSyncOwner. Exactly the ClockRow columns, pinned to
+ * the view by tests/test_curation_clock_read_contract.py, which reads the quotes
+ * below: no apostrophes in this comment or the list. */
+const CURATION_CLOCK_COLS = 'account_id,family,counter,mine,age_ms';
+
+/* NEVER acting: who follows whom is stated once, in the view (its audience
+ * function), and an x-act-as header would narrow it to the rows of the caller
+ * alone (docs/design/curation-sync.md § 3.4). */
+export const fetchCurationClock = async ({ signal }: { signal?: AbortSignal } = {}): Promise<ClockRow[]> => {
+  const { data } = await pgRead<ClockRow[] | null>(
+    supabase.from('curation_clock_public').select(CURATION_CLOCK_COLS),
+    { signal },
+  );
+  return data ?? [];
 };
 
 export const dismissalKeys = {

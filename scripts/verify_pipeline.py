@@ -435,6 +435,11 @@ THRESHOLDS: dict[str, Any] = {
     # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
     # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
     "CURATION_CLOCK_TRIGGERS": 12,
+    # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
+    # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
+    # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
+    "CURATION_CLOCK_QUIET_H": 24,
+    "CURATION_CLOCK_LOAD_PCT": 5.0,
     # --- migration_drift (platform alarm, on GitHub): is every merged migration applied -------
     # The newest 25 files span several weeks of this repo's cadence, so a drift is caught long
     # before the window rolls past it, with a few hundred catalog lookups.
@@ -554,7 +559,7 @@ CHECKS: tuple[Check, ...] = (
     Check("notifications", check_notifications, "platform", "alarm", _WORKER, _TEN_MINUTES,
           "Push notifications", unit="cells", owner_path="/notifications",
           budget_s=_NOTIFICATIONS_BUDGET_S),
-    # Curation sync (migration 696): the clock's triggers and the board's bumps; no owner page.
+    # Curation sync (migration 696): the clock's triggers and the board's bumps, its reads and their load; no owner page.
     Check("curation_sync", check_curation_sync, "platform", "alarm", _WORKER, _HOURLY, "Curation sync",
           unit="cells", budget_s=_CURATION_SYNC_BUDGET_S),
     # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read
