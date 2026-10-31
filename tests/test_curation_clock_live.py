@@ -596,10 +596,11 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
         cur.execute("SELECT p.proname, p.prosecdef, p.proconfig FROM pg_proc p WHERE p.pronamespace = 'public'::"
                     "regnamespace AND p.proname IN ('bump_curation_clock', 'curation_clock_audience')")
         procs = {name: (definer, config) for name, definer, config in cur.fetchall()}
-        cur.execute("SELECT r, p, has_table_privilege(r, 'public.curation_clock', p) "
-                    "FROM unnest(array['anon', 'authenticated', 'service_role']) r, "
-                    "unnest(array['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) p")
-        writes = [(r, p) for r, p, held in cur.fetchall() if held]
+        cur.execute("SELECT rel, r, p, has_table_privilege(r, 'public.' || rel, p) "
+                    "FROM unnest(array['curation_clock', 'curation_clock_public']) rel, "
+                    "unnest(array['anon', 'authenticated', 'service_role']) r, "
+                    "unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) p")
+        held = {(rel, r, p) for rel, r, p, has in cur.fetchall() if has}
         cur.execute("SELECT reloptions FROM pg_class WHERE oid = 'public.curation_clock_public'::regclass")
         options = cur.fetchone()[0]
         cur.execute("SELECT a.id, array_agg(c.family ORDER BY c.family) FROM accounts a "
@@ -612,7 +613,12 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
     assert {rel: d.split("bump_curation_clock('")[1].split("'")[0] for rel, _n, d in triggers} == CLOCKED_TABLES
     assert procs["bump_curation_clock"] == (True, ['search_path=""']), "the bump is definer on a fixed path"
     assert procs["curation_clock_audience"][0] is False, "the audience is invoker"
-    assert writes == [], "no browser or service role may write the clock"
+    assert {(rel, r, p) for rel, r, p in held if p != "SELECT"} == set(), (
+        "nobody but bump_curation_clock() writes the clock or its view")
+    assert {(rel, r) for rel, r, p in held if p == "SELECT"} == {
+        ("curation_clock", "authenticated"), ("curation_clock", "service_role"),
+        ("curation_clock_public", "authenticated"), ("curation_clock_public", "service_role"),
+    }, "the browser reads through its policy, the service role reads everything (701), anon reads nothing"
     assert "security_invoker=true" in options
     assert seeded and all(families == sorted(FAMILIES) for _acc, families in seeded), (
         f"every account that predates the clock was seeded with all seven families: {seeded}")
