@@ -622,9 +622,10 @@ def post_estimations(
     """verify_jwt (not require_token) so a real per-user JWT gets its account
     stamped onto the run — but `conn` stays the service-role connection, NOT
     the tenant pool: a run's execution can run minutes long (agent mode), and
-    tenant_conn holds one pooler transaction open for the whole request
-    (Wave 1 W1-1 boundary; moving execution itself off the request process is
-    W1-3). resolve_account_id is plain SQL, safe on any connection."""
+    TenantConn holds one pooler transaction open for the whole handler,
+    committed before the response is sent (Wave 1 W1-1 boundary; moving
+    execution itself off the request process is W1-3). resolve_account_id
+    is plain SQL, safe on any connection."""
     account_id = tenant_pool.resolve_account_id(conn, claims) or deps.SYSTEM_ACCOUNT_ID
     return create_estimation_run(
         conn, client, llm_client, body, background_tasks=background_tasks,

@@ -58,7 +58,8 @@ def bound_read(cur: psycopg.Cursor) -> None:
 
 
 def read_conn(conn: psycopg.Connection = Depends(deps.get_db_conn)) -> "Iterator[psycopg.Connection]":
-    """FastAPI dependency: the service connection as one bounded read, held for the request like `tenant_conn`."""
+    """FastAPI dependency: the service connection as one bounded read, held for the whole request
+    (request scope, so it ends after the response is sent; `TenantConn` commits before the response)."""
     with conn.transaction():
         with conn.cursor() as cur:
             bound_read(cur)

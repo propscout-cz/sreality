@@ -196,13 +196,13 @@ def refuse_auth_optional_on_railway() -> None:
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
     """Any signed-in caller — a verified Supabase JWT — with no identity returned.
-    A route that needs one takes verify_jwt / tenant_conn."""
+    A route that needs one takes verify_jwt / `TenantConn` (tenant_pool)."""
     _bearer(authorization)
 
 
 def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
     """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
-    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / tenant_conn."""
+    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / `TenantConn` (tenant_pool)."""
     return _bearer(authorization)
 
 

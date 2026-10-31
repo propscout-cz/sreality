@@ -1,10 +1,11 @@
 # Curation sync: open windows follow a curation change made anywhere
 
-Status: **Approved 2026-10-31 (spec #2197); build in progress.** All five rulings are in (§ 8; Q3 was ruled (a), not the recommended (b)). Waves W0–W4 (§ 6) are #2198–#2202 and the gate #2203 follows W4; track `roadmap/operator-workflow-track.md` § Phase U-SYNC; decision record ADR-0008. The design is Lens C (the pulled curation clock), revised against four adversarial reviews (security, correctness, operability, completeness); § 12 is that review's ledger.
+Status: **Approved 2026-10-31 (spec #2197); build in progress.** All five rulings are in (§ 8; Q3 was ruled (a), not the recommended (b)). Waves W0–W4 (§ 6) are #2198–#2202 and the gate #2203 follows W4; track `roadmap/operator-workflow-track.md` § Phase U-SYNC; decision record ADR-0008. The design is Lens C (the pulled curation clock), revised against four adversarial reviews (security, correctness, operability, completeness); § 12 is that review's ledger, and its build ledger records what each wave built differently.
 
 Tags:
 - **[V]** means the reviser read it this session (code, `node_modules`, site-packages or docs).
 - **[V·r]** means a reader or reviewer verified it and I did not re-read it.
+- **[V, W1]** means read in W1's code as built (PR #2205), not on origin/main.
 - **[A]** means assumed.
 
 Line numbers refer to origin/main at `934e904a3` (2026-10-31).
@@ -36,7 +37,7 @@ Rejected terms:
 - A re-read stays owed until a read issued after the change has landed: a change can be delayed, never lost.
 
 **Named exceptions** (each one is ruled or filed as a follow-up):
-- An open Browse, Feed or collection list keeps its rows, counts, map and stats until the next navigation; only the per-row marks follow now (ruling Q3a). The window's own writes settle as today.
+- An open Browse, Feed or collection list keeps its rows, counts, map and stats until the next navigation; only the per-row marks follow now (ruling Q3a). The window's own writes settle by ruling 9's per-property judge (Decision 7).
 - The two parties of a collection share do not yet follow each other's shared curation (F2).
 - An open property that is merged away elsewhere shows its emptied curation until navigation (F14).
 - Extension panels do not receive (Q4/F1).
@@ -380,12 +381,12 @@ export type SyncTable = keyof typeof SYNC_TABLES;
 /** Ruling Q3(a): a REMOTE lens change reaches Browse at its next mount, lists and aggregates alike; marks follow now. */
 export const LENS_REREAD = { lists: 'mount', aggregates: 'mount' } as const satisfies Record<string, ReadMode>;
 export const SYNC_ROOTS: readonly QueryKey[];   // ['pipeline'] ['curation'] ['dismissals'] ['pipeline-shares'] ['acting']
-export function applySyncQueryDefaults(qc: QueryClient): void;      // refetchOnReconnect:false per SYNC_ROOT (main.tsx)
+export function applySyncQueryDefaults(qc: QueryClient): void;      // refetchOnReconnect:false per SYNC_ROOT (main.tsx, called from W4)
 export function tableReads(tables: readonly SyncTable[], actAs: string | null): QueryKey[];
-export function revalidateTables(qc: QueryClient, tables: readonly SyncTable[], actAs?: string | null, opts?: { release?: Hold }): void;
+export function revalidateTables(qc: QueryClient, tables: readonly SyncTable[], actAs?: string | null, opts?: { release?: Hold }): Promise<void>;
 export function familyTargets(qc: QueryClient, family: CurationFamily, owner: string | null): Revalidation[];
 export function clockChanges(prev: ReadonlyMap<string, ClockRow> | null, next: readonly ClockRow[], firstWindowMs: number): ClockRow[];
-export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-factory member → reason (key census)
+export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-factory member → reason (key census); empty as built
 ```
 
 | table | family | reads (own → bare; owner → `['acting',O,…]`) | ownReads (never acting) | lens |
@@ -393,15 +394,15 @@ export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-fact
 | property_pipeline | board | `pipelineKeys.board`, `.members` | — | pipeline |
 | pipeline_stages | board | `.stages`, `.board`, `.members` (**closes D2**) | — | pipeline |
 | property_dismissals | dismissals | `dismissalKeys.all` | — | dismissed |
-| collections | collections | `curationKeys.collections` | `curationKeys.anyCollection` (new member `['curation','collection']`) | collections |
+| collections | collections | `curationKeys.collections` | `curationKeys.anyCollection` (new member `['curation','collection']`; a remote change owes it `LENS_REREAD.lists`) | collections |
 | collection_properties | collections | `.propertyCollectionMembers`, `.collections` | `.anyCollection`, `.allPropertyNotes`, `.noteCounts` (shared-note visibility joins this table, 610:136-145 [V]) | collections |
-| tags | tags | `.tags`, `.propertyTagMembers` | — | tags |
-| property_tags | tags | `.propertyTagMembers` | — | tags |
+| tags | tags | `.tags` (`property_tags_public` reads only `property_tags`; a tag DELETE names both tables, 202 cascades) | — | tags |
+| property_tags | tags | `.propertyTagMembers`, `.tags` (GET /tags counts `listing_count`) | — | tags |
 | property_notes | notes | `.allPropertyNotes` (notes, files, viewings: one prefix) | `.noteCounts` | — |
 | property_attachments | notes | `.allPropertyNotes` | — | — |
 | property_artifact_links | links | `.artifactLinks` | — | — |
 | pipeline_shares | shares | — | `pipelineShareKeys.all` | — |
-| collection_shares | shares | — | `.collections`, `.anyCollection`, `.allPropertyNotes`, `.noteCounts` | — |
+| collection_shares | shares | — | `.collections`, `.anyCollection`, `.propertyCollectionMembers` (`collection_properties_shared_read`, 610, joins this table), `.allPropertyNotes`, `.noteCounts` | — |
 
 **Rule for an entry:** a key sits under a table **iff** its read selects that table, or a view or policy that joins it.
 
@@ -411,13 +412,18 @@ export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-fact
 - `PIPELINE_REVALIDATE` is replaced by `tableReads(['property_pipeline','property_dismissals'], actAs)`, pinned **set-equal** (by `hashKey`) to today's `[members, board, dismissals]`.
 - A remote change knows only its family and takes the union of the family's tables.
 
-**Decision 7: remote lens changes go through `LENS_REREAD` (ruling Q3(a), 2026-10-31).**
-- `lensTargets(qc, lens)` is a new export of `curationSettle.ts` and reuses `cohorts()`. For each cohort that engages the lens:
+**Decision 7: remote lens changes go through `LENS_REREAD` (ruling Q3(a), 2026-10-31); a local write keeps ruling 9's judge, with the stale-side rule.**
+- `lensTargets(qc, lens, reread)` is a new export of `curationSettle.ts` and reuses `cohorts()`. `familyTargets` passes `LENS_REREAD` as `reread`, because `curationSync.ts` imports `curationSettle.ts` and not the other way round [V, W1]. For each cohort that engages the lens:
   - `browseKeys.aggregates` (map, stats, counts, broker board) are owed `'mount'`;
   - lists are owed `'mount'`.
+- An open collection page (`curationKeys.anyCollection`) is a list too: `familyTargets` owes it `LENS_REREAD.lists` [V, W1].
 - Only the per-card marks (the member reads in `SYNC_TABLES`) re-read now, so a remote change never moves a row, a count or a pin under the user.
-- Local writes keep today's behaviour unchanged: ruling 9's per-property judge, including "stale map → that cohort re-reads" (`curationSettle.ts:13-14,127,161-162` [V]). A click on a row that a remote change left stale is judged by those same rules.
-- *Not built under (a):* the stale-side rule drafted for Q3(b) (such a click drops the row in place and re-reads only the aggregates). It comes back only with a switch to (b), together with `aggregates: 'now'`.
+- Local writes keep ruling 9's per-property judge (`curationSettle.ts` header [V, W1]). The stale-side rule below refines its "stale map" row.
+- **The stale-side rule** (`curationSettle.ts` `staleMap`, used by `settlePatches` [V, W1]). A click's before-verdict from a member map can say "no" while a cached list still shows the row. One of them is stale:
+  - The **map** is, if one of the member reads the verdict stands on is owed (`isOwed`) or was read before the list was (its `dataUpdatedAt` older than the newest of the cohort's lists showing the row). That cohort re-reads and nothing drops, as today.
+  - Otherwise the **list** is: a change made elsewhere after it was read, which under Q3(a) a list follows only at its next mount. The row is judged like any other, so a click that leaves it out drops it in place and only the aggregates re-read.
+- The ledger writes every patch with `updatedAt` = its base's read time (Decision 9), so a paint never makes a map look fresh.
+- **What changes versus today: exactly one case.** A local click on a row that a list shows while a member map fresher than the list (nothing owed) already says "no". Today that cohort re-reads whole. Now only the clicked row moves.
 
 **Decision 8: Browse never receives owner-space targets.** `familyTargets(…, owner≠null)` returns only `actingKey(owner, reads)`, never ownReads or lens targets (`curationSettle.ts:112-113` [V]). This invariant has its own test.
 
@@ -427,25 +433,26 @@ export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-fact
 export type ReadMode = 'now' | 'mount';
 export interface Revalidation { queryKey: QueryKey; exact?: boolean; mode?: ReadMode }   // default 'now'
 export interface Hold { release(): void; rollback(): void }                              // idempotent, epoch-guarded
-export function revalidate(qc: QueryClient, items: readonly (Revalidation | QueryKey)[], opts?: { release?: Hold }): void;
+export function revalidate(qc: QueryClient, items: readonly (Revalidation | QueryKey)[], opts?: { release?: Hold }): Promise<void>;  // settles with the reads it started or joined
 export function holdReads(qc: QueryClient, filters: readonly QueryFilters[], patches?: readonly CachePatch[]): Hold;
 export function useReadHold(keys: readonly QueryKey[], active: boolean): void;
 export function isOwed(qc: QueryClient, key: QueryKey): boolean;
+export function repayOwed(qc: QueryClient): void;            // W4's owner, on each clock answer: retry errored 'now' debts
 export function resetReads(qc: QueryClient): void;           // epoch++; drop owed reads, holds, ledgers
-export const HOLD_TTL_MS = REQUEST_DEADLINE_MS + 10_000;      // 140 s of ONLINE time; lib/api.ts deadline 130 s [V·r]
+export const HOLD_TTL_MS = 140_000;                           // ONLINE time; = REQUEST_DEADLINE_MS (130 s) + 10 s, pinned by revalidate.test.ts
 ```
 
 **Decision 14 (rewritten): owed reads make the client lossless.**
-1. **Owe.** `revalidate(items)` records, for each cached query that an item matches, an owed read `{since: now, mode, gen}`, deduped by `hashKey`, with `'now'` winning over `'mount'`. With `opts.release`, the release and the new items form one batch, so there is never a double invalidate.
+1. **Owe.** `revalidate(items)` records, for each cached query that an item matches, an owed read `{since, mode, attempts}`, deduped by `hashKey`, with `'now'` winning over `'mount'`. `since` comes from the scheduler's own counter, which also stamps every fetch start [V, W1]. With `opts.release`, the release and the new items form one batch, so there is never a double invalidate.
 2. **Pay.**
    - A query that is active, not held, enabled and owed `'now'` is paid at once with `query.fetch(undefined, {cancelRefetch})`. That is the same call `refetchQueries` makes, and disabled or static queries are skipped as it skips them.
    - `cancelRefetch` is false **only** if the in-flight fetch started at or after `since`. The start time comes from the cache's `fetch` actions (the starvation guard).
    - An initial load (no data) started before `since` is awaited and then paid anew. This closes the swallowed-invalidation trap.
-   - An inactive query, a disabled query, or one owed `'mount'` is paid on its next `observerAdded`, in a microtask.
+   - An inactive or disabled query owed `'now'` is paid when an observer makes it active, in a microtask. One owed `'mount'` is paid only on its first observer (or when a disabled first observer is enabled); a second reader joining a mounted query pays nothing [V, W1].
    - A held query is parked until its last overlapping hold releases.
    - The scheduler never uses `isInvalidated` as its carrier. A local in-place drop, a rollback or a `fetchNextPage` therefore cannot erase an owed read.
 3. **Settle a payment.**
-   - The fetch promise resolving pays the debt. Only the matching `gen` acts.
+   - The fetch resolving pays the debt, if it started after `since`.
    - A `CancelledError` leaves it owed.
    - Any other error leaves it owed with `attempts+1`. It is re-paid on the next clock answer, up to 3 attempts, and then falls to `'mount'`, so an error never loops.
    - Removing a query drops its debt.
@@ -463,11 +470,12 @@ export const HOLD_TTL_MS = REQUEST_DEADLINE_MS + 10_000;      // 140 s of ONLINE
 
 **Decision 9 (rewritten): holds are synchronous, per key, enforced by the cache, and composed by a patch ledger.**
 - `holdReads(filters, patches)` registers synchronously inside the click.
-  - It cancels every matching **non-page** fetch in flight with `revert` (synchronous, `retryer.js:29-35` [V]) and owes it.
-  - It then applies `patches` through a per-query **ledger** `{base, patches[] in order}`.
+  - It cancels every matching fetch in flight with `revert` (synchronous, `retryer.js:29-35` [V]) and owes the full ones. A page fetch in flight is dropped, not owed: it was built on the pages from before the patch, and the list's sentinel or next scroll asks again [V, W1].
+  - It then applies `patches` through a per-query **ledger** `{base, patches[] in order}`, writing each with the base's read time (`updatedAt`).
   - There is no `await` between registration and paint.
 - While a key is held, any later non-page fetch that starts on it, whatever started it (mount refetch, reconnect, a stray `invalidateQueries`, a remote target), is cancelled in a microtask and owed. A microtask is needed because `fetch` dispatches before it creates the retryer [V]. Page fetches (`meta.fetchMore`) pass, so scrolling during a pending dismissal never turns into a full-list refetch.
 - `rollback()` drops this hold's patches and sets each query to `base` plus the remaining patches in order. Rollbacks in any order are exact, with no erased concurrent patch and no resurrected failed one: this is Replicache's rebase model.
+- A write that lands on a held query from outside the ledger (a landed page, a site's `setQueryData` of a server answer) becomes the new base with the patches in it, and the ledger drops them. Rollback is therefore exact only while no such write has landed; after one, the query is left to the re-read that follows [V, W1].
 - `release()`: the write's patches stay in the ledger as confirmed until the query's last hold releases. Then the parked debts are paid and the ledger is dropped.
 - A hold older than `HOLD_TTL_MS` of **online** time (the clock pauses while `onlineManager` is offline, so a paused write cannot trip it) is released with `console.warn`.
 
@@ -539,7 +547,7 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
   - Permanent (400, 401, 403, 404, e.g. the kill switch or a renamed view): no interval; triggers spaced at least 60 s apart.
   - No toast and no retry storm.
 - The global focusManager is untouched (R12), and `refetchOnWindowFocus:false` stays, with its reason now stated: the owner supersedes it.
-- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour.
+- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. W4 calls it in `main.tsx` beside the owner; W1 left it uncalled, so reconnect refetch stays on until the clock read exists [V, W1].
 - The nudge is posted from one `MutationCache` subscription on every mutation `success`. Under W0, success means committed. There is a `typeof BroadcastChannel` fallback, and the whole owner is gated on `isSupabaseConfigured()`.
 
 **Decision 13: mount `useCurationSync(loading ? null : userId)` in `AuthProvider`, declared after the identity effect.**
@@ -707,7 +715,7 @@ Registry edits (W3):
 | ArtifactLinkRow `setQueryData`-on-success | `ArtifactLinkRow.tsx:48-61` | W1 | — |
 | Seed-once drafts (6 editors) | Pipeline stage row, TagEditPopover, CollectionDetail, PhoneCollectionDetail, CurationBlock note, ArtifactLinkRow | W2 | D3 class |
 | `remembered` read once; index-valued `target` | `PhonePipeline.tsx:245,258-268` | W2 | — |
-| Bare `Depends(tenant_conn)` (71 sites) | `api/` → `TenantConn` | W0 | D6 |
+| Bare `Depends(tenant_conn)` (68 route sites + 2 helpers) | `api/` → `TenantConn` | W0 | D6 |
 | Stale "two places mount" | `lib/acting.ts:10-12`, `docs/design/pipeline-sharing.md:237` | W1 | — |
 | "A revoked board reads empty" as the only revoke signal | `docs/design/pipeline-sharing.md:256` (rewritten: the clock is the signal; the empty-read guard stays) | W4 | — |
 | Rule-22 cache doctrine naming settle/`PIPELINE_REVALIDATE` as the only re-read paths | `docs/architecture.md:3739-3776` (rewritten) | W1 | — |
@@ -739,7 +747,7 @@ Each wave is one PR, with a draft PR opened early.
 
 **Docs budgets:** CLAUDE.md is **not touched** (15 B free [V]). ROADMAP edits are byte-neutral or smaller (27 B free on 2026-10-31 [V]). Database SKILL.md (270 B free [V]) gets at most two pointer phrases; the rest goes to `references/tenancy.md` (uncapped).
 
-**W0 `fix/tenant-commit-before-response` (backend + program charter; in progress, #2198).**
+**W0 `fix/tenant-commit-before-response` (backend + program charter; in progress, #2198, PR #2204).**
 - Code:
   - `api/tenant_pool.py` (`TenantConn`; `require_account_id`/`require_acting_account_id` take it);
   - 68 route sites in `api/main.py`, `api/saved_sets.py`, `api/routes/{notifications,billing,property_download,stats_dashboards}.py`;
@@ -758,16 +766,16 @@ Each wave is one PR, with a draft PR opened early.
   - `roadmap/operator-workflow-track.md` new "Phase U-SYNC" (W0 bullet);
   - `ROADMAP.md:47` `🟢 mostly done` → `🟡 U-SYNC` (shorter).
 
-**W1 `cleanup/curation-read-scheduler` (SPA, no DB).** Valuable on its own: D1, D2, D5, rollback composition.
+**W1 `cleanup/curation-read-scheduler` (SPA, no DB; built, PR #2205).** Valuable on its own: D1, D2, D5, rollback composition. What it built differently is in § 12's build ledger.
 - New: `lib/revalidate.ts` + test; `lib/curationSync.ts` + test (no owner yet).
 - Edited:
   - `lib/useOptimisticWrite.ts` (holds, ledger, header);
-  - `lib/curationSettle.ts` (`lensTargets`, `settleMemberWrite` on holds; no stale-side rule under Q3(a));
+  - `lib/curationSettle.ts` (`lensTargets`, `settleMemberWrite` on holds, the stale-side rule of Decision 7);
   - `lib/queries.ts` (`curationKeys.anyCollection`);
   - `lib/auth.tsx` (`resetReads` before `clear()`);
-  - `main.tsx` (`applySyncQueryDefaults`; a comment on why focus refetch stays off);
+  - `main.tsx`: a comment on why focus refetch stays off; `applySyncQueryDefaults` is called in W4;
   - every W1 ledger site; `pages/Pipeline.tsx` StageManager.
-- `frontend/eslint.config.js`: one selector in the ONE block. It bans `CallExpression[callee.property.name=/^(invalidateQueries|refetchQueries|resetQueries)$/]` with a descendant `MemberExpression[object.name=/^(pipelineKeys|curationKeys|dismissalKeys|pipelineShareKeys)$/]`. `lib/revalidate.ts` exempts its own call with a per-line disable; the file-exemption list does not grow (`eslint.config.js:196-210` [V]).
+- `frontend/eslint.config.js`: one selector in the ONE block. It bans `CallExpression[callee.property.name=/^(invalidateQueries|refetchQueries|resetQueries)$/]` with a descendant `MemberExpression[object.name=/^(pipelineKeys|curationKeys|dismissalKeys|pipelineShareKeys)$/]`. `lib/revalidate.ts` needs no exemption: it pays with `query.fetch`, never `invalidateQueries` [V, W1]. The file-exemption list does not grow (`eslint.config.js:196-210` [V]).
 - Tests:
   - `lib/hydration/hydration.test.ts` adds "SYNC_ROOTS disjoint from `['hydration']`";
   - a key-coverage vitest: every member of the four factories is prefix-covered by a `SYNC_TABLES` entry or listed in `NOT_SYNCED` with a reason.
@@ -818,6 +826,7 @@ Each wave is one PR, with a draft PR opened early.
 - `lib/queries.ts` `fetchCurationClock` (the select list stays apostrophe-free).
 - `lib/phoneShell.ts` exports `isPhoneFrame()` (the hook reuses it).
 - `lib/auth.tsx` mounts the owner.
+- `main.tsx` calls `applySyncQueryDefaults(queryClient)` beside the owner (W1 left it uncalled, so curation keeps its reconnect refetch until then). This is W4's, and it MUST land with the owner.
 - `lib/auth.test.tsx` and `auth.push.test.tsx` mock `@/lib/curationSyncOwner`.
 - `tests/test_curation_clock_read_contract.py`: `fetchCurationClock`'s columns ⊆ the latest `curation_clock_public` columns (precedent `tests/test_property_page_read_contract.py`).
 - Health cells `reads` and `load`.
@@ -855,7 +864,7 @@ Each wave is one PR, with a draft PR opened early.
 | 12 | Swallowed re-read (initial load, inactive in-flight, hold cancel, manual setData) | Owed reads (Decision 14) |
 | 13 | Startup race | Duration rule (Decision 14b) + start-time owe |
 | 14 | Leaked hold | Epoch reset; TTL 140 s online time + warn |
-| 15 | Rows, counts, map and stats of an open list stay as read until navigation (ruling Q3a) | Marks repaint now; a click on a stale row is judged by today's rules (Decision 7) |
+| 15 | Rows, counts, map and stats of an open list stay as read until navigation (ruling Q3a) | Marks repaint now; a click on a row a remote change left stale is settled by the stale-side rule (Decision 7): a stale map re-reads its cohort, a stale list drops only the clicked row |
 | 16 | Self-echo cost | ≤ 1 family re-read set per answer per writing window; accepted |
 | 17 | Nudge before commit | Resolved by W0 (success = committed) |
 | 18 | A window left visible overnight | ≈ 17k reads/day ≈ 31 MB; F12 idle back-off only if measured |
@@ -881,8 +890,8 @@ Each wave is one PR, with a draft PR opened early.
 - (b) ≈ 1 s via a Realtime doorbell: **not built**; follow-up F7, only on a future ≈ 1 s ruling. It would add a WAL-decoding slot (cost unmeasured), a CI shim, a dashboard toggle and a feature without a GA label, and open a revocation window: a recipient whose share is revoked keeps receiving content-free "something changed" pokes until their login token refreshes (≤ 1 h at Supabase's default [A]).
 
 **Q3. An open Browse, Feed or collection list when a property changes on another device. RULED: (a).**
-- (a) **Everything the list shows (rows, counts, map, stats) stays as read until you navigate; only the per-card marks update.** Cheapest, and fully consistent: `LENS_REREAD = { lists: 'mount', aggregates: 'mount' }` (Decision 7). The window's own writes keep today's behaviour.
-- (b) *Recommended, not ruled:* counts, map and stats update within seconds; rows refresh on the next navigation. A later ruling would switch `aggregates` to `'now'` and add the stale-side rule.
+- (a) **Everything the list shows (rows, counts, map, stats) stays as read until you navigate; only the per-card marks update.** Cheapest, and fully consistent: `LENS_REREAD = { lists: 'mount', aggregates: 'mount' }` (Decision 7). The window's own writes keep today's behaviour, read as ruling 9's per-property judge (§ 12).
+- (b) *Recommended, not ruled:* counts, map and stats update within seconds; rows refresh on the next navigation. A later ruling would switch `aggregates` to `'now'`; the stale-side rule is already built (Decision 7).
 - (c) *Not ruled:* rows also enter and leave while the pointer is outside the list; each change re-reads every loaded page.
 
 **Q4. The Chrome extension as a receiver. RULED: (i), it stays a sender.** Re-reading what is on screen when the portal tab becomes visible (ii) is follow-up F1.
@@ -900,21 +909,22 @@ Each wave is one PR, with a draft PR opened early.
   - an inactive in-flight read that lands pre-change stays owed and is paid on remount (iv);
   - a fetch started after `since` is deduped, not restarted (starvation);
   - errors re-paid ≤ 3 then `'mount'`; CancelledError stays owed;
-  - a fetch started on a held key (mount, reconnect, stray invalidate) is cancelled and owed; `fetchNextPage` passes;
-  - ledger: A fails while B is pending on `members` → B's patch survives (ii); A fails after B fails → no resurrection; a count patch is never double-applied;
-  - epoch: after `resetReads`, an old rollback or release paints and parks nothing (vi);
-  - TTL counts only online time;
+  - a fetch started on a held key (mount, reconnect, stray invalidate) is cancelled and owed; `fetchNextPage` passes; a page in flight when the hold registers is dropped, not owed;
+  - a `'mount'` debt: a second reader joining a mounted query pays nothing; a disabled first reader pays when enabled;
+  - ledger: A fails while B is pending on `members` → B's patch survives (ii); A fails after B fails → no resurrection; a count patch is never double-applied; an outside write becomes the base, never patched twice; a patch keeps its base's read time through a paint and a rollback;
+  - epoch: after `resetReads`, an old rollback or release paints and parks nothing (vi), and a settle releasing an old hold owes nothing;
+  - TTL counts only online time; `HOLD_TTL_MS` equals `REQUEST_DEADLINE_MS + 10_000`;
   - release + settle keys → exactly one fetch (the D1 regression, using the real `createMutationCache()` and the `deferred()` helper, as in `useOptimisticWrite.test.tsx:37-47`).
 - `lib/curationSync.test.ts`:
   - every `SyncTable` × {own, owner}; owner targets are `['acting',O,…]` only (Decision 8);
   - `pipeline_stages` reaches `members` (D2);
   - `tableReads(['property_pipeline','property_dismissals'], null)` is set-equal to `[members, board, dismissals]`;
   - `clockChanges` changed/appeared/disappeared/unchanged, and the first-answer age rule;
-  - `LENS_REREAD` targets;
+  - `LENS_REREAD` targets: a remote lens change owes Browse lists and aggregates `'mount'` and nothing `'now'`; an open collection page waits for its next mount while the marks re-read now;
   - key-coverage census; local-write keys covered by their tables.
 - `lib/curationSettle.test.ts`:
-  - an aggregate re-read in flight at click time (a `'mount'` debt being paid) → `browse-count` correct after settle (i);
-  - Q3(a): a remote lens change owes lists and aggregates `'mount'` and nothing `'now'`; a click on a row it left stale settles by today's rules.
+  - an aggregate re-read in flight at click time → `browse-count` correct after settle (i);
+  - the stale side, both branches: a member map that is owed, or was read before the list, says "no" → that cohort re-reads whole and nothing drops; a map read after the list, nothing owed, says "no" → the row drops in place and only the aggregates re-read.
 - `lib/useServerDraft.test.ts`:
   - follows the server while untouched;
   - a server change while focused is never written back;
@@ -1022,8 +1032,8 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 | The settle microtask ordering protects `settleMemberWrite` | TRUE today [V·r]; replaced by holds (no ordering reliance) |
 | SurvivorRedirect only on initial null | FALSE: any null render (`PropertyDetail.tsx:280`) [V]; the property read is not clocked (F14) |
 | Shared-note visibility depends on `collection_properties` | TRUE (610:136-145) [V] → in the map |
-| Facts: TanStack 5.59; 6 supabase mocks; 87 `tenant_conn` refs | 5.100.9 [V·r]; 10 [V·r]; 71 `Depends` sites (87 incl. prose) [V] |
-| Still [A] | iOS resume event delivery; map typical size; probe cost at scale; worker read of `pg_stat_statements`; `service_role` in the CI bootstrap; Realtime topic form (F7); the exact FastAPI version introducing `scope` |
+| Facts: TanStack 5.59; 6 supabase mocks; 87 `tenant_conn` refs | 5.100.9 [V·r]; 10 [V·r]; 68 route sites + 2 helpers (71 `Depends` grep hits with one docstring; 87 incl. prose) [V] |
+| Still [A] | iOS resume event delivery; map typical size; clock-read cost at scale; worker read of `pg_stat_statements`; `service_role` in the CI bootstrap; Realtime topic form (F7); the exact FastAPI version introducing `scope` |
 
 ## 11. Follow-ups (out of scope)
 
@@ -1061,7 +1071,7 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 
   Never an INSERT policy (census rail). The topic form under Realtime is [A]; verify in the lane.
 - Same PR:
-  - the `scripts/ci_db_bootstrap.sql` realtime shim (inserting `send`, production shape at realtime `schema_migrations` 20261002120000; text in the backend report §2);
+  - the `scripts/ci_db_bootstrap.sql` realtime shim (inserting `send`, production shape at realtime `schema_migrations` 20261002120000; why Realtime is at-most-once and what its slot costs in WAL: § 4 R1);
   - the `scripts/migration_objects.py` schema-aware policy idents (`:215-217,329-333`) + test;
   - a live matrix under the realtime GUCs (claims, headers, role; **no method**): owner on 3 scopes; read recipient on board only; edit recipient on board + curation, never own; stranger nothing; malformed topic → false without error; `x-act-as` fails closed; a `client_id` token denied;
   - a health arm: `WarnSendingBroadcastMessage` count and partition count.
@@ -1072,7 +1082,7 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 
 ## 12. Changes from the adversarial review
 
-The review's ledger, kept as written. Since the rulings, "W5" below is follow-up F7 (Q2), and outcomes written for Q3(b), such as C3's stale-side rule, are not built under Q3(a) (§ 8).
+The review's ledger, kept as written. Since the rulings, "W5" below is follow-up F7 (Q2). The orchestrator ruled on 2026-10-31 that Q3(a)'s "the window's own writes keep today's behaviour" echoes this design's "local writes keep ruling 9's per-property judge unchanged" and does not drop C3's stale-side rule, so it stays as W1 built it (Decision 7).
 
 | ID | Objection (verdict) | Outcome |
 |---|---|---|
@@ -1091,7 +1101,7 @@ The review's ledger, kept as written. Since the rulings, "W5" below is follow-up
 | S-M | Abuse note; signup at commit; F8 now | Risks 21–22; live case 8; F8 marked "do now" |
 | C1 | Lossless refuted client-side (REFUTED) | **Changed**: owed reads paid only by post-change fetches; holds owe what they cancel; `isInvalidated` never the carrier (Decision 14) |
 | C2 | Holds incomplete; rollback composition; reconnect bypass (WEAKENED) | **Changed**: patch ledger (rebase), cache-enforced holds, `refetchOnReconnect:false` on `SYNC_ROOTS` (Decision 9, 12) |
-| C3 | Q3a marks fragile; reconnect; click on a stale row (WEAKENED) | **Changed**: `'mount'` debts in the scheduler; lists not marked stale; stale-side drop-in-place rule (Decision 7) |
+| C3 | Q3a marks fragile; reconnect; click on a stale row (WEAKENED) | **Changed, BUILT in W1 (repaired form)**: `'mount'` debts in the scheduler; lists not marked stale; the stale-side rule judges by owed reads and by read time (Decision 7) |
 | C4 | 30 s window inexact (WEAKENED) | **Changed, partly rebutted**: duration rule `age ≤ elapsed + 10 s` + start-time owe; empty baseline rejected on cost (R22) |
 | C5 | D6 makes losses silent (REFUTED) | **Changed**: W0 prerequisite (Decision 17) |
 | C6 | Family order not global (WEAKENED) | **Changed**: per-tx dedupe + W0 makes the residual visible; ordering census rejected (R25) |
@@ -1138,6 +1148,31 @@ The review's ledger, kept as written. Since the rulings, "W5" below is follow-up
 | P-M | `delegated_edits` named; extra live cases; vitest list; ADR-0008; agent Runs page | **Added** (W3 registry, §9 live 5–9, W0 ADR, F5) |
 | Own | "probe" collides with GLOSSARY | **Changed**: "clock read" |
 | Own | v1's `stop()` "mark synced keys stale" redundant (identity effect clears on every change incl. sign-out [V]) | **Removed** |
+
+### Build ledger (what each wave changed versus this document)
+
+Where a wave built something other than the design, the section concerned now says what was built, and a line here records the change. For W1 the code is the truth; for W2–W4 this document is. Each line names the file it lives in (`frontend/src/` omitted).
+
+**W0, PR #2204 (#2198).** Its deviations are written where they apply: § 2 (68 route sites + 2 helpers), § 3.6 ("As built") and § 6 W0. The API comments that described the old lifetime (`api/tenant_pool.py` `read_conn`, `api/main.py` `post_estimations`, `api/dependencies.py` `require_token` and `token_claims`) now name `TenantConn` and its commit before the response.
+
+**W1, PR #2205 (#2199).** Three commits on `934e904a3`, each with `Co-Authored-By: Claude Opus 5.5` (the implementer) [V].
+1. `lib/curationSync.ts` `SYNC_TABLES`: `tags` lists only `curationKeys.tags` (`property_tags_public` reads only `property_tags`); `property_tags` also lists `curationKeys.tags` (GET /tags counts `listing_count`); `collection_shares` own reads also list `propertyCollectionMembers` (policy `collection_properties_shared_read`, 610, joins `collection_shares`). § 3.5's table shows this.
+2. `components/curation/TagEditPopover.tsx`: a tag DELETE names both `tags` and `property_tags` (migration 202 cascades the memberships).
+3. `lib/curationSync.ts`: acting reads are NOT mapped under `pipeline_shares` (its `reads` are empty). When an owner's clock row disappears, the owner (W4) re-reads that family's acting keys. `NOT_SYNCED` is empty.
+4. `lib/revalidate.ts`, `lib/curationSync.ts`: `revalidate` and `revalidateTables` return `Promise<void>`, which settles when the reads they started or joined settle; parked and `'mount'` reads are not awaited. `CurationBlock.tsx`, `PropertyPhotos.tsx` and `ArtifactLinkRow.tsx` await it before closing an editor. `useOptimisticWrite`'s `onSettled` does not return it.
+5. `lib/revalidate.ts`: `repayOwed(qc)` is exported for W4's owner. An errored debt is retried at most 3 times, then falls to `'mount'`.
+6. `lib/curationSettle.ts`: `lensTargets(qc, lens, reread)` takes the `LENS_REREAD` modes as a parameter, and `settleMemberWrite(qc, set, propertyId, elementId, member, actAs, reads)` takes the caller's table reads and returns `void`. Both avoid an import cycle. `lib/collectionCache.ts` and `lib/tagCache.ts` pass `tableReads([...], actAs)`.
+7. `lib/revalidate.ts`: `HOLD_TTL_MS` is the literal `140_000`, pinned equal to `REQUEST_DEADLINE_MS + 10_000` by `revalidate.test.ts`. Tests that mock `lib/api` whole would otherwise fail to load the writers.
+8. `lib/revalidate.ts` ledger: a write that lands on a held query from outside the ledger (a landed page, a site's `setQueryData` of a server answer) becomes the new base with the patches baked in, and the ledger drops them. `rollback()` replays base + the remaining patches, so a rollback is exact only when no such write landed; after one, the query is left to the re-read that follows. `'mount'` debts survive a rollback.
+9. `lib/revalidate.ts`: a page fetch already in flight when a hold registers is cancelled with `revert` and NOT owed (the sentinel or the next scroll asks again). A page that starts while the hold is on passes.
+10. `lib/revalidate.ts`: a `'mount'` debt is paid only on the FIRST observer (or when a disabled first observer becomes enabled); a second reader joining pays nothing. `pay()` does not stamp its own start: query-core 5.100.9 dispatches `'fetch'` on a `cancelRefetch` restart (`query.js:261`, `null !== undefined`).
+11. `lib/revalidate.ts`: the epoch guard also covers a `revalidate` that releases a hold from an older epoch. A re-read with no hold can still owe a new identity's reads after `resetReads` (cost: one extra read).
+12. `lib/curationSync.ts` `familyTargets(own)`: owes `curationKeys.anyCollection` (the open collection page) as `LENS_REREAD.lists` (`'mount'`); the family's other reads (the collections index, the member maps, the note reads) are owed `'now'`.
+13. `lib/curationSettle.ts`: the stale-side rule is built as Decision 7 states, judging by owed reads and by read time; `lib/revalidate.ts` writes each patch with `updatedAt` = its base's read time.
+14. `main.tsx` does NOT call `applySyncQueryDefaults` yet: reconnect refetch on the curation roots stays on until W4 mounts the owner. **W4 MUST add that call in `main.tsx` beside the owner** (§ 6 W4).
+15. Kept: `pages/Pipeline.tsx`'s `sharePipeline(...).then(next => qc.setQueryData(pipelineShareKeys.all, next))` (the POST answers both lists). `lib/mergedAdverts.ts` `refreshAfterSplit` re-reads by the tables the merge carriers move instead of the `['curation']` sweep. Note writes (`CurationBlock.tsx`) re-read every property-notes query plus note counts for the own identity.
+16. `frontend/eslint.config.js`: `lib/revalidate.ts` needs no per-line exemption from the ban (it never calls `invalidateQueries`).
+17. Tests: `lib/revalidate.test.ts` 31, `lib/curationSync.test.ts` 49 (15 cases and 3 tables of cases; the Q3(a) remote-lens cases live here), `lib/curationSettle.test.ts` 19; full vitest 4283 (CI at `570acac0f`) [V].
 
 ---
 
