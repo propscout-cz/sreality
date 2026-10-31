@@ -587,20 +587,42 @@ inserts ≈ 50 k rows a day).
 
 1. **Prerequisites:** W2 live (#2216 merged; its reconcile sweeps v5.9.1). W4 (#2220) merged first:
    realitymix@9 is built on its @8 and this branch carries #2220's commits.
-2. **Standing autodedup shadow gate, before Step 2** (PROGRAM.md; ≈ 52 % of movers sit in the live
-   apply scope). From this branch, before the purge: `location_wave_shadow.yml` with
-   `--claims purge` (W3's keeper over a raw read, then the one read, `what_if.purge`) over the movers'
-   ids (the active listings with ≥ 2 rows of one type at the effective version, plus the
-   precision-declaration and marker cohorts), then `autodedup.shadow` + `harness shadow`; pass = no
-   ruled pair moved against its ruling. The ids bound the work (the shadow finds the movers itself):
+2. **Standing autodedup shadow gate, before Step 1** (PROGRAM.md; ≈ 52 % of movers sit in the live
+   apply scope). From this branch, before the purge: `location_wave_shadow.yml` with `claims=purge`
+   (`what_if.purge`: every claim of the ids read raw, the purge's keeper, then the one read) and
+   W3's OWN `ids_sql` — without it the workflow shadows its default (W4's realitymix cohort) and a PASS
+   means nothing. Then `autodedup.shadow` + `harness shadow`; pass = no ruled pair moved against its
+   ruling. The id set is the UNION, active listings only, of every listing W3 can move:
+   (a) a key holding ≥ 2 distinct values (the purge and the deleted tie rules: pins, towns, PSČ,
+   streets, two precision declarations; a key's same-value copies cannot move an answer, so they are
+   left out — the literal "≥ 2 claims for one key" is ≈ 90 % of active listings and adds only cost);
+   (b) a house-number claim beside a street line carrying a number (the one new rule between two
+   types); (c) any operator claim (the operator now binds through the register).
    ```
    gh workflow run location_wave_shadow.yml --ref feature/location-w3-one-claim-per-fact \
-     -f wave=w3-one-claim -f claims=purge -f scope=apply -f ids_sql="SELECT c.listing_id FROM
-     location_claims c JOIN listings l ON l.id = c.listing_id AND l.is_active GROUP BY c.listing_id,
-     c.claim_type, c.licence_class HAVING count(DISTINCT (c.value_text, c.value_num,
-     ST_AsText(c.value_geom), c.value_jsonb::text, c.declared_precision_label, c.blur_evidence)) > 1"
+     -f wave=w3-one-claim -f claims=purge -f scope=apply -f ids_sql="
+   SELECT l.id FROM listings l WHERE l.is_active AND l.id IN (
+     SELECT c.listing_id FROM location_claims c
+      GROUP BY c.listing_id, c.claim_type, c.licence_class
+     HAVING count(DISTINCT (c.value_text, c.value_num, ST_AsText(c.value_geom),
+                            c.value_jsonb::text, c.declared_precision_label, c.declared_radius_m,
+                            c.blur_evidence, c.subject_scoped)) > 1
+     UNION
+     SELECT s.listing_id FROM location_claims s
+      WHERE s.claim_type = 'street_name' AND s.value_text ~ '[0-9]'
+        AND EXISTS (SELECT 1 FROM location_claims h
+                     WHERE h.listing_id = s.listing_id
+                       AND h.claim_type IN ('house_number_cp', 'house_number_co'))
+     UNION
+     SELECT o.listing_id FROM location_claims o WHERE o.licence_class = 'operator')"
    ```
-   (active listings holding two values for one key; one aggregate over the table, read-only.)
+   Size (not run: this box has no production access): (a) ≈ 2.5–4 k active listings (inv-B at the
+   effective version: 2,289 pins, 104 towns, 41 PSČ, 50 streets; S1 across versions ≈ 0.8 % of active
+   listings ≈ 3.1 k; plus ≈ 250 sreality/mmreality declaration pairs); (b) unmeasured, bounded by the
+   active listings with a house-number claim (it moves only where the two numbers differ); (c) 1 (the
+   2026-08-13 correction). `scope=apply` keeps the ones the live apply scope admits. The aggregate
+   reads the whole table once (read-only); if it outruns the shadow's statement timeout, materialise
+   the ids first and pass `--ids`.
 3. Steps 0 + 1 (backup + purge, dry run first), Step 2 (699), Step 3 (merge + deploy), Step 4 (automatic),
    Step 5 (hand: re-stamp + payload re-mine + readings re-mark).
 4. PR-2 (Step 6) after one green intake tick; then Step 7.
@@ -631,21 +653,64 @@ tests.
 
 ---
 
-## 7. Acceptance
+## 7. Acceptance (the gate ticket's checks)
 
-| Measure | Before | After |
-|---|---|---|
-| `location_claims` rows | 14.82 M | **≈ 5.98 M** right after Step 2 (± 1 %; the corpus grows ≈ 50 k claims a day) |
-| duplicate keys | 45.9 k keys per 1 % sample have > 1 row | **0** (`location_claims_key` valid) |
-| sreality multi-pin ads whose position is the portal pin, serving the portal's CURRENT pin | ≈ 37 % (S25sr: 59 of 161 pin-placed serve the newest; 102 the oldest) | **≥ 99 %** after Step 5 (the plan's wording "of sreality multi-pin ads" excludes the 28 % on a register point) |
-| all portals: multi-pin ads serving the oldest pin | 1,793 of 2,289 (inv-B) | 0 where the pin places the row |
-| sreality + mmreality rows read blurred although the portal now declares precise | 234 (10-30), ≈ 250 today | **0** |
-| towns / PSČ / street-less listings that follow the newest value | 104 / 41 / 40 | all |
-| writers of `location_claims` | 2 statements + 3 DELETE paths | 1 statement + `contracts.retract` |
-| tie rules / supersession paths | 7 / 4 | 0 / 2 |
-| intake write mean / resolver read mean (pg_stat_statements, 7 days after) | 0.26 s / 128 ms | ≤ both |
-| index bytes | 2,671 MB | ≈ 0.6 GB after Step 7 |
-| W1 town cell | as before | no redder (A never deletes a town) |
+Each line names its measurement. "After" is read after Step 5 unless it says otherwise.
+
+| # | Measure | Before | After |
+|---|---|---|---|
+| 1 | `location_claims` rows | 14.82 M | ≈ 5.98 M right after Step 2 (± 1 %; ≈ +50 k a day) |
+| 2 | keys holding > 1 row | 45.9 k keys per 1 % sample | **0**, and still 0 after a full intake tick and one contract bump |
+| 3 | sreality pin claims that are not the payload's current pin | ≈ 1.4 % of multi-pin ads (A→B→A) | **≈ 0** (> 1 m apart) |
+| 4 | sreality/mmreality listings read blurred although the payload now declares precise | 234 (10-30), ≈ 250 | **0** |
+| 5 | multi-pin ads serving an older pin | 1,793 of 2,289 (inv-B) | 0: no listing holds two pins (line 2), and line 3 |
+| 6 | W1 town cell (`location_town_coverage`) | the W1 reading before Step 1 | no redder (A never deletes a town) |
+| 7 | intake write mean / resolver read mean (pg_stat_statements, 7 days after) | 0.26 s / 128 ms | ≤ both |
+| 8 | index bytes / heap bytes | 2,671 MB / 3,600 MB | ≈ 0.6 GB after Step 7 / unchanged (R7) |
+| 9 | empty location readings left unread (bazos, web) | 1,915 | falling to 0 as the text lane re-reads (≤ 5 attempts each) |
+| 10 | code facts | 2 write statements + 3 DELETE paths; 7 tie rules; 4 supersession paths | 1 statement + `contracts.retract`; 0; 2 (this PR's diff) |
+
+```sql
+-- 1, 2
+select count(*) from location_claims;
+select count(*) - count(distinct (listing_id, claim_type, licence_class)) from location_claims;
+select indisvalid, indisunique from pg_index where indexrelid = 'location_claims_key'::regclass;
+-- 3: the stored pin vs the payload's current pin (sr.det.gps reads /locality/gps_lat, gps_lon)
+select count(*) from listings l
+  join location_claims c on c.listing_id = l.id and c.claim_type = 'coordinate'
+   and c.licence_class = 'portal'
+ where l.source = 'sreality' and l.is_active
+   and l.raw_json #>> '{locality,gps_lat}' is not null
+   and ST_DistanceSphere(c.value_geom, ST_SetSRID(ST_MakePoint(
+         (l.raw_json #>> '{locality,gps_lon}')::float8,
+         (l.raw_json #>> '{locality,gps_lat}')::float8), 4326)) > 1;
+-- 4: a stored blurred declaration where the payload states a precise one
+select l.source, count(*) from listings l
+  join location_claims c on c.listing_id = l.id and c.claim_type = 'precision_declaration'
+   and c.licence_class = 'portal'
+ where l.is_active and c.blur_evidence = 'declared'
+   and ((l.source = 'sreality' and l.raw_json #>> '{locality,inaccuracy_type}'
+          not in ('street', 'ward', 'quarter', 'municipality', 'not_address'))
+     or (l.source = 'mmreality' and (l.raw_json ->> 'accurate')::boolean))
+ group by 1;
+-- 6: the W1 cells (scorecard view, migration 698), read before Step 1 and after Step 5
+select source, class, n, of_n from location_quality_by_source
+ where cohort = 'listing' and metric = 'town' order by 1, 2;
+-- 7
+select left(query, 60), calls, round(mean_exec_time) from pg_stat_statements
+ where query like '%ON CONFLICT (listing_id, claim_type, licence_class)%'
+    or query like '%SELECT DISTINCT ON (c.listing_id, c.claim_type)%';
+-- 8
+select pg_size_pretty(pg_indexes_size('location_claims')), pg_size_pretty(pg_table_size('location_claims'));
+-- 9
+select count(*) from listing_description_enrichments
+ where extracted ->> 'error' = 'empty location block: ad_kind and every slot null';
+```
+Line 3 also reads the marker work's effect where it applies: the three marker portals' blurred
+declarations fall on their next re-mine where a page's map or link no longer states the blur
+(`select l.source, count(*) from location_claims c join listings l on l.id = c.listing_id where
+c.claim_type = 'precision_declaration' and c.blur_evidence = 'declared' and l.source in ('bazos',
+'idnes', 'realitymix') and l.is_active group by 1`, before and after) — a readout, not a threshold.
 
 ---
 
