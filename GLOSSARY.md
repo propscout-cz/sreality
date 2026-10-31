@@ -205,7 +205,7 @@ One of the few facts that prove two ads are one unit, so the engine may merge a 
 an identical photo, one text contained in the other, a shared order code.
 _Avoid_: proof, evidence (alone), demonstrate, warrant
 
-**Blocker** (UI: "blok"):
+**Blocker** (UI: "blokace"):
 A fact that says "two units" and holds a pair in the grey band even when it has a certificate: a different
 street, two printed areas, floors two apart.
 _Avoid_: gate, distinguishing fact, d43 fact, wall
