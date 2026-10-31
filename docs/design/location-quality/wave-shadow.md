@@ -82,7 +82,7 @@ gh workflow run location_wave_shadow.yml --ref main -f wave=w4-realitymix-v8 \
     -f claims=remine -f limit=50 \
     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
 ```
-`ids_sql` defaults to the W4 selection above (edit it, or add a `LIMIT`); it runs as ONE statement wrapped
+The ids_sql input defaults to the W4 selection above (edit it, or add a `LIMIT`); it runs as ONE statement wrapped
 in a subquery, on the extended protocol, inside a READ ONLY transaction (`what_if.select_ids`), so no input
 reaches a writable path. No movers: steps 2 and 3 are skipped and the run ends green. The artifact
 `wave-shadow-<wave>-<run id>` (30 days) holds `positions.jsonl`, `movers.jsonl`, `scorer.json` and
