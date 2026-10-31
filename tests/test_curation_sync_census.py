@@ -73,7 +73,8 @@ def _number(name: str) -> int:
 
 def _creating_clock(migrations: Migrations) -> list[tuple[str, str]]:
     return [(n, t) for n, t in migrations if "curation_clock" in t
-            and re.search(r"\bcreate table (?:public\.)?curation_clock\b", _norm(_strip_comments(t)))]
+            and re.search(r"\bcreate table (?:if not exists )?(?:public\.)?curation_clock\b",
+                          _norm(_strip_comments(t)))]
 
 
 def _clock_migration(migrations: Migrations) -> tuple[str, str]:
@@ -465,6 +466,7 @@ def _with(migrations: Migrations, sql: str, number: int = 999) -> Migrations:
 def test_a_bites_on_a_dropped_trigger_a_ts_row_and_a_registry_row() -> None:
     migrations, ts = _migrations(), SYNC_TS.read_text(encoding="utf-8")
     for sql in ("drop trigger tags_curation_clock on public.tags;",
+                "drop trigger if exists collection_properties_curation_clock on public.collection_properties;",
                 "drop function public.bump_curation_clock() cascade;",
                 "drop function if exists public.touch(), bump_curation_clock cascade;",
                 "drop table if exists public.property_artifact_links cascade;",
@@ -472,6 +474,10 @@ def test_a_bites_on_a_dropped_trigger_a_ts_row_and_a_registry_row() -> None:
                 "alter trigger tags_curation_clock on public.tags rename to tags_clock;"):
         assert rail_a(_with(migrations, sql), ts, CLOCKED_TABLES), sql
     assert rail_a(_with(migrations, "alter table public.filter_presets rename to presets;"), ts, CLOCKED_TABLES) == []
+    redo = ("drop trigger if exists tags_curation_clock on public.tags;\n"
+            "create constraint trigger tags_curation_clock after insert or update or delete on public.tags "
+            "deferrable initially deferred for each row execute function public.bump_curation_clock('tags');")
+    assert rail_a(_with(migrations, redo), ts, CLOCKED_TABLES) == [], "a drop the same file re-creates loses nothing"
     assert rail_a(migrations, ts.replace("  tags: { family: 'tags'", "  tags: { family: 'notes'"), CLOCKED_TABLES)
     assert rail_a(migrations, ts, {**CLOCKED_TABLES, "filter_presets": "board"})
 
@@ -539,6 +545,11 @@ def test_e_bites_on_replica_only_firing_a_buried_action_and_a_later_redefinition
     migrations = _migrations()
     assert rail_e(_with(migrations, silent), [], CLOCKED_TABLES)
     assert rail_e([("999_census_bite.sql", silent)], [], CLOCKED_TABLES) == [], "no clock migration, no later one"
+    clock_name, clock_text = _clock_migration(migrations)
+    assert "drop trigger if exists" in clock_text
+    assert "create or replace function public.bump_curation_clock" in clock_text
+    assert rail_e([(clock_name, clock_text)], [], CLOCKED_TABLES) == [], "the clock's own drops and its own writer"
+    assert rail_e(_with(migrations, clock_text), [], CLOCKED_TABLES), "the same text after the clock redefines it"
 
 
 def test_f_bites_on_a_clock_over_listings() -> None:

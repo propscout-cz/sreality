@@ -172,10 +172,11 @@ The migration is additive. 696 is claimed with the merge coordinator before W3 w
 -- NEVER write curation_clock outside bump_curation_clock(), never reset a counter, and never disable a
 --   *_curation_clock trigger without a `-- ci-allow-clock-disable:` annotation
 --   (tests/test_curation_sync_census.py).
+-- APPLY: psql -f, statement autocommit, no begin/commit: every statement is idempotent and holds its one table
+--   lock only while it runs; a re-run of the file resumes a partial apply. One transaction deadlocked (2026-10-31).
 set lock_timeout = '5s';
-begin;
 
-create table public.curation_clock (
+create table if not exists public.curation_clock (
   account_id uuid        not null references public.accounts(id) on delete cascade,
   family     text        not null,
   counter    bigint      not null default 1,
@@ -194,7 +195,7 @@ grant select on public.curation_clock to authenticated;
 -- (tests/test_migration_rls_grants.py:736-757) reads POLICY text only; this body is guarded by
 -- tests/test_curation_clock_live.py and census (i). ROWS 4: the caller's accounts plus the owners sharing with
 -- them, a handful; the default estimate (1000) would steer the clock read off curation_clock_pkey.
-create function public.curation_clock_audience()
+create or replace function public.curation_clock_audience()
 returns table (account_id uuid, mine boolean, edit boolean)
 language sql stable rows 4 set search_path = '' as $$
   select a.id, true, true from public.current_account_ids() as a(id)
@@ -208,6 +209,7 @@ $$;
 revoke all on function public.curation_clock_audience() from public, anon, authenticated, service_role;
 grant execute on function public.curation_clock_audience() to authenticated;
 
+drop policy if exists curation_clock_audience_read on public.curation_clock;
 create policy curation_clock_audience_read on public.curation_clock
   for select to authenticated
   using (
@@ -219,7 +221,7 @@ create policy curation_clock_audience_read on public.curation_clock
 
 -- The clock read's one relation. Invoker, so the policy above stays the gate (pinned in _TENANT_VIEWS).
 -- `mine` maps a row to own vs acting keys. `age_ms` serves a window's first answer (§3.5 Decision 14).
-create view public.curation_clock_public with (security_invoker = true) as
+create or replace view public.curation_clock_public with (security_invoker = true) as
   select c.account_id, c.family, c.counter, a.mine,
          greatest(0, extract(epoch from statement_timestamp() - c.changed_at) * 1000)::bigint as age_ms
     from public.curation_clock_audience() a
@@ -228,7 +230,7 @@ revoke all on public.curation_clock_public from public, anon, authenticated, ser
 grant select on public.curation_clock_public to authenticated;
 
 -- THE one writer of the clock. tg_argv[0] = the family.
-create function public.bump_curation_clock() returns trigger
+create or replace function public.bump_curation_clock() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
   v_new  jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
@@ -258,10 +260,11 @@ begin
 end $$;
 revoke all on function public.bump_curation_clock() from public, anon, authenticated, service_role;
 
+drop trigger if exists property_pipeline_curation_clock on public.property_pipeline;
 create constraint trigger property_pipeline_curation_clock
   after insert or update or delete on public.property_pipeline
   deferrable initially deferred for each row execute function public.bump_curation_clock('board');
--- … one static line per table of the families table (12 in all):
+-- … one static drop + create per table of the families table (12 in all; constraint triggers have no OR REPLACE):
 --   pipeline_stages(board) property_dismissals(dismissals) collections, collection_properties(collections)
 --   tags, property_tags(tags) property_notes, property_attachments(notes) property_artifact_links(links)
 --   pipeline_shares, collection_shares(shares)
@@ -305,7 +308,6 @@ begin
   if (select count(*) from public.curation_clock) < 7 * (select count(*) from public.accounts) then
     raise exception '696: clock seed incomplete'; end if;
 end $post$;
-commit;
 ```
 
 **Decision 3: deferred constraint row triggers.** A no-op UPDATE is skipped, and the bump runs **once per (transaction, account, family)**.
@@ -1201,8 +1203,8 @@ Where a wave built something other than the design, the section concerned now sa
 6. Tests: `lib/useServerDraft.test.ts` 11; Pipeline (D3 rename, typed name kept and saved alone, a remote target during a drag lands after the drop, a drag started during a board re-read shows no repaint, unmount mid-drag); PhonePipeline (archive falls to the neighbour, a reorder during a tab-tap scroll lands on the tapped stage, a remote add during a touch waits, a scroll with no touch); D3 cases for the five other editors; full vitest 4332 after merging W1's final head.
 
 **W3 (#2201), as built:**
-1. `migrations/696_curation_clock.sql` (the number is provisional until the merge coordinator's claim): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback).
+1. `migrations/696_curation_clock.sql` (the number is provisional until the merge coordinator's claim): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback). It applies statement by statement (no `begin`/`commit`; `if not exists`, `or replace`, and `drop … if exists` before the policy and each trigger), so a re-run of the file resumes a partial apply: the first apply (`apply_migration.yml`, 2026-10-31) ran as one transaction, held four trigger tables until COMMIT and deadlocked on the fifth (`collection_properties`); it rolled back whole. Census (a)'s locator reads `create table if not exists`, and (a)/(e) have bites for a later trigger drop and a later copy of 696.
 2. `tests/test_curation_sync_census.py` goes beyond § 6's first wording, and § 6 now says so. (a) replays drops and renames and checks each trigger's name. (c) adds the seed's families. (e) also catches `ENABLE REPLICA`, an action buried in a multi-action `ALTER TABLE`, code as well as migrations, and a later redefinition of the bump; an annotation counts only on a line of its own. (g) also covers the dedupe GUC. (h) pins 696's two writes. The review added the replay in (a) and the wider (e): `drop function … cascade` and `enable replica trigger` had passed every rail.
 3. `tests/test_curation_clock_live.py`: a fifth tenant E; item 6 counts firings and adds the property delete and the `account_id` move (§ 9). A trigger missing from `collection_properties`, `property_tags` or `property_attachments` had passed the first cascade case [V].
 4. `docs/architecture.md`: the DB half is a paragraph in rule 18 beside W0's (§ 6 lists it).
-5. The 696 apply (MCP, before the merge, after W0 is live) and its § 9 catalog check are owed.
+5. The 696 apply (before the merge, after W0 is live) and its § 9 catalog check are owed; the 2026-10-31 attempt changed nothing (item 1).

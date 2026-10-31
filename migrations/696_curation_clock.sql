@@ -25,17 +25,25 @@
 --   (tests/test_curation_sync_census.py rails e and h). The kill switches are forward migrations
 --   (.claude/skills/database/references/tenancy.md § Curation clock).
 --
--- APPLY ORDER: before the PR merges, and only once W0 (#2198, commit before the response) is live. Additive: a new
---   table, view, two functions, one policy and twelve constraint triggers on the curation tables (each CREATE
---   TRIGGER takes SHARE ROW EXCLUSIVE on its table for an instant; the tables are operator-scale).
+-- APPLY: before the PR merges, and only once W0 (#2198, commit before the response) is live, through
+--   apply_migration.yml (psql -f, statement autocommit). Additive: a table, a view, two functions, one policy and
+--   twelve constraint triggers on the curation tables. There is no begin/commit: every statement is its own
+--   transaction and idempotent, so a partial apply is resumed by re-running this same file. Each trigger statement
+--   locks its one table (CREATE CONSTRAINT TRIGGER: SHARE ROW EXCLUSIVE; DROP TRIGGER IF EXISTS: nothing on a first
+--   apply, ACCESS EXCLUSIVE on a re-run) and releases it at its own commit: no lock outlives its statement, and
+--   lock_timeout 5 s bounds each wait, which the workflow retries. WHY: the first apply (2026-10-31) ran
+--   as one transaction, held the first four trigger tables until COMMIT and deadlocked on the fifth
+--   (collection_properties) with a writer that held it and wanted one of the four; it rolled back whole.
+-- RE-RUN: CREATE OR REPLACE is refused for a constraint trigger, so each is dropped and created; a write that
+--   commits in the instant between the two moves no counter. IF NOT EXISTS keeps an existing curation_clock as it
+--   is: a column or CHECK changed in this file would not reach a database that holds the table, and $post$ checks
+--   the grants, policy, view, triggers and seed, not the columns (change the table in a forward migration).
 -- ROLLBACK: forward only (rule 1); the writer kill switch disables the twelve triggers, the reader kill switch
 --   revokes the reads.
 
 set lock_timeout = '5s';
 
-begin;
-
-create table public.curation_clock (
+create table if not exists public.curation_clock (
   account_id uuid        not null references public.accounts(id) on delete cascade,
   family     text        not null,
   counter    bigint      not null default 1,
@@ -54,7 +62,7 @@ grant select on public.curation_clock to authenticated;
 -- (tests/test_migration_rls_grants.py) reads POLICY text only; this body is guarded by
 -- tests/test_curation_clock_live.py and census (i). ROWS 4: the caller's accounts plus the owners sharing with
 -- them, a handful; the default estimate (1000) would steer the clock read off curation_clock_pkey.
-create function public.curation_clock_audience()
+create or replace function public.curation_clock_audience()
 returns table (account_id uuid, mine boolean, edit boolean)
 language sql stable rows 4 set search_path = '' as $$
   select a.id, true, true from public.current_account_ids() as a(id)
@@ -68,6 +76,7 @@ $$;
 revoke all on function public.curation_clock_audience() from public, anon, authenticated, service_role;
 grant execute on function public.curation_clock_audience() to authenticated;
 
+drop policy if exists curation_clock_audience_read on public.curation_clock;
 create policy curation_clock_audience_read on public.curation_clock
   for select to authenticated
   using (
@@ -79,7 +88,7 @@ create policy curation_clock_audience_read on public.curation_clock
 
 -- The clock read's one relation. Invoker, so the policy above stays the gate (pinned in _TENANT_VIEWS).
 -- `mine` maps a row to own vs acting keys. `age_ms` serves a window's first answer (§ 3.5 Decision 14).
-create view public.curation_clock_public with (security_invoker = true) as
+create or replace view public.curation_clock_public with (security_invoker = true) as
   select c.account_id, c.family, c.counter, a.mine,
          greatest(0, extract(epoch from statement_timestamp() - c.changed_at) * 1000)::bigint as age_ms
     from public.curation_clock_audience() a
@@ -89,7 +98,7 @@ grant select on public.curation_clock_public to authenticated;
 
 -- THE one writer of the clock. tg_argv[0] = the family. A row names its account in account_id and, on the two share
 -- tables, its recipient in recipient_account_id: both parties' `shares` move.
-create function public.bump_curation_clock() returns trigger
+create or replace function public.bump_curation_clock() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
   v_new  jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
@@ -119,40 +128,52 @@ begin
 end $$;
 revoke all on function public.bump_curation_clock() from public, anon, authenticated, service_role;
 
--- One static line per clocked table (12; tests/_tenant_registry.py CLOCKED_TABLES, frontend SYNC_TABLES).
+-- One static drop + create per clocked table (12; tests/_tenant_registry.py CLOCKED_TABLES, frontend SYNC_TABLES).
+drop trigger if exists property_pipeline_curation_clock on public.property_pipeline;
 create constraint trigger property_pipeline_curation_clock
   after insert or update or delete on public.property_pipeline
   deferrable initially deferred for each row execute function public.bump_curation_clock('board');
+drop trigger if exists pipeline_stages_curation_clock on public.pipeline_stages;
 create constraint trigger pipeline_stages_curation_clock
   after insert or update or delete on public.pipeline_stages
   deferrable initially deferred for each row execute function public.bump_curation_clock('board');
+drop trigger if exists property_dismissals_curation_clock on public.property_dismissals;
 create constraint trigger property_dismissals_curation_clock
   after insert or update or delete on public.property_dismissals
   deferrable initially deferred for each row execute function public.bump_curation_clock('dismissals');
+drop trigger if exists collections_curation_clock on public.collections;
 create constraint trigger collections_curation_clock
   after insert or update or delete on public.collections
   deferrable initially deferred for each row execute function public.bump_curation_clock('collections');
+drop trigger if exists collection_properties_curation_clock on public.collection_properties;
 create constraint trigger collection_properties_curation_clock
   after insert or update or delete on public.collection_properties
   deferrable initially deferred for each row execute function public.bump_curation_clock('collections');
+drop trigger if exists tags_curation_clock on public.tags;
 create constraint trigger tags_curation_clock
   after insert or update or delete on public.tags
   deferrable initially deferred for each row execute function public.bump_curation_clock('tags');
+drop trigger if exists property_tags_curation_clock on public.property_tags;
 create constraint trigger property_tags_curation_clock
   after insert or update or delete on public.property_tags
   deferrable initially deferred for each row execute function public.bump_curation_clock('tags');
+drop trigger if exists property_notes_curation_clock on public.property_notes;
 create constraint trigger property_notes_curation_clock
   after insert or update or delete on public.property_notes
   deferrable initially deferred for each row execute function public.bump_curation_clock('notes');
+drop trigger if exists property_attachments_curation_clock on public.property_attachments;
 create constraint trigger property_attachments_curation_clock
   after insert or update or delete on public.property_attachments
   deferrable initially deferred for each row execute function public.bump_curation_clock('notes');
+drop trigger if exists property_artifact_links_curation_clock on public.property_artifact_links;
 create constraint trigger property_artifact_links_curation_clock
   after insert or update or delete on public.property_artifact_links
   deferrable initially deferred for each row execute function public.bump_curation_clock('links');
+drop trigger if exists pipeline_shares_curation_clock on public.pipeline_shares;
 create constraint trigger pipeline_shares_curation_clock
   after insert or update or delete on public.pipeline_shares
   deferrable initially deferred for each row execute function public.bump_curation_clock('shares');
+drop trigger if exists collection_shares_curation_clock on public.collection_shares;
 create constraint trigger collection_shares_curation_clock
   after insert or update or delete on public.collection_shares
   deferrable initially deferred for each row execute function public.bump_curation_clock('shares');
@@ -205,5 +226,3 @@ begin
   if (select count(*) from public.curation_clock) < 7 * (select count(*) from public.accounts) then
     raise exception '696: clock seed incomplete'; end if;
 end $post$;
-
-commit;
