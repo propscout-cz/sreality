@@ -208,6 +208,17 @@ the two gaps found while adding property list are closed in the same PR that add
 
 ## Progress ledger (update every session, newest first)
 
+- 2026-10-31 — **The DINOv3 bake-off manifest is deleted (Actions exit R6a, #2018); Set 2 stays unrun.** The
+  operator approved deleting `scripts/dinov3_bakeoff_manifest.py`, its dispatch-only workflow and its test: no
+  run in the Actions exit audit's 14 days, and #1300's Set 2 was never run. This parks the bake-off, it does not
+  decide the encoder. The pod-side harness `scripts/dinov3_bakeoff.py` stays, with its offline tests. **If the
+  bake-off resumes,** restore the three files from the commit before the deletion and re-check the manifest
+  against the schema of that day:
+  `sha=$(git log -1 --diff-filter=D --format=%h -- scripts/dinov3_bakeoff_manifest.py)`, then
+  `git checkout "$sha^" -- scripts/dinov3_bakeoff_manifest.py .github/workflows/dinov3_bakeoff_manifest.yml tests/scripts/test_dinov3_bakeoff_manifest.py`.
+  The same PR deletes the secondary-CLIP label-proposal job (its proposals stay reviewable) and moves the
+  hourly `compute_image_phash.yml` into the worker's images lane as a bounded retry (`scraper/image_phash.py`).
+
 - 2026-09-15 — **W17: one headline area. The rule's meaning changed: `c3 -> c4`.** The operator
   asked whether path C's "has an attribute the rule can compare" and the pairing itself use the
   PLOT for pozemek or a floor area. They used `estate_area` for pozemek and `usable_area`

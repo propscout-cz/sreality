@@ -221,11 +221,10 @@ REGISTRY: dict[str, SettingDef] = {
             default="openai/clip-vit-large-patch14",
             decided=False,
             explanation=(
-                "The stronger CLIP checkpoint the Labeling page's relabel "
-                "job uses to propose Taxonomy v1 tags for operator review. "
-                "A starting pick (bigger than the production tagger's "
-                "vit-base-patch32) — expect this to change once the first "
-                "labeling rounds show whether it's worth the extra compute."
+                "The CLIP checkpoint whose Taxonomy v1 proposals the Labeling "
+                "page reviews in batches. The relabel job that wrote them is "
+                "retired, so changing this writes nothing new; it only moves "
+                "which model's pending proposals batch together."
             ),
         ),
         SettingDef(
