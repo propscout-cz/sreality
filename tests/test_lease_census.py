@@ -38,8 +38,8 @@ class Ledgered(NamedTuple):
 
 LEGACY: dict[str, Ledgered] = {
     "scripts/recompute_property_stats.py": Ledgered(
-        "S1 property_maintenance_lease (mig 279): the maintenance lane and the daily sweep (rule 20)",
-        "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),
+        "S1 property_maintenance_lease (mig 279): the cutover row beside the job_lease row (rule 20)",
+        "the follow-up to #2107 drops it once gate #2110 passes"),
     "scripts/resolve_brokers.py": Ledgered(
         "S2 broker_resolution_lock (mig 192): the broker lane and the daily full resolve",
         "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),

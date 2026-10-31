@@ -79,7 +79,7 @@ def _group(cur: Any, *listing_ids: int) -> None:
 
 def _settle(cur: Any) -> int:
     """One stamper pass as the maintenance pass runs it; inside the test's open transaction it takes savepoints."""
-    return _settle_fresh(cur.connection, renew=lambda: None)
+    return _settle_fresh(cur.connection)
 
 
 def _settled(cur: Any, *pids: int) -> dict[int, bool]:
