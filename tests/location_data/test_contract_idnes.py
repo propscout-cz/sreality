@@ -66,7 +66,7 @@ _REFETCH = _ROOT / "tests" / "fixtures" / "location_w2a_refetch"
 CONTRACT = {c.source: c for c in contracts.load_all()}["idnes"]
 CLOCK = datetime(2026, 1, 1, tzinfo=UTC)
 
-VERSION = 6
+VERSION = 7
 NATIVE = "6a71888887e5da33ca081ad8"
 NEIGHBOUR = "68badb8de7b021a4470fb87d"
 DISCLAIMER = "Nemovitost nemá přesnou adresu, nachází se ve vyznačené oblasti."
@@ -154,17 +154,21 @@ def feature(native: str, lon: float, lat: float, *, address: str = "Na Balkáně
 
 
 def page(features: str = "[]", *, info: str = DISCLAIMER, disclaimer: bool = True,
+         detail_map: bool = True,
          address: str = "Na Balkáně, Tanvald - Šumburk nad Desnou, okres Jablonec nad Nisou",
          data_layer: dict[str, Any] | None = None, native: str = NATIVE) -> str:
     """A minimal idnes detail page in the SHAPE the contract's selectors address, with the
-    dataLayer push written the way the real page writes it (a nested handler included)."""
+    dataLayer push written the way the real page writes it (a nested handler included). The
+    detail map (`section#map-container`) carries the disclaimer in its overlay, as live."""
     fields = {"event": "viewDetail", "listing_id": native,
               "listing_localityRegion": "Liberecký kraj", "listing_localityCity": "Tanvald",
               "listing_localityCityArea": "Šumburk nad Desnou", "listing_localityState": "CZ"}
     fields.update(data_layer or {})
     return (
         "<!DOCTYPE html><html lang='cs'><body>"
-        + (f"<p class='b-detail__disclaimer'>{DISCLAIMER}</p>" if disclaimer else "")
+        + ("<section id='map-container' class='b-detail__map-wrapper'>"
+           + (f"<span id='overlayText'>{DISCLAIMER}</span>" if disclaimer else "")
+           + "</section>" if detail_map else "")
         + f"<div class='b-detail__info'>{address}</div>"
         + '<script type="application/json" data-maptiler-json>'
         + json.dumps({"mtMapOptions": {"zoom": 14}, "infoText": info,
@@ -180,7 +184,7 @@ def page(features: str = "[]", *, info: str = DISCLAIMER, disclaimer: bool = Tru
 
 # ------------------------------------------------------------------ the shape
 
-def test_the_contract_is_v6_with_one_entry_per_type_and_a_town_entry() -> None:
+def test_the_contract_is_v7_with_one_entry_per_type_and_a_town_entry() -> None:
     """The three rails W1-c's loader enforces, pinned here against THIS portal's file so a
     silent renumber, a reorder or a second carrier for one type is a test failure and not a
     review catch."""
@@ -284,13 +288,28 @@ def test_the_disclaimer_claims_the_contracts_label_and_declares_blur() -> None:
     assert stamped.declared_precision_label == "no_exact_address"
 
 
-def test_a_page_without_the_sentence_declares_nothing() -> None:
+def test_a_page_without_the_sentence_retracts_the_declaration() -> None:
     """The negative control for the `body` scope: `html_marker` fires off the map config's
     `infoText` too, so the only way to show the reader is not simply always-true is a page
-    carrying neither occurrence."""
-    assert read("id.det.no_exact_disclaimer",
-                scoped(page(info="Na mapě zobrazujeme jen nemovitosti s přesnou adresou.",
-                            disclaimer=False))) == []
+    carrying neither occurrence. Since v7 (W3, `absent: retract`) such a page states the
+    absence: one tombstone, no label."""
+    (tombstone,) = read("id.det.no_exact_disclaimer",
+                        scoped(page(info="Na mapě zobrazujeme jen nemovitosti s přesnou adresou.",
+                                    disclaimer=False)))
+    assert (tombstone.claim.retract, tombstone.claim.value_text) == (True, None)
+
+
+def test_a_page_without_the_detail_map_states_nothing_either_way() -> None:
+    """W3: the marker reads the detail map, the node a live listing page carries the sentence
+    in. A 2xx body without it — an interstitial, a soft-gone page, a bot wall, a foreign ad
+    drawn with no map — emits no tombstone, so it cannot clear a stored blur, and no label."""
+    for info in (DISCLAIMER, "Na mapě zobrazujeme jen nemovitosti s přesnou adresou."):
+        assert read("id.det.no_exact_disclaimer",
+                    scoped(page(info=info, disclaimer=False, detail_map=False))) == []
+    assert read("id.det.no_exact_disclaimer", scoped(
+        "<html><body><p>Přístup odepřen. Ověřte, že nejste robot.</p></body></html>")) == []
+    assert read("id.det.no_exact_disclaimer", scoped(FOREIGN.read_bytes()),
+                native=FOREIGN_NATIVE) == []
 
 
 # ------------------------------------------------------------ the town coverage line
@@ -658,19 +677,21 @@ def test_an_unparseable_blob_costs_the_pin_and_nothing_else() -> None:
     result = extract_page(payload(_ARCHIVED.read_bytes()), row(),
                           fx.entries_for("idnes"), register=register())
     assert sorted(c.extractor_id for c in result.claims) == [
-        "id.det.cast_obce", "id.det.kraj", "id.det.obec", "id.det.okres", "id.det.street"]
+        "id.det.cast_obce", "id.det.kraj", "id.det.no_exact_disclaimer", "id.det.obec",
+        "id.det.okres", "id.det.street"]
+    assert [c.extractor_id for c in result.claims if c.retract] == ["id.det.no_exact_disclaimer"]
     assert dict(result.refusals) == {"subject_not_found:idnes": 1}
 
 
-def test_the_real_page_carries_the_other_sentence_and_declares_no_blur() -> None:
-    """`html_marker` is presence-only and its literal is the disclaimer, so the exact-address
-    page — whose `infoText` is 'Na mapě zobrazujeme jen nemovitosti s přesnou adresou.' —
-    matches nothing. The absent branch is a different entry, never a false value on this
-    one."""
+def test_the_real_page_carries_the_other_sentence_and_retracts_the_blur() -> None:
+    """The literal is the disclaimer, so the exact-address page — whose `infoText` is 'Na
+    mapě zobrazujeme jen nemovitosti s přesnou adresou.' — never states the label. Since v7
+    (W3) it states its absence: a tombstone, never a false value on this entry."""
     text = _ARCHIVED.read_text(encoding="utf-8")
     assert "Na mapě zobrazujeme jen nemovitosti s přesnou adresou." in text
     assert DISCLAIMER not in text
-    assert read("id.det.no_exact_disclaimer", scoped(_ARCHIVED.read_bytes())) == []
+    (tombstone,) = read("id.det.no_exact_disclaimer", scoped(_ARCHIVED.read_bytes()))
+    assert (tombstone.claim.retract, tombstone.claim.value_text) == (True, None)
 
 
 def test_the_real_pages_address_line_is_split_and_never_claimed_whole() -> None:
@@ -832,7 +853,7 @@ def test_the_foreign_body_claims_a_country_the_resolver_maps_and_a_town_that_can
     claims = {entry_id: [r.claim for r in read(entry_id, document, native=FOREIGN_NATIVE)]
               for entry_id in ENTRY_IDS if entry_id != "id.det.subject_feature"}
     assert {k: [c.value_text for c in v] for k, v in claims.items()} == {
-        "id.det.no_exact_disclaimer": [],
+        "id.det.no_exact_disclaimer": [],   # no detail map: says nothing, retracts nothing
         "id.det.country": ["HR"],
         "id.det.kraj": [],
         "id.det.okres": [],

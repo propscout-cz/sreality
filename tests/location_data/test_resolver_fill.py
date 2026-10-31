@@ -71,18 +71,6 @@ def test_an_ephemeral_coordinate_can_never_become_the_position():
     assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
 
 
-def test_the_pin_is_chosen_by_declared_quality_not_by_claim_id():
-    """A blurred coordinate that merely arrived FIRST used to become the position."""
-    claims = [
-        mm.claim(1, "obec_name", value_text="Praha"),
-        mm.claim(2, "coordinate", lat=50.0755, lon=14.4378,
-                 declared_precision_label="municipality"),
-        mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
-    ]
-    pin = step_bind.elect_pin(claims)
-    assert pin is not None and pin.id == 3
-
-
 def test_a_declared_blurred_pin_grades_at_the_obec_rung():
     claims = [
         mm.claim(1, "obec_name", value_text="Praha"),
@@ -93,18 +81,6 @@ def test_a_declared_blurred_pin_grades_at_the_obec_rung():
     resolution = _resolve(claims)
     assert resolution.granularity == "obec"
     assert resolution.match_confidence == "medium"
-
-
-def test_a_bare_blur_hint_is_a_distinct_claim_type_with_no_declared_value():
-    """bazos 'Přibližná lokalita' is a BINARY presence signal — folding it into
-    `precision_declaration` would lose that it declares nothing."""
-    claims = [
-        mm.claim(1, "obec_name", value_text="Praha", source="bazos"),
-        mm.claim(2, "coordinate", lat=50.0755, lon=14.4378, source="bazos"),
-        mm.claim(3, "blur_hint", value_text="Přibližná lokalita", source="bazos"),
-    ]
-    resolution = _resolve(claims)
-    assert resolution.granularity == "obec"
 
 
 def test_our_own_coords_stamp_is_not_the_portals_declared_precision():

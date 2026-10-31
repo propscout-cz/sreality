@@ -369,52 +369,41 @@ def match_streets(
 
 
 def resolve_street(
-    lines: Sequence[str], obec_kods: Sequence[int], registry: RegistryView,
-    *, place_lines: Sequence[str] = (),
+    line: str | None, obec_kods: Sequence[int], registry: RegistryView,
+    *, place_line: str | None = None,
 ) -> StreetBind:
-    """-> the ONE street the claims name inside the constraining obec, or nothing.
+    """-> the ONE street the street claim names inside the constraining obec, or nothing.
 
-    Distinct across every claim, because two streets are two answers and neither is the
-    listing's. Two SPELLINGS of one register row are one answer, which is why the set is keyed
-    on the street's code. `place_lines` are street claims S1 refused as a place name: never a
-    street, asked only which part of the town they name.
+    A line that reaches two distinct streets names neither. Two SPELLINGS of one register row
+    are one answer, which is why the set is keyed on the street's code. `place_line` is a
+    street claim S1 refused as a place name: never a street, asked only which part of the town
+    it names.
     """
-    tiers: dict[str, dict[int, tuple[Street, dict[str, object]]]] = {"exact": {}, "stripped": {}}
-    # Per tier, what each line reached and, for a line WITH diacritics reaching several, the one
-    # it is spelled like — a line's own twins only, never pooled across two street claims.
-    reached: dict[str, list[tuple[set[int], int | None]]] = {"exact": [], "stripped": []}
+    found: dict[int, tuple[Street, dict[str, object]]] = {}
+    spelled: int | None = None
     parts: dict[int, AdminUnit] = {}
-    for line in lines:
-        _, keys = street_match_keys(line)
-        if not keys:
-            continue
-        streets, tier = match_streets(line, obec_kods, registry)
+    keys = street_match_keys(line)[1] if line else ()
+    if line and keys:
+        streets, _ = match_streets(line, obec_kods, registry)
         # The place test is asked AFTER the match and only about a claim that matched: asked
         # first, prose keys would fill a `RunCache` that CLEARS ITSELF at 250,000 entries.
         places = places_named(keys, {s.obec_kod for s in streets}, registry) if streets else []
         if places:
             parts.update(_parts_of_town(places))
-            continue
-        _, numbers = split_street_and_number(strip_street_generic(line))
-        for street in streets:
-            tiers[tier].setdefault(street.code, (street, numbers))
-        reached[tier].append(({s.code for s in streets}, _spelled_like(line, streets)))
-    for line in place_lines:
+        else:
+            _, numbers = split_street_and_number(strip_street_generic(line))
+            found = {street.code: (street, numbers) for street in streets}
+            spelled = _spelled_like(line, streets)
+    if place_line:
         parts.update(_parts_of_town(
-            places_named(street_match_keys(line)[1], set(obec_kods), registry)))
+            places_named(street_match_keys(place_line)[1], set(obec_kods), registry)))
     named_part = _one_part(parts)
-    # The EXACT tier is consulted alone when it has anything at all: a claim that names one
-    # street exactly and grazes another through the tolerant fold has named one street.
-    tier = "exact" if tiers["exact"] else "stripped"
-    found = tiers[tier]
     if not found:
         return StreetBind(reason="street_names_part" if named_part else "no_match",
                           named_part=named_part)
     if len(found) > 1:
-        spelled = set().union(*({one} if one is not None else codes
-                                for codes, one in reached[tier]))
         return StreetBind(reason="ambiguous_streets", named_part=named_part, candidates=tuple(
-            replace(_bound(*found[code]), spelled=spelled == {code}) for code in sorted(found)))
+            replace(_bound(*found[code]), spelled=spelled == code) for code in sorted(found)))
     return _bound(*found[next(iter(found))], named_part=named_part)
 
 

@@ -590,7 +590,7 @@ def test_the_claim_store_no_longer_pins_anything(conn: psycopg.Connection) -> No
     for i in range(3):
         _append(conn, native, f'{{"v": {i}}}'.encode(), version_cap=2)
     middle = _rows(conn, native)[1]
-    _claim_on_listing(conn, native)
+    _claim_on_listing(conn)
 
     _append(conn, native, b'{"v": 98}', version_cap=2)
     _append(conn, native, b'{"v": 99}', version_cap=2)
@@ -817,20 +817,36 @@ def test_an_index_page_is_a_separate_group_from_the_detail_page(
     ]
 
 
-def _claim_on_listing(conn: psycopg.Connection, native: str) -> int:
-    """One ordinary mined claim — the 19 columns migration 498 leaves. It names no body:
-    that is the point (the pin predicate cannot reach it)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO location_claims "
-            "  (listing_id, source, first_observed_at, claim_type, surface, "
-            "   extraction_method, value_text, licence_class, claim_fingerprint) "
-            "VALUES (1, 'idnes', now(), 'street_name', 'html_selector', "
-            "        'html_selector_parse', 'Dlouha', 'portal', %s) "
-            "RETURNING id",
-            (hashlib.sha256(native.encode()).digest(),),
-        )
-        return int(cur.fetchone()[0])
+def _claim_on_listing(conn: psycopg.Connection) -> None:
+    """One ordinary mined claim — the columns migration 498 leaves. It names no body: that
+    is the point (the pin predicate cannot reach it)."""
+    conn.execute(
+        "INSERT INTO location_claims "
+        "  (listing_id, source, first_observed_at, claim_type, surface, "
+        "   extraction_method, value_text, licence_class) "
+        "VALUES (1, 'idnes', now(), 'street_name', 'html_selector', "
+        "        'html_selector_parse', 'Dlouha', 'portal') "
+        "ON CONFLICT (listing_id, claim_type, licence_class) DO NOTHING")
+
+
+@requires_db
+def test_a_reverted_body_is_mined_again(conn: psycopg.Connection) -> None:
+    """W3: A -> B -> A bumps A, mined before B; the claims hold B's value, so A loses its
+    stamp. Re-sighting the latest body keeps it."""
+    native = _key()
+    start = datetime.now(timezone.utc) - timedelta(hours=6)
+
+    def stamps() -> list[int | None]:
+        return [r[0] for r in conn.execute(
+            "SELECT contract_version FROM portal_raw_payloads WHERE source_id_native = %s"
+            " ORDER BY version_seq", (native,)).fetchall()]
+
+    _append(conn, native, b'{"v": "A"}', observed_at=start)
+    _append(conn, native, b'{"v": "A"}', observed_at=start + timedelta(hours=1))
+    assert stamps() == [1]
+    _append(conn, native, b'{"v": "B"}', observed_at=start + timedelta(hours=2))
+    _append(conn, native, b'{"v": "A"}', observed_at=start + timedelta(hours=3))
+    assert stamps() == [None, 1]
 
 
 @requires_db

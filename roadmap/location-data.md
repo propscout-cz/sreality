@@ -1248,18 +1248,48 @@ component is slimmed twice — each wave rewrites one component and slims its st
   cohort; the recent `same` rulings counted apart; D83 edges touching a mover printed). "Approved-split
   sessions" in PROGRAM.md now reads as the rulings ledger inside the affected blocks. Runs where the secrets
   live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
-  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. `what_if.restate` and `what_if.purge` are
-  **deleted when W3 lands** (W3 replaces the read; `what_if --claims purge` then reads all claims raw and
-  applies the keeper rule). Owed before W5's shadow: an id-grain export block for movers that sit in no
+  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. With W3 (#2223) `what_if.restate` is
+  deleted (a re-mine replaces each mined key, a tombstone removes it, under the one read) and
+  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed before W5's shadow: an id-grain export block for movers that sit in no
   block today (Praha rows gaining a quarter).
-- **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
+- **Owed — one copy the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
-  it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the
-  23-argument `location_claim_fingerprint()` call and the enqueue CTE beside
-  `claims_intake._CLAIM_INSERT_CTES` — one fingerprint function, two copies of its argument list.
-  And `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
+  it). `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
-  mirror of the shape test.
+  mirror of the shape test. (The other, the operator's transcription of the claim INSERT, went with W3.)
+- **W4 — realitymix@8 — built 2026-10-31** (#2219, PR #2220, gate #2222; no migration; no `RESOLVER_VERSION`
+  bump). The `estimated` marker reads `div#map` alone: where the agency gave no GPS the server writes its own
+  geocode of the address onto `#print-map` (dropping "okres X": Beroun -> Moravský Beroun) and leaves
+  `#map` blank, and v7's first-match read of the print node never saw it (3,622 of the 3,656 declared
+  rows have both nodes blank). ~11k active pinned ads (7.4k–15.1k; ≤ 19,527 on the 0.01″ grid) become
+  declared estimates: under v5.9 ~610 obec-grain pins outside their town stand at the town point, and
+  ~6.6k street-bound geocodes yield to the RÚIAN street point (the W18 ladder as it stands: a register
+  street point beats a blurred pin). The dead C6 `odbl` branch is deleted; the geocode is filed `portal`,
+  declared `estimated`. Rollout: merge AFTER W2 is live (its queue order drains `claim_insert` rows ahead of
+  the full sweep), then `gh workflow run location_claims_intake.yml --ref main` by hand — the only
+  projector; ~102k stored bodies re-mine in 2–3 chained runs (~1 h), ~526k claims re-insert until W3
+  purges the v7 copies. The standing autodedup shadow gate (PROGRAM.md) runs before the re-mine.
+  Acceptance (gate #2222): realitymix outside cell ≤ 110 (from 712), 0 declared pins outside, 0 off-grid
+  declared; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
+  (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
+- **W3 — one current claim per fact — built 2026-10-31** (#2223; PR-1 migration 699, PR-2 migration 702;
+  `resolver:v5.9.1`; merges after W4's #2220). `location_claims` holds ONE claim per listing, claim type and
+  author (`location_claims_key`): ONE keyed upsert, `claims_store.write_claims`, writes it for the lane and
+  the operator (whose hand copy goes), only when a value changes (in place; A → B → A ends on A; the enqueue
+  only for a changed listing), provenance the entry that FIRST stated the value. ONE read, `DISTINCT ON
+  (listing_id, claim_type)` operator first, no version window. Deleted: BIND's seven tie rules (pin
+  election, first PSČ / street / last address point, blur OR'd across claims, two-street pooling, the
+  operator's register bypass), the readings DELETE (ruling Q4 = A: a silent reading keeps the value), the
+  23-argument fingerprint and its Python mirror, the hand-copied operator statement. `html_marker` gains
+  `absent: retract` (bazos@10, idnes@7, realitymix@9): a node that fails its marker test retracts the
+  blur, which a presence detector could never clear. A payload body that becomes latest again is re-mined;
+  the text lane retries an empty location block (1,915 stored ones re-marked). Rollout (design § 5): the
+  autodedup shadow gate, then the R2 backup + batched purge (≈ 8.8 M rows, `location_claims_retire.yml`'s
+  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (702:
+  the fingerprint column, its index, both functions; the purge script) after one green intake tick. A
+  retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
+  keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve
+  the current pin. Design: `docs/design/location-quality/w3-one-claim-per-fact.md`.
 
 - **W1 — one location scorecard — built 2026-10-31** (#2218; migration 698; location data quality
   programme, rulings Q3/Q6/Q7). `location_quality_by_source` defines every location quality number
@@ -1720,7 +1750,7 @@ all closed, several proven against a throwaway PostgreSQL 18 built from `.deb` f
   `surface='archived_html'` (C9), the page's own `page_kind` (C10),
   `snapshot_anchor='unanchored_latest_fetch'` (C4), plus the archived arm of the coordinate
   ladder (`ARCHIVED_COORDINATE_RULES`, one detail-map entry per portal; the `mapy_affected` veto
-  above the substrate branch; realitymix's Nominatim fallback is `'odbl'`). Evidence is refused in
+  above the substrate branch; realitymix's Nominatim fallback is `'odbl'` (branch deleted 2026-10-31, W4: it emitted 0 rows ever)). Evidence is refused in
   Python, never by the CHECK. Also: C7 now counts distinct **sources**, so one portal read two
   ways is one voice, and `tests/location_data/test_lane_identifiers.py` makes every `LANE` /
   `JOB_NAME` / `CONCURRENCY_GROUP` / version constant globally unique. **Inert on merge,

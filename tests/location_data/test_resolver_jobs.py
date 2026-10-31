@@ -56,6 +56,8 @@ class _FakeCursor:
             self._result = [(7, REGISTRY)]
         elif text.startswith("select coalesce(max(id), 0) from listings"):
             self._result = [(self.state.get("max_listing_id", 0),)]
+        elif text.startswith("select pc.source, string_agg"):
+            self._result = list(self.state.get("declared", []))
         else:
             self._result = []
 
@@ -219,6 +221,64 @@ def test_reconcile_sweeps_once_per_version_pair_and_retries_a_cut_sweep(monkeypa
     assert calls[0][0] == "ruian:A" and all(c[1] is never for c in calls)
 
 
+def test_reconcile_re_resolves_a_portal_whose_active_contract_declares_other_types(monkeypatch):
+    """W3 (ruling R4): the read asks the contracts one thing, which claim types each portal's
+    ACTIVE contract declares, so a change there is part of what reconcile compares. A portal
+    whose set moved has every listing re-resolved; a bump declaring the same types moves
+    nothing (its re-mine enqueues what it changes); a portal a retract left with no active
+    contract reads nothing and is never swept to blank — it is swept when a contract returns."""
+    portal_sweeps: list[list[str]] = []
+
+    def portal_sweep(conn, sources, *, stop):
+        portal_sweeps.append(list(sources))
+        return 9
+
+    monkeypatch.setattr(drain, "enqueue_full_sweep", lambda conn, **kw: 0)
+    monkeypatch.setattr(drain, "enqueue_portal_sweep", portal_sweep)
+    monkeypatch.setattr(drain, "_SWEPT_PAIR", None)
+    monkeypatch.setattr(drain, "_SWEPT_DECLARED", None)
+    monkeypatch.setattr(drain.resolve_db, "current_registry_version", lambda conn: (7, "ruian:A"))
+    state = _state()
+    conn = _FakeConn(state)
+    pair = [RESOLVER_VERSION, "ruian:A"]
+
+    def never() -> bool:
+        return False
+
+    def contracts(**declared: str) -> None:
+        state["declared"] = sorted(declared.items())
+
+    contracts(bazos="obec_name,psc", idnes="obec_name")
+    assert drain.reconcile(conn, stop=never) == {"pair": pair, "rows": 0, "complete": True}
+    assert drain.reconcile(conn, stop=never) is None            # a same-type bump: nothing
+    contracts(bazos="obec_name", idnes="obec_name")             # bazos stops declaring psc
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": ["bazos"], "rows": 9, "complete": True}
+    contracts(idnes="obec_name")                                # bazos retracted, no contract
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": [], "rows": 0, "complete": True}
+    contracts(bazos="obec_name", idnes="obec_name")             # a corrected bazos activated
+    assert drain.reconcile(conn, stop=never)["contracts"] == ["bazos"]
+    assert portal_sweeps == [["bazos"], ["bazos"]]
+    assert any(t.startswith("select pc.source, string_agg") for t, _ in state["executed"])
+
+
+def test_the_portal_sweep_is_the_sweeps_twin_for_named_portals():
+    """Every listing of the named portals, versions current or not, with the sweep's own
+    manners: an MVCC skip of a queued row, DO NOTHING, the backfill reason, two walks."""
+    flat = " ".join(drain._PORTAL_SWEEP_SQL.split()).lower()
+    assert "where l.source = any(%s::text[]) and l.is_active = %s and l.id > %s and l.id <= %s" in flat
+    assert "not exists (select 1 from dirty_locations d where d.listing_id = l.id)" in flat
+    assert "on conflict (listing_id) do nothing" in flat and "'full_sweep'" in flat
+    declared = " ".join(drain._DECLARED_TYPES_SQL.split()).lower()
+    assert "where pc.is_active" in declared and "group by pc.source" in declared
+    state = _state(max_listing_id=300_000)
+    assert drain.enqueue_portal_sweep(_FakeConn(state), ["bazos"], window=250_000) == 0
+    assert [p for _, p in _sweep_windows(state)] == [
+        (["bazos"], True, 0, 250_000), (["bazos"], True, 250_000, 300_000),
+        (["bazos"], False, 0, 250_000), (["bazos"], False, 250_000, 300_000)]
+
+
 def test_a_window_retries_a_lock_wait_then_gives_up_loudly(monkeypatch):
     import psycopg
     monkeypatch.setattr(drain, "SWEEP_WINDOW_RETRY_S", 0.0)
@@ -357,13 +417,13 @@ def test_the_per_listing_reads_are_prefetched_once_per_slice():
     state = _drained([[(101, 0), (102, 0), (103, 0)], [(104, 0), (105, 0)]])
     assert state["stats"].claimed == 5
     for needle in (
-        "from location_claims c left join portal_contract_entries pce",
+        "select distinct on (c.listing_id, c.claim_type) c.* from location_claims c",
         "select id, source from listings where id = any(",
     ):
         assert _count(state, needle) == 2, needle
-    assert _count(state, "and c.listing_id = any(") == 2
+    assert _count(state, "where c.listing_id = any(") == 2
     # ...and never the single-listing forms the prefetch replaced.
-    assert _count(state, "and c.listing_id = %s") == 0
+    assert _count(state, "where c.listing_id = %s") == 0
     for gone in (
         "location_contradictions_open", "location_resolutions",
         "select id, property_id from listings",
@@ -464,11 +524,11 @@ def test_the_dry_run_counts_what_a_rule_change_does_to_the_stored_row():
 
 
 def test_the_claims_select_maps_onto_claim_positionally():
-    """`_claim` unpacks `_CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
+    """`claim_from_row` unpacks `CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
     reordered in one and not the other is a silent mis-mapping: every value still has the
     right TYPE one slot over (three texts in a row, two floats, two nullable texts), so
     nothing raises — the resolver just reads the surface as the extraction method."""
-    body = resolve_db._CLAIM_COLUMNS
+    body = resolve_db.CLAIM_COLUMNS
     names, depth, current = [], 0, []
     for ch in body:
         if ch == "(":
@@ -495,7 +555,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
            "portal", mm._T0, "Dlouhá", 3.5, 50.1, 14.4, {"k": "v"}, "exact_address",
            25.0, "declared", True)
     assert len(row) == len(labels)
-    claim = resolve_db._claim(row)
+    claim = resolve_db.claim_from_row(row)
 
     assert (claim.id, claim.listing_id, claim.source) == (11, 22, "sreality")
     assert (claim.claim_type, claim.surface) == ("street_name", "api_json")
@@ -511,7 +571,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
     assert claim.subject_scoped is True
 
     # A NULL geometry must not become 0.0 — the resolver's `has_position` reads both.
-    assert resolve_db._claim(row[:10] + (None, None) + row[12:]).has_position is False
+    assert resolve_db.claim_from_row(row[:10] + (None, None) + row[12:]).has_position is False
 
 
 # ------------------------------------------------------------------ the run-scoped cache
@@ -813,11 +873,10 @@ def _enqueue_ctes() -> dict[str, str]:
 
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
-    from location_data import claims_intake, contracts, operator_corrections
+    from location_data import claims_store, contracts
     return {
-        "claims_intake._CLAIM_WRITE_SQL": claims_intake._CLAIM_WRITE_SQL,
+        "claims_store._WRITE_CLAIMS_SQL": claims_store._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
-        "operator_corrections._OPERATOR_CLAIM_SQL": operator_corrections._OPERATOR_CLAIM_SQL,
     }
 
 
@@ -851,7 +910,7 @@ def test_the_bump_only_touches_columns_dirty_locations_actually_has():
                        "last_error", "next_eligible_at"}, columns
     assert "next_eligible_at timestamptz not null" in " ".join(body.split())
     for sql in _enqueue_ctes().values():
-        clause = " ".join(sql.split()).lower().split("do update")[1]
+        clause = " ".join(sql.split()).lower().split("on conflict (listing_id) do update")[1]
         assert "next_eligible_at = null" not in clause
 
 
@@ -1161,7 +1220,7 @@ def test_workers_1_is_the_single_connection_path_statement_for_statement(monkeyp
         "select listing_id, attemp",
         # the prefetch on its own budget, restored before anything writes (W2-a6)
         "set local statement_timeout = '90s'",
-        "with evidence as ( select", "select id, source from li",
+        "select id, listing_id, so", "select id, source from li",
         "set local statement_timeout = '30s'",
         "insert into listing_locat", "delete from dirty_locatio",
         "set local statement_timeout = '30s'", "set local lock_timeout = '5s'",

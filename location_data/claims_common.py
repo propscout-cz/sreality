@@ -158,18 +158,9 @@ class ArchivedCoordinateRule:
     later per-portal PR from licensing a second, unruled locator by simply declaring
     `claim_type: coordinate`: an unrecognised entry gets no coordinate, and the PR that
     wants one has to add a row here and argue for it.
-
-    `geocoded_licence_class` is realitymix's second branch, and it is the whole of C6:
-    `/build/maps.913b4199.js` falls back to `nominatim.openstreetmap.org` when `data-gps-*`
-    is absent and labels the pin *"Pozice na mapě je pouze orientační"* [live-C §2.3]. ODbL
-    follows the geometry, not the republisher (00 §6.2), so that branch is `'odbl'` — never
-    `'portal'`, and never the retired `portal_osm_derived` spelling. A portal with no such
-    branch leaves it None, and a coordinate recovered without the portal's own pin is
-    refused rather than guessed at.
     """
     entry_id: str
     licence_class: str
-    geocoded_licence_class: str | None = None
 ARCHIVED_COORDINATE_RULES: dict[str, ArchivedCoordinateRule] = {
     # `#printMap[data-gps], #listingMap[data-gps]`, scoped by element id — never "the first
     # data-gps in the document", which is the neighbour carousel [live-B §3.5.1].
@@ -181,8 +172,9 @@ ARCHIVED_COORDINATE_RULES: dict[str, ArchivedCoordinateRule] = {
     # row here, which only ever said "bazos has no coordinate at all".
     # `bzs.det.link_pin` is 02 §2.2.3's reserved id for exactly this act.
     "bazos": ArchivedCoordinateRule("bzs.det.link_pin", "portal"),
-    "realitymix": ArchivedCoordinateRule("rm.det.gps", "portal",
-                                         geocoded_licence_class="odbl"),
+    # The page's pin. Where `div#map` is blank it is the portal server's own geocode, still
+    # the page's publication, and `rm.det.agency_est_flag` declares it 'estimated' (v8).
+    "realitymix": ArchivedCoordinateRule("rm.det.gps", "portal"),
     # A typed {coordinates,address} pair keyed by the listing id, inside the MapTiler blob.
     "idnes": ArchivedCoordinateRule("id.det.subject_feature", "portal"),
     # The same Vue `point{}` W1 reads out of raw_json, re-read from the archived body.
@@ -310,59 +302,46 @@ class Claim:
     extraction_method: str
     extractor_id: str
     extractor_version: str
-    contract_entry_id: int
+    contract_entry_id: int | None
     first_observed_at: datetime
     blur_evidence: str
     licence_class: str
     value_text: str | None = None
     value_num: float | None = None
     value_geom_wkt: str | None = None
-    value_shape_wkt: str | None = None
     value_jsonb: Any | None = None
-    distance_m: int | None = None
-    travel_mode: str | None = None
-    target_text: str | None = None
     declared_precision_label: str | None = None
-    declared_confidence: str | None = None
     declared_radius_m: float | None = None
     subject_scoped: bool | None = None
-    legacy_source_column: str | None = None
     # NULL on every claim this lane writes since W3 deleted the headline's `low` (only the
     # operator writes one, 'exact'); the column goes with a later, destructive migration.
     claim_confidence: str | None = None
+    # A TOMBSTONE (location W3): the page states the fact's absence (`html_marker`'s
+    # `absent: retract`), so the one write deletes this key's claim instead of storing a value.
+    retract: bool = False
 
     def to_row(self) -> dict[str, Any]:
-        row = {
+        """The one write's recordset row (`claims_store._WRITE_CLAIMS_SQL`): what is stored."""
+        return {
             "listing_id": self.listing_id,
             "source": self.source,
-            "source_id_native": self.source_id_native,
             "first_observed_at": self.first_observed_at.isoformat(),
             "claim_type": self.claim_type,
             "surface": self.surface,
-            "page_kind": self.page_kind,
             "extraction_method": self.extraction_method,
-            "extractor_id": self.extractor_id,
-            "extractor_version": self.extractor_version,
             "contract_entry_id": self.contract_entry_id,
             "value_text": self.value_text,
             "value_num": self.value_num,
             "value_geom_wkt": self.value_geom_wkt,
-            "value_shape_wkt": self.value_shape_wkt,
             "value_jsonb": self.value_jsonb,
-            "distance_m": self.distance_m,
-            "travel_mode": self.travel_mode,
-            "target_text": self.target_text,
             "declared_precision_label": self.declared_precision_label,
-            "declared_confidence": self.declared_confidence,
             "declared_radius_m": self.declared_radius_m,
             "claim_confidence": self.claim_confidence,
             "blur_evidence": self.blur_evidence,
             "licence_class": self.licence_class,
-            "legacy_source_column": self.legacy_source_column,
             "subject_scoped": self.subject_scoped,
+            "retract": self.retract,
         }
-        return row
-
 
 
 @dataclass(slots=True)
@@ -399,7 +378,6 @@ class CoordinateVerdict:
 def coordinate_verdict(
     source: str, coords_source: str | None, *,
     substrate: str = SUBSTRATE_PAYLOAD, entry_id: str | None = None,
-    portal_pin_present: bool = True,
 ) -> CoordinateVerdict:
     """06 §6.1.2, applied to the INPUT. On the payload substrate it never returns a
     non-`portal` licence class: a class-E coordinate produces no claim at all (§6.6 rule 6).
@@ -410,12 +388,10 @@ def coordinate_verdict(
     `carry_forward` stamp it laundered through refetches license nothing.
 
     `substrate` defaults to the payload one; `SUBSTRATE_ARCHIVED_HTML` asks the same ladder
-    about a body W2 re-mines. `entry_id` / `portal_pin_present` are only consulted on the
-    archived arm.
+    about a body W2 re-mines. `entry_id` is only consulted on the archived arm.
     """
     if substrate == SUBSTRATE_ARCHIVED_HTML:
-        return _archived_coordinate_verdict(
-            source, entry_id=entry_id, portal_pin_present=portal_pin_present)
+        return _archived_coordinate_verdict(source, entry_id=entry_id)
     rule = COORDINATE_RULES.get(source)
     if rule is None:
         return CoordinateVerdict(False, None, "unknown_source")
@@ -431,9 +407,7 @@ def coordinate_verdict(
     return CoordinateVerdict(False, None, "unrecognised_coordinate_provenance")
 
 
-def _archived_coordinate_verdict(
-    source: str, *, entry_id: str | None, portal_pin_present: bool,
-) -> CoordinateVerdict:
+def _archived_coordinate_verdict(source: str, *, entry_id: str | None) -> CoordinateVerdict:
     """The archived-body arm of the ladder: the ONE locator the portal's rule names, and
     nothing else."""
     rule = ARCHIVED_COORDINATE_RULES.get(source)
@@ -441,12 +415,7 @@ def _archived_coordinate_verdict(
         return CoordinateVerdict(False, None, "no_archived_coordinate_locator_on_this_portal")
     if entry_id != rule.entry_id:
         return CoordinateVerdict(False, None, "unrecognised_archived_coordinate_locator")
-    if portal_pin_present:
-        return CoordinateVerdict(True, rule.licence_class, f"archived_{rule.entry_id}")
-    if rule.geocoded_licence_class is None:
-        return CoordinateVerdict(False, None, "coordinate_provenance_unestablished")
-    return CoordinateVerdict(
-        True, rule.geocoded_licence_class, f"archived_{rule.entry_id}_portal_geocoded")
+    return CoordinateVerdict(True, rule.licence_class, f"archived_{rule.entry_id}")
 
 
 # ------------------------------------------------------------------ payload helpers
@@ -792,14 +761,6 @@ def wkt_point(wkt: str) -> tuple[float, float]:
     return lat, lon
 
 
-def envelope_wkt(lat_min: float, lon_min: float, lat_max: float, lon_max: float) -> str:
-    corners = (
-        (lon_min, lat_min), (lon_max, lat_min), (lon_max, lat_max),
-        (lon_min, lat_max), (lon_min, lat_min),
-    )
-    return "POLYGON((" + ", ".join(f"{x!r} {y!r}" for x, y in corners) + "))"
-
-
 def in_cz_bbox(lat: float, lon: float) -> bool:
     lat_min, lat_max, lon_min, lon_max = cz_bbox()
     return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
@@ -928,50 +889,6 @@ def payload_hash(raw: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-# ------------------------------------------------------------------ value_norm mirror
-
-# Characters where PostgreSQL's `unaccent` DICTIONARY and Python's NFKD combining-mark
-# strip disagree: the dictionary expands or maps them (ß->ss, æ->ae, ø->o, đ->d, ł->l …)
-# while NFKD leaves them intact, so the Python mirror would fold them to a space instead.
-# They are rare in Czech and NOT rare in this corpus — the program exists partly to find
-# the German, Polish and Nordic addresses hiding in it (remax 442804 is in Poland; bazos
-# has an 835-row `Zahraničí` bucket). This set is why `claim_fingerprint` is computed in
-# SQL and never in Python: a mirror that drifts on exactly the foreign cohort would make
-# the unique index stop deduping, silently, in an append-only table.
-MIRROR_UNSAFE_CHARS = frozenset("ßæÆœŒøØđĐłŁðÐþÞħĦŧŦıĸŉ")
-
-
-def mirror_is_faithful(value: str | None) -> bool:
-    """True when the Python mirror provably agrees with `location_value_norm()`."""
-    return value is None or not (MIRROR_UNSAFE_CHARS & set(value))
-
-
-def value_norm_mirror(value: str | None) -> str | None:
-    """DIAGNOSTIC ONLY — never on the write path.
-
-    Mirrors migration 382's
-    `nullif(btrim(regexp_replace(lower(unaccent(p_value)), '[^a-z0-9]+', ' ', 'g')), '')`
-    so a dry run can show what a claim's `value_norm` will become and so the parity test
-    has something to compare. The authoritative definition is the SQL function; see
-    `_CLAIM_FINGERPRINT_SQL`.
-    """
-    if value is None:
-        return None
-    try:
-        from location_data.name_index import normalize_name
-    except ImportError:  # the RÚIAN loader (PR #1010) is not merged yet
-        import re
-        import unicodedata
-
-        def normalize_name(raw: str) -> str:
-            stripped = "".join(
-                ch for ch in unicodedata.normalize("NFKD", raw)
-                if not unicodedata.combining(ch))
-            return re.sub(r"[^0-9a-z]+", " ", stripped.lower()).strip()
-
-    return normalize_name(value) or None
-
-
 # ------------------------------------------------------------------ claim stamping
 
 def _base(entry: Entry, row: ListingRow, **overrides: Any) -> Claim:
@@ -1035,8 +952,7 @@ def claim_value_bytes(claim: Claim) -> int:
     if claim.value_jsonb is not None:
         total += len(json.dumps(claim.value_jsonb, ensure_ascii=False,
                                 default=str).encode("utf-8"))
-    for text in (claim.value_text, claim.value_geom_wkt, claim.value_shape_wkt,
-                 claim.target_text):
+    for text in (claim.value_text, claim.value_geom_wkt):
         if text is not None:
             total += len(text.encode("utf-8"))
     return total

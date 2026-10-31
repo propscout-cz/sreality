@@ -111,4 +111,12 @@ from __future__ import annotations
 #      bound a část and now publish the quarter grain the bind always had. The pin stays
 #      evidence (`pin_outside_obec` is still recorded); an exact or undeclared pin outside the
 #      town keeps the position as before. The bump re-queues the corpus.
-RESOLVER_VERSION = "resolver:v5.9"
+# v5.9.1 = location W3, one claim per fact (#2223). The read returns at most ONE claim per
+#      listing and claim type, the operator's ahead of the portal's (migration 699 keys the
+#      store), so BIND's seven tie rules go: no pin election by declared rank and id, no
+#      first-PSČ / first-street / last-address-point idiom, no blur OR'd across a type's
+#      claims, no two-street pooling, and no operator bypass of the register (an operator
+#      value outranks at the read and binds like any claim). A house-number claim outranks the
+#      number in the street line. A point release: W5 takes v5.10. The bump re-resolves the
+#      corpus through W2's reconcile.
+RESOLVER_VERSION = "resolver:v5.9.1"

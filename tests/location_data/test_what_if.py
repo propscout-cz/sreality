@@ -46,11 +46,27 @@ def _at(claim: Any, days: int) -> Any:
     return replace(claim, observed_at=T0 + timedelta(days=days))
 
 
+def _marker_reads(css: str, version: int) -> contracts.PortalContract:
+    """The shipped contract with the `estimated` marker re-pointed, so the test states both sides
+    of W4 itself and never depends on which version the checkout ships (W3's `absent` key aside:
+    neither side of W4 had it)."""
+    def repoint(entry: Any) -> Any:
+        locator = {k: v for k, v in entry.locator.items() if k != "absent"}
+        return replace(entry, locator={**locator, "css": css})
+
+    entries = [repoint(e) if e.entry_id == "rm.det.agency_est_flag" else e
+               for e in CONTRACT.entries]
+    return replace(CONTRACT, version=version, entries=entries)
+
+
+def _v7() -> contracts.PortalContract:
+    """Before W4: the marker read the print node first, which always carries a value."""
+    return _marker_reads("div#print-map, div#map", CONTRACT.version)
+
+
 def _v8() -> contracts.PortalContract:
     """W4's bump as a contract value: the marker reads the interactive map only."""
-    entries = [replace(e, locator={**e.locator, "css": "div#map"})
-               if e.entry_id == "rm.det.agency_est_flag" else e for e in CONTRACT.entries]
-    return replace(CONTRACT, version=CONTRACT.version + 1, entries=entries)
+    return _marker_reads("div#map", CONTRACT.version + 1)
 
 
 def _mined(contract: contracts.PortalContract, first_id: int) -> list[Any]:
@@ -79,57 +95,75 @@ def _resolved(listing_id: int) -> Any:
 # ------------------------------------------------------------------ the claim changes
 
 
-def test_purge_keeps_one_claim_per_type_and_author_the_newest_observation():
-    """W3's keeper: the newest observation of today's read (the id breaks a tie); the
-    operator's claim is its own key."""
-    old_pin = _at(mm.claim(1, "coordinate", lat=50.0, lon=14.0), 0)
-    new_pin = _at(mm.claim(2, "coordinate", lat=50.1, lon=14.1), 1)
-    first_town, second_town = (_at(mm.claim(i, "obec_name", value_text="Praha"), 0)
-                               for i in (3, 4))
-    operator = _at(mm.claim(5, "obec_name", value_text="Brno", licence_class="operator"), 0)
-    out = what_if.purge(None, {7: [new_pin, old_pin, second_town, first_town, operator], 8: []})
-    assert [c.id for c in out[7]] == [2, 4, 5]
+def _raw(claim: Any, version: int | None, active: int | None = 4,
+         declared: bool = True) -> tuple[Any, ...]:
+    """A row of `_RAW_CLAIMS_SQL` for listing 7: `CLAIM_COLUMNS`' 17, then version, active
+    version, declared."""
+    return (claim.id, 7, claim.source, claim.claim_type, claim.surface,
+            claim.extraction_method, claim.licence_class, claim.observed_at, claim.value_text,
+            claim.value_num, claim.lat, claim.lon, claim.value_jsonb,
+            claim.declared_precision_label, claim.declared_radius_m, claim.blur_evidence,
+            claim.subject_scoped, version, active, declared)
+
+
+def test_purge_reads_every_claim_raw_and_keeps_what_the_purge_keeps():
+    """W3's shadow: today's read is one claim per type already, so `purge` reads the ids' claims
+    RAW and keeps, per (listing, type, author), the purge's keeper — the newest version at or
+    below the active one, then the newest observation — then reads them as W3 does: one per type,
+    the operator's first, a portal claim only of a type the active contract declares."""
+    newer_pin = _at(mm.claim(1, "coordinate", lat=50.1, lon=14.1), 5)     # @5 > active @4
+    pin = _at(mm.claim(2, "coordinate", lat=50.0, lon=14.0), 0)           # @4: the keeper
+    old_town, town = (_at(mm.claim(i, "obec_name", value_text=t), d)
+                      for i, t, d in ((3, "Brno", 9), (4, "Praha", 1)))  # @3 newer, @4 kept
+    psc, psc_later = (_at(mm.claim(i, "psc", value_text=v), d)
+                      for i, v, d in ((5, "11000", 1), (6, "12000", 2)))  # both @4: newest
+    cast = _at(mm.claim(7, "cast_obce_name", value_text="Žižkov"), 0)     # @3, its only row
+    operator = _at(mm.claim(8, "psc", value_text="13000", licence_class="operator"), 0)
+    gone = _at(mm.claim(9, "okres_name", value_text="Praha"), 0)          # no longer declared
+    conn = _FakeConn(rows=[_raw(newer_pin, 5), _raw(pin, 4), _raw(old_town, 3), _raw(town, 4),
+                           _raw(psc, 4), _raw(psc_later, 4), _raw(cast, 3),
+                           _raw(operator, None, None, False), _raw(gone, 4, declared=False)])
+    out = what_if.purge(conn, {7: [], 8: []})
+    assert [c.id for c in out[7]] == [2, 4, 7, 8]
     assert out[8] == []
+    (sql, params, _, in_transaction), = conn.executed
+    assert sql == what_if._RAW_CLAIMS_SQL and params == {"ids": [7, 8]} and in_transaction
+    assert "DISTINCT ON" not in sql and "WHERE listing_id = ANY(%(ids)s::bigint[])" in sql
 
 
-def test_a_remine_restates_the_admissible_types_it_mined_and_keeps_the_rest():
-    """Per type the newest version (the re-mine's where it stated the type); a type the contract
-    stopped declaring is not read; operator and other-portal claims stay; an inadmissible
-    licence (`odbl`, a geocode) is never read, so it restates nothing."""
+def test_the_shadows_keeper_is_the_purge_scripts():
+    """One keeper rule, two spellings: the purge's SQL window and the shadow's Python sort."""
+    from scripts import location_claims_retire
+
+    assert ("ORDER BY (pc.version <= act.version) DESC NULLS LAST, pc.version DESC NULLS FIRST, "
+            "c.first_observed_at DESC, c.id DESC") in " ".join(
+        location_claims_retire._BATCH_SQL.split())
+    claim = mm.claim(1, "psc", value_text="11000")
+    ranks = sorted([(what_if.keeper_rank(claim, v, a), v) for v, a in
+                    ((5, 4), (None, 4), (3, 4), (4, 4), (4, None))])
+    assert [v for _, v in ranks] == [4, 3, 5, None, 4]   # SQL: false before NULL, NULL first
+
+
+def test_a_remine_writes_as_the_one_write_and_reads_as_the_one_read():
+    """W4's re-mine under W3: a mined portal claim replaces its type's portal claim, a tombstone
+    removes it, silence keeps it; a type the contract stopped declaring is not read; the operator
+    still outranks; an inadmissible licence (`odbl`, a geocode) is never read."""
     today = [
         mm.claim(1, "coordinate", source="realitymix", lat=50.0, lon=14.0),
-        mm.claim(2, "obec_name", source="realitymix", value_text="Beroun"),
-        mm.claim(3, "street_name", source="realitymix", value_text="Husova"),
-        mm.claim(4, "obec_name", source="realitymix", value_text="Beroun",
+        mm.claim(2, "obec_name", source="realitymix", value_text="Beroun",
                  licence_class="operator"),
-        mm.claim(5, "obec_name", source="sreality", value_text="Beroun"),
+        mm.claim(3, "street_name", source="realitymix", value_text="Husova"),
         mm.claim(6, "psc", source="realitymix", value_text="26601"),
+        mm.claim(7, "precision_declaration", source="realitymix", value_text="estimated"),
     ]
     new = what_if.NEW_CLAIM_ID
     mined = [mm.claim(new, "coordinate", source="realitymix", lat=50.0, lon=14.0),
-             mm.claim(new + 1, "precision_declaration", source="realitymix",
-                      value_text="estimated"),
-             mm.claim(new + 2, "psc", source="realitymix", value_text="26601",
+             mm.claim(new + 1, "obec_name", source="realitymix", value_text="Králův Dvůr"),
+             mm.claim(new + 2, "psc", source="realitymix", value_text="26701",
                       licence_class="odbl")]
     declared = frozenset({"coordinate", "obec_name", "precision_declaration", "psc"})
-    out = what_if.restate(today, mined, "realitymix", declared)
-    assert [c.id for c in out] == [2, 4, 5, 6, new, new + 1]
-
-
-def test_restate_is_pinned_to_the_claim_reads_invariants():
-    """`restate` re-states `resolve_db._claims_sql` in Python; when the read changes, this fails
-    and `restate` changes with it (both go when W3 replaces the read)."""
-    sql = " ".join(resolve_db._CLAIMS_BULK_SQL.split())
-    for invariant in (
-        "max(pc.version) OVER (PARTITION BY c.listing_id, c.source, c.claim_type)",  # per type
-        "pc.version <= act.version",  # never past the active contract
-        "contract_version IS NULL OR contract_version = newest_version",  # newest wins
-        "ace.claim_type = c.claim_type",  # a type the active contract declares
-        "c.contract_entry_id IS NULL AND c.licence_class = 'operator'",  # operator kept
-        f"c.licence_class IN {resolve_db._ADMISSIBLE_LICENCE_CLASSES}",
-    ):
-        assert invariant in sql, invariant
-    assert resolve_db.ADMISSIBLE_LICENCE_CLASSES == ("portal", "operator")
+    out = what_if.remined_read(today, mined, {"precision_declaration"}, declared)
+    assert [c.id for c in out] == [2, 6, new]
 
 
 def test_an_intake_claim_reads_back_as_the_resolver_reads_the_stored_row():
@@ -143,7 +177,7 @@ def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
     """The W4 path over the real contract: today (v7) the marker reads `#print-map` and never
     fires; re-mined under the bump it reads the blank `#map`. Every type the bump states is
     replaced by its newer claim, and another portal's listing is left alone."""
-    today = _mined(CONTRACT, 1)
+    today = _mined(_v7(), 1)
     assert "precision_declaration" not in {c.claim_type for c in today}
     monkeypatch.setattr(claims_intake, "scan_rows",
                         lambda cur, ids: [_scan(7, 9001), _scan(8, None, "sreality")])
@@ -162,7 +196,7 @@ def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
 def test_a_page_that_would_not_remine_is_counted_not_hidden(monkeypatch):
     """A stored body the bucket did not serve keeps today's page claims (as the lane would leave
     it unstamped) and joins `unmined`, which makes the run exit 1; no stored body is no failure."""
-    today = _mined(CONTRACT, 1)
+    today = _mined(_v7(), 1)
     monkeypatch.setattr(claims_intake, "scan_rows",
                         lambda cur, ids: [_scan(7, 9001), _scan(9, None)])
     monkeypatch.setattr(page_readers, "load_bodies", lambda cur, ids, store: ({}, 1))

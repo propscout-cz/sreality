@@ -1803,7 +1803,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
     return {
         "ran": True,
         "listings": stats["listings"],
-        "claims_inserted": stats["claims_inserted"],
+        "written": stats["written"],
         "enqueued": stats["enqueued"],
         "bodies_mined": stats["bodies_mined"],
         "bodies_complete": bool(stats["bodies_pass_complete"]),
@@ -1822,9 +1822,9 @@ async def _location_intake_fast_pass(
     # Only when the pass did work — see _tune_intake_log_level for the same argument.
     if last.get("listings") or last.get("bodies_mined"):
         LOG.info(
-            "LOCATION_INTAKE_FAST lane listings=%d claims=%d enqueued=%d bodies=%d "
+            "LOCATION_INTAKE_FAST lane listings=%d written=%d enqueued=%d bodies=%d "
             "complete=%s %.1fs cursor=%s bodies_cursor=%s",
-            last["listings"], last["claims_inserted"], last["enqueued"],
+            last["listings"], last["written"], last["enqueued"],
             last["bodies_mined"], last["bodies_complete"], last["seconds"],
             last["cursor"], last["bodies_cursor"],
         )
@@ -2017,11 +2017,10 @@ def _readings_fast(conn: Any, listing_ids: list[int]) -> dict[str, Any]:
         LOG.warning("INTAKE readings fast ids=%d failed: %s", len(listing_ids), str(exc)[:200])
         return {"ids": len(listing_ids), "error": str(exc)[:200]}
     seconds = time.monotonic() - started
-    LOG.info("INTAKE readings fast ids=%d mined=%d superseded=%d in %.1fs", len(listing_ids),
-             stats["readings_mined"], stats["claims_superseded"], seconds)
+    LOG.info("INTAKE readings fast ids=%d mined=%d written=%d in %.1fs", len(listing_ids),
+             stats["readings_mined"], stats["written"], seconds)
     return {"ids": len(listing_ids), "mined": stats["readings_mined"],
-            "inserted": stats["claims_inserted"], "superseded": stats["claims_superseded"],
-            "seconds": round(seconds, 1)}
+            "written": stats["written"], "seconds": round(seconds, 1)}
 
 
 async def _text_extract_pass(
