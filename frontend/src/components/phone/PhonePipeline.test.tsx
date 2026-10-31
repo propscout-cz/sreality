@@ -19,7 +19,6 @@ import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/actin
 import { revalidateTables, type SyncTable } from '@/lib/curationSync';
 import { districtChipsToCsvParams } from '@/lib/filters';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
-import * as pinAudit from '@/lib/pinAudit';
 import * as queries from '@/lib/queries';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 import Pipeline from '@/pages/Pipeline';
@@ -43,10 +42,6 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
   fetchPipelineBoard: vi.fn(),
   fetchListingCovers: vi.fn(),
   fetchPropertyTagMemberSet: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -145,7 +140,6 @@ beforeEach(() => {
   vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,

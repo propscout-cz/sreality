@@ -267,9 +267,8 @@ def test_the_map_is_gone_from_the_audit_page() -> None:
 
 
 def test_the_audit_page_is_routed_and_leads_the_admin_menu() -> None:
-    """513 unrouted the page. It comes back as the FIRST item of the Admin menu, its
-    count on the Admin trigger (ruling P33) — the badge is a work queue that counts
-    down on its own."""
+    """513 unrouted the page. It comes back as the FIRST item of the Admin menu (ruling
+    P33); its count left the Admin trigger with W1 (ruling Q7)."""
     routes = (REPO / "frontend" / "src" / "lib" / "routes.ts").read_text(encoding="utf-8")
     assert "newDedupPinAudit: def('/new-dedup/pin-audit')" in routes
     assert "ROUTES.newDedupPinAudit.childPath" in (

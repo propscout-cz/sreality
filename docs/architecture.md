@@ -700,8 +700,7 @@ rules. Identify which one a task belongs to before you start.
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  relations `location_pin_audit_mv` (a matview, no RLS) and `location_audit_waterfall` (RLS,
-  read-all policy); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  matview `location_pin_audit_mv` (no RLS); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -5317,7 +5316,9 @@ over the PUBLISHED properties at their location ad (`served/*`), `registry`, `fr
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
 `freshness/evidence` (the oldest claim or operator edit waiting for its resolve, Problem past 60 min). As
 a gauge it sends one notice when a cell first reads Problem, then one a day until it recovers or is
-acknowledged. The lane still works every listing; only
+acknowledged. The Location Quality page (`/location-quality`) renders the SAME stored row through
+the Health page's own query (`HEALTH_QUERY`), so the two show identical numbers and hold no threshold
+(W1 PR 2 deleted `/location/quality/*` and their toolkit aggregates). The lane still works every listing; only
 the gauge's population moved (operator ruling Q2, 2026-10-18, which reverses W15's whole-corpus count:
 the 13,192 inactive ads with no town on 2026-10-19, whose pages are gone, are a dated fact that Location
 Quality owns, not read each run). Its per-portal series changed meaning on 2026-09-14 and again at the
@@ -5575,11 +5576,12 @@ change: **1,163 rows (~3 %)** where another listing of the same property already
 or the listing sits in `dirty_locations`, or its newest `listing_snapshots.scraped_at` is past the
 verdict's `resolved_at` — is the lane still working and NOT a finding; `unresolved` (a verdict
 exists, nothing queued, no newer evidence, still no location) is the issue, and the four `quality`
-buckets refine that half alone. The page toggles between the two and defaults to `unresolved`; the
-nav badge counts `unresolved` only, because a badge that climbed whenever the scrapers ran would
-teach the operator to ignore it. Measured at the split: 11 pending, 44,370 unresolved.
-**W14 (migration 523) makes the page read against the whole database, and W15 (migration 524)
-simplifies the chain to the one rule.** The operator's complaint was that the audit set was a number
+buckets refine that half alone. The page toggles between the two and defaults to `unresolved`.
+Measured at the split: 11 pending, 44,370 unresolved. (W1, ruling Q7, deleted the nav badge that
+counted `unresolved`: 99 % of its 12,272 were delisted ads with no claims.)
+**W14 (migration 523) made the page read against the whole database, and W15 (migration 524)
+simplified the chain to the one rule; W1 (ruling Q7) deleted the page's waterfall panel, and the table
+and its producer leave with a separate drop migration (ruling W1-c).** The operator's complaint was that the audit set was a number
 with nothing to measure it by. `location_audit_waterfall` is the chain — **9 rows** since W15,
 rewritten hourly by the SAME `refresh_location_pin_audit_mv()` run, after the matview so the last
 step's split reads the relation the page lists: every listing in the database (841,428) → **judged**
@@ -5612,8 +5614,8 @@ rows of movement), and `located_no_town` stays the plain complement so the three
 partitioning `located` by construction. And `label_cs` was **dropped**: wording moved to
 `frontend/src/lib/locationSteps.ts`, one file holding Czech and English for every key, so a better
 sentence costs no migration and a step cannot be renamed on one page only — and, one level down,
-the hidden set's two states now carry ONE Czech name across the waterfall split, the filter pill,
-the header total and the note. Two operational constraints ride with the drop, both in 526's header:
+the hidden set's two states carried ONE Czech name across the waterfall split, the filter pill,
+the header total and the note (since W1 only the filter pill: `STATE_LABEL` in `LocationPinAudit.tsx`). Two operational constraints ride with the drop, both in 526's header:
 the column is made NULLABLE **before** the producer is replaced and dropped only **after**, so the
 :25 cron cannot land between two statements and fail; and the migration is applied only once the
 merge commit's Railway `vite` rollout is green, because the bundle on `main` still selects
@@ -5624,8 +5626,8 @@ and by TIME (a run is frozen; this relation refreshes hourly) — and the candid
 next to its chain. The cross-surface rail is `tests/test_location_steps_vocabulary.py`.
 `quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
 the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
-plus the sibling flag and reads its overview matrix from `location_pin_audit_summary()` so the
-matrix, the header split and the list cannot disagree. The cohort is ONE arm — `listings` LEFT JOINed
+plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
+`location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
 sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
 row (~80 k) and not once per listing. Refreshed hourly by pg_cron
@@ -5635,7 +5637,7 @@ default. Rule 25's deletion parity did not apply: it was an operator-requested r
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
 decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
-Admin menu, with its count on the Admin trigger.
+Admin menu; its count left the Admin trigger with W1.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own

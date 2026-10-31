@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Shell from '@/components/Shell';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
-import * as pinAudit from '@/lib/pinAudit';
 import { DESKTOP_VIEW_KEY, PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 
 import HomeRedirect from './HomeRedirect';
@@ -26,10 +25,6 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -54,7 +49,6 @@ beforeEach(() => {
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,

@@ -271,7 +271,7 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `components/Shell.tsx`), P34 (drop the "read-only · scrape data" build line from the footer, `Shell.tsx`).
    P35 is design-system only (Terakota dropped; nothing to build).
    As built: "!AUDIT POLOH" is the first Admin item, above Health; its brick count sits on the Admin trigger
-   (`AuditCountBadge`), and a failed count read leaves the trigger badge-less. P34's footer keeps the map-tile
+   (`AuditCountBadge`), and a failed count read leaves the trigger badge-less (removed 2026-10-31, W1 PR 2). P34's footer keeps the map-tile
    attribution at the right edge. P26 also dropped the label on the Estimations, Watchdog edit, Datasets and
    Outreach pages (and on /brokers/review with agenda 6); `pages/pageTitleLabels.test.ts` pins every label
    left above an h1 (only the error and not-found states keep one).
