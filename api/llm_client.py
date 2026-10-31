@@ -173,8 +173,9 @@ class LLMClient:
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
-        don't use it; `timeout_s` likewise bounds the whole call, its retries
-        included. `called_for` must be a value `llm_calls_called_for_check`
+        don't use it; `timeout_s` likewise replaces the provider's own request
+        timeout, with no SDK retry under it (the HTTP client's connect and read
+        limits, not a stopwatch). `called_for` must be a value `llm_calls_called_for_check`
         admits (the latest migration restating it holds the list); the
         INSERT runs after the provider has billed.
         """

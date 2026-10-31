@@ -18,9 +18,14 @@ shape for each grain.
 - **An agent run's identity (migration 704, #2070).** The JWT-claims GUC of a run carries `run_account_id` beside
   `sub`, set only by `api/agents/claims.caller_for`. It narrows: `current_account_ids()` and `acting_account_ids()`
   intersect with that one account, `acting_account_ids()` ignores `x-act-as`, `is_platform_admin()` answers false. It
-  can only remove power, and without it all three answer as before (`tests/test_agent_runs_live.py`). Hence a run
-  started by an admin has no admin arm, and a two-membership user's run reads one account; a removed membership empties
-  the next tool call. The SYSTEM arm of 291's policies is every account's, a run's included.
+  can only remove power: an account the `sub` is not a member of yields no account, and an empty claim raises. Without
+  it all three answer as 286, 641 and 330 did (`tests/test_agent_runs_live.py` compares them over a grid of claims,
+  headers, methods and roles). A browser user cannot set it: a Supabase JWT is signed, what a user can edit lands
+  under `user_metadata`, which no identity function reads, and no RPC of ours wraps `set_config` for a caller's value.
+  A custom access token hook would be the one way to add a top-level claim; the repo configures none (the dashboard
+  is not in git), and even that could only narrow. Hence a run started by an admin has no admin arm, and a
+  two-membership user's run reads one account; a removed membership empties the next tool call. The SYSTEM arm of
+  291's policies is every account's, a run's included.
 - Grants follow the skill body's "Default privileges" recipe: `handle_new_user()`
   (trigger-only) is executable by no client role; the other two grant `authenticated`
   EXECUTE, since RLS policies invoke them under the querying role.
@@ -394,7 +399,8 @@ routing inside `detach_listings`, whose carry-row identity, twins and conflicts 
 merge's receipt (`api/property_merge.merge_receipt`: the caller's account's own carry rows), the split's preview
 and receipt (`toolkit/property_split`: the caller's account's own items only, nothing of another's), `api/estimation_runs.py`
 (service-role child runs from `building_runs`), the Stripe webhook (no caller identity at
-all — the HMAC over the raw body is the auth), and both Valuo routes (`api/routes/valuo.py` →
+all — the HMAC over the raw body is the auth), the agent executor (`api/agents/executor.py`: `submit` and `cancel`
+take the account the route resolved, and every run row names it), and both Valuo routes (`api/routes/valuo.py` →
 `api/valuo.py`; `valuo_valuations` is RLS-on with zero policies): the account is
 `require_account_id(conn, claims, None)` called on the service-role connection — the one no-account 400,
 with no tenant transaction left open across the POST's two paid calls (`market-value`, then

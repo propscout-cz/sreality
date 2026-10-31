@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -15,8 +16,16 @@ from api.capabilities import registry
 from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import encode
-from api.llm_client import LLMClient
-from api.providers import Message, ModelPrice, TextBlock, ToolResultBlock, ToolUseBlock
+from api.llm_client import LLMClient, LLMResponse
+from api.providers import (
+    Message,
+    ModelPrice,
+    ProviderError,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    is_transient,
+)
 
 CALLED_FOR = "agent_run"
 # A reply's limit covers the model's thinking too (Opus/Sonnet 5.5 always think): the ceiling is the non-streaming
@@ -24,6 +33,9 @@ CALLED_FOR = "agent_run"
 # likely to be cut off.
 MAX_REPLY_TOKENS = 16_000
 MIN_REPLY_TOKENS = 4_096
+# A rate limit or an overload is retried inside the step, each wait inside the wall clock (PROGRAM § 3.4's numbers). A
+# failed try bills nothing, so the budget check made for the call still holds for its retries.
+RETRY_DELAYS_S = (2.0, 8.0, 30.0)
 
 StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "end_turn", "max_tokens"]
 
@@ -66,10 +78,31 @@ def _reply_tokens(remaining_usd: float, prompt_tokens: int, price: ModelPrice) -
     return min(MAX_REPLY_TOKENS, math.floor(left * 1e6 / price.output_per_mtok))
 
 
+def _callable(definition: Definition) -> set[str]:
+    return {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
+
+
 def tool_schemas(definition: Definition) -> list[dict[str, Any]]:
     """What this agent's model is offered: its tools it may call, then the terminator."""
-    callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
-    return [s for s in registry.schemas() if s["name"] in callable_names] + [terminator.schema(definition)]
+    return [s for s in registry.schemas() if s["name"] in _callable(definition)] + [terminator.schema(definition)]
+
+
+def _call_in_time(call: Callable[[float], LLMResponse], *, deadline: float, clock: Callable[[], float],
+                  sleep: Callable[[float], None]) -> LLMResponse | None:
+    """The model's reply, or None when the wall clock ran out; a failure that is not transient, or the last retry's,
+    raises."""
+    for delay in (*RETRY_DELAYS_S, None):
+        try:
+            return call(deadline - clock())
+        except ProviderError as exc:
+            if clock() >= deadline:
+                return None
+            if delay is None or not is_transient(exc):
+                raise
+        sleep(min(delay * random.uniform(0.75, 1.25), deadline - clock()))
+        if clock() >= deadline:
+            return None
+    raise AssertionError("the last try returns or raises")
 
 
 def run(
@@ -81,6 +114,7 @@ def run(
     call_tool: Callable[[str, Any], dict[str, Any]],
     record: Callable[[Step], None],
     clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Outcome:
     """Run `definition` on `value`. `call_tool` is the registry call under the run's caller; `record` journals."""
     definition.check_input(value)
@@ -91,7 +125,7 @@ def run(
     if price is None:
         raise DefinitionError(f"{provider} has no price for {model!r}")
 
-    callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
+    callable_names = _callable(definition)
     tools = tool_schemas(definition)
     opening = json.dumps(value, ensure_ascii=False, indent=2)
     messages = [Message(role="user", content=[TextBlock(text=opening)])]
@@ -123,8 +157,13 @@ def run(
             return outcome("max_cost")
 
         started = clock()
-        response = llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions, tools=tools,
-                            model=model, provider=provider, max_tokens=max_tokens, timeout_s=deadline - started)
+        response = _call_in_time(
+            lambda timeout_s: llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions,
+                                       tools=tools, model=model, provider=provider, max_tokens=max_tokens,
+                                       timeout_s=timeout_s),
+            deadline=deadline, clock=clock, sleep=sleep)
+        if response is None:
+            return outcome("timeout")
         calls += 1
         spent += response.cost_usd
         completion = response.completion

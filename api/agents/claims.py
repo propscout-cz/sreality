@@ -1,9 +1,4 @@
-"""The one claims builder: a run's principal and account become the Caller its tools run under.
-
-`run_account_id` narrows the identity functions (migration 704): one account of the principal's memberships, no admin
-powers, no acting for another account. It can only remove power, so whoever could set it gains nothing. A claim rather
-than a new setting, so `tenant_pool.tenant_transaction` and the registry stay as they are.
-"""
+"""The one claims builder: a run's principal and account become the Caller its tools run under."""
 
 from __future__ import annotations
 
@@ -13,6 +8,9 @@ import psycopg
 
 from api.capabilities.entry import Caller
 
+# Narrows the identity functions (migration 704): one account of the principal's memberships, no admin powers, no acting
+# for another account. It can only remove power. A claim rather than a new setting, so `tenant_transaction` and the
+# registry stay as they are.
 RUN_ACCOUNT_CLAIM = "run_account_id"
 
 

@@ -81,6 +81,11 @@ class _Claimed(NamedTuple):
     input: dict[str, Any]
     attempts: int
 
+    @property
+    def held(self) -> dict[str, Any]:
+        """The compare-and-set every write by this worker carries."""
+        return {"id": self.id, "attempts": self.attempts}
+
 
 class _LeaseLost(Exception):
     """The row is no longer this worker's: re-queued or ended by someone else."""
@@ -198,27 +203,28 @@ def _pin(definition: Definition, provider: str) -> dict[str, str]:
             "commit_sha": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"), "model": definition.models[provider]}
 
 
-def _storable(value: Any) -> Any:
-    """`value` as JSON reads it back, less the NUL Postgres refuses in text and jsonb (an ad's text can carry one)."""
+def _no_nul(value: Any) -> Any:
     if isinstance(value, str):
         return value.replace("\x00", "")
     if isinstance(value, list):
-        return [_storable(v) for v in value]
+        return [_no_nul(v) for v in value]
     if isinstance(value, dict):
-        return {_storable(k): _storable(v) for k, v in value.items()}
+        return {_no_nul(k): _no_nul(v) for k, v in value.items()}
     return value
+
+
+def _storable(value: Any) -> Any:
+    """`value` as JSON reads it back, less the NUL Postgres refuses in text and jsonb (an ad's text can carry one)."""
+    return _no_nul(cassette.plain(value))
 
 
 # --- submit --------------------------------------------------------------------------------------------------------
 
 def submit(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id: uuid.UUID, agent: str,
            value: Mapping[str, Any], provider: str | None = None, idempotency_key: str | None = None) -> Submitted:
-    """Queue one run on the service connection, for the identity the route stamped from the caller's own token.
-
-    Raises DefinitionError or InputError for a run that could not start, SubmitRefused for one this account may not
-    make. A repeated idempotency key returns the run it made, at any status. There is no act-as: a run acts for its
-    own user only (spec #2055 story 34).
-    """
+    """Queue one run on the service connection, for the identity the route stamped from the caller's own token; a
+    repeated idempotency key returns the run it made. Raises DefinitionError, InputError or SubmitRefused."""
+    # No act-as parameter: a run acts for its own user only (spec #2055 story 34).
     definition = _definition(agent)
     definition.check_input(value)
     provider = provider or next(iter(definition.models))
@@ -235,12 +241,14 @@ def submit(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id
             cur.execute(_EXISTING, (account_id, idempotency_key))
             if (row := cur.fetchone()) is not None:
                 return Submitted(run_id=row[0], status=row[1], created=False)
-        cap = _number(settings, IN_FLIGHT_CAP) or 0
+        cap = _number(settings, IN_FLIGHT_CAP)
+        if cap is None:
+            raise SubmitRefused("in_flight_cap", "Agent runs are not open right now.")
         cur.execute(_IN_FLIGHT, (account_id,))
         if cur.fetchone()[0] >= cap:
             raise SubmitRefused("in_flight_cap", f"This account already has {cap:g} runs queued or running.")
         cur.execute(_INSERT, (account_id, principal_user_id, agent, pinned["definition_sha"], pinned["tool_set_sha"],
-                              pinned["commit_sha"], provider, pinned["model"], Jsonb(_storable(cassette.plain(value))),
+                              pinned["commit_sha"], provider, pinned["model"], Jsonb(_storable(value)),
                               idempotency_key))
         run_id, status = cur.fetchone()
     return Submitted(run_id=run_id, status=status, created=True)
@@ -294,7 +302,7 @@ def _keep_lease(connect: Callable[[], psycopg.Connection], run: _Claimed) -> Ite
         while not done.wait(LEASE_S / 3) and time.monotonic() < ceiling:
             try:
                 with connect() as conn:
-                    conn.execute(_RENEW, {"lease": LEASE_S, "id": run.id, "attempts": run.attempts})
+                    conn.execute(_RENEW, {"lease": LEASE_S, **run.held})
             except psycopg.Error as exc:
                 LOG.warning("AGENT_RUN lease renewal failed run=%s: %s", run.id, exc)
 
@@ -319,10 +327,10 @@ def _recorder(conn: psycopg.Connection, run: _Claimed, stop: threading.Event) ->
     """The loop's journal, and the between-steps checkpoint: the step lands only under a held lease, then a cancel or
     a shutdown stops the loop by raising through it."""
     def record(step: loop.Step) -> None:
-        given = _storable(cassette.plain(step.input))
-        output = _storable(cassette.plain(step.output))
+        given = _storable(step.input)
+        output = _storable(step.output)
         with conn.transaction(), conn.cursor() as cur:
-            cur.execute(_RENEW_FOR_STEP, {"lease": LEASE_S, "id": run.id, "attempts": run.attempts})
+            cur.execute(_RENEW_FOR_STEP, {"lease": LEASE_S, **run.held})
             held = cur.fetchone()
             if held is None:
                 raise _LeaseLost
@@ -345,16 +353,15 @@ def _finish(conn: psycopg.Connection, run: _Claimed, status: Literal["succeeded"
         "result_markdown": _storable(answer.markdown) if answer else None,
         "cited_property_ids": list(answer.cited_property_ids) if answer else [],
         "files": _storable(list(answer.files)) if answer else [],
-        "proposals": Jsonb(_storable(cassette.plain(answer.proposed_actions)) if answer else []),
-        "output": Jsonb(_storable(cassette.plain(answer.output))) if answer and answer.output is not None else None,
+        "proposals": Jsonb(_storable(answer.proposed_actions) if answer else []),
+        "output": Jsonb(_storable(answer.output)) if answer and answer.output is not None else None,
     }
-    written = conn.execute(_FINISH, {**fields, "id": run.id, "attempts": run.attempts})
+    written = conn.execute(_FINISH, {**fields, **run.held})
     return status if written.rowcount else "lost"
 
 
 def _release(conn: psycopg.Connection, run: _Claimed) -> WorkState:
-    row = conn.execute(_RELEASE, {"max": MAX_ATTEMPTS, "reason": "its worker shut down twice", "id": run.id,
-                                  "attempts": run.attempts}).fetchone()
+    row = conn.execute(_RELEASE, {"max": MAX_ATTEMPTS, "reason": "its worker shut down twice", **run.held}).fetchone()
     if row is None:
         return "lost"
     return "released" if row[1] == "queued" else row[1]
@@ -371,7 +378,7 @@ def _execute(conn: psycopg.Connection, run: _Claimed, providers: Mapping[str, Co
              stop: threading.Event) -> WorkState:
     try:
         definition = _definition(run.agent)
-        conn.execute(_STAMP, {**_pin(definition, run.provider), "id": run.id, "attempts": run.attempts})
+        conn.execute(_STAMP, {**_pin(definition, run.provider), **run.held})
         # A retry starts from the beginning but not from zero: the cap is per run, and its earlier attempts were paid.
         spent = float(conn.execute(f"SELECT {_LEDGER_COST} FROM agent_runs WHERE id = %s", (run.id,)).fetchone()[0])
         budget = replace(definition.limits, max_cost_usd=max(0.0, definition.limits.max_cost_usd - spent))
@@ -387,6 +394,8 @@ def _execute(conn: psycopg.Connection, run: _Claimed, providers: Mapping[str, Co
         return _finish(conn, run, "cancelled")
     except _Stopped:
         return _release(conn, run)
+    except psycopg.Error:
+        raise  # the ledger's trouble, not the run's: work_once leaves it to the lease and the attempt counter
     except Exception as exc:  # noqa: BLE001 - a run must end with its reason, not wait out a lease nobody will renew
         LOG.exception("AGENT_RUN failed run=%s", run.id)
         return _finish(conn, run, "failed", error=_reason(exc))
@@ -415,7 +424,8 @@ def work_once(*, stop: threading.Event, providers: Mapping[str, CompletionProvid
             try:
                 state = _execute(conn, claimed, providers or dependencies.get_providers(), stop)
             except psycopg.Error:
-                # The ledger itself is unreachable, so nothing can be written; the lease decides.
+                # A deadlock, a timeout or a dead connection: nothing says the run itself is at fault, so write no
+                # verdict. The heartbeat stops with this block, the lease lapses, and `_reap` counts the interruption.
                 LOG.exception("AGENT_RUN left to its lease run=%s", claimed.id)
                 state = "lost"
         LOG.info("AGENT_RUN done run=%s state=%s", claimed.id, state)

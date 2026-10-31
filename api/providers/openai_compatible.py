@@ -118,7 +118,8 @@ class OpenAICompatibleProvider:
             # exhausted quota apart from a real model miss, and they need
             # "429" / "401" / etc. to actually appear here.
             raise ProviderError(
-                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}"
+                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}",
+                status=resp.status_code,
             )
         return _completion_from_raw(resp.json(), model=model)
 

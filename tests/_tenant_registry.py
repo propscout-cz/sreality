@@ -61,7 +61,7 @@ BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
     "building_runs": frozenset(),
     # Migration 696: only bump_curation_clock() writes the clock (docs/design/curation-sync.md § 3.2).
     "curation_clock": frozenset(),
-    # Migration 704: api/agents/executor.py writes every run, step and artifact on the service role.
+    # Migration 704: the service role writes these, runs and steps in api/agents/executor.py; no code writes an artifact yet.
     "agent_runs": frozenset(),
     "agent_run_steps": frozenset(),
     "agent_artifacts": frozenset(),

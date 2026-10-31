@@ -181,11 +181,21 @@ story 25). Waiting never fails a run. A shutdown spares a reply that only hands 
 (a release would pay for it all again); a cancel does not. Any other exception ends the run `failed`; `error` holds a definition's own
 words, a generic line otherwise (the details are in the log and `llm_calls.error`).
 
-**The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger: an input
+**A database error** on the ledger, on a live connection or a dead one, writes no verdict: `work_once` returns `lost` and
+the lease lapses into the interruption above.
+
+**The model call.** `loop.run` retries a transient failure (`providers.is_transient`: 408, 429, 5xx, 529, a broken
+connection) up to three times inside the step, waiting about 2, 8 and 30 s, every wait and try inside the wall clock; a
+failed try bills nothing, so the call's budget check still holds. Each try gets `timeout_s`, what the wall clock has left,
+with no SDK retry under it. A call that outlasts the wall clock ends the run as the loop's `timeout`. Anything else
+not transient, or the last retry's failure, raises and fails the run.
+
+**The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger (a DELETE
+passes only once its run is gone, the cascade from an account's deletion): an input
 hash, a summary of at most 500 characters, the full payload, the model call's `llm_calls` id, cost, duration. A NUL is
 stripped from what is stored, since Postgres refuses it. `llm_calls.agent_run_id` is set by a per-run `LLMClient`;
-`agent_runs.cost_usd` is that ledger's sum. Each model call gets `timeout_s`, what the run's wall clock has left, with no
-SDK retry.
+`agent_runs.cost_usd` is that ledger's sum. No foreign key joins `llm_calls` to the runs: the INSERT follows the provider's
+bill, and a run deleted mid-call must not lose it.
 
 **Identity.** `api/agents/claims.caller_for(market, *, principal_user_id, account_id)` is the one claims builder and it
 hands the registry a `Caller`: no new `tenant_transaction` caller. `scripts/agent_run.py` has no run row, so it calls the

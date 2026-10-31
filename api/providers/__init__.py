@@ -28,6 +28,7 @@ from api.providers.base import (
     ToolUseBlock,
     Usage,
     compute_cost_usd,
+    is_transient,
 )
 
 __all__ = [
@@ -49,4 +50,5 @@ __all__ = [
     "ToolUseBlock",
     "Usage",
     "compute_cost_usd",
+    "is_transient",
 ]

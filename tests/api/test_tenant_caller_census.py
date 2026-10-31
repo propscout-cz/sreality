@@ -1,15 +1,14 @@
-"""THE TENANT-CALLER CENSUS: who opens a tenant transaction, and who builds a caller with claims. Read off the syntax
-tree of every non-test Python package, with no database; each arm compares what it finds with its pinned set.
+"""Who opens a tenant transaction and who builds a caller with claims, read off every non-test package's syntax tree."""
 
-Direct callers of `tenant_pool.tenant_transaction`, attribute and bare-name calls alike (the pool's own `tenant_conn`
-calls it unqualified), keyed `<file>::<enclosing function>` on the account-scope census's walk. A claims site is a
-`Caller(...)` handed claims, or a dict naming both `sub` and `role`: every run's claims come out of the one builder,
-so there is one claims shape. This file is the list; docs point here rather than restate it.
-
-BLIND SPOTS. A call in a class body (no function encloses it), a call through `getattr`, or the function passed around
-as a value and called elsewhere is not seen; an import alias is. A claims dict built key by key, or from another mapping,
-is not seen, nor is one naming `sub` alone (`resolve_account_id`'s lookup in the local runner, which no caller is built from).
-"""
+# Direct callers of `tenant_pool.tenant_transaction`, attribute and bare-name calls alike (the pool's own `tenant_conn`
+# calls it unqualified), keyed `<file>::<enclosing function>` on the account-scope census's walk. A claims site is a
+# `Caller(...)` handed claims, or a dict naming both `sub` and `role`: every run's claims come out of the one builder,
+# so there is one claims shape. This file is the list; docs point here rather than restate it.
+#
+# BLIND SPOTS. A call in a class body (no function encloses it), a call through `getattr`, or the function passed around
+# as a value and called elsewhere is not seen; an import alias is. A claims dict built key by key, or from another
+# mapping, is not seen, nor is one naming `sub` alone (`resolve_account_id`'s lookup in the local runner, which no caller
+# is built from).
 
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = "tenant_transaction"
 
 # A floor per tree: a census that found the tree empty, or lost it to a move, would pass every assertion.
-TREES: Mapping[str, int] = {"api": 90, "toolkit": 55, "scraper": 80, "scripts": 80}
+TREES: Mapping[str, int] = {"api": 90, "toolkit": 55, "scraper": 80, "scripts": 80, "autodedup": 60, "location_data": 30}
 
 CALLERS = frozenset({
     "api/tenant_pool.py::tenant_conn",
@@ -128,6 +127,11 @@ def test_non_vacuity_every_tree_holds_at_least_its_floor_and_every_pin_is_found(
     assert floor_problems(ROOT) == []
     assert CALLERS <= direct_callers(ROOT)
     assert CLAIMS_SITES <= claims_sites(ROOT)
+
+
+def test_no_python_tree_is_left_out() -> None:
+    packages = {p.parent.name for p in ROOT.glob("*/__init__.py")} - {"tests"}
+    assert packages and packages <= set(TREES)
 
 
 def test_the_message_names_paragraphs_that_exist() -> None:

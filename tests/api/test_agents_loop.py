@@ -13,7 +13,7 @@ from api.agents import loop, terminator
 from api.agents.definition import Definition, DefinitionError, InputError, Limits
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.llm_client import LLMClient
-from api.providers import ModelPrice
+from api.providers import ModelPrice, ProviderError
 from tests.api._agent_fixtures import READS, WRITE, install_probes, reply
 from tests.api._fakes import _FakeConn, _ScriptedProvider
 
@@ -93,6 +93,103 @@ def test_each_model_call_may_take_only_the_time_the_run_has_left() -> None:
     run = _Run(reply(("probe_a", {})), reply((SUBMIT, {"markdown": "Done."})), clock=lambda: next(ticks))
     assert run.outcome.stop_reason == "submit_result"
     assert [c["timeout_s"] for c in run.provider.calls] == [60.0, 40.0]
+
+
+class _Flaky(_ScriptedProvider):
+    """Fails each of its first calls with the given errors, then answers from the script."""
+
+    def __init__(self, errors: list[Exception], *replies: Any) -> None:
+        super().__init__("anthropic", list(replies), prices={MODEL: CHEAP})
+        self.errors = list(errors)
+        self.tries = 0
+
+    def complete(self, **kwargs: Any) -> Any:
+        self.tries += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return super().complete(**kwargs)
+
+
+class _Time:
+    """A clock and a sleep on one fake timeline."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def _run_flaky(provider: _Flaky, timeline: _Time | None = None, agent: Definition | None = None) -> tuple[loop.Outcome, _FakeConn]:
+    conn = _FakeConn()
+    timeline = timeline or _Time()
+    outcome = loop.run(agent or _agent(), {"town": "Brno"}, provider="anthropic",
+                       llm=LLMClient(conn, providers={"anthropic": provider}), call_tool=lambda name, args: {"data": []},
+                       record=lambda step: None, clock=timeline, sleep=timeline.sleep)
+    return outcome, conn
+
+
+_OVERLOADED = ProviderError("anthropic call failed: overloaded", status=529)
+
+
+@pytest.mark.parametrize("error", [
+    ProviderError("rate limited", status=429),
+    _OVERLOADED,
+    ProviderError("bad gateway", status=502),
+])
+def test_one_rate_limit_or_overload_does_not_end_the_run(error: ProviderError) -> None:
+    timeline = _Time()
+    outcome, conn = _run_flaky(_Flaky([error], reply((SUBMIT, {"markdown": "Done."}))), timeline)
+    assert outcome.stop_reason == "submit_result" and outcome.model_calls == 1
+    assert len(timeline.slept) == 1 and 1.5 <= timeline.slept[0] <= 2.5
+    assert len(conn.llm_calls_rows) == 2, "the failed try is on the ledger too, at no cost"
+
+
+def test_retries_are_bounded_then_the_failure_stands() -> None:
+    provider = _Flaky([_OVERLOADED] * 10)
+    with pytest.raises(ProviderError):
+        _run_flaky(provider)
+    assert provider.tries == 1 + len(loop.RETRY_DELAYS_S) == 4
+
+
+def test_a_failure_that_is_not_transient_is_not_retried() -> None:
+    provider = _Flaky([ProviderError("bad request", status=400)])
+    timeline = _Time()
+    with pytest.raises(ProviderError):
+        _run_flaky(provider, timeline)
+    assert provider.tries == 1 and timeline.slept == []
+
+
+def test_a_call_that_outlasts_the_wall_clock_ends_as_the_loops_timeout() -> None:
+    timeline = _Time()
+
+    class _Slow(_Flaky):
+        def complete(self, **kwargs: Any) -> Any:
+            timeline.now += kwargs["timeout_s"]
+            raise ProviderError("anthropic call failed: Request timed out.")
+    outcome, _ = _run_flaky(_Slow([]), timeline)
+    assert (outcome.stop_reason, outcome.model_calls) == ("timeout", 0)
+    assert timeline.slept == []
+
+
+def test_a_retry_never_waits_past_the_wall_clock_and_never_starts_after_it() -> None:
+    timeline = _Time()
+    provider = _Flaky([_OVERLOADED, _OVERLOADED], reply((SUBMIT, {"markdown": "Done."})))
+    outcome, _ = _run_flaky(provider, timeline, _agent(limits=Limits(6, 1.0, 3.0)))
+    assert outcome.stop_reason == "timeout"
+    assert timeline.now <= 3.0 and provider.tries == 2
+
+
+def test_a_failed_try_costs_nothing_and_every_try_keeps_the_calls_output_bound() -> None:
+    provider = _Flaky([_OVERLOADED], reply((SUBMIT, {"markdown": "Done."})))
+    outcome, conn = _run_flaky(provider)
+    assert outcome.cost_usd == pytest.approx(0.00015)
+    assert sum(float(row["params"][7]) for row in conn.llm_calls_rows) == pytest.approx(0.00015)
 
 
 def test_a_definitions_tool_schemas_are_what_the_model_is_offered() -> None:

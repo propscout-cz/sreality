@@ -8,16 +8,20 @@
 -- NOTHING RUNS FROM THIS FILE: agent_executor_enabled lands false (work_once claims nothing while it is false or
 --   absent), and agent_run_allowlist lands absent (nobody may submit). Set by the operator when agent-worker exists.
 --
--- THE NARROWING. A claim `run_account_id`, set only by api/agents/claims.caller_for, intersects current_account_ids()
--- and acting_account_ids() with that one account, turns off acting for another account, and makes is_platform_admin()
--- false. It can only remove power, so a caller who could forge it gains nothing; without the claim all three
--- functions answer exactly as before (tests/test_agent_runs_live.py pins both). The three bodies below are 286's, 641's
--- and 330's with the claim added: read pg_get_functiondef on production before applying, in case one has drifted.
+-- THE NARROWING. A top-level JWT claim `run_account_id`, set only by api/agents/claims.caller_for, intersects
+-- current_account_ids() and acting_account_ids() with that one account, turns off acting for another account, and makes
+-- is_platform_admin() false. It can only remove power: an account the `sub` is not a member of yields no account. A
+-- browser user cannot set it (a Supabase JWT is signed, and what a user may edit lands under user_metadata, read by no
+-- identity function), and one who could would gain nothing. Without the claim all three answer as before:
+-- tests/test_agent_runs_live.py runs them against 286's, 641's and 330's bodies over a grid of claims, headers, methods
+-- and roles. Read pg_get_functiondef on production before applying, in case one has drifted from those files.
 --
 -- Additive: new tables, a nullable column, four settings, three CREATE OR REPLACE that keep their signatures and
--- grants. The foreign key and the index on llm_calls take 690's and 605's shape so writers of that hot append table
--- never wait on a scan: NOT VALID then VALIDATE, and CONCURRENTLY at top level. Plain SET, never SET LOCAL: the apply
--- path is statement-autocommit.
+-- grants. The index on llm_calls is CONCURRENTLY at top level (605's shape), so writers of that hot append table never
+-- wait on a scan. Plain SET, never SET LOCAL: the apply path is statement-autocommit.
+--
+-- NO FOREIGN KEY between llm_calls and the runs, either way: `_record_call` inserts after the provider has billed, and a
+-- run deleted during a call (an account's deletion) must not cost that row, which the daily ceiling counts.
 
 set lock_timeout = '5s';
 
@@ -72,7 +76,7 @@ create table agent_run_steps (
   input_sha   text        not null,
   summary     text        not null,
   payload     jsonb       not null,
-  llm_call_id bigint      references llm_calls(id) on delete set null,
+  llm_call_id bigint,
   cost_usd    numeric     not null default 0,
   duration_ms integer     not null,
   created_at  timestamptz not null default now(),
@@ -81,13 +85,12 @@ create table agent_run_steps (
 );
 create index agent_run_steps_account_idx on agent_run_steps (account_id);
 
--- Depth 1 is a statement aimed at the diary; deeper is a foreign key's own action (an account deleted, a model call
--- removed), which must still work.
+-- A DELETE passes only once its run is gone: the foreign key's own cascade, as an account's deletion takes the run.
 create function agent_run_steps_append_only() returns trigger
 language plpgsql set search_path = '' as $$
 begin
-  if pg_trigger_depth() > 1 then
-    return case when tg_op = 'DELETE' then old else new end;
+  if tg_op = 'DELETE' and not exists (select 1 from public.agent_runs r where r.id = old.run_id) then
+    return old;
   end if;
   raise exception 'agent_run_steps is append-only (migration 704)' using errcode = 'restrict_violation';
 end;
@@ -100,6 +103,7 @@ create table agent_artifacts (
   id          bigint      generated always as identity primary key,
   account_id  uuid        not null,
   run_id      bigint      not null,
+  step_attempt integer,
   step_n      integer,
   property_id bigint      references properties(id),
   kind        text        not null,
@@ -108,7 +112,9 @@ create table agent_artifacts (
   sha256      text        not null,
   storage_key text        not null,
   created_at  timestamptz not null default now(),
-  foreign key (run_id, account_id) references agent_runs(id, account_id) on delete cascade
+  foreign key (run_id, account_id) references agent_runs(id, account_id) on delete cascade,
+  foreign key (run_id, step_attempt, step_n) references agent_run_steps(run_id, attempt, n) on delete cascade,
+  constraint agent_artifacts_step_whole check ((step_attempt is null) = (step_n is null))
 );
 create index agent_artifacts_run_idx on agent_artifacts (run_id);
 create index agent_artifacts_account_idx on agent_artifacts (account_id);
@@ -127,8 +133,6 @@ create policy agent_artifacts_tenant_read on agent_artifacts for select to authe
   using (account_id in (select current_account_ids()));
 
 alter table llm_calls add column agent_run_id bigint;
-alter table llm_calls add constraint llm_calls_agent_run_id_fkey
-  foreign key (agent_run_id) references agent_runs(id) on delete set null not valid;
 
 insert into app_settings (key, value, description) values
   ('agent_executor_enabled', 'false',
@@ -154,7 +158,7 @@ as $$
     current_setting('request.jwt.claims', true)::jsonb ->> 'sub', ''
   )::uuid
     and am.account_id = coalesce(
-      nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'run_account_id', '')::uuid,
+      (current_setting('request.jwt.claims', true)::jsonb ->> 'run_account_id')::uuid,
       am.account_id
     )
 $$;
@@ -167,7 +171,7 @@ language sql stable security definer set search_path = public as $$
     select am.account_id
       from account_members am, claims
      where am.user_id = nullif(claims.c ->> 'sub', '')::uuid
-       and am.account_id = coalesce(nullif(claims.c ->> 'run_account_id', '')::uuid, am.account_id)),
+       and am.account_id = coalesce((claims.c ->> 'run_account_id')::uuid, am.account_id)),
   asked as (
     select nullif(nullif(current_setting('request.headers', true), '')::json ->> 'x-act-as', '')::uuid as id)
   select me.account_id from me, asked where asked.id is null
@@ -175,7 +179,7 @@ language sql stable security definer set search_path = public as $$
   select s.account_id
     from pipeline_shares s, asked, claims
    where s.account_id = asked.id
-     and nullif(claims.c ->> 'run_account_id', '') is null
+     and claims.c ->> 'run_account_id' is null
      and s.recipient_account_id in (select me.account_id from me)
      and (s.mode = 'edit'
           or (for_board and coalesce(current_setting('request.method', true), '') in ('GET', 'HEAD')))
@@ -195,7 +199,7 @@ as $function$
         (select r.rolbypassrls from pg_roles r where r.rolname = session_user),
         false
       )
-    when nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'run_account_id', '') is not null then
+    when current_setting('request.jwt.claims', true)::jsonb ->> 'run_account_id' is not null then
       false
     else exists (
       select 1 from admins a
@@ -209,8 +213,6 @@ $function$;
 commit;
 
 reset lock_timeout;
-
-alter table llm_calls validate constraint llm_calls_agent_run_id_fkey;
 
 create index concurrently if not exists llm_calls_agent_run_idx on llm_calls (agent_run_id)
   where agent_run_id is not null;

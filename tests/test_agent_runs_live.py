@@ -17,13 +17,14 @@ import psycopg
 import pytest
 
 from api import tenant_pool
-from api.agents import claims, executor, terminator
+from api.agents import claims, executor, loop, terminator
 from api.agents.definition import load
 from api.capabilities import registry
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.filter_args import Args
 from api.providers import Completion, ModelPrice
 from tests._live_property import REQUIRED_DB, db_url, signups
+from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
 from tests.api._agent_fixtures import frontmatter, reply, write_folder
 from tests.api._fakes import _ScriptedProvider
@@ -161,11 +162,144 @@ def test_a_two_membership_users_run_sees_only_the_runs_account(svc: psycopg.Conn
 
 
 @pytest.mark.usefixtures("tenant_db")
-def test_a_claim_naming_an_account_the_user_is_not_in_sees_nothing(svc: psycopg.Connection, people: dict[str, Any]) -> None:
-    """A forged or stale account narrows to nothing: an intersection, never a grant."""
+def test_a_claim_naming_an_account_the_user_is_not_in_reads_nothing(svc: psycopg.Connection, people: dict[str, Any]) -> None:
+    """A forged or stale account narrows to nothing: an intersection, never a grant. Every tenant table a browser
+    role may read, filtered to the account the claim names, is empty; that account's owner sees its rows."""
+    with scoped(people["b"]) as conn:
+        for table in ("collections", "pipeline_stages"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] > 0, table  # noqa: S608 - fixed
+    readable = [t for t in TENANT_TABLES
+                if svc.execute("SELECT has_table_privilege('authenticated', %s, 'SELECT')", (t,)).fetchone()[0]]
+    assert "collections" in readable and "agent_runs" in readable
     with _as_run(svc, people["a"], people["b_acc"]) as conn:
         assert _ids(conn, "SELECT current_account_ids()") == set()
-        assert _ids(conn, "SELECT id FROM collections") == set()
+        assert _ids(conn, "SELECT account_id FROM acting_account_ids()") == set()
+        assert conn.execute("SELECT is_platform_admin()").fetchone()[0] is False
+        for table in readable:
+            held = conn.execute(f"SELECT count(*) FROM {table} WHERE account_id = %s",  # noqa: S608 - fixed
+                                (people["b_acc"],)).fetchone()[0]
+            assert held == 0, table
+
+
+@pytest.mark.usefixtures("tenant_db")
+def test_the_claim_only_narrows_whatever_account_it_names(svc: psycopg.Connection, people: dict[str, Any]) -> None:
+    """For every account a claim could name: exactly the user's memberships intersected with it, never more."""
+    svc.execute("INSERT INTO account_members (account_id, user_id, role) VALUES (%s, %s, 'member')",
+                (people["b_acc"], people["a"]))
+    mine = {people["a_acc"], people["b_acc"]}
+    for named in (people["a_acc"], people["b_acc"], people["c_acc"], uuid.uuid4()):
+        with _as_run(svc, people["a"], named) as conn:
+            assert _ids(conn, "SELECT current_account_ids()") == mine & {named}, named
+            assert _ids(conn, "SELECT account_id FROM acting_account_ids()") == mine & {named}, named
+            assert _ids(conn, "SELECT account_id FROM acting_account_ids(true)") == mine & {named}, named
+
+
+def _claims_row(user: uuid.UUID, **extra: Any) -> dict[str, Any]:
+    return {"sub": str(user), "role": "authenticated", **extra}
+
+
+@pytest.mark.usefixtures("tenant_db")
+def test_only_a_top_level_claim_narrows_so_a_users_own_metadata_cannot(svc: psycopg.Connection, people: dict[str, Any]) -> None:
+    """user_metadata is the one part of a JWT a browser user can write (auth.updateUser): it is nested, and read by no
+    identity function. Narrowing yourself would gain nothing, but it must not change what the claim means either."""
+    forged = _claims_row(people["a"], user_metadata={"run_account_id": str(people["b_acc"])},
+                         app_metadata={"run_account_id": str(people["b_acc"])})
+    with tenant_pool.tenant_transaction(forged, act_as=None, method="GET") as conn:
+        assert _ids(conn, "SELECT current_account_ids()") == {people["a_acc"]}
+
+
+@pytest.mark.usefixtures("tenant_db")
+def test_an_empty_claim_fails_loudly_rather_than_reading_as_absent(people: dict[str, Any]) -> None:
+    claims_ = _claims_row(people["a"], run_account_id="")
+    with pytest.raises(psycopg.errors.InvalidTextRepresentation):
+        with tenant_pool.tenant_transaction(claims_, act_as=None, method="GET") as conn:
+            conn.execute("SELECT current_account_ids()").fetchall()
+    with tenant_pool.tenant_transaction(claims_, act_as=None, method="GET") as conn:
+        assert conn.execute("SELECT is_platform_admin()").fetchone()[0] is False
+
+
+_MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+
+
+def _replaced_body(file: str, start: str, end: str, renamed: str) -> str:
+    """A function as the migration before 704 left it, taken from that file itself, under another schema."""
+    sql = (_MIGRATIONS / file).read_text(encoding="utf-8")
+    at = sql.index(start)
+    return sql[at:sql.index(end, at) + len(end)].replace(start, renamed)
+
+
+_OLD_FUNCTIONS = (
+    ("286_accounts_foundation.sql", "create or replace function current_account_ids()", "$$;",
+     "create function old_identity.current_account_ids()"),
+    ("641_pipeline_shares_and_acting.sql", "create function acting_account_ids(", "$$;",
+     "create function old_identity.acting_account_ids("),
+    ("330_admin_gate_fallback_tighten.sql", "create or replace function public.is_platform_admin()", "$function$;",
+     "create function old_identity.is_platform_admin()"),
+)
+_IDENTITY_READS = ("current_account_ids() AS a", "acting_account_ids() AS a", "acting_account_ids(true) AS a",
+                   "is_platform_admin() AS a")
+
+
+def test_without_the_claim_every_identity_answer_is_the_old_functions_answer(people: dict[str, Any]) -> None:
+    """The functions as they stood before 704, from their own migration files, against 704's, over a grid of what
+    PostgREST and the tenant pool can set: claims (a full Supabase JWT included), x-act-as, method, role. Answers and
+    errors alike must match, so traffic carrying no run_account_id cannot tell the difference."""
+    a, b, c = people["a"], people["b"], people["c"]
+    a_acc, b_acc, c_acc = people["a_acc"], people["b_acc"], people["c_acc"]
+    stranger = uuid.uuid4()
+    supabase = {"aud": "authenticated", "exp": 2_000_000_000, "iat": 1, "iss": "https://x.supabase.co/auth/v1",
+                "sub": str(a), "email": "a@test.local", "phone": "", "role": "authenticated", "aal": "aal1",
+                "session_id": str(stranger), "is_anonymous": False, "amr": [{"method": "password", "timestamp": 1}],
+                "app_metadata": {"provider": "email", "run_account_id": str(b_acc)},
+                "user_metadata": {"run_account_id": str(b_acc)}}
+    claims_grid: list[str | None] = [
+        None, "", "{}", '{"sub": ""}', '{"role": "anon"}', "not json", json.dumps(supabase),
+        *(json.dumps(_claims_row(u)) for u in (a, b, c, stranger)),
+    ]
+    headers_grid = ["", "{}", json.dumps({"x-act-as": ""}), *(json.dumps({"x-act-as": str(x)}) for x in (b_acc, c_acc, stranger))]
+
+    conn = _connect()
+    seen: set[str] = set()
+    try:
+        with conn.transaction(force_rollback=True):
+            conn.execute("CREATE SCHEMA old_identity")
+            for file, start, end, renamed in _OLD_FUNCTIONS:
+                conn.execute(_replaced_body(file, start, end, renamed))
+            conn.execute("GRANT USAGE ON SCHEMA old_identity TO authenticated")
+            conn.execute("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA old_identity TO authenticated")
+            conn.execute("INSERT INTO account_members (account_id, user_id, role) VALUES (%s, %s, 'member')", (b_acc, a))
+            conn.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'edit')", (c_acc, a_acc))
+            conn.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'read')", (b_acc, c_acc))
+            conn.execute("INSERT INTO admins (user_id) VALUES (%s)", (b,))
+
+            def answer(read: str, claims_: str | None, headers: str, method: str, as_role: bool) -> Any:
+                try:
+                    with conn.transaction(force_rollback=True):
+                        if claims_ is not None:
+                            conn.execute("SELECT set_config('request.jwt.claims', %s, true)", (claims_,))
+                        conn.execute("SELECT set_config('request.headers', %s, true)", (headers,))
+                        conn.execute("SELECT set_config('request.method', %s, true)", (method,))
+                        if as_role:
+                            conn.execute("SET LOCAL ROLE authenticated")
+                        return sorted(str(r[0]) for r in conn.execute(f"SELECT {read}").fetchall())  # noqa: S608 - fixed
+                except psycopg.Error as exc:
+                    return type(exc).__name__
+
+            for claims_ in claims_grid:
+                for headers in headers_grid:
+                    for method in ("GET", "POST"):
+                        for as_role in (True, False):
+                            for read in _IDENTITY_READS:
+                                new = answer(read, claims_, headers, method, as_role)
+                                old = answer(f"old_identity.{read}", claims_, headers, method, as_role)
+                                assert new == old, (read, claims_, headers, method, as_role)
+                                seen.add(json.dumps(new))
+    finally:
+        conn.close()
+    assert '["True"]' in seen and '["False"]' in seen and "[]" in seen
+    assert f'["{a_acc}", "{b_acc}"]' in seen or f'["{b_acc}", "{a_acc}"]' in seen, "a real membership answered"
+    assert any(str(c_acc) in s for s in seen), "the edit share's arm answered"
+    assert '"InvalidTextRepresentation"' in seen, "the grid reached the functions' error paths too"
 
 
 @pytest.mark.usefixtures("tenant_db")
@@ -221,12 +355,6 @@ def test_an_admin_principals_run_has_no_admin_power(svc: psycopg.Connection, peo
         assert _ids(conn, f"SELECT id FROM estimation_feedback WHERE id = {account_less_note}") == set()
 
 
-def test_without_a_jwt_the_service_connection_keeps_its_admin_fallback(svc: psycopg.Connection) -> None:
-    """330's claims-less fallback is untouched: a run's narrowing lives only in claims."""
-    with svc.transaction():
-        assert isinstance(svc.execute("SELECT is_platform_admin()").fetchone()[0], bool)
-
-
 def test_the_builder_refuses_a_missing_principal_or_account(svc: psycopg.Connection) -> None:
     some = uuid.uuid4()
     for principal, account in ((None, some), (some, None)):
@@ -270,8 +398,32 @@ def test_the_diary_is_append_only_yet_an_account_deletion_still_cascades(svc: ps
     assert svc.execute("SELECT count(*) FROM agent_run_steps WHERE run_id = %s", (run_id,)).fetchone()[0] == 0
 
 
-def test_only_the_three_ledger_tables_changed_hands(svc: psycopg.Connection) -> None:
-    """No browser write grant; RLS on; the brake lands dark and the allowlist absent (the file, not a test's setup)."""
+def _artifact(svc: psycopg.Connection, account: uuid.UUID, run_id: int, attempt: int | None, n: int | None) -> None:
+    svc.execute("INSERT INTO agent_artifacts (account_id, run_id, step_attempt, step_n, kind, name, size_bytes, sha256, "
+                "storage_key) VALUES (%s, %s, %s, %s, 'md', 'x', 1, 'x', 'x')", (account, run_id, attempt, n))
+
+
+def test_an_artifact_names_its_step_by_attempt_and_goes_with_its_account(svc: psycopg.Connection) -> None:
+    """A retry starts its steps over from 1, so a step number alone is two different steps."""
+    with signups(svc, "artifact", "d") as made:
+        run_id = svc.execute(
+            "INSERT INTO agent_runs (account_id, principal_user_id, agent, definition_sha, tool_set_sha, commit_sha, "
+            "provider, model, input) VALUES (%s, %s, 'x', 'x', 'x', 'x', 'x', 'x', '{}') RETURNING id",
+            (made["d_acc"], made["d"])).fetchone()[0]
+        for attempt in (1, 2):
+            svc.execute("INSERT INTO agent_run_steps (run_id, account_id, attempt, n, kind, name, input_sha, summary, "
+                        "payload, duration_ms) VALUES (%s, %s, %s, 1, 'tool', 'x', 'x', 'x', '{}', 0)",
+                        (run_id, made["d_acc"], attempt))
+        _artifact(svc, made["d_acc"], run_id, 2, 1)
+        _artifact(svc, made["d_acc"], run_id, None, None)
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            _artifact(svc, made["d_acc"], run_id, 3, 1)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _artifact(svc, made["d_acc"], run_id, None, 1)
+    assert svc.execute("SELECT count(*) FROM agent_artifacts WHERE run_id = %s", (run_id,)).fetchone()[0] == 0
+
+
+def test_browser_roles_hold_no_write_grant_on_the_ledger(svc: psycopg.Connection) -> None:
     for table in ("agent_runs", "agent_run_steps", "agent_artifacts"):
         for privilege in ("INSERT", "UPDATE", "DELETE"):
             has = svc.execute("SELECT has_table_privilege('authenticated', %s, %s)", (table, privilege)).fetchone()[0]
@@ -345,6 +497,14 @@ def test_the_in_flight_cap_refuses_a_new_run_but_not_a_duplicate(svc: psycopg.Co
     assert refused.value.reason == "in_flight_cap"
     assert _submit(svc, world, "a", idempotency_key="k") == first
     assert _submit(svc, world, "b"), "another account's room is its own"
+
+
+def test_an_absent_in_flight_cap_refuses_in_plain_words(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _set(svc, "agent_account_in_flight_cap", None)
+    with pytest.raises(executor.SubmitRefused) as refused:
+        _submit(svc, world, "a")
+    assert refused.value.reason == "in_flight_cap"
+    assert str(refused.value) == "Agent runs are not open right now."
 
 
 @pytest.mark.parametrize("agent, value, error", [
@@ -437,6 +597,58 @@ def test_a_provider_failure_fails_the_run_keeps_its_details_private_and_is_on_th
     assert row["error"] == "the model call failed"
     logged = svc.execute("SELECT error FROM llm_calls WHERE agent_run_id = %s", (run_id,)).fetchall()
     assert ["secret detail" in r[0] for r in logged] == [True]
+
+
+def test_one_overload_does_not_fail_the_run_and_the_failed_try_is_on_the_ledger(svc: psycopg.Connection, world: dict[str, Any],
+                                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(loop, "RETRY_DELAYS_S", (0.01,))
+    run_id = _submit(svc, world, "a")
+    errors = [executor.ProviderError("anthropic call failed: overloaded", status=529)]
+
+    def overloaded(call: int) -> None:
+        if errors:
+            raise errors.pop()
+    assert _work_on(_Model(ANSWER, during=overloaded)) == executor.Worked("succeeded", run_id)
+    logged = svc.execute("SELECT error IS NULL, cost_usd > 0 FROM llm_calls WHERE agent_run_id = %s ORDER BY id", (run_id,)).fetchall()
+    assert logged == [(False, False), (True, True)]
+
+
+def test_a_call_that_outlasts_the_wall_clock_is_the_runs_timeout(svc: psycopg.Connection, world: dict[str, Any], tmp_path: Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    _swap_agent(world, monkeypatch, tmp_path, [OWN_CONTEXT], wall_clock_timeout_s=1)
+    run_id = _submit(svc, world, "a")
+
+    def outlasts(call: int) -> None:
+        time.sleep(1.05)
+        raise executor.ProviderError("anthropic call failed: Request timed out.")
+    assert _work_on(_Model(during=outlasts)) == executor.Worked("failed", run_id)
+    row = _run(svc, run_id)
+    assert row["stop_reason"] == "timeout" and "timeout" in row["error"]
+
+
+def test_a_database_error_on_a_live_connection_is_left_to_the_lease(svc: psycopg.Connection, world: dict[str, Any],
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not the run's fault and not a verdict on it: the attempt counter decides, as for any interrupted worker."""
+    run_id = _submit(svc, world, "a")
+    with monkeypatch.context() as broken:
+        broken.setattr(executor, "_STEP", executor._STEP.replace("agent_run_steps", "no_such_diary"))
+        assert _work_on(_Model(ANSWER)) == executor.Worked("lost", run_id)
+    row = _run(svc, run_id)
+    assert (row["status"], row["attempts"], row["error"]) == ("running", 1, None) and row["lease_until"] is not None
+    _expire(svc, run_id)
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", run_id)
+    assert _run(svc, run_id)["attempts"] == 2
+
+
+def test_a_run_deleted_during_a_call_keeps_its_billed_spend_on_the_ledger(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    """Only an account's deletion removes a run. The provider has billed by then, and the ceiling must count it."""
+    run_id = _submit(svc, world, "a")
+
+    def account_deleted(call: int) -> None:
+        svc.execute("DELETE FROM agent_runs WHERE id = %s", (run_id,))
+    assert _work_on(_Model(ANSWER, during=account_deleted)) == executor.Worked("lost", run_id)
+    logged = svc.execute("SELECT cost_usd FROM llm_calls WHERE agent_run_id = %s", (run_id,)).fetchall()
+    assert len(logged) == 1 and logged[0][0] > 0
 
 
 def test_a_definition_gone_since_submit_fails_the_run_with_its_reason(svc: psycopg.Connection, world: dict[str, Any],
