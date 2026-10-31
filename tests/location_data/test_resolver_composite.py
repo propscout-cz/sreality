@@ -235,10 +235,10 @@ def test_1e_the_abbreviation_fold_keys_both_sides_alike(claim, register):
 
 
 def test_1c_a_line_s1_refused_as_a_place_names_the_one_part_of_the_town():
-    """`place_lines`: the street claims S1 refused as a place name. A line naming the town
+    """`place_line`: the street claim S1 refused as a place name. A line naming the town
     itself names none; the matched-street case is `test_resolver_street_line`'s."""
     mirror = mm.w4_mirror()
-    named = resolve_street([], (HARRACHOV,), mirror, place_lines=["Nový Svět"])
+    named = resolve_street(None, (HARRACHOV,), mirror, place_line="Nový Svět")
     assert (named.street, named.named_part.code, named.reason) == (
         None, 410845, "street_names_part")
-    assert resolve_street([], (HARRACHOV,), mirror, place_lines=["Harrachov"]).named_part is None
+    assert resolve_street(None, (HARRACHOV,), mirror, place_line="Harrachov").named_part is None

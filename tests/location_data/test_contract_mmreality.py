@@ -164,13 +164,12 @@ def test_the_blurred_label_is_a_key_the_resolver_actually_reads():
 
     W18 narrowed what "applied" MEANS: a declared label no longer caps the granularity (that
     ladder is deleted — it could not change an answer once the grain belonged to the register
-    bind). It ranks the pin against a blurred sibling and it caps the CONFIDENCE, and
-    `BLURRED_DECLARED_LABELS` is the membership both of those read."""
+    bind). It caps the CONFIDENCE and lets a pin outside the bound town yield to the words
+    (v5.9), and `BLURRED_DECLARED_LABELS` is the membership both of those read."""
     assert BLURRED_LABEL in BLURRED_DECLARED_LABELS
     assert BLURRED_LABEL in KNOWN_DECLARED_LABELS
     # The `true` arm names the pin PRECISE, which is a different question and the one a portal
-    # flag is actually for: `PRECISE_DECLARED_LABELS` decides which of two sibling
-    # declarations wins the pin (`declared_rank` returns 0).
+    # flag is actually for: a known, unblurred label makes `pin_is_precise` true.
     assert PRECISE_LABEL in PRECISE_DECLARED_LABELS
     assert PRECISE_LABEL not in BLURRED_DECLARED_LABELS
 

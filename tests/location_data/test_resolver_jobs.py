@@ -341,13 +341,13 @@ def test_the_per_listing_reads_are_prefetched_once_per_slice():
     state = _drained([[(101, 0), (102, 0), (103, 0)], [(104, 0), (105, 0)]])
     assert state["stats"].claimed == 5
     for needle in (
-        "from location_claims c left join portal_contract_entries pce",
+        "select distinct on (c.listing_id, c.claim_type) c.* from location_claims c",
         "select id, source from listings where id = any(",
     ):
         assert _count(state, needle) == 2, needle
-    assert _count(state, "and c.listing_id = any(") == 2
+    assert _count(state, "where c.listing_id = any(") == 2
     # ...and never the single-listing forms the prefetch replaced.
-    assert _count(state, "and c.listing_id = %s") == 0
+    assert _count(state, "where c.listing_id = %s") == 0
     for gone in (
         "location_contradictions_open", "location_resolutions",
         "select id, property_id from listings",
@@ -1144,7 +1144,7 @@ def test_workers_1_is_the_single_connection_path_statement_for_statement(monkeyp
         "select listing_id, attemp",
         # the prefetch on its own budget, restored before anything writes (W2-a6)
         "set local statement_timeout = '90s'",
-        "with evidence as ( select", "select id, source from li",
+        "select id, listing_id, so", "select id, source from li",
         "set local statement_timeout = '30s'",
         "insert into listing_locat", "delete from dirty_locatio",
         "set local statement_timeout = '30s'", "set local lock_timeout = '5s'",
