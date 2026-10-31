@@ -216,14 +216,10 @@ def check(
     # admin centroid both come OUT of the RÚIAN mirror, so asking whether they are in Czechia
     # or inside their own obec is a round trip whose answer is fixed by construction.
     #
-    # The pin is read off the elected CLAIM, not off `position.origin` (W18). A pin that lost
-    # the position to a register point is still EVIDENCE, and it is evidence about the one
-    # thing these two tests ask: on bazos every pin is declared blurred, so once a street was
-    # bound the pin stopped being the position on every row — and with it went the
-    # `pin_outside_obec` flag on 3,421 production rows, exactly where it says the obec or the
-    # bind is wrong. The containment answer arrives from `bind.pin_inside_bound_obec` — the
-    # ONE read `place()` and this step share; the in-Czechia read stays warm because the
-    # drain pre-answers it for EVERY claim coordinate in the slice.
+    # The pin is read off the CLAIM, not off `position.origin` (W18): a pin that is not the
+    # position is still EVIDENCE about the one thing these two tests ask. The containment answer
+    # is `bind.pin_inside_bound_obec`'s, the ONE read `place()` and this step share; the
+    # in-Czechia read stays warm because the drain pre-answers it for every claim coordinate.
     pin = pin_claim.point if pin_claim is not None else None
     in_cz = registry.in_czechia_polygon(*pin) if pin else None
 

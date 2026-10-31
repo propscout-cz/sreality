@@ -171,9 +171,8 @@ def _part_inside(
 
 
 def part_of(unit: AdminUnit, town: int, registry: RegistryView) -> AdminUnit | None:
-    """The část a match binds (W5, rulings Q1/Q2): a část itself; a KÚ the one část of the same
-    obec its qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec
-    nothing — a MOMC anchors its town and is never the quarter, its borders cross the části."""
+    """The část a match binds (W5, Q1/Q2): a část itself; a KÚ the one část of its obec its
+    qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec nothing."""
     if unit.level == "cast_obce":
         return unit
     if unit.level != "katastralni_uzemi":

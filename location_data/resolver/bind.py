@@ -122,10 +122,7 @@ BLURRED_DECLARED_LABELS = frozenset(
 # words bound. A subset of the blurred labels, so caps and street precedence are unchanged.
 AREA_DECLARED_LABELS = frozenset({"approximate_location"})
 # `accurate` is mmreality's `/accurate: true` branch — the portal asserting the pin IS the
-# address, the counterpart of its `regional` label above. It is deliberately NOT in
-# `grade.DECLARED_CAP`: membership here RANKS the pin against a blurred sibling, which is
-# what the flag is for, while a cap row would additionally CERTIFY a granularity the portal's
-# own boolean does not predict.
+# address, the counterpart of its `regional` label above.
 PRECISE_DECLARED_LABELS = frozenset(
     {"gps", "address", "exact", "presna", "rooftop", "ruian", "accurate"})
 # A `precision_declaration` with no `declared_precision_label` may still carry the portal's

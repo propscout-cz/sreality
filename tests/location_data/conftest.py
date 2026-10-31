@@ -9,26 +9,20 @@ import pytest
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "location_data"
 
-# The row's keys, finest first (W5): the grain every published row must carry.
-_KEYS = (("address_point", "ruian_adm_kod"), ("street", "ulice_kod"),
-         ("cast_obce_or_quarter", "cast_obce_kod"), ("obec", "obec_kod"), ("okres", "okres_kod"),
-         ("kraj", "kraj_kod"))
+_KEYS = ("ruian_adm_kod", "ulice_kod", "cast_obce_kod", "obec_kod", "okres_kod", "kraj_kod")
 
 
 @pytest.fixture(autouse=True)
 def _grain_is_the_finest_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """W5's property rail, over EVERY resolution any test here makes: the published grain is the
-    row's finest key (`grade.grain_of`, the one writer), so no second writer can come back."""
-    from location_data.resolver import core
+    """W5's property rail over EVERY resolution a test here makes: the published grain is
+    `grain_of(keys)`, so no second grain writer can come back."""
+    from location_data.resolver import core, grade
+    from location_data.resolver.types import Fill, Verdict
 
-    resolve = core.resolve
-
-    def checked(*args, **kwargs):
+    def checked(*args, resolve=core.resolve, **kwargs):
         row = resolve(*args, **kwargs)
-        named = row.country_status == "foreign" and row.country_code
-        finest = next((g for g, k in _KEYS if getattr(row, k) is not None),
-                      "country" if named else "unknown")
-        assert row.granularity == finest, (row.listing_id, row.granularity, finest)
+        keys = Fill(**{key: getattr(row, key) for key in _KEYS})
+        assert row.granularity == grade.grain_of(keys, Verdict(row.country_status, row.country_code))
         return row
 
     monkeypatch.setattr(core, "resolve", checked)
