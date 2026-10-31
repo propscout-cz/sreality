@@ -665,6 +665,8 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
             cost = float(getattr(res, "cost_usd", 0.0) or 0.0)
             if payload is None:
                 error = "the model returned no record_description_facts call"
+            elif text_reading.is_empty(payload):
+                error = "empty location block: ad_kind and every slot null"
         if error is not None:
             LOG.warning("TEXT-EXTRACT listing=%s failed: %s", row["id"], error[:200])
             # A fatal error is the PROVIDER's state, not this listing's: the pass is

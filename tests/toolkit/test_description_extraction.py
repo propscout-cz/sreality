@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from location_data import text_reading
 from scraper import attribute_contract as contract
 from toolkit import description_extraction as tx
 
@@ -541,6 +542,36 @@ def test_the_budget_guard_is_the_shared_engines_and_binds_before_the_call() -> N
     # ...under the lock, in the worker, BEFORE the call.
     assert (src.index("with lock:\n                    if _stop()")
             < src.index("cost, result = call(llm, row)"))
+
+
+def test_an_empty_location_block_is_a_failed_reading_and_is_retried(monkeypatch) -> None:
+    """W3 (ruling R2): `ad_kind` null with every slot null is the model failing the schema
+    ("always set"), not a judgement. 1,915 of 143,117 readings of one extractor version came
+    back so; mined, each kept or cost a town. It is recorded as a FAILURE (retried under
+    GIVE_UP_AFTER), and nothing of it is written."""
+    from toolkit import vision_batch
+
+    empty = {"location": {slot: {"value": None, "evidence_quote": None}
+                          for slot in ("ad_kind", "country", *text_reading.SLOTS)}}
+    row = {"id": 7, "source": "bazos", "text_hash": "h", "advert_text": "Prodej bytu"}
+    failed: list[str] = []
+    monkeypatch.setattr(tx, "lane_scope", lambda conn: {"bazos": ()})
+    monkeypatch.setattr(tx, "resolve_model", lambda conn: "m1")
+    monkeypatch.setattr(tx, "select_eligible", lambda conn, **kw: [row])
+    monkeypatch.setattr(tx, "record_failure",
+                        lambda conn, row, *, error, **kw: failed.append(error))
+    monkeypatch.setattr(tx, "record_extraction",
+                        lambda *a, **kw: pytest.fail("an empty block was stored as a reading"))
+
+    def batch(*, rows, record, **kw):
+        for one in rows:
+            record(None, one, (object(), empty), None)
+        return {"errors": 0, "spent": 0.0, "aborted": False, "fatal": None}
+
+    monkeypatch.setattr(vision_batch, "run_batch", batch)
+    stats = tx.run_pass(object())
+    assert failed == ["empty location block: ad_kind and every slot null"]
+    assert (stats["failed"], stats["extracted"]) == (1, 0)
 
 
 def test_the_tool_call_is_forced(monkeypatch) -> None:
