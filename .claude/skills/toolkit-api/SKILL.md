@@ -89,7 +89,8 @@ it (`api/`). They do not apply to the scraper.
    JWT, no identity (401 without one, `503` with no verifier; `API_AUTH_OPTIONAL=1` opens it for local dev
    ONLY), `verify_jwt` = the claims, `account_scope` = a read scope; every 401 is RFC 6750
    (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
-   healthchecks. `/admin/*` (Settings-page surface) is gated like every write surface.
+   healthchecks, `POST /waitlist` (+ `/answer`) for the propscout.cz landing form (honeypot, rate limit, 303;
+   `LANDING_ORIGIN`; `api/routes/waitlist.py`). `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,

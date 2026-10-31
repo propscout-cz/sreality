@@ -668,6 +668,17 @@ rules. Identify which one a task belongs to before you start.
 - Browser code. Vite + React 18 + TypeScript + Tailwind v4 SPA, served by Caddy from a
   two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as its own project
   (`vite`).
+- **The propscout.cz landing page** (`frontend/landing/*.html`, vanilla TS in `src/landing/`, no React) is a second
+  Vite build into the same `dist/` (`vite.landing.config.ts`, run after the SPA's in `npm run build`), so the SPA's
+  chunk graph, entry name and zero modulepreload links never see it; its files carry a `landing-` prefix in
+  `dist/assets/`. The Caddyfile serves it on the bare domain only (`/`, `/dekujeme`, `/soukromi`; any other path 302s to
+  the app, as the Cloudflare redirect did) and redirects `/landing/*` away on the app host, because the service worker
+  keeps any 200 HTML page as its offline shell. Its waitlist form posts cross-origin to the API's open
+  `POST /waitlist` (honeypot, rate limit, a 303 back to the page; `waitlist_signups`, mig 700), so it needs no CORS and
+  works without JavaScript; the consent wording it shows is pinned to `api/waitlist.py` CONSENT_TEXTS by a test.
+  Marketing cookies are opt-in: the Meta Pixel is not fetched before "Přijmout", and with `META_PIXEL_ID` empty
+  (`src/landing/consent.ts`) there is no tracker and no bar. Its mockups are redraws with invented listings: never a
+  portal photo, a broker, an address or a person.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
   trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
