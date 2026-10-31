@@ -5179,7 +5179,11 @@ have lost the flag on 3,421 rows the moment a street bound, exactly where it say
 is wrong. The extent is in that threshold because a street is not a
 point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule would call half of its pins a
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
-`pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
+`pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers. Since
+realitymix@8 (W4, 2026-10-31) that portal's `estimated` marker reads `div#map` alone: where the agency
+gave no GPS the server writes its own geocode onto `#print-map` and leaves `#map` blank, so a blank
+there is the server geocode, and ~11k pinned ads become declared estimates (~6.6k street-bound ones
+then stand on their street point).
 
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named

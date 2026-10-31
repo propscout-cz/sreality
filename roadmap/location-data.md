@@ -1215,6 +1215,16 @@ component is slimmed twice — each wave rewrites one component and slims its st
   And `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
   mirror of the shape test.
+- **W4 — realitymix@8 — built 2026-10-31** (#2219; no migration; no `RESOLVER_VERSION` bump). The
+  `estimated` marker reads `div#map` alone: where the agency gave no GPS the server writes its own
+  geocode of the address onto `#print-map` (dropping "okres X": Beroun -> Moravský Beroun) and leaves
+  `#map` blank, and v7's first-match read of the print node never saw it. ~11k active pinned ads
+  (7.4k–15.1k; ≤ 19,527 on the 0.01″ grid) become declared estimates: under v5.9 ~610 obec-grain pins
+  outside their town stand at the town point, and ~6.6k street-bound geocodes yield to the RÚIAN
+  street point (W18 precedence, in scope by ruling). The dead C6 `odbl` branch is deleted; the geocode
+  is filed `portal`, declared `estimated`. Acceptance: realitymix outside cell ≤ 110 (from 712), 0
+  declared pins outside; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
+  (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

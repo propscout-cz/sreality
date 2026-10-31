@@ -1,10 +1,11 @@
 """realitymix@5 — the slim location contract (rule 25 / W1-c), scored against real bodies.
 
 Every test runs the SHIPPED entries (no hand-written locators) through the real readers, the
-real scoper and the real licence ladder. Five committed bodies:
+real scoper and the real licence ladder. Six committed bodies:
   * `tests/fixtures/location_w2/realitymix_detail.html` — the MODELLED page, the one the
     fixture-diff golden scores. A selector that works on a page written from the contract
     proves the shape, not the population, so it is never the only evidence for a carrier.
+    Since v8 it models the hidden-geocode shape (`#print-map` filled, `#map` blank).
   * `tests/fixtures/portal_html/realitymix_detail.html` — the real capture of 8662169
     (Potůčky), which the contract pins. PII-scrubbed by
     `scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`, so the agent name in it is
@@ -12,6 +13,9 @@ real scoper and the real licence ladder. Five committed bodies:
   * `tests/fixtures/location_w2a_refetch/realitymix_{a1,a2,b1}.html` — real refetches. a1/a2
     are one Praha-Smíchov flat and carry the ONE-SEGMENT `data-address="Plzeňská"` that
     decided v5's town carrier; b1 (Děčín) is the only committed body with a house number.
+  * `tests/fixtures/location_w2a_refetch/realitymix_c1.html` — 8642285 (Beroun), fetched
+    2026-10-31: the server's DMS geocode of "Beroun" on `#print-map` (it lands in Moravský
+    Beroun) and a blank `#map`, the shape v8 declares 'estimated'. Scrubbed like the capture.
 
 Supersedes tests/location_data/test_contract_realitymix_w2.py; its realitymix-specific
 coverage is carried forward here in full (the PII/zone rail, the entry-id rung of the licence
@@ -47,8 +51,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 MODELLED = _ROOT / "tests" / "fixtures" / "location_w2" / "realitymix_detail.html"
 CAPTURED = _ROOT / "tests" / "fixtures" / "portal_html" / "realitymix_detail.html"
 _REFETCH = _ROOT / "tests" / "fixtures" / "location_w2a_refetch"
-A1, A2, B1 = (_REFETCH / f"realitymix_{name}.html" for name in ("a1", "a2", "b1"))
-EVERY_BODY = (MODELLED, CAPTURED, A1, A2, B1)
+A1, A2, B1, C1 = (_REFETCH / f"realitymix_{name}.html" for name in ("a1", "a2", "b1", "c1"))
+EVERY_BODY = (MODELLED, CAPTURED, A1, A2, B1, C1)
+# The bodies whose interactive map carries the agency's GPS.
+AGENCY_PINNED = (CAPTURED, A1, A2, B1)
 
 NATIVE = "8662169"
 FETCHED_AT = datetime(2026, 8, 13, 4, 30, tzinfo=UTC)
@@ -127,8 +133,8 @@ def og_title(title: str) -> ScopedDocument:
 
 # ------------------------------------------------------------------ the contract shape
 
-def test_the_version_is_seven():
-    assert CONTRACT.version == 7
+def test_the_version_is_eight():
+    assert CONTRACT.version == 8
 
 
 def test_the_entry_id_set_is_exactly_these_ten():
@@ -200,7 +206,7 @@ def test_the_payload_lane_produces_nothing_for_this_portal():
 
 @pytest.mark.parametrize("body,expected", [
     (MODELLED, "plzen"), (CAPTURED, "potucky"),
-    (A1, "praha"), (A2, "praha"), (B1, "decin")])
+    (A1, "praha"), (A2, "praha"), (B1, "decin"), (C1, "beroun")])
 def test_the_town_is_claimed_from_the_canonical_slug_on_every_committed_body(body, expected):
     """100% of the committed corpus, which is the property the carrier was chosen for:
     `_town_from_url` (scraper/realitymix_parser.py) calls the `/detail/{obec}/` segment
@@ -291,6 +297,10 @@ def test_the_breadcrumb_cannot_carry_the_town_on_a_prague_page():
     ("rm.det.gps", MODELLED, "49.73561,13.39051"),
     ("rm.det.gps", CAPTURED, "50.427238,12.742544"),
     ("rm.det.gps", B1, "50.740624066389,14.194566771667"),
+    # the server's geocode stays the evidence it was; v8 declares it, below
+    ("rm.det.gps", C1, "49.793666666667,17.442091666667"),
+    ("rm.det.agency_est_flag", C1, "estimated"),
+    ("rm.det.agency_est_flag", MODELLED, "estimated"),
     # the kraj, from the breadcrumb chain anchored on its kraj slug
     ("rm.det.breadcrumb_kraj", CAPTURED, "Karlovarský kraj"),
     ("rm.det.breadcrumb_kraj", B1, "Ústecký kraj"),
@@ -311,20 +321,10 @@ def test_each_entry_extracts_its_value_from_a_committed_body(entry_id, body, exp
     assert value(entry_id, document(body)) == expected
 
 
-def test_the_two_entries_no_committed_body_fires_are_exercised_on_their_own_shape():
-    """`rm.det.agency_est_flag` and `rm.det.og_house_number_co` claim nothing on all five
-    committed bodies — every one of them carries a `data-gps-*` pair, and not one publishes a
-    čp/čo PAIR in og:title. Both are silent no-ops on today's corpus and correct the instant
-    the shape appears, so the shape is what is asserted; no fixture was edited to manufacture
-    one. The markup below is the map JS's own predicate (`if (gpsLat && gpsLon) …`) and the
-    production og:title shape `scraper/realitymix_parser.py::_HOUSE_NO_RE` documents."""
-    blurred = read("rm.det.agency_est_flag",
-                   document('<html><body><div id="map" data-address="Zlín"></div>'
-                            '</body></html>'))
-    assert len(blurred) == 1
-    assert blurred[0].claim.value_text == "estimated"
-    assert blurred[0].claim.blur_evidence == "declared"
-
+def test_the_orientation_number_no_committed_body_carries_is_exercised_on_its_shape():
+    """`rm.det.og_house_number_co` claims nothing on every committed body — not one
+    publishes a čp/čo PAIR in og:title — so the shape is what is asserted: the production
+    og:title shape `scraper/realitymix_parser.py::_HOUSE_NO_RE` documents."""
     doc = og_title("Prodej bytu, Luční 1793/3, 301 00 Plzeň")
     assert value("rm.det.og_house_number_cp", doc) == "1793"
     assert value("rm.det.og_house_number_co", doc) == "3"
@@ -460,22 +460,49 @@ def test_an_unruled_coordinate_locator_counts_a_refusal_not_a_silence():
     assert result.claims == []
 
 
-def test_a_blank_gps_attribute_declares_the_estimated_position():
-    """`data-gps-lat=""` is the geocoding branch: the map script places a pin only
-    `if (gpsLat && gpsLon)`, and an empty string is false there. v6 read it as neither branch
-    (`:not([attr])` cannot see an empty attribute) and declared nothing on any active ad;
-    v7 asks the script's own question of the node `rm.det.gps` reads."""
-    doc = document('<html><body><div id="print-map" data-gps-lat="" data-gps-lon="" '
-                   'data-address="Zlín"></div></body></html>')
-    assert value("rm.det.agency_est_flag", doc) == "estimated"
-    assert read("rm.det.gps", doc) == []
+def _map_nodes(print_gps: str | None, map_gps: str | None) -> ScopedDocument:
+    def node(node_id: str, gps: str | None) -> str:
+        if gps is None:
+            return ""
+        lat, _, lon = gps.partition(",")
+        return (f'<div id="{node_id}" data-gps-lat="{lat}" data-gps-lon="{lon}" '
+                f'data-address="Zlín"></div>')
+    return document(f"<html><body>{node('print-map', print_gps)}"
+                    f"{node('map', map_gps)}</body></html>")
+
+
+def test_a_blank_interactive_map_declares_the_estimated_position():
+    """The map script places a pin only `if (gpsLat && gpsLon)`, and an empty string is false
+    there, so a blank `div#map` is the page saying "Pozice na mapě je pouze orientační". v8
+    asks that node alone: the print node carries the server's geocode on the hidden shape."""
+    hidden = _map_nodes("49.193333333333,17.656944444444", ",")
+    assert value("rm.det.agency_est_flag", hidden) == "estimated"
+    assert value("rm.det.gps", hidden) == "49.193333333333,17.656944444444"
+    both_blank = _map_nodes(",", ",")
+    assert value("rm.det.agency_est_flag", both_blank) == "estimated"
+    assert read("rm.det.gps", both_blank) == []
+    # Never observed live: a print node with no interactive map declares nothing.
+    assert read("rm.det.agency_est_flag", _map_nodes(",", None)) == []
     no_map = document("<html><body><p>no map block</p></body></html>")
     assert read("rm.det.agency_est_flag", no_map) == []
 
 
-def test_the_declaration_is_silent_wherever_the_portal_supplied_a_pin():
-    """The honest pairing with `rm.det.gps`, which claims the pin on exactly those pages."""
-    for body in EVERY_BODY:
+def test_v7_read_the_print_node_first_and_missed_the_hidden_geocode():
+    """The defect v8 fixes, on a real body. lexbor's `css_first` returns the first node in
+    DOCUMENT order whatever the selector order, so v7's `div#print-map, div#map` tested the
+    print node, which the server fills; the blank `div#map` was never asked."""
+    doc = document(C1)
+    assert doc.css_first("div#print-map").attributes["data-gps-lat"] == "49.793666666667"
+    assert doc.css_first("div#map").attributes["data-gps-lat"] == ""
+    marker = ENTRIES["rm.det.agency_est_flag"]
+    v7 = replace(marker, locator={**marker.locator, "css": "div#print-map, div#map"})
+    assert read("rm.det.agency_est_flag", doc, entry=v7) == []
+    assert value("rm.det.agency_est_flag", doc) == "estimated"
+
+
+def test_the_declaration_is_silent_wherever_the_agency_supplied_a_pin():
+    """The honest pairing with `rm.det.gps`, which claims the agency's pin on these pages."""
+    for body in AGENCY_PINNED:
         assert read("rm.det.agency_est_flag", document(body)) == []
 
 
