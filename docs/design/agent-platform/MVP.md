@@ -137,7 +137,7 @@ Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 | Smoke-test accounts | 2026-10-27 | sign-in with the new password |
 | R2 access key pair | 2026-10-27 | boto3 head/put/delete; the API signs with the new pair (R2 404, not 403); worker variable checked |
 | Mapy keys | 2026-10-27 | geocode 200 per key; /maps/suggest 200; API variable checked |
-| Valuo tokens | pending | |
+| Valuo tokens | 2026-10-31 | the operator's word; #2067's live check is the first call on them |
 | GitHub tokens | pending | |
 | Stripe | 2026-10-27 | nothing stored: none on the Railway API (looked), no STRIPE* GitHub secret |
 | Supabase secret key | 2026-10-27 | Auth admin API 200 (its one copy is the GitHub secret; no code reads it) |
@@ -277,6 +277,9 @@ start runs, what agent search means, and model-written SQL.
 5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.
 
 ## 8. Build log
+
+The operator's plain-words view of this programme is the admin Agent platform page; each ticket's PR flips its `done` in
+`frontend/src/lib/agentPlatformMap.ts`, as well as adding its row here.
 
 | Ticket | What landed | Owed after merge |
 |---|---|---|
