@@ -45,15 +45,15 @@ export default function ArtifactLinkRow({
   const link = linkQ.data?.get(property_id) ?? null;
   /* The field follows the stored link while untouched, so a link set elsewhere shows
    * in an open field and is never saved back over (D3, lib/useServerDraft). */
-  const draft = useServerDraft(link?.url ?? '', trimDraft);
+  const url = useServerDraft(link?.url ?? '', trimDraft);
   const open = () => {
-    draft.reset();
+    url.reset();
     setError(null);
     setEditing(true);
   };
   const close = () => {
     setEditing(false);
-    draft.reset();
+    url.reset();
     setError(null);
   };
   const failed = readFailed(linkQ);
@@ -81,17 +81,17 @@ export default function ArtifactLinkRow({
     },
   });
 
-  const trimmed = draft.value.trim();
   const showForm = !failed && !linkQ.isLoading && editing;
-  /* Only what the user typed is saved: an untouched field closes, whatever the link is now. */
+  /* What the field holds must be a whole URL, an empty field included; then only
+   * what the user typed is saved, and an untouched field closes, whatever the link is now. */
   const submit = () => {
-    const next = draft.edited();
-    if (next == null) {
-      close();
+    if (!safeHttpUrl(url.normalized)) {
+      setError(NOT_A_URL);
       return;
     }
-    if (!safeHttpUrl(next)) {
-      setError(NOT_A_URL);
+    const next = url.edited();
+    if (next == null) {
+      close();
       return;
     }
     setError(null);
@@ -124,10 +124,7 @@ export default function ArtifactLinkRow({
           inputMode="url"
           aria-labelledby={bare ? undefined : labelId}
           aria-label={bare ? label : undefined}
-          value={draft.value}
-          onChange={(e) => draft.onChange(e.target.value)}
-          onFocus={draft.onFocus}
-          onBlur={draft.onBlur}
+          {...url.bind}
           placeholder="https://…"
           maxLength={URL_MAX}
           autoFocus
@@ -144,7 +141,7 @@ export default function ArtifactLinkRow({
         >
           Zrušit
         </button>
-        <button type="submit" disabled={trimmed.length === 0 || save.isPending} className={primary}>
+        <button type="submit" disabled={url.normalized.length === 0 || save.isPending} className={primary}>
           {save.isPending ? 'Ukládám…' : 'Uložit odkaz'}
         </button>
       </form>

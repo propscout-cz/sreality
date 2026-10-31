@@ -111,6 +111,18 @@ describe('isPhoneFrame', () => {
     expect(isPhoneFrame()).toBe(false);
   });
 
+  it('is what usePhoneShell renders, across the breakpoint and the override', () => {
+    width = mockWidth(false);
+    for (const [narrow, desktopView] of [[false, false], [true, false], [true, true], [false, true]]) {
+      width.resize(narrow);
+      writeDesktopView(desktopView);
+      const { result, unmount } = renderHook(() => usePhoneShell());
+      expect(result.current).toBe(isPhoneFrame());
+      expect(result.current).toBe(narrow && !desktopView);
+      unmount();
+    }
+  });
+
   it('is the desktop frame where the page has no matchMedia', () => {
     expect(typeof window.matchMedia).not.toBe('function');
     expect(isPhoneFrame()).toBe(false);

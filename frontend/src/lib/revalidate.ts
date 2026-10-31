@@ -407,13 +407,15 @@ const toItem = (item: Revalidation | QueryKey): Revalidation =>
 
 /** Owe `items` and pay what can be paid now. With `release`, that hold is let go
  * in the same batch: a query both parked by it and named here is fetched once.
+ * With `skipInitialLoads`, a query whose first load is in flight is owed nothing
+ * (lib/curationSyncOwner's start: that load began after the window began following).
  * Settles when every read it started or joined has (parked and mount reads are
  * not waited for); a read a scroll's page cancels settles with that page, and
  * the repayment after it is not waited for. */
 export function revalidate(
   qc: QueryClient,
   items: readonly (Revalidation | QueryKey)[],
-  opts: { release?: Hold } = {},
+  opts: { release?: Hold; skipInitialLoads?: boolean } = {},
 ): Promise<void> {
   const s = scheduler(qc);
   const held = opts.release ? records.get(opts.release) : undefined;
@@ -423,6 +425,7 @@ export function revalidate(
   const touched = new Map<string, Query>();
   for (const item of items.map(toItem)) {
     for (const q of cache.findAll({ queryKey: item.queryKey, exact: item.exact })) {
+      if (opts.skipInitialLoads && q.state.data === undefined && q.state.fetchStatus === 'fetching') continue;
       owe(s, q, item.mode ?? 'now');
       touched.set(q.queryHash, q);
     }

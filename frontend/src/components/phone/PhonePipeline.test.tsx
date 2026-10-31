@@ -202,6 +202,9 @@ const changedElsewhere = (qc: QueryClient, table: 'pipeline_stages' | 'property_
   });
 
 const panel = (name: RegExp) => screen.getByRole('tabpanel', { name });
+/* One finger on the screen as a touch event lists it: the element it came down on. */
+const finger = (target: Element) => ({ target });
+const added: PipelineBoardCard = { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' };
 
 describe('phone pipeline', () => {
   it('draws the stage tabs in position order, the closed stages set apart, and no kanban', async () => {
@@ -480,8 +483,8 @@ describe('phone pipeline, changes made elsewhere', () => {
   it('a remote add waits for the last finger to lift', async () => {
     const { qc } = renderPipeline();
     const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
-    fireEvent.touchStart(pager, { touches: [{}, {}] });
-    fireEvent.touchEnd(pager, { touches: [{}] });
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/)), finger(panel(/^Zájem/))] });
+    fireEvent.touchEnd(pager, { touches: [finger(panel(/^Zájem/))] });
 
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
       ...CARDS,
@@ -500,7 +503,7 @@ describe('phone pipeline, changes made elsewhere', () => {
     const { qc } = renderPipeline();
     const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
     expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
-    fireEvent.touchStart(pager);
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
 
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
       ...CARDS,
@@ -511,7 +514,52 @@ describe('phone pipeline, changes made elsewhere', () => {
     expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
     expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
 
-    fireEvent.touchEnd(pager);
+    fireEvent.touchEnd(pager, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  /* A second finger rests on the strip, outside the pages: its touchend goes to the
+     strip, which the pager never hears, so it must not keep the pages' hold. */
+  it('a finger resting outside the pages does not keep the hold once the pages finger lifts', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    const strip = screen.getByRole('tablist', { name: 'Fáze' });
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
+    fireEvent.touchStart(strip, { touches: [finger(panel(/^Zájem/)), finger(strip)] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(pager, { touches: [finger(strip)] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  /* The finger's page unmounted under it: its touchend goes to a detached node. */
+  it('a finger on a page archived elsewhere stops holding the board', async () => {
+    localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, '2');
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Prohlídka/))).parentElement!;
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Prohlídka/))] });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES.filter((st) => st.id !== 2));
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    await changedElsewhere(qc, 'property_pipeline');
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a touchcancel ends the hold, whatever fingers it still lists', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
+    fireEvent.touchCancel(pager, { touches: [finger(panel(/^Zájem/))] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    await changedElsewhere(qc, 'property_pipeline');
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 });

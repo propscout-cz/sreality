@@ -108,6 +108,23 @@ describe('owe and pay', () => {
     expect(isOwed(qc, ['a'])).toBe(false);
   });
 
+  /* lib/curationSyncOwner's start: that load began after the window began following. */
+  it('with skipInitialLoads, owes nothing on an initial load in flight, and still owes a read with data', async () => {
+    const qc = client();
+    const first = deferred<number>();
+    const fn = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(2);
+    mount(qc, ['a'], fn);
+    qc.setQueryData(['b'], 0);
+
+    void revalidate(qc, [['a'], ['b']], { skipInitialLoads: true });
+    expect(isOwed(qc, ['a'])).toBe(false);
+    expect(isOwed(qc, ['b'])).toBe(true);
+    first.resolve(1);
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(qc.getQueryData(['a'])).toBe(1);
+  });
+
   it('restarts a refetch that started before the change', async () => {
     const qc = client();
     qc.setQueryData(['a'], 0);

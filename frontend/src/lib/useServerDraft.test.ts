@@ -3,8 +3,9 @@
  * while untouched, keeps what the user typed, and never writes a server change
  * back. */
 
+import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 
 import { trimDraft as trim, useServerDraft } from './useServerDraft';
 
@@ -166,5 +167,32 @@ describe('useServerDraft', () => {
     rerender({ server: 'B' });
     expect(result.current.value).toBe('B');
     expect(result.current.edited()).toBeNull();
+  });
+
+  it('exposes the value through normalize: what a save would send', () => {
+    const { result } = field('Zájem', trim);
+    expect(result.current.normalized).toBe('Zájem');
+    act(() => result.current.onChange('  Nový název '));
+    expect(result.current.value).toBe('  Nový název ');
+    expect(result.current.normalized).toBe('Nový název');
+  });
+
+  it('bind wires an input: its value, change, focus and blur', () => {
+    let draft: ReturnType<typeof useServerDraft<string>> | null = null;
+    function NameInput({ server }: { server: string }) {
+      draft = useServerDraft(server, trim);
+      return createElement('input', { 'aria-label': 'Název', ...draft.bind });
+    }
+    const view = render(createElement(NameInput, { server: 'Zájem' }));
+    const input = screen.getByRole<HTMLInputElement>('textbox', { name: 'Název' });
+    expect(input.value).toBe('Zájem');
+    fireEvent.focus(input);
+    view.rerender(createElement(NameInput, { server: 'Jinde' }));
+    expect(input.value).toBe('Jinde');
+    fireEvent.change(input, { target: { value: 'Můj ' } });
+    view.rerender(createElement(NameInput, { server: 'Jinde 2' }));
+    expect(input.value).toBe('Můj ');
+    fireEvent.blur(input);
+    expect(draft!.edited()).toBe('Můj');
   });
 });
