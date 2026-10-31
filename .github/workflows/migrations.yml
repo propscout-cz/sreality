@@ -706,6 +706,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_maintenance_lease_live.py -q
 
+      # #2108, EXECUTED: the broker lane and the daily full resolve through their real entry points on committed sessions:
+      # one holder at a time, on the new scheduled_jobs row alone and on migration 192's row alone (the deploy overlap).
+      - name: The broker lane and the full resolve never overlap (#2108)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_broker_lease_live.py -q
+
       # #2024, EXECUTED: scraper/job_runner.py's tick over the real PgLedger with a stand-in spawner. The SQL decides
       # each case: a due row is claimed oldest first, a pause holds, a request runs with its args and never moves
       # the schedule, exit 75 re-dues in a minute, failures back off (a DB-heavy job's in its own hour), a lost run is

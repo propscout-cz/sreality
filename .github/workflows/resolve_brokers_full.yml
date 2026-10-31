@@ -12,7 +12,7 @@ name: Broker resolution (full sweep + backfill)
 # Nominally runs after the property recompute (04:15); in practice GH throttling
 # drifts both into the same mid-morning window. mode=backfill is the same code
 # path (the first population); dispatch it once after this lands on main.
-# Source-agnostic. broker_resolution_lock keeps it apart from the worker's
+# Source-agnostic. The broker_resolution lease keeps it apart from the worker's
 # incremental broker lane.
 #
 # Required secret: SUPABASE_DB_URL.
@@ -38,7 +38,7 @@ on:
 
 # Per-workflow group (NOT shared with the incremental) so the */10 incremental can
 # never cancel this pending run. Cross-workflow mutual exclusion is the DB lock
-# (broker_resolution_lock, migration 192), which this sweep waits on.
+# (the broker_resolution row of scheduled_jobs), which this sweep waits on.
 concurrency:
   group: broker-resolution-full
   cancel-in-progress: false
