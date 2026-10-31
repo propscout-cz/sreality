@@ -174,7 +174,8 @@ it (`api/`). They do not apply to the scraper.
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
-    completion types; `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
+    completion types (a tool loop sends `Completion.reply` back: the provider's own blocks in order, an
+    `OpaqueBlock` read only by its writer; the estimator still sends text + calls); `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
     (default `anthropic`). `provider_for_model` derives the backend from the model id
     prefix, so a lane that only knows its `app_settings` model routes without threading a
     provider argument. Adding a provider is a new file implementing the same Protocol,
