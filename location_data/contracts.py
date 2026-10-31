@@ -361,10 +361,12 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
     # never the portal's own text. `consults_transforms` is FALSE
     # deliberately — normalising a label the contract itself wrote is a no-op with a failure
     # mode, since blur is decided by that label's membership of `precision_cap.blurred_labels`.
+    # `absent: retract` (W3): where the node EXISTS and the marker test fails, the page
+    # states the label's absence and the reader emits a tombstone for the claim.
     "html_marker": ReaderContract(
         substrates=_DOM_SURFACES, methods=_DECLARED_QUALITY,
         locator_keys=frozenset({"css", "value_label"}),
-        optional_keys=frozenset({"attr", "blank_attrs", "contains"}),
+        optional_keys=frozenset({"attr", "blank_attrs", "contains", "absent"}),
         reads_stored_body=True),
     # --- W2 reader canon, embedded-JSON family: ONE acquisition layer (css + optional attr
     # + optional decode + optional subject match) and five extractors over it. `css` is

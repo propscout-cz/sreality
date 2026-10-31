@@ -431,6 +431,36 @@ def test_html_marker_marks_a_map_whose_pin_attributes_are_absent_or_empty():
     assert marks("<p>no map block at all</p>") == []
 
 
+def test_html_marker_with_absent_retract_states_the_absence_where_the_node_exists():
+    """W3: a presence detector alone can never clear a blur once stated. With `absent:
+    retract` a node that EXISTS and fails the test yields a tombstone (no value, `retract`),
+    which the one write turns into a delete; no node, no claim, exactly as before."""
+    marker = _marker_entry(
+        "realitymix", {"css": "div#map", "blank_attrs": ["data-gps-lat", "data-gps-lon"],
+                       "value_label": "estimated", "absent": "retract"}, ["estimated"])
+
+    def marks(markup: str) -> list[archive.PageRead]:
+        return read("html_marker", scoped("realitymix", f"<html><body>{markup}</body></html>"),
+                    marker)
+
+    stated = one(marks('<div id="map" data-gps-lat="" data-gps-lon=""></div>'))
+    assert (stated.retract, stated.value_text, stated.blur_evidence) == (
+        False, "estimated", "declared")
+    tombstone = one(marks('<div id="map" data-gps-lat="50.1" data-gps-lon="14.4"></div>'))
+    assert (tombstone.retract, tombstone.value_text, tombstone.declared_precision_label,
+            tombstone.blur_evidence) == (True, None, None, "none")
+    assert tombstone.to_row()["retract"] is True
+    assert marks("<p>no map block at all</p>") == []
+
+
+def test_html_marker_refuses_any_absent_value_but_retract():
+    with pytest.raises(IntakeRefused, match="locator.absent"):
+        read("html_marker", pinned("bazos"),
+             _marker_entry("bazos", {"css": "a[href*='/place/']", "attr": "title",
+                                     "value_label": "approximate_location",
+                                     "absent": "undeclared"}, ["approximate_location"]))
+
+
 def test_html_marker_refuses_an_entry_with_no_value_label():
     with pytest.raises(IntakeRefused) as excinfo:
         read("html_marker", pinned("bazos"),
