@@ -25,6 +25,7 @@ vi.mock('@/lib/locationQuality', async (importActual) => ({
 import AddressPicker from './AddressPicker';
 import { PropertyIdentity } from './ListingOverview';
 import { propertyKeys } from '@/lib/mergedAdverts';
+import { propertyLocationKeys } from '@/components/phone/propertyLocation';
 import type { ListingPublic } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
 
@@ -100,7 +101,7 @@ describe('<AddressPicker>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     await waitFor(() => expect(screen.queryByRole('group', { name: PENCIL })).toBeNull());
     expect(submitLocationPick).toHaveBeenCalledWith({ property_id: 7, pick: { level: 'adresni_misto', code: 21000001 } });
-    for (const key of [propertyKeys.row(7), ['property-location', 7], ['property-static-map', 7]]) {
+    for (const key of [propertyKeys.row(7), propertyLocationKeys.location(7), propertyLocationKeys.staticMap(7)]) {
       expect(invalidated).toHaveBeenCalledWith({ queryKey: key });
     }
   });

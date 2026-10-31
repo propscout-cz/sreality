@@ -361,7 +361,7 @@ def _resolve_street(
     return street
 
 
-def _entry(regional_structure: Sequence[Any], type_: str) -> str | None:
+def _entry_name(regional_structure: Sequence[Any], type_: str) -> str | None:
     """The name of the regionalStructure entry of this type, if any."""
     return next(
         (e["name"] for e in regional_structure
@@ -374,10 +374,11 @@ def _street_of(type_: str, name: str, regional_structure: Sequence[Any]) -> str 
     """The name a pick is bound by: its own, except an address, which binds the
     `regional.street` entry of its regionalStructure (a street-less village
     address has none, and so binds nothing)."""
-    return name if type_ != "regional.address" else _entry(regional_structure, "regional.street")
+    return name if type_ != "regional.address" else _entry_name(regional_structure, "regional.street")
 
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read.
+# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
 _DOOR_LABEL_SQL = """
 SELECT location_display_label(
          s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
@@ -388,7 +389,6 @@ SELECT location_display_label(
   LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
   LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id
  WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
- LIMIT 1
 """
 
 
@@ -402,7 +402,7 @@ def _resolve_address_point(
 ) -> tuple[int, str | None] | None:
     """The picked door's (kód ADM, label), or None with one LOG line."""
     obec = _containing_chain(conn, version=version, lat=lat, lng=lng).get("obec")
-    slots = normalize_house_number(_entry(regional_structure, "regional.address") or "")
+    slots = normalize_house_number(_entry_name(regional_structure, "regional.address") or "")
     number, typ = house_number(slots)
     if obec is None or number is None:
         LOG.info("maps.resolve: address %r has no obec or number — no code", name)

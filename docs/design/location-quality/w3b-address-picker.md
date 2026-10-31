@@ -11,6 +11,13 @@ this block records where the build differs and what it measured.
   `frontend/src/components/listing-detail/AddressPicker.tsx` (lazy chunk, 3.9 kB), the `addressAction` slot,
   `usePlaceSuggest` + exported `SuggestPanel`, `resolveSuggestion(pick, {addressPoint})`, `submitLocationPick`.
 - **Differences from the design.**
+  - `submit_pick` owns the whole write: it locks the property row `FOR SHARE` and reads the ads in the
+    next statement, inside the claim transaction (a detach or merge, which lock it `FOR UPDATE`, waits, so
+    a pick never lands on an ad that just left), then resolves the location ad, reads it back and sets
+    `held`. The route only maps it to HTTP.
+  - `_DOOR_LABEL_SQL` has no `LIMIT`: `kod_adm` is the mirror's primary key.
+  - The phone's location query keys are one factory, `propertyLocationKeys` (`phone/propertyLocation.ts`),
+    which the picker invalidates.
   - The door's orientation letter must equal the pick's when the pick names a číslo orientační (no letter
     matches only a door without one). A pick with no `regional.address` number entry binds nothing.
   - The batch row is written after the claims, in the same transaction, so `row_count` is the claims changed;
@@ -20,9 +27,10 @@ this block records where the build differs and what it measured.
   - The live test (`tests/location_data/test_operator_pick_live.py`) seeds its own two-town mirror in the
     rolled-back transaction (the CI database holds no mirror; `tests/location_data/mini_mirror.py` is in
     memory) and runs the real drain: pick → address point on both ads, street re-pick, clear → the
-    pre-pick `claim_set_hash`; plus the detach clear. The admin-only pencil is pinned in `PropertyDetail.test.tsx`.
-- **Measured.** Product code −636/+555 (net −81; the design estimated −195: the door arm and the picker came
-  out larger than estimated), tests −274/+704. First-visit JS 328,008 → 328,240 B gzip (budget 330,000).
+    pre-pick `claim_set_hash`; and the REAL `detach_listings` splitting one ad off (its pick cleared, the
+    other ad's kept). The admin-only pencil is pinned in `PropertyDetail.test.tsx`.
+- **Measured.** Product code −638/+570 (net −68; the design estimated −195: the door arm and the picker came
+  out larger than estimated), tests −274/+752. First-visit JS 328,008 → 328,267 B gzip (budget 330,000).
 - **Owed.** About 20 real Mapy address picks on production before the merge, to confirm the 300 m door slack
   picks one door (needs production access). The operator may override R1 (taken as b).
 
@@ -273,16 +281,21 @@ def submit_pick(conn, *, property_id: int, pick: tuple[str, int] | None, by: str
 3. `LocationQuality.test.tsx` gains one assertion: no inspector box, and no `/location/listing` call.
 
 ## 8. Acceptance (the gate ticket's checks)
-1. **A corrected ad binds the picked point.** On production, pick an address on a property with at least 2 ads whose location ad is coarser than address grain.
+Checks 1 and 3 need the operator's own pick on production: a pick is a mutating action, and an agent
+never drives one against production. The read-only test drive of the door arm is
+`POST /maps/resolve` with `"address_point": true` in the JSON body (beside `lat`, `lng`, `type`,
+`name`, `regional_structure`), never a query string.
+
+1. **A corrected ad binds the picked point.** On production, the operator picks an address on a property with at least 2 ads whose location ad is coarser than address grain.
    - The response says `held:true` and `resolved:true`.
    - `listing_location.ruian_adm_kod = picked` holds on the location ad at once and on every ad after one drain tick.
    - `location_claims` holds exactly one operator `address_point_id` per ad and no other operator type.
    - The page label equals `location_display_label` of the point without a reload.
 2. **The W1 cells move only for the corrected rows.**
    - Between two reads of `location_quality_by_source` (migration 698), the corrected rows change their source's cells by at most the property's ad count.
-   - `dirty_locations` rows with reason `operator_edit` are exactly those ads.
+   - One `location_claim_batches` row for the pick (lane `operator_correction`), and the four operator claim types present or absent on every ad of the property exactly as the pick states them. (`dirty_locations` is not a check: the drain deletes its rows, and `submit_pick` drains the location ad before it answers.)
    - A portal pin outside the picked town may correctly make a corrected row `pin_outside_obec` (`check.py:268-279`). That is the honest evidence, not drift.
-3. **Undo:** a street re-pick, then a clear, returns the ads to their pre-pick `claim_set_hash`.
+3. **Undo:** the operator's street re-pick, then a clear, returns the ads to their pre-pick `claim_set_hash`.
 4. **Gone:** `/location/listing/*` returns 404; `toolkit/location_quality.py` does not exist; the LQ page has no inspector.
 5. **Gated:** non-admins see no pencil, and the POST returns 403.
 6. **Browse:** the Browse card shows the new label after the next `*/15` `browse_list` rebuild.

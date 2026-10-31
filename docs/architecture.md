@@ -4805,7 +4805,8 @@ or an obec pick as the chips do. `POST /location/corrections {property_id, pick}
 `operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
 `obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
 types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
-to their own words; it then resolves the location ad and answers `held` (the row binds the code). Per
+to their own words. Its transaction holds the property row `FOR SHARE` before it reads the ads (a detach
+or merge waits); it then resolves the location ad and answers `held` (the row binds the code). Per
 ad, because the location ad is re-elected at every recompute. Not curation (rule 18): a merge leaves
 the claims on their ads, a detach clears them on the ads it moved (R1, `detach_listings` →
 `operator_corrections.clear`). Limits: a portal PSČ or kód ADM can defeat a street or obec pick

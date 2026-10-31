@@ -2,7 +2,8 @@
 
 No DB. A pick is written on EVERY ad of the property as the four picker types, through the lane's
 own one write (`claims_store.write_claims`): the picked level's register names, a tombstone for
-the rest, licence `operator`, which the resolver's read puts ahead of the portal's.
+the rest, licence `operator`, which the resolver's read puts ahead of the portal's. Then the
+location ad alone is resolved and read back (`held`).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ _ADS = [(11, "sreality", "s11", False), (12, "bezrealitky", "b12", True)]
 
 
 class _Conn:
-    """Answers the ads read and the register read by statement; records everything."""
+    """Answers the property lock, the ads read and the register read by statement."""
 
     def __init__(self, ads: list[tuple] = _ADS, register: tuple | None = (None, None, None)) -> None:
         self.ads, self.register = ads, register
@@ -41,7 +42,10 @@ class _Conn:
 
     def execute(self, sql: str, params: object = None) -> None:
         self.executed.append((" ".join(sql.split()), params))
-        self._next = self.ads if sql in (oc._ADS_SQL, oc._LISTINGS_SQL) else self.register
+        if sql == oc._LOCK_SQL:
+            self._next = (1,) if self.ads else None
+        else:
+            self._next = self.ads if sql in (oc._ADS_SQL, oc._LISTINGS_SQL) else self.register
 
     def fetchall(self) -> Any:
         return self._next
@@ -50,8 +54,20 @@ class _Conn:
         return self._next
 
 
+_ROW = {"ruian_adm_kod": 24252301, "ulice_kod": 9002, "obec_kod": 500002, "label": "Lipová 12, Betov"}
+
+
 @pytest.fixture()
-def written(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[Any], str]]:
+def resolved(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """`resolve_now` and `read_projection` recorded; the row read back is `_ROW`."""
+    ads: list[int] = []
+    monkeypatch.setattr(oc, "resolve_now", lambda conn, listing_id: ads.append(listing_id) or True)
+    monkeypatch.setattr(oc, "read_projection", lambda conn, listing_id: dict(_ROW))
+    return ads
+
+
+@pytest.fixture()
+def written(monkeypatch: pytest.MonkeyPatch, resolved: list[int]) -> list[tuple[list[Any], str]]:
     calls: list[tuple[list[Any], str]] = []
 
     def fake_write(cur: Any, claims: list[Any], reason: str = "claim_insert") -> tuple[int, int]:
@@ -88,6 +104,23 @@ def test_an_address_pick_states_the_point_on_every_ad_and_retracts_the_rest(writ
     assert result["ads"] == [{"listing_id": 11, "source": "sreality", "location_ad": False},
                              {"listing_id": 12, "source": "bezrealitky", "location_ad": True}]
     assert (result["pick"], result["written"]) == ({"level": "adresni_misto", "code": 24252301}, 2)
+    lock, ads_read = (s for s, _p in conn.executed[:2])
+    assert lock.endswith("FOR SHARE") and ads_read == " ".join(oc._ADS_SQL.split())
+
+
+def test_the_location_ad_alone_is_resolved_and_read_back(written, resolved) -> None:
+    result = oc.submit_pick(_Conn(), property_id=5, pick=("adresni_misto", 24252301), by="u-0")
+    assert resolved == [12]
+    assert (result["resolved"], result["held"], result["location"]["label"]) == (
+        True, True, "Lipová 12, Betov")
+    street = oc.submit_pick(_Conn(register=("Lipová", "Betov", None)), property_id=5,
+                            pick=("ulice", 1), by=None)
+    assert street["held"] is False                       # L1: the row binds another street
+    cleared = oc.submit_pick(_Conn(), property_id=5, pick=None, by=None)
+    assert cleared["held"] is None
+    orphan = [(11, "sreality", "s11", False)]           # no location ad: the first ad resolves
+    oc.submit_pick(_Conn(ads=orphan), property_id=5, pick=None, by=None)
+    assert resolved[-1] == 11
 
 
 def test_a_street_pick_writes_the_registers_names_and_drops_the_point(written) -> None:

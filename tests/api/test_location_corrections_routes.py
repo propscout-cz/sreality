@@ -2,7 +2,7 @@
 
 The router is admin-gated at the APIRouter level; overriding `verify_jwt` only means every 403
 below is the REAL `require_admin`'s decision. The producer is monkeypatched, so these tests pin
-the HTTP layer: gating, body shape, error mapping, which ad resolves and how `held` is read.
+the HTTP layer: gating, body shape, the caller's `sub` and error mapping.
 """
 
 from __future__ import annotations
@@ -36,24 +36,17 @@ def admin_client():
 
 
 _PICK = {"property_id": 138994, "pick": {"level": "adresni_misto", "code": 24252301}}
-_ADS = [{"listing_id": 11, "source": "sreality", "location_ad": False},
-        {"listing_id": 156144, "source": "bezrealitky", "location_ad": True}]
 
 
-def _producer(monkeypatch, *, location: dict | None, resolved: bool = True) -> dict:
-    """The producer faked: what it was handed, and which ads resolved / were read."""
-    seen: dict = {"resolved": [], "read": []}
+def _producer(monkeypatch) -> dict:
+    """The producer faked: what the route handed it; it answers the shape it builds."""
+    seen: dict = {}
 
     def submit(conn, *, property_id, pick, by):
         seen.update(property_id=property_id, pick=pick, by=by)
-        return {"property_id": property_id, "ads": _ADS, "written": 2, "enqueued": 2,
-                "pick": None if pick is None else {"level": pick[0], "code": pick[1]}}
+        return {"property_id": property_id, "held": None if pick is None else True}
 
     monkeypatch.setattr(oc, "submit_pick", submit)
-    monkeypatch.setattr(oc, "resolve_now",
-                        lambda conn, listing_id: seen["resolved"].append(listing_id) or resolved)
-    monkeypatch.setattr(oc, "read_projection",
-                        lambda conn, listing_id: seen["read"].append(listing_id) or location)
     return seen
 
 
@@ -85,30 +78,20 @@ def test_the_deleted_route_families_are_gone(admin_client):
     ).status_code == 404
 
 
-def test_a_pick_resolves_the_location_ad_only_and_says_whether_it_held(admin_client, monkeypatch):
-    seen = _producer(monkeypatch, location={"ruian_adm_kod": 24252301, "label": "Týnská 7, Praha"})
+def test_the_route_hands_the_producer_the_pick_and_the_callers_sub(admin_client, monkeypatch):
+    """The producer writes, resolves and reads back (`submit_pick`); the route maps it to HTTP."""
+    seen = _producer(monkeypatch)
     res = admin_client.post("/location/corrections", json=_PICK)
     assert res.status_code == 200, res.text
-    body = res.json()["data"]
-    assert (seen["property_id"], seen["pick"], seen["by"]) == (138994, ("adresni_misto", 24252301), "u-0")
-    assert seen["resolved"] == seen["read"] == [156144]
-    assert (body["resolved"], body["held"], body["location"]["label"]) == (True, True, "Týnská 7, Praha")
+    assert seen == {"property_id": 138994, "pick": ("adresni_misto", 24252301), "by": "u-0"}
+    assert res.json() == {"data": {"property_id": 138994, "held": True}}
 
 
-def test_a_pick_portal_evidence_defeats_is_saved_but_not_held(admin_client, monkeypatch):
-    """Limit L1: a portal PSČ or kód ADM can defeat a street pick; the row then binds another
-    code and the response says so, so the picker asks for an address."""
-    _producer(monkeypatch, location={"ulice_kod": 1, "label": "Jinde"}, resolved=False)
-    body = admin_client.post("/location/corrections", json={
-        "property_id": 7, "pick": {"level": "ulice", "code": 472786}}).json()["data"]
-    assert (body["resolved"], body["held"]) == (False, False)
-
-
-def test_a_clear_holds_nothing(admin_client, monkeypatch):
-    seen = _producer(monkeypatch, location={"ruian_adm_kod": None})
+def test_a_clear_is_an_explicit_null(admin_client, monkeypatch):
+    seen = _producer(monkeypatch)
     body = admin_client.post("/location/corrections",
                              json={"property_id": 7, "pick": None}).json()["data"]
-    assert seen["pick"] is None and body["held"] is None and body["pick"] is None
+    assert seen["pick"] is None and body["held"] is None
 
 
 def test_errors_map_to_404_and_422(admin_client, monkeypatch):

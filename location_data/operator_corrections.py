@@ -44,10 +44,15 @@ class UnknownPropertyError(CorrectionError):
     """No active property with ads (HTTP 404)."""
 
 
+# The property row is locked FOR SHARE in a statement of its own, so a detach or a merge (both
+# lock it FOR UPDATE) serializes with the pick, and the ads are read by the NEXT statement, whose
+# snapshot follows the lock: an ad a detach just moved off is never written (R1).
+_LOCK_SQL = "SELECT 1 FROM properties WHERE id = %s AND status = 'active' FOR SHARE"
+
 _ADS_SQL = """
     SELECT l.id, l.source, l.source_id_native, l.id = p.location_listing_ref_id
       FROM properties p JOIN listings l ON l.property_id = p.id
-     WHERE p.id = %s AND p.status = 'active'
+     WHERE p.id = %s
      ORDER BY l.id
 """
 
@@ -129,24 +134,35 @@ def submit_pick(
     conn: psycopg.Connection, *, property_id: int, pick: tuple[str, int] | None,
     by: str | None,
 ) -> dict[str, Any]:
-    """Write the pick on every ad of the property (+ enqueue the changed ones). One transaction."""
-    with conn.cursor() as cur:
-        cur.execute(_ADS_SQL, (property_id,))
-        ads = cur.fetchall()
-    if not ads:
-        raise UnknownPropertyError(f"property {property_id} is not an active property with ads")
-    values = {} if pick is None else _register_values(conn, *pick)
+    """Write the pick on every ad of the property in ONE transaction (+ enqueue the changed
+    ones), then resolve the location ad and read it back: `held` = it binds the picked code."""
     what = "cleared" if pick is None else f"{pick[0]} {pick[1]}"
     with conn.transaction():
         with conn.cursor() as cur:
+            cur.execute(_LOCK_SQL, (property_id,))
+            locked = cur.fetchone() is not None
+            if locked:
+                cur.execute(_ADS_SQL, (property_id,))
+            ads = cur.fetchall() if locked else []
+        if not ads:
+            raise UnknownPropertyError(f"property {property_id} is not an active property with ads")
+        values = {} if pick is None else _register_values(conn, *pick)
+        with conn.cursor() as cur:
             written, enqueued = _write(
                 cur, _claims(ads, values), f"property {property_id}: {what} by {by}")
+    location_ad = next((a[0] for a in ads if a[3]), ads[0][0])
+    resolved = resolve_now(conn, location_ad)
+    location = read_projection(conn, location_ad)
     return {
         "property_id": property_id,
         "pick": None if pick is None else {"level": pick[0], "code": pick[1]},
         "ads": [{"listing_id": a[0], "source": a[1], "location_ad": bool(a[3])} for a in ads],
         "written": written,
         "enqueued": enqueued,
+        "resolved": resolved,
+        "location": location,
+        "held": None if pick is None else (
+            location is not None and location.get(PICK_COLUMN[pick[0]]) == pick[1]),
     }
 
 

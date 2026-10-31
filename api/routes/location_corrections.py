@@ -3,10 +3,9 @@
 Admin-gated at the router. The property page's pencil sends ONE register entity — an
 address point, a street or an obec, bound by `/maps/resolve` — or `pick: null`, and
 `operator_corrections.submit_pick` writes it as operator claims on every ad of the
-property. A WRITE EXCEPTION in the toolkit sense: after the claim transaction the location
-ad is resolved synchronously, so the response already carries the refreshed label and
-`held` (whether the row binds the picked code) — 05 5.5.5 read-your-writes. If that resolve
-fails, the write's enqueue makes the drain converge; the response says which happened.
+property, then resolves the location ad, so the response already carries the refreshed
+label and `held` (whether the row binds the picked code) — 05 5.5.5 read-your-writes. A
+WRITE EXCEPTION in the toolkit sense; this module only maps it to HTTP.
 
 Gone with W3b: the listing inspector (`/location/listing/*`). Before it: `/sample/*` and
 `/compare/*` (W2-b) and `/quality/*` (W1, the page renders the gauge's stored cells).
@@ -49,18 +48,9 @@ def submit_pick(
 
     pick = None if body.pick is None else (body.pick.level, body.pick.code)
     try:
-        result = oc.submit_pick(conn, property_id=body.property_id, pick=pick,
-                                by=claims.get("sub"))
+        return {"data": oc.submit_pick(conn, property_id=body.property_id, pick=pick,
+                                       by=claims.get("sub"))}
     except oc.UnknownPropertyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except oc.CorrectionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    ads = result["ads"]
-    location_ad = next((a["listing_id"] for a in ads if a["location_ad"]), ads[0]["listing_id"])
-    result["resolved"] = oc.resolve_now(conn, location_ad)
-    location = oc.read_projection(conn, location_ad)
-    result["location"] = location
-    result["held"] = None if pick is None else (
-        location is not None and location.get(oc.PICK_COLUMN[pick[0]]) == pick[1])
-    return {"data": result}

@@ -1,7 +1,8 @@
 """Location W3b, EXECUTED against the replayed schema (CI's migrations lane, `TEST_DATABASE_URL`;
 locally `scripts/local_pg.sh test`): the address picker's pick on every ad of a property,
 resolved by the drain over a two-town mini mirror seeded in the transaction, replaced by a
-re-pick and undone by a clear. Every test rolls back.
+re-pick, undone by a clear, and left behind by an ad the real detach splits off (R1). Every test
+rolls back.
 """
 
 from __future__ import annotations
@@ -17,8 +18,10 @@ import pytest
 from location_data import claims_intake as ci
 from location_data import claims_store, contracts
 from location_data import operator_corrections as oc
+from location_data.claims_common import Claim
 from location_data.name_index import normalize_name, normalize_street_name
 from location_data.resolver import drain
+from toolkit.property_identity import detach_listings
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -92,9 +95,13 @@ def _property(conn: Any) -> tuple[int, list[int]]:
     conn.execute("UPDATE listings SET property_id = %s WHERE id = ANY(%s)", (prop, ads))
     with conn.cursor() as cur:
         claims_store.write_claims(cur, [
-            ci._base(entries[entry], ci.ListingRow(ad, "bazos", "n", {}, T0), value_text=value)
-            for ad in ads for entry, value in (("bzs.txt.town", "Alfov"),
-                                               ("bzs.txt.street", "Sadová"))])
+            Claim(listing_id=ad, source="bazos", source_id_native="n", claim_type=e.claim_type,
+                  surface=e.surface, page_kind=e.page_kind, extraction_method=e.extraction_method,
+                  extractor_id="ci", extractor_version="ci", contract_entry_id=e.id,
+                  first_observed_at=T0, blur_evidence=e.default_blur_evidence,
+                  licence_class=e.default_licence_class, value_text=value)
+            for ad in ads for e, value in ((entries["bzs.txt.town"], "Alfov"),
+                                           (entries["bzs.txt.street"], "Sadová"))])
     return prop, ads
 
 
@@ -123,15 +130,17 @@ def test_a_pick_lands_on_every_ad_a_re_pick_replaces_it_and_a_clear_restores_the
     result = oc.submit_pick(conn, property_id=prop, pick=("adresni_misto", DOOR), by="ci")
     assert (result["written"], result["enqueued"]) == (2, 2)
     assert [a["location_ad"] for a in result["ads"]] == [True, False]
-    assert conn.execute("SELECT array_agg(listing_id ORDER BY listing_id), array_agg(DISTINCT"
-                        " reason) FROM dirty_locations WHERE listing_id = ANY(%s)",
-                        (ads,)).fetchone() == (ads, ["operator_edit"])
+    # The location ad resolved before the answer; the other waits in the queue for the drain.
+    assert (result["resolved"], result["held"], result["location"]["granularity"]) == (
+        True, True, "address_point")
+    assert conn.execute("SELECT reason FROM dirty_locations WHERE listing_id = %s",
+                        (ads[1],)).fetchone() == ("operator_edit",)
     for ad in ads:
         assert _operator(conn, ad) == {"address_point_id": str(DOOR)}
         assert _resolved(conn, ad)[:4] == ("address_point", DOOR, LIPOVA, 500002)
     # The picker's preview (`/maps/resolve`'s door label) is the label the row now reads.
     maps = pytest.importorskip("api.maps")
-    assert oc.read_projection(conn, ads[0])["label"] == "Lipová 12, Betov" == conn.execute(
+    assert result["location"]["label"] == "Lipová 12, Betov" == conn.execute(
         maps._DOOR_LABEL_SQL, (DOOR,)).fetchone()[0]
     assert conn.execute("SELECT note FROM location_claim_batches WHERE lane ="
                         " 'operator_correction' ORDER BY id DESC LIMIT 1").fetchone() == (
@@ -150,11 +159,18 @@ def test_a_pick_lands_on_every_ad_a_re_pick_replaces_it_and_a_clear_restores_the
 
 
 def test_a_detached_ad_goes_back_to_its_own_words(conn: Any) -> None:
-    """Ruling R1 (b): the clear the detach runs retracts the operator's types on that ad alone."""
+    """Ruling R1 (b), executed: the REAL detach (rule 15's chokepoint) splits the second ad off to
+    a record of its own and, in its transaction, clears the operator's pick on it; the ad that
+    stays keeps it. The offline suites see the call only through the ledger fake."""
     _mirror(conn)
     prop, ads = _property(conn)
     oc.submit_pick(conn, property_id=prop, pick=("obec", 500002), by="ci")
-    assert oc.clear(conn, [ads[1]]) == 2
+    (moved,) = detach_listings(conn, [ads[1]], decided_by="ci")["data"]["adverts"]
+    assert moved["detached"] and moved["left_property_id"] == prop
+    assert conn.execute("SELECT property_id FROM listings WHERE id = %s",
+                        (ads[1],)).fetchone()[0] not in (None, prop)
     assert _operator(conn, ads[1]) == {}
     assert _operator(conn, ads[0]) == {"obec_name": "Betov", "okres_name": "Betovsko"}
-    assert oc.clear(conn, [ads[1]]) == 0
+    assert conn.execute("SELECT note FROM location_claim_batches WHERE lane ="
+                        " 'operator_correction' ORDER BY id DESC LIMIT 1").fetchone() == (
+        f"listings {ads[1]}: detached",)

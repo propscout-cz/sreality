@@ -851,6 +851,21 @@ def test_an_address_pick_binds_its_one_door_on_its_bound_street(client):
                     "name": "Týnská ulička 610/7, Praha", "context": None}
 
 
+def test_an_orientation_letter_picks_its_own_door(client):
+    """610/7 and 610/7a are two doors of one house: the pick's letter chooses (the
+    `another-letter` case below is the refusal)."""
+    pick = _address("610/7a", "Týnská ulička", _TYNSKA_DOOR)
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA),
+        _doors(554782, TYNSKA_ULICKA, 610, 7,
+               _door(21717001, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7),
+               _door(21717002, (50.0884, 14.4224), TYNSKA_ULICKA, 610, 7, znak="a")),
+        _label(21717002, "Týnská ulička 610/7a, Praha"),
+    ])
+    assert (body["id"], body["name"]) == (21717002, "Týnská ulička 610/7a, Praha")
+
+
 def test_a_village_address_binds_by_obec_and_number_inside_the_slack(client):
     at = (49.1902, 16.4201)
     pick = _address("12", None, at, town="Ostrovačice")

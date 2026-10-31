@@ -13,6 +13,7 @@ import ErrorBanner from '@/components/ErrorBanner';
 import { Field } from '@/components/controls';
 import { PencilIcon } from '@/components/icons';
 import { SuggestPanel, usePlaceSuggest } from '@/components/filter-controls/LocationTypeahead';
+import { propertyLocationKeys } from '@/components/phone/propertyLocation';
 import { submitLocationPick, type LocationPick, type PickResult } from '@/lib/locationQuality';
 import { resolveSuggestion, type LocationResolution, type MapySuggestion } from '@/lib/maps';
 import { propertyKeys } from '@/lib/mergedAdverts';
@@ -79,8 +80,8 @@ function Picker({ propertyId, label, adCount, onDone }: Props & { onDone: () => 
     mutationFn: (pick: LocationPick | null) => submitLocationPick({ property_id: propertyId, pick }),
     onSuccess: ({ data }) => {
       void qc.invalidateQueries({ queryKey: propertyKeys.row(propertyId) });
-      void qc.invalidateQueries({ queryKey: ['property-location', propertyId] });
-      void qc.invalidateQueries({ queryKey: ['property-static-map', propertyId] });
+      void qc.invalidateQueries({ queryKey: propertyLocationKeys.location(propertyId) });
+      void qc.invalidateQueries({ queryKey: propertyLocationKeys.staticMap(propertyId) });
       const said = outcome(data);
       if (said == null) onDone();
       else setNotice(said);
