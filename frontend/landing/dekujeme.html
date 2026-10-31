@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Jste na čekací listině · PropScout.cz</title>
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#f2efe7" />
+    <link rel="icon" href="/favicon.ico?v=ps" sizes="32x32 48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="../src/landing/landing.css" />
+    <script type="module" src="../src/landing/thanks.ts"></script>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5" /><path d="M5 13v6.5h14V13" /></g></symbol>
+    </svg>
+
+    <header class="top">
+      <div class="wrap">
+        <a class="wordmark" href="/" data-page="index" aria-label="PropScout.cz"><span class="mark" aria-hidden="true">PS</span><span>PropScout<span class="cz">.cz</span></span></a>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="wrap">
+        <div class="check-badge" aria-hidden="true"><svg><use href="#i-check" /></svg></div>
+        <p class="eyebrow">Čekací listina</p>
+        <h1>Hotovo. Jste na čekací listině.</h1>
+        <p class="lede">Až PropScout otevřeme, pošleme vám pozvánku na e-mail. Do té doby vám nic dalšího nepřijde.</p>
+        <ol class="next-steps">
+          <li><span><b>Pozvánky posíláme postupně</b>, v pořadí, v jakém se lidé přihlásili.</span></li>
+          <li><span><b>V pozvánce najdete odkaz</b> a krátký návod, jak si PropScout přidat na plochu telefonu.</span></li>
+          <li><span><b>Zakladatelskou cenu máte rezervovanou.</b> Platí pro všechny z čekací listiny.</span></li>
+        </ol>
+
+        <section class="card" data-question aria-labelledby="q-title">
+          <h2 id="q-title">Pomozte nám ho nastavit pro vás</h2>
+          <p>Dvě rychlé otázky, obě nepovinné. Odpověď uložíme k vašemu e-mailu, abychom vám aplikaci připravili na míru.</p>
+          <form method="post" action="%VITE_API_BASE_URL%/waitlist/answer">
+            <fieldset class="choices">
+              <legend>Jak investujete?</legend>
+              <label><input type="radio" name="investor_type" value="flip" />Flip: koupit, opravit, prodat</label>
+              <label><input type="radio" name="investor_type" value="rent" />Kupuji byty k pronájmu</label>
+              <label><input type="radio" name="investor_type" value="both" />Obojí</label>
+              <label><input type="radio" name="investor_type" value="starting" />Teprve začínám</label>
+            </fieldset>
+            <div class="field">
+              <label for="note">Co vás při hledání bytů teď nejvíc zdržuje?</label>
+              <textarea id="note" name="note" maxlength="2000" placeholder="Třeba: každý den projíždím pět portálů a stejně mi věci utečou…"></textarea>
+            </div>
+            <input type="hidden" name="t" value="" />
+            <input type="hidden" name="next" value="/dekujeme" />
+            <button class="btn" type="submit">Odeslat odpověď</button>
+          </form>
+          <p class="done-note" data-done role="status">Díky, máme to. Ozveme se s pozvánkou.</p>
+        </section>
+
+        <section class="card" aria-labelledby="share-title">
+          <h2 id="share-title">Hledá investiční byt i někdo z vašich známých?</h2>
+          <p>Pošlete mu odkaz. Ať taky nemusí každý den projíždět devět portálů.</p>
+          <div class="share-row">
+            <button class="btn ghost" type="button" data-share><svg aria-hidden="true"><use href="#i-share" /></svg><span>Sdílet odkaz</span></button>
+            <a class="btn ghost" href="https://wa.me/" data-whatsapp target="_blank" rel="noopener">Poslat přes WhatsApp</a>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <span>© 2026 PropScout.cz · Provozovatel: Limen Ventures s.r.o., IČO 14053179</span>
+        <nav aria-label="Odkazy v patičce">
+          <a href="/soukromi" data-page="soukromi">Ochrana osobních údajů</a>
+          <button type="button" class="linklike" data-cookie-settings hidden>Nastavení cookies</button>
+        </nav>
+      </div>
+    </footer>
+
+    <div class="cookie-bar" data-cookie-bar hidden role="dialog" aria-live="polite" aria-label="Souhlas s cookies">
+      <p>Rádi bychom měřili, které reklamy na Facebooku a Instagramu k nám lidi přivádějí. K tomu potřebujeme váš souhlas s marketingovými cookies od Meta. Bez souhlasu stránka funguje stejně. <a href="/soukromi#cookies" data-page="soukromi">Podrobnosti</a></p>
+      <div class="actions"><button type="button" data-consent="denied">Odmítnout</button><button type="button" data-consent="granted">Přijmout</button></div>
+    </div>
+  </body>
+</html>

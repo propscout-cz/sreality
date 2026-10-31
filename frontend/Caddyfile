@@ -4,24 +4,9 @@
 	admin off
 }
 
-:{$PORT:80} {
-	root * /srv
-	encode gzip zstd
-
-	# The retired Railway address forwards to the brand domain, path and query
-	# kept, until both old addresses are removed (brand-domain PROGRAM.md W1).
-	# Railway's healthcheck arrives as healthcheck.railway.app, so it is untouched.
-	@retired_host host sreality-production-1bb6.up.railway.app
-	redir @retired_host https://app.propscout.cz{uri} 301
-
-	# Liveness endpoint Railway hits per the `/healthz` healthcheck in .railway/railway.ts.
-	# Exclusive handle block — no fall-through to try_files/file_server.
-	handle /healthz {
-		respond "ok" 200
-	}
-
-	# Hashed bundles in /assets/ are immutable; long-cache them and
-	# serve directly without SPA fallback.
+# Hashed bundles in /assets/ are immutable; long-cache them and
+# serve directly without SPA fallback. Both sites below import it.
+(hashed_assets) {
 	handle_path /assets/* {
 		root * /srv/assets
 		# The immutable header must ride on a REAL FILE only. A tab that
@@ -34,6 +19,78 @@
 		header @exists Cache-Control "public, max-age=31536000, immutable"
 		file_server
 	}
+}
+
+# No error response is ever cacheable. Without this a 404 has no
+# Cache-Control at all and is heuristically cacheable by the browser.
+(no_store_errors) {
+	handle_errors {
+		header Cache-Control "no-store"
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
+}
+
+# The brand domain's bare name is the landing page (frontend/landing/, a separate
+# Vite entry, no SPA code): three pages, their files under /landing/ and the
+# shared /assets/. Any other path goes to the app, as the Cloudflare redirect
+# that held this name before did, so an old propscout.cz/<path> link still opens
+# the app. The waitlist form posts to the API (api/routes/waitlist.py).
+http://propscout.cz:{$PORT:80} {
+	root * /srv
+	encode gzip zstd
+
+	import hashed_assets
+
+	@icons path /icons/* /apple-touch-icon.png /favicon.ico /landing/*
+	handle @icons {
+		header Cache-Control "public, max-age=86400"
+		file_server
+	}
+
+	@page path / /dekujeme /soukromi
+	handle @page {
+		header Cache-Control "public, max-age=0, must-revalidate"
+		header X-Content-Type-Options "nosniff"
+		header Referrer-Policy "strict-origin-when-cross-origin"
+		header X-Frame-Options "DENY"
+		header -Server
+		rewrite / /landing/index.html
+		rewrite /dekujeme /landing/dekujeme.html
+		rewrite /soukromi /landing/soukromi.html
+		file_server
+	}
+
+	handle {
+		redir https://app.propscout.cz{uri} 302
+	}
+
+	import no_store_errors
+}
+
+:{$PORT:80} {
+	root * /srv
+	encode gzip zstd
+
+	# The retired Railway address forwards to the brand domain, path and query
+	# kept, until both old addresses are removed (brand-domain PROGRAM.md W1).
+	# Railway's healthcheck arrives as healthcheck.railway.app, so it is untouched.
+	@retired_host host sreality-production-1bb6.up.railway.app
+	redir @retired_host https://app.propscout.cz{uri} 301
+
+	# The landing page (frontend/landing/) answers on the bare domain only (the
+	# site block above). Here its files redirect there, so no navigation on this
+	# host returns its HTML: the installed app's service worker keeps any 200
+	# HTML page as its offline shell (public/sw.js storeShell).
+	@landing_files path /landing /landing/*
+	redir @landing_files https://propscout.cz/ 302
+
+	# Liveness endpoint Railway hits per the `/healthz` healthcheck in .railway/railway.ts.
+	# Exclusive handle block — no fall-through to try_files/file_server.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	import hashed_assets
 
 	# The installable shell's own files: a real file or a real 404, never the
 	# SPA fallback below. A missing /sw.js answered 200 text/html fails
@@ -82,10 +139,5 @@
 		file_server
 	}
 
-	# No error response is ever cacheable. Without this a 404 has no
-	# Cache-Control at all and is heuristically cacheable by the browser.
-	handle_errors {
-		header Cache-Control "no-store"
-		respond "{err.status_code} {err.status_text}" {err.status_code}
-	}
+	import no_store_errors
 }

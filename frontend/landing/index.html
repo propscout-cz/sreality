@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>PropScout.cz — hlídací pes na 9 realitních portálech, rovnou v mobilu</title>
+    <meta name="description" content="Nové inzeráty a zlevnění z 9 realitních portálů rovnou do mobilu. Kandidáty, poznámky, fáze obchodu a prohlídky přehledně na jednom místě. Přidejte se na čekací listinu." />
+    <link rel="canonical" href="https://propscout.cz/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://propscout.cz/" />
+    <meta property="og:title" content="PropScout.cz — dobré byty jsou pryč dřív, než projedete všechny portály" />
+    <meta property="og:description" content="Jeden hlídací pes na 9 realitních portálech. Nové nabídky a zlevnění rovnou do mobilu. Čekací listina se zakladatelskou cenou." />
+    <meta property="og:image" content="https://propscout.cz/landing/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="cs_CZ" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#f2efe7" />
+    <link rel="icon" href="/favicon.ico?v=ps" sizes="32x32 48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The ad's angle picks the hero before anything paints (?v=flip|najem, or a utm_content starting with one), so
+         the headline matches the ad that was tapped. CSS shows [data-variant] by <html data-v>; main.ts reads it back. -->
+    <script>
+      try {
+        var q = new URLSearchParams(location.search), v = (q.get('v') || q.get('utm_content') || '').toLowerCase();
+        v = /^flip/.test(v) ? 'flip' : /^(najem|pronajem|rent)/.test(v) ? 'najem' : '';
+        if (v) document.documentElement.setAttribute('data-v', v);
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="../src/landing/landing.css" />
+    <script type="module" src="../src/landing/main.ts"></script>
+  </head>
+  <body>
+    <!-- Icons and the illustrated facades every mockup reuses (no portal photo is ever shown). -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <pattern id="pt-win" width="30" height="28" patternUnits="userSpaceOnUse"><rect width="14" height="19" fill="#3f4a54" /><rect y="19" width="14" height="2.5" fill="#f4ead8" /></pattern>
+        <pattern id="pt-panel" width="26" height="20" patternUnits="userSpaceOnUse"><rect width="26" height="20" fill="#d8d2c4" /><rect x="4" y="5" width="15" height="10" fill="#47525b" /><rect y="18.5" width="26" height="1.5" fill="#c4bdae" /></pattern>
+        <linearGradient id="g-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d7e3e4" /><stop offset="1" stop-color="#f1eee6" /></linearGradient>
+        <linearGradient id="g-glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7d939a" /><stop offset="1" stop-color="#43535a" /></linearGradient>
+      </defs>
+      <symbol id="f-tenement" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice">
+        <rect width="320" height="200" fill="url(#g-sky)" />
+        <circle cx="34" cy="128" r="30" fill="#8aa274" /><rect x="31" y="140" width="6" height="30" fill="#6b5a45" />
+        <path d="M66 54 76 30h168l10 24z" fill="#58616c" />
+        <rect x="104" y="36" width="16" height="14" fill="#47505a" /><rect x="152" y="36" width="16" height="14" fill="#47505a" /><rect x="200" y="36" width="16" height="14" fill="#47505a" />
+        <rect x="66" y="54" width="188" height="122" fill="#e3c79c" />
+        <rect x="62" y="51" width="196" height="6" fill="#cdab79" />
+        <rect x="78" y="66" width="176" height="80" fill="url(#pt-win)" />
+        <rect x="66" y="146" width="188" height="4" fill="#cdab79" />
+        <path d="M80 176v-16a8 8 0 0 1 16 0v16zM110 176v-16a8 8 0 0 1 16 0v16zM194 176v-16a8 8 0 0 1 16 0v16zM224 176v-16a8 8 0 0 1 16 0v16z" fill="#4f4237" />
+        <rect x="146" y="154" width="28" height="22" fill="#3c4650" />
+        <rect y="176" width="320" height="24" fill="#c9c1b0" /><rect x="268" y="120" width="40" height="56" fill="#d4b98f" /><rect x="276" y="128" width="10" height="14" fill="#3f4a54" /><rect x="292" y="128" width="10" height="14" fill="#3f4a54" />
+      </symbol>
+      <symbol id="f-panel" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice">
+        <rect width="320" height="200" fill="url(#g-sky)" />
+        <rect x="14" y="34" width="292" height="144" fill="url(#pt-panel)" />
+        <rect x="10" y="28" width="300" height="8" fill="#b9b1a1" />
+        <rect x="66" y="36" width="26" height="140" fill="#c98a52" opacity=".85" /><rect x="170" y="36" width="26" height="140" fill="#9db3a7" opacity=".9" /><rect x="248" y="36" width="26" height="140" fill="#c98a52" opacity=".85" />
+        <rect x="66" y="44" width="26" height="1.5" fill="#fff" opacity=".5" /><rect x="66" y="64" width="26" height="1.5" fill="#fff" opacity=".5" /><rect x="66" y="84" width="26" height="1.5" fill="#fff" opacity=".5" /><rect x="66" y="104" width="26" height="1.5" fill="#fff" opacity=".5" /><rect x="66" y="124" width="26" height="1.5" fill="#fff" opacity=".5" /><rect x="66" y="144" width="26" height="1.5" fill="#fff" opacity=".5" />
+        <rect y="176" width="320" height="24" fill="#c7c2b5" /><circle cx="296" cy="168" r="18" fill="#86a06f" /><circle cx="24" cy="170" r="14" fill="#86a06f" />
+      </symbol>
+      <symbol id="f-modern" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice">
+        <rect width="320" height="200" fill="url(#g-sky)" />
+        <rect x="40" y="46" width="160" height="132" fill="#f3f1ec" /><rect x="200" y="78" width="88" height="100" fill="#b88a5c" />
+        <rect x="56" y="62" width="56" height="30" fill="url(#g-glass)" /><rect x="128" y="62" width="56" height="30" fill="url(#g-glass)" />
+        <rect x="56" y="104" width="56" height="30" fill="url(#g-glass)" /><rect x="128" y="104" width="56" height="30" fill="url(#g-glass)" />
+        <rect x="52" y="92" width="64" height="3" fill="#9aa9ab" /><rect x="124" y="134" width="64" height="3" fill="#9aa9ab" />
+        <rect x="214" y="96" width="60" height="34" fill="url(#g-glass)" /><rect x="214" y="142" width="26" height="36" fill="#3f4a50" />
+        <rect x="200" y="78" width="88" height="2" fill="#a07650" /><rect x="40" y="146" width="160" height="32" fill="#e5e1d8" /><rect x="56" y="150" width="128" height="22" fill="url(#g-glass)" />
+        <rect y="178" width="320" height="22" fill="#b9c79f" /><circle cx="18" cy="160" r="20" fill="#7f9a6b" />
+      </symbol>
+      <symbol id="f-house" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice">
+        <rect width="320" height="200" fill="url(#g-sky)" />
+        <path d="M74 98 160 38l86 60z" fill="#ad5a3f" /><rect x="88" y="96" width="144" height="74" fill="#f0eadf" />
+        <rect x="104" y="112" width="26" height="24" fill="#4c5a62" /><rect x="190" y="112" width="26" height="24" fill="#4c5a62" /><rect x="148" y="122" width="24" height="48" fill="#6d4c37" />
+        <rect x="150" y="60" width="20" height="18" fill="#4c5a62" />
+        <rect y="168" width="320" height="32" fill="#a6bd8a" /><circle cx="258" cy="150" r="24" fill="#7c9867" /><circle cx="46" cy="152" r="20" fill="#88a372" />
+        <path d="M0 176h320" stroke="#e9e3d6" stroke-width="3" stroke-dasharray="6 6" />
+      </symbol>
+      <symbol id="i-feed" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="11" rx="1.5" /><path d="M3 19h18M8 8h8M8 11h5" /></g></symbol>
+      <symbol id="i-pipe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16l-6 7v6l-4 2v-8z" /><path d="M7.5 2.5v2M10.5 2.5v2M13.5 2.5v2M16.5 2.5v2" /></g></symbol>
+      <symbol id="i-cal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></g></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M6 3.5h12v17l-6-4.5-6 4.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></symbol>
+      <symbol id="i-book-on" viewBox="0 0 24 24"><path d="M6 3.5h12v17l-6-4.5-6 4.5z" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20.5a2 2 0 0 0 4 0" /></g></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4" /><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" /></g></symbol>
+      <symbol id="i-eyeoff" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18" /><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 8.5 4.5 9.5 6-.5.8-1.6 2.3-3.2 3.6M6.3 7.6C4.4 8.9 3.1 10.8 2.5 12c1 1.5 4.5 6 9.5 6 1.4 0 2.7-.3 3.8-.9" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></g></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" /></g></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-note" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l11-11-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></g></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></symbol>
+      <symbol id="i-filter" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></g></symbol>
+      <symbol id="i-gift" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="17" height="4" rx="1" /><path d="M5 12.5v8h14v-8M12 8.5v12M12 8.5S10.5 4 8 4.5 7 8.5 12 8.5zM12 8.5S13.5 4 16 4.5 17 8.5 12 8.5z" /></g></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></g></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></symbol>
+      <symbol id="st-signal" viewBox="0 0 18 11"><path d="M0 8h3v3H0zM5 5.5h3V11H5zM10 3h3v8h-3zM15 0h3v11h-3z" fill="currentColor" /></symbol>
+      <symbol id="st-wifi" viewBox="0 0 16 11"><path d="M8 11 5.6 8.4a3.4 3.4 0 0 1 4.8 0zM2.8 5.6a7.4 7.4 0 0 1 10.4 0l-1.4 1.4a5.4 5.4 0 0 0-7.6 0zM0 2.8a11.3 11.3 0 0 1 16 0l-1.4 1.4a9.3 9.3 0 0 0-13.2 0z" fill="currentColor" /></symbol>
+      <symbol id="st-batt" viewBox="0 0 27 12"><rect x=".5" y=".5" width="23" height="11" rx="3" fill="none" stroke="currentColor" opacity=".45" /><rect x="2" y="2" width="18" height="8" rx="1.6" fill="currentColor" /><path d="M25 4v4c.8-.3 1.3-1.1 1.3-2S25.8 4.3 25 4z" fill="currentColor" opacity=".45" /></symbol>
+    </svg>
+
+    <header class="top">
+      <div class="wrap">
+        <a class="wordmark" href="/" aria-label="PropScout.cz"><span class="mark" aria-hidden="true">PS</span><span>PropScout<span class="cz">.cz</span></span></a>
+        <p class="top-note">Čekací listina je otevřená</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" id="prihlaska" aria-labelledby="hero-title">
+        <div class="wrap">
+          <div>
+            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Pro investory do nemovitostí · spouštíme brzy</p>
+            <h1 id="hero-title">
+              <span data-variant="default">Dobré byty jsou pryč dřív, než projedete <em>všechny portály.</em></span>
+              <span data-variant="flip">Byty na flip mizí za pár hodin. <em>Přestaňte je hledat ručně.</em></span>
+              <span data-variant="najem">Investiční byt hledáte na 9 portálech. <em>Stačí jeden hlídací pes.</em></span>
+            </h1>
+            <p class="lede" data-variant="default">PropScout hlídá 9 realitních portálů najednou a nové nabídky i zlevnění vám posílá rovnou do mobilu. Od prvního upozornění po koupi pak máte všechno přehledně v jedné aplikaci.</p>
+            <p class="lede" data-variant="flip">PropScout hlídá 9 realitních portálů najednou a každý nový inzerát i zlevnění, které odpovídá vašemu hledání, vám pošle do mobilu. Kandidáty, poznámky a prohlídky pak máte přehledně na jednom místě.</p>
+            <p class="lede" data-variant="najem">Nastavte lokalitu, dispozici a cenu jednou. PropScout hlídá Sreality, Bazoš, Bezrealitky a dalších 6 portálů a každý nový vhodný byt vám pošle do mobilu. Bez každodenního projíždění.</p>
+
+            <form class="signup" method="post" action="%VITE_API_BASE_URL%/waitlist" data-signup novalidate>
+              <label class="field-label" for="email-hero">Váš e-mail</label>
+              <div class="row">
+                <input id="email-hero" name="email" type="email" inputmode="email" autocomplete="email" placeholder="vas@email.cz" required maxlength="254" />
+                <button class="btn" type="submit">Chci přístup mezi prvními<svg aria-hidden="true"><use href="#i-arrow" /></svg></button>
+              </div>
+              <p class="form-error" role="alert" data-error></p>
+              <ul class="trigger">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Zdarma, stačí e-mail</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Zakladatelská cena</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Pozvánka před spuštěním</li>
+              </ul>
+              <p class="consent">Odesláním souhlasíte, že vám Limen Ventures s.r.o. (IČO 14053179), provozovatel PropScout.cz, bude e-mailem posílat pozvánku do aplikace a novinky k jejímu spuštění. Souhlas můžete kdykoli odvolat odkazem v každém e-mailu. <a href="/soukromi" data-page="soukromi">Jak chráníme vaše údaje</a></p>
+              <input type="hidden" name="consent" value="2026-10-31" />
+              <input type="hidden" name="v" value="default" />
+              <input type="hidden" name="next" value="/dekujeme" />
+              <div class="hp" aria-hidden="true"><label>Web <input type="text" name="web" tabindex="-1" autocomplete="off" /></label></div>
+            </form>
+          </div>
+
+          <figure class="hero-visual" role="img" aria-label="Ukázka aplikace v mobilu: upozornění na nový byt 2+kk v Brně za 4 290 000 Kč a přehled dnešních nových inzerátů ze všech portálů.">
+            <div class="push float-push" aria-hidden="true">
+              <span class="ic">PS</span>
+              <div>
+                <div class="nt">PropScout <span>teď</span></div>
+                <p><b>Hlídací pes · Brno do 4,5 M</b><br />Nový byt 2+kk, 54 m², Žabovřesky — 4 290 000 Kč</p>
+              </div>
+            </div>
+            <div class="phone" aria-hidden="true">
+              <div class="screen">
+                <span class="island"></span>
+                <div class="status"><span>7:42</span><span class="icons"><svg viewBox="0 0 18 11"><use href="#st-signal" /></svg><svg viewBox="0 0 16 11"><use href="#st-wifi" /></svg><svg viewBox="0 0 27 12"><use href="#st-batt" /></svg></span></div>
+                <div class="app-head"><span class="title">Nové</span><svg class="bell"><use href="#i-bell" /></svg><span class="me"><svg><use href="#i-user" /></svg></span></div>
+                <div class="app-body">
+                  <div class="chips"><span class="chip"><svg><use href="#i-filter" /></svg>Filtry</span><span class="chip on">Vše</span><span class="chip">Sreality</span><span class="chip">Bazoš</span><span class="chip">Bezrealitky</span></div>
+                  <div class="dayrule">DNES 7:42</div>
+                  <div class="feed-card">
+                    <div class="photo">
+                      <div class="pic"><svg><use href="#f-tenement" /></svg></div>
+                      <div class="rail"><svg><use href="#i-pipe" /></svg><svg><use href="#i-book" /></svg><svg><use href="#i-eyeoff" /></svg><svg><use href="#i-pin" /></svg></div>
+                      <span class="badge">Nové</span>
+                      <span class="dots"><i></i><i></i><i></i><i></i><i></i></span>
+                    </div>
+                    <div class="card-body">
+                      <div class="price-row"><span class="price">4 290 000 Kč</span><span class="ppm">79 444 Kč/m²</span></div>
+                      <div class="card-title">Byt 2+kk · 54 m² · Brno – Žabovřesky</div>
+                      <div class="card-meta"><span class="portal">Sreality</span><span class="portal">Bezrealitky</span><span>2 portály · před 4 min</span></div>
+                    </div>
+                  </div>
+                  <div class="feed-card">
+                    <div class="photo">
+                      <div class="pic"><svg><use href="#f-panel" /></svg></div>
+                      <div class="rail"><svg><use href="#i-pipe" /></svg><svg class="on"><use href="#i-book-on" /></svg><svg><use href="#i-eyeoff" /></svg><svg><use href="#i-pin" /></svg></div>
+                      <span class="badge drop">Zlevněno −6 %</span>
+                      <span class="dots"><i></i><i></i><i></i><i></i></span>
+                    </div>
+                    <div class="card-body">
+                      <div class="price-row"><span class="price">3 375 000 Kč</span><span class="ppm">55 328 Kč/m²</span></div>
+                      <div class="card-title">Byt 2+1 · 61 m² · Plzeň – Slovany</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tabbar"><span class="on"><svg><use href="#i-feed" /></svg>Nové</span><span><svg><use href="#i-pipe" /></svg>Pipeline</span><span><svg><use href="#i-cal" /></svg>Prohlídky</span><span><svg><use href="#i-book" /></svg>Sbírky</span></div>
+              </div>
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="proof" aria-label="PropScout v číslech">
+        <div class="wrap">
+          <div class="stat"><b>397 000</b><span>aktivních inzerátů, které právě hlídáme</span></div>
+          <div class="stat"><b>9 portálů</b><span>prohledaných najednou, ve dne i v noci</span></div>
+          <div class="stat"><b>3 800</b><span>nových inzerátů každý den</span></div>
+          <div class="stat"><b>91 000</b><span>inzerátů je jen duplicita jiného. U nás jedna karta.</span></div>
+        </div>
+        <div class="portals"><div class="wrap"><strong>Hlídáme:</strong> Sreality · Bezrealitky · iDNES Reality · Bazoš · RE/MAX · M&amp;M Reality · Českéreality · RealityMIX · Maxima Reality <span class="asof">· stav k 31. 10. 2026</span></div></div>
+      </section>
+
+      <section class="band" aria-labelledby="pain-title">
+        <div class="wrap">
+          <p class="eyebrow" style="color: var(--chrome-ink-2)">Jeden obyčejný den investora</p>
+          <h2 id="pain-title">Hledat investiční byt je dnes <em>druhá práce.</em></h2>
+          <ul class="pains">
+            <li class="pain"><span class="time">7:15</span><p>V tramvaji projedete Sreality. Pak Bazoš. Pak Bezrealitky. A pak ještě dva další portály, protože co kdyby.</p></li>
+            <li class="pain"><span class="time">12:40</span><p>Hlídací pes hlásí <q>3 nové inzeráty</q>. Nic nového tam není. Jen ten samý byt od tří různých realitek.</p></li>
+            <li class="pain"><span class="time">18:05</span><p>Konečně byt, který dává smysl. Voláte makléři. <q>Ten už je bohužel rezervovaný.</q></p></li>
+            <li class="pain"><span class="time">22:30</span><p>Kandidáti v Excelu, screenshoty v galerii, poznámky z prohlídek na papírku. Který z nich měl ten vlhký sklep?</p></li>
+          </ul>
+          <p class="agitate">Dobré nabídky za rozumné peníze jsou pryč za pár hodin. Kdo dřív přijde, ten dřív kupuje — <em>a vy zrovna projíždíte čtvrtý portál.</em></p>
+        </div>
+      </section>
+
+      <section class="features" aria-labelledby="features-title">
+        <div class="wrap">
+          <header>
+            <p class="eyebrow">Jak vám PropScout pomůže</p>
+            <h2 id="features-title">Nudnou část udělá za vás. <em>Vy se rozhodujete.</em></h2>
+            <p class="section-lede">Od prvního upozornění až po podpis: celý obchod máte přehledně v mobilu.</p>
+          </header>
+
+          <article class="feature">
+            <div>
+              <p class="kicker"><i>1</i>Hlídací psi</p>
+              <h2>Jeden hlídací pes na všech 9 portálech</h2>
+              <p>Jednou nastavíte, co hledáte: lokalitu, dispozici, cenu, plochu. PropScout pak nepřetržitě prochází Sreality, Bezrealitky, iDNES Reality, Bazoš, RE/MAX, M&amp;M Reality, Českéreality, RealityMIX i Maxima Reality.</p>
+              <ul class="ticks">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Nový inzerát i zlevnění vám pípne v mobilu</b> jako push notifikace. Ne až večer v e-mailu.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Stejný byt od pěti realitek uvidíte jednou</b>, jako jednu kartu se všemi inzeráty a jejich cenami.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Historie ceny prozradí, kdo zlevňuje</b> a jak rychle. Motivovaného prodávajícího poznáte na první pohled.</span></li>
+              </ul>
+            </div>
+            <figure class="feature-visual" role="img" aria-label="Hlídací pes pro byty v Brně do 4,5 milionu na 9 portálech a karta bytu v Plzni, který je inzerovaný na třech portálech a zlevnil o 6 procent.">
+              <div style="width: 100%; max-width: 420px" aria-hidden="true">
+                <div class="panel">
+                  <div class="ph"><b>Hlídací pes · Brno</b><span>9 portálů</span></div>
+                  <div class="pb">
+                    <div class="wd-crit"><span class="chip on">Byt</span><span class="chip">Brno</span><span class="chip">2+kk – 3+1</span><span class="chip">do 4,5 M Kč</span><span class="chip">od 45 m²</span></div>
+                    <div class="wd-out"><b>3</b> nové dnes<span style="color: var(--ink-4)">·</span><b>1</b> zlevnění</div>
+                  </div>
+                </div>
+                <div class="panel">
+                  <div class="ph"><b>2+1 · 61 m² · Plzeň – Slovany</b><span>3 inzeráty, 1 karta</span></div>
+                  <div class="pb">
+                    <ul class="ads">
+                      <li><span class="portal">Sreality</span><span class="main">hlavní inzerát</span><span class="amt best">3 375 000 Kč</span></li>
+                      <li><span class="portal">Bazoš</span><span></span><span class="amt best">3 375 000 Kč</span></li>
+                      <li><span class="portal">iDNES Reality</span><span></span><span class="amt">3 490 000 Kč</span></li>
+                    </ul>
+                    <div class="spark">
+                      <svg viewBox="0 0 300 64" preserveAspectRatio="none"><path d="M0 10H118V30H236V54H300" fill="none" stroke="#1f6b5c" stroke-width="2.5" /><circle cx="118" cy="30" r="3.5" fill="#a3392b" /><circle cx="236" cy="54" r="3.5" fill="#a3392b" /><path d="M0 63.5H300" stroke="rgba(22,24,29,.12)" /></svg>
+                      <div class="lbl"><span>srpen · 3,59 M</span><span>dnes · 3,38 M (−6 %)</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </article>
+
+          <article class="feature flip">
+            <div>
+              <p class="kicker"><i>2</i>Přehled kandidátů</p>
+              <h2>Žádné screenshoty, Excel ani papírky</h2>
+              <p>Byt, který vás zaujme, uložíte jedním ťuknutím. Rovnou k němu připíšete, co vám řekl makléř, a označíte ho štítkem. Za týden ho najdete za dvě vteřiny.</p>
+              <ul class="ticks">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Sbírky podle strategie:</b> Ostrava – flip, Brno – nájem do 4 M, Prohlídky v listopadu…</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Štítky a soukromé poznámky</b> přímo u nemovitosti, i s vlastními fotkami z prohlídky.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Co vás nezajímá, jedním ťuknutím skryjete.</b> Už se vám znovu neukáže.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Sbírku nasdílíte</b> partnerovi nebo spoluinvestorovi.</span></li>
+              </ul>
+            </div>
+            <figure class="feature-visual" role="img" aria-label="Detail bytu 3+1 v Ostravě-Porubě v aplikaci: štítky Před rekonstrukcí, Pod cenou za m² a Volat zítra, soukromá poznámka z hovoru s makléřem a naplánovaná prohlídka, byt uložený ve sbírce Ostrava – flip.">
+              <div class="duo" aria-hidden="true">
+                <div class="phone">
+                  <div class="screen">
+                    <span class="island"></span>
+                    <div class="status"><span>9:41</span><span class="icons"><svg viewBox="0 0 18 11"><use href="#st-signal" /></svg><svg viewBox="0 0 16 11"><use href="#st-wifi" /></svg><svg viewBox="0 0 27 12"><use href="#st-batt" /></svg></span></div>
+                    <div class="app-head"><span class="back"><svg><use href="#i-back" /></svg>Nové</span><span class="title small">Byt · 3+1 · Ostrava</span></div>
+                    <div class="app-body">
+                      <div class="prop-photo"><svg><use href="#f-panel" /></svg><span class="count">1 / 14</span></div>
+                      <div class="prop-head">
+                        <div class="price">2 950 000 Kč</div>
+                        <div class="sub">3+1 · 78 m² · Ostrava – Poruba</div>
+                        <div class="facts">37 821 Kč/m² · na trhu 12 dní · 2 portály</div>
+                      </div>
+                      <div class="actions">
+                        <span class="on"><svg><use href="#i-pipe" /></svg>3 · Prohlídka</span>
+                        <span class="on"><svg><use href="#i-book-on" /></svg>Ve sbírce</span>
+                        <span><svg><use href="#i-note" /></svg>Poznámka</span>
+                        <span><svg><use href="#i-eyeoff" /></svg>Skrýt</span>
+                      </div>
+                      <div class="mini">
+                        <div class="mh"><b>Štítky</b><span>3</span></div>
+                        <div class="mb tags"><span class="tagpill t-ochre">Před rekonstrukcí</span><span class="tagpill t-sage">Pod cenou za m²</span><span class="tagpill t-brick">Volat zítra</span></div>
+                      </div>
+                      <div class="mini">
+                        <div class="mh"><b>Poznámky</b><span>2</span></div>
+                        <div class="mb">Makléř: majitel se stěhuje, chce to rychle. Sklep suchý, stoupačky původní. Nabídnout 2,75 M.<div class="note-meta"><svg><use href="#i-cal" /></svg>Prohlídka čt 5. 11. · 14:30</div></div>
+                      </div>
+                    </div>
+                    <div class="tabbar"><span class="on"><svg><use href="#i-feed" /></svg>Nové</span><span><svg><use href="#i-pipe" /></svg>Pipeline</span><span><svg><use href="#i-cal" /></svg>Prohlídky</span><span><svg><use href="#i-book" /></svg>Sbírky</span></div>
+                  </div>
+                </div>
+                <div class="panel">
+                  <div class="ph"><b>Ostrava – flip</b><span>7 bytů</span></div>
+                  <div class="pb">
+                    <ul class="ads">
+                      <li><span class="portal">3+1</span><span>Poruba</span><span class="amt">2 950 000</span></li>
+                      <li><span class="portal">2+1</span><span>Zábřeh</span><span class="amt">2 490 000</span></li>
+                      <li><span class="portal">3+kk</span><span>Výškovice</span><span class="amt">3 190 000</span></li>
+                    </ul>
+                    <div class="wd-out" style="margin-top: 10px; font-size: 12.5px">Sdíleno se spoluinvestorem</div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </article>
+
+          <article class="feature">
+            <div>
+              <p class="kicker"><i>3</i>Od zajímavé po koupeno</p>
+              <h2>Každý byt přesně tam, kde v obchodě je</h2>
+              <p>Kandidáty posouváte fázemi, které si sami pojmenujete: k prověření, zavolat, prohlídka, nabídka, koupeno. Na první pohled vidíte, co čeká na vás a jak dlouho už to leží.</p>
+              <ul class="ticks">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Vlastní fáze obchodu</b> jako nástěnka, jen v kapse.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Prohlídky v kalendáři:</b> kdy, kde a ke kterému bytu. Celý den na jedné obrazovce.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Nástěnku sdílíte se spoluinvestorem</b>, jen ke čtení, nebo i k úpravám.</span></li>
+              </ul>
+            </div>
+            <figure class="feature-visual" role="img" aria-label="Nástěnka obchodů v mobilu: fáze K prověření, Zavolat, Prohlídka a Nabídka, ve fázi Prohlídka dva byty, a seznam prohlídek na tento týden.">
+              <div class="duo" aria-hidden="true">
+                <div class="phone">
+                  <div class="screen">
+                    <span class="island"></span>
+                    <div class="status"><span>9:41</span><span class="icons"><svg viewBox="0 0 18 11"><use href="#st-signal" /></svg><svg viewBox="0 0 16 11"><use href="#st-wifi" /></svg><svg viewBox="0 0 27 12"><use href="#st-batt" /></svg></span></div>
+                    <div class="app-head"><span class="title">Pipeline</span><span class="count">6 karet</span><svg class="bell"><use href="#i-bell" /></svg></div>
+                    <div class="app-body">
+                      <div class="stages"><span class="stage"><span class="num s1">1</span>K prověření <em>2</em></span><span class="stage"><span class="num s2">2</span>Zavolat <em>1</em></span><span class="stage on"><span class="num s3">3</span>Prohlídka <em>2</em></span><span class="stage"><span class="num s4">4</span>Nabídka <em>1</em></span></div>
+                      <div class="stage-head"><b>3. Prohlídka</b><span>2 karty</span></div>
+                      <div class="p-card">
+                        <div class="thumb"><svg><use href="#f-panel" /></svg></div>
+                        <div><div class="pr">2 950 000 Kč</div><div class="l1">3+1 · 78 m² · Ostrava – Poruba</div><div class="l2">3 dny ve fázi</div><div class="tags"><span class="tagpill t-ochre">Před rekonstrukcí</span></div></div>
+                        <span class="num s3">3</span>
+                      </div>
+                      <div class="p-card">
+                        <div class="thumb"><svg><use href="#f-tenement" /></svg></div>
+                        <div><div class="pr">4 190 000 Kč</div><div class="l1">2+kk · 49 m² · Brno – Královo Pole</div><div class="l2">1 den ve fázi<br />Výnos MF 4,9 %</div><div class="tags"><span class="tagpill t-slate">Výtah</span></div></div>
+                        <span class="num s3">3</span>
+                      </div>
+                      <div class="stage-head"><b>4. Nabídka</b><span>1 karta</span></div>
+                      <div class="p-card">
+                        <div class="thumb"><svg><use href="#f-house" /></svg></div>
+                        <div><div class="pr">5 490 000 Kč</div><div class="l1">Rodinný dům 4+1 · Kladno</div><div class="l2">8 dní ve fázi</div></div>
+                        <span class="num s4">4</span>
+                      </div>
+                    </div>
+                    <div class="tabbar"><span><svg><use href="#i-feed" /></svg>Nové</span><span class="on"><svg><use href="#i-pipe" /></svg>Pipeline</span><span><svg><use href="#i-cal" /></svg>Prohlídky</span><span><svg><use href="#i-book" /></svg>Sbírky</span></div>
+                  </div>
+                </div>
+                <div class="panel">
+                  <div class="ph"><b>Prohlídky</b><span>tento týden</span></div>
+                  <div class="pb" style="display: grid; gap: 14px">
+                    <div class="visit"><div class="day"><span>ČT</span><b>5</b></div><div class="what"><b>14:30 · 3+1, Poruba</b><span>Vzít metr a baterku</span></div></div>
+                    <div class="visit"><div class="day"><span>PÁ</span><b>6</b></div><div class="what"><b>10:00 · 2+kk, Královo Pole</b><span>Zeptat se na fond oprav</span></div></div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </article>
+
+          <article class="feature flip">
+            <div>
+              <p class="kicker"><i>4</i>V mobilu</p>
+              <h2>Celé to nosíte v kapse</h2>
+              <p>PropScout je aplikace do mobilu. Přidáte si ji na plochu přímo z prohlížeče, na iPhonu i Androidu, bez App Store. A u počítače otevřete to samé ve velkém.</p>
+              <ul class="ticks">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Push notifikace jen pro to, co hledáte.</b> Nové inzeráty, zlevnění a změny u bytů, které sledujete.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Obrazovka Nové:</b> dnešní nabídky ze všech portálů na jednom místě, od nejnovější.</span></li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg><span><b>Inzerát odjinud?</b> Vložíte odkaz a byt máte uložený u ostatních.</span></li>
+              </ul>
+            </div>
+            <figure class="feature-visual" role="img" aria-label="Zamčená obrazovka telefonu se třemi upozorněními od PropScoutu: nový byt v Brně, zlevnění bytu v Plzni o 6 procent a změna ceny u sledovaného bytu v Ostravě.">
+              <div class="phone" aria-hidden="true">
+                <div class="screen lock">
+                  <span class="island"></span>
+                  <div class="status"><span></span><span class="icons"><svg viewBox="0 0 18 11"><use href="#st-signal" /></svg><svg viewBox="0 0 16 11"><use href="#st-wifi" /></svg><svg viewBox="0 0 27 12"><use href="#st-batt" /></svg></span></div>
+                  <div class="clock"><div class="d">čtvrtek 5. listopadu</div><div class="t">7:42</div></div>
+                  <div class="notifs">
+                    <div class="push"><span class="ic">PS</span><div><div class="nt">Hlídací pes · Brno <span>teď</span></div><p>Nový byt 2+kk, 54 m², Žabovřesky — 4 290 000 Kč</p></div></div>
+                    <div class="push"><span class="ic">PS</span><div><div class="nt">Zlevnění · Plzeň <span>před 18 min</span></div><p>2+1, Slovany: z 3 590 000 na 3 375 000 Kč (−6 %)</p></div></div>
+                    <div class="push"><span class="ic">PS</span><div><div class="nt">Sbírka Ostrava – flip <span>včera</span></div><p>3+1, Poruba: nová cena 2 950 000 Kč</p></div></div>
+                  </div>
+                </div>
+              </div>
+            </figure>
+          </article>
+        </div>
+      </section>
+
+      <section class="audience" aria-labelledby="aud-title">
+        <div class="wrap">
+          <p class="eyebrow">Pro koho to je</p>
+          <h2 id="aud-title">Ať flipujete, nebo pronajímáte</h2>
+          <div class="aud-grid">
+            <div class="aud flip">
+              <span class="tag">Flip</span>
+              <h3>Kupujete, opravujete, prodáváte</h3>
+              <ul>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Zlevnění na všech portálech hlídá hlídací pes za vás.</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Historie ceny prozradí, kdo spěchá s prodejem.</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Cena za m² u každého inzerátu: porovnáte na první pohled.</li>
+              </ul>
+            </div>
+            <div class="aud rent">
+              <span class="tag">Pronájem</span>
+              <h3>Kupujete byty k pronájmu</h3>
+              <ul>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Malé byty ve vašich lokalitách hlídáte na všech portálech najednou.</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>U bytu vidíte odhad hrubého výnosu podle cenové mapy nájemného Ministerstva financí.</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Kandidáty si porovnáte vedle sebe ve sbírce.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="offer" id="pridat" aria-labelledby="offer-title">
+        <div class="wrap">
+          <div class="offer-card">
+            <div>
+              <p class="eyebrow" style="color: var(--chrome-ink-2)">Čekací listina</p>
+              <h2 id="offer-title">Zakladatelská cena <em>pro lidi z čekací listiny</em></h2>
+              <p class="section-lede">PropScout teď dolaďujeme s prvními uživateli. Přidejte se a pozvánku dostanete před veřejným spuštěním.</p>
+              <ul class="perks">
+                <li><svg aria-hidden="true"><use href="#i-clock" /></svg><div>Přístup mezi prvními<span>Pozvánky posíláme postupně, v pořadí přihlášení.</span></div></li>
+                <li><svg aria-hidden="true"><use href="#i-gift" /></svg><div>Zakladatelská cena<span>Zvýhodněná cena jen pro lidi z čekací listiny.</span></div></li>
+                <li><svg aria-hidden="true"><use href="#i-chat" /></svg><div>Slovo v tom, co postavíme dál<span>Vaše připomínky půjdou přímo k lidem, kteří aplikaci staví.</span></div></li>
+              </ul>
+            </div>
+            <form class="signup" method="post" action="%VITE_API_BASE_URL%/waitlist" data-signup novalidate>
+              <label class="field-label" for="email-offer">Váš e-mail</label>
+              <div class="row">
+                <input id="email-offer" name="email" type="email" inputmode="email" autocomplete="email" placeholder="vas@email.cz" required maxlength="254" />
+                <button class="btn" type="submit">Chci zakladatelskou cenu<svg aria-hidden="true"><use href="#i-arrow" /></svg></button>
+              </div>
+              <p class="form-error" role="alert" data-error></p>
+              <ul class="trigger">
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Zdarma a nezávazně</li>
+                <li><svg aria-hidden="true"><use href="#i-check" /></svg>Jen pozvánka a novinky ke spuštění</li>
+              </ul>
+              <p class="consent">Odesláním souhlasíte, že vám Limen Ventures s.r.o. (IČO 14053179), provozovatel PropScout.cz, bude e-mailem posílat pozvánku do aplikace a novinky k jejímu spuštění. Souhlas můžete kdykoli odvolat odkazem v každém e-mailu. <a href="/soukromi" data-page="soukromi">Jak chráníme vaše údaje</a></p>
+              <input type="hidden" name="consent" value="2026-10-31" />
+              <input type="hidden" name="v" value="default" />
+              <input type="hidden" name="next" value="/dekujeme" />
+              <div class="hp" aria-hidden="true"><label>Web <input type="text" name="web" tabindex="-1" autocomplete="off" /></label></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="faq" aria-labelledby="faq-title">
+        <div class="wrap">
+          <h2 id="faq-title">Na co se lidé ptají</h2>
+          <div class="faq-list">
+            <details><summary>Kolik to bude stát?</summary><p>Cenu zveřejníme před spuštěním. Lidé z čekací listiny dostanou zakladatelskou cenu, nižší než ostatní. Přihlášení na čekací listinu je zdarma a k ničemu vás nezavazuje.</p></details>
+            <details><summary>Čím se to liší od hlídacího psa na Sreality?</summary><p>Hlídací pes na Sreality hlídá jen Sreality. PropScout hlídá 9 portálů najednou, stejný byt z více inzerátů ukáže jednou a upozornění posílá jako push do mobilu. A po upozornění pokračujete: poznámky, štítky, fáze obchodu i prohlídky máte přímo u bytu.</p></details>
+            <details><summary>Které portály hlídáte?</summary><p>Sreality, Bezrealitky, iDNES Reality, Bazoš, RE/MAX, M&amp;M Reality, Českéreality, RealityMIX a Maxima Reality. Inzerát z jiného webu si uložíte vložením odkazu.</p></details>
+            <details><summary>Funguje to i v mém kraji?</summary><p>Ano. Hlídáme celou Českou republiku: byty, domy, pozemky i komerční prostory, na prodej i k pronájmu.</p></details>
+            <details><summary>Musím něco instalovat?</summary><p>Nic nestahujete z App Store ani Google Play. PropScout otevřete v prohlížeči a jedním ťuknutím si ho přidáte na plochu telefonu. Funguje na iPhonu, Androidu i na počítači.</p></details>
+            <details><summary>Nejlepší byty se stejně na internet nedostanou, ne?</summary><p>Některé ne. O to důležitější je být včas u těch, které na internet přijdou. Jen za posledních 30 dní jich bylo v průměru 3 800 nových denně.</p></details>
+            <details><summary>Co uděláte s mým e-mailem?</summary><p>Pošleme vám pozvánku do aplikace a novinky k jejímu spuštění. Nikomu ho neprodáme ani nepředáme kvůli reklamě. Odhlásit se můžete jedním klikem v každém e-mailu. Podrobnosti najdete v <a href="/soukromi" data-page="soukromi">zásadách ochrany osobních údajů</a>.</p></details>
+            <details><summary>Kdy mě pustíte dovnitř?</summary><p>Pozvánky posíláme postupně, v pořadí, v jakém se lidé přihlásili. Čím dřív se přidáte, tím dřív jste na řadě.</p></details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <span>© 2026 PropScout.cz · Provozovatel: Limen Ventures s.r.o., IČO 14053179</span>
+        <nav aria-label="Odkazy v patičce">
+          <a href="/soukromi" data-page="soukromi">Ochrana osobních údajů</a>
+          <button type="button" class="linklike" data-cookie-settings hidden>Nastavení cookies</button>
+          <a href="https://app.propscout.cz/login">Už máte přístup? Přihlásit se</a>
+        </nav>
+      </div>
+    </footer>
+
+    <div class="sticky-cta" data-sticky aria-hidden="true">
+      <a class="btn" href="#pridat" tabindex="-1">Chci přístup mezi prvními<svg aria-hidden="true"><use href="#i-arrow" /></svg></a>
+    </div>
+
+    <div class="cookie-bar" data-cookie-bar hidden role="dialog" aria-live="polite" aria-label="Souhlas s cookies">
+      <p>Rádi bychom měřili, které reklamy na Facebooku a Instagramu k nám lidi přivádějí. K tomu potřebujeme váš souhlas s marketingovými cookies od Meta. Bez souhlasu stránka funguje stejně. <a href="/soukromi#cookies" data-page="soukromi">Podrobnosti</a></p>
+      <div class="actions"><button type="button" data-consent="denied">Odmítnout</button><button type="button" data-consent="granted">Přijmout</button></div>
+    </div>
+  </body>
+</html>
