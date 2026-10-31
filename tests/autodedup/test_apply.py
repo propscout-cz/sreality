@@ -18,14 +18,17 @@ import typing
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
 import pytest
+from psycopg import pq
 
 from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import lane
-from autodedup.incremental_sql import RT_LEASE_READ_SQL, RT_LEASE_RELEASE_SQL, RT_LEASE_TAKE_SQL
+from autodedup.incremental_sql import RT_LEASE_READ_SQL
+from scraper.job_lease import _ACQUIRE_LANE_SQL, _BOUND_SQL, _END_LANE_SQL, _UPSERT_LANE_SQL
 from toolkit import property_carriers, property_identity
 from tests._property_ledger import _Ledger
 from toolkit.property_identity import (
@@ -86,6 +89,9 @@ class _Cursor:
     def fetchall(self) -> list[tuple]:
         return list(self.rows)
 
+    def fetchone(self) -> tuple | None:
+        return self.rows[0] if self.rows else None
+
 
 class FakeDb:
     def __init__(self) -> None:
@@ -103,7 +109,7 @@ class FakeDb:
         self.closed = False
         self.now = T0
         self.depth = 0
-        # `autodedup.rt_lease`: the one-writer rail a live apply or unapply takes (A9).
+        # `rt_lease`: the one-writer rail a live apply or unapply takes (A9).
         self.lease: dict[str, dict[str, Any]] = {}
         # `autodedup.rt_fp`: the listings the real-time generation fingerprints (E965).
         self.read: set[int] = set()
@@ -123,6 +129,14 @@ class FakeDb:
 
     def transaction(self) -> _Tx:
         return _Tx(self)
+
+    @property
+    def info(self) -> SimpleNamespace:
+        """The one psycopg fact `job_lease` reads before it opens a transaction of its own."""
+        return SimpleNamespace(transaction_status=(pq.TransactionStatus.INTRANS if self.depth
+                                                   else pq.TransactionStatus.IDLE))
+
+    autocommit = True
 
     def close(self) -> None:
         self.closed = True
@@ -165,14 +179,16 @@ class FakeDb:
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:  # noqa: C901
         if sql == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL:
             return []
-        if sql == RT_LEASE_TAKE_SQL:
-            held = self.lease.get(p["name"])
+        if sql in (_BOUND_SQL, _UPSERT_LANE_SQL):
+            return []
+        if sql == _ACQUIRE_LANE_SQL:
+            held = self.lease.get(p["job"])
             if held and held["holder"] != p["holder"] and held["live"]:
                 return []
-            self.lease[p["name"]] = {"holder": p["holder"], "live": True}
-            return [(p["holder"],)]
-        if sql == RT_LEASE_RELEASE_SQL:
-            held = self.lease.get(p["name"])
+            self.lease[p["job"]] = {"holder": p["holder"], "live": True}
+            return [(p["job"],)]
+        if sql == _END_LANE_SQL:
+            held = self.lease.get(p["job"])
             if held and held["holder"] == p["holder"]:
                 held["live"] = False
             return []

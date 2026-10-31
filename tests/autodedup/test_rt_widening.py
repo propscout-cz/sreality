@@ -20,6 +20,7 @@ import pytest
 from autodedup import apply as AP
 from autodedup import incremental_lane, reconcile, rt_lease
 from autodedup import incremental_sql as S
+from scraper import job_lease
 from autodedup.export_sql import COHORT_PHASH_POP_SQL
 from autodedup.incremental import bootstrap_key
 from autodedup.incremental_lane import (
@@ -387,10 +388,10 @@ def test_the_widening_reads_everything_before_its_transaction_writes(
              S.RT_SCOPE_IDS_OF_BLOCKS_SQL, S.RT_FP_HELD_SQL}
     assert reads <= set(before) and not reads & set(writing)
     assert writing[0] == S.RT_PHASH_POP_WRITE_SQL
-    assert writing.count(S.RT_LEASE_HOLD_SQL) == 1, "the fence, once, at the end"
+    assert writing.count(job_lease._FENCE_SQL) == 1, "the fence, once, at the end"
     # The walk is in no transaction; every cut step is in one of its own, guard first.
     assert S.RT_SCOPE_BLOCK_SQL not in conn.statements_in_tx[in_tx_before:]
-    steps = conn.transactions - tx_before - 1
+    steps = conn.transactions - tx_before - 2  # the take's own and the one write transaction
     assert steps == before.count(S.RT_STATEMENT_GUARD_SQL) >= 3, "hashes, population, facts"
     for read in (S.RT_CUT_HASHES_SQL, COHORT_PHASH_POP_SQL):
         index = before.index(read)
@@ -406,8 +407,8 @@ def test_a_lease_lost_under_the_widening_rolls_all_of_it_back(
     def cut_then_lose_the_lease(conn_: Any, *args: Any, **kwargs: Any) -> Any:
         out = original(conn_, *args, **kwargs)
         holder = conn_.lease[LANE_NAME]["holder"]
-        conn_.other_session().cursor().execute(S.RT_LEASE_RELEASE_SQL,
-                                               {"name": LANE_NAME, "holder": holder})
+        conn_.other_session().cursor().execute(job_lease._END_LANE_SQL,
+                                               {"job": LANE_NAME, "holder": holder})
         return out
 
     monkeypatch.setattr(incremental_lane, "write_cut", cut_then_lose_the_lease)
@@ -470,7 +471,7 @@ def test_a_widening_over_budget_refuses_before_any_write(tmp_path: Path) -> None
     before, transactions = conn.snapshot(), conn.transactions
     with pytest.raises(SystemExit, match="listings its store does not hold yet"):
         _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
-    assert conn.transactions == transactions, "no transaction opened"
+    assert conn.transactions == transactions + 1, "the take's own, no other"
     after = conn.snapshot()
     assert after["lease"][LANE_NAME]["expires_at"] <= conn.now, "the lease went back"
     assert {**after, "lease": before["lease"]} == before

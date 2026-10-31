@@ -285,10 +285,11 @@ def _set_ruled(conn: Any, members: list[int] | None, verdict: str, *, key: int, 
 
 def _lease(conn: Any, name: str, holder: str, *, taken_min: float, ends_min: float) -> None:
     """The lane's one lease row: taken `taken_min` ago, ending `ends_min` from now (negative: it has ended)."""
-    conn.execute("insert into autodedup.rt_lease (name, holder, taken_at, expires_at) values (%(name)s, %(holder)s, "
+    conn.execute("insert into scheduled_jobs (job_name, cadence, runner, lease_holder, last_started_at, "
+                 "lease_expires_at) values (%(name)s, '10 minutes', 'railway-realtime-worker', %(holder)s, "
                  "now() - make_interval(secs => %(taken)s), now() + make_interval(secs => %(ends)s)) "
-                 "on conflict (name) do update set holder = excluded.holder, taken_at = excluded.taken_at, "
-                 "expires_at = excluded.expires_at",
+                 "on conflict (job_name) do update set lease_holder = excluded.lease_holder, "
+                 "last_started_at = excluded.last_started_at, lease_expires_at = excluded.lease_expires_at",
                  {"name": name, "holder": holder, "taken": taken_min * 60, "ends": ends_min * 60})
 
 
