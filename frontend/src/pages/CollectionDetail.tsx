@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -18,7 +18,7 @@ import {
 } from '@/lib/api';
 import { settleCollectionWrite } from '@/lib/collectionCache';
 import { deletedTables, revalidateTables } from '@/lib/curationSync';
-import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
+import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import {
@@ -348,39 +348,9 @@ function HeaderEditor({
   /* Saved or cancelled: the header flips back. */
   onDone: () => void;
 }) {
-  const qc = useQueryClient();
-  /* Both fields follow the collection while untouched, and only what the user
-   * changed is saved: a rename made elsewhere is never written back (D3,
-   * lib/useServerDraft). */
-  const name = useServerDraft(collection.name, trimDraft);
-  const description = useServerDraft(collection.description ?? '', trimDraft);
-  const [error, setError] = useState<string | null>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
-  const descriptionRef = useRef<HTMLInputElement>(null);
-
-  /* The default collection's name is locked, so its first field is the description. */
-  useEffect(() => {
-    (collection.is_system ? descriptionRef : nameRef).current?.focus();
-  }, [collection.is_system]);
-
-  const nextName = name.edited();
-  const nextDescription = description.edited();
-  const dirty = nextName != null || nextDescription != null;
-
-  const save = useMutation({
-    mutationFn: () =>
-      updateCollection(collection.id, {
-        ...(nextName != null && { name: nextName }),
-        /* A cleared description goes as '': PATCH /collections reads null as "not
-         * given" (coalesce), so null alone is refused and never clears it. */
-        ...(nextDescription != null && { description: nextDescription }),
-      }),
-    onSuccess: () => {
-      setError(null);
-      void revalidateTables(qc, ['collections']);
-      onDone();
-    },
-    onError: (err: Error) => setError(err.message || 'Failed to save'),
+  const { name, description, nameRef, descriptionRef, save, canSave, error } = useCollectionEditor(collection, {
+    onDone,
+    failed: 'Failed to save',
   });
 
   return (
@@ -397,10 +367,7 @@ function HeaderEditor({
         <input
           ref={nameRef}
           type="text"
-          value={name.value}
-          onChange={(e) => name.onChange(e.target.value)}
-          onFocus={name.onFocus}
-          onBlur={name.onBlur}
+          {...name.bind}
           maxLength={200}
           placeholder="Name"
           disabled={collection.is_system}
@@ -412,10 +379,7 @@ function HeaderEditor({
         <input
           ref={descriptionRef}
           type="text"
-          value={description.value}
-          onChange={(e) => description.onChange(e.target.value)}
-          onFocus={description.onFocus}
-          onBlur={description.onBlur}
+          {...description.bind}
           placeholder="Description (optional)"
           className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
         />
@@ -423,7 +387,7 @@ function HeaderEditor({
       <div className="flex items-center gap-3">
         <button
           type="button"
-          disabled={!dirty || save.isPending || name.value.trim().length === 0}
+          disabled={!canSave}
           onClick={() => save.mutate()}
           className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >

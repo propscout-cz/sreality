@@ -309,6 +309,16 @@ One window's read of the curation clock, on a cadence while the window is visibl
 shown again (the cadence: `docs/design/curation-sync.md` § 3.5).
 _Avoid_: probe, tick, poll (alone), heartbeat
 
+**Curation sync owner**:
+The one part of a signed-in window that does its clock reads and, when a counter moved, has that window
+re-read what the change touched. A window signed out has none.
+_Avoid_: poller, sync engine, listener, watcher
+
+**Nudge**:
+A content-free note one browser tab sends its sibling tabs after a write committed, so they take a clock
+read now instead of at their next one. It says only "read the clock", never what changed.
+_Avoid_: ping, push, broadcast (alone), doorbell
+
 **Watchdog**:
 A saved filter that alerts an account when a property newly matches it or drops its price.
 _Avoid_: alert (for the saved filter), subscription, notification

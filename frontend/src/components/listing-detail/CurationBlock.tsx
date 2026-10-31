@@ -69,7 +69,7 @@ import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
 import Panel from '@/components/Panel';
 import ArtifactLinkRow from './ArtifactLinkRow';
-import { ViewingFields, ViewingHead, ViewingToggle } from './NoteViewing';
+import { slotFields, ViewingFields, ViewingHead, ViewingToggle } from './NoteViewing';
 import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/attachments';
 import {
   AttachButton,
@@ -342,7 +342,7 @@ export function NotesRow({
         >
           {slot && (
             <div className="border-b border-[var(--color-rule-soft)] px-3.5 py-2.5">
-              <ViewingFields slot={slot} onChange={setSlot} disabled={create.isPending} />
+              <ViewingFields {...slotFields(slot, setSlot)} disabled={create.isPending} />
             </div>
           )}
           <textarea
@@ -519,15 +519,6 @@ const CARD = 'relative rounded-[var(--radius-md)] border px-3.5 py-3';
 /* What the editor sends: only what changed (viewing_at null drops the date). */
 type NotePatch = { body?: string; viewing_at?: string | null };
 
-/* The viewing slot as the editor's draft holds it (lib/useServerDraft is over
- * text): '' for none, else "day time" — neither part ever holds a space. */
-const slotText = (slot: ViewingSlot | null): string => (slot ? `${slot.day} ${slot.time}` : '');
-const slotOf = (text: string): ViewingSlot | null => {
-  if (text === '') return null;
-  const [day = '', time = ''] = text.split(' ');
-  return { day, time };
-};
-
 const noteLabel = (prefix: string, note: Note): string =>
   note.viewing_at ? `Prohlídka ${viewingWhen(note.viewing_at)}` : `${prefix} ${fmtAbsolute(note.created_at)}`;
 
@@ -611,13 +602,20 @@ function OwnNoteRow({
   onFilesChanged: () => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
-  /* The text and the date follow the note while untouched, and only what the user
-   * changed is saved: an edit made elsewhere while this editor is open is never
-   * written back (D3, lib/useServerDraft). */
+  /* The text, the day and the time follow the note while untouched, each on its
+   * own, and only what the user changed is saved: an edit made elsewhere while this
+   * editor is open is never written back (D3, lib/useServerDraft). A time-only edit
+   * saves the instant on the day the note holds by then. '' and '' is no viewing. */
   const body = useServerDraft(note.body, trimDraft);
-  const when = useServerDraft(slotText(note.viewing_at ? viewingSlot(note.viewing_at) : null));
-  const draftSlot = slotOf(when.value);
-  const setDraftSlot = (slot: ViewingSlot | null) => when.onChange(slotText(slot));
+  const stored = note.viewing_at ? viewingSlot(note.viewing_at) : null;
+  const day = useServerDraft(stored?.day ?? '');
+  const time = useServerDraft(stored?.time ?? '');
+  const draftSlot: ViewingSlot | null =
+    day.value === '' && time.value === '' ? null : { day: day.value, time: time.value };
+  const setDraftSlot = (slot: ViewingSlot | null) => {
+    day.onChange(slot?.day ?? '');
+    time.onChange(slot?.time ?? '');
+  };
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -650,16 +648,18 @@ function OwnNoteRow({
   };
   const drop = useFileDrop((files) => void attach(files));
 
-  const trimmed = body.value.trim();
+  const trimmed = body.normalized;
   const openEditor = () => {
     body.reset();
-    when.reset();
+    day.reset();
+    time.reset();
     setEditing(true);
   };
   const closeEditor = () => {
     setEditing(false);
     body.reset();
-    when.reset();
+    day.reset();
+    time.reset();
     setError(null);
   };
   /* Only what the user changed; a viewing may lose its text, a plain note never. */
@@ -668,10 +668,8 @@ function OwnNoteRow({
     const patch: NotePatch = {};
     const text = body.edited();
     if (text != null) patch.body = text;
-    const slot = when.edited();
-    if (slot != null) {
-      const next = slotOf(slot);
-      patch.viewing_at = next ? slotInstant(next) : null;
+    if (day.edited() != null || time.edited() != null) {
+      patch.viewing_at = draftSlot ? slotInstant(draftSlot) : null;
     }
     if (Object.keys(patch).length === 0) {
       closeEditor();
@@ -709,15 +707,12 @@ function OwnNoteRow({
         <>
           {draftSlot && (
             <div className="mb-2">
-              <ViewingFields slot={draftSlot} onChange={setDraftSlot} disabled={busy} />
+              <ViewingFields day={day.bind} time={time.bind} disabled={busy} />
             </div>
           )}
           <textarea
             aria-label="Upravit poznámku"
-            value={body.value}
-            onChange={(e) => body.onChange(e.target.value)}
-            onFocus={body.onFocus}
-            onBlur={body.onBlur}
+            {...body.bind}
             rows={3}
             maxLength={BODY_MAX}
             autoFocus
