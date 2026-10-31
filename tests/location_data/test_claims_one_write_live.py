@@ -108,6 +108,13 @@ def test_two_claims_of_one_key_in_one_batch_keep_the_later_observation(conn: Any
     assert _stored(conn, listing)[("street_name", "portal")][1] == "Palackého"
 
 
+def test_two_claims_of_one_key_seen_at_once_keep_the_later_in_the_batch(conn: Any) -> None:
+    listing = _listing(conn)
+    first = _claim(conn, listing, "bzs.txt.street", T0, value_text="Husova")
+    assert _write(conn, first, replace(first, value_text="Palackého")) == (1, 1)
+    assert _stored(conn, listing)[("street_name", "portal")][1] == "Palackého"
+
+
 def test_the_operator_outranks_the_portal_which_still_updates_beneath(conn: Any) -> None:
     listing = _listing(conn)
     portal = _claim(conn, listing, "bzs.txt.street", value_text="Husova")

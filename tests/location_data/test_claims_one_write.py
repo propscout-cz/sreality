@@ -28,6 +28,9 @@ def test_the_upsert_is_keyed_on_listing_type_and_author() -> None:
     assert "ON CONFLICT (listing_id, claim_type, licence_class) DO UPDATE SET" in _SQL
     assert "claim_fingerprint" not in _SQL
     assert "DISTINCT ON (listing_id, claim_type, licence_class)" in _SQL
+    # Two claims of one key with one observation time: the later in the batch, never chance.
+    assert "jsonb_array_elements(%(rows)s::jsonb) WITH ORDINALITY AS e(row, n)" in _SQL
+    assert "ORDER BY listing_id, claim_type, licence_class, first_observed_at DESC, n DESC" in _SQL
 
 
 def test_it_writes_only_when_one_of_the_eight_value_columns_moved() -> None:

@@ -58,9 +58,13 @@ def test_the_licence_gate_is_in_the_claim_read_not_only_in_the_code():
     each store of record to make a Mapy coordinate unstorable. `listing_location` has no such
     column because the guard moved upstream and got stronger: the resolver's own projection
     refuses to SELECT one."""
+    rail = ", ".join(f"'{c}'" for c in resolve_db.ADMISSIBLE_LICENCE_CLASSES)
+    assert resolve_db.ADMISSIBLE_LICENCE_CLASSES == ("portal", "operator")
     for sql in (resolve_db._CLAIMS_SQL, resolve_db._CLAIMS_BULK_SQL):
         flat = " ".join(sql.split()).lower()
-        assert "(c.licence_class = 'operator' or c.licence_class = 'portal' and exists" in flat
+        # The SQL is BUILT from the tuple the wave shadow reads too: one list, two readers.
+        assert f"and c.licence_class in ({rail})" in flat, flat
+        assert "and (c.licence_class = 'operator' or exists (" in flat, flat
 
 
 def test_the_one_read_takes_one_claim_per_type_the_operators_first():
@@ -71,15 +75,17 @@ def test_the_one_read_takes_one_claim_per_type_the_operators_first():
     for sql in (resolve_db._CLAIMS_SQL, resolve_db._CLAIMS_BULK_SQL):
         flat = " ".join(sql.split()).lower()
         assert "select distinct on (c.listing_id, c.claim_type) c.*" in flat, flat
-        assert ("order by c.listing_id, c.claim_type, (c.licence_class = 'operator') desc"
-                in flat), flat
+        # Operator first, then the newest observation: ids no longer order by recency once a
+        # changed value is an UPDATE in place.
+        assert ("order by c.listing_id, c.claim_type, (c.licence_class = 'operator') desc, "
+                "c.first_observed_at desc, c.id desc") in flat, flat
         for gone in (" over (", "version <=", "newest_version", "portal_contract_entries pce"):
             assert gone not in flat, gone
         # A type the active contract no longer declares is not read: an EXISTS, not a join,
         # because the active contract may declare one type on several surfaces.
         assert ("exists ( select 1 from portal_contract_entries ace join portal_contracts act "
                 "on act.id = ace.contract_id and act.is_active where act.source = c.source "
-                "and ace.claim_type = c.claim_type)") in flat, flat
+                "and ace.claim_type = c.claim_type))") in flat, flat
 
 
 class _ClaimCursor:
@@ -113,7 +119,7 @@ class _ClaimCursor:
 
     def execute(self, sql, params=None):
         flat = " ".join(sql.split()).lower()
-        assert "c.licence_class = 'operator' or c.licence_class = 'portal'" in flat
+        assert "c.licence_class in ('portal', 'operator')" in flat, "licence rail missing"
         assert "ace.claim_type = c.claim_type" in flat, "active-contract type gate missing"
         assert "distinct on (c.listing_id, c.claim_type)" in flat, "one claim per type"
         chosen: dict[tuple, tuple] = {}

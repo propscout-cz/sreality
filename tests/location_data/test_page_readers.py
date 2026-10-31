@@ -314,9 +314,9 @@ def test_a_branch_declared_on_a_non_coordinate_read_is_refused():
 # ------------------------------------------------------------------ write-path lockstep
 
 def test_to_row_and_the_recordset_column_list_stay_in_lockstep():
-    """`Claim.to_row()` feeds `jsonb_to_recordset(...) AS x(...)` positionally by NAME; a
+    """`Claim.to_row()` feeds `jsonb_to_record(...) AS x(...)` by NAME; a
     field added to one and not the other silently writes NULL forever."""
-    columns = re.search(r"jsonb_to_recordset\(%\(rows\)s::jsonb\) AS x\((.*?)\)\n",
+    columns = re.search(r"jsonb_to_record\(e\.row\) AS x\((.*?)\)\n",
                         claims_store._WRITE_CLAIMS_SQL, re.S)
     assert columns
     declared = re.findall(r"(\w+)\s+(?:bigint|text|timestamptz|numeric|jsonb|integer|boolean)",

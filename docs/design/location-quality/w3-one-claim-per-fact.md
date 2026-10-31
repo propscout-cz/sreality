@@ -269,7 +269,9 @@ SELECT (SELECT count(*) FROM up), (SELECT count(*) FROM gone), (SELECT count(*) 
 
 **As built (§ 2.1).** `location_data/claims_store.py` holds the one write and nothing else (so the
 operator's API route does not import the intake lane): `_WRITE_CLAIMS_SQL` + `write_claims(cur, claims, reason)`, chunked
-by listing (a key never spans two statements) and returning (changed, enqueued). The recordset also
+by listing (a key never spans two statements) and returning (changed, enqueued). The input is read
+`jsonb_array_elements(...) WITH ORDINALITY` + `jsonb_to_record`, so `one` breaks a tie in
+`first_observed_at` by the later row of the batch, never by chance. The recordset also
 carries `claim_confidence` (ruling R6: 'exact' for the operator, NULL else), set with the value. The
 readings half calls the same write and then stamps its readings in the same transaction (one statement
 less than before, no DELETE). `Claim.retract` lives on the intake claim (`claims_common.Claim`, what a
@@ -300,8 +302,12 @@ declared-type `EXISTS` (a type the active contract no longer declares is not rea
 nothing: 0 such keys in S1). It deletes the window, `pc.version <= act.version` and the three joins.
 **The resolver therefore sees at most one claim per type, and the operator's when there is one (Q5).**
 
-**As built (§ 2.2).** As drafted, plus `c.id DESC` as the last `ORDER BY` key (deterministic should a key
-ever hold two rows) and `resolve_db.ADMISSIBLE_LICENCE_CLASSES` (W2's tuple, read by the wave shadow).
+**As built (§ 2.2).** The licence rail is built from `resolve_db.ADMISSIBLE_LICENCE_CLASSES` (the tuple
+the wave shadow reads too; a test holds the SQL text to it): `c.licence_class IN ('portal', 'operator')
+AND (c.licence_class = 'operator' OR EXISTS (… declared …))`. The order within a (listing, type) is the
+operator first, then `first_observed_at DESC, id DESC` — the newest observation, since ids no longer
+order by recency once a changed value is an UPDATE in place (deterministic should a key ever hold two
+rows).
 
 ### 2.3 What deletes (each rule is unreachable once the read returns ≤ 1 claim per type)
 

@@ -55,7 +55,9 @@ DEFAULT_WRITE_CHUNK_BYTES = 32 * 1024 * 1024  # ~8x under the hard limit, per st
 #    (the only coupling between intake and resolution).
 _WRITE_CLAIMS_SQL = """
     WITH input AS (
-        SELECT * FROM jsonb_to_recordset(%(rows)s::jsonb) AS x(
+        SELECT x.*, e.n
+          FROM jsonb_array_elements(%(rows)s::jsonb) WITH ORDINALITY AS e(row, n)
+         CROSS JOIN LATERAL jsonb_to_record(e.row) AS x(
             listing_id bigint, source text, first_observed_at timestamptz,
             claim_type text, surface text, extraction_method text, contract_entry_id bigint,
             value_text text, value_num numeric, value_geom_wkt text, value_jsonb jsonb,
@@ -63,7 +65,7 @@ _WRITE_CLAIMS_SQL = """
             blur_evidence text, licence_class text, subject_scoped boolean, retract boolean)
     ), one AS (
         SELECT DISTINCT ON (listing_id, claim_type, licence_class) * FROM input
-         ORDER BY listing_id, claim_type, licence_class, first_observed_at DESC
+         ORDER BY listing_id, claim_type, licence_class, first_observed_at DESC, n DESC
     ), up AS (
         INSERT INTO location_claims AS c (
             listing_id, source, first_observed_at, claim_type, surface,

@@ -73,7 +73,8 @@ ADMISSIBLE_LICENCE_CLASSES: tuple[str, ...] = ("portal", "operator")
 # operator's when there is one (it outranks the portal, ruling Q5), else the portal's.
 #  * THE LICENCE RAIL (W2-a): only `ADMISSIBLE_LICENCE_CLASSES` are read. A Mapy-class
 #    coordinate is not refused at write time, it is never READ.
-#  * A portal claim of a type its portal's ACTIVE contract no longer declares is not read: a
+#  * A portal claim (every admissible class but the operator's) of a type its portal's ACTIVE
+#    contract no longer declares is not read: a
 #    deliberately dropped entry stops being evidence the moment it is dropped. An `EXISTS`, not
 #    a join: the active contract may declare one type on several surfaces.
 #  * No version filter. `contract_entry_id` is provenance (the entry that first stated the
@@ -92,18 +93,21 @@ _CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
 
 
 def _claims_sql(listing_filter: str, order_by: str) -> str:
-    """The claim read: one claim per (listing, claim type), the operator's first."""
+    """The claim read: one claim per (listing, claim type), the operator's first, then the
+    newest observation (the id only breaks a tie in time)."""
+    admissible = ", ".join(f"'{licence}'" for licence in ADMISSIBLE_LICENCE_CLASSES)
     return f"""
 SELECT {_CLAIM_COLUMNS}
   FROM (SELECT DISTINCT ON (c.listing_id, c.claim_type) c.*
           FROM location_claims c
          WHERE {listing_filter}
-           AND (c.licence_class = 'operator'
-                OR c.licence_class = 'portal' AND EXISTS (
-                     SELECT 1 FROM portal_contract_entries ace
-                       JOIN portal_contracts act ON act.id = ace.contract_id AND act.is_active
-                      WHERE act.source = c.source AND ace.claim_type = c.claim_type))
-         ORDER BY c.listing_id, c.claim_type, (c.licence_class = 'operator') DESC, c.id DESC
+           AND c.licence_class IN ({admissible})
+           AND (c.licence_class = 'operator' OR EXISTS (
+                SELECT 1 FROM portal_contract_entries ace
+                  JOIN portal_contracts act ON act.id = ace.contract_id AND act.is_active
+                 WHERE act.source = c.source AND ace.claim_type = c.claim_type))
+         ORDER BY c.listing_id, c.claim_type, (c.licence_class = 'operator') DESC,
+                  c.first_observed_at DESC, c.id DESC
        ) c
  ORDER BY {order_by}
 """
