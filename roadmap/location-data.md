@@ -1271,10 +1271,12 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
   `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
   fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
-  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. Owed: the frontend PR
-  (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates go),
-  then migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c,
-  awaits the operator's ruling).
+  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. **PR 2 built 2026-10-31**
+  (no migration): the Location Quality page renders the stored row through Health's `HEALTH_QUERY`;
+  its two routes, the toolkit aggregates, its thresholds, the audit waterfall's reader, the pin-audit
+  summary reader and the `!AUDIT POLOH` badge are deleted (product −884/+251, tests −449/+224). Owed:
+  migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c, awaits the
+  operator's ruling; apply after PR 2 is deployed).
 - **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
   2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
   The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the

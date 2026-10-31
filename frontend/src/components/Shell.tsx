@@ -1,6 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { agendaVisible, useAuth } from '@/lib/auth';
 import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -17,8 +16,6 @@ import { MAIN_ID, useRouteFocus } from '@/lib/useRouteFocus';
 import SkipLink from './SkipLink';
 import { ROUTES } from '@/lib/routes';
 import { lastBrowsePath } from '@/lib/lastBrowseView';
-import { PIN_AUDIT_TOTAL_KEY, fetchPinAuditTotal } from '@/lib/pinAudit';
-import { fmtCount } from '@/lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhoneFrame from './phone/PhoneShell';
 
@@ -102,10 +99,10 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
   /* First, and shouting on purpose. These are the listings W5 hides from
-   * customers until their location is resolved (migration 514), so it is a WORK
-   * QUEUE, not a one-off review: its count, on the Admin trigger, counts down as
-   * the resolver lane works. It led the top row until ruling P33 (2026-10-27)
-   * put it here. */
+   * customers until their location is resolved (migration 514), a WORK QUEUE,
+   * not a one-off review. It led the top row until ruling P33 (2026-10-27) put
+   * it here; its count left the Admin trigger with W1 (the location gauge's
+   * stored cells on Health are the one count). */
   { to: ROUTES.newDedupPinAudit.build(), label: '!AUDIT POLOH' },
   // Next: where the operator starts when something is wrong, and the one place
   // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
@@ -198,23 +195,6 @@ function TopBar() {
   const location = useLocation();
   /* Shell's one unread observer (lib/unreadCount), gated as the nav item is. */
   const { count: unread } = useUnreadCount();
-  /* The !AUDIT POLOH count — the UNRESOLVED rows only (W7-b): the listings the
-   * system finished and could not place. The ones it simply has not reached yet
-   * are normal traffic, and a badge that counted them would climb every time the
-   * scrapers ran. One head-count request, held for the session
-   * (`staleTime: Infinity`) because the matview behind it only refreshes
-   * hourly; the audit page invalidates this key on open, which is the one
-   * moment a fresh number is worth a round trip. `retry: false` + reading
-   * `data` (never `isError`) is what keeps a failed count from touching
-   * navigation — the Admin trigger renders with no badge and the entry still works. */
-  const pinAuditQ = useQuery({
-    queryKey: PIN_AUDIT_TOTAL_KEY,
-    queryFn: fetchPinAuditTotal,
-    enabled: isAdmin || !isSupabaseConfigured(),
-    staleTime: Infinity,
-    retry: false,
-  });
-  const pinAuditTotal = pinAuditQ.data ?? null;
   // Unconfigured local dev has no session (so no is_admin claim) — show the
   // full nav there, mirroring the guards' allow-through posture.
   const showAdmin = isAdmin || !isSupabaseConfigured();
@@ -316,12 +296,7 @@ function TopBar() {
           {showAdmin && (
             <>
               <span className="mx-2 h-4 w-px bg-[var(--color-chrome-ink-2)] opacity-40" aria-hidden />
-              <NavMenu
-                label="Admin"
-                groups={adminGroups}
-                active={adminActive}
-                badge={pinAuditTotal !== null ? <AuditCountBadge total={pinAuditTotal} /> : null}
-              />
+              <NavMenu label="Admin" groups={adminGroups} active={adminActive} />
             </>
           )}
         </nav>
@@ -333,30 +308,10 @@ function TopBar() {
   );
 }
 
-/* The !AUDIT POLOH count as a glyph; the number reaches the trigger's accessible
- * name through the hidden suffix, as the Notifications badge does. */
-function AuditCountBadge({ total }: { total: number }) {
-  return (
-    <>
-      <span
-        className="ml-1.5 inline-flex items-center justify-center h-[1.05rem] px-1.5 rounded-full bg-[var(--color-brick)] text-[var(--color-on-brick)] text-[0.6rem] font-medium tabular-nums"
-        aria-hidden="true"
-      >
-        {fmtCount(total)}
-      </span>
-      <span className="sr-only">
-        {' '}
-        {total} inzerátů s nevyřešenou polohou
-      </span>
-    </>
-  );
-}
-
 function NavMenu({
   label,
   groups,
   active,
-  badge,
 }: {
   label: string;
   /* Sections, not one flat list: four programs under one trigger stay legible
@@ -364,7 +319,6 @@ function NavMenu({
    * heading at all. */
   groups: ReadonlyArray<MenuGroup>;
   active: boolean;
-  badge?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -392,7 +346,6 @@ function NavMenu({
       >
         <NavLabel active={active}>
           {label}
-          {badge}
           <CaretIcon spin={open} />
         </NavLabel>
       </button>

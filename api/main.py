@@ -343,12 +343,12 @@ app.include_router(new_dedup_candidates_router)
 # See autodedup/progress_sql.py, autodedup/ui_sql.py and docs/design/autodedup/PROGRAM.md
 # (Q11, §9, §12).
 app.include_router(autodedup_router)
-# /location/* (location-quality dashboard + operator corrections) — the consumer
+# /location/* (location inspector + operator corrections) — the consumer
 # of `listing_location`, the location program's one answer table (mig 501),
 # admin-gated (require_admin). Reads via toolkit/location_quality.py; the
 # corrections POST appends an operator claim and resolves synchronously
 # (05 5.5.5). W2-b deleted the /sample/* and /compare/* families with their
-# tables.
+# tables; W1 deleted /quality/* (the Location Quality page renders the gauge's cells).
 app.include_router(location_quality_router)
 
 
