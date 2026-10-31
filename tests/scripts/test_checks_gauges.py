@@ -13,12 +13,12 @@ import ast
 import datetime as _dt
 import inspect
 import re
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from location_data import location_steps
-from location_data.claims_common import SERVED_LOCATION_PREDICATE, SOURCES
+from location_data.claims_common import SOURCES
 from location_data.resolver.version import RESOLVER_VERSION
 from scripts.checks import clock, common
 from scripts.checks import publishing as pub
@@ -26,7 +26,7 @@ from scripts.checks import quality as qc
 from tests.scripts.test_checks_platform import _Conn
 from tests.scripts.test_checks_platform_replay import _incidents, _told
 from toolkit import description_extraction as text_lane
-from toolkit.measures import wilson_lower
+from toolkit.measures import wilson_lower, wilson_upper
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 19, 14, 0, tzinfo=_UTC)
@@ -42,7 +42,13 @@ T: dict[str, Any] = {
     "data_quality_estate_sum_min_n": 100, "data_quality_url_warn": 50,
     "data_quality_url_fail": 500, "data_quality_measure_gap_warn": 0.95,
     "data_quality_measure_gap_min_n": 200, "location_registry_max_age_days": 40,
-    "location_registry_max_staged_hours": 24, "text_extraction_flow_warn": 0.05,
+    "location_registry_max_staged_hours": 24,
+    "location_street_floor": {
+        "bezrealitky": 0.62, "sreality": 0.57, "realitymix": 0.52, "idnes": 0.45, "maxima": 0.45,
+        "ceskereality": 0.38, "mmreality": 0.35, "bazos": 0.28, "remax": 0.04},
+    "location_street_floor_min_n": 200, "location_served_street_floor": 0.44,
+    "location_radius_cover_watch": 0.90, "location_accuracy_min_n": 30,
+    "location_evidence_backlog_max_min": 60, "text_extraction_flow_warn": 0.05,
     "text_extraction_flow_fail": 0.25, "text_extraction_flow_min_n": 30,
     "text_extraction_eta_warn_d": 14,
 }
@@ -166,12 +172,12 @@ def test_only_measured_results_feed_a_series_so_an_unknown_run_never_resets_one(
 
 def test_a_pass_reads_a_gauges_series_once_and_a_second_pass_reads_it_again() -> None:
     """The source is memoised per check in clock.PASS: one read a pass, rebuilt every pass."""
-    conn = _location_conn([_town("bazos", ads=100)])
+    conn = _location_conn()
     for _ in range(2):
         _in_pass(qc.check_location_town_coverage, conn, T)
     assert sum(sql == common.TREND_SQL for sql, _, _ in conn.sent) == 2
     qc.check_location_town_coverage(conn, T)
-    assert sum(sql == common.TREND_SQL for sql, _, _ in conn.sent) == 2 + len(SOURCES) + 1
+    assert sum(sql == common.TREND_SQL for sql, _, _ in conn.sent) == 2 + len(_SUBJECTS)
 
 
 def test_alarms_carry_no_trend() -> None:
@@ -400,102 +406,263 @@ def test_the_ship_time_floor_red_opens_one_incident_and_watch_cells_none() -> No
     assert [i["subject"] for i in opened] == ["floor/realitymix/komercni-pronajem"]
 
 
-# --- location_town_coverage ----------------------------------------------------------------
+# --- location_town_coverage: the ONE location scorecard (W1, migration 698) -----------------
 
 
-def _town(source: str, *, ads: int = 50_000, no_row: int = 0, cz_no_town: int = 0,
-          hidden: int = 0, no_ku: int = 0) -> tuple[Any, ...]:
-    """A _LOCATION_TOWN_COVERAGE_SQL row; `town` is every ad with a row and a town."""
-    return (source, ads, no_row, cz_no_town, ads - no_row - cz_no_town, hidden, no_ku)
+def _portal(source: str, *, ads: int = 50_000, foreign: int = 0, no_row: int = 0,
+            unresolved: int = 0, withheld: int = 0, hidden: int = 0, street_share: float = 0.65,
+            ku_missing: int = 0, outside: int = 0, disputed: tuple[int, int, int, int] = (0, 0, 0, 0),
+            versions: dict[str, tuple[int, int]] | None = None, ku_gap: int = 0,
+            cohort: str = "listing") -> list[tuple[Any, ...]]:
+    """One source's view rows of a cohort; the Czech ads with a town split 40/25/10/25 by grain
+    unless `street_share` says otherwise. `versions` is {resolver_version: (rows, stale)}."""
+    czech = ads - foreign
+    towned = czech - unresolved - withheld
+    street = round(towned * street_share)
+    grains = {"address": street // 2, "street": street - street // 2,
+              "quarter": (towned - street) // 3}
+    grains["obec"] = towned - sum(grains.values())
+
+    def row(metric: str, cls: str, n: int, of_n: int | None) -> tuple[Any, ...]:
+        return (cohort, source, metric, cls, n, of_n, None, None, None, None)
+
+    rows = [row("town", "ads", ads, ads), row("town", "foreign", foreign, ads),
+            row("town", "has_town", towned, czech), row("town", "no_row", no_row, ads),
+            row("town", "unresolved", unresolved, czech), row("town", "withheld", withheld, czech),
+            row("town", "hidden", hidden, ads), row("outside", "position", outside, towned)]
+    rows += [row("ku", g, n - (ku_missing if g == "obec" else 0), n) for g, n in grains.items()]
+    rows += [row("disputed", c, n, ads) for c, n in zip(qc._DISPUTED, disputed)]
+    rows += [row("grain", g, n, towned) for g, n in grains.items()]
+    if cohort == "listing":
+        held = versions or {RESOLVER_VERSION: (ads - no_row, 0)}
+        total = sum(n for n, _ in held.values())
+        for version, (n, stale) in held.items():
+            rows += [row("version", version, n, total), row("registry_stale", version, stale, n),
+                     row("ku_gap", version, ku_gap if version == RESOLVER_VERSION else 0,
+                         grains["address"])]
+    return rows
+
+
+def _sample(source: str, *, hits: int = 290, n: int = 300,
+            pins: dict[str, tuple[int, float]] | None = None) -> list[tuple[Any, ...]]:
+    """One source's sample rows: radius cover hits of n, and pin error per label (n, q95 m)."""
+    rows = [("sample", source, "radius_cover", "below_address", hits, n, None, None, None, None)]
+    for label, (count, q95) in (pins or {"undeclared": (n, 40.0)}).items():
+        rows.append(("sample", source, "pin_error_m", label, count, None, Decimal("5.5"),
+                     Decimal(str(q95 / 2)), Decimal(str(q95)), Decimal(str(q95 * 3))))
+    return rows
+
+
+def _queue(evidence: tuple[int, int, float, float] | None = None,
+           backfill: tuple[int, int, float, float] | None = None) -> list[tuple[Any, ...]]:
+    """The resolve queue's rows: (count, retrying, median s, oldest s) per class."""
+    return [("queue", None, "backlog_s", cls, n, retrying, Decimal(str(q50)), None, None,
+             Decimal(str(oldest)))
+            for cls, values in (("evidence", evidence), ("backfill", backfill)) if values
+            for n, retrying, q50, oldest in [values]]
 
 
 _REGISTRY = ("ruian:2026-09-30", 19, None, None)
+_LIVE = ("bezrealitky", "sreality", "realitymix", "idnes", "maxima", "ceskereality", "mmreality",
+         "bazos", "remax")
 
 
-def _location_conn(rows: list[tuple[Any, ...]],
-                   registry: tuple[Any, ...] | None = _REGISTRY) -> _Conn:
-    return _Conn({qc._LOCATION_TOWN_COVERAGE_SQL: rows,
-                  qc._REGISTRY_LIVENESS_SQL: [] if registry is None else [registry]}, now=_NOW)
+def _stock(*rows: list[tuple[Any, ...]], served: bool = True) -> list[tuple[Any, ...]]:
+    """Every live portal OK at the listing grain (and served, unless off), then the given rows
+    replacing a portal's cohort wholesale."""
+    given = {(r[0], r[1]) for rs in rows for r in rs}
+    base = [r for p in _LIVE for cohort in (("listing", "served") if served else ("listing",))
+            if (cohort, p) not in given for r in _portal(p, cohort=cohort)]
+    return base + [r for rs in rows for r in rs]
 
 
-def _location(rows: list[tuple[Any, ...]],
-              registry: tuple[Any, ...] | None = _REGISTRY) -> tuple[dict[str, Any], _Conn]:
-    conn = _location_conn(rows, registry)
+def _location_conn(stock: list[tuple[Any, ...]] | None = None,
+                   sample: list[tuple[Any, ...]] | BaseException | None = None,
+                   registry: tuple[Any, ...] | None = _REGISTRY,
+                   previous: list[dict[str, Any]] | None = None) -> _Conn:
+    return _Conn({qc._LOCATION_STOCK_SQL: _stock() if stock is None else stock,
+                  qc._LOCATION_SAMPLE_SQL: ([r for p in _LIVE for r in _sample(p)]
+                                           if sample is None else sample),
+                  qc._REGISTRY_LIVENESS_SQL: [] if registry is None else [registry],
+                  common.PREVIOUS_CELLS_SQL: [] if previous is None else [
+                      (_NOW - _dt.timedelta(hours=6), previous)]}, now=_NOW)
+
+
+def _location(stock: list[tuple[Any, ...]] | None = None,
+              sample: list[tuple[Any, ...]] | BaseException | None = None,
+              registry: tuple[Any, ...] | None = _REGISTRY,
+              previous: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], _Conn]:
+    conn = _location_conn(stock, sample, registry, previous)
     return qc.check_location_town_coverage(conn, T), conn
 
 
-def test_the_location_gauge_reads_problem_per_portal_until_zero() -> None:
-    """Live 2026-10-19 13:09Z: 43 active ads past 24 h with no town, three portals red."""
-    rows = [_town("ceskereality", ads=48_758, cz_no_town=39, hidden=15),
-            _town("realitymix", ads=49_048, cz_no_town=3, hidden=1),
-            _town("mmreality", ads=10_505, cz_no_town=1, hidden=1),
-            _town("bazos", ads=52_213)]
-    out, conn = _location(rows)
+_SUBJECTS = ([f"{p}/{name}" for p in sorted(SOURCES) for name in qc.LOCATION_PORTAL_CELLS]
+             + ["served/town", "served/town_withheld", "served/outside", "served/street",
+                "registry", "freshness/version", "freshness/evidence"])
+
+
+def test_the_scorecard_emits_one_stable_subject_list_and_web_reads_not_measured() -> None:
+    """67 cells on every pass, whatever the rows hold: six per portal, four served, the registry,
+    two freshness. web has no ad past the edge, so its six read Not measured."""
+    out, conn = _location()
     cells = _cells(out)
-    red = cells["ceskereality/town"]
-    assert (red["status"], red["value"], red["unit"], red["portal"]) == (
-        "fail", 39, "ads", "ceskereality")
-    assert red["message"] == ("39 of 48,758 active ads first written more than 24 h ago have no "
-                              "town: 0 with no location row, 39 not foreign with no town (rule 25: "
-                              "red until zero)")
-    assert red["facts"]["hidden"] == 15 and red["facts"]["town"] == 48_719
-    assert cells["bazos/town"]["message"] == (
-        "every one of 52,213 active ads first written more than 24 h ago has a town")
-    assert cells["idnes/town"]["status"] == "unknown"  # no row read: nothing past the edge
-    assert {f"{s}/town" for s in SOURCES} | {"registry"} == set(cells)
-    assert (out["status"], out["value"]) == ("fail", 3)
+    assert [c["subject"] for c in out["details"]["cells"]] == _SUBJECTS and len(_SUBJECTS) == 67
+    assert {cells[f"web/{n}"]["status"] for n in qc.LOCATION_PORTAL_CELLS} == {"unknown"}
+    assert cells["web/town"]["message"] == ("Not measured: no active ads first written more than "
+                                            "24 h ago")
+    assert {c["status"] for s, c in cells.items() if not s.startswith("web/")} == {"ok"}
+    assert out["status"] == "ok" and not out["details"].get("not_measured")
+    empty, _ = _location(stock=[], sample=[])
+    assert [c["subject"] for c in empty["details"]["cells"]] == _SUBJECTS
     assert conn.sent and all(armed for _, _, armed in conn.sent)
 
 
-def test_the_location_gauge_folds_the_legacy_per_portal_counts() -> None:
-    """location_town_coverage's own fixture, as cells: no row and Czech-without-a-town add up,
-    and the hidden ads are a fact that never moves a verdict."""
-    out, _ = _location([_town("bazos", ads=40_000, cz_no_town=120, hidden=120),
-                        _town("idnes", ads=30_000, no_row=900, cz_no_town=11_000, hidden=11_900),
-                        _town("sreality", ads=200_000)])
-    cells = _cells(out)
-    assert (cells["idnes/town"]["status"], cells["idnes/town"]["value"]) == ("fail", 11_900)
-    assert cells["bazos/town"]["value"] == 120 and cells["sreality/town"]["status"] == "ok"
-    assert cells["sreality/town"]["facts"]["town_share"] == 1.0
+def test_the_gauge_reads_the_view_in_two_statements_split_on_the_literal_cohort() -> None:
+    _, conn = _location()
+    sent = [s for s, _, _ in conn.sent]
+    assert sent.index(qc._LOCATION_STOCK_SQL) < sent.index(qc._LOCATION_SAMPLE_SQL)
+    assert qc._LOCATION_STOCK_SQL.endswith("from location_quality_by_source where cohort <> 'sample'")
+    assert qc._LOCATION_SAMPLE_SQL.endswith("from location_quality_by_source where cohort = 'sample'")
+    assert {s for s in sent} == {common.CLOCK_SQL, qc._LOCATION_STOCK_SQL, qc._REGISTRY_LIVENESS_SQL,
+                                 common.PREVIOUS_CELLS_SQL, qc._LOCATION_SAMPLE_SQL, common.TREND_SQL}
 
 
-def test_a_czech_address_row_with_no_ku_is_a_problem_that_stays_out_of_the_value() -> None:
-    out, _ = _location([_town("bezrealitky", ads=20_000, no_ku=37)])
-    cell = _cells(out)["bezrealitky/town"]
-    assert (cell["status"], cell["value"]) == ("fail", 0)
-    assert cell["message"] == (f"37 Czech ads at address grain have no cadastral area (KÚ) at "
-                               f"{RESOLVER_VERSION}: the registry's KÚ geometry is missing at its "
-                               "version")
+def test_every_count_cell_reads_the_count_that_colours_it() -> None:
+    """The value IS the rows that colour the cell: Problem above zero for the invariants, Watch
+    above zero for the page-withheld, each counted in its own cell and never in another's."""
+    stock = _stock(_portal("ceskereality", ads=50_026, unresolved=3, withheld=26, no_row=2,
+                           hidden=5, outside=139, disputed=(157, 141, 6, 4)),
+                   _portal("sreality", ads=106_936, foreign=1, ku_gap=1),
+                   _portal("ceskereality", cohort="served", ads=40_000, withheld=20, outside=113),
+                   _portal("bazos", cohort="served", ads=45_000, unresolved=2, outside=10_545))
+    cells = _cells(_location(stock)[0])
+    expect = {"ceskereality/town": ("fail", 3), "ceskereality/town_withheld": ("warn", 26),
+              "ceskereality/outside": ("fail", 139), "ceskereality/ku": ("ok", 0),
+              "sreality/ku": ("fail", 1), "sreality/town": ("ok", 0),
+              "sreality/town_withheld": ("ok", 0), "served/town": ("fail", 2),
+              "served/town_withheld": ("warn", 20), "served/outside": ("fail", 10_658),
+              "freshness/version": ("ok", 0)}
+    assert {s: (cells[s]["status"], cells[s]["value"]) for s in expect} == expect
+    town = cells["ceskereality/town"]
+    assert town["unit"] == "ads" and town["portal"] == "ceskereality"
+    assert town["message"] == ("3 of 50,026 active ads first written more than 24 h ago not "
+                               "determined foreign hold town-bearing evidence and no town (rule 25: "
+                               "red until zero)")
+    assert {k: town["facts"][k] for k in ("ads", "foreign", "has_town", "no_row", "hidden",
+                                          "town_share")} == {
+        "ads": 50_026, "foreign": 0, "has_town": 49_997, "no_row": 2, "hidden": 5,
+        "town_share": round(49_997 / 50_026, 4)}
+    assert "withheld" not in town["facts"], "measured once, in its own cell"
+    assert cells["ceskereality/outside"]["facts"]["disputed"] == {
+        "pin_outside_obec": 157, "pin_off_street": 141, "country_conflict": 6, "pin_outside_cz": 4}
+    assert cells["served/outside"]["facts"]["by_portal"] == {"bazos": 10_545, "ceskereality": 113}
+    assert cells["served/town_withheld"]["facts"]["by_portal"] == {"ceskereality": 20}
+    assert cells["sreality/ku"]["message"] == (
+        f"1 Czech ads at address grain have no cadastral area (KÚ) at {RESOLVER_VERSION}: the "
+        "registry's KÚ geometry is missing at its version")
 
 
-def test_the_location_population_is_active_ads_past_the_edge_publishing_ends_at() -> None:
-    """D9: the inactive stock is not read, and the 24 h edge with publishing's visible arm is
-    one number, NEW_AD_H, imported by both."""
-    _, conn = _location([_town("bazos")])
-    (params,) = [p for sql, p, _ in conn.sent if sql == qc._LOCATION_TOWN_COVERAGE_SQL]
-    assert params == {"resolver_version": RESOLVER_VERSION, "new_ad_h": common.NEW_AD_H}
-    assert pub._WINDOW_H == common.NEW_AD_H == 24
-    assert "_WINDOW_H = NEW_AD_H" in inspect.getsource(pub)
-    flat = " ".join(qc._LOCATION_TOWN_COVERAGE_SQL.split())
-    assert ("WHERE l.is_active AND l.first_seen_at < now() - make_interval(hours => "
-            "%(new_ad_h)s::int)") in flat
-    assert "first_seen_at >= now() - make_interval(hours => %(window_h)s::int)" in " ".join(
-        pub._VISIBLE_SQL.split())
+def test_the_town_share_leaves_foreign_ads_out_of_its_denominator() -> None:
+    """idnes on 10-31: 17,668 of 108,726 ads are abroad, and every Czech one has a town: 100 %."""
+    cells = _cells(_location(_stock(_portal("idnes", ads=108_726, foreign=17_668)))[0])
+    assert cells["idnes/town"]["facts"]["town_share"] == 1.0
+    assert cells["idnes/town"]["status"] == "ok"
 
 
-def test_the_location_counts_read_the_shared_predicates() -> None:
-    """Town-less is the shared `town_missing_sql` (undetermined and disputed count as Czech);
-    hidden is the consumer rule negated; the KÚ arm reads the rank table, the current resolver
-    and the current registry's excuse."""
-    flat = " ".join(qc._LOCATION_TOWN_COVERAGE_SQL.split())
-    assert f"NOT {SERVED_LOCATION_PREDICATE}" in qc._LOCATION_TOWN_COVERAGE_SQL
-    assert "AS hidden_n" in qc._LOCATION_TOWN_COVERAGE_SQL
-    assert f"ll.listing_id IS NOT NULL AND {location_steps.town_missing_sql()}" in flat
-    assert ("gr.is_address_grain AND ll.resolver_version = %(resolver_version)s AND "
-            "ll.katastr_kod IS NULL") in flat
-    # A town-less row is the town arm's alone: NULL NOT IN an empty degenerate set is true.
-    assert "ll.katastr_kod IS NULL AND ll.obec_kod IS NOT NULL AND ll.obec_kod NOT IN (" in flat
-    assert "d.discrepancy = 'degenerate_boundary_geometry'" in flat
+@pytest.mark.parametrize("withheld", [1, 26, 40_000])
+def test_page_withheld_is_watch_and_never_problem(withheld: int) -> None:
+    out, _ = _location(_stock(_portal("mmreality", ads=50_000, withheld=withheld)))
+    cell = _cells(out)["mmreality/town_withheld"]
+    assert (cell["status"], cell["value"]) == ("warn", withheld)
+    assert _cells(out)["mmreality/town"]["status"] == "ok" and out["status"] == "warn"
+
+
+@pytest.mark.parametrize("hits, n, status", [
+    (290, 300, "ok"), (102, 116, "warn"), (0, 500, "warn"), (213, 373, "warn"), (7, 7, "unknown"),
+    (29, 29, "unknown")])
+def test_accuracy_is_watch_on_its_lower_bound_and_never_problem(hits: int, n: int,
+                                                               status: str) -> None:
+    sample = [r for p in _LIVE if p != "sreality" for r in _sample(p)]
+    sample += _sample("sreality", hits=hits, n=n, pins={"gps": (40, 108.0), "street": (30, 713.0)})
+    cell = _cells(_location(sample=sample)[0])["sreality/accuracy"]
+    assert cell["status"] == status
+    assert cell["facts"]["pin_error_m"] == {
+        "gps": {"n": 40, "q50": 5.5, "q90": 54.0, "q95": 108.0, "max": 324.0},
+        "street": {"n": 30, "q50": 5.5, "q90": 356.5, "q95": 713.0, "max": 2139.0}}
+    if status != "unknown":
+        assert cell["value"] == round(100 * hits / n, 2) and cell["unit"] == "%"
+        assert cell["facts"]["lower_bound"] == round(wilson_lower(hits, n), 4)
+        assert "gps q95 108 m (n 40); street q95 713 m (n 30)" in cell["message"]
+
+
+@pytest.mark.parametrize("share, n, status", [
+    (0.641, 106_000, "ok"),      # sreality on 10-31, floor 0.57
+    (0.565, 106_000, "fail"),    # under the floor, upper bound too
+    (0.56, 210, "ok"),           # under the floor, but its upper bound is not
+    (0.40, 199, "unknown")])     # under min_n: no verdict
+def test_the_street_floor_is_judged_on_the_upper_bound_over_min_n(share: float, n: int,
+                                                                  status: str) -> None:
+    cell = _cells(_location(_stock(_portal("sreality", ads=n, street_share=share)))[0])[
+        "sreality/street"]
+    hits = round(n * share)
+    assert cell["status"] == status and cell["facts"]["floor"] == 0.57
+    assert cell["facts"]["upper_bound"] == round(wilson_upper(hits, n), 4)
+    assert cell["facts"]["share"] == round(hits / n, 4)
+    if status != "unknown":
+        assert cell["value"] == round(100 * hits / n, 2)
+    assert set(cell["facts"]["grains"]) == {"address", "street", "quarter", "obec"}
+
+
+def test_served_street_is_the_fleet_share_against_its_own_floor() -> None:
+    stock = _stock(*[_portal(p, cohort="served", ads=10_000, street_share=0.40) for p in _LIVE])
+    cell = _cells(_location(stock)[0])["served/street"]
+    assert (cell["status"], cell["value"], cell["facts"]["floor"]) == ("fail", 40.0, 0.44)
+    assert cell["facts"]["by_portal"]["bazos"] == 0.4
+
+
+@pytest.mark.parametrize("previous, status", [
+    (None, "warn"), ([{"subject": "freshness/version", "value": 0}], "warn"),
+    ([{"subject": "freshness/version", "value": 400}], "fail"),
+    ([{"subject": "registry", "value": 31}], "warn")])
+def test_a_resolve_lag_is_watch_once_and_problem_on_the_second_reading(
+        previous: list[dict[str, Any]] | None, status: str) -> None:
+    """Rows behind the code's version count once whatever their registry; rows at it count when
+    their registry label is stale."""
+    stock = _stock(_portal("bazos", ads=1_000, versions={"resolver:v5.0": (300, 300),
+                                                         RESOLVER_VERSION: (700, 20)}))
+    cell = _cells(_location(stock, previous=previous)[0])["freshness/version"]
+    assert (cell["status"], cell["value"]) == (status, 320)
+    assert {k: cell["facts"][k] for k in ("rows", "behind", "stale_registry")} == {
+        "rows": 50_000 * 8 + 1_000, "behind": 300, "stale_registry": 320}
+
+
+@pytest.mark.parametrize("oldest_s, status", [(59 * 60, "ok"), (60 * 60, "ok"), (61 * 60, "fail")])
+def test_evidence_waiting_past_an_hour_is_a_problem_and_backfill_a_fact(oldest_s: float,
+                                                                        status: str) -> None:
+    stock = _stock() + _queue(evidence=(12, 1, 300.0, oldest_s), backfill=(9_000, 4, 3600.0, 7200.0))
+    cell = _cells(_location(stock)[0])["freshness/evidence"]
+    assert (cell["status"], cell["value"], cell["unit"]) == (status, round(oldest_s / 60, 1), "min")
+    assert {k: cell["facts"][k] for k in ("evidence", "evidence_retrying", "backfill",
+                                          "backfill_oldest_min")} == {
+        "evidence": 12, "evidence_retrying": 1, "backfill": 9_000, "backfill_oldest_min": 120.0}
+    quiet = _cells(_location(_stock() + _queue(backfill=(9_000, 0, 60.0, 7200.0)))[0])
+    assert (quiet["freshness/evidence"]["status"], quiet["freshness/evidence"]["value"]) == ("ok", 0.0)
+
+
+def test_a_sample_that_times_out_leaves_only_the_accuracy_cells_not_measured() -> None:
+    """The pin sample is the second statement: its timeout costs the accuracy cells, never a red,
+    and every other cell reads exactly what it reads with the sample."""
+    read, _ = _location()
+    timed_out, conn = _location(sample=RuntimeError("canceling statement due to statement timeout"))
+    cells, before = _cells(timed_out), _cells(read)
+    assert {s for s, c in cells.items() if c["status"] != before[s]["status"]} == {
+        f"{p}/accuracy" for p in _LIVE}
+    assert cells["bazos/accuracy"]["message"] == (
+        "Not measured: the pin sample was not read (canceling statement due to statement timeout)")
+    assert timed_out["details"]["not_measured"] == {
+        "sample": "canceling statement due to statement timeout"}
+    assert timed_out["status"] == "ok"
+    assert common.TREND_SQL in [s for s, _, _ in conn.sent], "the trends still read"
 
 
 @pytest.mark.parametrize("registry, status, said", [
@@ -510,7 +677,7 @@ def test_a_stalled_registry_is_a_problem(registry: tuple[Any, ...] | None, statu
                                          said: str) -> None:
     """D9's stated deviation: Problem, not the design's Watch, since a superseded load is
     cancelled, not failed, and no other check sees it. Strict `>` as before."""
-    cell = _cells(_location([_town("bazos")], registry)[0])["registry"]
+    cell = _cells(_location(registry=registry)[0])["registry"]
     assert cell["status"] == status and said in cell["message"]
     assert cell["portal"] is None
 
@@ -662,7 +829,7 @@ def _every_result() -> list[dict[str, Any]]:
     return [
         _quality(_LIVE_FLOOR)[0], _quality([], urls=_url_counts(bazos=(1_000, 120, 0)))[0],
         _quality([])[0], _quality([], urls=[])[0],
-        _location([_town("bazos")])[0], _location([_town("bazos", cz_no_town=1)])[0],
+        _location()[0], _location(_stock(_portal("bazos", unresolved=1)))[0],
         _text()[0], _text(stock=(55_236, 0, 3_000))[0], _text(stock=(9, 9, 0))[0],
         _text(model=None)[0]]
 
@@ -680,7 +847,7 @@ def test_every_statement_runs_on_the_per_check_clock() -> None:
     _, conn = _quality(_LIVE_FLOOR)
     assert {s for s, _, _ in conn.sent} == {common.CLOCK_SQL, qc.PLAUSIBILITY_SQL, qc._URL_SQL,
                                            common.TREND_SQL}
-    _, location = _location([_town("bazos")])
+    _, location = _location()
     _, text = _text()
     assert {s for s, _, _ in text.sent} == {common.CLOCK_SQL, text_lane.MODEL_SQL,
                                            text_lane.LLM_TEXT_SOURCES_SQL,

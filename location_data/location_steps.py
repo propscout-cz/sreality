@@ -87,9 +87,29 @@ def _located_no_town_sql(flags: str) -> str:
 def town_missing_sql(*, loc: str = "ll", rank: str = "gr") -> str:
     """Rule 25's invariant, broken: not determined foreign and no town, off a LEFT JOIN of the
     answer row — so a listing with no row counts (foreign is a determination, never a default).
-    The `location_town_coverage` check judges it; the `location_refetch` lane acts on it."""
+    The scorecard view (migration 698) counts it; the `location_refetch` lane acts on it."""
     flags = step_flags_sql(loc=loc, rank=rank)
     return _no_town(flags["is_foreign"], flags["has_town"])
+
+
+# Rule 25's broken set splits by EVIDENCE (ruling Q6, W1): exactly the claims BIND can reach a
+# town from (resolver/bind.py, town ladder R4/R6/R7). `street_name` binds only inside an anchoring
+# town; `okres_name` and `kraj_name` cannot name one.
+TOWN_EVIDENCE_CLAIM_TYPES: tuple[str, ...] = (
+    "obec_name", "cast_obce_name", "psc", "address_point_id", "coordinate",
+)
+
+
+def town_evidence_sql(listing_id: str = "b.id", claims: str = "ec") -> str:
+    """The listing holds a town-bearing claim (a coordinate only with a position): unresolved, else withheld."""
+    types = ", ".join(f"'{t}'" for t in TOWN_EVIDENCE_CLAIM_TYPES)
+    return (
+        f"EXISTS (SELECT 1 FROM location_claims {claims}"
+        f" WHERE {claims}.listing_id = {listing_id}"
+        f" AND {claims}.claim_type IN ({types})"
+        f" AND {claims}.subject_scoped IS NOT FALSE"
+        f" AND ({claims}.claim_type <> 'coordinate' OR {claims}.value_geom IS NOT NULL))"
+    )
 
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:

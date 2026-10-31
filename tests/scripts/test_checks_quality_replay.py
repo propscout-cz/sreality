@@ -99,30 +99,18 @@
 #          e.value ->> 'n_ppm2'
 #     from runs r cross join lateral jsonb_each(r.cells) e order by 1, 2, 3, 4;
 #
-# tests/fixtures/health_quality_location_now.csv (source,ads,no_row,cz_no_town,town,hidden,
-# address_no_ku,ads_le_24h,missing_le_24h,inactive,inactive_no_row,inactive_cz_no_town,
-# inactive_address_no_ku), 14:22:01Z, 9 rows: per portal the location gauge's counts over active
-# ads first written more than 24 h ago, the younger ones publishing judges, and the inactive
-# stock (a dated fact the gauge never reads). The same statement read the registry: current
-# ruian:2026-09-30, source date 09-30, loaded 10-01 16:55:41Z, 19 d old, nothing newer staged.
-#   with base as (select l.source, l.is_active,
-#                        l.first_seen_at < now() - make_interval(hours => 24) as aged,
-#                        ll.listing_id is null as no_row,
-#                        (ll.listing_id is not null and ll.country_status <> 'foreign'
-#                         and ll.obec_kod is null) as cz_no_town,
-#                        <has_town> as town, <located> as located,
-#                        (ll.country_status = 'cz' and gr.is_address_grain
-#                         and ll.resolver_version = 'resolver:v5.7' and ll.katastr_kod is null
-#                         and ll.obec_kod not in (<quality._DEGENERATE_KU_OBCE_SQL>)) as no_ku
-#                   from listings l left join listing_location ll on ll.listing_id = l.id
-#                   left join location_granularity_rank gr on gr.granularity = ll.granularity)
-#   select source, count(*) filter (where is_active and aged),
-#          ... and no_row, ... and cz_no_town, ... and coalesce(town, false), ... and not located,
-#          ... and coalesce(no_ku, false), count(*) filter (where is_active and not aged),
-#          count(*) filter (where is_active and not aged and (no_row or cz_no_town)),
-#          the same four counts over not is_active
-#     from base group by source order by 1;
-#  with <has_town> and <located> = location_data.location_steps.step_flags_sql()'s two flags.
+# tests/fixtures/health_quality_location_view_now.csv (quality._LOCATION_COLUMNS), 2026-10-31
+# 13:09:55Z, 427 rows: location_quality_by_source exactly as the gauge's two statements read it,
+# quantiles to 1 dp. Migration 698 was not yet applied, so its view body ran as written, in the
+# statement below. The resolver then running was resolver:v5.9 (#2194, deployed; its sweep had
+# enqueued 1,076,970 rows 2.6 min before, so most rows still read v5.8). The same session read the
+# registry: current ruian:2026-09-30, source date 09-30, nothing newer staged.
+#   select md5(t), t from (
+#     select string_agg(concat_ws(',', cohort, coalesce(source, ''), metric, coalesce(class, ''), n,
+#                                 coalesce(of_n::text, ''), coalesce(round(q50, 1)::text, ''),
+#                                 <q90, q95 and q100 alike>),
+#                       E'\n' order by cohort, source nulls first, metric, class) as t
+#       from (<migration 698's view body>) v) x;
 #
 # tests/fixtures/health_quality_text_lane_28d.csv (day,source,arrivals,active_now,read_1h,read_24h,
 # read_ever,read_v2,given_up,p50_min,p95_min,readings_ok,readings_failed), 14:23:14Z, 29 rows: per
@@ -210,9 +198,11 @@
 #    so every tick holds them (the retiring ppm2_basis_floor_share failed all 92 of its measured
 #    runs in the 35 days, its worst cell at 13.05-14.39 %, so the condition stood throughout); the
 #    measure-gap columns are the daily series; the link counts are 13:18:52Z's on every tick;
-#  - location: day one is the 14:22:01Z reading (43 ads with no town: ceskereality 39, realitymix 3,
-#    mmreality 1); it holds through the gauge's day-one reminder (24 h), and from the pass after
-#    it (30 h in) every one of them has a town (the synthetic zero);
+#  - location: day one is the 13:09:55Z reading, mid-sweep, held for the next pass too; from the
+#    third pass (12 h in) the v5.9 sweep is done: every listing row at resolver:v5.9 on the current
+#    registry, each portal's KÚ gap and its scope carried over (sreality's one address point RÚIAN
+#    publishes without coordinates stays without a KÚ until W5), the queue drained; every other
+#    count holds as exported;
 #  - the description lane's reading times (no per-ad stamp was exported): an arrival day's ads are
 #    spread evenly over it; outside the two gaps its read_1h ads are read 5 min after first seen and
 #    the rest evenly from 1 h to the delay that puts the day's p95 where the export read it (24 h
@@ -245,6 +235,7 @@ import json
 import statistics
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from decimal import Decimal
 from typing import Any
 from unittest import mock
 
@@ -356,6 +347,10 @@ class _History:
                                             facts.get("price_per_m2_basis"), n)
         rows = [(first, subject, *reading) for subject, reading in sorted(newest.items())]
         return rows or [(first, None, None, None, None, None)]
+
+    def previous(self, params: dict[str, Any]) -> list[tuple[Any, ...]]:
+        """common.PREVIOUS_CELLS_SQL: the newest stored result's cells, whatever its status."""
+        return [(self.results[-1][0], self.results[-1][1]["details"]["cells"])] if self.results else []
 
     def answers(self) -> dict[str, Any]:
         return {common.TREND_SQL: self.trend, common.TREND_LOOKBACK_SQL: self.lookback}
@@ -614,36 +609,64 @@ def _quality() -> tuple[_Ladder, list[_Result]]:
 
 # --- location_town_coverage -----------------------------------------------------------------------
 
-_LOCATION_AT = _utc("2026-10-19T14:22:01Z")
-_ZERO_FROM = _LOCATION_AT + _DAY + _SIX_HOURS
+_LOCATION_AT = _utc("2026-10-31T13:09:55Z")
+_SWEPT_FROM = _LOCATION_AT + 2 * _SIX_HOURS
 _REGISTRY_SOURCE_DAY = _dt.date(2026, 9, 30)
+# The resolver the worker ran at the export (#2194 deployed, its sweep 2.6 min old).
+_EXPORT_RESOLVER = "resolver:v5.9"
+_FRESHNESS = ("version", "registry_stale", "ku_gap")
 
 
 @functools.cache
-def _location_now() -> tuple[tuple[Any, ...], ...]:
-    """_LOCATION_TOWN_COVERAGE_SQL's rows as exported."""
-    return tuple((r["source"], *(int(r[c]) for c in ("ads", "no_row", "cz_no_town", "town",
-                                                      "hidden", "address_no_ku")))
-                 for r in _fixture("health_quality_location_now.csv"))
+def _location_view() -> tuple[tuple[Any, ...], ...]:
+    """The view's rows as exported, typed as the driver returns them (numeric as Decimal)."""
+    def num(text: str, kind: Callable[[str], Any]) -> Any:
+        return None if text == "" else kind(text)
+
+    return tuple((r["cohort"], r["source"] or None, r["metric"], r["class"], int(r["n"]),
+                  num(r["of_n"], int), *(num(r[q], Decimal) for q in ("q50", "q90", "q95", "q100")))
+                 for r in _fixture("health_quality_location_view_now.csv"))
 
 
-def _location_rows(at: _dt.datetime) -> list[tuple[Any, ...]]:
-    """The export's counts until the synthetic zero, then every ad with a row has its town."""
-    if at < _ZERO_FROM:
-        return list(_location_now())
-    return [(s, ads, 0, 0, ads, 0, 0) for s, ads, *_ in _location_now()]
+def _swept() -> list[tuple[Any, ...]]:
+    """The export once the sweep is done: one version row per portal at the running resolver, no
+    stale registry label, the KÚ gap and its scope carried over, the queue drained."""
+    rows = [r for r in _location_view() if r[0] != "queue" and r[2] not in _FRESHNESS]
+    held: dict[str, list[int]] = {}
+    for _, source, metric, _, n, of_n, *_ in _location_view():
+        if metric in ("version", "ku_gap"):
+            total = held.setdefault(source, [0, 0, 0])
+            if metric == "version":
+                total[0] += n
+            else:
+                total[1], total[2] = total[1] + n, total[2] + (of_n or 0)
+    for source, (n, gap, scope) in sorted(held.items()):
+        rows += [("listing", source, metric, _EXPORT_RESOLVER, count, of_n, None, None, None, None)
+                 for metric, count, of_n in (("version", n, n), ("registry_stale", 0, n),
+                                             ("ku_gap", gap, scope))]
+    return rows
+
+
+def _location_answers(rows: list[tuple[Any, ...]], at: _dt.datetime,
+                      history: _History) -> dict[str, Any]:
+    """The gauge's reads: the view split on its literal cohort, the registry, its own last result."""
+    age = (at.date() - _REGISTRY_SOURCE_DAY).days
+    return {qu._LOCATION_STOCK_SQL: [r for r in rows if r[0] != "sample"],
+            qu._LOCATION_SAMPLE_SQL: [r for r in rows if r[0] == "sample"],
+            qu._REGISTRY_LIVENESS_SQL: [("ruian:2026-09-30", age, None, None)],
+            common.PREVIOUS_CELLS_SQL: history.previous}
 
 
 @functools.cache
 def _location() -> tuple[_Ladder, list[_Result]]:
     """check_location_town_coverage every 6 h for three days from the export."""
     def answers(at: _dt.datetime, history: _History) -> dict[str, Any]:
-        age = (at.date() - _REGISTRY_SOURCE_DAY).days
-        return {qu._LOCATION_TOWN_COVERAGE_SQL: _location_rows(at),
-                qu._REGISTRY_LIVENESS_SQL: [("ruian:2026-09-30", age, None, None)]}
+        rows = list(_location_view()) if at < _SWEPT_FROM else _swept()
+        return _location_answers(rows, at, history)
 
     ticks = _ticks(_LOCATION_AT, _LOCATION_AT + 3 * _DAY, _SIX_HOURS)
-    results = _replay(ticks, qu.check_location_town_coverage, answers)
+    with mock.patch.object(qu, "RESOLVER_VERSION", _EXPORT_RESOLVER):
+        results = _replay(ticks, qu.check_location_town_coverage, answers)
     return _told("location_town_coverage", 21_600, results, cls="gauge"), results
 
 
@@ -818,13 +841,15 @@ def _modelled(day: _dt.datetime) -> tuple[int, int]:
 
 def test_the_fixtures_hold_the_rows_and_totals_their_exports_read() -> None:
     """Every fixture's row count; the gap cells all decidable, each weekly basis the one the
-    measure function's Python face resolves; 43 ads with no town; 218 legacy harness artifacts."""
+    measure function's Python face resolves; 27 page-withheld ads and none unresolved; 218 legacy
+    harness artifacts."""
     counts = {name: len(_fixture(f"health_quality_{name}.csv")) for name in (
         "churn_28d", "measure_view_now", "measure_gaps_28d", "stock_medians_6w",
-        "legacy_medians_35d", "location_now", "text_lane_28d", "text_stock_now",
+        "legacy_medians_35d", "location_view_now", "text_lane_28d", "text_stock_now",
         "text_lag_runs_35d", "payload_now", "legacy_runs_35d")}
     assert counts == {"churn_28d": 261, "measure_view_now": 108, "measure_gaps_28d": 2_958,
-                      "stock_medians_6w": 754, "legacy_medians_35d": 2_310, "location_now": 9,
+                      "stock_medians_6w": 754, "legacy_medians_35d": 2_310,
+                      "location_view_now": 427,
                       "text_lane_28d": 29, "text_stock_now": 1, "text_lag_runs_35d": 96,
                       "payload_now": 3, "legacy_runs_35d": 1_047}
     gaps = _series(_GAPS, "at")
@@ -832,9 +857,9 @@ def test_the_fixtures_hold_the_rows_and_totals_their_exports_read() -> None:
     assert all(ppm2_basis(main, deal) for _, cells in gaps for _, main, deal in cells)
     weekly = [(grain, row) for _, cells in _series(_WEEKLY, "at") for grain, row in cells.items()]
     assert all(_part(row["basis"]) == ppm2_basis(main, deal) for (_, main, deal), row in weekly)
-    no_town = {source: no_row + missing for source, _, no_row, missing, *_ in _location_now()
-               if no_row + missing}
-    assert no_town == {"ceskereality": 39, "mmreality": 1, "realitymix": 3}
+    townless = {(source, cls): n for cohort, source, metric, cls, n, *_ in _location_view()
+                if cohort == "listing" and metric == "town" and cls in ("unresolved", "withheld") and n}
+    assert townless == {("ceskereality", "withheld"): 26, ("mmreality", "withheld"): 1}
     artifacts = [r["artifact"] for r in _fixture("health_quality_legacy_runs_35d.csv")
                  if r["artifact"]]
     assert {a: artifacts.count(a) for a in set(artifacts)} == {"not_run": 125, "skipped": 58,
@@ -862,7 +887,7 @@ def test_the_reading_model_reproduces_each_days_read_counts() -> None:
 def test_every_check_emits_every_subject_on_every_tick_and_every_result_carries_cells() -> None:
     """An omitted subject strands its incident for 7 days: no replay ever drops one."""
     # The heal replay is left out: its view gains the gap series' cells when that starts (09-22).
-    for (_, results), size in ((_parsing(), 541), (_quality(), 231), (_location(), 10),
+    for (_, results), size in ((_parsing(), 541), (_quality(), 231), (_location(), 61),
                                (_text(), 2)):
         assert {frozenset(_cells(r)) for _, r in results} == {frozenset(_cells(results[0][1]))}
         assert len(_cells(results[0][1])) == size
@@ -1110,6 +1135,12 @@ def test_the_measure_gap_arm_reads_no_watch_on_the_daily_stock_gaps() -> None:
 _STOCK_AT = _utc("2026-10-19T14:23:57Z")
 
 
+def _location_ship() -> list[_Result]:
+    with mock.patch.object(qu, "RESOLVER_VERSION", _EXPORT_RESOLVER):
+        return _replay([_LOCATION_AT], qu.check_location_town_coverage,
+                       lambda at, h: _location_answers(list(_location_view()), at, h))
+
+
 def _ship() -> dict[str, tuple[_Ladder, list[_Result]]]:
     """Each gauge on its own export: the view, the location counts and the lane's waiting split."""
     view = [tuple(row[c] for c in qu.PLAUSIBILITY_COLUMNS) for row in _view_now()]
@@ -1119,10 +1150,7 @@ def _ship() -> dict[str, tuple[_Ladder, list[_Result]]]:
     runs = {
         "data_quality": _replay([_VIEW_AT], qu.check_data_quality, lambda at, h: {
             qu.PLAUSIBILITY_SQL: view, qu._URL_SQL: _url_rows()}),
-        "location_town_coverage": _replay([_LOCATION_AT], qu.check_location_town_coverage,
-                                          lambda at, h: {
-            qu._LOCATION_TOWN_COVERAGE_SQL: list(_location_now()),
-            qu._REGISTRY_LIVENESS_SQL: [("ruian:2026-09-30", 19, None, None)]}),
+        "location_town_coverage": _location_ship(),
         "text_extraction": _replay([_STOCK_AT], qu.check_text_extraction, lambda at, h: {
             text_lane.MODEL_SQL: [(_MODEL,)], text_lane.LLM_TEXT_SOURCES_SQL: [("bazos",)],
             text_lane.EXTRACTION_LATENCY_SQL: _flow_rows(at), text_lane.ELIGIBLE_LAG_SQL: [lane]}),
@@ -1132,17 +1160,18 @@ def _ship() -> dict[str, tuple[_Ladder, list[_Result]]]:
             for key, results in runs.items()}
 
 
-def test_at_ship_the_gauges_problems_are_the_realitymix_floor_and_the_43_ads_with_no_town() -> None:
-    """D8 and D9's expected reds and nothing else: text_extraction reads OK on its exports."""
+def test_at_ship_the_gauges_problems_are_the_realitymix_floor_and_the_positions_outside_a_town() -> None:
+    """D8's expected red, W1's (ruling Q3: every portal's positions outside their town, and the
+    served properties'), and nothing else: text_extraction reads OK on its exports."""
     # data_quality reproduces the ship-time count its build read (231 cells: 1 Problem, 3 Watch,
     # 163 OK, 64 Not measured); the lane waits on 55,020 archived ads at 12,845 readings a day,
     # 4.3 d.
     ship = _ship()
     opened = {key: [s for s, _, _ in _onsets(ladder, key)] for key, (ladder, _) in ship.items()}
-    assert opened == {"data_quality": ["floor/realitymix/komercni-pronajem"],
-                      "location_town_coverage": ["ceskereality/town", "mmreality/town",
-                                                 "realitymix/town"],
-                      "text_extraction": []}
+    outside = sorted([f"{p}/outside" for p in _fleet()] + ["served/outside"])
+    assert {key: sorted(subjects) for key, subjects in opened.items()} == {
+        "data_quality": ["floor/realitymix/komercni-pronajem"], "location_town_coverage": outside,
+        "text_extraction": []}
     quality = ship["data_quality"][1][0][1]
     statuses = [c["status"] for c in quality["details"]["cells"]]
     assert {s: statuses.count(s) for s in set(statuses)} == {"fail": 1, "warn": 3, "ok": 163,
@@ -1157,29 +1186,44 @@ def test_at_ship_the_gauges_problems_are_the_realitymix_floor_and_the_43_ads_wit
 # --- location_town_coverage -----------------------------------------------------------------------
 
 
-def test_the_location_gauge_rings_the_43_ads_once_and_recovers_on_a_synthetic_zero() -> None:
-    """Day one opens three cells in one onset; the synthetic zero recovers them in one notice."""
-    # SYNTHETIC from day two: the 14:22:01Z reading holds through the day-one reminder (24 h), and
-    # from the pass after it (30 h in) every one of the 43 has a town. Recovery needs an OK held
-    # 11.5 h, so the third OK pass closes all three.
+def test_the_location_scorecard_at_ship_reads_what_the_export_holds() -> None:
+    """W1's day one, mid-sweep: no ad with town-bearing evidence lacks a town; 27 page-withheld ads
+    and 21 published properties read Watch, as do two portals' radius cover (bezrealitky's 7 and
+    maxima's 11 sampled ads are under the 30 it needs) and the sweep's first reading."""
+    cells = _cells(_location_ship()[0][1])
+    statuses = [c["status"] for c in cells.values()]
+    assert {st: statuses.count(st) for st in set(statuses)} == {"fail": 10, "warn": 6, "ok": 43,
+                                                                "unknown": 2}
+    assert {s: c["value"] for s, c in cells.items() if c["status"] == "warn"} == {
+        "ceskereality/town_withheld": 26, "mmreality/town_withheld": 1, "served/town_withheld": 21,
+        "bazos/accuracy": 57.41, "sreality/accuracy": 87.93, "freshness/version": 393_248}
+    assert {s for s, c in cells.items() if c["status"] == "unknown"} == {
+        "bezrealitky/accuracy", "maxima/accuracy"}
+    assert {s: c["value"] for s, c in cells.items() if s.endswith("/town")} == {
+        **{f"{p}/town": 0 for p in _fleet()}, "served/town": 0}
+    assert cells["served/outside"]["value"] == 11_568
+    assert cells["served/outside"]["facts"]["by_portal"]["bazos"] == 10_459
+    assert (cells["served/street"]["value"], cells["served/street"]["status"]) == (49.03, "ok")
+    assert cells["idnes/town"]["facts"]["town_share"] == 1.0, "17,668 abroad, out of the share"
+    assert cells["freshness/evidence"]["facts"]["backfill"] == 1_076_970
+    assert cells["registry"]["message"] == (
+        "the current registry ruian:2026-09-30 is 31 d old, nothing staged")
+
+
+def test_the_location_scorecard_rings_each_red_once_and_a_stalled_sweep_on_its_second_reading() -> None:
+    """Day one opens the ten outside cells in one onset. The sweep still running 6 h on opens
+    freshness/version; once it is done (12 h in) that cell recovers on an OK held 11.5 h, and the
+    one sreality address point with no KÚ opens sreality/ku at the running resolver version."""
     ladder, results = _location()
-    zero = _ZERO_FROM
-    recovered = zero + 2 * _SIX_HOURS
-    assert _onsets(ladder, "location_town_coverage") == [
-        (subject, _LOCATION_AT, recovered)
-        for subject in ("ceskereality/town", "mmreality/town", "realitymix/town")]
-    three = ("ceskereality/town", "mmreality/town", "realitymix/town")
-    assert [(t.kind, t.subjects, t.at) for t in ladder.told] == [
-        ("onset", three, _LOCATION_AT), ("reminder", three, _LOCATION_AT + _DAY),
-        ("recovery", three, recovered)]
-    assert [(r["status"], r["value"]) for at, r in results if at < zero] == [("fail", 3)] * 5
-    assert {(r["status"], r["value"]) for at, r in results if at >= zero} == {("ok", 0)}
-    red = _cells(results[0][1])["ceskereality/town"]
-    assert red["message"] == ("39 of 48,744 active ads first written more than 24 h ago have no "
-                              "town: 0 with no location row, 39 not foreign with no town (rule 25: "
-                              "red until zero)")
-    assert _cells(results[0][1])["registry"]["message"] == (
-        "the current registry ruian:2026-09-30 is 19 d old, nothing staged")
+    outside = [f"{p}/outside" for p in _fleet()] + ["served/outside"]
+    assert sorted(_onsets(ladder, "location_town_coverage")) == sorted(
+        [(subject, _LOCATION_AT, None) for subject in outside]
+        + [("freshness/version", _LOCATION_AT + _SIX_HOURS, _SWEPT_FROM + 2 * _SIX_HOURS),
+           ("sreality/ku", _SWEPT_FROM, None)])
+    assert [(r["status"], r["value"]) for _, r in results] == [("fail", 10)] + [("fail", 11)] * 12
+    version = [(c["status"], c["value"]) for _, c in _arm(results, "freshness/version")]
+    assert version[:3] == [("warn", 393_248), ("fail", 393_248), ("ok", 0)]
+    assert {c["status"] for _, c in _arm(results, "ceskereality/town_withheld")} == {"warn"}
 
 
 # --- text_extraction over 28 days -----------------------------------------------------------------
