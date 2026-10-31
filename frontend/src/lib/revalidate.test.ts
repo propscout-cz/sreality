@@ -411,6 +411,65 @@ describe("'mount' debts and a second reader", () => {
   });
 });
 
+describe("'mount' debts and a scroll", () => {
+  /* Browse's cards, cached and owed 'mount', get their first reader; `answers` serves the reads in turn. */
+  function remount(staleTime: number, answers: Promise<string>[]) {
+    const qc = client();
+    qc.setQueryData<InfiniteData<string>>(['list'], { pages: ['p0'], pageParams: [0] });
+    void revalidate(qc, [{ queryKey: ['list'], mode: 'mount' }]);
+    const fn = vi.fn(async ({ pageParam }: { pageParam: number }) => answers.shift() ?? `p${pageParam}`);
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: string, all: string[]) => all.length,
+      staleTime,
+    });
+    observer.subscribe(() => {});
+    const params = () => fn.mock.calls.map(([ctx]) => ctx.pageParam);
+    return { qc, observer, params };
+  }
+
+  it.each([
+    ['the payment its mount started', Infinity],
+    ['the mount read it joined', 0],
+  ])('a page that cancels %s is followed by one full read', async (_name, staleTime) => {
+    const payment = deferred<string>();
+    const { qc, observer, params } = remount(staleTime, [payment.promise]);
+    await flush();
+    expect(params()).toEqual([0]); // the mount's payment, in flight
+
+    await observer.fetchNextPage(); // the scroll: cancels it, reads page 1
+    payment.resolve('stale');
+    await flush();
+    await flush();
+
+    expect(params()).toEqual([0, 1, 0, 1]);
+    expect(isOwed(qc, ['list'])).toBe(false);
+    expect(qc.getQueryData<InfiniteData<string>>(['list'])?.pages).toEqual(['p0', 'p1']);
+  });
+
+  it('a hold that drops that page leaves the read to its release', async () => {
+    const payment = deferred<string>();
+    const page = deferred<string>();
+    const { qc, observer, params } = remount(Infinity, [payment.promise, page.promise]);
+    await flush();
+    void observer.fetchNextPage(); // cancels the payment
+    await flush();
+    const hold = holdReads(qc, [{ queryKey: ['list'] }]); // a click while the page is in flight: drops it
+    payment.resolve('stale');
+    page.resolve('dropped');
+    await flush();
+    expect(params()).toEqual([0, 1]);
+
+    hold.release();
+    await flush();
+    await flush();
+    expect(params()).toEqual([0, 1, 0]);
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+});
+
 describe('holds', () => {
   it('park an owed read until the last overlapping hold releases, then pay it once', async () => {
     const qc = client();

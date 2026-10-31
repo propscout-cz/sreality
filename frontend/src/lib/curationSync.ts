@@ -1,6 +1,8 @@
-/* THE table→read map of curation (docs/design/curation-sync.md § 3.5). The map
- * and its lookups are pure; `revalidateTables` owes reads through lib/revalidate
- * and `applySyncQueryDefaults` sets the client's query defaults.
+/* THE table→read map of curation (docs/design/curation-sync.md § 3.5). The map,
+ * `deletedTables` and `tableReads` are pure; `familyTargets` reads (never writes)
+ * the query cache for the Browse cohorts it holds; `revalidateTables` owes reads
+ * through lib/revalidate and `applySyncQueryDefaults` sets the client's query
+ * defaults.
  *
  * One row per curation TABLE: its family (the unit the curation clock counts),
  * the reads that select it — or a view or policy that joins it — and the lens of
@@ -79,15 +81,18 @@ export const SYNC_TABLES = {
 
 export type SyncTable = keyof typeof SYNC_TABLES;
 
-/* What a DELETE on a table takes with it: the foreign keys `on delete cascade`
- * from migrations 202 (memberships) and 610 (collection shares). */
-const CASCADES: Readonly<Partial<Record<SyncTable, readonly SyncTable[]>>> = {
+/* What a DELETE on a table writes besides it: every foreign-key action onto a
+ * synced table — `on delete cascade` from migrations 202 (memberships) and 610
+ * (collection shares), `on delete set null (note_id)` from 660 (a note's files
+ * stay, unlinked). A stage DELETE has none: 295's card key restricts it. */
+const ON_DELETE: Readonly<Partial<Record<SyncTable, readonly SyncTable[]>>> = {
   collections: ['collection_properties', 'collection_shares'],
   tags: ['property_tags'],
+  property_notes: ['property_attachments'],
 };
 
-/** The tables a DELETE on `table` writes: itself and every table it cascades into. */
-export const deletedTables = (table: SyncTable): SyncTable[] => [table, ...(CASCADES[table] ?? [])];
+/** The tables a DELETE on `table` writes: itself and every table a foreign-key action (cascade or set null) writes. */
+export const deletedTables = (table: SyncTable): SyncTable[] => [table, ...(ON_DELETE[table] ?? [])];
 
 const entry = (table: SyncTable): SyncEntry => SYNC_TABLES[table];
 

@@ -3115,7 +3115,7 @@ renumber.** Navigate by area:
     and ONE answer to "what does a collection write re-read": the tables it writes, through
     `lib/curationSync`'s map (`revalidateTables`) — the menu and the collection page's row-remove
     (`settleCollectionWrite`, `collection_properties`), BOTH collection DELETEs
-    (`deletedTables('collections')`: the map's `CASCADES` adds what the foreign keys take along), a share or leave
+    (`deletedTables('collections')`: the map's `ON_DELETE` adds what the foreign keys take along), a share or leave
     (`collection_shares`, which also moves whose shared notes the caller reads) and the merge
     (the carriers re-point `collection_properties`, so the map's keys change). The hand-typed key
     lists it replaced had drifted — every one but the menu forgot the shared map — the same failure

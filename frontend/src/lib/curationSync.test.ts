@@ -75,10 +75,17 @@ describe('tableReads', () => {
 });
 
 describe('deletedTables', () => {
-  it('a collection delete writes its memberships and shares, a tag delete its memberships', () => {
+  it('a collection delete writes its memberships and shares, a tag delete its memberships, a note delete its files', () => {
     expect(deletedTables('collections')).toEqual(['collections', 'collection_properties', 'collection_shares']);
     expect(deletedTables('tags')).toEqual(['tags', 'property_tags']);
-    expect(deletedTables('property_notes')).toEqual(['property_notes']);
+    expect(deletedTables('property_notes')).toEqual(['property_notes', 'property_attachments']);
+    expect(deletedTables('pipeline_stages')).toEqual(['pipeline_stages']);
+  });
+
+  it('the files a note delete unlinks add no read the note does not', () => {
+    expect(hashes(tableReads(deletedTables('property_notes'), null))).toEqual(
+      hashes(tableReads(['property_notes'], null)),
+    );
   });
 
   it('the shares a collection delete takes add no read its memberships do not', () => {
