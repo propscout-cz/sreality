@@ -489,9 +489,9 @@ _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
 _PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
 # The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
 _NOTIFICATIONS_BUDGET_S = 5.0
-# The curation clock's two reads: twelve catalog rows and the board ledger's last day (~10 events), so 5 s. Every
-# worker alarm due at once now owes 7 x 45 + 180 + 5 + 5 = 505 s, past the 500 s pass: the last of them (parsing)
-# no longer fits and defers one pass, the tested `defer_unfit` path (docs/design/curation-sync.md § 3.9).
+# The curation clock's two reads: twelve catalog rows and the board ledger's last day (~10 events), so 5 s. With it
+# WORKER_ALARMS_DUE_AT_ONCE_S passed the worker's pass: the last alarm (parsing) defers one pass when every alarm is
+# due at once, the tested `defer_unfit` path (docs/design/curation-sync.md § 3.9).
 _CURATION_SYNC_BUDGET_S = 5.0
 
 
@@ -733,6 +733,11 @@ def _uncelled_result(key: str, status: str) -> dict[str, Any]:
 def lane_budget_for(checks: Sequence[Check]) -> float:
     """A lane owes every check it runs that check's own budget, so none can starve another."""
     return float(sum(c.budget_s for c in checks))
+
+
+# What the worker's pass owes when every alarm it hosts falls due at once: the one figure the worker's pass budget
+# (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS), its test and the two docs that state it are weighed against.
+WORKER_ALARMS_DUE_AT_ONCE_S = lane_budget_for([c for c in CHECKS if c.host == _WORKER and c.cls == "alarm"])
 
 
 # A check fits the pass while its budget is at most what the pass has left plus this slack. The
