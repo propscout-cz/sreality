@@ -1,50 +1,60 @@
 /* The content script on every portal we scrape: the entry and the router.
  *
- * A listing's detail page gets the side sheet (panel.ts, sheet.ts); any other
- * page on a portal host gets the search-page overlay (index_overlay.ts: per-card
- * controls and the corner dock). Both draw from ONE store (store.ts), created
- * here over the one transport: every network call goes to the background worker
- * through chrome.runtime.sendMessage (it calls from the extension's origin, not
- * the portal page's); this script never fetches. */
+ * Each tab owns its SUBJECT — what the side panel (sidepanel.ts) shows while this
+ * tab is its window's active one: a detail page's ad, or the search card last
+ * opened in the panel; none on any other page. A detail page also gets the edge
+ * tab (edge_tab.ts), the panel's opener; any other page on a portal host gets the
+ * search-page overlay (index_overlay.ts: per-card controls and the corner dock).
+ * Both draw from this page's store (store.ts), over the one transport (transport.ts):
+ * every network call goes to the background worker, which calls from the
+ * extension's origin, not the portal page's; this script never fetches. The
+ * side panel of this tab's window holds a port to it while open: the subject goes up
+ * it, and each side re-reads a property the other wrote. */
 
-import { detailRef, portalForHost } from '../../frontend/src/lib/portalIds';
+import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import { followAppearance } from './appearance';
-import { EXTENSION_RELOADED_DETAIL } from './config';
+import { PANEL_PORT } from './config';
+import { createEdgeTab } from './edge_tab';
 import { runIndexOverlay, type IndexOverlayHandle } from './index_overlay';
-import { createPanel } from './panel';
 import { onAccountChange } from './session';
 import { createStore, sleep } from './store';
-import type { ApiMessage, ApiResult, AuthState, RouteMessage } from './types';
+import { send } from './transport';
+import type { PanelCall, PanelSubject, PortMessage, RouteMessage } from './types';
 
-/* An extension reload, update, disable or removal orphans the content script in an
- * open tab (Chrome re-injects only on page load): sendMessage then throws "Extension
- * context invalidated." synchronously. send() resolves with a failure instead of
- * rejecting — every busy flag waits for a result — and says what fixes it (a detail
- * the search page's notice recognises, to offer a reload instead of a retry). */
-function runtimeDetail(message: string | undefined): string {
-  if (message != null && /context invalidated/i.test(message)) return EXTENSION_RELOADED_DETAIL;
-  return message ?? 'runtime error';
+let subject: PanelSubject | null = null;
+/* The side panel of this tab's window, while it is open. */
+let panelPort: chrome.runtime.Port | null = null;
+
+function post(message: PortMessage): void {
+  try { panelPort?.postMessage(message); } catch { /* the panel closed, or this script was orphaned */ }
 }
 
-function send(message: ApiMessage): Promise<ApiResult<unknown>> {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage(message, (response: ApiResult<unknown>) => {
-        const error = chrome.runtime.lastError;  // always read: Chrome logs an unchecked one
-        resolve(error ? { ok: false, status: 0, detail: runtimeDetail(error.message) } : response);
-      });
-    } catch (err) {
-      resolve({ ok: false, status: 0, detail: runtimeDetail(err instanceof Error ? err.message : String(err)) });
-    }
-  });
+/* Chrome opens its side panel only on a user action, so a click calls this at once:
+ * the background opens the panel while the gesture is live. Opened or not, the panel
+ * of this window connects to a tab that calls. */
+function callPanel(open: boolean): void {
+  const message: PanelCall = { type: 'panel', open };
+  try {
+    chrome.runtime.sendMessage(message).catch(() => { /* nobody answers a call */ });
+  } catch {
+    // Orphaned (chrome.runtime.id is gone): an extension update or reload under this page.
+    edge.setOrphaned();
+  }
 }
 
-const store = createStore({ send, sleep, onAccountChange });
-const panel = createPanel(store);
+function setSubject(next: PanelSubject | null): void {
+  subject = next;
+  post({ type: 'subject', subject });
+}
+
+const store = createStore({
+  send, sleep, onAccountChange, written: (propertyId) => post({ type: 'property_written', property_id: propertyId }),
+});
+const edge = createEdgeTab(store, () => callPanel(true));
 
 /* What a URL means to US — the LISTING it shows, not its query string. SPAs
  * rewrite the URL for things that don't change the subject (a gallery lightbox,
- * tracking params); keying on the raw href would re-open the sheet on each and
+ * tracking params); keying on the raw href would re-open the panel on each and
  * lose a half-typed note or an edited assumption. Index pages collapse to one key:
  * paginating doesn't restart the overlay, whose observer picks up new cards. */
 function routeKey(url: string): string {
@@ -66,12 +76,18 @@ function renderForUrl(url: string): void {
 
   const ref = detailRef(url);
   if (ref != null) {
-    panel.open(ref, url).catch((err: unknown) => { console.error('[mf-ext] detail boot failed', err); });
+    setSubject({ ref, url });
+    edge.show(ref).catch((err: unknown) => { console.error('[mf-ext] edge tab failed', err); });
     return;
   }
-  panel.close();
+  setSubject(null);
+  edge.remove();
   if (portalForHost(window.location.hostname) == null) return;
-  runIndexOverlay(store, panel.open)
+  const openCard = (cardRef: PortalRef, href: string): void => {
+    setSubject({ ref: cardRef, url: href });
+    callPanel(true);
+  };
+  runIndexOverlay(store, openCard)
     .then((overlay) => {
       // Another route change landed while the overlay was starting: adopt nothing.
       if (lastRouteKey !== key) overlay.stop();
@@ -84,9 +100,30 @@ chrome.runtime.onMessage.addListener((message: RouteMessage) => {
   if (message.type === 'route_changed') renderForUrl(message.url);
 });
 
-// The profile's scheme and theme on every themed shadow host (appearance.ts).
-followAppearance(async () => {
-  const auth = await store.call<AuthState>({ type: 'get_auth_state' });
-  return auth.ok ? auth.data.appearance : null;
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== PANEL_PORT) return;
+  panelPort = port;
+  port.onMessage.addListener((message: PortMessage) => {
+    if (message.type === 'property_written') store.reread(message.property_id);
+  });
+  port.onDisconnect.addListener(() => {
+    if (panelPort !== port) return;
+    panelPort = null;
+    edge.setPanelOpen(false);
+  });
+  edge.setPanelOpen(true);
+  post({ type: 'subject', subject });
 });
+
+// The profile's scheme and theme on every themed shadow host (appearance.ts).
+followAppearance(store);
 renderForUrl(window.location.href);
+callPanel(false);
+/* The back/forward cache closes the panel's port as the page goes in, and the frozen
+ * page hears no onDisconnect: drop it here; back out, call the panel again. */
+window.addEventListener('pagehide', (e) => {
+  if (!e.persisted) return;
+  panelPort = null;
+  edge.setPanelOpen(false);
+});
+window.addEventListener('pageshow', (e) => { if (e.persisted) callPanel(false); });

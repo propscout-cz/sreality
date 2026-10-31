@@ -32,11 +32,12 @@ function hasCaret(node: Element | null): node is Caret {
   return node != null && 'setSelectionRange' in node && (node as Caret).selectionStart != null;
 }
 
-/* Rebuild a shadow root's content without taking focus from the page: the focused
- * element (by data-key) and its caret come back ONLY when focus was inside `root`
- * before — a background render never pulls focus out of the portal page. Read
- * before the rebuild because Chrome blurs a focused element as it is removed.
- * `fallback` takes focus when the keyed element is gone from the rebuild. */
+/* Rebuild a root's content — a shadow root on the portal page, or the side panel's
+ * document — keeping its focus: the focused element (by data-key) and its caret come
+ * back ONLY when focus was inside `root` before, so a background render never pulls
+ * focus out of the portal page. Read before the rebuild because Chrome blurs a
+ * focused element as it is removed. `fallback` takes focus when the keyed element
+ * is gone from the rebuild. */
 export function keepFocus(
   root: FocusRoot, rebuild: () => void, fallback?: () => HTMLElement | null,
 ): void {

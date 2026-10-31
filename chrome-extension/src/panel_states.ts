@@ -1,6 +1,7 @@
-/* The sheet when there is no property to show: signed out, an ad we do not hold
- * (with the add-to-database flow), a failure, and the static skeleton that
- * stands while the first answer is out. One card each, the old panel's words. */
+/* The panel when there is no property to show: no ad in the active tab, signed
+ * out, an ad we do not hold (with the add-to-database flow), a failure, and the
+ * static skeleton that stands while the first answer is out. One card each, the
+ * old panel's words. */
 
 import { buildCard } from './card';
 import { h, setBusy } from './dom';
@@ -18,6 +19,15 @@ function alertLine(text: string): HTMLElement {
   const p = h('p', 'err', text);
   p.setAttribute('role', 'alert');
   return p;
+}
+
+/* The active tab shows no ad: a search page, a page off our portals — or a listing whose
+ * page predates an extension update (the panel cannot tell: only a reload reconnects it). */
+export function emptyCard(): HTMLElement {
+  const card = buildCard({ title: 'Žádný inzerát' });
+  const text = 'Vyberte inzerát na podporovaném portálu. Pokud ho máte otevřený, obnovte stránku.';
+  card.body.appendChild(h('p', '', text));
+  return card.section;
 }
 
 /* Every route needs a session: one clean prompt instead of a raw 401. */

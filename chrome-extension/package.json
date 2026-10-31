@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build --mode content && vite build --mode background",
-    "watch": "vite build --mode content --watch",
+    "build": "vite build --mode content && vite build --mode background && vite build --mode sidepanel",
+    "watch": "vite build --watch --mode",
     "type-check": "tsc --noEmit",
     "test": "node --test src/*.test.ts release/*.test.ts",
     "package": "node release/make_store_package.ts dist store"

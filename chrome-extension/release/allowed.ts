@@ -10,7 +10,7 @@ export interface AllowedList {
 }
 
 export const ALLOWED: AllowedList = {
-  permissions: ['storage', 'identity', 'alarms', 'webNavigation'],
+  permissions: ['storage', 'identity', 'alarms', 'webNavigation', 'sidePanel'],
   // Empty: the background worker reaches the API and the auth service under ordinary CORS.
   hostPermissions: [],
   contentScriptMatches: [
