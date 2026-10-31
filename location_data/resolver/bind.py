@@ -1098,10 +1098,33 @@ def elect_pin(claims: Sequence[Claim]) -> Claim | None:
     return eligible[0] if eligible else None
 
 
-def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecision) -> Position:
+def pin_inside_bound_obec(
+    binding: Binding, pin_claim: Claim | None, registry: RegistryView
+) -> bool | None:
+    """The ONE containment question `place()` and CHECK both read (v5.9): does the elected pin
+    lie inside the obec the CLAIMS bound? None when it is not asked — no pin, no bound town (a
+    region-only bind), or a town the pin itself established (R7/R8, where the comparison is
+    circular). The drain pre-answers `containing_obec` for every claim coordinate in the slice,
+    so this is one cached read per listing."""
+    pin = pin_claim.point if pin_claim is not None else None
+    if pin is None or binding.obec_kod is None or binding.pin_derived:
+        return None
+    covering = registry.containing_obec(*pin)
+    return covering is not None and covering.code == binding.obec_kod
+
+
+def place(
+    binding: Binding,
+    pin_claim: Claim | None,
+    *,
+    declared: DeclaredPrecision,
+    pin_inside_bound_obec: bool | None = None,
+) -> Position:
     """The ONE precedence rule (W18), in order:
 
         registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  (FILL's unit point)
+                                                          (unless DECLARED blurred and outside
+                                                           the bound obec, v5.9 — see below)
 
     with the street beating the pin only when the pin cannot be trusted over it, which is
     exactly three states:
@@ -1121,6 +1144,15 @@ def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecis
     reads as a ceiling of `medium`. An exact pin that AGREES with the street keeps the
     position: the pin is the finer of two true answers.
 
+    The PIN rung has one exception of its own (v5.9, operator ruling 2026-10-30: "the words
+    decide"): a pin the portal DECLARES blurred that lies OUTSIDE the obec the claims bound is
+    not a position at all. The row is left unplaced here and FILL stands it at the named
+    entity's own point (a bound část's doors, else the obec's point), its radius floored by that
+    entity's reach; the pin stays EVIDENCE, so CHECK still records `pin_outside_obec`. An EXACT
+    or UNDECLARED pin outside the town is kept as before. `pin_inside_bound_obec` is
+    `pin_inside_bound_obec()`'s answer, handed in by `core` (None = never asked). Figures and
+    history: `version.py` v5.9, architecture § Location data.
+
     WHICH POINT WINS HERE DOES NOT DECIDE THE GRAIN, and deliberately not. A portal's
     declared precision is a statement about its own COORDINATE, so `grade.grade` applies the
     `DECLARED_CAP` ladder only to a grain the PIN established (R7/R8) — never to one a
@@ -1139,7 +1171,7 @@ def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecis
     loader has never written: it looked like a fallback and was dead in production on every
     one of the 8,706 towned rows that shipped `geom NULL`.
     """
-    pin = (pin_claim.lat, pin_claim.lon) if pin_claim else None
+    pin = pin_claim.point if pin_claim is not None else None
     if binding.target_kind == "address_point" and binding.lat is not None:
         return Position(
             lat=binding.lat, lon=binding.lon, origin="registry_point",
@@ -1166,6 +1198,8 @@ def place(binding: Binding, pin_claim: Claim | None, *, declared: DeclaredPrecis
             source_claim_ids=(pin_claim.id,),  # type: ignore[union-attr]
         )
     if pin_claim is not None and pin is not None:
+        if declared.blurred and pin_inside_bound_obec is False:
+            return Position(lat=None, lon=None, origin="none")
         return Position(
             lat=pin[0], lon=pin[1], origin="portal_pin", blurred=declared.blurred,
             source_claim_ids=(pin_claim.id,),

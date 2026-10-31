@@ -99,6 +99,13 @@ class Claim:
     def has_position(self) -> bool:
         return self.lat is not None and self.lon is not None
 
+    @property
+    def point(self) -> tuple[float, float] | None:
+        """(lat, lon) when the claim carries a coordinate, else None."""
+        if self.lat is None or self.lon is None:
+            return None
+        return (float(self.lat), float(self.lon))
+
 
 @dataclass(frozen=True, slots=True)
 class NormalizedClaim:
