@@ -21,6 +21,7 @@ import * as queries from '@/lib/queries';
 import { CARD_PAGE_SIZE, curationKeys, type CardRow, type PipelineMembers } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { collectionCardFilters } from '@/lib/collectionCards';
+import { revalidateTables } from '@/lib/curationSync';
 import { propertyPath } from '@/lib/listingUrl';
 import { cardRow } from '@/test/cardRow';
 import { watchReads } from '@/test/reads';
@@ -260,15 +261,51 @@ describe('<CollectionDetail>', () => {
       clear();
       fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: ' Vinohrady 2 ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-      await waitFor(() =>
-        expect(api.updateCollection).toHaveBeenCalledWith(1, {
-          name: 'Vinohrady 2',
-          description: 'Flats worth a second look.',
-        }),
-      );
+      /* Only what the user changed (lib/useServerDraft): the description stays out. */
+      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { name: 'Vinohrady 2' }));
       await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull());
       expect(actions()).toHaveFocus();
       await waitFor(() => expect(reread(curationKeys.collection(1))).toBe(true));
+    });
+
+    /* D3 (lib/useServerDraft): the open editor follows the collection while a field
+       is untouched, and saves only what the user changed. */
+    it('follows a rename made elsewhere, and a description edit saves the description alone', async () => {
+      vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, description: 'Jiný popis' });
+      const { qc } = renderPage();
+      await choose('Přejmenovat');
+      const name = screen.getByRole('textbox', { name: 'Name' });
+      vi.mocked(api.getCollection).mockResolvedValue({
+        ...DATA,
+        collection: { ...DATA.collection, name: 'Vinohrady (jinde)' },
+      });
+      await act(async () => {
+        await revalidateTables(qc, ['collections']);
+      });
+      await waitFor(() => expect(name).toHaveValue('Vinohrady (jinde)'));
+      fireEvent.blur(name);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'Jiný popis' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { description: 'Jiný popis' }));
+    });
+
+    it('keeps a typed name over a rename made elsewhere', async () => {
+      vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, name: 'Můj název' });
+      const { qc } = renderPage();
+      await choose('Přejmenovat');
+      const name = screen.getByRole('textbox', { name: 'Name' });
+      fireEvent.change(name, { target: { value: 'Můj název' } });
+      vi.mocked(api.getCollection).mockResolvedValue({
+        ...DATA,
+        collection: { ...DATA.collection, name: 'Vinohrady (jinde)', description: 'Jinde' },
+      });
+      await act(async () => {
+        await revalidateTables(qc, ['collections']);
+      });
+      expect(name).toHaveValue('Můj název');
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('Jinde'));
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { name: 'Můj název' }));
     });
 
     it('Cancel writes nothing and flips back, focus on ⋯', async () => {

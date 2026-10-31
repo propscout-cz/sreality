@@ -910,7 +910,11 @@ rules. Identify which one a task belongs to before you start.
   same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
   artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
   remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
-  board, and "Upravit jako", stay desktop-only. Its one filter, **Lokalita**, is the desktop bar's:
+  board, and "Upravit jako", stay desktop-only. The pager keeps its place under a change made
+  elsewhere: the stage on screen and a tab tap's destination are stage ids, so a stage archived
+  elsewhere hands over to its neighbour and a reorder never retargets a tap, and a finger on the
+  pages or a scroll still settling holds the board and the members map (`useReadHold`), so a
+  remote change lands after the gesture. Its one filter, **Lokalita**, is the desktop bar's:
   the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
   `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
@@ -983,6 +987,10 @@ rules. Identify which one a task belongs to before you start.
   `queryClient.clear()`. `applySyncQueryDefaults` (no reconnect refetch under the curation roots)
   is wired only beside the curation clock's read, which replaces it; until then a reconnect
   re-reads curation as before.
+- **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
+  the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
+  change made elsewhere is never written back (D3: the stage, tag, collection, note and
+  artifact-link editors).
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
@@ -3779,7 +3787,10 @@ renumber.** Navigate by area:
     or resurrected) → revalidate AND release in one batch (`revalidate(vars, failed, qc)`): an owed
     read is paid only by a read that started after it was owed, and a key another write still holds
     is read once, after that write — the old unconditional invalidate let the first of two
-    overlapping writes repaint the second's patch away. Deliberately NOT `onError`, because the global
+    overlapping writes repaint the second's patch away. A kanban drag holds the board, the members
+    map and the stages from pick-up to drop (`useDragHold`, `pages/Pipeline.tsx`), so no re-read
+    repaints the columns under the card in hand; the drop calls `move.mutate` before the drag lets
+    go, so what the drag parked on the board waits for the move's settle and is read once. Deliberately NOT `onError`, because the global
     `MutationCache.onError` (`lib/mutationCache`) stays silent for any mutation that defines its
     own — which is why a failed board drag used to snap back with no explanation. A site may still
     declare `onError`, but only to show its OWN message (inline text, the split's 409 prompt): the

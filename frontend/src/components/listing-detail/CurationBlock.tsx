@@ -45,6 +45,7 @@ import {
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys } from '@/lib/queries';
 import { revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { useTagReads } from '@/lib/useCardTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
 import { isMine, shareAudience } from '@/lib/collectionRules';
@@ -518,8 +519,14 @@ const CARD = 'relative rounded-[var(--radius-md)] border px-3.5 py-3';
 /* What the editor sends: only what changed (viewing_at null drops the date). */
 type NotePatch = { body?: string; viewing_at?: string | null };
 
-const sameInstant = (a: string | null, b: string | null): boolean =>
-  a == null || b == null ? a === b : new Date(a).getTime() === new Date(b).getTime();
+/* The viewing slot as the editor's draft holds it (lib/useServerDraft is over
+ * text): '' for none, else "day time" — neither part ever holds a space. */
+const slotText = (slot: ViewingSlot | null): string => (slot ? `${slot.day} ${slot.time}` : '');
+const slotOf = (text: string): ViewingSlot | null => {
+  if (text === '') return null;
+  const [day = '', time = ''] = text.split(' ');
+  return { day, time };
+};
 
 const noteLabel = (prefix: string, note: Note): string =>
   note.viewing_at ? `Prohlídka ${viewingWhen(note.viewing_at)}` : `${prefix} ${fmtAbsolute(note.created_at)}`;
@@ -604,8 +611,13 @@ function OwnNoteRow({
   onFilesChanged: () => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(note.body);
-  const [draftSlot, setDraftSlot] = useState<ViewingSlot | null>(null);
+  /* The text and the date follow the note while untouched, and only what the user
+   * changed is saved: an edit made elsewhere while this editor is open is never
+   * written back (D3, lib/useServerDraft). */
+  const body = useServerDraft(note.body, trimDraft);
+  const when = useServerDraft(slotText(note.viewing_at ? viewingSlot(note.viewing_at) : null));
+  const draftSlot = slotOf(when.value);
+  const setDraftSlot = (slot: ViewingSlot | null) => when.onChange(slotText(slot));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -638,24 +650,29 @@ function OwnNoteRow({
   };
   const drop = useFileDrop((files) => void attach(files));
 
-  const trimmed = draft.trim();
+  const trimmed = body.value.trim();
   const openEditor = () => {
-    setDraft(note.body);
-    setDraftSlot(note.viewing_at ? viewingSlot(note.viewing_at) : null);
+    body.reset();
+    when.reset();
     setEditing(true);
   };
   const closeEditor = () => {
     setEditing(false);
-    setDraft(note.body);
+    body.reset();
+    when.reset();
     setError(null);
   };
-  /* Only what changed; a viewing may lose its text, a plain note never. */
+  /* Only what the user changed; a viewing may lose its text, a plain note never. */
   const canSaveEdit = draftSlot ? slotIsComplete(draftSlot) : trimmed.length > 0;
   const save = () => {
     const patch: NotePatch = {};
-    if (trimmed !== note.body) patch.body = trimmed;
-    const at = draftSlot ? slotInstant(draftSlot) : null;
-    if (!sameInstant(at, note.viewing_at ?? null)) patch.viewing_at = at;
+    const text = body.edited();
+    if (text != null) patch.body = text;
+    const slot = when.edited();
+    if (slot != null) {
+      const next = slotOf(slot);
+      patch.viewing_at = next ? slotInstant(next) : null;
+    }
     if (Object.keys(patch).length === 0) {
       closeEditor();
       return;
@@ -697,8 +714,10 @@ function OwnNoteRow({
           )}
           <textarea
             aria-label="Upravit poznámku"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            value={body.value}
+            onChange={(e) => body.onChange(e.target.value)}
+            onFocus={body.onFocus}
+            onBlur={body.onBlur}
             rows={3}
             maxLength={BODY_MAX}
             autoFocus
@@ -708,7 +727,7 @@ function OwnNoteRow({
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
-                {draft.length} / {BODY_MAX}
+                {body.value.length} / {BODY_MAX}
               </span>
               {/* Dropping the date of a viewing with no text would leave nothing: delete it instead. */}
               <ViewingToggle

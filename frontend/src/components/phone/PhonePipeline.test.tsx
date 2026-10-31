@@ -5,7 +5,7 @@
  * so the swipe itself (scroll-snap, the rAF sync) is a browser check; what is
  * pinned here is the wiring. */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +16,7 @@ import * as auth from '@/lib/auth';
 import { createMutationCache } from '@/lib/mutationCache';
 import { PHONE_PIPELINE_STAGE_KEY } from '@/lib/phonePipeline';
 import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/acting';
+import { revalidateTables } from '@/lib/curationSync';
 import { districtChipsToCsvParams } from '@/lib/filters';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as pinAudit from '@/lib/pinAudit';
@@ -179,7 +180,7 @@ function renderPipeline(entry = '/pipeline') {
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
@@ -191,7 +192,14 @@ function renderPipeline(entry = '/pipeline') {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
+
+/* A change made elsewhere, re-read as the curation clock re-reads it (lib/curationSync). */
+const changedElsewhere = (qc: QueryClient, table: 'pipeline_stages' | 'property_pipeline') =>
+  act(async () => {
+    await revalidateTables(qc, [table]);
+  });
 
 const panel = (name: RegExp) => screen.getByRole('tabpanel', { name });
 
@@ -345,6 +353,86 @@ describe('phone pipeline', () => {
     const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
     expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
     expect(button).toHaveAttribute('target', '_blank');
+  });
+});
+
+/* The pager follows changes made elsewhere without losing its place
+ * (docs/design/curation-sync.md Decision 10): the stage on screen is held by id,
+ * so is a tab tap's destination, and a gesture holds the board's reads. */
+describe('phone pipeline, changes made elsewhere', () => {
+  const tab = (name: RegExp) => screen.getByRole('tab', { name });
+
+  it('an archive of the viewed stage falls to its neighbour, not the mount-time stage', async () => {
+    localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, '4');
+    const { qc } = renderPipeline();
+    expect(await screen.findByRole('tab', { name: /^Zamítnuto/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(tab(/^Prohlídka/));
+    expect(tab(/^Prohlídka/)).toHaveAttribute('aria-selected', 'true');
+
+    /* Prohlídka emptied and archived on the desktop. */
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES.filter((st) => st.id !== 2));
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS.filter((c) => c.stage_id !== 2));
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
+    expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
+  });
+
+  describe('with the pages laid out', () => {
+    const scrollTo = Element.prototype.scrollTo;
+    let width: { mockRestore: () => void } | null = null;
+    beforeEach(() => {
+      width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(300);
+      /* The smooth scroll a tab tap starts: on its way, never arriving by itself. */
+      Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
+    });
+    afterEach(() => {
+      width?.mockRestore();
+      Element.prototype.scrollTo = scrollTo;
+    });
+
+    it('a reorder during a tab-tap scroll lands on the tapped stage', async () => {
+      const { qc } = renderPipeline();
+      const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+      fireEvent.click(tab(/^Koupeno/));
+      expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+
+      /* Koupeno moved after Zamítnuto elsewhere: page 2 is now Zamítnuto. */
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+        STAGES.map((st) => (st.id === 3 ? { ...st, position: 5 } : st)),
+      );
+      await changedElsewhere(qc, 'pipeline_stages');
+      await waitFor(() =>
+        expect(within(screen.getByRole('tablist', { name: 'Fáze' })).getAllByRole('tab').at(-1)).toBe(tab(/^Koupeno/)),
+      );
+
+      /* The tap's scroll arrives where it was aimed before the reorder. */
+      pager.scrollLeft = 600;
+      fireEvent.scroll(pager);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+      expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
+      expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBe('3');
+    });
+  });
+
+  it('a remote add during an active touch waits for the finger to lift', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+    fireEvent.touchStart(pager);
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+
+    fireEvent.touchEnd(pager);
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 });
 

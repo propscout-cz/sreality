@@ -2,7 +2,7 @@
  * the collection, and the card's bookmark opens the shared collection sheet,
  * where unchecking this collection is the removal — the desktop row's own
  * `removePropertyFromCollection` — and the card leaves the roll. */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
 import { collectionCardFilters } from '@/lib/collectionCards';
+import { revalidateTables } from '@/lib/curationSync';
 import * as queries from '@/lib/queries';
 import type { PipelineMembers } from '@/lib/queries';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
@@ -102,7 +103,7 @@ afterEach(() => vi.clearAllMocks());
 
 function renderPage(path = '/collection/7') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
@@ -112,6 +113,7 @@ function renderPage(path = '/collection/7') {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 const cardFor = (place: string) => screen.getByRole('link', { name: new RegExp(place) }).closest('article')!;
@@ -287,7 +289,32 @@ describe('<CollectionDetail> on the phone: the header actions (P31)', () => {
     await user.clear(name);
     await user.type(name, 'Na prohlídku');
     await user.click(screen.getByRole('button', { name: 'Uložit' }));
-    expect(api.updateCollection).toHaveBeenCalledWith(7, { name: 'Na prohlídku', description: 'Vysočany, do 8 mil.' });
+    /* Only what the user changed (lib/useServerDraft): the description stays out. */
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { name: 'Na prohlídku' });
+  });
+
+  /* D3 (lib/useServerDraft): the open editor follows the collection while a field is untouched. */
+  it('follows a rename made elsewhere while open, and writes nothing back over it', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, description: 'Jen popis' });
+    const user = userEvent.setup();
+    const { qc } = renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
+    const name = screen.getByLabelText('Název');
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, name: 'Na prohlídku (jinde)' },
+      properties: [member(1)],
+    });
+    await act(async () => {
+      await revalidateTables(qc, ['collections']);
+    });
+    await waitFor(() => expect(name).toHaveValue('Na prohlídku (jinde)'));
+    expect(screen.getByRole('button', { name: 'Uložit' })).toBeDisabled();
+    const description = screen.getByLabelText('Popis');
+    await user.clear(description);
+    await user.type(description, 'Jen popis');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { description: 'Jen popis' });
   });
 
   it('deletes after the two-step confirm from ⋯ → Smazat sbírku', async () => {
