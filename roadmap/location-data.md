@@ -25,6 +25,11 @@ is the tie-breaker). This track records sequencing + shipped state only.
 
 ## The simplification sprint (2026-09-11 →): one store, one lane, nine fields, no flags
 
+**2026-10-31 → the location data quality programme** (`docs/design/location-quality/PROGRAM.md`) holds the north star,
+the operator's rulings and waves W0–W8 that follow this sprint: one current claim per fact, one bound register
+entity, a pin inside the town the words bind, a measured radius, one scorecard, one resolve lane, one registry
+(the pre-mirror `admin_boundaries` table retired). This file keeps receiving the as-built bullet of each wave.
+
 **North star:** *every Czech listing has its town; one slim store answers every question; the app
 gets faster because there is less.* Every decision in this sprint is tested against those three
 clauses, in that order. CLAUDE.md rule 25 is the standing form. The audit that started it ("Where the
@@ -782,7 +787,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
      DROP+CREATE views, so AFTER the deploy), **508** (W4-c, destructive — operator word + `pg_dump`,
      05:20–05:30 UTC, AFTER the deploy) — ALL APPLIED 2026-09-13, alongside the captain's **511**
      (backup), **512** (506's cancelled rebuild, re-run at 3600 s) and **513** (v1 of the pin-audit
-     surface retired, a precondition for 508). Left: **514** (W5, additive — BEFORE its merge: it
+     surface retired, a precondition for 508). **514** APPLIED too (confirmed 2026-10-30: `browse_projection`
+     carries the served predicate, as 522's header measured; W5, additive — BEFORE its merge: it
      only HIDES rows, so a database that has it while the old code runs is correct; the reverse would
      leak the exempted set into the watchdog).
   3. ~~**The later lock-free wave**: narrow `listings_public` + `portal_listing_counts`~~ — **DONE,
@@ -1161,7 +1167,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (first draft 1.77 s; 2.51 s with no category), a kraj + obec pair 44 ms as before. Outreach stores
   chips in `target.districts` (609 rewrote the stored id lists; 0 campaigns existed); the API refuses
   the old id lists (422 on a request, 409 on a stored target). No index: the arms OR five columns.
-- **ONE PIN — a property's location is its location ad — in review 2026-10-20 (636 not yet applied)** (operator rulings
+- **ONE PIN — a property's location is its location ad — delivered 2026-10-20 (migrations 635 + 636 applied)** (operator rulings
   of 2026-10-19, R1/R3/R5/R7–R9; migrations 635 + 636; `docs/design/one-pin/PROGRAM.md`). A property used to
   stand at its canonical ad's point, so two ads of one building could draw a ring where a sibling ad
   held the exact address. `properties.location_listing_ref_id` now points at the ad ranked first by a
@@ -1204,9 +1210,48 @@ component is slimmed twice — each wave rewrites one component and slims its st
   where Prague's point was 9 km). A FILL placement's radius is floored by the placed-on entity's
   reach — the část's farthest door (Břevnov 2.9 km), the polygon's `containment_radius_m` (Praha
   17.6 km, against the 1 km and 750 m constants). The bump re-queues the corpus. Left: 266
-  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Autodedup
+  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Measured
+  2026-10-30 with every row at v5.8: active ads on their town's point idnes 9,401 (was 22,124),
+  realitymix 743 (12,806), remax 327 (539), maxima 22. Autodedup
   reads these points as `same_exact_pin` / `pin_pop` (any grain); a shared quarter centroid is a
   smaller population than Prague's one point, which is an operator call for that program.
+- **The words decide — resolver v5.9, 2026-10-30** (operator ruling 2026-10-30; build #2192, gate #2193;
+  no migration). One row held two answers to "where": the named town (`obec_name` / PSČ claims) and the
+  portal's pin as the position; CHECK flagged `pin_outside_obec`, dropped the grain to obec and kept the
+  pin at a constant r = 1 km, so the list said one town and the map drew another. bazos places every ad
+  on a postal-area point ("Přibližná lokalita"; one Kolín pin carried 143 active ads from 34 obce;
+  19509113 "Jestřabí Lhota" stood 8.8 km off, inside Kolín). A DECLARED blurred pin outside the obec the
+  claims bound is no longer the position: `bind.place` leaves the row to FILL (the bound část's doors,
+  else the obec's point, radius floored by its reach); the pin stays evidence and the flag stays. Measured
+  2026-10-30 before the bump: 12,547 active rows move (bazos 12,543, realitymix 2, idnes 1, sreality 1);
+  12,582 served properties stood on a disputed bazos pin; ~2.9k of the moved rows bound a část and now
+  publish the quarter grain the bind always had (≈ 47 properties re-point their location ad at the next
+  rollup); ≤ 30 `country_conflict` / `pin_outside_cz` rows with a blurred pin move too. Every blur-declared
+  label counts (bazos approximate_location, idnes no_exact_address, sreality street/ward/quarter/
+  municipality/not_address, mmreality regional, maxima Circle/LineString, realitymix estimated). Costs
+  accepted with the ruling: a homonym town bound without a PSČ, or a bazos town the text reader misread,
+  now places the row at the wrong town's point; no boundary tolerance (a blurred pin just across the town
+  line moves to the town's point); autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
+  town and část points (re-decided lazily, never forced, as ruled for v5.8). Untouched, unruled: exact or
+  undeclared pins outside their town (realitymix 719, idnes 290, ceskereality 138 undeclared; sreality 188
+  declared `gps` — wrong pin or wrong name is not known; 565 realitymix ads sit > 20 km from their town),
+  the constant 1 km radius on a kept pin, and consumers reading `disputed` (only the Location Quality page
+  does). Rollout: the bump re-queues the corpus through the full-resolve sweep, whose GitHub cron fires
+  ~08–10Z (not 03:17), so `location_resolve.yml mode=full-resolve` is dispatched right after the deploy.
+- **The wave shadow — the programme's standing gate instrument, 2026-10-31** (#2225; as built:
+  `docs/design/location-quality/wave-shadow.md`). A wave that moves positions or quarter codes (W3, W4, W5,
+  W5b, W6) runs its movers through the engine before it deploys, with no production write and no brake:
+  `location_data.what_if` (post-wave positions over `drain.recompute`, the dry run's read path, now shared;
+  claim change `none` / `purge` / `remine`) → `autodedup.shadow` (the movers' blocks, sized and capped, the
+  rulings and the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111
+  clean and no ruled pair moved against its ruling; PARTIAL when ids were cut or a mover sat outside the
+  cohort; the recent `same` rulings counted apart; D83 edges touching a mover printed). "Approved-split
+  sessions" in PROGRAM.md now reads as the rulings ledger inside the affected blocks. Runs where the secrets
+  live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
+  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. `what_if.restate` and `what_if.purge` are
+  **deleted when W3 lands** (W3 replaces the read; `what_if --claims purge` then reads all claims raw and
+  applies the keeper rule). Owed before W5's shadow: an id-grain export block for movers that sit in no
+  block today (Praha rows gaining a quarter).
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the
@@ -1230,6 +1275,31 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Acceptance (gate #2222): realitymix outside cell ≤ 110 (from 712), 0 declared pins outside, 0 off-grid
   declared; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
   (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
+
+- **W1 — one location scorecard — built 2026-10-31** (#2218; migration 698; location data quality
+  programme, rulings Q3/Q6/Q7). `location_quality_by_source` defines every location quality number
+  once (long shape; cohorts listing / served / sample / queue; service_role only); the
+  `location_town_coverage` gauge, relabelled "Location quality", reads it in two statements and emits
+  67 cells with fixed lines: `{p}/town` unresolved red until zero, `{p}/town_withheld` page-withheld
+  Watch, `{p}/ku`, `{p}/outside` (strict pip containment), `{p}/street` (Wilson upper bound under a
+  fixed per-portal floor: WATCH ONLY until the operator rules the 0.9x floors, W1-b, unruled),
+  `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
+  `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
+  fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
+  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. Owed: the frontend PR
+  (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates go),
+  then migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c,
+  awaits the operator's ruling).
+- **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
+  2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
+  The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
+  process's (resolver version, registry label) pair changes (active listings first), the drain claims
+  by `(reason = 'full_sweep'), next_eligible_at, listing_id` so evidence always beats backfill, and a
+  boot that changed nothing sweeps 0 rows. Deleted: `.github/workflows/location_resolve.yml` (both
+  crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
+  `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
+  the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
+  The refetch lane ticks hourly, a constant.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

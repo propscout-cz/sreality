@@ -240,8 +240,9 @@ def test_the_part_question_is_asked_only_for_a_part_bind():
 def test_the_katastr_rule_carries_its_own_resolver_version():
     """A rule that changes an output moves `RESOLVER_VERSION`, or the sweep never re-queues
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
-    W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8)."""
-    assert RESOLVER_VERSION == "resolver:v5.8"
+    W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor a declared
+    blurred pin outside its town yielding the position to the words (v5.9)."""
+    assert RESOLVER_VERSION == "resolver:v5.9"
 
 
 # ------------------------------------------------------------------ the SQL side

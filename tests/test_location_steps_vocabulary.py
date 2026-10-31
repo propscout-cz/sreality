@@ -93,18 +93,20 @@ def test_every_shared_count_is_spelled_the_same_in_both_producers() -> None:
         assert _squeeze(expr) in funnel, name
 
 
-def test_town_missing_is_one_fragment_the_check_and_the_refetch_lane_share() -> None:
-    """Rule 25's invariant, broken, is spelled once: the check renders it, and scraper.db
-    carries it VERBATIM (importing it there is a cycle: location_steps -> claims_common ->
-    loader_db -> scraper.db), held here. RED by: a lane that re-derives "no town" and queues a
-    different set from the one the check judges."""
+def test_town_missing_is_one_fragment_the_scorecard_and_the_refetch_lane_share() -> None:
+    """Rule 25's invariant, broken, is spelled once: the scorecard view (migration 698, which
+    the location gauge reads) and scraper.db carry it VERBATIM (a migration cannot import it, and
+    importing it in scraper.db is a cycle: location_steps -> claims_common -> loader_db ->
+    scraper.db), held here. RED by: a lane that re-derives "no town" and queues a different set
+    from the one the gauge judges."""
     from scraper import db
-    from scripts.checks import quality
 
     missing = _squeeze(ls.town_missing_sql())
+    scorecard = _squeeze(_LINE_COMMENT.sub("", (
+        MIGRATIONS / "698_location_quality_scorecard.sql").read_text(encoding="utf-8")))
     assert _squeeze(ls.step_flags_sql()["has_town"]) in missing
     assert missing in _squeeze(db._LOCATION_REFETCH_CANDIDATES_SQL)
-    assert missing in _squeeze(quality._LOCATION_TOWN_COVERAGE_SQL)
+    assert missing in scorecard
 
 
 def test_the_consumer_rule_is_imported_and_never_retyped() -> None:
@@ -115,7 +117,8 @@ def test_the_consumer_rule_is_imported_and_never_retyped() -> None:
     assert ls.step_flags_sql()["located"] == served_location_predicate("l.id")
     body = STEPS_PY.read_text(encoding="utf-8")
     assert "from location_data.claims_common import served_location_predicate" in body
-    assert "geom IS NOT NULL" not in body
+    # A claim's `value_geom` (the town-evidence probe) is not the answer row's `geom`.
+    assert not re.search(r"\bgeom IS NOT NULL", body)
 
 
 def test_the_town_floor_is_applied_by_rank_never_by_enum_order() -> None:

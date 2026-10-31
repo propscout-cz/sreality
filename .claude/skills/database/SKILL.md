@@ -217,7 +217,7 @@ parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... fro
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
 using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
 `bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
-and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610; Stats dashboards 647, same shape)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation).
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610; Stats dashboards 647, same shape)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation). The curation clock (696) follows, never acts (§ Curation clock).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
@@ -470,7 +470,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
   to `ruian_streets` in the anchoring obec is not published, so `street_name IS NOT NULL` implies
   `ulice_kod IS NOT NULL` — but only on rows re-resolved at v5.2 or later, i.e. after the
-  `location_resolve.yml mode=full-resolve` sweep the bump triggers; check `resolver_version`
+  worker's own sweep that a bump triggers (W2: no hand dispatch); check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
   are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;

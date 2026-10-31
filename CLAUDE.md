@@ -249,7 +249,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     fingerprinted in SQL; ONE resolver writes `listing_location`; TWELVE claim types (a ceiling), ≤ 1 contract entry each, the `obec_name` entry mandatory;
     every display is `location_display_label`, every place filter `<level>_id = any(codes)`. Consumers (browse/map/watchdog/dedup) serve a listing only
     when resolved or determined foreign, by ONE predicate (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every
-    served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until zero; foreign is a determination, never a
+    served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a
     default); a field is added only by operator ruling or after a measured slowdown, only to `browse_list` (§ rule 25 and § Location data in
     `docs/architecture.md`).
 ## Coding conventions

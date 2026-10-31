@@ -1834,70 +1834,84 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_registry_load.yml"
     },
     {
-      "filename": "location_resolve.yml",
-      "name": "Location: resolve",
-      "description": "The steady-state resolution lane of the location subsystem. Without it a newly scraped listing gets claims and never gets an answer row in `listing_location` — invisible to every consumer of the location programme.",
+      "filename": "location_wave_shadow.yml",
+      "name": "Ops: Location wave shadow (the engine gate)",
+      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6) runs its movers through the engine's harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
       "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        },
-        {
-          "cron": "17 3 * * *",
-          "human": "Daily at 03:17 UTC"
-        }
-      ],
+      "schedules": [],
       "onPush": false,
       "onPullRequest": false,
       "paths": null,
       "inputs": [
         {
-          "name": "mode",
-          "description": "what to run",
+          "name": "wave",
+          "description": "A label for the artifact name (a-z 0-9 -), e.g. w4-realitymix-v8",
+          "required": true,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "claims",
+          "description": "The wave's claim change: none (W5/W5b/W6), remine (W4), purge (W3)",
           "required": true,
           "type": "choice",
-          "default": "drain",
+          "default": "none",
           "options": [
-            "drain",
-            "full-resolve"
+            "none",
+            "remine",
+            "purge"
           ]
         },
         {
-          "name": "max_seconds",
-          "description": "drain budget in seconds (drain / full-resolve); cron uses 1800",
+          "name": "contract_ref",
+          "description": "remine: <git ref>:<path> of the wave's contract, read with git show",
           "required": false,
           "type": "string",
-          "default": "2400",
+          "default": "",
           "options": null
         },
         {
-          "name": "batch_size",
-          "description": "listings claimed per slice (one transaction — bigger is not better)",
+          "name": "scope",
+          "description": "apply = only the ids the live apply scope admits today; all = every id",
+          "required": true,
+          "type": "choice",
+          "default": "apply",
+          "options": [
+            "apply",
+            "all"
+          ]
+        },
+        {
+          "name": "ids_sql",
+          "description": "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)",
           "required": false,
           "type": "string",
-          "default": "250",
+          "default": "SELECT l.id FROM listings l WHERE l.source = 'realitymix' AND l.is_active AND EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'coordinate') AND NOT EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'precision_declaration' AND c.value_text = 'estimated')",
           "options": null
         },
         {
-          "name": "dry_run",
-          "description": "resolve and log, write nothing",
+          "name": "limit",
+          "description": "Only the lowest N ids (0 = all)",
           "required": false,
-          "type": "boolean",
-          "default": "false",
+          "type": "number",
+          "default": "0",
           "options": null
         }
       ],
       "secrets": [
-        "SUPABASE_DB_SESSION_URL",
+        "R2_ACCESS_KEY_ID",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET_NAME",
+        "R2_SECRET_ACCESS_KEY",
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "${{ (github.event.inputs.mode == 'full-resolve' || github.event.schedule == '17 3 * * *') && 'location-batch' || 'location-resolve-lane' }}",
+      "concurrencyGroup": "location-wave-shadow",
       "cancelInProgress": false,
-      "timeoutMinutes": 60,
+      "timeoutMinutes": 300,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_resolve.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_resolve.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_wave_shadow.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_wave_shadow.yml"
     },
     {
       "filename": "migrations.yml",
@@ -3165,7 +3179,7 @@
       "secrets": [],
       "concurrencyGroup": null,
       "cancelInProgress": null,
-      "timeoutMinutes": 9,
+      "timeoutMinutes": 12,
       "permissions": null,
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/test.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/test.yml"

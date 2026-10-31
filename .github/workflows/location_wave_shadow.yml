@@ -1,0 +1,135 @@
+name: "Ops: Location wave shadow (the engine gate)"
+
+# The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4,
+# W5, W5b, W6) runs its movers through the engine's harness before it deploys, here where the
+# database and R2 credentials live. No production write: every statement runs in a READ ONLY
+# transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process
+# with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like
+# backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.
+#
+#   gh workflow run location_wave_shadow.yml -f wave=w4 -f claims=remine -f scope=apply -f limit=50 \
+#     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
+#
+# Steps (docs/design/location-quality/wave-shadow.md): `what_if` re-resolves the listings
+# `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
+# predicate) with this ref's resolver after the wave's claim change (`remine` re-mines the stored
+# pages under the contract at `contract_ref`, read with `git show`); `autodedup.shadow` sizes the
+# movers' old and new blocks, refusing more than 40 blocks or 60,000 ads (exit 2), then exports
+# them, the rulings and the live scorer; `harness shadow` judges base vs candidate and exits 1 on
+# FAIL (PARTIAL when `limit` cut the ids or a mover sat outside the cohort). `ids_sql` runs as one
+# wrapped, read-only statement (`what_if.select_ids`). No movers: nothing to judge, the run ends
+# green. The artifact carries positions, movers, the run record, the scorer and both arms' run
+# outputs (never a cohort).
+#
+# Secrets: SUPABASE_DB_URL (the transaction pooler, through `connect_read_only`), R2_* for `remine`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wave:
+        description: "A label for the artifact name (a-z 0-9 -), e.g. w4-realitymix-v8"
+        required: true
+        type: string
+      claims:
+        description: "The wave's claim change: none (W5/W5b/W6), remine (W4), purge (W3)"
+        required: true
+        default: none
+        type: choice
+        options: [none, remine, purge]
+      contract_ref:
+        description: "remine: <git ref>:<path> of the wave's contract, read with git show"
+        required: false
+        default: ""
+        type: string
+      scope:
+        description: "apply = only the ids the live apply scope admits today; all = every id"
+        required: true
+        default: apply
+        type: choice
+        options: [apply, all]
+      ids_sql:
+        description: "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)"
+        required: false
+        default: "SELECT l.id FROM listings l WHERE l.source = 'realitymix' AND l.is_active AND EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'coordinate') AND NOT EXISTS (SELECT 1 FROM location_claims c WHERE c.listing_id = l.id AND c.claim_type = 'precision_declaration' AND c.value_text = 'estimated')"
+        type: string
+      limit:
+        description: "Only the lowest N ids (0 = all)"
+        required: false
+        default: 0
+        type: number
+
+concurrency:
+  # One shadow at a time: two would hold two long read-only sessions and two harness runs.
+  group: location-wave-shadow
+  cancel-in-progress: false
+
+jobs:
+  shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # `contract_ref` may name another branch's file
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Read the wave's contract
+        if: ${{ inputs.contract_ref != '' }}
+        env:
+          CONTRACT_REF: ${{ inputs.contract_ref }}
+        run: git show "$CONTRACT_REF" > "$RUNNER_TEMP/contract.yaml"
+
+      - name: "1: post-wave positions (what_if, READ ONLY)"
+        id: whatif
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          CLAIMS: ${{ inputs.claims }}
+          SCOPE: ${{ inputs.scope }}
+          IDS_SQL: ${{ inputs.ids_sql }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          args=(--ids-sql "$IDS_SQL" --scope "$SCOPE" --limit "${LIMIT:-0}" --claims "$CLAIMS" --out shadow)
+          if [ -s "$RUNNER_TEMP/contract.yaml" ]; then args+=(--contract "$RUNNER_TEMP/contract.yaml"); fi
+          python -m location_data.what_if "${args[@]}"
+          echo "movers=$(grep -c . shadow/movers.jsonl || true)" >> "$GITHUB_OUTPUT"
+
+      - name: "2: size, then base cohort, rulings, live scorer (READ ONLY, no ledger row)"
+        if: ${{ steps.whatif.outputs.movers != '0' }}
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python -m autodedup.shadow shadow
+
+      - name: "3: the gate (harness shadow, no database)"
+        if: ${{ steps.whatif.outputs.movers != '0' }}
+        run: |
+          python -m autodedup.harness shadow shadow/base/cohort.jsonl.gz shadow/positions.jsonl \
+            shadow/labels --scorer shadow/scorer.json --out shadow/judge
+
+      - name: Upload the shadow
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave-shadow-${{ inputs.wave }}-${{ github.run_id }}
+          path: |
+            shadow/positions.jsonl
+            shadow/movers.jsonl
+            shadow/scorer.json
+            shadow/what_if.json
+            shadow/judge/
+            !shadow/judge/**/cohort.jsonl.gz
+          if-no-files-found: warn
+          retention-days: 30

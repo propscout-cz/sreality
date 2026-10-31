@@ -172,10 +172,11 @@ The migration is additive. 696 is claimed with the merge coordinator before W3 w
 -- NEVER write curation_clock outside bump_curation_clock(), never reset a counter, and never disable a
 --   *_curation_clock trigger without a `-- ci-allow-clock-disable:` annotation
 --   (tests/test_curation_sync_census.py).
+-- APPLY: psql -f, statement autocommit, no begin/commit: every statement is idempotent and holds its one table
+--   lock only while it runs; a re-run of the file resumes a partial apply. One transaction deadlocked (2026-10-31).
 set lock_timeout = '5s';
-begin;
 
-create table public.curation_clock (
+create table if not exists public.curation_clock (
   account_id uuid        not null references public.accounts(id) on delete cascade,
   family     text        not null,
   counter    bigint      not null default 1,
@@ -192,10 +193,11 @@ grant select on public.curation_clock to authenticated;
 -- pipeline they share follow board (read share) or every curation family (edit share), per 641 ruling 2.
 -- current_account_ids(), never acting_account_ids(): a clock read never acts. The 641 stray-acting rail
 -- (tests/test_migration_rls_grants.py:736-757) reads POLICY text only; this body is guarded by
--- tests/test_curation_clock_live.py and census (i).
-create function public.curation_clock_audience()
+-- tests/test_curation_clock_live.py and census (i). ROWS 4: the caller's accounts plus the owners sharing with
+-- them, a handful; the default estimate (1000) would steer the clock read off curation_clock_pkey.
+create or replace function public.curation_clock_audience()
 returns table (account_id uuid, mine boolean, edit boolean)
-language sql stable set search_path = '' as $$
+language sql stable rows 4 set search_path = '' as $$
   select a.id, true, true from public.current_account_ids() as a(id)
   union all
   select s.account_id, false, bool_or(s.mode = 'edit')
@@ -207,6 +209,7 @@ $$;
 revoke all on function public.curation_clock_audience() from public, anon, authenticated, service_role;
 grant execute on function public.curation_clock_audience() to authenticated;
 
+drop policy if exists curation_clock_audience_read on public.curation_clock;
 create policy curation_clock_audience_read on public.curation_clock
   for select to authenticated
   using (
@@ -218,7 +221,7 @@ create policy curation_clock_audience_read on public.curation_clock
 
 -- The clock read's one relation. Invoker, so the policy above stays the gate (pinned in _TENANT_VIEWS).
 -- `mine` maps a row to own vs acting keys. `age_ms` serves a window's first answer (§3.5 Decision 14).
-create view public.curation_clock_public with (security_invoker = true) as
+create or replace view public.curation_clock_public with (security_invoker = true) as
   select c.account_id, c.family, c.counter, a.mine,
          greatest(0, extract(epoch from statement_timestamp() - c.changed_at) * 1000)::bigint as age_ms
     from public.curation_clock_audience() a
@@ -227,7 +230,7 @@ revoke all on public.curation_clock_public from public, anon, authenticated, ser
 grant select on public.curation_clock_public to authenticated;
 
 -- THE one writer of the clock. tg_argv[0] = the family.
-create function public.bump_curation_clock() returns trigger
+create or replace function public.bump_curation_clock() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
   v_new  jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
@@ -257,10 +260,11 @@ begin
 end $$;
 revoke all on function public.bump_curation_clock() from public, anon, authenticated, service_role;
 
+drop trigger if exists property_pipeline_curation_clock on public.property_pipeline;
 create constraint trigger property_pipeline_curation_clock
   after insert or update or delete on public.property_pipeline
   deferrable initially deferred for each row execute function public.bump_curation_clock('board');
--- … one static line per table of the families table (12 in all):
+-- … one static drop + create per table of the families table (12 in all; constraint triggers have no OR REPLACE):
 --   pipeline_stages(board) property_dismissals(dismissals) collections, collection_properties(collections)
 --   tags, property_tags(tags) property_notes, property_attachments(notes) property_artifact_links(links)
 --   pipeline_shares, collection_shares(shares)
@@ -304,7 +308,6 @@ begin
   if (select count(*) from public.curation_clock) < 7 * (select count(*) from public.accounts) then
     raise exception '696: clock seed incomplete'; end if;
 end $post$;
-commit;
 ```
 
 **Decision 3: deferred constraint row triggers.** A no-op UPDATE is skipped, and the bump runs **once per (transaction, account, family)**.
@@ -464,9 +467,9 @@ export const HOLD_TTL_MS = 140_000;                           // ONLINE time; = 
    - Holds, rollbacks, releases and debts from an older epoch become no-ops. The previous account's in-flight write can therefore neither paint its rollback into the new cache nor park the new account's keys.
 
 **First answer (Decision 14b).**
-- Before the first read, `start()` owes every synced query already cached. Normally there are none, because the identity effect clears the cache.
-- On the first answer, a family counts as changed iff `age_ms ≤ (now − t0) + SYNC_START_MARGIN_MS` (10 s), where `t0` is `performance.now()` at start. Both sides are durations, so there is no clock skew. The window is the measured time since start, not a constant.
-- Why this is exact: every synced read in the cache started after `t0`. A commit missed by such a read therefore bumped (`changed_at`) no earlier than `t0 − d`, where `d` is the gap between a deferred bump and its commit becoming visible (milliseconds; the 10 s margin covers it). This holds however late the first good answer arrives, including after a PostgREST outage at boot.
+- Before the first read, `start()` owes every synced query already cached, in its family's mode (`familyTargets` of every own family, plus the `['acting']` root), **bar an initial load in flight** [V, W4]. Those are the norm, not none: `RequireAuth` mounts the page in the very commit in which the session is read, and React runs the page's effects (which start its reads) before `AuthProvider`'s. Such a load started within that commit, inside the margin below; owing it would read every mounted synced query twice on every launch (the cost R22 rejects). A read with data, or a refetch in flight, is owed.
+- On the first answer, a family counts as changed iff `age_ms ≤ (now − t0) + SYNC_START_MARGIN_MS` (10 s), where `t0` is `performance.now()` at start and `now` the answer's arrival. Both sides are durations, so there is no clock skew. The window is the measured time since start, not a constant. As built, `now − t0` is the larger of the `performance.now()` and the `Date.now()` time since start: `performance.now()` stands still while the device sleeps on some platforms (macOS and Linux Chrome, Firefox; w3c/hr-time#115), and a page opened hidden first reads when it is shown, perhaps after a sleep. Both are durations on this machine, so there is still no skew; a wall clock set forward only counts more families [V, W4].
+- Why this is exact: every synced read left unowed started after `t0`, give or take the commit that mounted the owner. A commit missed by such a read therefore bumped (`changed_at`) no earlier than `t0 − d`, where `d` is that commit's few milliseconds plus the gap between a deferred bump and its commit becoming visible; the 10 s margin covers it. This holds however late the first good answer arrives, including after a PostgREST outage at boot.
 - Later answers diff with `clockChanges` and collect all `familyTargets` into one `revalidate` call per answer. A disappeared row is treated as a change of that family and owner.
 - R22 rejects the empty-baseline alternative.
 
@@ -541,16 +544,16 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 - The loop never renders React.
 
 **Decision 12 (rewritten): the owner owns every trigger, and every trigger is visibility-gated.**
-- **Interval:** `SYNC_INTERVAL_MS[frame]` while `document.visibilityState === 'visible'`. Hidden means no timer and zero requests.
-- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now. A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V].
-- **`focus`, `online` and the nudge** (debounced 100 ms): request a read, ignored while hidden, coalesced with the read in flight (one follow-up), and never less than 1 s after the last read started.
+- **Interval:** `SYNC_INTERVAL_MS[frame]` from the last read's start (and never sooner than 1 s after its answer) while `document.visibilityState === 'visible'`; the frame is `isPhoneFrame()`, read at each answer. Hidden means no timer and zero requests: hiding aborts a read in flight and drops a pending nudge [V, W4].
+- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now. A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V]. A read still in flight that started under 1 s ago is already the shown page's, so the pair a bfcache restore fires reads once. With none in flight, a show under 1 s after the last start reads once that second has passed: the hide before it aborted that read or disarmed the next, and a sub-second tab flick must still leave the interval running [V, W4].
+- **`focus`, `online` and the nudge** (coalesced over 100 ms): request a read, ignored while hidden, coalesced with the read in flight (one follow-up), and never less than 1 s after the last read started. As built, each asks for a read that starts after it: `focus` also takes one that started under 1 s before it (a desktop tab switch fires `visibilitychange` then `focus`, one read), `online` and the nudge do not (a read from before cannot have reached the server, or seen that commit) [V, W4]. A trigger that is already due reads at once; the start's first read waits one task, so a StrictMode remount sends one request.
 - **Errors:**
-  - Transient (network, 5xx, 408, 429): interval of 5 s × 2ⁿ, capped at 60 s, reset on success.
-  - Permanent (400, 401, 403, 404, e.g. the kill switch or a renamed view): no interval; triggers spaced at least 60 s apart.
-  - No toast and no retry storm.
+  - Transient (network, the 20 s deadline, 5xx, 408, 429, and 401): interval of 5 s × 2ⁿ, capped at 60 s, reset on success. As built, a 401 is transient: it is a session supabase-js has not yet refreshed (it falls back to the anon key, whose read answers 401), which passes by itself; the kill switch answers a signed-in read 403 [V, W4].
+  - Permanent (any other 4xx: 400, 403, 404, e.g. the kill switch or a renamed view): no interval; triggers spaced at least 60 s apart. A transient failure while in this mode keeps it (no back-off timer); the first answer ends it [V, W4].
+  - No toast and no retry storm. An answer whose processing throws is logged, and its follow-up and the interval go on [V, W4].
 - The global focusManager is untouched (R12), and `refetchOnWindowFocus:false` stays, with its reason now stated: the owner supersedes it.
-- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. W4 calls it in `main.tsx` beside the owner; W1 left it uncalled, so reconnect refetch stays on until the clock read exists [V, W1].
-- The nudge is posted from one `MutationCache` subscription on every mutation `success`. Under W0, success means committed. There is a `typeof BroadcastChannel` fallback, and the whole owner is gated on `isSupabaseConfigured()`.
+- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. `main.tsx` calls it beside the owner (W4; W1 left it uncalled until the clock read existed) [V, W4].
+- The nudge is posted from one `MutationCache` subscription on every mutation `success`, held by the owner (`qc.getMutationCache().subscribe`), so `stop()` ends it and a signed-out window posts nothing [V, W4]. Under W0, success means committed. Without `BroadcastChannel` the owner neither posts nor listens and still reads on its other triggers, and the whole owner is gated on `isSupabaseConfigured()`.
 
 **Decision 13: mount `useCurationSync(loading ? null : userId)` in `AuthProvider`, declared after the identity effect.**
 - React runs the changed cleanups before the setups, so an account switch runs **stop → `resetReads` + `clear()` → start**.
@@ -565,11 +568,11 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 | sign-in, launch | start; first answer by the age rule |
 | hourly TOKEN_REFRESHED | nothing: keyed on `userId`; each read calls `getSession()` (`index.mjs:524-529`) [V·r] |
 | account switch, sign-out | stop → reset + clear → start / nothing |
-| hidden | no reads |
+| hidden | no reads; a read in flight is aborted |
 | shown, pageshow | abort and read now |
 | focus, online, nudge | one read, ≥ 1 s gap, visible only |
 | PostgREST or DB down | transient back-off; first good answer diffs against the last good one; errored debts re-paid ≤ 3× |
-| kill switch | permanent-error mode: ≤ 1 read per 60 s per triggered window; app equals today's |
+| kill switch | permanent-error mode: ≤ 1 read per 60 s per triggered window; app equals today's, except that curation does not refetch on reconnect (`applySyncQueryDefaults` holds whatever the owner's state) |
 
 **Decision 15 (rationale rewritten): self-echo is kept, with no origin suppression.**
 - After W0 the writer's own settle re-read is post-commit, so the echo is no longer load-bearing.
@@ -648,8 +651,8 @@ Cells:
   - This is exact because events are written only in the transaction of a `property_pipeline` change (`api/pipeline.py:280,326,380`) [V·r].
   - `now()` is the transaction start, which is ≤ the bump's `clock_timestamp()`.
   - The seed makes it hold from the moment of apply.
-- `reads` (W4): **Watch** (never paged) when the `pg_stat_statements` call count for `curation_clock_public` has not advanced for 24 h. `quiet_since` is carried forward in the cell facts through `previous_result`. Not measured without the extension (CI). Worker read privilege on `pg_stat_statements` is [A].
-- `load` (W4): **Watch** when the clock read's share of total statement time between two measurements is ≥ 5 % (the re-costing trigger).
+- `reads` (W4): **Watch** (never paged) when the `pg_stat_statements` call count for `curation_clock_public` has not advanced for 24 h (`THRESHOLDS["CURATION_CLOCK_QUIET_H"]`). As built, the count is the entries run as `authenticated` whose text names the view (the pattern is a bound parameter, so the check's own statement never matches; a verification query run as postgres never counts). `quiet_since` is carried forward in the cell facts through `previous_result`; an evicted entry (fewer calls, no reset) is no advance, a statistics reset (`pg_stat_statements_info.stats_reset`) with calls since is one. Not measured without the extension (CI; the PREPARE sweep allowlists the read, the `cron.` precedent), and Not measured when the worker sees an `authenticated` entry's text as `<insufficient privilege>` (its role lacks `pg_read_all_stats`, so the pattern could match nothing) [V, W4]. Whether the worker's role holds `pg_read_all_stats` in production, and PostgREST's read being recorded under `authenticated` (it runs after `SET LOCAL ROLE`), are [A].
+- `load` (W4): **Watch** when the clock read's share of total statement time (`total_exec_time`) between two measurements is ≥ 5 % (`THRESHOLDS["CURATION_CLOCK_LOAD_PCT"]`, the re-costing trigger). A first measurement, a statistics reset or an evicted entry takes a baseline: the cell is Not measured (`unknown`, its facts kept for the next run). It is Not measured wherever `reads` is, for the same reasons [V, W4].
 
 Registry edits (W3):
 - `CHECKS` (and the comment "these thirteen" → fourteen; the budget arithmetic comment at `verify_pipeline.py:449` becomes 7 × 45 + 180 + 5 + 5 = 505 s: when every alarm falls due at once, the last one defers one pass, an existing tested path).
@@ -666,7 +669,7 @@ Registry edits (W3):
 - **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 12, carrying `-- ci-allow-clock-disable: <reason>`.
   - It is non-destructive (database skill).
   - The `triggers` cell goes red while it is in force, by intent.
-  - Census (a) and (d) read the CREATE statements and are unaffected.
+  - Census (a) and (d) do not read the enabled state and are unaffected.
   - Re-enabling takes a forward migration with `enable trigger`.
 
 ## 4. Rejected alternatives
@@ -801,14 +804,14 @@ Each wave is one PR, with a draft PR opened early.
   - presets, groups, subscriptions, estimations, buildings, entitlements, dashboards and dashboard shares (F5).
 - `tests/test_tenant_isolation_live.py`: `curation_clock_public` added to `_TENANT_VIEWS`.
 - `tests/test_curation_sync_census.py` (offline):
-  - (a) the trigger set parsed from migrations == `CLOCKED_TABLES` == `SYNC_TABLES` table→family parsed from `frontend/src/lib/curationSync.ts`.
+  - (a) the trigger set the migrations leave == `CLOCKED_TABLES` == `SYNC_TABLES` table→family parsed from `frontend/src/lib/curationSync.ts`. The migrations are replayed in order: a drop of a trigger, of the bump function or of a clocked table removes a trigger, a table or trigger rename moves it, and every trigger left must be named `<table>_curation_clock`.
   - (b) `TENANT_TABLES ⊆ CLOCKED ∪ NOT_CLOCKED`; every reason non-empty.
-  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES`.
+  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES` == the seed's families.
   - (d) every clock trigger is `constraint … after insert or update or delete … deferrable initially deferred … for each row`.
-  - (e) no migration disables a `*_curation_clock` trigger (named, `all` or `user`) or sets `session_replication_role` on a clocked table without `-- ci-allow-clock-disable:`.
+  - (e) nothing silences a clock trigger without a `-- ci-allow-clock-disable: <reason>` line of its own: in a migration or in code, `DISABLE` or `ENABLE REPLICA` of a `*_curation_clock` trigger (or `all` / `user` on a clocked table, also as one action of several in an `ALTER TABLE`), or `session_replication_role`; in a migration after 696, a redefinition of `bump_curation_clock()`.
   - (f) no clock trigger on `listings|properties|listing_snapshots`.
-  - (g) no `x-sync-origin` or origin GUC in `api/`.
-  - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696.
+  - (g) no `x-sync-origin` or origin GUC in `api/`; nothing in code or migrations but 696 names the dedupe GUC `curation_clock.bumped`.
+  - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696; 696 writes it exactly twice (the bump and the seed).
   - (i) the policy's board arm families map to tables == `_BOARD_POLICIES` tables ∩ `CLOCKED_TABLES`; the edit arm == (`_ACTING_POLICIES` − board) ∩ `CLOCKED_TABLES`; `shares` appears only in the `mine` arm.
   - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)`.
 - `tests/test_curation_clock_live.py` + a `.github/workflows/migrations.yml` step beside `test_pipeline_shares_live` (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED: "1"`), else `test_live_lanes_census.py:100-105` fails [V·r].
@@ -817,7 +820,7 @@ Each wave is one PR, with a draft PR opened early.
 - Docs:
   - `references/tenancy.md`: the idiom; "follow, never act"; the metadata a recipient sees; never write or reset the clock; never disable without the annotation; the kill-switch runbook; fix the stale NULL note;
   - SKILL.md: one pointer;
-  - `docs/architecture.md`: § Curation sync, DB half;
+  - `docs/architecture.md`: the DB half, a paragraph in rule 18 beside W0's (the file has no § Curation sync);
   - `health-dashboard.md` § 4;
   - `pipeline-verification.md`;
   - track bullet.
@@ -855,7 +858,7 @@ Each wave is one PR, with a draft PR opened early.
 | 1 | Latency up to T | Ruling Q2 (≤ 5 s desktop, ≤ 15 s phone); the F7 doorbell would need no rework |
 | 2 | Cost (§3.8): fan-out dominated by the Browse map | `LENS_REREAD` switch, per-answer coalescing, `load` cell, gate thresholds |
 | 3 | iOS suspension / bfcache; a hung read across suspension | No socket; `visibilitychange`/`pageshow` abort and re-read; on-device step [A: iOS fires one of them] |
-| 4 | Token expiry | `getSession()` per read; a 401 is a permanent-error read (≤ 1 per 60 s) until the session resolves |
+| 4 | Token expiry | `getSession()` per read; a 401 is a transient failure (back-off to ≤ 1 per 60 s) until the session resolves, then the interval resumes by itself; a sign-out stops the owner |
 | 5 | PostgREST/DB outage | Transient back-off; errored debts re-paid ≤ 3×; the first good answer catches up exactly once |
 | 6 | RLS mistake (read recipient sees curation families; stranger rows) | One audience function; census (i); `_TENANT_VIEWS`; `$post$`; live matrix incl. base table, RPC, `x-act-as` and downgrade |
 | 7 | Ordering / duplication / loss | Inequality on persistent counters; owed reads paid only by post-change reads |
@@ -961,13 +964,13 @@ Each wave is one PR, with a draft PR opened early.
 - health registry pins;
 - existing rails unchanged (`test_migration_rls_grants` rules 2/3/5 and the stray-acting rail; tenant live sweeps; `test_pipeline_shares_live` exact `delegated_edits` counts, because the bump writes only `curation_clock`).
 
-**Live lane `tests/test_curation_clock_live.py`** (replayed schema; owner A, read recipient B, edit recipient C and stranger D via the `tenants`/`_scoped(sub)` pattern):
+**Live lane `tests/test_curation_clock_live.py`** (replayed schema; owner A, read recipient B, edit recipient C, stranger D and E, the party the share and cascade cases grant to and take back from, via the `tenants`/`_scoped(sub)` pattern):
 1. A tenant-shaped write on each clocked table bumps exactly its (account, family) once. A second connection sees nothing before COMMIT.
 2. Rollback, savepoint rollback, a 0-row statement and a no-op UPDATE bump nothing.
 3. A 500-row `collection_properties` insert bumps `collections` exactly once.
 4. A delegate's write (`x-act-as`, edit share) bumps the **owner**.
 5. A service-role `merge_property_set` over A and D bumps both. An autocommit service-role write (`db.connect`) bumps.
-6. FK cascades bump: a collection delete → `collection_properties`; a tag delete → `property_tags`. The nested `property_notes_files_follow` UPDATE bumps `notes`.
+6. FK cascades bump: a collection delete → `collection_properties`; a tag delete → `property_tags`. The nested `property_notes_files_follow` UPDATE bumps `notes`. A child that names its parent's (account, family) is folded into the parent's bump by the dedupe, so these cases also count `bump_curation_clock()` firings (`pg_stat_xact_user_functions`). A property delete, which writes no parent table, bumps every cascaded family (A's `collections` and `tags`, D's `dismissals`); a service-role UPDATE moving a row's `account_id` from A to D bumps both accounts.
 7. A share grant, a revoke and an edit→read downgrade each bump both parties' `shares`. After the downgrade, C's next read loses the 5 edit families.
 8. Signup (`handle_new_user`) succeeds and bumps the new account's board and collections. Deleting an account that holds curation succeeds.
 9. **Forced commit-time failure:** a second connection holds `curation_clock (A,'board')` `FOR UPDATE`; the writer, with a low `lock_timeout`, fails at **COMMIT** and its card change is absent afterwards. This is the case W0 surfaces as a 5xx.
@@ -1198,3 +1201,24 @@ Where a wave built something other than the design, the section concerned now sa
 4. `components/phone/PhonePipeline.tsx`: no `remembered` ref; the stage on screen is state seeded from `readLastStage`, switched to by id when it does not resolve (the neighbour after an archive, the entry stage when none), remembered by an effect; the tab-tap target is a stage id; `useReadHold([board, members], touching || scrolling)` with touchstart/touchend/touchcancel (a finger still down keeps the hold) and scroll events plus a 150 ms idle timer (`SCROLL_IDLE_MS`, React 18 has no onScrollEnd); the pager's own re-aim (`landPager`, after a reorder or resize) does not start the hold.
 5. `pages/CollectionDetail.tsx`, `pages/phone/PhoneCollectionDetail.tsx`: a cleared description is sent as `''` until #2208 teaches `PATCH /collections` to tell an explicit `null` from an absent field (`coalesce` reads `null` as "unchanged").
 6. Tests: `lib/useServerDraft.test.ts` 11; Pipeline (D3 rename, typed name kept and saved alone, a remote target during a drag lands after the drop, a drag started during a board re-read shows no repaint, unmount mid-drag); PhonePipeline (archive falls to the neighbour, a reorder during a tab-tap scroll lands on the tapped stage, a remote add during a touch waits, a scroll with no touch); D3 cases for the five other editors; full vitest 4332 after merging W1's final head.
+
+**W3 (#2201), as built:**
+1. `migrations/696_curation_clock.sql` (the number is provisional until the merge coordinator's claim): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback). It applies statement by statement (no `begin`/`commit`; `if not exists`, `or replace`, and `drop … if exists` before the policy and each trigger), so a re-run of the file resumes a partial apply: the first apply (`apply_migration.yml`, 2026-10-31) ran as one transaction, held four trigger tables until COMMIT and deadlocked on the fifth (`collection_properties`); it rolled back whole. Census (a)'s locator reads `create table if not exists`, and (a)/(e) have bites for a later trigger drop and a later copy of 696.
+2. `tests/test_curation_sync_census.py` goes beyond § 6's first wording, and § 6 now says so. (a) replays drops and renames and checks each trigger's name. (c) adds the seed's families. (e) also catches `ENABLE REPLICA`, an action buried in a multi-action `ALTER TABLE`, code as well as migrations, and a later redefinition of the bump; an annotation counts only on a line of its own. (g) also covers the dedupe GUC. (h) pins 696's two writes. The review added the replay in (a) and the wider (e): `drop function … cascade` and `enable replica trigger` had passed every rail.
+3. `tests/test_curation_clock_live.py`: a fifth tenant E; item 6 counts firings and adds the property delete and the `account_id` move (§ 9). A trigger missing from `collection_properties`, `property_tags` or `property_attachments` had passed the first cascade case [V].
+4. `docs/architecture.md`: the DB half is a paragraph in rule 18 beside W0's (§ 6 lists it).
+5. The 696 apply (before the merge, after W0 is live) and its § 9 catalog check are owed; the 2026-10-31 attempt changed nothing (item 1).
+
+**W4 (#2202), as built** (two commits on W3's head `cb1dcd054`, the owner `d8a55f59a`; W3's later head `a11b25382` merged in at the review, then the review repairs):
+1. `lib/curationSyncOwner.ts`: the owner as § 3.5 lists it, a closure per `startCurationSync(qc)` (no module state, no cache entry). Decision 12 and Decision 14b now say what it does where it refines them: `focus` takes a read that started under 1 s before it, `online` and the nudge need one that starts after them (the nudge keeps the newest receipt time over its 100 ms coalescing, so a nudge arriving inside that window is never answered by an older read); a show under 1 s after a read's start takes that read while it is in flight (a bfcache restore fires `pageshow` and `visibilitychange`: one read), and otherwise reads once that second has passed (a hide in between aborted the read or disarmed the next); hiding aborts the read in flight; the interval runs from the last read's start but never sooner than 1 s after its answer; a 401 is transient and a transient failure while in permanent-error mode keeps that mode; a due trigger reads at once, the start's first read one task later (StrictMode's remount stops it unsent); the next read is armed before an answer is processed, and a processing error is logged with the follow-up still run, so it cannot stop the loop; the first answer's time since start is the larger of the `performance.now()` and the `Date.now()` durations (Decision 14b).
+2. `lib/curationSyncOwner.ts` `cachedReads`: the start-time owe skips an initial load in flight (Decision 14b says why: owing it would read every mounted synced query twice per launch, the R22 cost); the charter's "normally there are none" did not hold, `RequireAuth` mounts the page in the commit that reads the session and the page's effects start its reads before `AuthProvider`'s.
+3. The nudge's `MutationCache` subscription is the owner's (`qc.getMutationCache().subscribe`), not `lib/mutationCache.ts`'s: `stop()` unsubscribes it, so only a signed-in window posts.
+4. `lib/queries.ts` `fetchCurationClock({ signal } = {})` over `CURATION_CLOCK_COLS` (`account_id,family,counter,mine,age_ms`); `tests/test_curation_clock_read_contract.py` pins it to the latest `curation_clock_public` (696), to `ClockRow`'s fields in `lib/curationSync.ts`, and to never naming `actAs`.
+5. `lib/phoneShell.ts` `isPhoneFrame()` = narrow screen and no desktop-view override, read live (the same two inputs as `usePhoneShell`); the owner reads it at each answer.
+6. `lib/auth.tsx` mounts `useCurationSync(loading ? null : userId)` after the identity effect; `lib/auth.test.tsx` pins stop → `resetReads` → `clear()` → start on a switch, stop alone on a sign-out, no start before the session is read nor on a token refresh; `lib/auth.push.test.tsx` mocks the owner away.
+7. `main.tsx` calls `applySyncQueryDefaults(queryClient)` (W1's item 14 closed); its focus comment names the owner.
+8. `scripts/checks/platform.py`: `reads` and `load` as § 3.9 now states, from one `pg_stat_statements` aggregate (`_CURATION_STATEMENTS_SQL`, which also counts the `authenticated` entries whose text the worker may not read) plus the check's previous result; `reads` advances only on more calls under the same reset, or any calls after a new one; two `THRESHOLDS` (`CURATION_CLOCK_QUIET_H` 24, `CURATION_CLOCK_LOAD_PCT` 5.0); `board_bumps` no longer ends the check when the clock is absent. `tests/test_sql_schema_prepare.py` allowlists the read (the platform's extension, absent from the replayed schema, like `cron.`): it PREPAREs against PostgreSQL 17's `pg_stat_statements` [V], and unpreloaded it raises 55000, which the check reads as Not measured. `tests/test_curation_clock_live.py` is unchanged: in the replayed schema both cells read Not measured.
+9. Docs: `docs/architecture.md` Frontend territory (the clock is the re-read trigger, staleTime the backstop), `docs/design/pipeline-sharing.md` (a revoke reaches the recipient through the clock; the empty-read guard stays), `docs/design/health-dashboard.md` and `pipeline-verification.md` (the two cells as built), `references/tenancy.md` (rails), the track bullet.
+10. Tests: `lib/curationSyncOwner.test.ts` 32 (every § 9 case, plus: hiding aborts a read in flight, a page that starts hidden reads nothing, a hide and show within 1 s after an aborted and after an answered read, a first answer after a sleep, an owner's row maps to acting reads, the start-time owe, an errored debt re-paid at most 3 times, a 401 backs off and resumes, an answer that cannot be processed, the nudge posted only on success, no `BroadcastChannel`, a signed-out window); `lib/auth.test.tsx` +2; `lib/phoneShell.test.tsx` +2; `tests/scripts/test_checks_curation_sync.py` 27 (21 new); `tests/test_curation_clock_read_contract.py` 3.
+11. Review repairs (the commit after the merge of `a11b25382`): a hide and show within 1 s of the last start had left nothing in flight and nothing armed, so a visible window stopped following curation until the next trigger (now Decision 12's show rule); a 401 left the owner in permanent-error mode with no way out but a trigger, so a window left alone after a failed token refresh stayed frozen (now transient; Risk 4); an answer whose processing threw lost its follow-up and surfaced as an unhandled rejection; `performance.now()` standing still across a device sleep could shrink the first answer's window (Decision 14b); `reads` counted fewer calls under the same reset as an advance, and read a masked statement text as zero calls; the kill-switch Lifecycle row now names the reconnect refetch `applySyncQueryDefaults` removes. `pipeline-verification.md`'s `curation_sync` table no longer breaks before its `reads` row.
+12. Owed after the merge: the Railway status, the § 9 read-only check, the operator's manual recipe (§ 9), then gate #2203's 7 days.

@@ -394,6 +394,13 @@ def connect_session(
     )
 
 
+def connect_read_only() -> psycopg.Connection:
+    """`connect()` whose every `conn.transaction()` opens BEGIN READ ONLY (never a leaky `SET`)."""
+    conn = connect()
+    conn.read_only = True
+    return conn
+
+
 _T = TypeVar("_T")
 
 # Bounded retry budget for a transient DB error on the detail drain's long-held

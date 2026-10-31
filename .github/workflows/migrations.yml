@@ -192,6 +192,7 @@ jobs:
       # completeness read are PostGIS and anti-join answers, not SQL shapes; so W3's readings half.
       # test_map_overlays_live joins because migration 600's tile renderer is plpgsql: its
       # PostGIS calls resolve only when it runs, and only real tiles show the layers it writes.
+      # test_connect_read_only_live joins because the wave shadow's "no write" is the server's refusal.
       - name: PREPARE every SQL statement against the replayed schema
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -201,6 +202,7 @@ jobs:
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/test_map_overlays_live.py \
+                 tests/scraper/test_connect_read_only_live.py \
                  tests/toolkit/test_dedup_candidates_sql.py -q
 
       - name: Tenant-isolation sweep (RLS cross-tenant denial, Phase 1)
@@ -235,6 +237,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_pipeline_shares_live.py -q
+
+      # The curation clock (migration 696) moves only at COMMIT, through twelve deferred constraint triggers: only a
+      # real schema committing as each writer (a tenant, a delegate, the service role, a cascade, a signup) shows one
+      # bump per transaction and family, nothing on a rollback, a failed commit when the counter cannot be locked,
+      # and each caller following exactly its audience (own, a read share's board, an edit share's six families).
+      - name: The curation clock moves once per committed change and each caller follows its audience (migration 696)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_curation_clock_live.py -q
 
       # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
       # party policy that hides while acting, and a trigger that stamps the owner and refuses the

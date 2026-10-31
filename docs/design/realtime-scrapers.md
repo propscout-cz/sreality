@@ -165,10 +165,14 @@ publication rule, migrations 668/669).
 - **W5a** (#697) — delisting rails: sreality `INDEX_MIN_COMPLETENESS` 1.0→0.995 + a new 3h
   `min_unseen_hours` rail; the 6 h portals 24h→12h.
 
-**Location-resolve lane (Decision 8b, ships dark):** the location resolver's `dirty_locations`
-drain now also runs from this worker, not only from `location_resolve.yml`. The drain's cost is
-round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
-measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
+**Location-resolve lane (Decision 8b; since 2026-10-31 the ONLY runtime, ruling Q9 / location
+programme W2):** the location resolver's `dirty_locations` drain runs from this worker alone; the
+GitHub `location_resolve.yml` lane, the `realtime_location_resolve_enabled` flag and the hand
+`full-resolve` dispatch are gone. Each pass first asks `drain.reconcile` whether this process's
+(resolver version, registry label) pair changed — a deploy, a registry publish — and if so spends
+the pass on the corpus sweep (active listings first; evidence rows always claim ahead of the sweep's);
+a boot that changed nothing sweeps 0 rows. The interval setting is the one control (absent = 15 s,
+0 = idle). Historically the drain's cost was round trips (~0.7 listings/s from a US runner); the
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
 `location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
 or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
@@ -284,10 +288,11 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   `browse_list`'s `*/15` pg_cron rebuild. Claim and verdict in ~3–4 minutes; the read model is now
   the slowest hop, not the claim lane.
 
-**Location-refetch lane (location simplification W8, ships LIVE):** once a day
-(`LOCATION_REFETCH_INTERVAL_S`, default 86400, first tick after a
-`LOCATION_REFETCH_FIRST_DELAY_SECONDS` = 300 s delay so a redeploy loop cannot turn "daily" into
-"per restart"), queue the active ads with no town (rule 25) for ONE more detail fetch.
+**Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a
+constant):** every hour (`LOCATION_REFETCH_TICK_SECONDS` = 3600), queue the active ads with no town
+(rule 25) whose newest page or payload is at least `LOCATION_REFETCH_MIN_AGE_S` (6 h) old for ONE
+more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal — so a townless ad is
+re-read every 6 h or more while it stays townless. The predicate bounds the traffic, not the tick.
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever

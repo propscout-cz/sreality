@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DESKTOP_VIEW_KEY,
   PHONE_SHELL_QUERY,
+  isPhoneFrame,
   isPhoneRoot,
   phoneTabFor,
   readDesktopView,
@@ -94,6 +95,25 @@ describe('usePhoneShell', () => {
     });
     expect(readDesktopView()).toBe(false);
     expect(renderHook(() => usePhoneShell()).result.current).toBe(true);
+  });
+});
+
+/* The same frame read outside React, now: the curation clock's cadence
+ * (lib/curationSyncOwner) asks it at every read it schedules. */
+describe('isPhoneFrame', () => {
+  it('is the frame usePhoneShell draws, read live', () => {
+    width = mockWidth(true);
+    expect(isPhoneFrame()).toBe(true);
+    width.resize(false);
+    expect(isPhoneFrame()).toBe(false);
+    width.resize(true);
+    writeDesktopView(true);
+    expect(isPhoneFrame()).toBe(false);
+  });
+
+  it('is the desktop frame where the page has no matchMedia', () => {
+    expect(typeof window.matchMedia).not.toBe('function');
+    expect(isPhoneFrame()).toBe(false);
   });
 });
 

@@ -41,8 +41,9 @@ by partial unique index: `PUT /stats/dashboard` upserts it under the account `re
 row's KEY; `GET /stats/dashboard` reads it by RLS alone, shape 1, and under `X-Act-As` that is the caller's own,
 the table being identity-scoped). The column was added nullable (the tables
 already held rows); it is NOT NULL on four of the five since `notification_subscriptions` 364,
-`filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
-about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row).
+`filter_presets` 595 and `collections` / `tags` 608. `property_notes.account_id` is still nullable in the schema,
+but production holds no NULL row (0 on 2026-10-31, `docs/design/curation-sync.md` § 2; PR #1829 attributed the one
+pre-tenancy row); a NULL row would reach no tenant and bump no curation clock (§ Curation clock).
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
@@ -190,6 +191,69 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   RLS-only route that reaches the service role or mixes curation with other writes declares one.
 - **Tests** scope through ONE helper, `tests/_tenant_scope.scoped(sub, act_as=, method=, cur=)`; the
   four-tenant lane is `tests/test_pipeline_shares_live.py`.
+
+## Curation clock (migration 696)
+
+`docs/design/curation-sync.md` § 3.2-3.4 and § 3.9; ADR-0008. One counter per (account, family) that only the
+database advances, on a committed change, so every open SPA window can learn THAT its curation changed and re-read
+(the family → reads map is `frontend/src/lib/curationSync.ts` `SYNC_TABLES`). A signal, never state: not history,
+never reset, never rendered.
+
+- **A tenant table no browser writes.** `curation_clock(account_id, family, counter, changed_at)`, PK
+  `(account_id, family)`, families `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`. It is in
+  `TENANT_TABLES` with `BROWSER_WRITE_COLUMNS['curation_clock'] = frozenset()` (the `building_runs` precedent), so
+  both tenancy gates check its `account_id`, its policy, no anon access and no browser write; `service_role` holds no
+  DML either. The 696 seed gave every account then present all seven families at 1; a later account gains a family's
+  row on its first bump (signup bumps `board` and `collections`).
+- **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
+  `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
+  … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
+  `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
+  bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
+  joins `accounts` so an account whose deletion cascades the row skips itself, and bumps each (family, account) once
+  per transaction through the transaction-local GUC `curation_clock.bumped`, so a 10⁴-row heal stays O(rows). A
+  rollback, a savepoint rollback or a 0-row statement moves nothing; the API, the merge carriers (service role, any
+  account), signup (definer) and FK cascades all move it. A new curation table gets a trigger line in a forward
+  migration, a `CLOCKED_TABLES` entry and a `SYNC_TABLES` row together (census a).
+- **Follow, never act** — the sanctioned union of own and owner accounts, beside § Delegation's "replace, never
+  union". `curation_clock_audience()` (INVOKER, `current_account_ids()`, NEVER `acting_account_ids()`) says once who
+  follows whom: the caller's own accounts follow every family (`mine`); an owner who shared their pipeline is
+  followed for `board` by a read share and for `board` + the five curation families by an edit share (`edit`);
+  nobody follows another account's `shares`. The one policy, `curation_clock_audience_read` (FOR SELECT), restates
+  641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its arms to
+  `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker; `_TENANT_VIEWS`). A clock
+  read sends no `x-act-as`; one sent anyway hides the share rows (`pipeline_shares_party … and not acting()`), so it
+  fails closed to the caller's own rows, never an error.
+- **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
+  volume, including changes before the share and changes that leave no readable trace) and the exact last-change
+  time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
+  (`/curation_clock`) and `/rpc/curation_clock_audience` are directly readable, scoped exactly like the view.
+- **Never** write or reset the clock outside `bump_curation_clock()` (census h: no DML in `api/`, `toolkit/`,
+  `scraper/`, `scripts/`, `autodedup/` or a migration after 696), set or read `curation_clock.bumped` anywhere else
+  in code or migrations (census g; a test may clear it to isolate a case), or silence a clock trigger without a
+  `-- ci-allow-clock-disable: <reason>` line in that migration (census e: `DISABLE` or `ENABLE REPLICA` of a clock
+  trigger, `ALL` or `USER`, `session_replication_role`, or redefining `bump_curation_clock()` after 696). Dropping
+  a clock trigger, its table or the function, or renaming either, leaves the trigger set census (a) compares. A heal
+  of a curation table needs no disable: the dedupe already makes it one bump per account and family.
+- **Commit-time failures are visible.** The bump locks its counter row at COMMIT, so a lock it cannot take (a
+  `lock_timeout`, the residual deadlock between two multi-family writers that bump in opposite orders) fails the
+  commit itself; the tenant pool commits before the response (`TenantConn`, W0), so the caller gets `503 db_busy`,
+  never a 200 for a lost write.
+- **Kill switches** (forward migrations, non-destructive; `docs/design/curation-sync.md` § 3.9 Decision 19).
+  *Reader* (the clock reads' load): `revoke select on public.curation_clock_public, public.curation_clock from
+  authenticated; revoke execute on function public.curation_clock_audience() from authenticated;` — windows fall
+  to permanent-error mode (≤ 1 read per 60 s each) and the app behaves as before sync, bar curation's reconnect
+  refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
+  re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
+  `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
+  twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
+  (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience, the grants,
+  the seed); `tests/test_curation_sync_census.py` (a)-(j), each shown to bite; the live lane
+  `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
+  commit-time failure, the read on `curation_clock_pkey`); the health alarm `curation_sync` (`triggers`,
+  `board_bumps`; W4's `reads` and `load` watch the browsers' read in `pg_stat_statements`); the SPA's read-contract
+  test `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
 
 ## Composite PK: `property_pipeline` (migration 295)
 
