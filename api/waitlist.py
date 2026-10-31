@@ -22,7 +22,7 @@ from psycopg.types.json import Jsonb
 # CONSENT_TEXTS[CONSENT_VERSION].
 CONSENT_TEXTS: dict[str, str] = {
     "2026-10-31": (
-        "Odesláním souhlasíte, že vám [PROVOZOVATEL] (IČO [IČO]), provozovatel PropScout.cz, bude e-mailem posílat "
+        "Odesláním souhlasíte, že vám Limen Ventures s.r.o. (IČO 14053179), provozovatel PropScout.cz, bude e-mailem posílat "
         "pozvánku do aplikace a novinky k jejímu spuštění. Souhlas můžete kdykoli odvolat odkazem v každém e-mailu."
     ),
 }

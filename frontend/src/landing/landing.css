@@ -476,4 +476,3 @@ h3 { font-size: 1.3rem; line-height: 1.25; letter-spacing: -0.01em; }
 .legal h2 { font-size: 1.35rem; margin-top: 36px; }
 .legal p, .legal li { color: var(--ink-2); }
 .legal ul { padding-left: 20px; }
-.legal .todo { background: var(--ochre-soft); color: var(--ochre); padding: 1px 5px; border-radius: 4px; font-weight: 600; }

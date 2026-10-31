@@ -684,9 +684,10 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     Built: `frontend/landing/` + `src/landing/` (own Vite build, `vite.landing.config.ts`), Caddy serves it on the bare
     domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 700);
     cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
-    **Owed before ads run:** the operator's company name, IČO, seat and contact e-mail (placeholders in the consent line,
-    footer and `/soukromi`, plus `api/waitlist.py` CONSENT_TEXTS); a Czech lawyer's read of the consent + privacy text;
-    the Meta Pixel id; then go-live: register `propscout.cz` on the vite service, point the apex at it in Cloudflare
-    (the 302-to-app redirect rule becomes www → apex), add the domain to `.railway/railway.ts`, submit a test signup.
+    Controller: Limen Ventures s.r.o., IČO 14053179 (ARES; operator 2026-10-31, go-live approved the same day).
+    **Owed:** the Meta Pixel id (no tracker until then); a Czech lawyer's read of the consent + privacy text
+    (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in); go-live: register
+    `propscout.cz` on the vite service, point the apex at it in Cloudflare (the 302-to-app redirect rule becomes
+    www → apex), add the domain to `.railway/railway.ts`, submit a test signup.
     **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), an admin
     view of signups, refreshing the proof numbers.
