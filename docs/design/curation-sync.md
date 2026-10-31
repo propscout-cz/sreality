@@ -192,10 +192,11 @@ grant select on public.curation_clock to authenticated;
 -- pipeline they share follow board (read share) or every curation family (edit share), per 641 ruling 2.
 -- current_account_ids(), never acting_account_ids(): a clock read never acts. The 641 stray-acting rail
 -- (tests/test_migration_rls_grants.py:736-757) reads POLICY text only; this body is guarded by
--- tests/test_curation_clock_live.py and census (i).
+-- tests/test_curation_clock_live.py and census (i). ROWS 4: the caller's accounts plus the owners sharing with
+-- them, a handful; the default estimate (1000) would steer the clock read off curation_clock_pkey.
 create function public.curation_clock_audience()
 returns table (account_id uuid, mine boolean, edit boolean)
-language sql stable set search_path = '' as $$
+language sql stable rows 4 set search_path = '' as $$
   select a.id, true, true from public.current_account_ids() as a(id)
   union all
   select s.account_id, false, bool_or(s.mode = 'edit')
@@ -666,7 +667,7 @@ Registry edits (W3):
 - **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 12, carrying `-- ci-allow-clock-disable: <reason>`.
   - It is non-destructive (database skill).
   - The `triggers` cell goes red while it is in force, by intent.
-  - Census (a) and (d) read the CREATE statements and are unaffected.
+  - Census (a) and (d) do not read the enabled state and are unaffected.
   - Re-enabling takes a forward migration with `enable trigger`.
 
 ## 4. Rejected alternatives
@@ -801,14 +802,14 @@ Each wave is one PR, with a draft PR opened early.
   - presets, groups, subscriptions, estimations, buildings, entitlements, dashboards and dashboard shares (F5).
 - `tests/test_tenant_isolation_live.py`: `curation_clock_public` added to `_TENANT_VIEWS`.
 - `tests/test_curation_sync_census.py` (offline):
-  - (a) the trigger set parsed from migrations == `CLOCKED_TABLES` == `SYNC_TABLES` table→family parsed from `frontend/src/lib/curationSync.ts`.
+  - (a) the trigger set the migrations leave == `CLOCKED_TABLES` == `SYNC_TABLES` table→family parsed from `frontend/src/lib/curationSync.ts`. The migrations are replayed in order: a drop of a trigger, of the bump function or of a clocked table removes a trigger, a table or trigger rename moves it, and every trigger left must be named `<table>_curation_clock`.
   - (b) `TENANT_TABLES ⊆ CLOCKED ∪ NOT_CLOCKED`; every reason non-empty.
-  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES`.
+  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES` == the seed's families.
   - (d) every clock trigger is `constraint … after insert or update or delete … deferrable initially deferred … for each row`.
-  - (e) no migration disables a `*_curation_clock` trigger (named, `all` or `user`) or sets `session_replication_role` on a clocked table without `-- ci-allow-clock-disable:`.
+  - (e) nothing silences a clock trigger without a `-- ci-allow-clock-disable: <reason>` line of its own: in a migration or in code, `DISABLE` or `ENABLE REPLICA` of a `*_curation_clock` trigger (or `all` / `user` on a clocked table, also as one action of several in an `ALTER TABLE`), or `session_replication_role`; in a migration after 696, a redefinition of `bump_curation_clock()`.
   - (f) no clock trigger on `listings|properties|listing_snapshots`.
-  - (g) no `x-sync-origin` or origin GUC in `api/`.
-  - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696.
+  - (g) no `x-sync-origin` or origin GUC in `api/`; nothing in code or migrations but 696 names the dedupe GUC `curation_clock.bumped`.
+  - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696; 696 writes it exactly twice (the bump and the seed).
   - (i) the policy's board arm families map to tables == `_BOARD_POLICIES` tables ∩ `CLOCKED_TABLES`; the edit arm == (`_ACTING_POLICIES` − board) ∩ `CLOCKED_TABLES`; `shares` appears only in the `mine` arm.
   - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)`.
 - `tests/test_curation_clock_live.py` + a `.github/workflows/migrations.yml` step beside `test_pipeline_shares_live` (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED: "1"`), else `test_live_lanes_census.py:100-105` fails [V·r].
@@ -817,7 +818,7 @@ Each wave is one PR, with a draft PR opened early.
 - Docs:
   - `references/tenancy.md`: the idiom; "follow, never act"; the metadata a recipient sees; never write or reset the clock; never disable without the annotation; the kill-switch runbook; fix the stale NULL note;
   - SKILL.md: one pointer;
-  - `docs/architecture.md`: § Curation sync, DB half;
+  - `docs/architecture.md`: the DB half, a paragraph in rule 18 beside W0's (the file has no § Curation sync);
   - `health-dashboard.md` § 4;
   - `pipeline-verification.md`;
   - track bullet.
@@ -961,13 +962,13 @@ Each wave is one PR, with a draft PR opened early.
 - health registry pins;
 - existing rails unchanged (`test_migration_rls_grants` rules 2/3/5 and the stray-acting rail; tenant live sweeps; `test_pipeline_shares_live` exact `delegated_edits` counts, because the bump writes only `curation_clock`).
 
-**Live lane `tests/test_curation_clock_live.py`** (replayed schema; owner A, read recipient B, edit recipient C and stranger D via the `tenants`/`_scoped(sub)` pattern):
+**Live lane `tests/test_curation_clock_live.py`** (replayed schema; owner A, read recipient B, edit recipient C, stranger D and E, the party the share and cascade cases grant to and take back from, via the `tenants`/`_scoped(sub)` pattern):
 1. A tenant-shaped write on each clocked table bumps exactly its (account, family) once. A second connection sees nothing before COMMIT.
 2. Rollback, savepoint rollback, a 0-row statement and a no-op UPDATE bump nothing.
 3. A 500-row `collection_properties` insert bumps `collections` exactly once.
 4. A delegate's write (`x-act-as`, edit share) bumps the **owner**.
 5. A service-role `merge_property_set` over A and D bumps both. An autocommit service-role write (`db.connect`) bumps.
-6. FK cascades bump: a collection delete → `collection_properties`; a tag delete → `property_tags`. The nested `property_notes_files_follow` UPDATE bumps `notes`.
+6. FK cascades bump: a collection delete → `collection_properties`; a tag delete → `property_tags`. The nested `property_notes_files_follow` UPDATE bumps `notes`. A child that names its parent's (account, family) is folded into the parent's bump by the dedupe, so these cases also count `bump_curation_clock()` firings (`pg_stat_xact_user_functions`). A property delete, which writes no parent table, bumps every cascaded family (A's `collections` and `tags`, D's `dismissals`); a service-role UPDATE moving a row's `account_id` from A to D bumps both accounts.
 7. A share grant, a revoke and an edit→read downgrade each bump both parties' `shares`. After the downgrade, C's next read loses the 5 edit families.
 8. Signup (`handle_new_user`) succeeds and bumps the new account's board and collections. Deleting an account that holds curation succeeds.
 9. **Forced commit-time failure:** a second connection holds `curation_clock (A,'board')` `FOR UPDATE`; the writer, with a low `lock_timeout`, fails at **COMMIT** and its card change is absent afterwards. This is the case W0 surfaces as a 5xx.
@@ -1198,3 +1199,10 @@ Where a wave built something other than the design, the section concerned now sa
 4. `components/phone/PhonePipeline.tsx`: no `remembered` ref; the stage on screen is state seeded from `readLastStage`, switched to by id when it does not resolve (the neighbour after an archive, the entry stage when none), remembered by an effect; the tab-tap target is a stage id; `useReadHold([board, members], touching || scrolling)` with touchstart/touchend/touchcancel (a finger still down keeps the hold) and scroll events plus a 150 ms idle timer (`SCROLL_IDLE_MS`, React 18 has no onScrollEnd); the pager's own re-aim (`landPager`, after a reorder or resize) does not start the hold.
 5. `pages/CollectionDetail.tsx`, `pages/phone/PhoneCollectionDetail.tsx`: a cleared description is sent as `''` until #2208 teaches `PATCH /collections` to tell an explicit `null` from an absent field (`coalesce` reads `null` as "unchanged").
 6. Tests: `lib/useServerDraft.test.ts` 11; Pipeline (D3 rename, typed name kept and saved alone, a remote target during a drag lands after the drop, a drag started during a board re-read shows no repaint, unmount mid-drag); PhonePipeline (archive falls to the neighbour, a reorder during a tab-tap scroll lands on the tapped stage, a remote add during a touch waits, a scroll with no touch); D3 cases for the five other editors; full vitest 4332 after merging W1's final head.
+
+**W3 (#2201), as built:**
+1. `migrations/696_curation_clock.sql` (the number is provisional until the merge coordinator's claim): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback).
+2. `tests/test_curation_sync_census.py` goes beyond § 6's first wording, and § 6 now says so. (a) replays drops and renames and checks each trigger's name. (c) adds the seed's families. (e) also catches `ENABLE REPLICA`, an action buried in a multi-action `ALTER TABLE`, code as well as migrations, and a later redefinition of the bump; an annotation counts only on a line of its own. (g) also covers the dedupe GUC. (h) pins 696's two writes. The review added the replay in (a) and the wider (e): `drop function … cascade` and `enable replica trigger` had passed every rail.
+3. `tests/test_curation_clock_live.py`: a fifth tenant E; item 6 counts firings and adds the property delete and the `account_id` move (§ 9). A trigger missing from `collection_properties`, `property_tags` or `property_attachments` had passed the first cascade case [V].
+4. `docs/architecture.md`: the DB half is a paragraph in rule 18 beside W0's (§ 6 lists it).
+5. The 696 apply (MCP, before the merge, after W0 is live) and its § 9 catalog check are owed.

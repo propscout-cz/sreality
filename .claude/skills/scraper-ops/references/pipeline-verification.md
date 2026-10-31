@@ -1525,7 +1525,7 @@ clock (migration 696, `docs/design/curation-sync.md` § 3.9, `.claude/skills/dat
 | Cell | Problem | Why this line |
 |---|---|---|
 | `triggers` | fewer or more than `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` enabled and initially deferred; facts `expected`, `armed`, `found`, `off` (the tables) | a disabled trigger stops every open window following that table's changes with no error; the writer kill switch turns it red by intent while in force; `tests/test_curation_sync_census.py` (j) pins the threshold to `CLOCKED_TABLES` |
-| `board_bumps` | a `property_pipeline_events` row of the last 24 h whose account's `board` counter changed before it; facts `events_24h`, `accounts`, `first_missed_at`; Not measured while `curation_clock` is absent | exact: an event is written only in a card change's transaction (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`; the 696 seed stamps every account at the apply |
+| `board_bumps` | a `property_pipeline_events` row of the last 24 h that has no `board` clock row of its account changed at or after it; facts `events_24h`, `accounts`, `first_missed_at`; Not measured while `curation_clock` is absent | exact: an event is written only in a card change's transaction (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`; the 696 seed stamps every account at the apply |
 
 W4 adds `reads` (Watch: the clock read's `pg_stat_statements` calls stood still for 24 h) and `load` (Watch: its share
 of statement time ≥ 5 %). Both statements run on the replayed schema in `tests/test_curation_clock_live.py`.

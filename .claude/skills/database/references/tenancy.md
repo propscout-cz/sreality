@@ -230,9 +230,11 @@ never reset, never rendered.
   (`/curation_clock`) and `/rpc/curation_clock_audience` are directly readable, scoped exactly like the view.
 - **Never** write or reset the clock outside `bump_curation_clock()` (census h: no DML in `api/`, `toolkit/`,
   `scraper/`, `scripts/`, `autodedup/` or a migration after 696), set or read `curation_clock.bumped` anywhere else
-  (census g), or disable a clock trigger (named, `ALL` or `USER`) or set `session_replication_role` without a
-  `-- ci-allow-clock-disable: <reason>` line in that migration (census e). A heal of a curation table needs no
-  disable: the dedupe already makes it one bump per account and family.
+  in code or migrations (census g; a test may clear it to isolate a case), or silence a clock trigger without a
+  `-- ci-allow-clock-disable: <reason>` line in that migration (census e: `DISABLE` or `ENABLE REPLICA` of a clock
+  trigger, `ALL` or `USER`, `session_replication_role`, or redefining `bump_curation_clock()` after 696). Dropping
+  a clock trigger, its table or the function, or renaming either, leaves the trigger set census (a) compares. A heal
+  of a curation table needs no disable: the dedupe already makes it one bump per account and family.
 - **Commit-time failures are visible.** The bump locks its counter row at COMMIT, so a lock it cannot take (a
   `lock_timeout`, the residual deadlock between two multi-family writers that bump in opposite orders) fails the
   commit itself; the tenant pool commits before the response (`TenantConn`, W0), so the caller gets `503 db_busy`,
@@ -245,7 +247,7 @@ never reset, never rendered.
   re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
   twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
-  (a) and (d) read the CREATE statements and stay green. Re-enable with a forward migration's `enable trigger`.
+  (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
 - **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience, the grants,
   the seed); `tests/test_curation_sync_census.py` (a)-(j), each shown to bite; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced

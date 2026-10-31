@@ -11,6 +11,7 @@ migrations lane sets DB_RAILS_REQUIRED=1, so a lane that loses its database goes
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from collections.abc import Iterator
@@ -71,7 +72,7 @@ def _one(svc: psycopg.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any
 def world(svc: psycopg.Connection) -> Iterator[_World]:
     """A's curation reaches every family (so A holds all seven clock rows), committed, as the owner login."""
     with svc.cursor() as cur:
-        cur.execute("INSERT INTO properties (settled_at) SELECT now() FROM generate_series(1, 16) RETURNING id")
+        cur.execute("INSERT INTO properties (settled_at) SELECT now() FROM generate_series(1, 18) RETURNING id")
         props = [int(r[0]) for r in cur.fetchall()]
     try:
         with signups(svc, "clock", "a", "b", "c", "d", "e") as made:
@@ -293,6 +294,31 @@ def test_a_service_role_merge_bumps_both_accounts(world: _World) -> None:
     assert moved == {(world.a.acc, "notes"): 1, (world.d.acc, "dismissals"): 1}
 
 
+_FIRED = ("SELECT coalesce((SELECT calls FROM pg_stat_xact_user_functions "
+          "WHERE funcid = 'public.bump_curation_clock()'::regprocedure), 0)")
+
+
+def _fired(sub: uuid.UUID | None, sql: str, params: tuple[Any, ...]) -> tuple[int, int]:
+    """One committed statement, as tenant `sub` or (None) the service role: (its rowcount, how often
+    bump_curation_clock() fired for it). A cascaded child that names its parent's (account, family) is folded into the
+    parent's bump by the dedupe, so only the firing count shows the child's trigger ran. track_functions is set as the
+    superuser before the tenant scope; the deferred firings are run at SET CONSTRAINTS ALL IMMEDIATE and counted."""
+    conn = psycopg.connect(db_url())
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL track_functions = 'pl'")
+            with scoped(sub, method="DELETE", cur=cur) if sub else contextlib.nullcontext():
+                cur.execute(sql, params)
+                n = cur.rowcount
+            cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            cur.execute(_FIRED)
+            fired = int(cur.fetchone()[0])
+        conn.commit()
+    finally:
+        conn.close()
+    return n, fired
+
+
 def test_cascades_and_the_files_follow_trigger_bump(svc: psycopg.Connection, world: _World) -> None:
     a, e = world.a.acc, world.e.acc
     doomed = _one(svc, "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
@@ -305,20 +331,45 @@ def test_cascades_and_the_files_follow_trigger_bump(svc: psycopg.Connection, wor
         cur.execute("INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s)", (doomed, e))
         cur.execute("INSERT INTO property_tags (property_id, tag_id) VALUES (%s, %s)", (world.props[7], doomed_tag))
     with _watch(svc, _accounts(world)) as moved:
-        assert _as(world.a.user, "DELETE FROM collections WHERE id = %s", (doomed,)) == 1
+        assert _fired(world.a.user, "DELETE FROM collections WHERE id = %s", (doomed,)) == (1, 3), (
+            "the collection, its one member and its one share each fire the clock")
     assert moved == {(a, "collections"): 1, (a, "shares"): 1, (e, "shares"): 1}, "610's share cascade bumps both"
     with _watch(svc, _accounts(world)) as moved:
-        assert _as(world.a.user, "DELETE FROM tags WHERE id = %s", (doomed_tag,)) == 1
+        assert _fired(world.a.user, "DELETE FROM tags WHERE id = %s", (doomed_tag,)) == (1, 2), (
+            "the tag and its one membership each fire the clock")
     assert moved == {(a, "tags"): 1}
     assert _one(svc, "SELECT count(*) FROM property_tags WHERE tag_id = %s", (doomed_tag,)) == 0
     # A note changes property only on the service role (the merge carriers; a tenant holds no UPDATE on files).
+    files = _one(svc, "SELECT count(*) FROM property_attachments WHERE note_id = %s", (world.note,))
     with _watch(svc, _accounts(world)) as moved:
-        with svc.cursor() as cur:
-            cur.execute("UPDATE property_notes SET property_id = %s WHERE id = %s", (world.props[8], world.note))
-            assert cur.rowcount == 1
-    assert moved == {(a, "notes"): 1}
+        assert _fired(None, "UPDATE property_notes SET property_id = %s WHERE id = %s",
+                      (world.props[8], world.note)) == (1, 1 + files), f"the note and each of its {files} files fire"
+    assert files >= 1 and moved == {(a, "notes"): 1}
     assert _one(svc, "SELECT property_id FROM property_attachments WHERE note_id = %s LIMIT 1",
                 (world.note,)) == world.props[8], "660's files-follow trigger moved the note's files"
+
+
+def test_a_property_delete_bumps_every_cascaded_family_and_an_account_move_bumps_both_accounts(
+    svc: psycopg.Connection, world: _World,
+) -> None:
+    """No parent table of any family is written here: every bump comes from a cascade, or from the OLD and NEW arms
+    of one UPDATE."""
+    a, d = world.a.acc, world.d.acc
+    gone, moving = world.props[12], world.props[13]
+    with svc.cursor() as cur:
+        cur.execute("INSERT INTO collection_properties (collection_id, property_id) VALUES (%s, %s)", (world.coll, gone))
+        cur.execute("INSERT INTO property_tags (property_id, tag_id) VALUES (%s, %s)", (gone, world.tag))
+        cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)", (d, gone))
+        cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)", (a, moving))
+    with _watch(svc, _accounts(world)) as moved:
+        assert _fired(None, "DELETE FROM properties WHERE id = %s", (gone,)) == (1, 3)
+    assert moved == {(a, "collections"): 1, (a, "tags"): 1, (d, "dismissals"): 1}
+    with _watch(svc, _accounts(world)) as moved:
+        with svc.cursor() as cur:
+            cur.execute("UPDATE property_dismissals SET account_id = %s WHERE account_id = %s AND property_id = %s",
+                        (d, a, moving))
+            assert cur.rowcount == 1
+    assert moved == {(a, "dismissals"): 1, (d, "dismissals"): 1}, "the row left A and reached D"
 
 
 # --- 7-8. shares, signup, account deletion ----------------------------------------------------------------------

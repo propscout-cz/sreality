@@ -6,12 +6,14 @@ and family CHECK, tests/_tenant_registry.py (CLOCKED_TABLES / NOT_CLOCKED) and t
 (frontend/src/lib/curationSync.ts SYNC_TABLES / CURATION_FAMILIES). Each rail is a function returning its problems,
 asserted empty on the repository and shown to bite on a mutated copy of its input:
 
-  (a) the trigger set parsed from migrations == CLOCKED_TABLES == SYNC_TABLES' table→family
+  (a) the trigger set the migrations leave (after drops of a trigger, the function or a table, and renames of a table
+      or a trigger) == CLOCKED_TABLES == SYNC_TABLES' table→family, each trigger still `<table>_curation_clock`
   (b) TENANT_TABLES ⊆ CLOCKED_TABLES ∪ NOT_CLOCKED, disjoint, every reason non-empty
   (c) the newest family CHECK == CURATION_FAMILIES (TS) == the families of CLOCKED_TABLES == the seed's families
   (d) every clock trigger is `<table>_curation_clock`, a constraint row trigger after insert/update/delete,
       deferrable initially deferred
-  (e) nothing disables a clock trigger (named, `all` or `user`) or sets session_replication_role without
+  (e) nothing disables a clock trigger or sets it to fire only on replicas (named, `all` or `user`), sets
+      session_replication_role, or redefines bump_curation_clock() after the clock's migration, without
       `-- ci-allow-clock-disable: <reason>`
   (f) no clock trigger on listings, properties or listing_snapshots
   (g) no x-sync-origin header or origin GUC in api/, and nobody outside the clock migration names its dedupe GUC
@@ -69,10 +71,14 @@ def _number(name: str) -> int:
     return int(name.split("_", 1)[0])
 
 
+def _creating_clock(migrations: Migrations) -> list[tuple[str, str]]:
+    return [(n, t) for n, t in migrations if "curation_clock" in t
+            and re.search(r"\bcreate table (?:public\.)?curation_clock\b", _norm(_strip_comments(t)))]
+
+
 def _clock_migration(migrations: Migrations) -> tuple[str, str]:
     """The migration that creates the clock (696, or wherever the merge coordinator numbers it)."""
-    made = [(n, t) for n, t in migrations if "curation_clock" in t
-            and re.search(r"\bcreate table (?:public\.)?curation_clock\b", _norm(_strip_comments(t)))]
+    made = _creating_clock(migrations)
     assert len(made) == 1, f"exactly one migration creates curation_clock: {[n for n, _ in made]}"
     return made[0]
 
@@ -92,6 +98,10 @@ def _code() -> tuple[tuple[str, str], ...]:
 _CREATE_TRIGGER = re.compile(r"^create (?:or replace )?(?:constraint )?trigger (\w+) .*? on (?:only )?"
                              r"(?:public\.)?(\w+) ")
 _DROP_TRIGGER = re.compile(r"^drop trigger (?:if exists )?(\w+) on (?:only )?(?:public\.)?(\w+)")
+_DROP_BUMP = re.compile(r"^drop (?:function|routine) .*\bbump_curation_clock\b")
+_DROP_TABLE = re.compile(r"^drop table (?:if exists )?(.*?)(?: cascade| restrict)?$")
+_RENAME_TABLE = re.compile(r"^alter table (?:if exists )?(?:only )?(?:public\.)?(\w+) rename to (\w+)$")
+_RENAME_TRIGGER = re.compile(r"^alter trigger (\w+) on (?:public\.)?(\w+) rename to (\w+)$")
 _BUMP_CALL = re.compile(r"execute (?:function|procedure) (?:public\.)?bump_curation_clock\s*\(\s*'(\w+)'\s*\)")
 
 
@@ -108,8 +118,10 @@ def clock_trigger_statements(migrations: Migrations) -> list[tuple[str, str, str
     return out
 
 
-def final_clock_triggers(migrations: Migrations) -> dict[str, str | None]:
-    """table → family of every clock trigger the migrations leave in place, in numeric order."""
+def final_clock_state(migrations: Migrations) -> dict[tuple[str, str], str | None]:
+    """(table, trigger) → family of every clock trigger the migrations leave in place, replayed in numeric order: a
+    trigger drop, a drop of the bump function (only CASCADE succeeds while a trigger uses it) or of the table removes
+    it; a table or trigger rename moves it."""
     state: dict[tuple[str, str], str | None] = {}
     for name, text in migrations:
         for stmt in _statements(text):
@@ -118,10 +130,25 @@ def final_clock_triggers(migrations: Migrations) -> dict[str, str | None]:
             if m and (m.group(1).endswith("_curation_clock") or "bump_curation_clock" in low):
                 call = _BUMP_CALL.search(low)
                 state[(m.group(2), m.group(1))] = call.group(1) if call else None
-                continue
-            m = _DROP_TRIGGER.match(low)
-            if m:
+            elif m := _DROP_TRIGGER.match(low):
                 state.pop((m.group(2), m.group(1)), None)
+            elif _DROP_BUMP.match(low):
+                state.clear()
+            elif m := _DROP_TABLE.match(low):
+                gone = {t.strip().removeprefix("public.") for t in m.group(1).split(",")}
+                state = {k: v for k, v in state.items() if k[0] not in gone}
+            elif m := _RENAME_TABLE.match(low):
+                old, new = m.groups()
+                state = {(new if t == old else t, trig): v for (t, trig), v in state.items()}
+            elif m := _RENAME_TRIGGER.match(low):
+                old, table, new = m.groups()
+                state = {(t, new if (t, trig) == (table, old) else trig): v for (t, trig), v in state.items()}
+    return state
+
+
+def final_clock_triggers(migrations: Migrations) -> dict[str, str | None]:
+    """table → family of every clock trigger the migrations leave in place."""
+    state = final_clock_state(migrations)
     tables = [table for table, _trigger in state]
     assert len(tables) == len(set(tables)), f"a table carries two clock triggers: {sorted(state)}"
     return {table: family for (table, _trigger), family in state.items()}
@@ -153,6 +180,8 @@ def rail_a(migrations: Migrations, ts_text: str, clocked: dict[str, str]) -> lis
                         f"{sorted(clocked.items())}")
     if sync != clocked:
         problems.append(f"SYNC_TABLES {sorted(sync.items())} != CLOCKED_TABLES {sorted(clocked.items())}")
+    problems += [f"the clock trigger on {table} is named {trigger}, not {table}_curation_clock"
+                 for table, trigger in final_clock_state(migrations) if trigger != f"{table}_curation_clock"]
     return problems
 
 
@@ -220,22 +249,35 @@ def rail_c(migrations: Migrations, ts_text: str, clocked: dict[str, str]) -> lis
 
 # --- (e) nothing silences the clock ------------------------------------------------------------------------------
 
-_DISABLE = re.compile(r"alter table (?:if exists )?(?:only )?(?:public\.)?(\w+) disable trigger (\w+)")
+# DISABLE, or ENABLE REPLICA (fires only under session_replication_role = replica, so never on our writes); the action
+# may follow others in one ALTER TABLE, bounded by the statement or the string literal that holds it.
+_DISABLE = re.compile(r"alter table (?:if exists )?(?:only )?(?:public\.)?(\w+) (?:[^;'\"]*?, )?"
+                      r"(disable|enable replica) trigger (\w+)")
+_DEFINE_BUMP = re.compile(r"\bcreate (?:or replace )?function (?:public\.)?bump_curation_clock\s*\(")
 
 
-def disable_offenders(name: str, text: str, clocked: dict[str, str]) -> list[str]:
+def disable_offenders(name: str, text: str, clocked: dict[str, str], *, after_clock: bool = False) -> list[str]:
+    """`after_clock`: a migration numbered after the clock's, where redefining the one writer is a silencing too."""
     if DISABLE_ALLOW.search(text):
         return []
     body = _norm(_strip_comments(text) if name.endswith(".sql") else text)
-    out = [f"{name}: disables {trigger} on {table}" for table, trigger in _DISABLE.findall(body)
+    out = [f"{name}: {'disables' if how == 'disable' else 'sets replica-only'} {trigger} on {table}"
+           for table, how, trigger in _DISABLE.findall(body)
            if trigger.endswith("_curation_clock") or (trigger in ("all", "user") and table in clocked)]
     if "session_replication_role" in body:
         out.append(f"{name}: sets session_replication_role, which silences every clock trigger")
+    if after_clock and _DEFINE_BUMP.search(body):
+        out.append(f"{name}: redefines bump_curation_clock(); a body without the bump silences every clock trigger "
+                   "(and one with it is a write rail h refuses)")
     return out
 
 
 def rail_e(migrations: Migrations, code: list[tuple[str, str]], clocked: dict[str, str]) -> list[str]:
-    return [o for name, text in [*migrations, *code] for o in disable_offenders(name, text, clocked)]
+    made = _creating_clock(migrations)
+    clock = _number(made[0][0]) if made else None
+    return [o for name, text in migrations
+            for o in disable_offenders(name, text, clocked, after_clock=clock is not None and _number(name) > clock)
+            ] + [o for name, text in code for o in disable_offenders(name, text, clocked)]
 
 
 # --- (g) no origin marker; the dedupe GUC is the trigger's own --------------------------------------------------
@@ -422,7 +464,14 @@ def _with(migrations: Migrations, sql: str, number: int = 999) -> Migrations:
 
 def test_a_bites_on_a_dropped_trigger_a_ts_row_and_a_registry_row() -> None:
     migrations, ts = _migrations(), SYNC_TS.read_text(encoding="utf-8")
-    assert rail_a(_with(migrations, "drop trigger tags_curation_clock on public.tags;"), ts, CLOCKED_TABLES)
+    for sql in ("drop trigger tags_curation_clock on public.tags;",
+                "drop function public.bump_curation_clock() cascade;",
+                "drop function if exists public.touch(), bump_curation_clock cascade;",
+                "drop table if exists public.property_artifact_links cascade;",
+                "alter table public.tags rename to labels;",
+                "alter trigger tags_curation_clock on public.tags rename to tags_clock;"):
+        assert rail_a(_with(migrations, sql), ts, CLOCKED_TABLES), sql
+    assert rail_a(_with(migrations, "alter table public.filter_presets rename to presets;"), ts, CLOCKED_TABLES) == []
     assert rail_a(migrations, ts.replace("  tags: { family: 'tags'", "  tags: { family: 'notes'"), CLOCKED_TABLES)
     assert rail_a(migrations, ts, {**CLOCKED_TABLES, "filter_presets": "board"})
 
@@ -472,6 +521,24 @@ def test_e_bites_on_a_named_or_bulk_disable_and_on_replica_mode() -> None:
     assert rail_e([("999_census_bite.sql", "alter table filter_presets disable trigger all;")], [],
                   CLOCKED_TABLES) == []
     assert rail_e([], [("scripts/x.py", 'cur.execute("SET session_replication_role = replica")')], CLOCKED_TABLES)
+
+
+def test_e_bites_on_replica_only_firing_a_buried_action_and_a_later_redefinition_of_the_bump() -> None:
+    for sql in ("alter table public.tags enable replica trigger tags_curation_clock;",
+                "alter table property_notes enable replica trigger all;",
+                "alter table public.tags add column x int, disable trigger tags_curation_clock;",
+                "alter table public.tags alter column name set not null, enable replica trigger user;"):
+        assert rail_e([("999_census_bite.sql", sql)], [], CLOCKED_TABLES), sql
+    assert rail_e([], [("scripts/x.py", 'cur.execute("ALTER TABLE tags ENABLE REPLICA TRIGGER ALL")')], CLOCKED_TABLES)
+    for sql in ("alter table public.tags enable always trigger tags_curation_clock;",
+                "alter table public.tags enable trigger tags_curation_clock;",
+                "alter table public.filter_presets add column x int, enable replica trigger all;"):
+        assert rail_e([("999_census_bite.sql", sql)], [], CLOCKED_TABLES) == [], sql
+    silent = ("create or replace function public.bump_curation_clock() returns trigger language plpgsql "
+              "security definer set search_path = '' as $$ begin return null; end $$;")
+    migrations = _migrations()
+    assert rail_e(_with(migrations, silent), [], CLOCKED_TABLES)
+    assert rail_e([("999_census_bite.sql", silent)], [], CLOCKED_TABLES) == [], "no clock migration, no later one"
 
 
 def test_f_bites_on_a_clock_over_listings() -> None:
