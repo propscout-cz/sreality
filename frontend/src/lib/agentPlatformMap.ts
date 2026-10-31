@@ -52,7 +52,7 @@ export const MILESTONES: Milestone[] = [
     key: 'M1b',
     summary: 'Queue, Runs page, Apply and Undo, first production run',
     tickets: [
-      { n: 2070, done: false, title: 'Run queue and diary: submit, execute once, cancel' },
+      { n: 2070, done: true, title: 'Run queue and diary: submit, execute once, cancel' },
       { n: 2071, done: false, title: 'Run routes and the minimal Runs page' },
       { n: 2072, done: false, title: 'Propose, Apply, Undo' },
       { n: 2073, done: false, title: 'Agent files in Supabase Storage' },
