@@ -198,7 +198,7 @@ it (`api/`). They do not apply to the scraper.
     `{"type": "tool", "name": ...}`, Gemini's `FunctionCallingConfig mode=ANY`, PR #768) so a
     caller that needs a guaranteed structured response (no prose fallback) can force it; pass
     it through `LLMClient.call(..., tool_choice=...)` — omitted, providers/fakes without the
-    param keep working.
+    param keep working; `hosted_code` too.
 12. **Never spell `price / area`. `toolkit/measures.py` is the only per-m² definition.**
     (Numbered last on purpose — the rules above are cited by code comments; never renumber.)
     `per_m2_sql(alias)` / `per_m2_basis_sql(alias)` render calls to `measure_price_per_m2` /

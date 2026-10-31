@@ -16,6 +16,7 @@ from api.llm_client import LLMClient
 from api.providers import (
     HostedCode,
     HostedFile,
+    HostedFileInfo,
     Message,
     ModelPrice,
     OpaqueBlock,
@@ -140,6 +141,25 @@ def test_a_code_call_deferred_behind_a_client_tool_resumes_in_its_container(monk
     assert [b["type"] for b in resumed["messages"][2]["content"]] == ["tool_result"]
 
 
+def test_an_answer_beside_code_still_waiting_is_refused_and_the_code_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("anthropic")
+    waiting = {"type": "server_tool_use", "id": "srvtoolu_1", "name": "bash_code_execution", "input": {"command": "ls"}}
+    early = _tool_use("toolu_1", SUBMIT, {"markdown": "Before the code ran."})
+    replies = [_coded(waiting, early), _coded(*_bash("srvtoolu_1")[1:], _tool_use("toolu_2", SUBMIT, {"markdown": "After."}))]
+    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", replies) as stub:
+        outcome = _wire_run(_agent())
+    assert outcome.answer.markdown == "After."
+    assert stub.requests[1]["messages"][2]["content"][0]["is_error"] is True
+
+
+def test_an_answer_after_its_code_finished_in_the_same_reply_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("anthropic")
+    replies = [_coded(*_bash("srvtoolu_1"), _tool_use("toolu_1", SUBMIT, {"markdown": "Done."}))]
+    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", replies) as stub:
+        outcome = _wire_run(_agent())
+    assert outcome.stop_reason == "submit_result" and len(stub.requests) == 1
+
+
 def test_no_request_without_hosted_code_changes_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every other lane: the exact request, tools and all, with hosted code never asked for."""
     pytest.importorskip("anthropic")
@@ -155,7 +175,7 @@ def test_no_request_without_hosted_code_changes_shape(monkeypatch: pytest.Monkey
         "tools": [{"name": "record", "description": "d", "input_schema": {"type": "object", "properties": {}},
                    "cache_control": {"type": "ephemeral"}}],
     }]
-    assert (completion.container, completion.file_ids, completion.hosted_calls) == (None, (), ())
+    assert (completion.container, completion.file_ids, completion.hosted_calls, completion.hosted_pending) == (None, (), (), ())
     assert (completion.usage.code_execution_requests, completion.usage.hosted_code_usd) == (0, 0.0)
 
 
@@ -375,14 +395,26 @@ def test_a_non_code_turn_journals_as_it_always_did() -> None:
     assert set(steps[0].output) == {"text", "tool_calls", "stop_reason", "usage", "model"}
 
 
-@pytest.mark.parametrize(("seconds", "resumed", "expected"), [
-    (30.0, None, 0.05 * 300 / 3600),      # a new container bills its five-minute minimum
-    (600.0, None, 0.05 * 600 / 3600),
-    (30.0, "cntr_1", 0.05 * 30 / 3600),   # the same container goes on: only the time this call held it
-    (30.0, "cntr_0", 0.05 * 300 / 3600),  # an expired one came back as a new container
+@pytest.mark.parametrize(("seconds", "new", "expected"), [
+    (30.0, True, 0.05 * 300 / 3600),    # a new container bills its five-minute minimum
+    (600.0, True, 0.05 * 600 / 3600),
+    (30.0, False, 0.05 * 30 / 3600),    # the same container goes on: only the time this call held it
 ])
-def test_a_container_is_priced_as_the_docs_state(seconds: float, resumed: str | None, expected: float) -> None:
-    assert _container_usd("cntr_1", resumed, seconds) == pytest.approx(expected, abs=1e-6)
+def test_a_container_is_priced_as_the_docs_state(seconds: float, new: bool, expected: float) -> None:
+    assert _container_usd(seconds, new=new) == pytest.approx(expected, abs=1e-6)
+
+
+def test_a_resumed_container_bills_no_second_minimum_and_a_replaced_one_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("anthropic")
+    reply_body = _coded({"type": "text", "text": "x", "citations": None}, stop="end_turn")
+    costs = []
+    for resumed in ("cntr_1", "cntr_gone"):
+        with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", [reply_body]):
+            costs.append(AnthropicProvider(api_key="test").complete(
+                system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model=OPUS,
+                hosted_code=HostedCode(container=resumed)).usage.hosted_code_usd)
+    assert costs[0] < 0.0005
+    assert costs[1] == pytest.approx(0.05 * 300 / 3600, abs=1e-6)
 
 
 def test_the_provider_reports_a_code_calls_container_and_its_cost(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -470,11 +502,57 @@ def test_a_rerun_of_the_same_name_replaces_the_earlier_file() -> None:
     assert run.provider.deleted == ["f1", "f2"]
 
 
+def _with_bytes_failing(file_id: str, error: Exception, *replies: Any, files: dict[str, HostedFile]) -> ScriptedCodeProvider:
+    provider = ScriptedCodeProvider(list(replies), files=dict(files), prices={OPUS: CHEAP})
+    provider.byte_errors[file_id] = error
+    loop.run(_agent(), {"town": "Brno"}, provider="anthropic", llm=LLMClient(_FakeConn(), providers={"anthropic": provider}),
+             call_tool=lambda n, a: {"data": []}, record=lambda step: None)
+    return provider
+
+
+def test_a_rerun_that_cannot_be_fetched_never_leaves_the_older_file_answering_for_it() -> None:
+    newer = replace(REPORT, data=b"newer")
+    provider = _with_bytes_failing(
+        "f2", ProviderError("502"),
+        code_reply(files=("f1",), stop="pause_turn"),
+        code_reply(_submit("model.xlsx"), files=("f2",)),
+        code_reply((SUBMIT, {"markdown": "No file."})),
+        files={"f1": REPORT, "f2": newer})
+    refusal = provider.calls[2]["messages"][-1].content[0].content
+    assert "produced no file" in refusal and "model.xlsx" in refusal
+
+
+def test_a_rerun_too_large_never_leaves_the_older_file_answering_for_it() -> None:
+    big = replace(REPORT, data=b"x" * (hosted_code.MAX_FILE_BYTES + 1))
+    run = _Run(code_reply(files=("f1",), stop="pause_turn"), code_reply(_submit("model.xlsx"), files=("big",)),
+               code_reply((SUBMIT, {"markdown": "No file."})), files={"f1": REPORT, "big": big})
+    assert run.outcome.answer.files == ()
+    assert "produced no file" in run.provider.calls[2]["messages"][-1].content[0].content
+
+
+def test_a_file_whose_name_could_not_be_read_clears_what_the_run_held() -> None:
+    """It may be a rerun of any of them, and an answer must not carry older bytes than the model thinks."""
+    other = replace(REPORT, name="other.csv")
+    run = _Run(code_reply(files=("f1", "f2"), stop="pause_turn"), code_reply(_submit("model.xlsx"), files=("f3",)),
+               code_reply((SUBMIT, {"markdown": "No file."})),
+               files={"f1": REPORT, "f2": other, "f3": ProviderError("502")})
+    assert run.outcome.answer.files == ()
+    assert "the files it has: []" in run.provider.calls[2]["messages"][-1].content[0].content
+
+
+def test_a_failed_file_of_a_new_name_keeps_the_others() -> None:
+    provider = _with_bytes_failing(
+        "f2", ProviderError("502"),
+        code_reply(_submit("model.xlsx"), files=("f1", "f2")),
+        files={"f1": REPORT, "f2": replace(REPORT, name="other.csv")})
+    assert len(provider.calls) == 1
+
+
 def test_an_oversized_file_is_refused_journalled_and_still_deleted() -> None:
     big = replace(REPORT, data=b"x" * (hosted_code.MAX_FILE_BYTES + 1))
     run = _Run(code_reply(_submit("model.xlsx"), files=("big",)), code_reply((SUBMIT, {"markdown": "No file."})), files={"big": big})
     step = next(s for s in run.steps if s.kind == "file")
-    assert "error" in step.output
+    assert step.output["name"] == "model.xlsx" and "over" in step.output["error"]
     assert run.outcome.answer.files == ()
     assert run.provider.deleted == ["big"]
 
@@ -486,6 +564,14 @@ def test_a_run_keeps_a_bounded_number_of_files() -> None:
     errors = [s for s in run.steps if s.kind == "file" and "error" in s.output]
     assert len(errors) == 2
     assert sorted(run.provider.deleted) == sorted(ids)
+
+
+def test_a_full_run_still_takes_a_rerun_of_a_name_it_holds() -> None:
+    ids = tuple(f"f{i}" for i in range(hosted_code.MAX_RUN_FILES))
+    files: dict[str, Any] = {i: replace(REPORT, name=f"{i}.csv") for i in ids}
+    files["again"] = replace(REPORT, name="f0.csv", data=b"newer")
+    run = _Run(code_reply((SUBMIT, {"markdown": "Done.", "files": ["f0.csv"]}), files=(*ids, "again")), files=files)
+    assert [f.data for f in run.outcome.answer.files] == [b"newer"]
 
 
 def test_the_journal_holds_a_files_facts_never_its_bytes() -> None:
@@ -514,7 +600,7 @@ def test_past_the_deadline_a_file_is_not_fetched() -> None:
     assert run.provider.deleted == ["f"]
 
 
-def test_the_real_sdk_refuses_a_file_whose_metadata_lied_about_its_size(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_real_sdk_refuses_a_file_past_its_bound_whatever_its_metadata_says(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("anthropic")
     files = {"f": {"filename": "x", "mime_type": "text/plain", "bytes": b"x" * 100, "size_bytes": 1}}
     with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", [], files=files):
@@ -522,22 +608,23 @@ def test_the_real_sdk_refuses_a_file_whose_metadata_lied_about_its_size(monkeypa
             AnthropicProvider(api_key="test").download_file("f", max_bytes=10)
 
 
-def test_the_real_sdk_refuses_a_file_too_large_before_downloading_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("anthropic")
-    files = {"f": {"filename": "x", "mime_type": "text/plain", "bytes": b"x" * 100}}
-    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", [], files=files):
-        with pytest.raises(ProviderError, match="100 bytes"):
-            AnthropicProvider(api_key="test").download_file("f", max_bytes=10)
-
-
 def test_the_real_sdk_returns_a_files_bytes_name_and_type(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("anthropic")
     files = {"f": {"filename": "model.xlsx", "mime_type": XLSX, "bytes": REPORT.data}}
     with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", [], files=files):
-        assert AnthropicProvider(api_key="test").download_file("f", max_bytes=1000) == REPORT
+        provider = AnthropicProvider(api_key="test")
+        assert provider.file_info("f") == HostedFileInfo(name="model.xlsx", media_type=XLSX, size_bytes=len(REPORT.data))
+        assert provider.download_file("f", max_bytes=1000) == REPORT.data
 
 
-def test_the_older_result_shape_yields_its_files_too(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_real_sdk_turns_a_missing_file_into_a_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("anthropic")
+    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", []):
+        with pytest.raises(ProviderError, match="metadata failed"):
+            AnthropicProvider(api_key="test").file_info("gone")
+
+
+def test_the_other_code_result_shape_yields_its_files_too(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("anthropic")
     block = {"type": "code_execution_tool_result", "tool_use_id": "srvtoolu_1", "content": {
         "type": "code_execution_result", "stdout": "", "stderr": "", "return_code": 0,

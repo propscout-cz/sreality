@@ -3,7 +3,7 @@
  * the tool chips and the services' states all derive from `done`. tests/api/test_agent_platform_page.py holds the live
  * tools to the registry. */
 
-export const AS_OF = '2026-10-31';
+export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +

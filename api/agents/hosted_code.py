@@ -51,8 +51,7 @@ def describe(file: HostedFile) -> dict[str, Any]:
 
 def read_input(path: Path) -> HostedFile:
     """A local file as a run's input, for the runners."""
-    return HostedFile(name=safe_name(path.name), media_type=mimetypes.guess_type(path.name)[0] or _OCTET_STREAM,
-                      data=path.read_bytes())
+    return HostedFile(name=path.name, media_type=mimetypes.guess_type(path.name)[0] or _OCTET_STREAM, data=path.read_bytes())
 
 
 def save(files: Sequence[HostedFile], folder: Path) -> list[Path]:
@@ -96,20 +95,32 @@ class RunFiles:
         return [*blocks, TextBlock(text=f"Input files in your code container: {', '.join(names)}.")]
 
     def collect(self, file_id: str, *, late: bool) -> dict[str, Any]:
-        """Fetch one produced file, a rerun of a name replacing the earlier one; a journal line either way, since a
-        failure here must not lose the call already paid for: the model hears of it when it names the file."""
+        """Fetch one produced file; a journal line either way, since a failure here must not lose the call already paid
+        for: the model hears of it when it names the file. A rerun of a name replaces the earlier file even when the
+        rerun cannot be fetched, so an answer never carries bytes older than the model thinks: with no name to go on,
+        every file held goes, and the model can copy what it needs to $OUTPUT_DIR again."""
         self._ids.append(file_id)
         if late:
+            self.produced.clear()
             return {"error": "past the run's deadline: not fetched"}
-        if len(self.produced) >= MAX_RUN_FILES:
-            return {"error": f"this run already holds {MAX_RUN_FILES} files: not fetched"}
         try:
-            fetched = self._provider.download_file(file_id, max_bytes=MAX_FILE_BYTES)
+            info = self._provider.file_info(file_id)
         except ProviderError as exc:
+            self.produced.clear()
             return {"error": str(exc)}
-        file = HostedFile(name=safe_name(fetched.name), media_type=_safe_media_type(fetched.media_type), data=fetched.data)
-        self.produced[file.name] = file
-        return {**describe(file), "sha256": hashlib.sha256(file.data).hexdigest()}
+        name = safe_name(info.name)
+        self.produced.pop(name, None)
+        if info.size_bytes > MAX_FILE_BYTES:
+            return {"name": name, "error": f"{info.size_bytes} bytes is over the {MAX_FILE_BYTES} a file may hold: not fetched"}
+        if len(self.produced) >= MAX_RUN_FILES:
+            return {"name": name, "error": f"this run already holds {MAX_RUN_FILES} files: not fetched"}
+        try:
+            data = self._provider.download_file(file_id, max_bytes=MAX_FILE_BYTES)
+        except ProviderError as exc:
+            return {"name": name, "error": str(exc)}
+        file = HostedFile(name=name, media_type=_safe_media_type(info.media_type), data=data)
+        self.produced[name] = file
+        return {**describe(file), "sha256": hashlib.sha256(data).hexdigest()}
 
     def release(self) -> None:
         """Delete everything this run left at the provider, which keeps a file until told otherwise (ADR-0005)."""

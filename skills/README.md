@@ -50,7 +50,7 @@ that declares it. The server refuses a submission, and tells the model what to f
 - a cited id was never a `property_id` under `data` in this run's tool results;
 - a file was not produced by this run (the refusal lists those it has);
 - a proposal names no write tool the agent lists, or its arguments fail that tool's schema;
-- it shares its turn with another call.
+- it shares its turn with another call, or with hosted code still waiting to run.
 
 ## Code
 
@@ -62,13 +62,15 @@ any provider. `run_python` is the name the design and the admin page give it; th
   into the container. A runner passes `--file`.
 - **Files out.** The model must copy a file to `$OUTPUT_DIR` (the answer tool tells it so) and name it in
   `submit_result`'s `files`. It arrives in the loop as bytes, name and type (`HostedFile`), on the accepted answer. The
-  name is cut down to one harmless path segment, the type to a plain media type, and a later file of the same name
-  replaces the earlier one. At most 20 MiB a file and 10 files a run; one refused or failed is a journal line, and the
-  model hears of it when it names the file. Storing the file is #2073's.
+  name is cut down to one harmless path segment and the type to a plain media type. At most 20 MiB a file and 10 files a
+  run; one refused or failed is a journal line, and the model hears of it when it names the file. A later file of the
+  same name replaces the earlier one even when it cannot be fetched, so an answer never carries older bytes than the
+  model thinks; when a failure leaves no name to go on, every file held goes. Storing the file is #2073's.
 - **Files leave.** When the run ends, however it ends, every file it uploaded or got is deleted from Anthropic. A
-  failed delete is a warning naming the file id. A process killed mid-run leaves its produced files there until someone
-  deletes them (they have no expiry; inputs expire within the hour). The container's own data stays up to 30 days
-  under Anthropic's retention, with no delete call.
+  failed delete is a warning naming the file id. Ids are known only from a reply that came back, so a process killed
+  mid-run, or a model call that failed after its code ran (a timeout, a 5xx), leaves produced files there until someone
+  deletes them: they have no expiry, and no sweep exists. Inputs expire within the hour. The container's own data stays
+  up to 30 days under Anthropic's retention, with no delete call.
 - **Pauses.** A `pause_turn` reply goes back as it came with its container: another model call, journalled and billed,
   so `max_iterations`, `max_cost_usd` and the wall clock bound it like any other.
 - **Budget.** One request can sample the model up to 10 times on its own, so a code call's reply limit is set as if

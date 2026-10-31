@@ -28,16 +28,28 @@ def _completion(output: dict[str, Any]) -> Completion:
         model=output["model"],
         raw=None,
         hosted_calls=tuple(ToolCall(**call) for call in output.get("hosted_calls", ())),
+        hosted_pending=tuple(output.get("hosted_pending", ())),
         container=output.get("container"),
         file_ids=tuple(output.get("file_ids", ())),
     )
 
 
-def _fake_file(output: dict[str, Any]) -> HostedFile | Exception:
-    """A produced file as its journal step remembers it: right name, type and size, its bytes never recorded."""
-    if "error" in output:
-        return ProviderError(output["error"])
-    return HostedFile(name=output["name"], media_type=output["media_type"], data=bytes(output["bytes"]))
+def _code_provider(document: dict[str, Any], completions: list[Completion], prices: dict[str, ModelPrice]) -> ScriptedCodeProvider:
+    """Each produced file as its journal step remembers it: right name, type and size, its bytes never recorded; one that
+    failed fails at the point it did, before its name was known or after."""
+    provider = ScriptedCodeProvider(completions, name=document["provider"], prices=prices)
+    for step in document["steps"]:
+        if step["kind"] != "file":
+            continue
+        output, file_id = step["output"], step["input"]["file_id"]
+        if "error" not in output:
+            provider.files[file_id] = HostedFile(name=output["name"], media_type=output["media_type"], data=bytes(output["bytes"]))
+        elif "name" not in output:
+            provider.files[file_id] = ProviderError(output["error"])
+        else:
+            provider.files[file_id] = HostedFile(name=output["name"], media_type="application/octet-stream", data=b"")
+            provider.byte_errors[file_id] = ProviderError(output["error"])
+    return provider
 
 
 def _ran_in_the_registry(step: dict[str, Any]) -> bool:
@@ -52,9 +64,8 @@ def replay(document: dict[str, Any], definition: Definition) -> Outcome:
     steps = document["steps"]
     completions = [_completion(s["output"]) for s in steps if s["kind"] == "model"]
     prices = {document["model"]: ModelPrice(**document["price"])}
-    provider = (ScriptedCodeProvider(completions, name=document["provider"], prices=prices,
-                                     files={s["input"]["file_id"]: _fake_file(s["output"]) for s in steps if s["kind"] == "file"})
-                if definition.code else _ScriptedProvider(document["provider"], completions, prices=prices))
+    provider = (_code_provider(document, completions, prices) if definition.code
+                else _ScriptedProvider(document["provider"], completions, prices=prices))
     served = iter([s for s in steps if _ran_in_the_registry(s)])
 
     def call_tool(name: str, args: Any) -> dict[str, Any]:

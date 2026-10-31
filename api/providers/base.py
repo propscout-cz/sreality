@@ -111,7 +111,7 @@ class Usage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    # Hosted code: the calls the provider reports, and its container time in dollars (an estimate: see `complete`).
+    # Hosted code: the calls the provider reports, and its container time in dollars (an estimate: no provider reports it).
     code_execution_requests: int = 0
     hosted_code_usd: float = 0.0
 
@@ -130,8 +130,10 @@ class Completion:
     model: str
     raw: Any = field(repr=False, default=None)
     blocks: list[Block] | None = field(repr=False, default=None)
-    # Hosted code only: the commands the provider ran itself, the container they ran in, the files they left.
+    # Hosted code only: the commands the provider ran itself, the ids of those still waiting on this turn's tool results
+    # to run, the container they ran in, the files they left.
     hosted_calls: tuple[ToolCall, ...] = ()
+    hosted_pending: tuple[str, ...] = ()
     container: str | None = None
     file_ids: tuple[str, ...] = ()
 
@@ -254,6 +256,14 @@ class HostedFile:
     data: bytes = field(repr=False)
 
 
+@dataclass(frozen=True)
+class HostedFileInfo:
+    """What a provider says of a produced file before its bytes are fetched, as written: nothing here is checked."""
+    name: str
+    media_type: str
+    size_bytes: int
+
+
 class HostedCodeProvider(CompletionProvider, Protocol):
     """A provider that runs code itself. Only Anthropic does (ADR-0005); the agent loop is the only caller."""
 
@@ -273,7 +283,9 @@ class HostedCodeProvider(CompletionProvider, Protocol):
 
     def input_block(self, file_id: str) -> Block: ...
 
-    def download_file(self, file_id: str, *, max_bytes: int) -> HostedFile: ...
+    def file_info(self, file_id: str) -> HostedFileInfo: ...
+
+    def download_file(self, file_id: str, *, max_bytes: int) -> bytes: ...
 
     def delete_file(self, file_id: str) -> None: ...
 

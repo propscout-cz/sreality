@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 < opts.max_usd <= 5:
         print("--max-usd must be above 0 and at most 5", file=sys.stderr)
         return 2
+    # Before anything is spent: the provider's copy is gone once the run ends.
+    opts.out.mkdir(parents=True, exist_ok=True)
 
     definition = Definition(
         name="hosted_code_live_check", description="One real code turn.", instructions=INSTRUCTIONS, tools=(),
@@ -64,9 +66,9 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
     print(f"{outcome.stop_reason} after {outcome.model_calls} model calls, ${outcome.cost_usd:.4f} of the "
-          f"${opts.max_usd:.2f} cap (Anthropic's bill may also show container time: see llm-pipelines)", file=sys.stderr)
-    if outcome.answer is None or not outcome.answer.files:
-        print("no file came back", file=sys.stderr)
+          f"${opts.max_usd:.2f} cap (container time in that figure is a list-price upper bound)", file=sys.stderr)
+    if outcome.answer is None or WORKBOOK not in [f.name for f in outcome.answer.files]:
+        print(f"{WORKBOOK} did not come back", file=sys.stderr)
         return 1
     print(outcome.answer.markdown)
     for path in hosted_code.save(outcome.answer.files, opts.out):

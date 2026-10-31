@@ -18,6 +18,7 @@ from api.providers import (
     Completion,
     HostedCode,
     HostedFile,
+    HostedFileInfo,
     Message,
     OpaqueBlock,
     ProviderError,
@@ -98,6 +99,7 @@ class ScriptedCodeProvider(_ScriptedProvider):
                  prices: dict[str, Any] | None = None, name: str = "anthropic") -> None:
         super().__init__(name, completions, prices=prices)
         self.files = dict(files or {})
+        self.byte_errors: dict[str, Exception] = {}
         self.hosted: list[HostedCode | None] = []
         self.uploaded: list[tuple[str, str, bytes, int]] = []
         self.deleted: list[str] = []
@@ -116,13 +118,20 @@ class ScriptedCodeProvider(_ScriptedProvider):
     def input_block(self, file_id: str) -> OpaqueBlock:
         return OpaqueBlock(provider=self.name, data={"type": "container_upload", "file_id": file_id})
 
-    def download_file(self, file_id: str, *, max_bytes: int) -> HostedFile:
+    def file_info(self, file_id: str) -> HostedFileInfo:
         found = self.files[file_id]
         if isinstance(found, Exception):
             raise found
+        return HostedFileInfo(name=found.name, media_type=found.media_type, size_bytes=len(found.data))
+
+    def download_file(self, file_id: str, *, max_bytes: int) -> bytes:
+        if file_id in self.byte_errors:
+            raise self.byte_errors[file_id]
+        found = self.files[file_id]
+        assert isinstance(found, HostedFile)
         if len(found.data) > max_bytes:
             raise ProviderError(f"{file_id} is over {max_bytes} bytes")
-        return found
+        return found.data
 
     def delete_file(self, file_id: str) -> None:
         self.deleted.append(file_id)

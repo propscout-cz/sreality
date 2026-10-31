@@ -93,6 +93,16 @@ def test_a_code_agent_takes_input_files_and_writes_its_answers_files(
     assert json.loads(printed.split("Done.\n", 1)[1])["files"] == [{"name": "model.csv", "media_type": "text/csv", "bytes": 4}]
 
 
+def test_an_out_folder_it_cannot_make_spends_nothing(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x")
+    code = agent_run.main([str(write_folder(tmp_path)), "--user", str(USER), "--input", '{"town": "Brno"}',
+                           "--out", str(blocker / "out")])
+    assert code == 2
+    assert world["provider"].calls == []
+
+
 def test_an_input_file_for_an_agent_without_code_spends_nothing(
         world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = tmp_path / "rents.csv"

@@ -183,8 +183,8 @@ def _run(
             "stop_reason": completion.stop_reason,
             "usage": asdict(completion.usage),
             "model": completion.model,
-            **({"hosted_calls": [asdict(c) for c in completion.hosted_calls], "container": completion.container,
-                "file_ids": list(completion.file_ids)} if definition.code else {}),
+            **({"hosted_calls": [asdict(c) for c in completion.hosted_calls], "hosted_pending": list(completion.hosted_pending),
+                "container": completion.container, "file_ids": list(completion.file_ids)} if definition.code else {}),
         }, started, response.cost_usd, response.llm_call_id)
         container = completion.container or container
         for file_id in completion.file_ids:
@@ -207,7 +207,8 @@ def _run(
             started = clock()
             try:
                 if call.name == terminator.NAME:
-                    if len(completion.tool_calls) > 1:
+                    # Code still waiting on this turn counts: its output could not have backed the answer.
+                    if len(completion.tool_calls) > 1 or completion.hosted_pending:
                         raise ToolError(ToolErrorCode.REFUSED, f"{terminator.NAME} must be the only call in its turn")
                     answer = terminator.accept(call.input, definition=definition, seen=seen, produced=files.produced)
                     journal("tool", call.name, call.input, plain_answer(answer), started)

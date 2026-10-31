@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
         if opts.file and not definition.code:
             raise DefinitionError(f"{definition.name} does not allow code, so it takes no --file")
         inputs = [hosted_code.read_input(path) for path in opts.file]
+        if opts.out:
+            opts.out.mkdir(parents=True, exist_ok=True)
     except (DefinitionError, InputError, json.JSONDecodeError, OSError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -82,12 +84,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{outcome.stop_reason} after {outcome.model_calls} model calls, ${outcome.cost_usd:.4f}", file=sys.stderr)
     if outcome.answer is None:
         return 1
+    answer = cassette.plain(loop.plain_answer(outcome.answer))
+    print(answer.pop("markdown"))
+    print(json.dumps(answer, ensure_ascii=False, indent=2))
     if opts.out:
         for path in hosted_code.save(outcome.answer.files, opts.out):
             print(f"wrote {path}", file=sys.stderr)
-    answer = cassette.plain_outcome(outcome)["answer"]
-    print(answer.pop("markdown"))
-    print(json.dumps(answer, ensure_ascii=False, indent=2))
     return 0
 
 

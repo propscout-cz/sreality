@@ -40,6 +40,21 @@ def test_it_uploads_one_input_saves_the_workbook_and_clears_the_provider(
     assert "submit_result after 2 model calls" in out.err and f"should read {agent_code_live.EXPECTED_TOTAL}" in out.out
 
 
+def test_it_fails_when_another_file_came_back_instead(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    other = HostedFile(name="other.csv", media_type="text/csv", data=b"x")
+    _world(monkeypatch, code_reply((SUBMIT, {"markdown": "Here.", "files": ["other.csv"]}), files=("f",)), files={"f": other})
+    assert agent_code_live.main(["--out", str(tmp_path)]) == 1
+
+
+def test_an_out_folder_it_cannot_make_spends_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    provider = _world(monkeypatch)
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x")
+    with pytest.raises(OSError):
+        agent_code_live.main(["--out", str(blocker / "out")])
+    assert provider.calls == []
+
+
 def test_it_fails_when_no_file_came_back(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _world(monkeypatch, code_reply((SUBMIT, {"markdown": "No file."})))
     assert agent_code_live.main(["--out", str(tmp_path)]) == 1

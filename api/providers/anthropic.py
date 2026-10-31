@@ -22,7 +22,7 @@ from api.providers.base import (
     Block,
     Completion,
     HostedCode,
-    HostedFile,
+    HostedFileInfo,
     ImageBlock,
     Message,
     ModelPrice,
@@ -118,7 +118,9 @@ class AnthropicProvider:
         completion = self._completion_from_raw(raw, fallback_model=model)
         if hosted_code is None:
             return completion
-        cost = _container_usd(completion.container, hosted_code.container, time.monotonic() - started)
+        cost = 0.0
+        if completion.container is not None:
+            cost = _container_usd(time.monotonic() - started, new=completion.container != hosted_code.container)
         return replace(completion, usage=replace(completion.usage, hosted_code_usd=cost))
 
     def price_for(self, model: str) -> ModelPrice | None:
@@ -139,15 +141,18 @@ class AnthropicProvider:
     def input_block(self, file_id: str) -> Block:
         return OpaqueBlock(provider=self.name, data={"type": "container_upload", "file_id": file_id})
 
-    def download_file(self, file_id: str, *, max_bytes: int) -> HostedFile:
-        """A produced file as it came, its name and type unchecked; refused whole past `max_bytes`, whatever its metadata says."""
-        files = self._file_client().files
+    def file_info(self, file_id: str) -> HostedFileInfo:
         try:
-            meta = files.retrieve_metadata(file_id)
-            if meta.size_bytes > max_bytes:
-                raise ProviderError(f"file {file_id} is {meta.size_bytes} bytes, over {max_bytes} bytes")
+            meta = self._file_client().files.retrieve_metadata(file_id)
+        except Exception as exc:
+            raise ProviderError(f"anthropic file metadata failed: {exc}") from exc
+        return HostedFileInfo(name=str(meta.filename), media_type=str(meta.mime_type), size_bytes=int(meta.size_bytes))
+
+    def download_file(self, file_id: str, *, max_bytes: int) -> bytes:
+        """A produced file's bytes, refused whole past `max_bytes`, whatever its metadata said."""
+        try:
             data = bytearray()
-            with files.with_streaming_response.download(file_id) as response:
+            with self._file_client().files.with_streaming_response.download(file_id) as response:
                 for chunk in response.iter_bytes():
                     data += chunk
                     if len(data) > max_bytes:
@@ -156,7 +161,7 @@ class AnthropicProvider:
             raise
         except Exception as exc:
             raise ProviderError(f"anthropic file download failed: {exc}") from exc
-        return HostedFile(name=str(meta.filename), media_type=str(meta.mime_type), data=bytes(data))
+        return bytes(data)
 
     def delete_file(self, file_id: str) -> None:
         try:
@@ -165,7 +170,7 @@ class AnthropicProvider:
             raise ProviderError(f"anthropic file delete failed: {exc}") from exc
 
     def container_cost_usd(self, seconds: float) -> float:
-        return _container_usd("new", None, seconds)
+        return _container_usd(seconds, new=True)
 
     # --- Message Batches API ----------------------------------------------
 
@@ -322,7 +327,7 @@ class AnthropicProvider:
 
     def _completion_from_raw(self, raw: Any, *, fallback_model: str) -> Completion:
         text_blocks, tool_calls, blocks = _split_anthropic_content(raw)
-        hosted_calls, file_ids = _hosted_work(raw)
+        hosted_calls, hosted_pending, file_ids = _hosted_work(raw)
         usage = _extract_anthropic_usage(raw)
         stop_reason = _normalise_stop_reason(getattr(raw, "stop_reason", None))
         return Completion(
@@ -334,6 +339,7 @@ class AnthropicProvider:
             raw=raw,
             blocks=blocks,
             hosted_calls=hosted_calls,
+            hosted_pending=hosted_pending,
             container=_container_id(raw),
             file_ids=file_ids,
         )
@@ -425,21 +431,25 @@ def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall], list[
     return texts, tool_calls, reply
 
 
-def _hosted_work(raw: Any) -> tuple[tuple[ToolCall, ...], tuple[str, ...]]:
-    """The commands the API ran itself in this reply and the ids of the files they left."""
+def _hosted_work(raw: Any) -> tuple[tuple[ToolCall, ...], tuple[str, ...], tuple[str, ...]]:
+    """The commands the API took up in this reply, those with no result yet (a call beside a client call waits for that
+    call's result: docs, server tools), and the ids of the files they left."""
     calls: list[ToolCall] = []
+    answered: set[str] = set()
     file_ids: list[str] = []
     for block in getattr(raw, "content", None) or []:
         kind = _attr(block, "type")
         if kind == "server_tool_use":
             calls.append(ToolCall(id=str(_attr(block, "id") or ""), name=str(_attr(block, "name") or ""),
                                   input=_attr(block, "input") or {}))
-        elif kind in _FILE_RESULTS:
+        elif str(kind).endswith("_tool_result"):
+            answered.add(str(_attr(block, "tool_use_id") or ""))
+        if kind in _FILE_RESULTS:
             # An error result has no inner `content`.
             for entry in _attr(_attr(block, "content"), "content") or []:
                 if file_id := _attr(entry, "file_id"):
                     file_ids.append(str(file_id))
-    return tuple(calls), tuple(file_ids)
+    return tuple(calls), tuple(c.id for c in calls if c.id not in answered), tuple(file_ids)
 
 
 def _container_id(raw: Any) -> str | None:
@@ -447,11 +457,9 @@ def _container_id(raw: Any) -> str | None:
     return container_id if isinstance(container_id, str) else None
 
 
-def _container_usd(opened: str | None, resumed: str | None, seconds: float) -> float:
-    """What a call's container time costs at most: nothing with no container, the minimum when it is a new one."""
-    if opened is None:
-        return 0.0
-    billed = seconds if opened == resumed else max(seconds, CONTAINER_MINIMUM_S)
+def _container_usd(seconds: float, *, new: bool) -> float:
+    """What `seconds` of a container cost at most, the billing minimum on a new one."""
+    billed = max(seconds, CONTAINER_MINIMUM_S) if new else seconds
     return round(billed * CONTAINER_USD_PER_HOUR / 3600, 6)
 
 
