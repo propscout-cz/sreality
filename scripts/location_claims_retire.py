@@ -22,6 +22,12 @@ THE RECEIPT lists every listing whose answer may move: one that loses a row of i
 version (the resolver's window read those beside the keeper; ≈ 2.8 k listings). W3's rollout
 re-mines exactly those (design § 4 step 5). Gzipped CSV, `--receipt`, uploaded by the workflow.
 
+THE SHADOW IDS (`--shadow-ids`, the dry run's job): the ACTIVE listings W3 can move — the receipt's,
+those whose keeper the old read never served (a version above the active one, or none), and the
+two rules that move without a duplicate (a house-number claim beside a street line carrying a
+number; any operator claim). Written per batch from the same rows, so the wave shadow gets W3's
+movers without one statement over the whole table (design § 5 step 2): `what_if --ids`.
+
 THE BACKUP is the workflow's first step: a whole-table `\\copy` to R2 before any row goes.
 
 BOUNDED, PAUSED, RESUMABLE: 2,000 listings a statement (keyset over `listings.id`), each its own
@@ -29,7 +35,7 @@ transaction with `lock_timeout 5s` and `statement_timeout 120s`, 0.5 s between b
 lost is retried, a budget spent stops between batches and logs the cursor to resume from
 (`--after-listing-id`); re-running re-derives the same keepers.
 
-    python3 -m scripts.location_claims_retire --dry-run
+    python3 -m scripts.location_claims_retire --dry-run --shadow-ids shadow_ids.txt.gz
     python3 -m scripts.location_claims_retire --confirm PURGE --receipt purge.csv.gz
 """
 
@@ -62,9 +68,9 @@ _BATCH_TIMEOUTS_SQL = ("SET LOCAL lock_timeout = '5s'", "SET LOCAL statement_tim
 # key keeps; a deleted row of that same version was read beside it, so its listing is collapsed.
 _BATCH_SQL = """
     WITH batch AS (
-        SELECT id FROM listings WHERE id > %(after)s ORDER BY id LIMIT %(listings)s
+        SELECT id, is_active FROM listings WHERE id > %(after)s ORDER BY id LIMIT %(listings)s
     ), ranked AS (
-        SELECT c.id, c.listing_id, pc.version, act.version AS active_version,
+        SELECT c.id, c.listing_id, c.licence_class, pc.version, act.version AS active_version,
                row_number() OVER w AS rn, first_value(pc.version) OVER w AS keeper_version
           FROM batch b
           JOIN location_claims c ON c.listing_id = b.id
@@ -78,6 +84,19 @@ _BATCH_SQL = """
         DELETE FROM location_claims c USING ranked r
          WHERE c.id = r.id AND r.rn > 1 AND %(armed)s
         RETURNING c.id
+    ), moved AS (
+        SELECT r.listing_id FROM ranked r JOIN batch b ON b.id = r.listing_id
+         WHERE b.is_active
+           AND (r.rn > 1 AND r.version IS NOT DISTINCT FROM r.keeper_version
+                OR r.rn = 1 AND r.licence_class = 'portal'
+                   AND (r.version <= r.active_version) IS NOT TRUE)
+        UNION
+        SELECT c.listing_id FROM batch b JOIN location_claims c ON c.listing_id = b.id
+         WHERE b.is_active
+         GROUP BY c.listing_id
+        HAVING bool_or(c.licence_class = 'operator')
+            OR bool_or(c.claim_type = 'street_name' AND c.value_text ~ '[0-9]')
+               AND bool_or(c.claim_type IN ('house_number_cp', 'house_number_co'))
     )
     SELECT (SELECT max(id) FROM batch),
            (SELECT count(*) FROM ranked WHERE rn = 1),
@@ -85,7 +104,8 @@ _BATCH_SQL = """
            (SELECT count(*) FROM ranked WHERE rn = 1 AND version < active_version),
            (SELECT count(*) FROM deleted),
            (SELECT coalesce(array_agg(DISTINCT listing_id ORDER BY listing_id), '{}')
-              FROM ranked WHERE rn > 1 AND version IS NOT DISTINCT FROM keeper_version)
+              FROM ranked WHERE rn > 1 AND version IS NOT DISTINCT FROM keeper_version),
+           (SELECT coalesce(array_agg(listing_id ORDER BY listing_id), '{}') FROM moved)
 """
 
 # THE SAFETY CHECK, in the batch's own transaction after its delete: the KEYS left for the
@@ -111,17 +131,19 @@ class Totals:
     batches: int = 0
     cursor: int = 0
     collapsed: list[int] = field(default_factory=list)
+    shadow: list[int] = field(default_factory=list)
 
 
 def _batch(conn: psycopg.Connection, after: int, listings: int,
-           armed: bool) -> tuple[int | None, int, int, int, int, list[int]]:
-    """One batch transaction -> (through, keys, surplus, kept retired, deleted, collapsed)."""
+           armed: bool) -> tuple[int | None, int, int, int, int, list[int], list[int]]:
+    """One batch transaction -> (through, keys, surplus, kept retired, deleted, collapsed,
+    the active listings W3 can move)."""
     with conn.transaction():
         with conn.cursor() as cur:
             for timeout in _BATCH_TIMEOUTS_SQL:
                 cur.execute(timeout)
             cur.execute(_BATCH_SQL, {"after": after, "listings": listings, "armed": armed})
-            through, keys, surplus, retired, deleted, collapsed = cur.fetchone()
+            through, keys, surplus, retired, deleted, collapsed, moved = cur.fetchone()
             if armed and through is not None:
                 cur.execute(_KEYS_SQL, {"after": after, "through": through})
                 left = int(cur.fetchone()[0])
@@ -129,7 +151,7 @@ def _batch(conn: psycopg.Connection, after: int, listings: int,
                     raise KeyLost(f"listings ({after}, {through}]: {keys} keys kept, {left} "
                                   f"left after the delete; the batch rolled back")
     return (None if through is None else int(through), int(keys), int(surplus), int(retired),
-            int(deleted), [int(i) for i in collapsed])
+            int(deleted), [int(i) for i in collapsed], [int(i) for i in moved])
 
 
 def purge(conn: psycopg.Connection, totals: Totals, *, armed: bool,
@@ -153,7 +175,7 @@ def purge(conn: psycopg.Connection, totals: Totals, *, armed: bool,
                 LOG.warning("PURGE lock lost at cursor %d (attempt %d): %s",
                             totals.cursor, attempt, exc.sqlstate)
                 time.sleep(2.0 * attempt)
-        through, keys, surplus, retired, deleted, collapsed = result
+        through, keys, surplus, retired, deleted, collapsed, moved = result
         if through is None:
             LOG.info("PURGE walk complete at cursor %d", totals.cursor)
             return True
@@ -163,6 +185,7 @@ def purge(conn: psycopg.Connection, totals: Totals, *, armed: bool,
         totals.kept_retired += retired
         totals.deleted += deleted
         totals.collapsed.extend(collapsed)
+        totals.shadow.extend(moved)
         totals.batches += 1
         if totals.batches % PROGRESS_EVERY == 0:
             LOG.info("PURGE batch=%d cursor=%d keys=%d surplus=%d deleted=%d collapsed=%d "
@@ -172,10 +195,12 @@ def purge(conn: psycopg.Connection, totals: Totals, *, armed: bool,
             time.sleep(pause)
 
 
-def write_receipt(path: str, listing_ids: list[int]) -> None:
-    """The collapsed listings, one id a line, gzipped (W3 rollout step 5 re-mines them)."""
+def write_receipt(path: str, listing_ids: list[int], *, header: bool = True) -> None:
+    """Listing ids, one a line, gzipped: the receipt (CSV, with its header) or the shadow ids
+    (`what_if --ids` reads them gunzipped, whitespace-separated, no header)."""
     with gzip.open(path, "wt", encoding="utf-8") as out:
-        out.write("listing_id\n")
+        if header:
+            out.write("listing_id\n")
         out.writelines(f"{i}\n" for i in sorted(set(listing_ids)))
 
 
@@ -189,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pause", type=float, default=DEFAULT_PAUSE_SECONDS)
     parser.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS)
     parser.add_argument("--receipt", default="", help="gzipped CSV of the collapsed listings")
+    parser.add_argument("--shadow-ids", default="",
+                        help="gzipped ids of the active listings W3 can move (the wave shadow's)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -207,10 +234,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if args.receipt:
             write_receipt(args.receipt, totals.collapsed)
+        if args.shadow_ids:
+            write_receipt(args.shadow_ids, totals.shadow, header=False)
     LOG.info("PURGE summary armed=%s complete=%s cursor=%d batches=%d keys=%d surplus=%d "
-             "deleted=%d kept_retired_version=%d collapsed_listings=%d", armed, complete,
+             "deleted=%d kept_retired_version=%d collapsed_listings=%d shadow_ids=%d",
+             armed, complete,
              totals.cursor, totals.batches, totals.keys, totals.surplus, totals.deleted,
-             totals.kept_retired, len(set(totals.collapsed)))
+             totals.kept_retired, len(set(totals.collapsed)), len(set(totals.shadow)))
     return code
 
 

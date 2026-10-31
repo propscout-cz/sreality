@@ -38,7 +38,8 @@ def test_the_keeper_is_the_row_the_resolver_reads_today() -> None:
 
 def test_a_batch_is_a_listing_keyset_and_the_dry_run_runs_the_same_statement() -> None:
     flat = _flat(purge._BATCH_SQL)
-    assert "SELECT id FROM listings WHERE id > %(after)s ORDER BY id LIMIT %(listings)s" in flat
+    assert ("SELECT id, is_active FROM listings WHERE id > %(after)s ORDER BY id"
+            " LIMIT %(listings)s") in flat
     assert "WHERE c.id = r.id AND r.rn > 1 AND %(armed)s" in flat
     assert purge.DEFAULT_LISTINGS == 2_000 and purge.DEFAULT_PAUSE_SECONDS == 0.5
     assert purge._BATCH_TIMEOUTS_SQL == ("SET LOCAL lock_timeout = '5s'",
@@ -49,6 +50,18 @@ def test_the_safety_check_counts_keys_not_listings() -> None:
     flat = _flat(purge._KEYS_SQL)
     assert "SELECT DISTINCT listing_id, claim_type, licence_class" in flat
     assert "listing_id > %(after)s AND listing_id <= %(through)s" in flat
+
+
+def test_the_shadow_ids_are_the_active_listings_w3_can_move() -> None:
+    """The wave shadow's input, written by the dry run from the rows it already reads: the
+    receipt's listings, a keeper the old read never served, and the two rules that move
+    without a duplicate (a numbered street beside a house-number claim; an operator claim)."""
+    moved = _flat(purge._BATCH_SQL).split("moved AS (")[1].split(") SELECT (SELECT max(id)")[0]
+    assert moved.count("b.is_active") == 2
+    assert "r.rn > 1 AND r.version IS NOT DISTINCT FROM r.keeper_version" in moved
+    assert "(r.version <= r.active_version) IS NOT TRUE" in moved
+    assert "bool_or(c.licence_class = 'operator')" in moved
+    assert "c.value_text ~ '[0-9]'" in moved and "'house_number_cp', 'house_number_co'" in moved
 
 
 def test_nothing_here_enqueues_or_touches_another_table() -> None:
@@ -183,3 +196,24 @@ def test_the_wave_shadows_purge_reads_what_the_purge_leaves(conn: Any) -> None:
     assert {k: [c.id for c in v] for k, v in shadow.items()} == {
         k: [c.id for c in v] for k, v in after.items()}
     assert len(shadow[l1]) == 4   # street, the newest psc, cast obce; the operator outranks the town
+
+
+@_live
+def test_the_dry_run_writes_the_shadow_ids_and_deletes_nothing(conn: Any, tmp_path: Path) -> None:
+    l1, l2, _ = _seed(conn)
+    entries = _header(conn, 0)
+    numbered, plain, gone = _listing(conn), _listing(conn), _listing(conn)
+    _claim(conn, numbered, "street_name", "Husova 12", entries["street_name"], 1)
+    _claim(conn, numbered, "house_number_cp", "12", entries["house_number_cp"], 1)
+    _claim(conn, plain, "street_name", "Husova", entries["street_name"], 1)
+    _claim(conn, plain, "house_number_cp", "12", entries["house_number_cp"], 1)
+    _claim(conn, gone, "obec_name", "Brno", None, 1, licence="operator")
+    conn.execute("UPDATE listings SET is_active = false WHERE id = %s", (gone,))
+    totals = purge.Totals(cursor=min(l1, l2) - 1)
+    assert purge.purge(conn, totals, armed=False, pause=0)
+    assert totals.deleted == 0
+    assert sorted(set(totals.shadow)) == sorted([l1, numbered])   # l1: receipt + operator
+    path = tmp_path / "shadow_ids.txt.gz"
+    purge.write_receipt(str(path), totals.shadow, header=False)
+    assert gzip.decompress(path.read_bytes()).decode().split() == [
+        str(i) for i in sorted({l1, numbered})]

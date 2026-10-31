@@ -484,7 +484,8 @@ pg_dump in memory (a ≈ 4 GB text dump on a 7–8 GB private-repo runner). Then
   range must be ≥ the keys it kept, else the batch rolls back and the run exits 3. A key whose only
   rows sit under a retired version keeps one (the ≈ 15.7 k, logged as `kept_retired_version`).
 - Receipt: every listing that lost a row of its keeper's own version (the rows the old window read
-  beside the keeper, ≈ 2.8 k), gzipped CSV to R2 beside the backup, for Step 5.
+  beside the keeper, ≈ 2.8 k), gzipped CSV to R2 beside the backup, for Step 5. Both modes also write
+  the shadow ids (`--shadow-ids`, § 5 step 2) and store both files in R2; the dry run deletes nothing.
 
 ```
 gh workflow run location_claims_retire.yml --ref feature/location-w3-one-claim-per-fact -f dry_run=true
@@ -589,40 +590,63 @@ inserts ≈ 50 k rows a day).
    realitymix@9 is built on its @8 and this branch carries #2220's commits.
 2. **Standing autodedup shadow gate, before Step 1** (PROGRAM.md; ≈ 52 % of movers sit in the live
    apply scope). From this branch, before the purge: `location_wave_shadow.yml` with `claims=purge`
-   (`what_if.purge`: every claim of the ids read raw, the purge's keeper, then the one read) and
-   W3's OWN `ids_sql` — without it the workflow shadows its default (W4's realitymix cohort) and a PASS
-   means nothing. Then `autodedup.shadow` + `harness shadow`; pass = no ruled pair moved against its
-   ruling. The id set is the UNION, active listings only, of every listing W3 can move:
-   (a) a key holding ≥ 2 distinct values (the purge and the deleted tie rules: pins, towns, PSČ,
-   streets, two precision declarations; a key's same-value copies cannot move an answer, so they are
-   left out — the literal "≥ 2 claims for one key" is ≈ 90 % of active listings and adds only cost);
-   (b) a house-number claim beside a street line carrying a number (the one new rule between two
-   types); (c) any operator claim (the operator now binds through the register).
+   (`what_if.purge`: every claim of the ids read raw, the purge's keeper, then the one read) over W3's
+   OWN ids — without them the workflow shadows its default (W4's realitymix cohort) and a PASS means
+   nothing. Then `autodedup.shadow` + `harness shadow`; pass = no ruled pair moved against its
+   ruling. The ids are every ACTIVE listing W3 can move: (a) one the purge collapses or whose keeper
+   the old read never served (the purge and the deleted tie rules: pins, towns, PSČ, streets, two
+   precision declarations); (b) a house-number claim beside a street line carrying a number (the one
+   new rule between two types); (c) any operator claim (the operator now binds through the register).
+
+   **Recommended: the purge's DRY RUN writes them.** Run 41217039410 (2026-10-31) showed one
+   statement over the table's 14.8 M claims cannot finish in the shadow's 2-minute read. The dry run
+   walks the same keyset the purge will (2,000 listings a statement, ≈ 15–20 min, nothing deleted)
+   and computes the three sets per batch from the rows it already reads (`moved` in
+   `scripts/location_claims_retire._BATCH_SQL`: the receipt's listings plus a keeper the old read
+   never served, then (b) and (c), active listings only). Until 2026-10-31 the dry run wrote nothing
+   but its log; it now writes `--receipt` and `--shadow-ids`, and the workflow stores both in R2:
+   ```
+   gh workflow run location_claims_retire.yml --ref feature/location-w3-one-claim-per-fact -f dry_run=true
+   # -> backups/w3-claims/<UTC date>/w3_shadow_ids_<run>_<attempt>.txt.gz  (one id a line, gzipped)
+   #    and w3_purge_receipt_<run>_<attempt>.csv.gz; the log's summary prints shadow_ids=N
+   ```
+   The shadow then takes that list as `what_if --ids <file>` (gunzipped). `location_wave_shadow.yml`
+   has no file or R2 input today: it needs one (fetch the R2 key, gunzip, pass `--ids`) — the shadow
+   tool's branch, beside its `ids_timeout_s`. Size: (a) ≈ 2.5–4 k active listings (inv-B at the
+   effective version: 2,289 pins, 104 towns, 41 PSČ, 50 streets; ≈ 250 sreality/mmreality
+   declaration pairs; the receipt's ≈ 2.8 k counts inactive listings too); (b) unmeasured, bounded by
+   the active listings with a house-number claim; (c) 1. `scope=apply` then keeps the ones the live
+   apply scope admits.
+
+   **Fallback: `ids_sql`, active listings joined inside each aggregate** (needs the shadow's
+   `ids_timeout_s`; this box cannot measure it). Set (a) here is "a key holding ≥ 2 distinct values",
+   a superset of the dry run's (a); same-value copies cannot move an answer.
    ```
    gh workflow run location_wave_shadow.yml --ref feature/location-w3-one-claim-per-fact \
      -f wave=w3-one-claim -f claims=purge -f scope=apply -f ids_sql="
-   SELECT l.id FROM listings l WHERE l.is_active AND l.id IN (
-     SELECT c.listing_id FROM location_claims c
-      GROUP BY c.listing_id, c.claim_type, c.licence_class
-     HAVING count(DISTINCT (c.value_text, c.value_num, ST_AsText(c.value_geom),
-                            c.value_jsonb::text, c.declared_precision_label, c.declared_radius_m,
-                            c.blur_evidence, c.subject_scoped)) > 1
-     UNION
-     SELECT s.listing_id FROM location_claims s
-      WHERE s.claim_type = 'street_name' AND s.value_text ~ '[0-9]'
-        AND EXISTS (SELECT 1 FROM location_claims h
-                     WHERE h.listing_id = s.listing_id
-                       AND h.claim_type IN ('house_number_cp', 'house_number_co'))
-     UNION
-     SELECT o.listing_id FROM location_claims o WHERE o.licence_class = 'operator')"
+   SELECT c.listing_id
+     FROM listings l JOIN location_claims c ON c.listing_id = l.id
+    WHERE l.is_active
+    GROUP BY c.listing_id, c.claim_type, c.licence_class
+   HAVING count(DISTINCT (c.value_text, c.value_num, ST_AsText(c.value_geom), c.value_jsonb::text,
+                          c.declared_precision_label, c.declared_radius_m, c.blur_evidence,
+                          c.subject_scoped)) > 1
+   UNION
+   SELECT s.listing_id
+     FROM listings l JOIN location_claims s ON s.listing_id = l.id
+    WHERE l.is_active AND s.claim_type = 'street_name' AND s.value_text ~ '[0-9]'
+      AND EXISTS (SELECT 1 FROM location_claims h WHERE h.listing_id = s.listing_id
+                    AND h.claim_type IN ('house_number_cp', 'house_number_co'))
+   UNION
+   SELECT o.listing_id
+     FROM location_claims o JOIN listings l ON l.id = o.listing_id AND l.is_active
+    WHERE o.extraction_method = 'operator_manual'"
    ```
-   Size (not run: this box has no production access): (a) ≈ 2.5–4 k active listings (inv-B at the
-   effective version: 2,289 pins, 104 towns, 41 PSČ, 50 streets; S1 across versions ≈ 0.8 % of active
-   listings ≈ 3.1 k; plus ≈ 250 sreality/mmreality declaration pairs); (b) unmeasured, bounded by the
-   active listings with a house-number claim (it moves only where the two numbers differ); (c) 1 (the
-   2026-08-13 correction). `scope=apply` keeps the ones the live apply scope admits. The aggregate
-   reads the whole table once (read-only); if it outruns the shadow's statement timeout, materialise
-   the ids first and pass `--ids`.
+   It is still, in all likelihood, a FULL SCAN: the active listings' claims are ≈ 4.9 M of the
+   14.8 M rows (S1: 33 %), too many for the planner to reach through `location_claims_listing` one
+   listing at a time, so it hash-joins a sequential read of the 3.6 GB heap, then sorts ≈ 4.9 M rows
+   for the per-key DISTINCT. Set (c) alone is cheap (`location_claims_by_method` leads with
+   `extraction_method`). Expect minutes, not seconds.
 3. Steps 0 + 1 (backup + purge, dry run first), Step 2 (699), Step 3 (merge + deploy), Step 4 (automatic),
    Step 5 (hand: re-stamp + payload re-mine + readings re-mark).
 4. PR-2 (Step 6) after one green intake tick; then Step 7.

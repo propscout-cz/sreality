@@ -17,7 +17,9 @@ name: "Ops: W3 claim purge (last run before migration 699)"
 #      0.5 s between batches; resumable from the logged cursor (`after_listing_id`).
 #   3. THE RECEIPT: the collapsed listing ids, gzipped, to R2 beside the backup.
 #
-# dry_run=true (the default) walks and counts with the same statement and deletes nothing.
+# dry_run=true (the default) walks and counts with the same statement and deletes nothing. It
+# writes the receipt too, and THE SHADOW IDS — the active listings W3 can move, the wave shadow's
+# `what_if --ids` input (design § 5 step 2) — both to R2 at backups/w3-claims/<UTC date>/.
 # The real purge needs dry_run=false AND confirm=PURGE. A budget-exhausted run exits non-zero
 # on purpose: re-dispatch with the cursor it logged.
 #
@@ -75,6 +77,7 @@ jobs:
       PGCONNECT_TIMEOUT: "15"
       BACKUP: w3_claims_${{ github.run_id }}_${{ github.run_attempt }}.csv.gz
       RECEIPT: w3_purge_receipt_${{ github.run_id }}_${{ github.run_attempt }}.csv.gz
+      SHADOW_IDS: w3_shadow_ids_${{ github.run_id }}_${{ github.run_attempt }}.txt.gz
     steps:
       - uses: actions/checkout@v6
 
@@ -142,6 +145,7 @@ jobs:
           MAX_SECONDS: ${{ inputs.max_seconds }}
         run: |
           python3 -m scripts.location_claims_retire --dry-run \
+            --receipt "$RECEIPT" --shadow-ids "$SHADOW_IDS" \
             --listings-per-batch "$LISTINGS" --after-listing-id "$AFTER" --max-seconds "$MAX_SECONDS"
 
       - name: Purge in bounded batches
@@ -152,16 +156,17 @@ jobs:
           MAX_SECONDS: ${{ inputs.max_seconds }}
         run: |
           python3 -m scripts.location_claims_retire --confirm PURGE --receipt "$RECEIPT" \
+            --shadow-ids "$SHADOW_IDS" \
             --listings-per-batch "$LISTINGS" --after-listing-id "$AFTER" --max-seconds "$MAX_SECONDS"
 
-      - name: Store the receipt in R2
-        if: ${{ always() && !inputs.dry_run && hashFiles(env.RECEIPT) != '' }}
+      - name: Store the receipt and the shadow ids in R2
+        if: ${{ always() && hashFiles(env.RECEIPT) != '' }}
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python -m scripts.backup_before_drop w3-claims --file "$RECEIPT"
+        run: python -m scripts.backup_before_drop w3-claims --file "$RECEIPT" --file "$SHADOW_IDS"
 
       # Reported, never asserted: autovacuum reclaims on its own schedule (ruling R7: no VACUUM
       # FULL), and a VACUUM here would be a second heavy statement on a hot table.
