@@ -65,6 +65,10 @@ export function usePhoneShell(): boolean {
   return narrow && !desktopView;
 }
 
+/** The frame `usePhoneShell` draws, read now, outside React: the curation clock's
+ * cadence follows it (lib/curationSyncOwner, ruling Q2). */
+export const isPhoneFrame = (): boolean => isNarrow() && !readDesktopView();
+
 /* The bar is 56 px plus the home-indicator inset, never less than 8 px of air
  * below the labels (#1763: `max(8px, env(safe-area-inset-bottom))`). The frame
  * pads <main> by the same sum, and the toasts sit just above it. */

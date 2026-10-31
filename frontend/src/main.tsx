@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { AuthProvider } from './lib/auth';
 import { isTransientApiError } from './lib/api';
+import { applySyncQueryDefaults } from './lib/curationSync';
 import { createMutationCache } from './lib/mutationCache';
 import { applyAppearance } from './lib/theme';
 import { registerServiceWorker } from './lib/serviceWorker';
@@ -23,9 +24,11 @@ const queryClient = new QueryClient({
       staleTime: 60_000,
       gcTime: 5 * 60_000,
       /* Off, and it stays off: a focus refetch would re-read every mounted
-       * query, market data included, at each alt-tab. Curation is to follow a
-       * change made elsewhere through the curation clock instead
-       * (docs/design/curation-sync.md, Decision 12); the rest follows its
+       * query, market data included, at each alt-tab. The curation sync owner
+       * (lib/curationSyncOwner, mounted by AuthProvider) supersedes it for
+       * curation: focus, a show, reconnecting and a write in another tab each
+       * read the curation clock, and only what moved is re-read
+       * (docs/design/curation-sync.md, Decision 12). The rest follows its
        * staleTime at the next mount. */
       refetchOnWindowFocus: false,
       /* One more attempt ONLY when it can help: a network blip or a
@@ -42,6 +45,10 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+/* Beside the owner, never without it: the curation clock's read is then the one
+ * reconnect path for curation, and a hidden tab reconnecting re-reads nothing. */
+applySyncQueryDefaults(queryClient);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

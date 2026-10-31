@@ -107,6 +107,7 @@ Each wave below replaces several local rules with one rule.
 
 **Sequencing.**
 - Merge #2194 (v5.9) first, with its hand rollout for the last time.
+  - **As built:** #2194 merged 2026-10-31 13:04Z; 55,114 disputed rows re-resolved by 13:17Z; the 1.03 M-row full sweep then running (about 9-10 h); gate #2193.
 - The RÚIAN vintage is due 11-01 (GH cron '0 10 1 * *', throttled). If it publishes before W2 lands, it also needs today's hand full-resolve.
 - W0 runs beside W1 on the scraper track.
 - W3 and W4 can swap if W3 waits on its destructive gate. W5 depends on W3 only for code overlap in bind.py, so it can go first if W3's gate waits.
@@ -125,6 +126,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - 0 content-free snapshots on any portal for 7 days;
   - the 51 ceskereality listings healed by their next real fetch;
   - the 4 realitymix rows closed by a gone verdict or refreshed by a real page.
+- **As built:** #2212 (a parsed detail with no listing content is a failed fetch: attempts counted, no write, no sighting) merged 2026-10-31 12:54Z; gate #2211.
 
 ### W1: one location scorecard
 - **Change:** a new view, `location_quality_by_source`, defines six metrics:
@@ -148,6 +150,13 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - the run fits inside the 45 s check budget;
   - the 25 page-withheld ads read Watch.
   - sreality/town stays red on one row (19405830: an address point RÚIAN publishes without coordinates, no KÚ) until W5's KÚ fix, so the cell leaves fail only then.
+- **As built (2026-10-31, ticket #2218, PR #2221; the backend half):**
+  - **Migration 698**, `location_quality_by_source`: additive, service_role only, `security_invoker`; long shape (cohort, source, metric, class, n, of_n, q50, q90, q95, q100) over the cohorts listing, served, sample and queue. The shared fragments are rendered verbatim and pinned by `tests/location_data/test_location_quality_view_contract.py`: `location_steps`' step flags, `town_missing_sql()` and the new `town_evidence_sql()`, the publication rule, and the containment probe of `resolve_db.CONTAINING_OBEC_SQL`. Every CTE but three scalars and two single-use feeders is `as materialized` (34.8 s inlined, 11.7 s materialized), and every UNION branch carries a literal cohort and no window function, so the gauge's two statements each prune the other's branches. **Apply 698 BEFORE the merge:** the worker reads it with no fallback.
+  - **Outside** is strict containment by the pip polygon (ruling Q3), not the 250 m tolerance this section's plan names; asked where CHECK flagged the elected pin.
+  - **67 cells**, not about 55, and not all Watch-only (ruling Q7): per portal `town` (unresolved, Problem), `town_withheld` (Watch), `ku` (Problem), `outside` (Problem), `street` and `accuracy`; `served/town`, `served/town_withheld`, `served/outside`, `served/street`; `registry`; `freshness/version` (Watch, Problem on a second reading 6 h on); `freshness/evidence` (Problem past 60 min). Label "Location quality", key kept.
+  - **Open, W1-b:** the per-portal street floors (0.9x the 10-31 share) are unruled, so `street` and `served/street` are Watch only until the operator rules. `accuracy` is Watch only until W6.
+  - **Day one** (the 10-31 13:09Z export, mid v5.9 sweep): 10 Problem (every portal's `outside` and `served/outside`: 11,568 published properties, bazos 10,459), 6 Watch (ceskereality 26 and mmreality 1 page-withheld, 21 served; bazos and sreality radius cover; the sweep's first version reading), 0 unresolved. `sreality/ku` opens once the sweep reaches 19405830.
+  - **Next:** the frontend half is PR 2 (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates are deleted there). Migration B (the audit waterfall and the pin-audit counters dropped) follows W1-c; it is destructive and awaits the operator's ruling.
 
 ### W2: one queue discipline, one trigger, one runtime
 - **Queue order:** the drain claims by `(reason = 'full_sweep'), enqueued_at, listing_id`, so fresh evidence always beats backfill. The sweep enqueues active ads first. The EXPLAIN rail must show that the new index still serves the `next_eligible_at <= now()` filter.
@@ -167,6 +176,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - new ads get a row within 15 min even mid-sweep (v5.8: up to 3.4 h);
   - all active rows are current within 90 min, all rows within 4 h;
   - every boot runs the sweep, so a SWEEP without a version change must enqueue 0 rows.
+
+- **As built 2026-10-31 (PR #2216, ticket #2215, migration 697 applied AFTER the deploy):** the drain claims by `(reason = 'full_sweep'), next_eligible_at, listing_id` (index `dirty_locations_claim`; `enqueued_at` in the plan text, `next_eligible_at` in the code because retries move it); the worker's `reconcile()` sweeps on a (resolver version, registry label) change, active rows first then inactive, under the maintenance lease (`drain.enqueue_full_sweep`, fence → None); `location_resolve.yml`, the red-line arm, the lane flag `realtime_location_resolve_enabled`, five queue reasons (CHECK 8 → 3 after the relabel to `full_sweep`), the `location_full_resolve` job and three refetch knobs are deleted; the refetch lane ticks hourly (`LOCATION_REFETCH_TICK_SECONDS = 3600`); the scheduled_jobs lease row is retagged `railway-realtime-worker`; the heartbeat carries `lanes.location_resolve.swept`. The CLI keeps dry-run only. Acceptance is measured by W1's `freshness/version` and `freshness/evidence` cells.
 
 ### W3: one current claim per fact
 - **Rule:** `location_claims` gets the natural key (listing, claim type, operator-or-portal). Both writers use one upsert that writes only when the value changed. The resolver then sees at most one claim per type, which deletes:
@@ -192,6 +203,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **remax v7:** read the header's typed "ulice X" slot. The ruled map attribute exists only on pages without a pin. Expected: street share from 5 % to about 58 %, 94 % binding RÚIAN, pins unchanged.
 - **Moved out:** deleting the unread street, house-number and ZIP parsing in 7 parsers is a separate scraper cleanup PR. The contract changes already delete more than they add.
 - **Acceptance:** realitymix outside cell under 80 (from 721); remax street share at least 55 %; the standing autodedup gate passes (the shared geocode pins on 51 Beroun and 102 Brno ads stop counting as exact).
+
+- **As built 2026-10-31 (PR #2220, ticket #2219, gate #2222; contract only, no migration, no resolver bump):** realitymix@8's `rm.det.agency_est_flag` reads `div#map` alone (3,622 of the 3,656 rows declared today had both nodes blank; verified on 112 pages: fires on exactly the 46 hidden ones, moves no pin). The dead C6 `odbl` licence branch is deleted (−145/+120 outside fixtures). **remax v7 is NOT built: ruling Q8 (the header slot is not read).** Acceptance corrected to ≤ 110 outside (68 undeclared agency pins and 6 placeholders stay until W5), 0 declared outside, 0 off-grid declared, declared pinned rows inside 7.4k–19,527. Merge order: after W2 is live; rollout = `gh workflow run location_claims_intake.yml --ref main` by hand (~102k bodies, ~1 h); rollback entry-scoped (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never whole-version. The standing shadow gate runs through #2225 (wave shadow) before the re-mine.
 
 ### W5: resolver v5.10
 - **Quarter = část obce only.** MOMC, správní obvod and ZSJ stop being levels a row can be bound to.

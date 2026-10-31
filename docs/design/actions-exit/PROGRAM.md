@@ -290,9 +290,11 @@ one request run, one pause with expiry and one self-fence drill exercised; 0 uni
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.
 
 ### W3 — Sweeps and intake
-property_sweep (keeping its 56 h fail line), broker_sweep, location_full_resolve, location_intake (exit 75
+property_sweep (keeping its 56 h fail line), broker_sweep, location_intake (exit 75
 for backlogs; the pool width from `JOB_CPUS`); the intake self-chain, its yield bash, the `location-batch`
-GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted; the `location_resolve` `*/15` tick deleted.
+GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted. (The full location resolve and the
+`location_resolve` `*/15` tick left GitHub in the location programme's W2, 2026-10-31: the worker
+sweeps itself; nothing to move.)
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.

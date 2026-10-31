@@ -373,12 +373,44 @@ THRESHOLDS: dict[str, Any] = {
     "data_quality_measure_gap_warn": 0.95,
     # ...over at least 200 active ads.
     "data_quality_measure_gap_min_n": 200,
-    # --- location_town_coverage (quality gauge): every active Czech ad has a town (rule 25) ---
+    # --- location_town_coverage (quality gauge): the ONE location scorecard (W1, migration 698) -
+    # Fixed lines from day one (ruling Q7). The town, KÚ and outside cells are Problem above zero
+    # and page-withheld Watch above zero (ruling Q6, Q3): invariants, no threshold here.
     # A current RÚIAN version older than 40 d is a Problem (monthly loads; 19 d old on 10-19)...
     "location_registry_max_age_days": 40,
     # ...as is a newer one staged 24 h without becoming current: a superseded load is cancelled,
     # not failed, so the jobs check never sees it stall.
     "location_registry_max_staged_hours": 24,
+    # Street share, (address + street) / Czech ads with a town by the rank table, judged on its Wilson
+    # UPPER bound against the portal's floor, 0.9x its share on 10-31 rounded down (a 10 % relative
+    # drop on n >= 5k is far past sampling noise, SE ~0.2 pp: a parser or contract regression).
+    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor.
+    # WATCH ONLY, never Problem, until the operator rules these floors (W1-b is unruled).
+    "location_street_floor": {
+        "bezrealitky": 0.62,   # 69.5 % on 10-31
+        "sreality": 0.57,      # 64.1 %
+        "realitymix": 0.52,    # 58.0 %
+        "idnes": 0.45,         # 50.5 %
+        "maxima": 0.45,        # 50.0 %
+        "ceskereality": 0.38,  # 43.2 %
+        "mmreality": 0.35,     # 39.9 %
+        "bazos": 0.28,         # 31.3 %
+        "remax": 0.04,         # 5.0 %
+    },
+    # ...over at least 200 Czech ads with a town (maxima had 280 on 10-31).
+    "location_street_floor_min_n": 200,
+    # The served properties' fleet street share, the same rule (Watch only too): 0.9x 49.0 % on 10-31.
+    "location_served_street_floor": 0.44,
+    # Pin accuracy, Watch only until W6 ships the calibrated table: the Wilson LB of the sampled
+    # below-address ads whose address point lies inside their own radius under 90 % (W6 targets
+    # >= 93 %; sreality 87.9 % of 116 and bazos 57.1 % of 373 read Watch on 10-31)...
+    "location_radius_cover_watch": 0.90,
+    # ...over at least 30 sampled ads (bezrealitky had 7 and maxima 11 on 10-31).
+    "location_accuracy_min_n": 30,
+    # The oldest evidence change (a new claim, an operator edit) waiting for its resolve past 60 min
+    # is a Problem: 4x W2's 15-min target, red only when evidence starves behind a sweep (v5.8
+    # measured up to 3.4 h mid-sweep).
+    "location_evidence_backlog_max_min": 60,
     # --- text_extraction (quality gauge): are new ads' descriptions read promptly -------------
     # Flow: Wilson LB of in-scope ads arrived in 24 h and not read yet, Watch past 5 % (0 of 707
     # on 10-19)...
@@ -403,6 +435,11 @@ THRESHOLDS: dict[str, Any] = {
     # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
     # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
     "CURATION_CLOCK_TRIGGERS": 12,
+    # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
+    # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
+    # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
+    "CURATION_CLOCK_QUIET_H": 24,
+    "CURATION_CLOCK_LOAD_PCT": 5.0,
     # --- migration_drift (platform alarm, on GitHub): is every merged migration applied -------
     # The newest 25 files span several weeks of this repo's cadence, so a drift is caught long
     # before the window rolls past it, with a few hundred catalog lookups.
@@ -493,11 +530,10 @@ class Check:
 # reads late and the outbound probe last. The page's `sort` is the position here.
 CHECKS: tuple[Check, ...] = (
     # FIRST of the gauges: 2026-09-11 21:02 lost the last seven checks to the budget, this
-    # one among them, and the invariant the location programme is measured by reads in 3.1 s
-    # with the served predicate's hidden count on 10-19 (0.62 s without it; 6.5 s whole-corpus
-    # before).
+    # one among them. Since W1 (migration 698) it reads the location scorecard in two statements:
+    # ~12 s warm on 10-31, an estimated 25-30 s with a cold location_claims, inside its 45 s.
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
-          _WORKER, _SIX_HOURLY, "Location coverage", unit="cells",
+          _WORKER, _SIX_HOURLY, "Location quality", unit="cells",
           owner_path="/location-quality"),
     # The worker's health lane measures these fourteen (scripts/checks/: platform, the portal checks,
     # dedup, push notifications, curation sync, then parsing and the quality gauges). GitHub keeps what
@@ -523,7 +559,7 @@ CHECKS: tuple[Check, ...] = (
     Check("notifications", check_notifications, "platform", "alarm", _WORKER, _TEN_MINUTES,
           "Push notifications", unit="cells", owner_path="/notifications",
           budget_s=_NOTIFICATIONS_BUDGET_S),
-    # Curation sync (migration 696): the clock's triggers and the board's bumps; no owner page.
+    # Curation sync (migration 696): the clock's triggers and the board's bumps, its reads and their load; no owner page.
     Check("curation_sync", check_curation_sync, "platform", "alarm", _WORKER, _HOURLY, "Curation sync",
           unit="cells", budget_s=_CURATION_SYNC_BUDGET_S),
     # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read

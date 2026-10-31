@@ -255,7 +255,10 @@ the database). Everything else answers as the caller. Without the header nothing
   and a two-step "Stop sharing"), opened from a "Sdílení" header toggle that shows the recipient count —
   the collection page's `SharingBlock` generalised into one `ShareBlock`; a recipient's mode changes by
   sharing the same email again (the API upserts). A viewer gets the `ViewerLine` with a two-step "Remove from my list" (which also resets
-  the active board to own). A revoked active board reads empty and resets to own with a toast. Any
+  the active board to own). A revoke reaches the recipient's open windows through the curation clock
+  (`docs/design/curation-sync.md`): its `shares` row moves and the owner's rows vanish from the next clock read, which
+  re-reads the share lists, so `useBoardSelection` resets the active board to own with a toast within one interval; a
+  revoked board that still reads empty (the clock's reader kill switch) resets the same way (`useSharedBoardGuard`). Any
   change of board (the switcher, a revoke, a leave) drops the URL's collection and tag scopes: their ids
   name one account's sets.
 - **Property page:** while the active board is an EDIT share, the header shows "Upravit jako {email}"

@@ -51,10 +51,8 @@ _FIXED: tuple[Job, ...] = (
     Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, RUNNER),
     Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, RUNNER,
         db_heavy=True),
-    Job("location_full_resolve",
-        ("location_data.resolver.drain", "--full-sweep", "--max-seconds", "1800", "--batch-size", "250"),
-        DAY, 1 * HOUR, 1 * HOUR, 1024, 1, UNTIL_MOVED, LOCATION_HEAVY, db_heavy=True),
-    # 03:00, not 02:00: full_resolve may wait on intake's run for location-heavy, and holds through the kill grace.
+    # 03:00: clear of the hourly intake's 00:35 slot, and it holds through the kill grace. (The daily
+    # full location resolve left this table in the location programme's W2: the worker sweeps itself.)
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
         DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),

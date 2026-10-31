@@ -1258,6 +1258,31 @@ component is slimmed twice — each wave rewrites one component and slims its st
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
   mirror of the shape test.
 
+- **W1 — one location scorecard — built 2026-10-31** (#2218; migration 698; location data quality
+  programme, rulings Q3/Q6/Q7). `location_quality_by_source` defines every location quality number
+  once (long shape; cohorts listing / served / sample / queue; service_role only); the
+  `location_town_coverage` gauge, relabelled "Location quality", reads it in two statements and emits
+  67 cells with fixed lines: `{p}/town` unresolved red until zero, `{p}/town_withheld` page-withheld
+  Watch, `{p}/ku`, `{p}/outside` (strict pip containment), `{p}/street` (Wilson upper bound under a
+  fixed per-portal floor: WATCH ONLY until the operator rules the 0.9x floors, W1-b, unruled),
+  `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
+  `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
+  fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
+  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. Owed: the frontend PR
+  (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates go),
+  then migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c,
+  awaits the operator's ruling).
+- **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
+  2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
+  The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
+  process's (resolver version, registry label) pair changes (active listings first), the drain claims
+  by `(reason = 'full_sweep'), next_eligible_at, listing_id` so evidence always beats backfill, and a
+  boot that changed nothing sweeps 0 rows. Deleted: `.github/workflows/location_resolve.yml` (both
+  crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
+  `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
+  the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
+  The refetch lane ticks hourly, a constant.
+
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
 campaigns or schedules (except the plain-text location reader, ruled 2026-09-29; its stored reading

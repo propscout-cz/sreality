@@ -92,7 +92,7 @@ from location_data.resolver.bind import REGISTRY_PIN_CONFLICT_M
 from location_data.resolver.geo import distance_between
 from location_data.resolver.types import Claim, ResolverContext
 from location_data.resolver.version import RESOLVER_VERSION
-from scraper import db, job_lease
+from scraper import db
 
 LOG = logging.getLogger("location_data.resolver.drain")
 
@@ -113,11 +113,19 @@ BACKOFF_SECONDS = (60, 300, 900, 3600, 21600)
 # `claim_insert` enqueue hit ON CONFLICT DO NOTHING, and the drain deleted the queue row
 # after resolving them from the OLD claims. 384,500 answer rows, 135 with a town, and nothing
 # left to re-enqueue them — the sweep sees a current-version row and stops.
+#
+# EVIDENCE FIRST, THEN BACKFILL (location quality programme W2, ruling Q9 2026-10-31). The
+# sweep's rows (`reason = 'full_sweep'`) sort behind every other row: a fresh ad's first
+# resolution never waits behind a corpus re-resolve (v5.8's deploy held new ads out of Browse
+# for up to 3.4 h). Within a class the oldest DUE row goes first — `next_eligible_at`, which
+# equals `enqueued_at` for every row that never failed and is the moment a backoff row becomes
+# due again, so the `WHERE` is an index condition and a poisoned row is never at the head of
+# its class. `dirty_locations_claim` (migration 697) is this exact order.
 _CLAIM_SLICE_SQL = """
 SELECT listing_id, attempts, enqueued_at
   FROM dirty_locations
  WHERE next_eligible_at <= now()
- ORDER BY enqueued_at, listing_id
+ ORDER BY (reason = 'full_sweep'), next_eligible_at, listing_id
  FOR UPDATE SKIP LOCKED
  LIMIT %s
 """
@@ -190,9 +198,10 @@ DEFAULT_BATCH_TIMEOUT_S = 30
 PREFETCH_TIMEOUT_ENV = "LOCATION_RESOLVE_PREFETCH_TIMEOUT_S"
 DEFAULT_PREFETCH_TIMEOUT_S = 90
 # One sweep window is an `INSERT ... SELECT` over a 250k-id slice of `listings` joined to the
-# answer table; minutes is normal for it and only for it.
+# answer table. Measured ≤ 3.5 s a window on a full-corpus bump (v5.8); the budget sits far above
+# that and well inside the worker lane's lease (740 s), which the sweep now runs under (W2).
 SWEEP_TIMEOUT_ENV = "LOCATION_RESOLVE_SWEEP_TIMEOUT_S"
-DEFAULT_SWEEP_TIMEOUT_S = 900
+DEFAULT_SWEEP_TIMEOUT_S = 300
 # Listing-id width of one corpus-sweep window (see _SWEEP_SQL).
 DEFAULT_SWEEP_WINDOW = 250_000
 LOCK_TIMEOUT_S = 5
@@ -268,9 +277,14 @@ def _bounded(conn: psycopg.Connection, seconds: int) -> Iterator[psycopg.Cursor]
             yield cur
 
 
-# `location_resolve_sweep` — the daily reconcile backstop. ONE statement, driving off
+# `location_resolve_sweep` — the one re-resolve mechanism. ONE statement, driving off
 # `listings`: every listing whose answer row is missing, or was written at a version tuple
-# that is no longer current, is enqueued. Driving off `listings` sees every listing there
+# that is no longer current, is enqueued. Since W2 of the location quality programme (ruling
+# Q9, 2026-10-31) the WORKER runs it, through `reconcile`, whenever its (resolver version,
+# registry label) pair changes — a deploy, a registry publish — so no clock in a second
+# runtime decides when a bump reaches the corpus (the GitHub `17 3 * * *` cron fired 5–7 h
+# late). ACTIVE LISTINGS FIRST: the walk runs twice, `is_active = true` then `false`, so the
+# rows Browse serves are current within the first ~76 min of a corpus sweep. Driving off `listings` sees every listing there
 # is, the join to the answer table is on its primary key, and the drain writes a row for a
 # claimless listing too — so coverage is `count(listing_location) = count(listings)` by
 # construction, and a stale row is caught the same way as a missing one.
@@ -296,13 +310,11 @@ def _bounded(conn: psycopg.Connection, seconds: int) -> Iterator[psycopg.Cursor]
 # would reset a poisoned row's `attempts` backoff and move the oldest row in the queue to the
 # back of it, on a statement that walks the whole corpus. NOT EXISTS + DO NOTHING, deliberately.
 #
-# THE RED-LINE ARM (W2-a2). Rule 25's invariant is "every Czech listing has a town".
-# The three version arms cannot express it: a row resolved without an `obec_kod` is stamped at
-# the CURRENT version tuple, so the sweep sees a fresh row and walks past it for ever — which
-# is exactly how 2026-09-12 left 384,365 rows red with nothing able to re-enqueue them. The
-# fourth arm re-resolves them nightly until each one has a town or is determined `foreign`
-# (never a default — `undetermined` is still red and still swept). It is bounded by the red
-# count, not the corpus, and served by `listing_location (obec_kod, granularity)` from 501.
+# NO RED-LINE ARM ANY MORE (W2, 2026-10-31). It re-resolved every townless row nightly as the
+# backstop for the 2026-09-12 lost-enqueue bug; that bug is fixed by construction (the
+# re-entrancy bound, and the claim write and its enqueue being ONE statement), and the arm
+# measured 13,224 re-resolves a day, 99.8 % of them inactive rows, 0 towns gained. A row
+# changes only when evidence, code or the register changes.
 #
 # THERE IS NO DRIVING PREDICATE ANY MORE (W15, operator ruling 2026-09-14). The sweep walks
 # EVERY listing: rule 25 is "every Czech listing has its town", and a listing this statement
@@ -317,8 +329,8 @@ SELECT l.id, 'full_sweep'
   LEFT JOIN listing_location p ON p.listing_id = l.id
  WHERE (p.listing_id IS NULL
         OR p.resolver_version <> %s
-        OR p.registry_version <> %s
-        OR (p.obec_kod IS NULL AND p.country_status <> 'foreign'))
+        OR p.registry_version <> %s)
+   AND l.is_active = %s
    AND l.id > %s AND l.id <= %s
    AND NOT EXISTS (SELECT 1 FROM dirty_locations d WHERE d.listing_id = l.id)
 ON CONFLICT (listing_id) DO NOTHING
@@ -984,33 +996,67 @@ def _execute_window(
 
 def enqueue_full_sweep(
     conn: psycopg.Connection, *, window: int = DEFAULT_SWEEP_WINDOW,
-) -> int:
-    """`location_resolve_sweep`: the backstop for lost enqueues, and the mechanism a version
-    bump rides. The incremental lane stays the primary path — this re-enqueues what a
-    `resolver_version` bump, a registry reload, a dropped enqueue or a claimless listing left
-    behind, plus every active Czech listing still without a town, in listing-id windows (see
-    `_SWEEP_SQL`). Its scope is what BROWSE SERVES — active listings plus the display listing
-    of every active property, delisted ones included."""
+    registry_label: str | None = None, stop: Callable[[], bool] | None = None,
+) -> int | None:
+    """`location_resolve_sweep`: the one mechanism a version bump or a registry publish rides,
+    and the backstop for a lost enqueue or a claimless listing. Every listing whose row is
+    missing or stamped at a stale (resolver version, registry label) is enqueued as backfill,
+    in listing-id windows (see `_SWEEP_SQL`), ACTIVE listings first, then inactive. Walks every
+    listing (W15): what is worth showing is the consumer rule's business, never this one's.
+
+    `stop` is the lease fence: asked between windows, and a sweep it cuts returns None so the
+    caller records nothing and the next pass re-sweeps (idempotent: queued rows are skipped by
+    the NOT EXISTS, drained ones are stamped current)."""
     if window <= 0:
         raise ValueError("sweep window must be positive")
     seconds = loader_db.env_timeout_s(SWEEP_TIMEOUT_ENV, DEFAULT_SWEEP_TIMEOUT_S)
-    _, registry_label = resolve_db.current_registry_version(conn)
+    if registry_label is None:
+        _, registry_label = resolve_db.current_registry_version(conn)
     with _bounded(conn, seconds) as cur:
         cur.execute(_SWEEP_UPPER_BOUND_SQL)
         row = cur.fetchone()
         upper = int(row[0]) if row else 0
-    enqueued = windows = after = 0
-    while after < upper:
-        hi = min(after + window, upper)
-        n = _execute_window(
-            conn, seconds, _SWEEP_SQL, (RESOLVER_VERSION, registry_label, after, hi),
-        )
-        enqueued += n
-        windows += 1
-        LOG.info("SWEEP window=(%d,%d] enqueued=%d", after, hi, n)
-        after = hi
+    enqueued = windows = 0
+    for active in (True, False):
+        after = 0
+        while after < upper:
+            if stop is not None and stop():
+                LOG.warning("SWEEP cut by the lease fence after %d windows; the next pass re-sweeps",
+                            windows)
+                return None
+            hi = min(after + window, upper)
+            n = _execute_window(
+                conn, seconds, _SWEEP_SQL,
+                (RESOLVER_VERSION, registry_label, active, after, hi),
+            )
+            enqueued += n
+            windows += 1
+            LOG.info("SWEEP active=%s window=(%d,%d] enqueued=%d", active, after, hi, n)
+            after = hi
     LOG.info("SWEEP enqueued=%d windows=%d width=%d timeout=%ds", enqueued, windows, window, seconds)
     return enqueued
+
+
+# The pair this PROCESS last swept. Process-local on purpose: a durable record would be one more
+# row to buy back a minute of bounded reads per boot, and every boot sweeping once is the rule
+# — it enqueues 0 rows when neither the code nor the register moved.
+_SWEPT_PAIR: tuple[str, str] | None = None
+
+
+def reconcile(conn: psycopg.Connection, *, stop: Callable[[], bool]) -> dict[str, Any] | None:
+    """Sweep when this process's (resolver version, registry label) pair is not the one it
+    last swept (W2, ruling Q9). None when nothing changed; otherwise what the pass spent itself
+    on — the drain waits for the next pass, so a sweep never shares a lease with a drain."""
+    global _SWEPT_PAIR
+    with _bounded(conn, _batch_timeout_s()):
+        _, label = resolve_db.current_registry_version(conn)
+    pair = (RESOLVER_VERSION, label)
+    if pair == _SWEPT_PAIR:
+        return None
+    rows = enqueue_full_sweep(conn, registry_label=label, stop=stop)
+    if rows is not None:
+        _SWEPT_PAIR = pair
+    return {"pair": list(pair), "rows": rows, "complete": rows is not None}
 
 
 def open_connection() -> psycopg.Connection:
@@ -1034,43 +1080,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS)
     parser.add_argument("--listing-id", type=int, default=None)
     parser.add_argument(
-        "--full-sweep", action="store_true",
-        help="first enqueue every active listing whose answer row is missing or stale",
+        "--dry-run", action="store_true",
+        help="measure what a rule change does to the stored rows; writes nothing",
     )
-    parser.add_argument(
-        "--sweep-window", type=int, default=DEFAULT_SWEEP_WINDOW,
-        help="full-sweep only: listing-id width of one bounded window",
-    )
-    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if not args.dry_run:
+        # The worker is the only runtime that writes (W2, ruling Q9 2026-10-31): a drain run
+        # from a laptop or a GitHub runner is a second runtime on a second code version.
+        parser.error("the drain writes only inside the realtime worker; use --dry-run")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     with open_connection() as conn:
-        if args.dry_run:
-            dry_run(conn, batch_size=args.batch_size, max_seconds=args.max_seconds,
-                    only_listing_id=args.listing_id)
-            return 0
-        # The sweep ENQUEUES before the lease is even attempted. The lease guards the DRAIN
-        # (claim, resolve, write); the enqueue is an idempotent insert whose only exclusion
-        # need — the archive sweep's bulk writes into the same table — is the `location-batch`
-        # Actions group this mode runs in. The Railway lane holds the drain lease ~94% of the
-        # time, so an enqueue gated behind it ran on 2026-09-10 as a 20-second "DRAIN skipped"
-        # success that enqueued nothing (run 34482389394).
-        if args.full_sweep:
-            enqueue_full_sweep(conn, window=args.sweep_window)
-        with job_lease.held(conn, JOB_NAME, cadence="15 minutes") as hold:
-            if hold is None:
-                LOG.info(
-                    "DRAIN skipped: another run holds the %s lease%s", JOB_NAME,
-                    " (the sweep above is enqueued; that holder drains it)"
-                    if args.full_sweep else "",
-                )
-                return 0
-            run(
-                conn,
-                batch_size=args.batch_size,
-                max_seconds=args.max_seconds,
-                only_listing_id=args.listing_id,
-            )
+        dry_run(conn, batch_size=args.batch_size, max_seconds=args.max_seconds,
+                only_listing_id=args.listing_id)
     return 0
 
 
