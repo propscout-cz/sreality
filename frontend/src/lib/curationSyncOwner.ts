@@ -31,7 +31,7 @@ import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { ACTING_SEGMENT } from '@/lib/acting';
-import { ApiError, isTransientApiError } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { clockChanges, clockKey, CURATION_FAMILIES, familyTargets, type ClockRow } from '@/lib/curationSync';
 import { onCommittedWrite } from '@/lib/mutationCache';
 import { isPhoneFrame } from '@/lib/phoneShell';
@@ -56,23 +56,19 @@ const NUDGE = { v: 1 } as const;
 const isVisible = (): boolean => document.visibilityState === 'visible';
 const monotonicNow = (): number => performance.now();
 
-/* Transient: back off and read again. Built on lib/api's one retry rule
- * (isTransientApiError: a network failure, 502/503/504/520), which asks whether
- * ONE request is worth a second attempt now; the owner asks whether a read
- * seconds later may pass, so it also waits out:
- * - a deadline: the rule spares a caller a second full wait; the next read is a
- *   fresh one, seconds later;
- * - 500 and every other 5xx: deterministic for one request, but an outage passes;
- * - 401: a session supabase-js has not refreshed yet, which passes by itself
- *   (Risk 4; the reader kill switch answers 403);
- * - 408 and 429: the server asks to be asked later;
- * - an error that is no API answer at all.
- * Permanent, stopping the interval: every other 4xx (the kill switch's 403, a
- * renamed view's 404 or 400). */
+/* Transient: back off and read again. Every failure but a 4xx: a network
+ * failure, a deadline, any 5xx, an error that is no API answer at all; and of
+ * the 4xx, 401 (a session supabase-js has not refreshed yet, which passes by
+ * itself: Risk 4; the reader kill switch answers 403), 408 and 429 (the server
+ * asks to be asked later). Wider than lib/api's isTransientApiError (a network
+ * failure, 502/503/504/520), which asks whether ONE request is worth a second
+ * attempt now; the owner asks whether a read seconds later may pass, so a
+ * deadline and a 500 wait too, and everything that rule retries is transient
+ * here. Permanent, stopping the interval: every other 4xx (the kill switch's
+ * 403, a renamed view's 404 or 400). */
 const WAIT_STATUSES = new Set([401, 408, 429]);
 const isTransient = (err: unknown): boolean =>
-  isTransientApiError(err)
-  || !(err instanceof ApiError && err.kind === 'http' && err.status >= 400 && err.status < 500)
+  !(err instanceof ApiError && err.kind === 'http' && err.status >= 400 && err.status < 500)
   || WAIT_STATUSES.has(err.status);
 
 /** Start following the curation clock for the signed-in user; `stop()` ends it. */

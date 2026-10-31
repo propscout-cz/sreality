@@ -16,7 +16,7 @@ import * as auth from '@/lib/auth';
 import { createMutationCache } from '@/lib/mutationCache';
 import { PHONE_PIPELINE_STAGE_KEY } from '@/lib/phonePipeline';
 import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/acting';
-import { revalidateTables } from '@/lib/curationSync';
+import { revalidateTables, type SyncTable } from '@/lib/curationSync';
 import { districtChipsToCsvParams } from '@/lib/filters';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as pinAudit from '@/lib/pinAudit';
@@ -196,13 +196,14 @@ function renderPipeline(entry = '/pipeline') {
 }
 
 /* A change made elsewhere, re-read as the curation clock re-reads it (lib/curationSync). */
-const changedElsewhere = (qc: QueryClient, table: 'pipeline_stages' | 'property_pipeline') =>
+const changedElsewhere = (qc: QueryClient, table: SyncTable) =>
   act(async () => {
     await revalidateTables(qc, [table]);
   });
 
 const panel = (name: RegExp) => screen.getByRole('tabpanel', { name });
-/* One finger on the screen as a touch event lists it: the element it came down on. */
+/* One finger on the screen as a touch event lists it: the element it came down on.
+   A finger's touchend and touchcancel go to that element, so a lift is fired there. */
 const finger = (target: Element) => ({ target });
 const added: PipelineBoardCard = { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' };
 
@@ -484,7 +485,7 @@ describe('phone pipeline, changes made elsewhere', () => {
     const { qc } = renderPipeline();
     const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
     fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/)), finger(panel(/^Zájem/))] });
-    fireEvent.touchEnd(pager, { touches: [finger(panel(/^Zájem/))] });
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [finger(panel(/^Zájem/))] });
 
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
       ...CARDS,
@@ -495,7 +496,7 @@ describe('phone pipeline, changes made elsewhere', () => {
     expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
     expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
 
-    fireEvent.touchEnd(pager, { touches: [] });
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [] });
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 
@@ -514,7 +515,7 @@ describe('phone pipeline, changes made elsewhere', () => {
     expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
     expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
 
-    fireEvent.touchEnd(pager, { touches: [] });
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [] });
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 
@@ -532,34 +533,68 @@ describe('phone pipeline, changes made elsewhere', () => {
     await changedElsewhere(qc, 'property_pipeline');
     expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
 
-    fireEvent.touchEnd(pager, { touches: [finger(strip)] });
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [finger(strip)] });
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 
-  /* The finger's page unmounted under it: its touchend goes to a detached node. */
-  it('a finger on a page archived elsewhere stops holding the board', async () => {
+  /* The finger's page unmounted under it: its touchend goes to the removed node,
+     whose events never bubble to the pager. */
+  it('a finger on a page archived elsewhere holds the board until it lifts, heard on the removed page', async () => {
     localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, '2');
     const { qc } = renderPipeline();
     const pager = (await waitFor(() => panel(/^Prohlídka/))).parentElement!;
-    fireEvent.touchStart(pager, { touches: [finger(panel(/^Prohlídka/))] });
+    const page = panel(/^Prohlídka/);
+    fireEvent.touchStart(pager, { touches: [finger(page)] });
 
     vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES.filter((st) => st.id !== 2));
     await changedElsewhere(qc, 'pipeline_stages');
     await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
+    expect(page.isConnected).toBe(false);
 
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
     await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(page, { touches: [] });
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 
-  it('a touchcancel ends the hold, whatever fingers it still lists', async () => {
+  /* The chip is re-drawn by the card's own tag read, which re-renders no page:
+     the pager learns of the lift only from the removed chip itself. */
+  it('a finger on a tag chip re-drawn by its own read stops holding once it lifts', async () => {
     const { qc } = renderPipeline();
     const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
-    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
-    fireEvent.touchCancel(pager, { touches: [finger(panel(/^Zájem/))] });
+    const chips = await screen.findByRole('button', { name: 'Štítky: k prohlídce, upravit' });
+    const chip = within(chips).getByText('k prohlídce');
+    fireEvent.touchStart(pager, { touches: [finger(chip)] });
+
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    await changedElsewhere(qc, 'property_tags');
+    await waitFor(() => expect(chip.isConnected).toBe(false));
 
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
     await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(chip, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a touchcancel ends the hold of the fingers it cancelled, not of one still down', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    const page = panel(/^Zájem/);
+    fireEvent.touchStart(pager, { touches: [finger(page), finger(page)] });
+    fireEvent.touchCancel(page, { touches: [finger(page)] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchCancel(page, { touches: [] });
     await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 });

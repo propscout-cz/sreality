@@ -846,7 +846,8 @@ rules. Identify which one a task belongs to before you start.
   #1766). `usePhoneShell()` renders `isPhoneFrame()`, the one definition (the curation clock's
   cadence reads it outside React): `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
   override (`localStorage` `sreality.phone.desktopView`, set from the phone's account sheet and
-  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads). When it is on,
+  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads that tab, and another
+  tab's frame readers all switch on its `storage` event, as on a rotation). When it is on,
   `Shell` renders the same `<Outlet>` inside a phone frame — an `h-14` header (the 3.5 rem that
   `top-14` / `calc(100dvh-3.5rem)` in Filters, BrowseExperience and Pipeline depend on), a
   bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
@@ -916,7 +917,7 @@ rules. Identify which one a task belongs to before you start.
   so a stage archived elsewhere hands over to its neighbour, a stage added or reordered never
   changes what is on screen and never retargets a tap, and a finger on the pages or a scroll
   still settling holds the board and the members map (`useReadHold`), so a remote change lands
-  after the gesture; the pager's own re-aim is no gesture. Its one filter, **Lokalita**, is the
+  after the gesture (a finger's lift is heard on its own node, even one removed under it); the pager's own re-aim is no gesture. Its one filter, **Lokalita**, is the
   desktop bar's: the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
   `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
@@ -998,7 +999,8 @@ rules. Identify which one a task belongs to before you start.
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and
-  artifact-link editors; an input takes `{...draft.bind}`, a save reads `normalized`). One draft
+  artifact-link editors; a free-text input takes `{...draft.bind}`, which a narrowed draft such as
+  a tag colour lacks, and a save reads `normalized`). One draft
   per field the server holds apart: a note's viewing day and time are two, so a time-only edit
   saves the time on whatever day the note holds by then. An editor that stays open after a save
   (the stage row) calls `saved()`, so the next server value ends the draft even when a change
@@ -3329,9 +3331,9 @@ renumber.** Navigate by area:
     and re-read (W4). `curation_clock_audience()` (invoker, `current_account_ids()`, never acting) is "follow,
     never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
     the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
-    (invoker) is the one read; the service role reads both and writes neither (701). Row triggers never fire
-    on TRUNCATE, so a clocked table is never truncated, only deleted from (census e). The event table is not
-    curation and is not clocked (rule 16). Its rails:
+    (invoker) is the browser's one read, its audience read from the JWT; the service role reads the table (701)
+    and writes it never. Row triggers never fire on TRUNCATE, so a clocked table is never truncated, only
+    deleted from (census e). The event table is not curation and is not clocked (rule 16). Its rails:
     `tests/_tenant_registry.py` (`CLOCKED_TABLES` / `NOT_CLOCKED`), `tests/test_curation_sync_census.py`,
     `tests/test_curation_clock_live.py`, the `curation_sync` health alarm; the kill switches:
     `.claude/skills/database/references/tenancy.md` § Curation clock.

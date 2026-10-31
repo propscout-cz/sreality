@@ -350,8 +350,9 @@ def rail_g(api: list[tuple[str, str]], code: list[tuple[str, str]], migrations: 
 
 # --- (h) only the trigger writes the clock -----------------------------------------------------------------------
 
+# The table plain or double-quoted, schema-qualified or not (`"public"."curation_clock"`); never curation_clock_public.
 _DML = re.compile(r"\b(?:insert\s+into|update|delete\s+from|truncate(?:\s+table)?|merge\s+into|copy)\s+(?:only\s+)?"
-                  r"(?:public\.)?curation_clock\b(?!_)", re.IGNORECASE)
+                  r'(?:"?public"?\.)?(?:"curation_clock"|curation_clock\b(?!_))', re.IGNORECASE)
 
 
 def rail_h(migrations: Migrations, code: list[tuple[str, str]]) -> list[str]:
@@ -637,10 +638,13 @@ def test_the_origin_rail_bites_on_an_origin_header_an_origin_guc_and_the_dedupe_
 def test_the_writer_rail_bites_on_a_write_from_code_and_from_a_later_migration() -> None:
     migrations = _migrations()
     for text in ("UPDATE curation_clock SET counter = 1", "delete from public.curation_clock where true",
-                 "INSERT INTO curation_clock (account_id, family) VALUES (%s, 'board')", "truncate curation_clock"):
+                 "INSERT INTO curation_clock (account_id, family) VALUES (%s, 'board')", "truncate curation_clock",
+                 'UPDATE "curation_clock" SET counter = 1', 'delete from "public"."curation_clock"'):
         assert rail_h(migrations, [("api/x.py", text)]), text
-    assert rail_h(_with(migrations, "update public.curation_clock set counter = 0;"), [])
-    assert rail_h(migrations, [("api/x.py", "select * from curation_clock_public")]) == []
+    for sql in ("update public.curation_clock set counter = 0;", 'update public."curation_clock" set counter = 1;'):
+        assert rail_h(_with(migrations, sql), []), sql
+    for text in ("select * from curation_clock_public", 'update "curation_clock_public" set x = 1'):
+        assert rail_h(migrations, [("api/x.py", text)]) == [], text
 
 
 def test_the_audience_rail_bites_when_a_read_share_follows_more_than_the_board_or_anyone_follows_shares() -> None:

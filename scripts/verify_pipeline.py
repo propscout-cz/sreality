@@ -490,7 +490,7 @@ _PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
 # The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
 _NOTIFICATIONS_BUDGET_S = 5.0
 # The curation clock's two reads: twelve catalog rows and the board ledger's last day (~10 events), so 5 s. With it
-# WORKER_ALARMS_DUE_AT_ONCE_S passed the worker's pass: the last alarm (parsing) defers one pass when every alarm is
+# WORKER_ALARMS_DUE_AT_ONCE_S exceeds the worker's pass: the last alarm (parsing) defers one pass when every alarm is
 # due at once, the tested `defer_unfit` path (docs/design/curation-sync.md § 3.9).
 _CURATION_SYNC_BUDGET_S = 5.0
 

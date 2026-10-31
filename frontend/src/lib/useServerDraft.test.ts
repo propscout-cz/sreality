@@ -195,4 +195,15 @@ describe('useServerDraft', () => {
     fireEvent.blur(input);
     expect(draft!.edited()).toBe('Můj');
   });
+
+  /* Checked by tsc, not at runtime (the idiom of lib/format.test.ts): an input
+     types any string, so a narrowed draft (a tag colour) has no `bind` to spread;
+     the directive turns into the compile error the moment it has one again. */
+  it('gives only a free-text draft a bind (checked by tsc)', () => {
+    const neverRun = (colour: ReturnType<typeof useServerDraft<'copper' | 'sand'>>) => {
+      // @ts-expect-error — a narrowed draft has no bind: an input would hand it any string.
+      return colour.bind.onChange;
+    };
+    expect(typeof neverRun).toBe('function');
+  });
 });

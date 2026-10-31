@@ -31,15 +31,17 @@
  * back, because nothing the user did not type is ever a draft.
  *
  * `bind` wires an input or a textarea in one spread: its value, its change, its
- * focus and its blur. `reset()` drops the draft and the focus with it: call it
- * when the editor opens or closes (a field that unmounts while focused never
- * blurs). */
+ * focus and its blur. Only a free-text draft (`T` = string) has one: a field
+ * types any string, which a narrowed draft (a colour) would take unchecked; such
+ * a draft takes its value through `onChange`. `reset()` drops the draft and the
+ * focus with it: call it when the editor opens or closes (a field that unmounts
+ * while focused never blurs). */
 
 import { useState, type ChangeEvent } from 'react';
 
 /** What `<input {...draft.bind} />` and `<textarea {...draft.bind} />` take. */
-export interface DraftBind<T extends string> {
-  value: T;
+export interface DraftBind {
+  value: string;
   onChange(e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>): void;
   onFocus(): void;
   onBlur(): void;
@@ -53,7 +55,8 @@ export interface ServerDraft<T extends string> {
   onChange(v: T): void;
   onFocus(): void;
   onBlur(): void;
-  bind: DraftBind<T>;
+  /** A free-text draft's field wiring; a narrowed draft has none. */
+  bind: string extends T ? DraftBind : never;
   /** What to save, or null: the user changed nothing net, or the server already holds it. */
   edited(): T | null;
   /** The draft went to the server: the next server value, whatever it is, ends it. */
@@ -114,6 +117,8 @@ export function useServerDraft<T extends string>(
     );
   const onFocus = (): void => setState((s) => (s.focused ? s : { ...s, focused: true }));
   const onBlur = (): void => setState((s) => dropFinishedDraft({ ...s, focused: false }, server, normalize));
+  /* Typed for T = string only (ServerDraft['bind']), so the field's string is a T. */
+  const bind: DraftBind = { value, onChange: (e) => onChange(e.target.value as T), onFocus, onBlur };
 
   return {
     value,
@@ -121,7 +126,7 @@ export function useServerDraft<T extends string>(
     onChange,
     onFocus,
     onBlur,
-    bind: { value, onChange: (e) => onChange(e.target.value as T), onFocus, onBlur },
+    bind: bind as ServerDraft<T>['bind'],
     edited: () => {
       if (!draft) return null;
       const v = normalize(draft.value);

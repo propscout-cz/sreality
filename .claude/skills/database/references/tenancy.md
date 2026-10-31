@@ -203,9 +203,11 @@ never reset, never rendered.
   `(account_id, family)`, families `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`. It is in
   `TENANT_TABLES` with `BROWSER_WRITE_COLUMNS['curation_clock'] = frozenset()` (the `building_runs` precedent), so
   both tenancy gates check its `account_id`, its policy, no anon access and no browser write. `service_role` reads,
-  never writes: SELECT on the table and its view (701, the Backend rule that the service role reads anything), no
-  INSERT, UPDATE, DELETE or TRUNCATE. The 696 seed gave every account then present all seven families at 1; a later account gains a family's
-  row on its first bump (signup bumps `board` and `collections`).
+  never writes: SELECT on the table (701, the Backend rule that the service role reads anything), no INSERT,
+  UPDATE, DELETE or TRUNCATE. The view `curation_clock_public` is the browser's read, not the service role's: its
+  audience reads the caller's accounts from the JWT and only `authenticated` may execute it. The 696 seed gave every
+  account then present all seven families at 1; a later account gains a family's row on its first bump (signup
+  bumps `board` and `collections`).
 - **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
   `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
   … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`

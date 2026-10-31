@@ -515,6 +515,21 @@ def test_anon_reads_no_clock(svc: psycopg.Connection) -> None:
             conn.close()
 
 
+def test_the_service_role_reads_the_table_whole_and_the_view_is_the_browsers(svc: psycopg.Connection,
+                                                                            world: _World) -> None:
+    accounts = _accounts(world)
+    owner = _one(svc, "SELECT count(*) FROM curation_clock WHERE account_id = ANY(%s)", (accounts,))
+    conn = psycopg.connect(db_url())
+    try:
+        conn.execute("SET ROLE service_role")
+        seen = conn.execute("SELECT count(*) FROM curation_clock WHERE account_id = ANY(%s)", (accounts,)).fetchone()
+        assert seen is not None and seen[0] == owner > 0, "the service role reads every account's counters (701)"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT 1 FROM curation_clock_public")
+    finally:
+        conn.close()
+
+
 def test_no_browser_role_writes_the_clock(world: _World) -> None:
     a = world.a.acc
     for sql, params in (("INSERT INTO curation_clock (account_id, family) VALUES (%s, 'tags')", (a,)),
@@ -617,8 +632,8 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
         "nobody but bump_curation_clock() writes the clock or its view")
     assert {(rel, r) for rel, r, p in held if p == "SELECT"} == {
         ("curation_clock", "authenticated"), ("curation_clock", "service_role"),
-        ("curation_clock_public", "authenticated"), ("curation_clock_public", "service_role"),
-    }, "the browser reads through its policy, the service role reads everything (701), anon reads nothing"
+        ("curation_clock_public", "authenticated"),
+    }, "the browser reads through its policy, the service role reads the table (701), anon reads nothing"
     assert "security_invoker=true" in options
     assert seeded and all(families == sorted(FAMILIES) for _acc, families in seeded), (
         f"every account that predates the clock was seeded with all seven families: {seeded}")
