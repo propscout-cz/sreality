@@ -540,6 +540,20 @@ _Avoid_: signature, error summary, failure reason
 
 ### Where users meet the platform
 
+**Sign-up**:
+Creating an account on the platform. Joining the waitlist is not a sign-up.
+_Avoid_: registration; sign-up for a waitlist entry
+
+**Waitlist entry**:
+One person's place on the waitlist: their email address and the consent they gave. It holds no
+account and grants no access.
+_Avoid_: sign-up, lead, subscriber
+
+**Waitlist invitation**:
+The message that lets the person behind a waitlist entry create an account. Always the full term, so
+it is never taken for a share.
+_Avoid_: invite (alone)
+
 **Extension**:
 The platform's Chrome extension, which shows a property's data and actions on portal pages.
 _Avoid_: plugin, add-on
