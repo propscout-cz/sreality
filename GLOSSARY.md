@@ -555,6 +555,10 @@ address, and the message that tells them. It decides nothing about plans. Always
 is never taken for a share.
 _Avoid_: invite (alone)
 
+**Introductory price**:
+The price reserved for people with a waitlist entry; "zaváděcí cena" on every Czech surface.
+_Avoid_: founder's price, zakladatelská cena
+
 **Extension**:
 The platform's Chrome extension, which shows a property's data and actions on portal pages.
 _Avoid_: plugin, add-on

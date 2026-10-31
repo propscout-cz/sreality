@@ -181,6 +181,8 @@ off. Supabase runs in Ireland (eu-west-1); the policy must say so.
 
 ### W3 — Auth email (deferred by default)
 
+*Replaced 2026-10-31 by [the email program](../email/PROGRAM.md).*
+
 Resend sending domain `mail.<brand>` with SPF, DKIM and DMARC records; Supabase custom SMTP via
 Resend; Czech templates. Not on the store's critical path: the extension is Google-only and this
 sprint ends at Unlisted. It becomes required when the web app opens email sign-up to the public.
