@@ -1,8 +1,10 @@
-# W5: resolver v5.10. One ladder, one matcher, one grain, one truth (design, 2026-10-31)
+# W5: resolver v5.10. One ladder, one matcher, one grain, one truth (as built, 2026-10-31)
+
+**Status: built 2026-10-31 (#2251) on W3's branch; merges after W3.** The design below is what was built, except where "As built" (end of file) says otherwise; §§ 0, 4.1 and 8 hold the measurements the acceptance reads against. Line numbers marked "W3" are on W3's branch before the build.
 
 ## Summary
 
-I read production between 16:15Z and 16:45Z through `execute_sql` on erlvtprrmrylhznfyaih (SELECT only, aggregates). The code was read at `main` 51bfa8196 and at W3's branch `origin/feature/location-w3-one-claim-per-fact`. Line numbers marked "W3" are on that branch, which is the base W5 builds on.
+I read production between 16:15Z and 16:45Z through `execute_sql` on erlvtprrmrylhznfyaih (SELECT only, aggregates). The code was read at `main` 51bfa8196 and at W3's branch `origin/feature/location-w3-one-claim-per-fact`.
 
 **The rule (ruling Q3, one truth).** In `bind.place` one boolean replaces v5.9's declared-blurred exception:
 
@@ -47,7 +49,7 @@ Other measures:
 
 **Release.** `resolver:v5.10`. W2's reconcile sweeps the corpus on deploy. There is no migration and no hand step.
 
-**Ledger.** About −360 / +300 lines including tests and the id block (net about −60).
+**Ledger** (measured, § 9): −707 / +677 lines including tests, docs and the id block, this file aside.
 
 **Defaults taken, no ruling needed:**
 - bazos keeps its existing label; no contract bump.
@@ -456,20 +458,17 @@ Reads:
 
 ---
 
-## 9. Deletion ledger versus additions (estimate; measure on the branch with `git diff --stat`)
+## 9. Deletion ledger versus additions (measured: `git diff --numstat` against W3's branch, this file aside)
 
-| Area | Deleted | Added |
-|---|---|---|
-| `bind.py`: v5.9 exception and prose, `said` loop, `cast_parts` filter, `_reconcile_parts` level branch, `climbed_part` KÚ arm moved out, `Binding(granularity=…)` | ≈ −75 | ≈ +25 (`may_place`, area label and property, part-claim comprehension, Q2) |
-| `check.py` coarsening, params, docstring | ≈ −28 | ≈ +5 |
-| `grade.py`: `grade()`, the "bind's grain" docstring | ≈ −32 | ≈ +12 (`grain_of`) |
-| `composite.py`: `PART_LEVELS`/SO, `_part_inside` loop, `_PART_OF_TOWN_LEVELS`, `_one_part` loop | ≈ −32 | ≈ +18 (`part_of` moved in) |
-| `fill.py` / `core.py` / `types.py`: v5.9 prose, `momc` row, ZSJ mention, `Grade`, `Verdict.granularity`, `Binding.granularity`, `coarser_of`, `_is_place_name` levels | ≈ −50 | ≈ +12 |
-| `version.py` | 0 | +11 |
-| Shadow `ids` block (autodedup) | ≈ −12 | ≈ +60 |
-| Tests | ≈ −170 | ≈ +165 |
-| Docs (architecture, rule 25, PROGRAM, wave-shadow) | ≈ −60 | ≈ +35 |
-| **Total** | **≈ −460** | **≈ +345 (net ≈ −115)** |
+| Area | Deleted | Added | Estimated |
+|---|---|---|---|
+| Resolver (`bind`, `check`, `grade`, `composite`, `fill`, `core`, `types`, `version`) | −312 | +216 | −217 / +83 |
+| Shadow `ids` block (`autodedup/cohort`, `export`, `shadow`) | −24 | +74 | −12 / +60 |
+| Tests | −262 | +288 | −170 / +165 |
+| Docs (architecture, CLAUDE.md rule 25, PROGRAM, wave-shadow, roadmap) | −109 | +99 | −60 / +35 |
+| **Total** | **−707** | **+677 (net −30)** | −460 / +345 |
+
+The resolver nets −96 against the estimate's −134: `part_of`, `town_code` and the rewritten `place` docstring cost more than estimated. The tests net +26: the one-truth table, the MOMC-key, eponymous, Q2, KÚ-fix and `ids` tests outweigh the deletions.
 
 Rule changes:
 - Special cases go from 6 to 0: blurred-outside, coarsening, MOMC-as-quarter, SO tie, ZSJ lookup, the unit-id tie between levels.
@@ -494,9 +493,14 @@ No default here is unsafe, so W5 needs no new ruling. Watch on the shadow:
 - bazos `pin_pop` stacking on town and část points (23k ads);
 - Praha's quarter split for the about 5.4k rows that gain a quarter.
 
-### Critical files for implementation
-- /home/hejtm/dev/sreality/location_data/resolver/bind.py (as on `origin/feature/location-w3-one-claim-per-fact`)
-- /home/hejtm/dev/sreality/location_data/resolver/composite.py
-- /home/hejtm/dev/sreality/location_data/resolver/check.py
-- /home/hejtm/dev/sreality/location_data/resolver/grade.py (with core.py, fill.py, types.py, version.py)
-- /home/hejtm/dev/sreality/autodedup/shadow.py (with autodedup/export.py:537 and autodedup/cohort.py:18 for the `ids` block)
+---
+
+## As built (where the build differs from §§ 1–7)
+
+- **Names.** `bind.PART_NAME_LEVELS = (*MATCH_LEVELS, "katastralni_uzemi")` is the part-claim match list (the R4 part match and the `bind_towns` anchor). `composite.town_code` is the one "the ltree path's obec, else the chain's" read (four readers). `part_of(unit, town, registry)` takes the town's code.
+- **`resolve_street`.** A line naming any place below the town, a MOMC included, returns `street_names_part` (trap 2); `named_part` is the one část. A line naming two části of one town now reads as a place too (it was `no_match`, so R3 could run on it); no such row is known.
+- **The `ids` block** travels as one token, `ids:<id>+<id>…` (`cohort.ids_block`, read back by `parse_blocks`: key `ids`, code its count), so `chunks`, `group.json` and `run_export` carry it unchanged. `block_sizes` keys each block by its token, and `outside_group` counts an unquartered mover as exported by the group holding the `ids` block. `shadow.tied_ads` reads, in one read-only statement, the other side of every pair verdict (any word), the member sets of group verdicts and the property's sibling ads.
+- **Tests.** The grain rail is an autouse fixture in `tests/location_data/conftest.py` around `core.resolve`: every resolution any location test makes asserts `granularity == grain_of(keys)` (a second writer fails it; probed). The MOMC-key case uses the statutory mirror's "Praha 4" + Podolí (the mirror holds no Žižkov). The one-truth table runs every label through `core.resolve` inside, outside and without words.
+- **CLAUDE.md** rule 25 reads "ONE resolver writes `listing_location` (quarter a část obce, grain the finest key, position inside the town the words bind)", paid inside rule 25 (31,248 of 31,250 bytes).
+- **Also trimmed:** the stale `grade.DECLARED_CAP` note on `PRECISE_DECLARED_LABELS`, CHECK's W18 history comment, and `wave-shadow.md`'s W5 dispatch points at § 4.4 instead of copying it.
+- **Not run here:** the shadow (§ 4.4) and the acceptance reads (§ 8) need production; they run after the push.
