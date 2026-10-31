@@ -102,9 +102,14 @@ def test_the_area_stays_a_feature_only_the_veto_yields() -> None:
     assert not area_basis_exempt(a, b, 0.12, W31)
 
 
-def test_w34_reaches_past_c4_where_c4_keeps_the_default_bar() -> None:
-    # C4 already lifts a byt x byt pair to 20 %; the exemption bites where C4 does not reach.
-    assert pair(W34, 88.0) is None and pair(W34, 88.0, basis="usable") is None
+def test_w34_s_exemption_needs_no_gallery_where_c4b_does() -> None:
+    # C4b lets a byt x byt gap past 8 % only on one gallery; the exemption asks for none.
+    mix = fp(1, W34, source="realitymix", basis="floor", category_main="byt", area_m2=88.0)
+    usable = fp(3, W34, source="realitymix", basis="usable", category_main="byt", area_m2=88.0)
+    partner = fp(2, W34, source="sreality", basis="usable", category_main="byt", area_m2=100.0)
+    assert pair_veto(mix, partner, W34, lambda: False) is None
+    assert pair_veto(usable, partner, W34, lambda: False) == "area"
+    assert pair_veto(usable, partner, W34, lambda: True) is None
     for cat_a, cat_b in (("byt", "komercni"), ("komercni", "byt"), ("komercni", "komercni")):
         assert pair(W34, 88.0, cat_a=cat_a, cat_b=cat_b) is None
         assert pair(W34, 88.0, basis="usable", cat_a=cat_a, cat_b=cat_b) == "area"

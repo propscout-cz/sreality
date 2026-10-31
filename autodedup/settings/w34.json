@@ -1,11 +1,11 @@
 {
-    "area_reject_pct_by_category": {
+    "area_veto_basis_floor_exempt": {
+        "realitymix": 0.15
+    },
+    "area_veto_gallery_exempt": {
         "byt": 0.2,
         "dum": 0.2,
         "pozemek": 0.2
-    },
-    "area_veto_basis_floor_exempt": {
-        "realitymix": 0.15
     },
     "attr_cross_type_subtype_skip": true,
     "attr_probe_town_grain": true,

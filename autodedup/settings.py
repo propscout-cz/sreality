@@ -21,7 +21,7 @@ from autodedup.features import DEFAULT_VOCABULARY_ATTR_KEYS
 # lower.
 CONTEXT_RULE_MIN_IMAGES_FLOOR: float = 4.0
 
-# C4: the category_main vocabulary `area_reject_pct_by_category` is keyed by: the census's own
+# C4b: the category_main vocabulary `area_veto_gallery_exempt` is keyed by: the census's own
 # `CATEGORY_MAIN`, restated because importing the census would widen the decision closure.
 CATEGORY_MAIN: tuple[str, ...] = ("byt", "dum", "pozemek", "komercni", "ostatni")
 # The portals `area_veto_basis_floor_exempt` is keyed by: the census's `SOURCES`, restated for
@@ -42,11 +42,12 @@ class Settings:
     area_band_tol: float = 0.20
     area_reject_pct: float = 0.08
     area_band_pct: float = 0.03
-    # C4: the pair veto's area bar per category_main (`guards.area_veto_pct`), read only where
-    # BOTH sides state the same category and it has an entry; every other pair keeps
-    # `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area limbs and the
-    # cluster spread keep their own bars. Empty = w31.
-    area_reject_pct_by_category: dict[str, float] = field(default_factory=dict)
+    # C4b (operator ruling 2026-11-01): the pair veto's area clause yields, up to the mapped gap,
+    # where BOTH sides state that category_main and at least 20 m2 (`guards.area_gallery_bar`)
+    # and the two adverts show one gallery at one price (`guards.identical_gallery`); every
+    # other pair keeps `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area
+    # limbs and the cluster spread keep their own bars. Empty = w31.
+    area_veto_gallery_exempt: dict[str, float] = field(default_factory=dict)
     # The pair veto's area clause yields, up to the mapped gap, when a side of that portal states
     # `area_basis = 'floor'` (`guards.area_basis_exempt`): realitymix prints "celková podlahová
     # plocha", which may hold the cellar, balcony or terrace a partner leaves out. The area stays
@@ -1104,9 +1105,9 @@ class Settings:
         }
         self.floor_camps = {str(key): int(value)
                             for key, value in dict(self.floor_camps).items()}
-        self.area_reject_pct_by_category = {
+        self.area_veto_gallery_exempt = {
             str(key): float(value)
-            for key, value in dict(self.area_reject_pct_by_category).items()}
+            for key, value in dict(self.area_veto_gallery_exempt).items()}
         self.area_veto_basis_floor_exempt = {
             str(key): float(value)
             for key, value in dict(self.area_veto_basis_floor_exempt).items()}
@@ -1125,14 +1126,14 @@ class Settings:
                 f"area_band_pct must be in [0, area_reject_pct]: {self.area_band_pct} "
                 f"> {self.area_reject_pct}"
             )
-        for key, value in self.area_reject_pct_by_category.items():
+        for key, value in self.area_veto_gallery_exempt.items():
             if key not in CATEGORY_MAIN:
                 raise ValueError(
-                    f"area_reject_pct_by_category key must be a category_main "
+                    f"area_veto_gallery_exempt key must be a category_main "
                     f"({', '.join(CATEGORY_MAIN)}): {key}")
-            if not self.area_band_pct <= value < 1.0:
+            if not self.area_reject_pct < value < 1.0:
                 raise ValueError(
-                    f"area_reject_pct_by_category[{key}] must be in [area_band_pct, 1): {value}")
+                    f"area_veto_gallery_exempt[{key}] must be in (area_reject_pct, 1): {value}")
         for key, value in self.area_veto_basis_floor_exempt.items():
             if key not in SOURCES:
                 raise ValueError(

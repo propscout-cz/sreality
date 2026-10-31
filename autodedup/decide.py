@@ -30,7 +30,9 @@ from autodedup.demonstrate import (
 )
 from autodedup.features import Feats, evidence_families, parse_ts, window_end_stamp
 from autodedup.fingerprint import Fingerprint
-from autodedup.guards import UNIT_DESIGNATOR_VETO, pair_veto, unit_designator_conflict
+from autodedup.guards import (
+    UNIT_DESIGNATOR_VETO, identical_gallery, pair_veto, unit_designator_conflict,
+)
 from autodedup.hazard_context import ContextIndex, PairContext, fungible_catalogue
 from autodedup.indistinguishable import (
     GATE,
@@ -704,7 +706,7 @@ def _decide_layers(
     lo, hi = (fa.listing_id, fb.listing_id) if fa.listing_id < fb.listing_id else (
         fb.listing_id, fa.listing_id
     )
-    veto = pair_veto(fa, fb, settings)
+    veto = pair_veto(fa, fb, settings, lambda: identical_gallery(fa, fb, settings))
     if veto is not None:
         return Decision(lo, hi, "veto", 0.0, set(), None, veto, f"guard:{veto}")
 
