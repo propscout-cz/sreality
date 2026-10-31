@@ -25,6 +25,11 @@ is the tie-breaker). This track records sequencing + shipped state only.
 
 ## The simplification sprint (2026-09-11 →): one store, one lane, nine fields, no flags
 
+**2026-10-31 → the location data quality programme** (`docs/design/location-quality/PROGRAM.md`) holds the north star,
+the operator's rulings and waves W0–W8 that follow this sprint: one current claim per fact, one bound register
+entity, a pin inside the town the words bind, a measured radius, one scorecard, one resolve lane, one registry
+(the pre-mirror `admin_boundaries` table retired). This file keeps receiving the as-built bullet of each wave.
+
 **North star:** *every Czech listing has its town; one slim store answers every question; the app
 gets faster because there is less.* Every decision in this sprint is tested against those three
 clauses, in that order. CLAUDE.md rule 25 is the standing form. The audit that started it ("Where the
