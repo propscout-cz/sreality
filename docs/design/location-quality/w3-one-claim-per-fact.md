@@ -507,6 +507,18 @@ and the deploy the old writer's `ON CONFLICT (claim_fingerprint) DO NOTHING` rai
 changed value: its batch rolls back and retries next tick, nothing is lost. CI replays 699 and re-runs
 it (retry contract).
 
+**Rollback after 699.** The purge is undone only from the R2 backup. A CODE revert (the PR reverted after
+699 applied) also needs the key gone, because the old writer's `ON CONFLICT (claim_fingerprint) DO
+NOTHING` raises unique_violation on `location_claims_key` for every changed value — and the old read
+needs an index on `listing_id` back first:
+```
+create index concurrently if not exists location_claims_listing
+  on location_claims (listing_id, claim_type, first_observed_at desc);
+drop index concurrently if exists location_claims_key;
+```
+`claim_fingerprint` stays nullable (the old writer fills it; nothing needs NOT NULL). After 700 (PR-2) a
+code revert is not possible without restoring the column from the backup.
+
 ### Step 3: merge PR-1 (after W4's #2220), Railway rolls out worker + API
 `gh api repos/propscout-cz/sreality/commits/<sha>/status` until both services report success.
 
@@ -652,7 +664,8 @@ tests.
 - **Provenance of survivors** is the version active at purge time, so a later retract of exactly that
   version would delete most of that portal's claims (R4's re-mine restores them).
 - **Old code after 699, before the deploy:** batches with a changed value fail and retry (no loss);
-  keep 699 → merge → deploy back to back.
+  keep 699 → merge → deploy back to back. The same holds for a code rollback after 699: see § 4
+  Step 2's rollback (re-create `location_claims_listing`, then drop `location_claims_key`).
 - **Shadow gate:** ≈ 52 % of movers sit in the live apply scope (§5).
 - **idnes rewording its sentence** would, with `absent: retract`, clear every idnes disclaimer on the
   next re-mine (today it would only stop new ones). That is the honest reading of the page; the W1

@@ -29,7 +29,14 @@
 -- old writer's ON CONFLICT (claim_fingerprint) DO NOTHING raises unique_violation on a changed value: its batch rolls
 -- back and retries next tick, nothing is lost.
 -- RE-RUN: every statement is idempotent; apply_migration.yml retries the whole file on a lock timeout.
--- ROLLBACK: forward only (rule 1). The old code reads a one-row-per-key table correctly; the rows are in R2.
+-- ROLLBACK: forward only (rule 1); the purged rows are in R2. The old code reads a one-row-per-key table
+-- correctly, but its writer CANNOT run beside the key: `ON CONFLICT (claim_fingerprint) DO NOTHING` raises
+-- unique_violation on location_claims_key for every changed value. A code revert after this file therefore
+-- also needs, in this order (the old read must keep an index on listing_id):
+--   create index concurrently if not exists location_claims_listing
+--     on location_claims (listing_id, claim_type, first_observed_at desc);
+--   drop index concurrently if exists location_claims_key;
+-- claim_fingerprint stays nullable: the old writer fills it, and nothing needs it NOT NULL.
 -- VERIFY (the $post$ block raises unless all of it holds):
 --   select indisvalid, indisunique from pg_index where indexrelid = 'location_claims_key'::regclass;  -- t, t
 --   select to_regclass('location_claims_listing');                                                       -- null
