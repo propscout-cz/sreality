@@ -323,13 +323,13 @@ def test_the_dedup_funnel_is_cut_with_the_same_rule_as_the_lane_it_describes() -
     assert served_location_predicate("l.id") in FUNNEL_SQL
 
 
-def test_the_location_gauge_counts_the_hidden_set_with_the_same_rule() -> None:
+def test_the_location_scorecard_counts_the_hidden_set_with_the_same_rule() -> None:
     """The number is visible outside the audit page, per portal, and it is a WORKLOAD
-    number — it never moves the check's status (scripts/checks/quality.py since wave 6)."""
-    from scripts.checks.quality import _LOCATION_TOWN_COVERAGE_SQL
-
-    assert f"NOT {SERVED_LOCATION_PREDICATE}" in _LOCATION_TOWN_COVERAGE_SQL
-    assert "AS hidden_n" in _LOCATION_TOWN_COVERAGE_SQL
+    number — a fact on the town cell, never its status. The scorecard view (migration 698,
+    read by the location gauge) carries the rule rendered on its cohort's listing id."""
+    sql = _sql(MIGRATIONS / "698_location_quality_scorecard.sql")
+    assert f"{served_location_predicate('c.id')} as located" in sql
+    assert "count(*) filter (where not b.located)" in sql
 
 
 def test_comparables_keeps_the_rules_narrower_form() -> None:

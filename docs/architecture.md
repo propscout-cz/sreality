@@ -4561,7 +4561,8 @@ renumber.** Navigate by area:
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
     listing has a town (the `location_town_coverage` gauge, over active ads first written more than
-    24 h ago since Health dashboard sprint wave 6, is red until both are zero), and foreign is a
+    24 h ago, reads the W1 scorecard view, migration 698: an ad holding town-bearing evidence and no
+    town is red until zero, one whose page names no town is Watch, ruling Q6), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
     fields at rebuild, so no consumer query joins the store; a field is added only by operator
@@ -4930,7 +4931,7 @@ for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ul
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
 after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the `location_town_coverage` check counts with,
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5272,18 +5273,34 @@ every walk, sweep, rail and audit surface drives off `listings` unfiltered (migr
 index on `properties (repr_listing_ref_id)` stays — append-only, and every read model that joins
 `listings` on that column still uses it). The one rule left in the programme is the CONSUMER rule
 `SERVED_LOCATION_PREDICATE`, below, and it decides what is *shown*, never what is *worked*. **The red
-line**: the `location_town_coverage` gauge (`scripts/checks/quality.py`, on the worker every 6 h since
-Health dashboard sprint wave 6) reports, per portal and in absolute counts, ACTIVE ads first written
-more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm shares) with no row, or non-foreign
-with no `obec_kod`, and is RED until both are zero: as a gauge it sends one notice when it first reads
-Problem, then one a day until it recovers or is acknowledged. The lane still works every listing; only
+line**: the `location_town_coverage` gauge ("Location quality", `scripts/checks/quality.py`, on the
+worker every 6 h since Health dashboard sprint wave 6) reads ONE view since W1,
+`location_quality_by_source` (migration 698, service_role only: every location quality number defined
+once, its shared fragments rendered verbatim from `location_steps` and pinned by
+`tests/location_data/test_location_quality_view_contract.py`). It reports, per portal and in absolute
+counts, ACTIVE ads first written more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm
+shares) with no row, or non-foreign with no town, split by EVIDENCE (ruling Q6, 2026-10-31): one holding
+a town-bearing claim (`location_steps.TOWN_EVIDENCE_CLAIM_TYPES`, BIND's five town inputs) is UNRESOLVED
+and `{portal}/town` is RED until zero; one holding none is PAGE-WITHHELD, `{portal}/town_withheld`,
+Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7): `{portal}/ku` (below),
+`{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
+zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
+the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
+operator rules the floors, W1-b), `{portal}/accuracy`
+(radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
+over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
+behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
+`freshness/evidence` (the oldest claim or operator edit waiting for its resolve, Problem past 60 min). As
+a gauge it sends one notice when a cell first reads Problem, then one a day until it recovers or is
+acknowledged. The lane still works every listing; only
 the gauge's population moved (operator ruling Q2, 2026-10-18, which reverses W15's whole-corpus count:
 the 13,192 inactive ads with no town on 2026-10-19, whose pages are gone, are a dated fact that Location
 Quality owns, not read each run). Its per-portal series changed meaning on 2026-09-14 and again at the
 wave-6 deploy, and numbers either side of those dates are not comparable. That is the invariant the whole shape exists
 for; the mandatory town entry, BIND's tail rungs and the sweep's fourth arm are all rails that serve
-it. Its KÚ arm (MF PR-B) is the same kind of zero: a Czech address-grain row written by the current
-`RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is missing at the registry version.
+it. Its KÚ cell (MF PR-B; out of the town cell since W1) is the same kind of zero: a Czech address-grain
+row with a town written by the current `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is
+missing at the registry version; KÚ coverage of the coarser grains is a fact, never judged.
 
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
@@ -5347,8 +5364,8 @@ its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
 the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
-2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as its
-`hidden` fact — a workload number that never moves its status. The operator watches the same
+2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as the
+`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The operator watches the same
 set on `/new-dedup/pin-audit`, whose relation `location_pin_audit_mv` (migration 524) IS that
 definition — every listing that fails `SERVED_LOCATION_PREDICATE` and nothing else, refreshed hourly
 by pg_cron, leading the nav with its count — so the page and the rule can never describe different
