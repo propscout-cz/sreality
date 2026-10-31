@@ -112,8 +112,8 @@ const LIST_READS = new Set([hashKey(curationKeys.anyCollection)]);
 export const SYNC_ROOTS: readonly QueryKey[] = [['pipeline'], ['curation'], ['dismissals'], ['pipeline-shares'], ['acting']];
 
 /** No reconnect refetch under SYNC_ROOTS, so a hidden tab stays at zero requests.
- * main.tsx calls it only beside the curation clock's read, which then is the one
- * reconnect path for curation; before that read exists it stays uncalled. */
+ * main.tsx calls it beside the owner (lib/curationSyncOwner), whose clock read on
+ * `online` is the one reconnect path for curation. */
 export function applySyncQueryDefaults(qc: QueryClient): void {
   for (const root of SYNC_ROOTS) qc.setQueryDefaults(root, { refetchOnReconnect: false });
 }

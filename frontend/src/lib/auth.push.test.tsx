@@ -63,6 +63,9 @@ vi.mock('./supabase', () => {
   };
 });
 
+/* The curation sync owner is lib/curationSyncOwner.test.ts's; nothing here reads the clock. */
+vi.mock('@/lib/curationSyncOwner', () => ({ useCurationSync: () => {} }));
+
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   getPushKey: vi.fn(async () => ({ public_key: SERVER_KEY_B64 })),

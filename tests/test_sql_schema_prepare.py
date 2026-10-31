@@ -72,6 +72,15 @@ _ALLOWLIST: list[tuple[str, str, str]] = [
         "the jobs and capacity checks read them (verified read-only against "
         "production) and read Not measured when they cannot",
     ),
+    (
+        "scripts/checks/platform.py",
+        "pg_stat_statements",
+        "the pg_stat_statements extension is the platform's (Supabase preloads "
+        "it), not a migration's, so the replayed schema has neither "
+        "pg_stat_statements nor pg_stat_statements_info; the curation_sync "
+        "check's reads and load cells read them and are Not measured when "
+        "they cannot (docs/design/curation-sync.md § 3.9)",
+    ),
 ]
 
 

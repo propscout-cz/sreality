@@ -22,7 +22,36 @@ const h = vi.hoisted(() => ({
   failNext: {} as Record<string, unknown[]>,
   updateUser: vi.fn(async (_attrs: unknown) => ({ data: {}, error: null })),
   getUser: vi.fn(async () => ({ data: { user: null as unknown }, error: null })),
+  /* The curation sync owner's starts and stops, the read epoch and the cache clear, in order. */
+  order: [] as string[],
 }));
+
+/* The owner itself is lib/curationSyncOwner.test.ts's; here only WHEN it starts and stops. */
+vi.mock('@/lib/curationSyncOwner', async () => {
+  const { useEffect } = await import('react');
+  return {
+    useCurationSync: (userId: string | null) => {
+      useEffect(() => {
+        if (userId == null) return;
+        h.order.push(`start ${userId}`);
+        return () => {
+          h.order.push(`stop ${userId}`);
+        };
+      }, [userId]);
+    },
+  };
+});
+
+vi.mock('./revalidate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./revalidate')>();
+  return {
+    ...actual,
+    resetReads: vi.fn((qc: QueryClient) => {
+      h.order.push('resetReads');
+      actual.resetReads(qc);
+    }),
+  };
+});
 
 vi.mock('./supabase', () => {
   const table = (relation: string) => {
@@ -99,6 +128,7 @@ function renderAuth(client: QueryClient) {
 beforeEach(() => {
   h.listeners = [];
   h.reads = [];
+  h.order = [];
   h.initialSession = null;
   h.initialError = null;
   h.planAgendas = { browse: true };
@@ -216,6 +246,49 @@ describe('AuthProvider session bootstrap', () => {
     await waitFor(() => expect(getActiveBoard()).toBeNull());
     expect(localStorage.getItem(ACTIVE_BOARD_KEY)).toBeNull();
     expect(localStorage.getItem(EDIT_AS_OWNER_KEY)).toBeNull();
+  });
+
+  /* Decision 13 (curation sync): the owner is declared after the identity
+   * effect, so React's cleanups-before-setups order makes a switch stop the
+   * old owner, reset the read epoch and clear the cache, and only then start
+   * the new one; a sign-out stops it and starts nothing. */
+  it('an account switch runs stop → resetReads → clear() → start, in order; a sign-out only stops', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const clear = qc.clear.bind(qc);
+    qc.clear = () => {
+      h.order.push('clear');
+      clear();
+    };
+    renderAuth(qc);
+    await waitFor(() => expect(h.order).toEqual(['start user-1']));
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-2'));
+    });
+    await waitFor(() =>
+      expect(h.order).toEqual(['start user-1', 'stop user-1', 'resetReads', 'clear', 'start user-2']),
+    );
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_OUT', null);
+    });
+    await waitFor(() => expect(h.order.slice(5)).toEqual(['stop user-2', 'resetReads', 'clear']));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.order).toHaveLength(8);
+  });
+
+  it('starts no owner before the stored session is read, nor on a token refresh', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    expect(h.order).toEqual([]);
+    await waitFor(() => expect(h.order).toEqual(['start user-1']));
+    act(() => {
+      for (const cb of h.listeners) cb('TOKEN_REFRESHED', sessionFor('user-1'));
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.order).toEqual(['start user-1']);
   });
 
   it('does not clear the cache on the first sign-in of a session', async () => {

@@ -242,8 +242,8 @@ never reset, never rendered.
 - **Kill switches** (forward migrations, non-destructive; `docs/design/curation-sync.md` § 3.9 Decision 19).
   *Reader* (the clock reads' load): `revoke select on public.curation_clock_public, public.curation_clock from
   authenticated; revoke execute on function public.curation_clock_audience() from authenticated;` — windows fall
-  to permanent-error mode (≤ 1 read per 60 s each) and the app behaves as before sync; the live tenancy cases that
-  read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
+  to permanent-error mode (≤ 1 read per 60 s each) and the app behaves as before sync, bar curation's reconnect
+  refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
   re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
   twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
@@ -252,7 +252,8 @@ never reset, never rendered.
   the seed); `tests/test_curation_sync_census.py` (a)-(j), each shown to bite; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
   commit-time failure, the read on `curation_clock_pkey`); the health alarm `curation_sync` (`triggers`,
-  `board_bumps`).
+  `board_bumps`; W4's `reads` and `load` watch the browsers' read in `pg_stat_statements`); the SPA's read-contract
+  test `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
 
 ## Composite PK: `property_pipeline` (migration 295)
 
