@@ -514,7 +514,7 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
                                     21_600, 45.0, "Data quality", "cells", "/scrapers")
     assert meta("location_town_coverage") == (
         quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 45.0,
-        "Location coverage", "cells", "/location-quality")
+        "Location quality", "cells", "/location-quality")
     assert meta("text_extraction") == (quality.check_text_extraction, "data_quality", "gauge",
                                        worker, 3_600, 45.0, "Description reading", "cells",
                                        "/costs")

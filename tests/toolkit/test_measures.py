@@ -39,6 +39,7 @@ from toolkit.measures import (
     spec_ppm2_basis,
     unit_label,
     wilson_lower,
+    wilson_upper,
 )
 
 _MIGRATION = (
@@ -333,3 +334,15 @@ def test_wilson_lower_matches_the_textbook_interval(hits: int, n: int, lower: fl
 def test_wilson_lower_of_nothing_counted_is_none_and_a_wider_z_is_more_cautious() -> None:
     assert wilson_lower(0, 0) is None
     assert wilson_lower(5, 10, z=2.576) < wilson_lower(5, 10)
+
+
+@pytest.mark.parametrize("hits, n", [(0, 10), (1, 1), (5, 10), (173, 2004), (2004, 2004)])
+def test_wilson_upper_mirrors_the_lower_bound_of_the_misses(hits: int, n: int) -> None:
+    """The interval is symmetric in hits and misses: the upper bound is one minus the misses' lower one."""
+    assert wilson_upper(hits, n) == pytest.approx(1 - wilson_lower(n - hits, n), abs=1e-12)
+    assert wilson_lower(hits, n) <= hits / n <= wilson_upper(hits, n) <= 1.0
+
+
+def test_wilson_upper_of_nothing_counted_is_none_and_a_wider_z_is_more_cautious() -> None:
+    assert wilson_upper(0, 0) is None
+    assert wilson_upper(5, 10, z=2.576) > wilson_upper(5, 10)
