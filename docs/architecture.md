@@ -853,9 +853,11 @@ rules. Identify which one a task belongs to before you start.
   unregister — which also ends push below iOS 18.4.
 - **One SPA, two frames: the phone shell is chosen by screen width, and the routes do not
   change** (`frontend/src/lib/phoneShell.ts`, `components/phone/`; the Phone app map #1759, W1
-  #1766). `usePhoneShell()` is `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
+  #1766). `usePhoneShell()` renders `isPhoneFrame()`, the one definition (the curation clock's
+  cadence reads it outside React): `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
   override (`localStorage` `sreality.phone.desktopView`, set from the phone's account sheet and
-  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads). When it is on,
+  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads that tab, and another
+  tab's frame readers all switch on its `storage` event, as on a rotation). When it is on,
   `Shell` renders the same `<Outlet>` inside a phone frame — an `h-14` header (the 3.5 rem that
   `top-14` / `calc(100dvh-3.5rem)` in Filters, BrowseExperience and Pipeline depend on), a
   bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
@@ -925,7 +927,7 @@ rules. Identify which one a task belongs to before you start.
   so a stage archived elsewhere hands over to its neighbour, a stage added or reordered never
   changes what is on screen and never retargets a tap, and a finger on the pages or a scroll
   still settling holds the board and the members map (`useReadHold`), so a remote change lands
-  after the gesture; the pager's own re-aim is no gesture. Its one filter, **Lokalita**, is the
+  after the gesture (a finger's lift is heard on its own node, even one removed under it); the pager's own re-aim is no gesture. Its one filter, **Lokalita**, is the
   desktop bar's: the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
   `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
@@ -999,15 +1001,20 @@ rules. Identify which one a task belongs to before you start.
 - **The curation clock is the re-read trigger; staleTime is the backstop** (`lib/curationSyncOwner.ts`).
   One owner per signed-in window (`AuthProvider`, after the identity effect) reads
   `curation_clock_public` every 5 s (15 s in the phone frame) while visible, at once when shown,
-  on focus / online / a same-browser nudge (`BroadcastChannel`, posted on every mutation success),
+  on focus / online / a same-browser nudge (`BroadcastChannel`, posted on every committed write:
+  `lib/mutationCache` `onCommittedWrite`, told from the cache's `onSuccess` before the hook's own),
   never while hidden, and owes each moved family's reads through `revalidate`. `main.tsx` calls
   `applySyncQueryDefaults` beside it, so that read is curation's one reconnect path, and
   `refetchOnWindowFocus` stays off.
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and
-  artifact-link editors). An editor that stays open after a save (the stage row) calls `saved()`,
-  so the next server value ends the draft even when a change made elsewhere beat the re-read.
+  artifact-link editors; a free-text input takes `{...draft.bind}`, which a narrowed draft such as
+  a tag colour lacks, and a save reads `normalized`). One draft
+  per field the server holds apart: a note's viewing day and time are two, so a time-only edit
+  saves the time on whatever day the note holds by then. An editor that stays open after a save
+  (the stage row) calls `saved()`, so the next server value ends the draft even when a change
+  made elsewhere beat the re-read. Both collection rename editors share `lib/useCollectionEditor`.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
@@ -3334,7 +3341,9 @@ renumber.** Navigate by area:
     and re-read (W4). `curation_clock_audience()` (invoker, `current_account_ids()`, never acting) is "follow,
     never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
     the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
-    (invoker) is the one read. The event table is not curation and is not clocked (rule 16). Its rails:
+    (invoker) is the browser's one read, its audience read from the JWT; the service role reads the table (701)
+    and writes it never. Row triggers never fire on TRUNCATE, so a clocked table is never truncated, only
+    deleted from (census e). The event table is not curation and is not clocked (rule 16). Its rails:
     `tests/_tenant_registry.py` (`CLOCKED_TABLES` / `NOT_CLOCKED`), `tests/test_curation_sync_census.py`,
     `tests/test_curation_clock_live.py`, the `curation_sync` health alarm; the kill switches:
     `.claude/skills/database/references/tenancy.md` § Curation clock.
@@ -3833,14 +3842,16 @@ renumber.** Navigate by area:
     or resurrected) → revalidate AND release in one batch (`revalidate(vars, failed, qc)`): an owed
     read is paid only by a read that started after it was owed, and a key another write still holds
     is read once, after that write — the old unconditional invalidate let the first of two
-    overlapping writes repaint the second's patch away. A kanban drag holds the board, the members
-    map and the stages from pick-up to drop (`useDragHold`, `pages/Pipeline.tsx`), so no re-read
-    repaints the columns under the card in hand; the drop calls `move.mutate` before the drag lets
-    go, so what the drag parked on the board waits for the move's settle and is read once. Deliberately NOT `onError`, because the global
+    overlapping writes repaint the second's patch away. The rollback lives in `onSettled`,
+    deliberately NOT `onError`, because the global
     `MutationCache.onError` (`lib/mutationCache`) stays silent for any mutation that defines its
     own — which is why a failed board drag used to snap back with no explanation. A site may still
     declare `onError`, but only to show its OWN message (inline text, the split's 409 prompt): the
-    hook hands it no context, so it cannot roll back. Pending is per key (`pendingFor`), answered
+    hook hands it no context, so it cannot roll back. A kanban drag holds the board and the members
+    map (`BOARD_GESTURE_HELD`, `lib/queries`, which the phone pager's swipe holds too) and the
+    stages from pick-up to drop (`useDragHold`, `pages/Pipeline.tsx`), so no re-read
+    repaints the columns under the card in hand; the drop calls `move.mutate` before the drag lets
+    go, so what the drag parked on the board waits for the move's settle and is read once. Pending is per key (`pendingFor`), answered
     from ONE pending index per MutationCache (one cache subscription, O(1) per event), so every
     instance sharing a `mutationKey` agrees — the funnel stays busy while the stage menu it opened
     is still writing — and a write re-renders only the instances that asked about its key. Browse

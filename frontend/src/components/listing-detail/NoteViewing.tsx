@@ -1,8 +1,11 @@
 /* What a viewing adds to a note (migration 666: a viewing is a note with a
- * date): the day + time fields its composer and its editor share, the toggle
+ * date): the day + time fields its composer and its editor share (the editor
+ * binds each to its own draft, lib/useServerDraft), the toggle
  * that adds or drops the date, and the calendar leaf a viewing note opens with.
  * The fields read and write the Prague wall clock (lib/viewings); the native
  * pickers are the phone's own wheels. */
+
+import type { ChangeEvent } from 'react';
 
 import { CalendarIcon } from '@/components/phone/phoneIcons';
 import {
@@ -17,13 +20,32 @@ import {
 const FIELD =
   'h-8 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-2 text-[0.85rem] tabular-nums text-[var(--color-ink)] focus:border-[var(--color-copper)] disabled:opacity-50';
 
+/** One of the two fields: an editor's `useServerDraft` bind, or a part of a slot held in state. */
+export interface ViewingField {
+  value: string;
+  onChange(e: ChangeEvent<HTMLInputElement>): void;
+  onFocus?(): void;
+  onBlur?(): void;
+}
+
+/** The day and the time of a slot held in state (the composer's), each change writing its part. */
+export function slotFields(
+  slot: ViewingSlot,
+  onChange: (slot: ViewingSlot) => void,
+): { day: ViewingField; time: ViewingField } {
+  return {
+    day: { value: slot.day, onChange: (e) => onChange({ ...slot, day: e.target.value }) },
+    time: { value: slot.time, onChange: (e) => onChange({ ...slot, time: e.target.value }) },
+  };
+}
+
 export function ViewingFields({
-  slot,
-  onChange,
+  day,
+  time,
   disabled = false,
 }: {
-  slot: ViewingSlot;
-  onChange: (slot: ViewingSlot) => void;
+  day: ViewingField;
+  time: ViewingField;
   disabled?: boolean;
 }) {
   return (
@@ -34,8 +56,7 @@ export function ViewingFields({
         type="date"
         aria-label="Den prohlídky"
         required
-        value={slot.day}
-        onChange={(e) => onChange({ ...slot, day: e.target.value })}
+        {...day}
         disabled={disabled}
         className={FIELD}
       />
@@ -44,8 +65,7 @@ export function ViewingFields({
         aria-label="Čas prohlídky"
         required
         step={300}
-        value={slot.time}
-        onChange={(e) => onChange({ ...slot, time: e.target.value })}
+        {...time}
         disabled={disabled}
         className={FIELD}
       />

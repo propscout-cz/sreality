@@ -48,9 +48,12 @@ from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, lo
 from scripts.record_workflow_failures import CURSOR_KEY, MONITOR_WORKFLOW_NAME
 
 _UTC = _dt.timezone.utc
-# A role without access to pg_cron's schema or tables reads no history: Not measured, never OK.
-_CRON_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
-                    _pg_errors.UndefinedTable)
+# A platform extension's tables (pg_cron's, pg_stat_statements'), not a migration's: a role without access to its schema
+# or tables, or the extension absent, reads nothing there. Not measured, never OK.
+_EXTENSION_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
+                         _pg_errors.UndefinedTable)
+# pg_stat_statements also answers 55000 (object not in prerequisite state) where it is installed but not preloaded.
+_STATEMENTS_UNREADABLE = (*_EXTENSION_UNREADABLE, _pg_errors.ObjectNotInPrerequisiteState)
 # One outage, two wordings: OpenAI's 429 says "You have no credits remaining", Anthropic's
 # "credit balance" (the patterns llm_errors used, carried verbatim; auth failures match neither).
 _CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
@@ -225,7 +228,7 @@ def _cron_cells(conn: Any, thresholds: dict[str, Any],
     """One cell per pg_cron job: failures in its newest runs, and lateness on its own gaps."""
     try:
         rows = fetchall(conn, _CRON_JOBS_SQL)
-    except _CRON_UNREADABLE as exc:
+    except _EXTENSION_UNREADABLE as exc:
         return [], f"pg_cron's tables are unreadable ({_oneline(exc)})"
     if not rows:
         return [], _CRON_EMPTY
@@ -315,6 +318,11 @@ def _lane_cells(conn: Any, thresholds: dict[str, Any],
     return cells, None
 
 
+def _stored_facts(cells: dict[str, dict[str, Any]], subject: str) -> dict[str, Any]:
+    """The facts a stored result's cell `subject` carried, or none."""
+    return (cells.get(subject) or {}).get("facts") or {}
+
+
 def _missing_lane(lane: str, previous: dict[str, Any]) -> dict[str, Any]:
     """A registered lane the heartbeat lacks: Watch at once, Problem when the previous measurement read it missing too.
 
@@ -323,7 +331,7 @@ def _missing_lane(lane: str, previous: dict[str, Any]) -> dict[str, Any]:
     beating beside this one.
     """
     subject = f"lane/{lane}"
-    again = bool(((previous.get(subject) or {}).get("facts") or {}).get("missing"))
+    again = bool(_stored_facts(previous, subject).get("missing"))
     said = ("missing: the heartbeat has no entry for it, so the beat is from an older process "
             "beating beside this one (a deploy overlap)")
     return _cell(subject, "fail" if again else "warn",
@@ -367,8 +375,8 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     # from until it completes a pass: its clock starts at that measurement, never at the boot nor
     # at a pass from before the pause (autodedup came off its brake at 02:40 on 2026-10-19 and read
     # "late ... 2.1 h" at once; on 2026-10-23 a 5 h brake left a pre-brake pass as the clock).
-    held = previous.get(subject) or {}
-    held_interval = _num((held.get("facts") or {}).get("interval_s"))
+    held_facts = _stored_facts(previous, subject)
+    held_interval = _num(held_facts.get("interval_s"))
     was_off = held_interval is not None and held_interval <= 0
     reference = max(stamp for stamp in (last_pass, previous_at if was_off else None,
                                         booted if last_pass is None else None) if stamp)
@@ -406,7 +414,6 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     aborted = _abort_reason(last.get("aborted"))
     facts["last_aborted"] = aborted
     if aborted:
-        held_facts = held.get("facts") or {}
         held_aborted = _abort_reason(held_facts.get("last_aborted"))
         held_passes = _num(held_facts.get("passes"))
         if held_aborted and held_passes is not None and passes > held_passes:
@@ -552,7 +559,7 @@ def _registry_cell(conn: Any, thresholds: dict[str, Any], now: _dt.datetime,
     conditions: list[tuple[str, str]] = []
     if missing and settled:
         said = f"declared on the job runner in this code but not registered: {', '.join(missing)}"
-        held = ((_previous_result(conn, "jobs")[1].get(_REGISTRY) or {}).get("facts") or {}).get("missing") or []
+        held = _stored_facts(_previous_result(conn, "jobs")[1], _REGISTRY).get("missing") or []
         if set(missing) & set(held):
             conditions.append(("fail", f"{said}. The runner is not running this registry (its deploy failed or was "
                                        "skipped, it refused the entry, or an older image booted and retired it); see "
@@ -697,7 +704,7 @@ def _capacity_cron_cells(conn: Any, thresholds: dict[str, Any],
     try:
         rows = fetchall(conn, _CAPACITY_CRON_SQL)
         weeks = fetchall(conn, _CAPACITY_REFERENCE_SQL, {"ref": ref})
-    except _CRON_UNREADABLE as exc:
+    except _EXTENSION_UNREADABLE as exc:
         return [], f"pg_cron's tables are unreadable ({_oneline(exc)})"
     if not rows:
         return [], _CRON_EMPTY
@@ -998,12 +1005,12 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 #                least CURATION_CLOCK_LOAD_PCT: the planned trigger to re-cost the interval (§ 3.8). A statistics
 #                reset, or a first measurement, takes a baseline and judges nothing.
 
-_CURATION_TRIGGERS_SQL = """
-select count(*) filter (where t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable and t.tginitdeferred),
+# A clock trigger that fires: enabled (origin), a constraint trigger, initially deferred (migration 696's shape).
+_CLOCK_TRIGGER_ARMED = "t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable and t.tginitdeferred"
+_CURATION_TRIGGERS_SQL = f"""
+select count(*) filter (where {_CLOCK_TRIGGER_ARMED}),
        count(*),
-       coalesce(array_agg(c.relname::text order by c.relname)
-                  filter (where not (t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable
-                                     and t.tginitdeferred)), '{}')
+       coalesce(array_agg(c.relname::text order by c.relname) filter (where not ({_CLOCK_TRIGGER_ARMED})), '{{}}')
   from pg_trigger t
   join pg_class c on c.oid = t.tgrelid
  where t.tgfoid = to_regprocedure('public.bump_curation_clock()') and not t.tgisinternal
@@ -1033,9 +1040,6 @@ select coalesce(sum(s.calls) filter (where s.browser and s.named), 0)::bigint,
                p.query ilike %(relation)s as named, p.query = '<insufficient privilege>' as masked
           from pg_stat_statements p) s
 """
-# pg_stat_statements is the platform's extension, not a migration's: absent, unreadable or not preloaded.
-_STATEMENTS_UNREADABLE = (_pg_errors.UndefinedTable, _pg_errors.InsufficientPrivilege,
-                          _pg_errors.ObjectNotInPrerequisiteState, _pg_errors.InvalidSchemaName)
 
 
 def _curation_triggers_cell(conn: Any, expected: int) -> dict[str, Any]:
@@ -1056,6 +1060,9 @@ def _curation_board_bumps_cell(conn: Any, at: _dt.datetime) -> dict[str, Any]:
     missed, accounts, first, events = fetchone(conn, _CURATION_BOARD_BUMPS_SQL)
     missed, accounts, events = int(missed or 0), int(accounts or 0), int(events or 0)
     facts = {"events_24h": events, "accounts": accounts, "first_missed_at": _iso(_as_utc(first))}
+    if not events:
+        return _cell("board_bumps", "ok", "no card events in the last 24 h: nothing to check against the board "
+                     "clock", value=0, unit="events", facts=facts)
     if missed:
         oldest = _ago((at - _as_utc(first)).total_seconds())
         return _cell("board_bumps", "fail", (
@@ -1064,11 +1071,6 @@ def _curation_board_bumps_cell(conn: Any, at: _dt.datetime) -> dict[str, Any]:
             "windows never re-read it"), value=missed, unit="events", facts=facts)
     return _cell("board_bumps", "ok", f"every one of the {events} card events of the last 24 h bumped "
                  "its account's board clock", value=0, unit="events", facts=facts)
-
-
-def _facts(cells: dict[str, dict[str, Any]], subject: str) -> dict[str, Any]:
-    """A stored cell's facts, or none."""
-    return (cells.get(subject) or {}).get("facts") or {}
 
 
 def _curation_reads_cell(calls: int, reset: str | None, previous: dict[str, Any], at: _dt.datetime,
@@ -1123,28 +1125,30 @@ def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
     at = _now(conn)
     cells = [_curation_triggers_cell(conn, int(thresholds["CURATION_CLOCK_TRIGGERS"]))]
     not_measured: dict[str, str] = {}
+
+    def reader_not_measured(why: str) -> dict[str, Any]:
+        not_measured.update(reads=why, load=why)
+        return _result("curation_sync", cells, not_measured)
+
     try:
         cells.append(_curation_board_bumps_cell(conn, at))
     except _pg_errors.UndefinedTable as exc:
         not_measured["board_bumps"] = f"the curation clock is absent ({_oneline(exc)})"
     try:
-        row = fetchone(conn, _CURATION_STATEMENTS_SQL, {"relation": "%curation_clock_public%"})
+        calls, clock_ms, all_ms, reset, masked = fetchone(
+            conn, _CURATION_STATEMENTS_SQL, {"relation": "%curation_clock_public%"})
     except _STATEMENTS_UNREADABLE as exc:
-        why = f"pg_stat_statements cannot be read here ({_oneline(exc)})"
-        not_measured.update(reads=why, load=why)
-        return _result("curation_sync", cells, not_measured)
-    calls, clock_ms, all_ms, reset, masked = row or (0, 0.0, 0.0, None, 0)
+        return reader_not_measured(f"pg_stat_statements cannot be read here ({_oneline(exc)})")
     if masked:
-        why = (f"the worker cannot read other roles' statement text ({int(masked)} entries of authenticated show "
-               "<insufficient privilege>; grant it pg_read_all_stats)")
-        not_measured.update(reads=why, load=why)
-        return _result("curation_sync", cells, not_measured)
+        return reader_not_measured(
+            f"the worker cannot read other roles' statement text ({int(masked)} entries of authenticated show "
+            "<insufficient privilege>; grant it pg_read_all_stats)")
     reset_at = _iso(_as_utc(reset))
     previous = _previous_result(conn, "curation_sync")[1]
-    cells.append(_curation_reads_cell(int(calls or 0), reset_at, _facts(previous, "reads"), at,
+    cells.append(_curation_reads_cell(int(calls or 0), reset_at, _stored_facts(previous, "reads"), at,
                                       float(thresholds["CURATION_CLOCK_QUIET_H"])))
-    cells.append(_curation_load_cell(float(clock_ms or 0), float(all_ms or 0), reset_at, _facts(previous, "load"),
-                                     float(thresholds["CURATION_CLOCK_LOAD_PCT"])))
+    cells.append(_curation_load_cell(float(clock_ms or 0), float(all_ms or 0), reset_at,
+                                     _stored_facts(previous, "load"), float(thresholds["CURATION_CLOCK_LOAD_PCT"])))
     return _result("curation_sync", cells, not_measured)
 
 

@@ -19,7 +19,7 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { hashKey } from '@tanstack/react-query';
 
-import { actingKey } from '@/lib/acting';
+import { ACTING_SEGMENT, actingKey } from '@/lib/acting';
 import { lensTargets, type CurationLens } from '@/lib/curationSettle';
 import { curationKeys, dismissalKeys, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
 import { revalidate, type Hold, type ReadMode, type Revalidation } from '@/lib/revalidate';
@@ -109,7 +109,13 @@ export const LENS_REREAD = { lists: 'mount', aggregates: 'mount' } as const sati
 const LIST_READS = new Set([hashKey(curationKeys.anyCollection)]);
 
 /** The roots every synced read sits under; none is lib/hydration's (hydration.test.ts). */
-export const SYNC_ROOTS: readonly QueryKey[] = [['pipeline'], ['curation'], ['dismissals'], ['pipeline-shares'], ['acting']];
+export const SYNC_ROOTS: readonly QueryKey[] = [
+  ['pipeline'],
+  ['curation'],
+  ['dismissals'],
+  ['pipeline-shares'],
+  [ACTING_SEGMENT],
+];
 
 /** No reconnect refetch under SYNC_ROOTS, so a hidden tab stays at zero requests.
  * main.tsx calls it beside the owner (lib/curationSyncOwner), whose clock read on
