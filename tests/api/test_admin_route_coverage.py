@@ -37,7 +37,7 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
     # The propscout.cz landing page's waitlist form and its thank-you question: a visitor from an ad has
-    # no account. Honeypot + rate limit + strict input checks; writes only waitlist_signups (mig 699).
+    # no account. Honeypot + rate limit + strict input checks; writes only waitlist_signups (mig 700).
     ("POST", "/waitlist"),
     ("POST", "/waitlist/answer"),
 })

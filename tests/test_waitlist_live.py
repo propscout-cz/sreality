@@ -1,4 +1,4 @@
-"""Migration 699 and api/waitlist.py's two statements on the real schema: a new email gets a token and a second signup
+"""Migration 700 and api/waitlist.py's two statements on the real schema: a new email gets a token and a second signup
 of it none, the table refuses what the API would never send (mixed case, a junk address, an unknown investor type),
 an answer is accepted once, and no browser role can read or write the table. Runs in CI's migrations job
 (`TEST_DATABASE_URL`, DB_RAILS_REQUIRED=1); each test rolls back."""

@@ -1,4 +1,4 @@
-"""The propscout.cz waitlist (migration 699): the consent wording, input checks, a rate limit and the two writes.
+"""The propscout.cz waitlist (migration 700): the consent wording, input checks, a rate limit and the two writes.
 
 The routes are api/routes/waitlist.py. Nothing here reads a request; nothing in the routes writes SQL.
 """

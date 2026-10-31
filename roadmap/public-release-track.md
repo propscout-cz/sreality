@@ -682,7 +682,7 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone
     screens with invented listings (no portal photo, broker, address or person; nothing from Browse, no agents).
     Built: `frontend/landing/` + `src/landing/` (own Vite build, `vite.landing.config.ts`), Caddy serves it on the bare
-    domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 699);
+    domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 700);
     cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
     **Owed before ads run:** the operator's company name, IČO, seat and contact e-mail (placeholders in the consent line,
     footer and `/soukromi`, plus `api/waitlist.py` CONSENT_TEXTS); a Czech lawyer's read of the consent + privacy text;

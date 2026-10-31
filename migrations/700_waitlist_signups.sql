@@ -1,4 +1,4 @@
--- 699: the propscout.cz waitlist — one row per email that asked to be invited from the landing page.
+-- 700: the propscout.cz waitlist — one row per email that asked to be invited from the landing page.
 --
 -- WHO WRITES: only api/waitlist.py, through the open POST /waitlist and POST /waitlist/answer routes (service role).
 -- WHO READS: the operator (SQL) and, later, the launch-invite sender. No browser role reads or writes it: RLS on with no
@@ -42,4 +42,4 @@ revoke all on public.waitlist_signups from public, anon, authenticated;
 revoke all on sequence public.waitlist_signups_id_seq from public, anon, authenticated;
 
 comment on table public.waitlist_signups is
-  'propscout.cz landing-page waitlist (mig 699): written only by api/waitlist.py via POST /waitlist; consent_version names the wording submitted.';
+  'propscout.cz landing-page waitlist (mig 700): written only by api/waitlist.py via POST /waitlist; consent_version names the wording submitted.';
