@@ -676,7 +676,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").
-12. **Waitlist landing page on propscout.cz — built 2026-10-31 (draft PR, `feature/landing-waitlist`); go-live owed.**
+12. **Waitlist landing page on propscout.cz — LIVE 2026-10-31 17:52Z (#2248, merge a4de3157; DNS switched by the operator).**
     Operator ask: a conversion-oriented pre-launch page for Facebook/Instagram ads, primary action a waitlist signup.
     Copy follows Joanna Wiebe's method (one reader: Czech flip + buy-to-rent investors; voice-of-customer mined from
     1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone
@@ -685,9 +685,10 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 700);
     cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
     Controller: Limen Ventures s.r.o., IČO 14053179 (ARES; operator 2026-10-31, go-live approved the same day).
+    Live: `propscout.cz` on the vite service (Railway domain 216bdb3e; Cloudflare apex CNAME DNS-only, the redirect
+    rule now www → apex 302), declared in `.railway/railway.ts`. End-to-end check 17:53Z: signup id 1
+    (`utm_source=claude-test`, a test row, exclude or delete it) stored with consent version, variant and answer.
     **Owed:** the Meta Pixel id (no tracker until then); a Czech lawyer's read of the consent + privacy text
-    (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in); go-live: register
-    `propscout.cz` on the vite service, point the apex at it in Cloudflare (the 302-to-app redirect rule becomes
-    www → apex), add the domain to `.railway/railway.ts`, submit a test signup.
+    (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in).
     **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), an admin
     view of signups, refreshing the proof numbers.
