@@ -96,7 +96,7 @@ def _resolved(listing_id: int) -> Any:
 
 def _raw(claim: Any, version: int | None, active: int | None = 4,
          declared: bool = True) -> tuple[Any, ...]:
-    """A row of `_RAW_CLAIMS_SQL` for listing 7: `_CLAIM_COLUMNS`' 17, then version, active
+    """A row of `_RAW_CLAIMS_SQL` for listing 7: `CLAIM_COLUMNS`' 17, then version, active
     version, declared."""
     return (claim.id, 7, claim.source, claim.claim_type, claim.surface,
             claim.extraction_method, claim.licence_class, claim.observed_at, claim.value_text,

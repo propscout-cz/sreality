@@ -80,10 +80,10 @@ ADMISSIBLE_LICENCE_CLASSES: tuple[str, ...] = ("portal", "operator")
 #  * No version filter. `contract_entry_id` is provenance (the entry that first stated the
 #    value), so the claims of a retired version stay readable until a re-mine changes them: a
 #    bump can never black a listing out (W11) nor a partial re-mine blank one (W18-b).
-# ONE projection: the row unpacking in `_claim` is positional, so a second hand-written column
+# ONE projection: the row unpacking in `claim_from_row` is positional, so a second hand-written column
 # list is a silent mis-mapping waiting to happen
 # (`test_resolver_jobs.test_the_claims_select_maps_onto_claim_positionally` pins it).
-_CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
+CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
        extraction_method::text, licence_class::text, first_observed_at, value_text,
        value_num,
        CASE WHEN value_geom IS NULL THEN NULL ELSE ST_Y(value_geom) END,
@@ -97,7 +97,7 @@ def _claims_sql(listing_filter: str, order_by: str) -> str:
     newest observation (the id only breaks a tie in time)."""
     admissible = ", ".join(f"'{licence}'" for licence in ADMISSIBLE_LICENCE_CLASSES)
     return f"""
-SELECT {_CLAIM_COLUMNS}
+SELECT {CLAIM_COLUMNS}
   FROM (SELECT DISTINCT ON (c.listing_id, c.claim_type) c.*
           FROM location_claims c
          WHERE {listing_filter}
@@ -513,7 +513,8 @@ def current_registry_version(conn: psycopg.Connection) -> tuple[int, str]:
     return int(row[0]), str(row[1])
 
 
-def _claim(row: Sequence[Any]) -> Claim:
+def claim_from_row(row: Sequence[Any]) -> Claim:
+    """A `CLAIM_COLUMNS` row as the resolver's `Claim` (positional: the test pins the order)."""
     return Claim(
         id=row[0], listing_id=row[1], source=row[2], claim_type=row[3], surface=row[4],
         extraction_method=row[5], licence_class=row[6],
@@ -528,7 +529,7 @@ def _claim(row: Sequence[Any]) -> Claim:
 
 
 def claim_from_intake(claim: IntakeClaim, claim_id: int) -> Claim:
-    """An intake claim as `_claim` would read its stored row back (the wave shadow's re-mine)."""
+    """An intake claim as `claim_from_row` would read its stored row back (the wave shadow's re-mine)."""
     lat, lon = wkt_point(claim.value_geom_wkt) if claim.value_geom_wkt else (None, None)
     return Claim(
         id=claim_id, listing_id=claim.listing_id, source=claim.source,
@@ -546,7 +547,7 @@ def claim_from_intake(claim: IntakeClaim, claim_id: int) -> Claim:
 def load_claims(conn: psycopg.Connection, listing_id: int) -> list[Claim]:
     with conn.cursor() as cur:
         cur.execute(_CLAIMS_SQL, (listing_id,))
-        return [_claim(row) for row in cur.fetchall()]
+        return [claim_from_row(row) for row in cur.fetchall()]
 
 
 def load_claims_bulk(
@@ -560,7 +561,7 @@ def load_claims_bulk(
     with conn.cursor() as cur:
         cur.execute(_CLAIMS_BULK_SQL, (list(listing_ids),))
         for row in cur.fetchall():
-            out.setdefault(int(row[1]), []).append(_claim(row))
+            out.setdefault(int(row[1]), []).append(claim_from_row(row))
     return out
 
 

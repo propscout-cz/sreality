@@ -566,7 +566,9 @@ drop function if exists location_claim_fingerprint(bigint, text, text, text, tex
 drop function if exists location_value_norm(text);
 -- $post$: the column, both indexes and both functions are gone.
 ```
-PR-2 also deletes `scripts/location_claims_retire.py`, `location_claims_retire.yml` (and its
+PR-2 also deletes `what_if.purge`, `what_if._RAW_CLAIMS_SQL`, `what_if.keeper_rank` and the
+`--claims purge` choice (the shadow's second spelling of the keeper rule: it dies with the purge),
+`scripts/location_claims_retire.py`, `location_claims_retire.yml` (and its
 `GROUP_WORKFLOWS` entry, the workflow-docs entry, `test_workflow_artifacts`' backup test, the
 `test_location_batch_hardening` group list entry, the migrations.yml lane entry) and
 `tests/location_data/test_claims_retire.py`; `tests/location_data/test_claims_slim_migration.py`'s

@@ -524,11 +524,11 @@ def test_the_dry_run_counts_what_a_rule_change_does_to_the_stored_row():
 
 
 def test_the_claims_select_maps_onto_claim_positionally():
-    """`_claim` unpacks `_CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
+    """`claim_from_row` unpacks `CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
     reordered in one and not the other is a silent mis-mapping: every value still has the
     right TYPE one slot over (three texts in a row, two floats, two nullable texts), so
     nothing raises — the resolver just reads the surface as the extraction method."""
-    body = resolve_db._CLAIM_COLUMNS
+    body = resolve_db.CLAIM_COLUMNS
     names, depth, current = [], 0, []
     for ch in body:
         if ch == "(":
@@ -555,7 +555,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
            "portal", mm._T0, "Dlouhá", 3.5, 50.1, 14.4, {"k": "v"}, "exact_address",
            25.0, "declared", True)
     assert len(row) == len(labels)
-    claim = resolve_db._claim(row)
+    claim = resolve_db.claim_from_row(row)
 
     assert (claim.id, claim.listing_id, claim.source) == (11, 22, "sreality")
     assert (claim.claim_type, claim.surface) == ("street_name", "api_json")
@@ -571,7 +571,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
     assert claim.subject_scoped is True
 
     # A NULL geometry must not become 0.0 — the resolver's `has_position` reads both.
-    assert resolve_db._claim(row[:10] + (None, None) + row[12:]).has_position is False
+    assert resolve_db.claim_from_row(row[:10] + (None, None) + row[12:]).has_position is False
 
 
 # ------------------------------------------------------------------ the run-scoped cache

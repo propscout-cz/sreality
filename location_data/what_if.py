@@ -44,10 +44,10 @@ from location_data.claims_common import (
 )
 from location_data.resolver import drain, projection
 from location_data.resolver.resolve_db import (
-    _CLAIM_COLUMNS,
     ADMISSIBLE_LICENCE_CLASSES,
-    _claim,
+    CLAIM_COLUMNS,
     claim_from_intake,
+    claim_from_row,
 )
 from location_data.resolver.types import Claim, Resolution
 from scraper import db
@@ -62,11 +62,15 @@ TOLERANCE = 1e-6
 _RANK_SQL = "SELECT granularity::text, rank, is_address_grain FROM location_granularity_rank"
 
 
+# DELETED IN PR-2 WITH THE PURGE (#2223): `_RAW_CLAIMS_SQL`, `keeper_rank` and `purge` are a second
+# spelling of the purge script's keeper rule, for the shadow gate that runs before it; once the
+# store holds one claim per key they have nothing to derive.
+#
 # Every stored claim of the ids, raw, with what W3's purge ranks it by: its contract version, the
 # portal's active version, and whether the active contract still declares its type. Scalar
-# subqueries keep `location_claims` the only FROM item, so `_CLAIM_COLUMNS` reads unqualified.
+# subqueries keep `location_claims` the only FROM item, so `CLAIM_COLUMNS` reads unqualified.
 _RAW_CLAIMS_SQL = f"""
-SELECT {_CLAIM_COLUMNS},
+SELECT {CLAIM_COLUMNS},
        (SELECT pc.version FROM portal_contract_entries pce
           JOIN portal_contracts pc ON pc.id = pce.contract_id
          WHERE pce.id = location_claims.contract_entry_id),
@@ -111,7 +115,7 @@ def purge(conn: psycopg.Connection, claims: dict[int, list[Claim]]) -> dict[int,
     kept: dict[tuple[int, str, str], tuple[tuple[Any, ...], Claim]] = {}
     declared: dict[int, set[str]] = {listing_id: set() for listing_id in claims}
     for row in rows:
-        claim, (version, active, in_contract) = _claim(row[:17]), row[17:]
+        claim, (version, active, in_contract) = claim_from_row(row[:17]), row[17:]
         if in_contract:
             declared.setdefault(claim.listing_id, set()).add(claim.claim_type)
         key, rank = (claim.listing_id, claim.claim_type, claim.licence_class), keeper_rank(
