@@ -2486,7 +2486,8 @@ def test_text_extract_is_free_while_its_scope_is_empty(
     from toolkit import description_extraction
 
     monkeypatch.setattr(rw.db, "connect", lambda: _FakeConn())
-    monkeypatch.setattr(description_extraction, "lane_scope", lambda conn: {})
+    monkeypatch.setattr(description_extraction, "location_sources", lambda conn: frozenset())
+    monkeypatch.setattr(description_extraction, "scope_from", lambda located: {})
     assert rw._text_extract_sync() == {"claimed": 0, "reason": "empty_scope"}
 
 

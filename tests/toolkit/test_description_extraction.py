@@ -520,14 +520,16 @@ def test_confidence_is_gone() -> None:
 def test_a_pass_with_no_model_configured_claims_nothing(monkeypatch) -> None:
     """No hardcoded fallback: `LLMClient`'s own default is a claude id and this project
     does not use Anthropic models."""
-    monkeypatch.setattr(tx, "lane_scope", lambda conn: {"bazos": ("has_lift",)})
+    monkeypatch.setattr(tx, "location_sources", lambda conn: frozenset())
+    monkeypatch.setattr(tx, "scope_from", lambda located: {"bazos": ("has_lift",)})
     monkeypatch.setattr(tx, "resolve_model", lambda conn: None)
     assert tx.run_pass(object()) == {"claimed": 0, "reason": "no_model"}
 
 
 def test_a_pass_with_an_empty_scope_claims_nothing(monkeypatch) -> None:
     """No open gate and no `llm_text` entry: nothing the lane may read or pay for."""
-    monkeypatch.setattr(tx, "lane_scope", lambda conn: {})
+    monkeypatch.setattr(tx, "location_sources", lambda conn: frozenset())
+    monkeypatch.setattr(tx, "scope_from", lambda located: {})
     assert tx.run_pass(object()) == {"claimed": 0, "reason": "empty_scope"}
 
 
@@ -544,24 +546,28 @@ def test_the_budget_guard_is_the_shared_engines_and_binds_before_the_call() -> N
             < src.index("cost, result = call(llm, row)"))
 
 
-def test_an_empty_location_block_is_a_failed_reading_and_is_retried(monkeypatch) -> None:
+def test_an_empty_location_block_fails_only_where_the_reading_feeds_location(monkeypatch) -> None:
     """W3 (ruling R2): `ad_kind` null with every slot null is the model failing the schema
     ("always set"), not a judgement. 1,915 of 143,117 readings of one extractor version came
-    back so; mined, each kept or cost a town. It is recorded as a FAILURE (retried under
-    GIVE_UP_AFTER), and nothing of it is written."""
+    back so; mined, each kept or cost a town. On a portal whose `llm_text` entries mine the
+    reading it is recorded as a FAILURE (retried under GIVE_UP_AFTER), nothing written. On an
+    attribute-only portal the block is unread, so the call's attribute facts are stored."""
     from toolkit import vision_batch
 
     empty = {"location": {slot: {"value": None, "evidence_quote": None}
                           for slot in ("ad_kind", "country", *text_reading.SLOTS)}}
-    row = {"id": 7, "source": "bazos", "text_hash": "h", "advert_text": "Prodej bytu"}
-    failed: list[str] = []
-    monkeypatch.setattr(tx, "lane_scope", lambda conn: {"bazos": ()})
+    rows = [{"id": 7, "source": "bazos", "text_hash": "h", "advert_text": "Prodej bytu"},
+            {"id": 8, "source": "sreality", "text_hash": "h", "advert_text": "Prodej bytu"}]
+    failed: list[tuple[int, str]] = []
+    stored: list[int] = []
+    monkeypatch.setattr(tx, "location_sources", lambda conn: frozenset({"bazos"}))
+    monkeypatch.setattr(tx, "scope_from", lambda located: {"bazos": (), "sreality": ("floor",)})
     monkeypatch.setattr(tx, "resolve_model", lambda conn: "m1")
-    monkeypatch.setattr(tx, "select_eligible", lambda conn, **kw: [row])
+    monkeypatch.setattr(tx, "select_eligible", lambda conn, **kw: rows)
     monkeypatch.setattr(tx, "record_failure",
-                        lambda conn, row, *, error, **kw: failed.append(error))
+                        lambda conn, row, *, error, **kw: failed.append((row["id"], error)))
     monkeypatch.setattr(tx, "record_extraction",
-                        lambda *a, **kw: pytest.fail("an empty block was stored as a reading"))
+                        lambda conn, row, **kw: stored.append(row["id"]) or [])
 
     def batch(*, rows, record, **kw):
         for one in rows:
@@ -570,8 +576,9 @@ def test_an_empty_location_block_is_a_failed_reading_and_is_retried(monkeypatch)
 
     monkeypatch.setattr(vision_batch, "run_batch", batch)
     stats = tx.run_pass(object())
-    assert failed == ["empty location block: ad_kind and every slot null"]
-    assert (stats["failed"], stats["extracted"]) == (1, 0)
+    assert failed == [(7, "empty location block: ad_kind and every slot null")]
+    assert stored == [8]
+    assert (stats["failed"], stats["extracted"]) == (1, 1)
 
 
 def test_the_tool_call_is_forced(monkeypatch) -> None:

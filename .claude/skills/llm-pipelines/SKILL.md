@@ -72,7 +72,7 @@ calls an LLM must do the same.
   + the one pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
   NULL-only (`coalesce`), active rows only, with the `dirty_properties` enqueue in the same CTE and
   no snapshot; a failed call is cached with an attempt count and given up on after 5 (so is an
-  empty location block, `ad_kind` and every slot null: W3, `text_reading.is_empty`).
+  empty location block, `ad_kind` and every slot null, on an `llm_text` portal: W3, `text_reading.is_empty`).
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
   convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN

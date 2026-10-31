@@ -371,8 +371,12 @@ commit with the 23 goldens that carried them.
   are re-read. This is the text-lane twin of W0's "an empty page is a failed fetch".
 
 **As built (§ 2.4).** The text lane's `_record` treats `text_reading.is_empty(payload)` (a `location`
-block whose `ad_kind`, `country` and every slot are null) as a failure: recorded with `extracted.error`,
-retried under GIVE_UP_AFTER, nothing written. The 1,915 stored ones are re-marked by Step 5's statement.
+block whose `ad_kind`, `country` and every slot are null) as a failure — recorded with `extracted.error`,
+retried under GIVE_UP_AFTER, nothing written — ONLY on a portal whose active contract declares
+`llm_text` (`description_extraction.location_sources`: the readings that feed location claims, today
+bazos and web). Elsewhere the block is unread, and failing the call would throw away its attribute
+facts (floor, lift) and bill five retries. The 1,915 stored ones are re-marked by Step 5's statement,
+which is scoped the same way.
 
 ### 2.5 Presence markers state their absence
 
@@ -522,7 +526,8 @@ first. The three contract bumps declare the same claim types as their predecesso
   `gh workflow run location_claims_intake.yml --ref main -f mode=full -f source=sreality`.
 - The 1,915 empty readings (ruling R2), re-marked failed so the text lane re-reads them:
   `update listing_description_enrichments e set extracted = e.extracted || jsonb_build_object('error',
-  'empty location block: ad_kind and every slot null', 'attempts', 1) where e.extracted ? 'location'
+  'empty location block: ad_kind and every slot null', 'attempts', 1) from listings l where l.id =
+  e.listing_id and l.source in ('bazos', 'web') and e.extracted ? 'location'
   and e.extracted -> 'error' is null and jsonb_typeof(e.extracted -> 'location') = 'object' and not
   exists (select 1 from jsonb_each(e.extracted -> 'location') cell where coalesce(cell.value ->> 'value',
   '') <> '');` — expect ≈ 1,915 rows. Run it after the deploy: the old text lane would re-store an empty
