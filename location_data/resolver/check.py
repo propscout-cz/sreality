@@ -12,7 +12,10 @@ Three reasons ship:
   position to a register point is still evidence, and this is the test that evidence is for.
   Where the pin IS the position it is KEPT (throwing it away loses the only position we have)
   and the granularity drops to the admin level, because the address identity is the half that
-  is now in doubt; where the REGISTER placed the row the grain stands, because the address
+  is now in doubt — since v5.9 that is an EXACT or UNDECLARED pin only: a DECLARED blurred pin
+  outside the bound town never becomes the position (`bind.place` leaves the row to FILL;
+  operator ruling 2026-10-30, "the words decide"), and this flag is then what records that
+  the pin disagreed; where the REGISTER placed the row the grain stands, because the address
   identity is the half that bound. It is asked only when the town came from a CLAIM: on BIND's
   two pin-derived rungs (the reverse geocode and the sliver fallback) the comparison is
   circular — the pin is where the town came from — and a sliver is an edge case of the
@@ -208,8 +211,10 @@ def check(
     registry: RegistryView,
     rank: GranularityRank,
     pin_claim: Claim | None = None,
+    pin_inside_bound_obec: bool | None = None,
 ) -> Verdict:
-    """-> (country_status, country_code, disputed, granularity)."""
+    """-> (country_status, country_code, disputed, granularity). `pin_inside_bound_obec` is
+    `bind.pin_inside_bound_obec()`'s answer, shared with `place()` (v5.9): None = not asked."""
     codes = country_codes(claims, normalized)
     foreign = {c for c in codes if c != "CZ"}
     has_town = filled.obec_kod is not None
@@ -227,13 +232,10 @@ def check(
     # thing these two tests ask: on bazos every pin is declared blurred, so once a street was
     # bound the pin stopped being the position on every row — and with it went the
     # `pin_outside_obec` flag on 3,421 production rows, exactly where it says the obec or the
-    # bind is wrong. Both reads stay warm: the drain pre-answers them for EVERY claim
-    # coordinate in the slice, not only for the elected position.
-    pin = (
-        (float(pin_claim.lat), float(pin_claim.lon))  # type: ignore[arg-type]
-        if pin_claim is not None and pin_claim.has_position
-        else None
-    )
+    # bind is wrong. The containment answer arrives from `bind.pin_inside_bound_obec` — the
+    # ONE read `place()` and this step share (v5.9); the in-Czechia read stays warm because the
+    # drain pre-answers it for EVERY claim coordinate in the slice.
+    pin = pin_claim.point if pin_claim is not None else None
     pin_is_position = position.origin == "portal_pin"
     in_cz = registry.in_czechia_polygon(*pin) if pin else None
 
@@ -262,19 +264,17 @@ def check(
         return Verdict("cz", "CZ", disputed="country_conflict", granularity=granularity)
     if in_cz is False:
         return Verdict("cz", "CZ", disputed="pin_outside_cz", granularity=granularity)
-    if pin is not None and has_town and not binding.pin_derived:
-        covering = registry.containing_obec(*pin)
-        if covering is None or covering.code != filled.obec_kod:
-            # The granularity drops only when the PIN IS THE POSITION: there the disagreement
-            # puts the ADDRESS identity in doubt, because the pin is all the row stands on.
-            # On a register-placed row the address identity is the half that bound and the
-            # pin is the half that lost, so the grain stands and the flag is the whole
-            # statement.
-            return Verdict(
-                "cz", "CZ", disputed="pin_outside_obec",
-                granularity=(rank.coarser_of(granularity, "obec")
-                             if pin_is_position else granularity),
-            )
+    if pin_inside_bound_obec is False:
+        # The granularity drops only when the PIN IS THE POSITION: there the disagreement
+        # puts the ADDRESS identity in doubt, because the pin is all the row stands on. On a
+        # register-placed row — and on a v5.9 row FILL placed because the declared-blurred pin
+        # was set aside — the address identity is the half that bound and the pin is the half
+        # that lost, so the grain stands and the flag is the whole statement.
+        return Verdict(
+            "cz", "CZ", disputed="pin_outside_obec",
+            granularity=(rank.coarser_of(granularity, "obec")
+                         if pin_is_position else granularity),
+        )
     if position.pin_overridden:
         # The street decided the point and an EXACT pin disagreed with it. The granularity
         # stands: the street is the half that bound to the register, so the ADDRESS identity
