@@ -1063,8 +1063,8 @@ rules. Identify which one a task belongs to before you start.
   API) rather than a full page load, which MV3's manifest-declared content script does NOT
   re-inject for. The content script watches the Navigation API itself (`currententrychange`,
   which reaches its isolated world; live-checked on every portal, #2277) and re-runs its
-  page-type decision (`content.ts`, the entry and router) without a reload — no `webNavigation`
-  permission, which was the install warning's "read your browsing history" line. This fixed the
+  page-type decision (`content.ts`, the entry and router) without a reload — no webNavigation
+  permission any more, which was the install warning's "read your browsing history" line. This fixed the
   "panel only appears after F5" bug. The content script runs only on each portal's `pageHosts`
   (`portalIds.ts`): the redirect-only hosts stay in `hosts` for pasted links. The router keys on the **listing identity**
   (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't
