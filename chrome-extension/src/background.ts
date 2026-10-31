@@ -1,7 +1,7 @@
 /* Background service worker. The single context that talks to the
- * FastAPI service — host_permissions covers the API origin and the
- * call doesn't have to go through sreality.cz's CORS. Content scripts
- * post messages here; we route them to the api helpers. */
+ * FastAPI service: its calls leave from the extension's origin, which the
+ * API's CORS allowlist names, never through a portal page's CORS. Content
+ * scripts post messages here; we route them to the api helpers. */
 
 import {
   addNote,

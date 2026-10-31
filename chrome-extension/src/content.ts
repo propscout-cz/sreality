@@ -4,8 +4,8 @@
  * page on a portal host gets the search-page overlay (index_overlay.ts: per-card
  * controls and the corner dock). Both draw from ONE store (store.ts), created
  * here over the one transport: every network call goes to the background worker
- * through chrome.runtime.sendMessage (host_permissions and the portal's CORS do
- * not apply there); this script never fetches. */
+ * through chrome.runtime.sendMessage (it calls from the extension's origin, not
+ * the portal page's); this script never fetches. */
 
 import { detailRef, portalForHost } from '../../frontend/src/lib/portalIds';
 import { followAppearance } from './appearance';

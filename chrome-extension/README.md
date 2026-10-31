@@ -218,16 +218,16 @@ existing Railway + Supabase project — skip unless standing up a fresh one):
 2. **Supabase dashboard** → your project → **Authentication** → **URL
    Configuration** → **Redirect URLs** → add that exact URL to
    **Additional Redirect URLs** → **Save**.
-3. **Google Cloud Console** → your OAuth client (the same one Supabase's
-   Google provider uses) → **APIs & Services** → **Credentials** → open the
-   OAuth 2.0 Client → **Authorized redirect URIs** → add the SAME URL →
-   **Save**. (This is the step that actually breaks sign-in if skipped —
-   Google rejects the redirect before Supabase ever sees it.)
-4. **Supabase dashboard** → **Authentication** → **Providers** → confirm
+3. **Supabase dashboard** → **Authentication** → **Providers** → confirm
    **Google** is enabled.
+4. Add the extension's origin to the API's CORS allowlist (below, "Allow the
+   extension's origin in CORS").
+
+Google Cloud needs nothing for the extension: Google only ever sees Supabase's
+own callback, never the extension's redirect URL.
 
 If you ever need a *different* stable extension ID (e.g. a second
-deployment), generate a new keypair and repeat steps 1–3 with the new ID:
+deployment), generate a new keypair and repeat steps 1, 2 and 4 with the new ID:
 
 ```sh
 openssl genrsa -out extension-key.pem 2048
@@ -242,11 +242,9 @@ needs to keep deriving the same ID.
 ## Distribution policy
 
 No secret ships in the bundle — the Supabase anon key + FastAPI base URL are
-both non-sensitive public client config (same posture as the SPA). The
-extension is safe to distribute broadly, including via the public Chrome Web
-Store, once the Chrome Web Store readiness items in
-`docs/design/waves-1-4-public-features.md` (privacy policy, single-purpose
-statement, staged rollout) are done.
+both non-sensitive public client config (same posture as the SPA), and the
+manifest names no deployed host. The extension goes to the Chrome Web Store as
+an Unlisted item: spec #2261 and `docs/design/brand-domain-and-store/PROGRAM.md`.
 
 ## Build option A — GitHub Actions (recommended)
 
@@ -274,6 +272,11 @@ Building:
    download **chrome-extension-dist**.
 4. Unzip it. The unzipped folder is what you "Load unpacked" into
    Chrome.
+
+The same run also uploads **chrome-extension-store**, the store package (see
+"The store package and its permission guard" below). Don't load that one
+unpacked: it has no `key`, so Chrome would give it a different ID and sign-in
+would fail.
 
 ## Build option B — Local
 
@@ -334,7 +337,7 @@ a plain local path (or delete `desktop.ini` from `dist/` before loading); on WSL
 The `key` field pinned in `manifest.json` means the extension ID is always
 `eibnegoankipleeegjilnjhpnbaedpjd` (same on every machine, every CI
 download) — the "one-time setup" steps above already registered it with
-both Supabase and Google, and the origin below is already correct.
+Supabase, and the API's CORS allowlist already names its origin.
 
 ## Keeping it up to date (auto-update)
 
@@ -371,12 +374,14 @@ extension ID, same update channel, no reinstall.
 
 1. Register once at the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
    (one-time US$5 fee, any Google account).
-2. **+ New item** → upload a ZIP of `dist/` (download the `chrome-extension-dist`
-   artifact from the Actions build, then zip the folder's *contents*).
+2. **+ New item** → upload the store package: the `chrome-extension-store`
+   artifact from the Actions build, downloaded as a ZIP with `manifest.json` at
+   its root, which is the shape the store takes. Never upload `dist/`: the
+   store refuses a manifest with a `key`.
 3. Fill the listing: description, an icon, at least one screenshot, a **privacy
    policy URL**, a **single-purpose statement**, and a justification for each
-   permission (`storage`, `identity`, `alarms`, `webNavigation`, and the two
-   `host_permissions` origins). See "Chrome Web Store submission" below.
+   permission in `release/allowed.ts` (there are no host permissions). See
+   "Chrome Web Store submission" below.
 4. **Visibility → Unlisted**. Submit for review. (Unlisted items are still
    reviewed; expect hours to a few days.)
 5. Install once from the item's link. From then on it updates itself.
@@ -384,13 +389,12 @@ extension ID, same update channel, no reinstall.
 > ⚠️ **The extension ID will probably change — check before you cut over.** The
 > store assigns the item its own ID, which will most likely differ from the
 > self-generated `eibnegoankipleeegjilnjhpnbaedpjd` pinned in the `key` field.
-> That ID is baked into three places, and sign-in plus every API call break if
-> they aren't updated: the **Supabase** redirect-URL allowlist, the **Google OAuth**
-> client's authorized redirect URIs (both `https://<id>.chromiumapp.org/`), and
-> Railway's `CORS_ALLOW_ORIGINS` (`chrome-extension://<id>`). After creating the
-> draft item, read its assigned ID off the dashboard URL and **add** the new
-> values alongside the existing ones (all three accept multiple entries) *before*
-> installing the store build. Adding rather than replacing means the unpacked dev
+> That ID is baked into two places, and sign-in plus every API call break if
+> they aren't updated: the **Supabase** redirect-URL allowlist
+> (`https://<id>.chromiumapp.org/`) and the API's `CORS_ALLOW_ORIGINS`
+> (`chrome-extension://<id>`). After creating the draft item, read its assigned
+> ID off the dashboard URL and **add** the new values alongside the existing
+> ones (both accept multiple entries) *before* installing the store build. Adding rather than replacing means the unpacked dev
 > copy keeps working throughout — no downtime, and no cutover to time.
 
 ### Option 2 — self-hosted `.crx` + `update_url`
@@ -419,111 +423,71 @@ repository secrets (`CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`,
 
 ## Allow the extension's origin in CORS (Railway)
 
-The extension's fetches run from the background service worker under the
-origin `chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd`. The FastAPI
-service must allow that origin or every request will be blocked.
+The manifest grants **no host permissions**, so every call the background
+worker makes to the API is an ordinary cross-origin request from
+`chrome-extension://<id>`. The API answers it only when that origin is in its
+`CORS_ALLOW_ORIGINS` allowlist; without it, every API call fails. The auth
+service (Supabase) answers any origin and needs no entry.
 
-1. Open the **Railway** dashboard.
-2. Pick the FastAPI service (the one running `api/main.py`).
-3. Open the **Variables** tab.
-4. Find `CORS_ALLOW_ORIGINS`. (If it doesn't exist yet, click
-   **+ New Variable** and add it.)
-5. Set the value to a comma-separated list including the extension's
-   origin. Example:
+Today the allowlist holds the app (`https://app.propscout.cz`) and the pinned
+extension ID, `chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd` (added
+2026-10-31, #2275). The landing's sign-up forms are plain form posts and need
+no entry. The store's ID gets its own entry before the store review (#2280).
+
+`CORS_ALLOW_ORIGINS` is a **kept** Railway variable: its name is declared in
+`.railway/railway.ts`, its value lives in Railway, and the operator changes the
+value there (an agent never does):
+
+1. **Railway** → project **API** → service **sreality** → **Variables**.
+2. `CORS_ALLOW_ORIGINS` → **⋯** → **Edit**. Never rename it or add a second
+   variable: names belong to `.railway/railway.ts`.
+3. Append `,chrome-extension://<id>` to the end of the value; keep every
+   existing entry.
+4. Save, then click **Deploy** on the staged change (a variable edit alone
+   doesn't redeploy).
+5. Check, read-only: this prints `200` once the origin is allowed (`400`
+   before):
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS https://api.propscout.cz/health \
+     -H 'Origin: chrome-extension://<id>' -H 'Access-Control-Request-Method: GET'
    ```
-   https://app.propscout.cz,chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd
-   ```
-   Keep any existing origins (your SPA's URL) and just append the
-   `chrome-extension://...` one. **No spaces** around the comma.
-6. Save. Railway auto-redeploys the service. Wait ~30 seconds for
-   the new deploy to come up.
-
-## Use
-
-**First run:** the side sheet shows **"Přihlásit se přes Google"** —
-click it, complete the Google consent screen in the popup window that
-opens, and the sheet reloads signed in. Its **⋯** menu then names the
-account; **Odhlásit** there signs out in every tab (search pages drop their
-badges and card controls; an open sheet prompts).
-
-**On a listing detail page** (any supported portal):
-
-1. The side sheet opens on the right edge (folded to a tab on a window under
-   1280 px; the **›** in its top bar folds it, the tab unfolds it, and it
-   stays as you left it).
-2. The header says what the property is and what this ad asks; **V aplikaci ↗**
-   opens it in the app.
-3. **Vývoj ceny** charts every ad of the property; **Moje** holds the pipeline
-   (**Přidat do pipeline**, then the stage bar and **Uzavřít ▾**), the hide
-   toggle, collections, tags and notes.
-4. On a flat for sale, **AI agenti › Odhad výnosu** runs the comparables
-   estimate, or opens the one already made; its editor's fields debounce
-   500 ms and PATCH the scenario back — the SPA's `/estimation/:id` page picks
-   up the same state on next load.
-
-**On a search / index page** (any supported portal, any category):
-
-1. Each card we have in our database gets three small icons in its top-left
-   corner — the same three as a Browse card in the app: the **funnel** (add to
-   the pipeline; once added, click again to change the stage), the **bookmark**
-   (tick the collections the property belongs in) and the **eye** (hide the
-   property / show it again). A property in the pipeline also has its photo
-   tinted in the stage's colour with the stage number over it (point at the
-   card to see the photo through); one saved to a collection gets the same
-   tint in copper with a bookmark and the collection's name; its tags show as
-   coloured chips in the photo's top-right corner. Cards in the results that
-   are not listings — paid ads, developer-project promos — are washed white
-   (point at one to see it).
-2. Sale-apartment cards also get a badge right after the icons:
-   `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
-   tooltip); otherwise a
-   clickable **Odhadnout výnos** badge that opens the side sheet, where the
-   estimate runs.
-3. In the bottom-left corner, the **Skrýt skryté** switch: on, the properties
-   you have hidden stay on the page as barely visible cards (hover one to peek
-   at it, click its eye to bring it back); off, they look like every other
-   card. The number beside it says how many hidden ones the page holds.
-4. Cards aren't matched by portal-specific markup — the overlay scans each
-   card's detail link and resolves it through `/listings/lookup`, so it
-   survives the portals reshuffling their card HTML. Cards not in our DB get no
-   icons and no badge; an ad is added from its own detail page (**Přidat do
-   databáze**).
-
-### Supported portals
-
-sreality, bazos, bezrealitky (.cz and the English .com), idnes, maxima, remax,
-mmreality, ceskereality and realitymix (a missed id just shows no badge, never a
-wrong one).
-
-The host list and the URL→id rules live in ONE module the SPA shares,
-`frontend/src/lib/portalIds.ts` (imported cross-tree like `lib/brand.ts`; the
-SPA's paste-a-link uses the same rules). The build writes
-`content_scripts.matches` from it; the checked-in `manifest.json` list is a
-template that `frontend/src/lib/portalIds.test.ts` keeps equal to it, so a new
-host goes in both.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the
 > results do and re-attach as you scroll/paginate (a `MutationObserver` watches
 > for new cards).
 
+## The store package and its permission guard
+
+`npm run package` (after `npm run build`) writes `store/` from `dist/`: the same
+files without the manifest's `key` (the store assigns its own ID; the repository
+keeps the key so unpacked builds keep theirs). It then refuses the package
+(`release/package.ts`) when it carries:
+
+- a permission, a content-script site or a host permission other than the
+  hand-written list in `release/allowed.ts` (compared for **equality**, so a
+  dropped permission fails too);
+- a `key`, a source map (`.map` file or `sourceMappingURL` comment), or one of
+  our deployed hostnames (the build's API, auth and app hosts);
+- a description over 132 characters.
+
+CI runs it on every pull request against the real build and uploads `store/` as
+the `chrome-extension-store` artifact. **Adding a permission or a portal site is
+a deliberate edit to `release/allowed.ts`**, reviewed in its PR: Chrome disables
+every installed copy until its user approves a new permission, so the install
+warning only grows on purpose. Never generate that list from the build or the
+portal registry.
+
 ## Chrome Web Store submission — what's left
 
-The bundle itself carries no secret and every write is per-user + RLS-scoped
-(Wave 1), so the remaining gap to a public listing is process, not code:
+The bundle carries no secret, every write is per-user + RLS-scoped, and the
+store package above passes the store's package rules. The rest is spec #2261:
+the privacy page, a shorter permission list, the listing kit, the first upload,
+and releases through the store API.
 
-- `sourcemap:false` + confirm `minify:'esbuild'` for the store build
-  (`sourcemap:true` today is a dev/debug convenience — flip it off before
-  packaging a store submission).
-- A privacy policy URL + per-permission justifications (`identity`,
-  `alarms`, `storage`, the two `host_permissions` origins) + a single-purpose
-  statement in the Developer Dashboard listing.
-- Staged rollout, with the API kept backward-compatible across at least two
-  extension versions. **No auth safety net remains**: the `verify_jwt`
-  dual-auth window closed 2026-08-04 (PR #941), so a build still presenting
-  a static `API_TOKEN` gets a flat `401` today — the key itself was deleted on
-  2026-10-13 (`tests/api/test_auth.py` asserts a non-JWT bearer is refused). Every install must carry a real
-  Supabase JWT; plan the rollout accordingly.
-
-Full detail: `docs/design/waves-1-4-public-features.md`, "Chrome Web Store
-readiness".
+Staged rollout: from the first store release on, keep API changes the extension
+relies on additive until the store has published the version that stopped
+needing the old shape. **No auth safety net remains**: the `verify_jwt`
+dual-auth window closed 2026-08-04 (PR #941), so a build still presenting a
+static `API_TOKEN` gets a flat `401` (`tests/api/test_auth.py` asserts a non-JWT
+bearer is refused). Every install must carry a real Supabase JWT.

@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 // Shared product brand — the SAME source the SPA + content script use, so the
@@ -41,32 +41,7 @@ const ENTRIES = {
 } as const;
 
 type EntryName = keyof typeof ENTRIES;
-/* Chrome Web Store readiness: host_permissions narrows to just the two
- * origins the background worker actually fetches — the FastAPI service and
- * the Supabase GoTrue auth origin (the SW hits `${SUPABASE_URL}/auth/v1/token`
- * directly for PKCE exchange + refresh). Derived from origin, not the full
- * URL (host_permissions is origin + /*, no path). Falls back to an empty
- * host_permissions when a var is unset (e.g. a forked PR build with no
- * secrets) — least-privilege over silently wildcarding. The scheme default
- * repeats src/config.ts normalizeBaseUrl on purpose: this file runs in Node,
- * and config.ts reads import.meta.env (Vite-only) as it loads. */
-function originPermission(raw: string | undefined): string | null {
-  const trimmed = (raw ?? '').trim();
-  if (trimmed === '') return null;
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    return `${new URL(withScheme).origin}/*`;
-  } catch {
-    return null;
-  }
-}
-
 export default defineConfig(({ mode }) => {
-  // loadEnv reads chrome-extension/.env (and process.env) the same way Vite
-  // populates import.meta.env for the bundled code — the config file itself
-  // needs this explicit call since it runs in Node, not the bundle.
-  const env = loadEnv(mode, __dirname, '');
-
   // `mode` selects the entry, so a bare `vite build` can't quietly emit half a
   // bundle: it fails here naming the command that does both passes.
   const entry = ENTRIES[mode as EntryName];
@@ -82,7 +57,9 @@ export default defineConfig(({ mode }) => {
       outDir: 'dist',
       // Only the first pass clears dist — the second would delete content.js.
       emptyOutDir: mode === 'content',
-      sourcemap: true,
+      // No source maps: the store package refuses them (release/package.ts). The code stays
+      // unminified, so the bundle reads close to the source anyway.
+      sourcemap: false,
       rollupOptions: {
         input: { [mode]: resolve(__dirname, entry.file) },
         output: {
@@ -125,17 +102,14 @@ export default defineConfig(({ mode }) => {
         name: 'copy-static',
         closeBundle() {
           // manifest.json is the template; its display `name` is stamped from the
-          // shared brand, and host_permissions from the two live origins the
-          // background worker fetches — both computed at build so chrome://extensions
-          // tracks the one source and the store listing never ships a wildcard.
+          // shared brand, so chrome://extensions tracks the one source. Host
+          // permissions stay the template's empty list: the background worker
+          // reaches the API and the auth service under ordinary CORS, so no
+          // deployed hostname ever enters the manifest (release/allowed.ts).
           const manifest = JSON.parse(
             readFileSync(resolve(__dirname, 'manifest.json'), 'utf8'),
           );
           manifest.name = EXTENSION_NAME;
-          manifest.host_permissions = [
-            originPermission(env.VITE_API_BASE_URL),
-            originPermission(env.VITE_SUPABASE_URL),
-          ].filter((o): o is string => o != null);
           manifest.content_scripts[0].matches = PORTALS.flatMap((p) =>
             p.hosts.map((h) => `https://${h}/*`),
           );
