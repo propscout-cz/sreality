@@ -297,6 +297,19 @@ stores it only in Railway as part of `TENANT_POOL_DB_URL`.
 (`SET LOCAL ROLE` + `set_config('request.jwt.claims', ...)`, bind param not string
 interpolation).
 
+**Routes take `TenantConn`, never `Depends(tenant_conn)` (curation sync W0, 2026-10-31).** The one alias
+`tenant_pool.TenantConn = Annotated[psycopg.Connection, Depends(tenant_conn, scope="function")]` is how every
+route and both helpers (`require_account_id`, `require_acting_account_id`) take the connection. Function scope
+closes the dependency, and so COMMITs, after the handler and the response's serialization but BEFORE the bytes are
+sent: a COMMIT that fails (deadlock, lock timeout, an FK race, any future commit-time trigger) reaches
+`api.main`'s exception handler as a 503 `db_busy` or a 500, and the client never holds a 200 for a write that rolled
+back. The default request scope committed after `await response(...)`. ONE alias, because FastAPI's dependency
+cache keys on the scope: a bare `Depends(tenant_conn)` beside it is a second cache entry, so a second connection
+and transaction in the same request, its reads blind to the other's uncommitted writes. An `Annotated` `Depends`
+takes no default, so the parameter goes before any defaulted one. Tests keep overriding
+`dependency_overrides[tenant_pool.tenant_conn]` (keyed by callable). `tenant_transaction` (the context manager) is
+unchanged. The census: `tests/api/test_tenant_conn_scope.py` (below).
+
 **The legacy-caller bypass is gone (2026-09-11).** `tenant_conn` and `resolve_account_id`
 used to branch on a `claims.get("legacy")` key and route static-`API_TOKEN` callers onto
 the unscoped service-role connection (RLS off). `verify_jwt` (`api/dependencies.py`) has
@@ -422,7 +435,7 @@ connection even opens (`deps.open_background_conn` in the handler, never a depen
 `test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
 service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role
 transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
-the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
+the handler-long `TenantConn` (committed before the response): its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
 (`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
 
 **Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
@@ -466,6 +479,10 @@ an assertion, and outlived the behaviour it described. A comment is not a rail.
   `verify_jwt` on the service-role connection (`/brokers/*`, `POST /estimations`) are excluded
   structurally, not enumerated, and so is the named exception above. It has its own
   non-vacuity sentinel.
+- `tests/api/test_tenant_conn_scope.py` — the COMMIT-BEFORE-RESPONSE CENSUS. An AST pass finds no
+  `Depends(tenant_conn)` in `api/` outside the `TenantConn` alias in `api/tenant_pool.py`; a walk of the live app finds every route reaching
+  `tenant_conn` only function-scoped (with a mount sentinel); a commit patched to deadlock answers 503 `db_busy` on a
+  card move and 5xx on a GET; an acting write resolves its account and writes on ONE connection.
 - `tests/api/test_account_scope_census.py` — the ACCOUNT-SCOPE CENSUS, one layer down: no
   `account_id`/`account_ids` parameter in `api/` defaults to `None`, and every hand-rolled
   `resolve_account_id` call is enumerated with a reason. Both arms declare their blind spots.

@@ -323,8 +323,8 @@ def _agent_estimation_quota(conn: Any, claims: dict, account_id: Any) -> dict[st
 
 @router.get("/me")
 def get_billing_me(
+    conn: tenant_pool.TenantConn,
     claims: dict = Depends(deps.verify_jwt),
-    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     """The caller's plan + agenda visibility + agent-estimation quota
     (no resolvable account -> default plan, unmetered)."""
