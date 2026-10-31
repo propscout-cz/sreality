@@ -1,6 +1,7 @@
 """Per-request tenant-scoped DB transaction (Phase 1 Amendment A1).
 
-ONE explicit transaction per request, autocommit off: SET LOCAL ROLE +
+ONE explicit transaction per request, committed BEFORE the response is sent: every
+route and helper takes it as `TenantConn` (see there). Autocommit off: SET LOCAL ROLE +
 the verified JWT claims are issued first, and the SAME transaction serves the
 route handler's reads AND writes (a SET LOCAL evaporates when its transaction
 ends, so a post-commit read-back on another transaction would run claim-less
@@ -35,6 +36,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
+from typing import Annotated
 
 import psycopg
 from fastapi import Depends, Header, HTTPException, Request
@@ -129,7 +131,7 @@ def tenant_conn(
 ) -> "Iterator[psycopg.Connection]":
     """FastAPI dependency: one transaction, RLS-scoped to the caller's accounts
     (or, under X-Act-As, to the owner a share lets them act for on curation),
-    held for the whole request (it commits at dependency teardown).
+    held for the whole handler; taken ONLY as `TenantConn`, never `Depends(tenant_conn)`.
 
     verify_jwt is a dependency of THIS function; FastAPI caches dependency
     results per request, so a route that also declares Depends(verify_jwt)
@@ -137,6 +139,14 @@ def tenant_conn(
     """
     with tenant_transaction(claims, act_as=act_as, method=method) as conn:
         yield conn
+
+
+# Function scope: FastAPI closes it (the COMMIT) after the handler and the response's serialization but
+# BEFORE the response is sent, so a commit that fails (deadlock, lock timeout) answers 503/500, never a
+# 200 for a write that rolled back. The request scope committed after the bytes left. ONE alias for every
+# route and helper: the dependency cache keys on the scope, so a bare Depends(tenant_conn) beside it would
+# open a SECOND transaction in the same request (tests/api/test_tenant_conn_scope.py is the census).
+TenantConn = Annotated[psycopg.Connection, Depends(tenant_conn, scope="function")]
 
 
 # A deterministic pick: account_members has only a composite PK, so a user with >1 membership
@@ -174,7 +184,7 @@ def account_for_email(conn: psycopg.Connection, email: str) -> uuid.UUID | None:
 
 
 def require_account_id(
-    conn: psycopg.Connection = Depends(tenant_conn),
+    conn: TenantConn,
     claims: dict = Depends(deps.verify_jwt),
     act_as: uuid.UUID | None = Depends(act_as_header),
 ) -> uuid.UUID:
@@ -187,10 +197,10 @@ def require_account_id(
     reject, or predicates a DELETE/UPDATE that matches nothing.
 
     Lives in tenant_pool, not api.dependencies: this module imports that one
-    (tenant_conn's verify_jwt default), so Depends(tenant_conn) over there is a
-    circular import — and a lazily-imported wrapper would be a SECOND callable,
-    which FastAPI caches separately, splitting a route's reads and writes across
-    two tenant transactions (the Amendment A1 boundary).
+    (tenant_conn's verify_jwt default), so TenantConn over there is a circular
+    import — and a lazily-imported wrapper would be a SECOND callable, which
+    FastAPI caches separately, splitting a route's reads and writes across two
+    tenant transactions (the Amendment A1 boundary).
     """
     # A route declaring it never acts (watchdog, presets, the stats board, sharing): 403, not ignored.
     if act_as is not None:
@@ -205,7 +215,7 @@ _ACTING_ACCOUNT_SQL = "SELECT DISTINCT a.account_id FROM acting_account_ids() a"
 
 
 def require_acting_account_id(
-    conn: psycopg.Connection = Depends(tenant_conn),
+    conn: TenantConn,
     claims: dict = Depends(deps.verify_jwt),
     act_as: uuid.UUID | None = Depends(act_as_header),
 ) -> uuid.UUID:
