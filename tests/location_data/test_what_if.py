@@ -45,11 +45,22 @@ def _at(claim: Any, days: int) -> Any:
     return replace(claim, observed_at=T0 + timedelta(days=days))
 
 
+def _marker_reads(css: str, version: int) -> contracts.PortalContract:
+    """The shipped contract with the `estimated` marker re-pointed, so the test states both sides
+    of W4 itself and never depends on which version the checkout ships."""
+    entries = [replace(e, locator={**e.locator, "css": css})
+               if e.entry_id == "rm.det.agency_est_flag" else e for e in CONTRACT.entries]
+    return replace(CONTRACT, version=version, entries=entries)
+
+
+def _v7() -> contracts.PortalContract:
+    """Before W4: the marker read the print node first, which always carries a value."""
+    return _marker_reads("div#print-map, div#map", CONTRACT.version)
+
+
 def _v8() -> contracts.PortalContract:
     """W4's bump as a contract value: the marker reads the interactive map only."""
-    entries = [replace(e, locator={**e.locator, "css": "div#map"})
-               if e.entry_id == "rm.det.agency_est_flag" else e for e in CONTRACT.entries]
-    return replace(CONTRACT, version=CONTRACT.version + 1, entries=entries)
+    return _marker_reads("div#map", CONTRACT.version + 1)
 
 
 def _mined(contract: contracts.PortalContract, first_id: int) -> list[Any]:
@@ -142,7 +153,7 @@ def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
     """The W4 path over the real contract: today (v7) the marker reads `#print-map` and never
     fires; re-mined under the bump it reads the blank `#map`. Every type the bump states is
     replaced by its newer claim, and another portal's listing is left alone."""
-    today = _mined(CONTRACT, 1)
+    today = _mined(_v7(), 1)
     assert "precision_declaration" not in {c.claim_type for c in today}
     monkeypatch.setattr(claims_intake, "scan_rows",
                         lambda cur, ids: [_scan(7, 9001), _scan(8, None, "sreality")])
@@ -161,7 +172,7 @@ def test_w4_remine_declares_the_hidden_pin_estimated(monkeypatch):
 def test_a_page_that_would_not_remine_is_counted_not_hidden(monkeypatch):
     """A stored body the bucket did not serve keeps today's page claims (as the lane would leave
     it unstamped) and joins `unmined`, which makes the run exit 1; no stored body is no failure."""
-    today = _mined(CONTRACT, 1)
+    today = _mined(_v7(), 1)
     monkeypatch.setattr(claims_intake, "scan_rows",
                         lambda cur, ids: [_scan(7, 9001), _scan(9, None)])
     monkeypatch.setattr(page_readers, "load_bodies", lambda cur, ids, store: ({}, 1))

@@ -35,7 +35,14 @@
      (ARCHIVE_FIXTURE_NATIVE has no realitymix row), so this model names no listing,
      and any number here would fabricate one. The first v5 draft borrowed 8460367,
      which claim_intake_fixtures.REALITYMIX_PAGE binds to Staňkovice, okres Louny —
-     two artefacts disagreeing about one id. Only the OBEC segment is read. -->
+     two artefacts disagreeing about one id. Only the OBEC segment is read.
+
+     V8 (W4) adds the interactive map node every two-node page serves after the print
+     one, <div id="map">, with BLANK data-gps-*: the hidden-geocode shape (captured as
+     location_w2a_refetch/realitymix_c1.html). The agency gave no GPS, the server put its
+     own geocode of data-address on #print-map and left #map blank, so the page shows
+     "Pozice na mapě je pouze orientační". v8's rm.det.agency_est_flag reads #map alone and
+     declares 'estimated' here; rm.det.gps still reads #print-map, so the pin is unmoved. -->
 <html lang="cs">
 <head>
   <title>Prodej bytu 3+1, Slovanská alej, 326 00 Plzeň | RealityMix</title>
@@ -61,6 +68,10 @@
 <div id="print-map"
      data-gps-lat="49.73561"
      data-gps-lon="13.39051"
+     data-address="Slovanská alej, Plzeň 2-Slovany, Plzeň, okres Plzeň-město"></div>
+<div id="map"
+     data-gps-lat=""
+     data-gps-lon=""
      data-address="Slovanská alej, Plzeň 2-Slovany, Plzeň, okres Plzeň-město"></div>
 <div class="advert-map__text advert-map__text--gps">* Umístění na mapě je na základě GPS informací dodaných realitní kanceláří.</div>
 <div class="advert-map__text advert-map__text--estimated">* Pozice na mapě je pouze orientační.</div>
