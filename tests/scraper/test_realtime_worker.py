@@ -1384,6 +1384,9 @@ def _patch_resolver(
 
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
     monkeypatch.setattr("scraper.job_lease.held", fake_held)
+    # W2: the pass first asks reconcile; the default fake has nothing to sweep.
+    monkeypatch.setattr("location_data.resolver.drain.reconcile",
+                        lambda c, *, stop: captured.__setitem__("stop", stop))
     monkeypatch.setattr("location_data.resolver.drain.run", run or default_run)
     monkeypatch.setattr(rw, "_read_location_resolve_max_seconds", lambda: 240)
     monkeypatch.setattr(rw, "_read_location_resolve_batch_size", lambda: 250)
@@ -1394,17 +1397,22 @@ def _patch_resolver(
     return conn, captured
 
 
-def test_location_resolve_lane_registered_and_dark_by_default(monkeypatch):
-    # Registered in _amain, and DARK: with the flag absent the interval is 0 so
-    # _lane_loop idles it — no lease attempt, no connection, no drain.
+def test_location_resolve_lane_registered_and_live_by_default(monkeypatch):
+    # W2 (ruling Q9): the only runtime of the resolver ships LIVE. Registered in _amain with
+    # its own cadence as the fail-safe, and the interval setting is the ONE control: absent
+    # reads 15, 0 idles the lane (idle-not-dead), no flag is consulted.
     src = inspect.getsource(rw._amain)
     assert '("location_resolve"' in src
-    monkeypatch.setattr(rw, "_read_flag", lambda key: False)
+    assert "default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT" in src
+    assert "_read_flag" not in inspect.getsource(rw._read_location_resolve_interval)
+    assert not hasattr(rw, "LOCATION_RESOLVE_LANE_SETTING")
+    monkeypatch.setattr(rw, "_read_int", lambda key, default: default)
+    assert rw._read_location_resolve_interval() == 15
+    monkeypatch.setattr(rw, "_read_int", lambda key, default: 0)
     assert rw._read_location_resolve_interval() == 0
 
 
-def test_location_resolve_interval_uses_configured_when_enabled(monkeypatch):
-    monkeypatch.setattr(rw, "_read_flag", lambda key: True)
+def test_location_resolve_interval_uses_the_configured_value(monkeypatch):
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 7)
     assert rw._read_location_resolve_interval() == 7
 
@@ -1525,6 +1533,35 @@ def test_location_resolve_sync_runs_the_shared_drain_with_configured_budget(
     assert out["seconds"] == 12.3
     assert out["rate"] == round(40 / 12.34, 2)
     assert conn.closed is True
+
+
+def test_location_resolve_sync_spends_a_pass_on_the_sweep_and_drains_on_the_next(monkeypatch):
+    """W2 (ruling Q9): under the lease the pass asks `drain.reconcile` with the lease fence;
+    a sweep is the whole pass (no drain shares its lease TTL), reported under `swept`, and
+    the heartbeat carries it past the next pass."""
+    conn, captured = _patch_resolver(monkeypatch)
+    sweeps = iter([{"pair": ["resolver:vX", "ruian:L"], "rows": 1_068_644, "complete": True}, None])
+
+    def reconcile(c: Any, *, stop: Any) -> Any:
+        captured["reconcile_conn"] = c
+        captured["stop"] = stop
+        return next(sweeps)
+
+    monkeypatch.setattr("location_data.resolver.drain.reconcile", reconcile)
+    first = rw._location_resolve_sync()
+    assert first["swept"]["rows"] == 1_068_644 and first["claimed"] == 0
+    assert "run_conn" not in captured, "a sweep pass does not drain"
+    assert captured["reconcile_conn"] is conn and callable(captured["stop"])
+    second = rw._location_resolve_sync()
+    assert "swept" not in second and captured["run_conn"] is conn
+    state = rw._new_state()
+    monkeypatch.setattr(rw, "_location_resolve_sync", lambda: first)
+    asyncio.run(rw._location_resolve_pass(asyncio.Event(), state))
+    monkeypatch.setattr(rw, "_location_resolve_sync", lambda: {"acquired": True, "claimed": 0})
+    asyncio.run(rw._location_resolve_pass(asyncio.Event(), state))
+    lane = state["lanes"]["location_resolve"]
+    assert lane["swept"]["rows"] == 1_068_644 and lane["swept"]["pair"] == ["resolver:vX", "ruian:L"]
+    assert "at" in lane["swept"] and lane["passes"] == 2
 
 
 def test_location_resolve_sync_skips_cheaply_when_the_lease_is_held(monkeypatch):
@@ -1669,14 +1706,14 @@ def test_location_resolve_quiets_the_drain_log_only_once_the_queue_is_empty(
         drain_log.setLevel(original)
 
 
-def test_location_resolve_lane_is_dark_when_the_settings_read_fails() -> None:
-    # _lane_loop keeps default_interval when read_interval() RAISES, and the
-    # flag lives inside the read that just failed. A positive fallback would run
-    # a full drain pass on any app_settings blip while the operator believes the
-    # lane is off (e.g. during an epoch recompute).
+def test_location_resolve_lane_keeps_its_cadence_when_the_settings_read_fails() -> None:
+    # W2 (ruling Q9): the lane is the resolver's only runtime, so _lane_loop's fallback when
+    # read_interval() RAISES is the lane's own cadence, never 0 — a pooler blip must not
+    # idle the one thing that resolves. (Before W2 the flag lived inside that read and 0
+    # was the fail-safe for a lane the operator might have left dark.)
     src = inspect.getsource(rw._amain)
     lane = src.split('("location_resolve"', 1)[1].split(")),", 1)[0]
-    assert "default_interval=0" in lane
+    assert "default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT" in lane
 
 
 def test_location_resolve_pass_returns_early_when_stopping(monkeypatch):
@@ -2046,23 +2083,24 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_registered_and_live_by_default(
+def test_location_refetch_lane_ticks_hourly_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # LIVE by default for the intake lane's reason: an env var the operator has to
-    # remember to set on the Railway service is a fix that never runs.
+    # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
+    # at least MIN_AGE old) bounds the traffic, and an hourly tick is what lets liveness judge
+    # the lane (Watch after 3 h, not 3 days).
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    monkeypatch.delenv(rw.LOCATION_REFETCH_ENABLED_ENV, raising=False)
-    monkeypatch.delenv(rw.LOCATION_REFETCH_INTERVAL_ENV, raising=False)
-    assert rw._read_location_refetch_interval() == 86400
-    monkeypatch.setenv(rw.LOCATION_REFETCH_ENABLED_ENV, "0")
-    assert rw._read_location_refetch_interval() == 0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 3600.0
+    assert "LOCATION_REFETCH_TICK_SECONDS" in src
+    for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
+                 "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",
+                 "_read_location_refetch_interval"):
+        assert not hasattr(rw, gone), gone
 
 
 def test_location_refetch_knobs_are_env_vars_and_clamped(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    for env in (rw.LOCATION_REFETCH_INTERVAL_ENV, rw.LOCATION_REFETCH_MIN_AGE_ENV,
-                rw.LOCATION_REFETCH_CAP_ENV):
+    for env in (rw.LOCATION_REFETCH_MIN_AGE_ENV, rw.LOCATION_REFETCH_CAP_ENV):
         monkeypatch.delenv(env, raising=False)
     assert rw._read_location_refetch_min_age() == 21600
     assert rw._read_location_refetch_cap() == 500
@@ -2071,8 +2109,6 @@ def test_location_refetch_knobs_are_env_vars_and_clamped(
     assert rw._read_location_refetch_cap() == 500
     monkeypatch.setenv(rw.LOCATION_REFETCH_CAP_ENV, "0")
     assert rw._read_location_refetch_cap() == 1, "a cap knob is not the flag"
-    monkeypatch.setenv(rw.LOCATION_REFETCH_INTERVAL_ENV, "1")
-    assert rw._read_location_refetch_interval() == 3600, "the interval has an hour floor"
 
 
 def test_location_refetch_tick_queues_every_portal_at_verify_priority(
@@ -2152,7 +2188,7 @@ def test_a_first_delay_holds_the_pass_and_still_stops_cleanly() -> None:
         return calls
 
     assert asyncio.run(scenario()) == []
-    assert rw.LOCATION_REFETCH_FIRST_DELAY_SECONDS > 0
+    assert rw.SOLD_COMPS_FIRST_DELAY_SECONDS > 0
 
 
 # --- sold_comps lane (sold-comps W2) ------------------------------------------

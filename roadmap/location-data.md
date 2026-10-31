@@ -1238,6 +1238,20 @@ component is slimmed twice — each wave rewrites one component and slims its st
   the constant 1 km radius on a kept pin, and consumers reading `disputed` (only the Location Quality page
   does). Rollout: the bump re-queues the corpus through the full-resolve sweep, whose GitHub cron fires
   ~08–10Z (not 03:17), so `location_resolve.yml mode=full-resolve` is dispatched right after the deploy.
+- **The wave shadow — the programme's standing gate instrument, 2026-10-31** (#2225; as built:
+  `docs/design/location-quality/wave-shadow.md`). A wave that moves positions or quarter codes (W3, W4, W5,
+  W5b, W6) runs its movers through the engine before it deploys, with no production write and no brake:
+  `location_data.what_if` (post-wave positions over `drain.recompute`, the dry run's read path, now shared;
+  claim change `none` / `purge` / `remine`) → `autodedup.shadow` (the movers' blocks, sized and capped, the
+  rulings and the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111
+  clean and no ruled pair moved against its ruling; PARTIAL when ids were cut or a mover sat outside the
+  cohort; the recent `same` rulings counted apart; D83 edges touching a mover printed). "Approved-split
+  sessions" in PROGRAM.md now reads as the rulings ledger inside the affected blocks. Runs where the secrets
+  live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
+  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. With W3 (#2223) `what_if.restate` is
+  deleted (a re-mine replaces each mined key, a tombstone removes it, under the one read) and
+  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed before W5's shadow: an id-grain export block for movers that sit in no
+  block today (Praha rows gaining a quarter).
 - **Owed — one copy the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
@@ -1291,6 +1305,16 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates go),
   then migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c,
   awaits the operator's ruling).
+- **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
+  2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
+  The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
+  process's (resolver version, registry label) pair changes (active listings first), the drain claims
+  by `(reason = 'full_sweep'), next_eligible_at, listing_id` so evidence always beats backfill, and a
+  boot that changed nothing sweeps 0 rows. Deleted: `.github/workflows/location_resolve.yml` (both
+  crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
+  `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
+  the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
+  The refetch lane ticks hourly, a constant.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

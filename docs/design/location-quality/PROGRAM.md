@@ -111,7 +111,7 @@ Each wave below replaces several local rules with one rule.
 - The RÚIAN vintage is due 11-01 (GH cron '0 10 1 * *', throttled). If it publishes before W2 lands, it also needs today's hand full-resolve.
 - W0 runs beside W1 on the scraper track.
 - W3 and W4 can swap if W3 waits on its destructive gate. W5 depends on W3 only for code overlap in bind.py, so it can go first if W3's gate waits.
-- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation on the approved-split sessions before deploy. DECISION_MODULES stay untouched.
+- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
@@ -177,6 +177,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - all active rows are current within 90 min, all rows within 4 h;
   - every boot runs the sweep, so a SWEEP without a version change must enqueue 0 rows.
 
+- **As built 2026-10-31 (PR #2216, ticket #2215, migration 697 applied AFTER the deploy):** the drain claims by `(reason = 'full_sweep'), next_eligible_at, listing_id` (index `dirty_locations_claim`; `enqueued_at` in the plan text, `next_eligible_at` in the code because retries move it); the worker's `reconcile()` sweeps on a (resolver version, registry label) change, active rows first then inactive, under the maintenance lease (`drain.enqueue_full_sweep`, fence → None); `location_resolve.yml`, the red-line arm, the lane flag `realtime_location_resolve_enabled`, five queue reasons (CHECK 8 → 3 after the relabel to `full_sweep`), the `location_full_resolve` job and three refetch knobs are deleted; the refetch lane ticks hourly (`LOCATION_REFETCH_TICK_SECONDS = 3600`); the scheduled_jobs lease row is retagged `railway-realtime-worker`; the heartbeat carries `lanes.location_resolve.swept`. The CLI keeps dry-run only. Acceptance is measured by W1's `freshness/version` and `freshness/evidence` cells.
+
 ### W3: one current claim per fact
 - **Rule:** `location_claims` gets the natural key (listing, claim type, operator-or-portal). Both writers use one upsert that writes only when the value changed. The resolver then sees at most one claim per type, which deletes:
   - the seven tie rules;
@@ -202,6 +204,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **remax v7:** read the header's typed "ulice X" slot. The ruled map attribute exists only on pages without a pin. Expected: street share from 5 % to about 58 %, 94 % binding RÚIAN, pins unchanged.
 - **Moved out:** deleting the unread street, house-number and ZIP parsing in 7 parsers is a separate scraper cleanup PR. The contract changes already delete more than they add.
 - **Acceptance:** realitymix outside cell under 80 (from 721); remax street share at least 55 %; the standing autodedup gate passes (the shared geocode pins on 51 Beroun and 102 Brno ads stop counting as exact).
+
+- **As built 2026-10-31 (PR #2220, ticket #2219, gate #2222; contract only, no migration, no resolver bump):** realitymix@8's `rm.det.agency_est_flag` reads `div#map` alone (3,622 of the 3,656 rows declared today had both nodes blank; verified on 112 pages: fires on exactly the 46 hidden ones, moves no pin). The dead C6 `odbl` licence branch is deleted (−145/+120 outside fixtures). **remax v7 is NOT built: ruling Q8 (the header slot is not read).** Acceptance corrected to ≤ 110 outside (68 undeclared agency pins and 6 placeholders stay until W5), 0 declared outside, 0 off-grid declared, declared pinned rows inside 7.4k–19,527. Merge order: after W2 is live; rollout = `gh workflow run location_claims_intake.yml --ref main` by hand (~102k bodies, ~1 h); rollback entry-scoped (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never whole-version. The standing shadow gate runs through #2225 (wave shadow) before the re-mine.
 
 ### W5: resolver v5.10
 - **Quarter = část obce only.** MOMC, správní obvod and ZSJ stop being levels a row can be bound to.
@@ -243,7 +247,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
   - `match_confidence`, together with its readers: the pin-audit matview (mig 524), its page and lib, and the Location Quality inspector column.
 - **Monitoring:** the W1 accuracy cell watches drift. Recalibration after a contract change is the one standing hand step; the cell turns Watch to trigger it, and the table header records the contract versions it was fitted on.
 - **UX consult:** the popup "±" changes, and blurred classes hit the 2 km drawn-circle cap more often (bazos about 3 to 4 km after v5.9).
-- **Deploy gate:** autodedup's `dist_norm` inputs shift, so a shadow re-validation on the approved-split sessions must pass. `DECISION_MODULES` stay untouched.
+- **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
 
 ### W7: registry
 - **Praha's okres:** obec Praha and ORP 19 take okres 9999 from ČÚZK's own SHP pack. A load assertion guards the value; reading each obec's okres from OBCE_P would remove the constant altogether.

@@ -52,6 +52,8 @@ from typing import Any
 
 import psycopg
 
+from location_data.claims_common import Claim as IntakeClaim
+from location_data.claims_common import wkt_point
 from location_data.resolver import composite
 from location_data.resolver.types import (
     AddressPoint,
@@ -64,10 +66,12 @@ from location_data.resolver.types import (
 
 _CURRENT_REGISTRY_SQL = "SELECT id, label FROM registry_versions WHERE is_current LIMIT 1"
 
+ADMISSIBLE_LICENCE_CLASSES: tuple[str, ...] = ("portal", "operator")
+
 # THE ONE READ (location W3). The store holds one claim per listing, claim type and author
 # (`location_claims_key`, migration 699), so the resolver sees AT MOST ONE claim per type: the
 # operator's when there is one (it outranks the portal, ruling Q5), else the portal's.
-#  * THE LICENCE RAIL (W2-a): only `portal` and `operator` claims are read. A Mapy-class
+#  * THE LICENCE RAIL (W2-a): only `ADMISSIBLE_LICENCE_CLASSES` are read. A Mapy-class
 #    coordinate is not refused at write time, it is never READ.
 #  * A portal claim of a type its portal's ACTIVE contract no longer declares is not read: a
 #    deliberately dropped entry stops being evidence the moment it is dropped. An `EXISTS`, not
@@ -517,6 +521,22 @@ def _claim(row: Sequence[Any]) -> Claim:
         declared_radius_m=None if row[14] is None else float(row[14]),
         blur_evidence=row[15], subject_scoped=row[16],
     )
+
+
+def claim_from_intake(claim: IntakeClaim, claim_id: int) -> Claim:
+    """An intake claim as `_claim` would read its stored row back (the wave shadow's re-mine)."""
+    lat, lon = wkt_point(claim.value_geom_wkt) if claim.value_geom_wkt else (None, None)
+    return Claim(
+        id=claim_id, listing_id=claim.listing_id, source=claim.source,
+        claim_type=claim.claim_type, surface=claim.surface,
+        extraction_method=claim.extraction_method, licence_class=claim.licence_class,
+        observed_at=claim.first_observed_at, value_text=claim.value_text,
+        value_num=None if claim.value_num is None else float(claim.value_num),
+        lat=lat, lon=lon, value_jsonb=claim.value_jsonb or {},
+        declared_precision_label=claim.declared_precision_label,
+        declared_radius_m=None if claim.declared_radius_m is None
+        else float(claim.declared_radius_m),
+        blur_evidence=claim.blur_evidence, subject_scoped=claim.subject_scoped)
 
 
 def load_claims(conn: psycopg.Connection, listing_id: int) -> list[Claim]:

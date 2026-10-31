@@ -5200,6 +5200,18 @@ places the row at the wrong town's point; there is no boundary tolerance, so a b
 town line moves to the town's point; autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
 town and část points (re-decided lazily, never forced).
 
+**A WAVE THAT MOVES POSITIONS IS SHADOWED THROUGH THE ENGINE BEFORE IT DEPLOYS** (the location programme's
+standing gate, W3/W4/W5/W5b/W6; `docs/design/location-quality/wave-shadow.md`). The engine reads every
+position field through `COHORT_LOCATION_SQL` and `export.build_location`, in the export and the live lane
+alike, so the seam is the cohort artifact and `DECISION_MODULES` never change for it. Three commands, no
+production write (every statement in a READ ONLY transaction on `db.connect_read_only()`):
+`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W3's
+`purge`, W4's `remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
+writes the movers; `autodedup.shadow` sizes their old and new blocks (capped) and exports them, the rulings
+and the live scorer in-process (no `autodedup.iterations` row); `harness shadow` rewrites the movers'
+blocks, runs base and candidate under the live scorer and the operator's links, and passes only when E111
+is clean and no ruled pair moved against its ruling. D83 edges touching a mover are printed, never judged.
+
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named
 no street, and it cannot un-say what RÚIAN holds about the street the ad named. W18 deleted the
@@ -5221,11 +5233,13 @@ row replays byte-identically from its inputs and the three version ids stamped o
 
 **THE SWEEP IS THE INVARIANT'S BACKSTOP, AND THE QUEUE IS RE-ENTRANT.** `_SWEEP_SQL` — ONE statement,
 driving off `listings` in id windows — enqueues every listing whose row is missing or carries a stale
-`resolver_version` / `registry_version`, which is also how a version bump reaches the corpus, plus a
-fourth arm: `obec_kod IS NULL AND country_status <> 'foreign'`, so every Czech listing without a town
-is re-resolved nightly (`location_resolve.yml`, 03:17 UTC, `mode=full-resolve`) until it has one or
-is determined foreign — the version arms could not express that, because a townless row is stamped at
-the CURRENT version tuple. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
+`resolver_version` / `registry_version`, which is how a version bump or a registry publish reaches
+the corpus. Since W2 of the location quality programme (ruling Q9, 2026-10-31) the WORKER runs it
+through `drain.reconcile` whenever its (resolver version, registry label) pair changes — active
+listings first — and the drain claims evidence rows (`claim_insert`, `operator_edit`) ahead of the
+sweep's; the GitHub `location_resolve.yml` lane, the lane's flag and every hand dispatch are gone,
+and so is the nightly red-line arm (13,224 townless rows re-resolved a day, 99.8 % inactive, 0 towns
+gained): a row changes only when evidence, code or the register changes. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
 operator edit) is `ON CONFLICT (listing_id) DO UPDATE SET enqueued_at = now(), attempts = 0,
 next_eligible_at = now()`, and every statement that FINISHES a queue row (both deletes and the
 failure stamp) is bounded by the `enqueued_at` the slice claimed, so evidence arriving mid-slice

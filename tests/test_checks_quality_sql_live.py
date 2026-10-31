@@ -836,7 +836,7 @@ def test_the_queue_parts_evidence_from_backfill_and_judges_the_oldest_evidence(s
     seed.version("current", age_d=19, current=True)
     ids = seed.ads("bazos", 4, seen_h=48)
     for listing_id, reason, minutes, attempts in zip(ids, ("claim_insert", "operator_edit", "full_sweep",
-                                                           "policy_version"), (90, 10, 300, 30), (1, 0, 0, 2)):
+                                                           "full_sweep"), (90, 10, 300, 30), (1, 0, 0, 2)):
         seed.dirty(listing_id, reason, minutes=minutes, attempts=attempts)
 
     queue = _view_rows(seed.conn, q._LOCATION_STOCK_SQL)[("queue", None)]
