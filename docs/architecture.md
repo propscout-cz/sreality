@@ -1621,7 +1621,13 @@ renumber.** Navigate by area:
    failures still in the index). A given-up
    queue row is not dropped either: `enqueue_presence_checks` re-arms up to
    `PRESENCE_REARM_PER_WALK` = 50 given-up rows per nominating scope, source-wide, at VERIFY
-   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`.
+   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
+   that parses to NO listing content (no price, no area, no params, no images, no description) is a
+   failed fetch too, never a write: `portal_runner.content_free` turns such an item into an error
+   before the flush (2026-10-31; ceskereality's anti-bot interstitial had been written into 51 live
+   ads as content, blanking them and bumping `last_seen_at`; realitymix served a category page at a
+   detail URL the same way). Shape-keyed on the parsed `ScrapedListing`, never portal-keyed; sreality's
+   API payload fails JSON parsing instead.
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,
@@ -3303,6 +3309,20 @@ renumber.** Navigate by area:
     `latest_delegated_edit()` (cleared once the owner changes the row), labelled through
     `share_party_emails()`, now over every share kind (647 added dashboards) and the owner's own ledger actors. The ledger names rows, not properties, so it
     needs no carrier; cards and curation stay owned by exactly one account.
+    **The curation clock (migration 696, `docs/design/curation-sync.md` § 3.2-3.4): only the database says
+    that curation changed, and who FOLLOWS a change is stated once.** `curation_clock` holds one counter per
+    (account, family: `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`), advanced only by
+    `bump_curation_clock()`, a definer function on twelve DEFERRED constraint row triggers (the eleven curation
+    tables bar `property_pipeline_events`, plus both share tables, whose rows bump both parties): once per
+    committed transaction, account and family, nothing on a rollback, every writer seen (the API, the carriers,
+    signup, cascades). A counter is a signal, never state and never history: windows compare it for inequality
+    and re-read (W4). `curation_clock_audience()` (invoker, `current_account_ids()`, never acting) is "follow,
+    never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
+    the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
+    (invoker) is the one read. The event table is not curation and is not clocked (rule 16). Its rails:
+    `tests/_tenant_registry.py` (`CLOCKED_TABLES` / `NOT_CLOCKED`), `tests/test_curation_sync_census.py`,
+    `tests/test_curation_clock_live.py`, the `curation_sync` health alarm; the kill switches:
+    `.claude/skills/database/references/tenancy.md` § Curation clock.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a
@@ -4536,7 +4556,8 @@ renumber.** Navigate by area:
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
     listing has a town (the `location_town_coverage` gauge, over active ads first written more than
-    24 h ago since Health dashboard sprint wave 6, is red until both are zero), and foreign is a
+    24 h ago, reads the W1 scorecard view, migration 698: an ad holding town-bearing evidence and no
+    town is red until zero, one whose page names no town is Watch, ruling Q6), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
     fields at rebuild, so no consumer query joins the store; a field is added only by operator
@@ -4905,7 +4926,7 @@ for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ul
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
 after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the `location_town_coverage` check counts with,
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5122,7 +5143,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   only a bound `č.p.` point publishes one, and only psč still falls back to a claim, preserve-if-null.
   A street bound in a town the advert's town field names takes the část obce all its doors lie in
   (Q3), else none. Only an operator correction outranks the registry. It also fills
-  **the position: the portal pin when admissible, else the finest bound unit's point on surface** — the boundary's stored
+  **the position: the portal pin when admissible — and not DECLARED blurred outside the town the claims
+  bound (v5.9) — else the finest bound unit's point on surface** — the boundary's stored
   inscribed-circle centre, inside the polygon where `ST_Centroid` need not be, read off the same
   chain rather than as a tenth registry question. RÚIAN draws no polygon for a část obce, so since
   v5.8 a bound část stands at the centroid of its own valid doors (`part_point`, the street's
@@ -5133,7 +5155,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   centre of the country. Grade and confidence are untouched — the LEVEL is what says how coarse a
   position is — the radius is floored by the placed-on entity's reach (the část's farthest door, the
   polygon's `containment_radius_m`: Praha 17.6 km where the `obec` constant says 1 km), and
-  `disputed` is never set by this path. Foreign and undetermined rows bind no Czech unit, so they
+  FILL's point never causes a dispute (a row FILL places because a declared-blurred pin was set aside,
+  v5.9, still carries that pin's `pin_outside_obec`). Foreign and undetermined rows bind no Czech unit, so they
   keep `geom NULL` by construction.
 * **GRADE** (`grade.py`) is two tables: `match_confidence` from how many INDEPENDENT fields agreed
   with the bound entity (`exact` an address point the pin corroborates, `high` ≥ 2 fields, `medium`
@@ -5143,9 +5166,11 @@ portal's payload or its own page, and every other stamp is class E outright.
   understate the thing the position came off. A portal's declared
   precision reaches the confidence and never the grain (see the position ladder below).
 * **CHECK** (`check.py`) decides the country and whether the row disagrees with itself. `disputed` is
-  ONE nullable text column whose value IS the reason: `pin_outside_obec` (the pin is kept, the
-  granularity drops to the admin level; asked only when the town came from a CLAIM, since on BIND's
-  pin-derived rungs the comparison is circular), `pin_outside_cz`, `country_conflict`, and
+  ONE nullable text column whose value IS the reason: `pin_outside_obec` (where an EXACT or UNDECLARED
+  pin IS the position it is kept and the grain drops to `obec`; a DECLARED blurred pin outside the town
+  is set aside since v5.9 and the grain stays the bind's; a register-placed row keeps its grain; asked
+  only when the town came from a CLAIM, since on BIND's pin-derived rungs the comparison is circular),
+  `pin_outside_cz`, `country_conflict`, and
   `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; the granularity does
   NOT drop, because the address identity is the half that bound to the register and the coordinate is
   the half that lost, and GRADE caps such a row at `medium`). A Czech admin
@@ -5157,6 +5182,8 @@ portal's payload or its own page, and every other stamp is class E outright.
 before it is a portal's:
 
     registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  FILL's unit point
+                                                      (the pin rung yields to FILL's point when
+                                                       DECLARED blurred and outside the bound obec, v5.9)
 
 `ruian_streets` carries no geometry, so a bound street's point is DERIVED — the centroid of its valid
 address points, with an EXTENT that reaches the FARTHEST of them (all but 4 of the 83,451 live streets
@@ -5175,18 +5202,40 @@ point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule wou
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
 `pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
 
+**The pin rung has one exception since v5.9 (operator ruling 2026-10-30, "the words decide"): a pin the
+portal DECLARES blurred that lies OUTSIDE the obec the claims bound is not a position at all — FILL's point
+beats it.** bazos places every advert on a postal-area point — one Kolín pin carried 143 active ads from 34
+obce, and 12,543 active bazos rows said one town and drew another, 8.8 km off at r = 1 km (19509113:
+Jestřabí Lhota, drawn in Kolín). ONE containment read (`bind.pin_inside_bound_obec`, asked by `core`, read by
+`place()` and CHECK; never on the pin-derived rungs R7/R8, where the town came from the pin) decides it:
+`place()` leaves such a row unplaced, so FILL stands it at the named entity's own point — a bound část's
+doors, else the obec's point — with the level's radius floored by that entity's reach (v5.8). The pin stays
+EVIDENCE and `pin_outside_obec` is still recorded; the grain stays the bind's (~2.9k of the moved bazos rows
+bound a část and now publish the quarter grain). Every blur-declared label counts: bazos
+`approximate_location`, idnes `no_exact_address`, sreality `street`/`ward`/`quarter`/`municipality`/
+`not_address`, mmreality `regional`, maxima `Circle`/`LineString`, realitymix `estimated`; a blurred pin
+outside every Czech obec is set aside the same way and CHECK then records `pin_outside_cz` or
+`country_conflict`. An EXACT or UNDECLARED pin outside the town keeps the position as before (the only
+position there is), at `obec` grain and flagged: which half is wrong there is not ruled. The costs the
+ruling accepts, by name: a homonym town bound without a PSČ, or a bazos town the text reader misread, now
+places the row at the wrong town's point; there is no boundary tolerance, so a blurred pin just across the
+town line moves to the town's point; autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
+town and část points (re-decided lazily, never forced).
+
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named
 no street, and it cannot un-say what RÚIAN holds about the street the ad named. W18 deleted the
 `DECLARED_CAP` ladder outright rather than narrowing it: keying the cap on the elected POSITION was
 wrong twice over (it published a bazos row with `street_name` + `ulice_kod`, the position on the
-street's centroid and `granularity='obec'` at 1 km, and it INVERTED the two labels that are capped but
-not blurred — idnes' `no_exact_address`, 66,165 listings, and sreality's `not_address`, 13,176 — because
+street's centroid and `granularity='obec'` at 1 km, and it INVERTED the two labels that were then capped
+but not blurred — idnes' `no_exact_address`, 66,165 listings, and sreality's `not_address`, 13,176, both
+blur-declared by their contracts since W1-c — because
 a pin AGREEING with the bound street stayed the position and was capped while one CONTRADICTING it lost
 the position and was not), and keying it on the PIN-DERIVED rungs instead was correct and INERT: R7/R8
 already grade `obec` and every cap value is at or coarser than that, so the table could not change an
-answer on any input. What a declaration still does is rank the pin against a blurred sibling and cap the
-confidence at `medium` — a blurred pin is a weak witness however good the bind is.
+answer on any input. What a declaration still does is rank the pin against a blurred sibling, cap the
+confidence at `medium` — a blurred pin is a weak witness however good the bind is — and, since v5.9, set
+aside a pin that lies outside the bound obec (the grain still stays the bind's).
 
 It is a **pure function**: no wall clock, no network, no randomness, enforced by an AST scan, so a
 row replays byte-identically from its inputs and the three version ids stamped on it
@@ -5221,18 +5270,34 @@ every walk, sweep, rail and audit surface drives off `listings` unfiltered (migr
 index on `properties (repr_listing_ref_id)` stays — append-only, and every read model that joins
 `listings` on that column still uses it). The one rule left in the programme is the CONSUMER rule
 `SERVED_LOCATION_PREDICATE`, below, and it decides what is *shown*, never what is *worked*. **The red
-line**: the `location_town_coverage` gauge (`scripts/checks/quality.py`, on the worker every 6 h since
-Health dashboard sprint wave 6) reports, per portal and in absolute counts, ACTIVE ads first written
-more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm shares) with no row, or non-foreign
-with no `obec_kod`, and is RED until both are zero: as a gauge it sends one notice when it first reads
-Problem, then one a day until it recovers or is acknowledged. The lane still works every listing; only
+line**: the `location_town_coverage` gauge ("Location quality", `scripts/checks/quality.py`, on the
+worker every 6 h since Health dashboard sprint wave 6) reads ONE view since W1,
+`location_quality_by_source` (migration 698, service_role only: every location quality number defined
+once, its shared fragments rendered verbatim from `location_steps` and pinned by
+`tests/location_data/test_location_quality_view_contract.py`). It reports, per portal and in absolute
+counts, ACTIVE ads first written more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm
+shares) with no row, or non-foreign with no town, split by EVIDENCE (ruling Q6, 2026-10-31): one holding
+a town-bearing claim (`location_steps.TOWN_EVIDENCE_CLAIM_TYPES`, BIND's five town inputs) is UNRESOLVED
+and `{portal}/town` is RED until zero; one holding none is PAGE-WITHHELD, `{portal}/town_withheld`,
+Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7): `{portal}/ku` (below),
+`{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
+zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
+the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
+operator rules the floors, W1-b), `{portal}/accuracy`
+(radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
+over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
+behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
+`freshness/evidence` (the oldest claim or operator edit waiting for its resolve, Problem past 60 min). As
+a gauge it sends one notice when a cell first reads Problem, then one a day until it recovers or is
+acknowledged. The lane still works every listing; only
 the gauge's population moved (operator ruling Q2, 2026-10-18, which reverses W15's whole-corpus count:
 the 13,192 inactive ads with no town on 2026-10-19, whose pages are gone, are a dated fact that Location
 Quality owns, not read each run). Its per-portal series changed meaning on 2026-09-14 and again at the
 wave-6 deploy, and numbers either side of those dates are not comparable. That is the invariant the whole shape exists
 for; the mandatory town entry, BIND's tail rungs and the sweep's fourth arm are all rails that serve
-it. Its KÚ arm (MF PR-B) is the same kind of zero: a Czech address-grain row written by the current
-`RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is missing at the registry version.
+it. Its KÚ cell (MF PR-B; out of the town cell since W1) is the same kind of zero: a Czech address-grain
+row with a town written by the current `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is
+missing at the registry version; KÚ coverage of the coarser grains is a fact, never judged.
 
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
@@ -5296,8 +5361,8 @@ its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
 the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
-2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as its
-`hidden` fact — a workload number that never moves its status. The operator watches the same
+2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as the
+`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The operator watches the same
 set on `/new-dedup/pin-audit`, whose relation `location_pin_audit_mv` (migration 524) IS that
 definition — every listing that fails `SERVED_LOCATION_PREDICATE` and nothing else, refreshed hourly
 by pg_cron, leading the nav with its count — so the page and the rule can never describe different

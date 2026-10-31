@@ -202,6 +202,12 @@ def wilson_lower(hits: int, n: int, z: float = 1.96) -> float | None:
     return max(0.0, (centre - margin) / (1 + z2 / n))
 
 
+def wilson_upper(hits: int, n: int, z: float = 1.96) -> float | None:
+    """The Wilson score interval's upper bound of hits / n (one minus the misses' lower bound)."""
+    low = wilson_lower(n - hits, n, z)
+    return None if low is None else 1.0 - low
+
+
 # --- the Python mirror ----------------------------------------------------
 
 

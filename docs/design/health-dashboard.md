@@ -278,14 +278,24 @@ Undo:
 
 **Measures.** Rule 25's invariant, over ACTIVE ads first written more than 24 h ago, per portal: no listing_location row, or non-foreign with no town. As today, Czech address-grain rows at the current resolver with no katastr_kod also count. Plus the RÚIAN registry's vintage and staging age. The inactive legacy stock is shown as a fixed number and not judged. Location Quality owns the fix (its All-sources table owns town, building and street per portal) and is the row's link. Each cell carries a rolling 30-day trend. As built (Health dashboard sprint wave 6): `<portal>/town` cells over every portal for `l.is_active and l.first_seen_at < now() - 24 h`, the 24 h one constant (`scripts/checks/common.NEW_AD_H`) shared with publishing's visible arm; the hidden ads a fact (`hidden`); a `registry` cell; facts `trend` and `worse_7d`.
 
-**Data.** listings (is_active) joined to listing_location; location registry stamps.
+As built (location data quality W1, 2026-10-31, #2218, migration 698; label "Location quality", key kept): the gauge reads ONE view, `location_quality_by_source`, in two statements (`where cohort <> 'sample'`, about 12 s warm; then `where cohort = 'sample'`, whose failure leaves only the accuracy cells Not measured), and emits 67 cells, each value the rows or share that colours it:
+- `<portal>/town`: the unresolved ads (rule 25's set holding a town-bearing claim, `location_steps.TOWN_EVIDENCE_CLAIM_TYPES`). Facts `ads`, `foreign`, `has_town`, `no_row`, `hidden`, `town_share` (has_town over the ads not determined foreign: foreign out of the denominator).
+- `<portal>/town_withheld`: the ads holding no town-bearing claim (ruling Q6: the page names no town).
+- `<portal>/ku`: Czech address-grain rows with a town and no KÚ at the running `RESOLVER_VERSION`, the degenerate-boundary obce excused (moved out of the town cell). Facts: KÚ coverage by grain (address, street, quarter, obec), shown only.
+- `<portal>/outside`: positions CHECK flagged (`pin_outside_obec`, `pin_outside_cz`, `country_conflict`) that the bound town's pip polygon does not cover (ruling Q3, strict). Facts: the disputed-class mix.
+- `<portal>/street`: (address + street) / Czech ads with a town, by the rank table. Facts `share`, `lower_bound`, `upper_bound`, `n`, `floor`, the grain mix.
+- `<portal>/accuracy`: radius cover on the `id % 10 = 0` sample (the truth a word-bound RÚIAN address point, the ad's or its property's location ad's). Facts `share`, `lower_bound`, `n`, `pin_error_m` q50/q90/q95/max/n per declared label.
+- `served/town`, `served/town_withheld`, `served/outside`, `served/street`: the same over published properties at their location ad, facts per portal.
+- `registry` (unchanged), `freshness/version` (rows not at `RESOLVER_VERSION`, plus rows at it on a stale registry label, each counted once), `freshness/evidence` (the oldest `claim_insert`/`operator_edit` resolve waiting, minutes; the backfill queue a fact).
 
-**Thresholds and their basis.** - Problem above 0: red until zero (rule 25). As a gauge it sends one notice when it first reads Problem, then one reminder a day until it recovers or is acknowledged.
+**Data.** listings (is_active) joined to listing_location; location registry stamps. As built since W1: the one view `location_quality_by_source` (migration 698: listings, properties at their location ad, listing_location, location_claims, the RÚIAN pip geometries, dirty_locations), read in two statements, plus `registry_versions` and this check's own previous result.
+
+**Thresholds and their basis.** - Problem above 0: red until zero (rule 25). As a gauge it sends one notice when it first reads Problem, then one reminder a day until it recovers or is acknowledged. As built since W1 (fixed from day one, ruling Q7): `town`, `ku`, `outside` and their `served/` twins Problem above 0; `town_withheld` Watch above 0, never Problem; `street` Watch (never Problem until the operator rules the floors, W1-b) when the Wilson upper bound is under the portal's fixed floor, 0.9x its share on 10-31 rounded down (`location_street_floor`: bezrealitky 0.62, sreality 0.57, realitymix 0.52, idnes and maxima 0.45, ceskereality 0.38, mmreality 0.35, bazos 0.28, remax 0.04, web none), over at least 200 ads (`location_street_floor_min_n`), and `served/street` under 0.44 (`location_served_street_floor`), Watch only too; `accuracy` Watch when its Wilson lower bound is under 0.90 over at least 30 sampled ads (`location_radius_cover_watch`, `location_accuracy_min_n`), never Problem until W6; `freshness/version` Watch on its first non-zero reading, Problem when the previous stored reading was non-zero too (rows still behind the running resolver version after 6 h: a sweep still running and one never started read alike, so the message points at the worker heartbeat's `lanes.location_resolve.swept`); `freshness/evidence` Problem past 60 min (`location_evidence_backlog_max_min`). Measured on the export of 10-31 13:09Z (`tests/fixtures/health_quality_location_view_now.csv`, mid v5.9 sweep): 10 Problem (every portal's `outside` and `served/outside`, 11,568 published properties, bazos 10,459 of them), 6 Watch (ceskereality 26 and mmreality 1 page-withheld, 21 served; bazos and sreality radius cover; the sweep's first version reading), 0 unresolved.
 - Registry: Watch when the vintage is older than 40 d or a staged load is older than 24 h. As built: Problem, as before this wave, and also when no version is current (`location_registry_max_age_days`, `location_registry_max_staged_hours`): a stalled load is a failure the jobs check cannot see, because a superseded run is cancelled, not failed, and a gauge's Watch sends no notice.
 - Live: 44 (ceskereality 40, realitymix 3, mmreality 1), against 13,239 under the whole-corpus definition, of which 13,192 are inactive ads whose pages are gone. As built: 43 on 10-19 at 13:09Z (ceskereality 39, realitymix 3, mmreality 1), read in 3.1 s with the served predicate's hidden count (0.62 s without it) against the whole corpus's 6.5 s; the inactive 13,192 are a dated fact in the docs, not read each run.
 - Under the old definition: 0 ok rows in 132 runs and 59 alerts.
 
-**Replaces.** its whole-corpus alarm (W15 ruling reversed per Q2; 18 false 'Recovered' on timed-out runs); CoverageLine geo/street % (owned by Location Quality)
+**Replaces.** its whole-corpus alarm (W15 ruling reversed per Q2; 18 false 'Recovered' on timed-out runs); CoverageLine geo/street % (owned by Location Quality). Since W1 also the gauge's own `address_no_ku` (now `ku`) and `cz_no_town` facts; the Location Quality page's aggregates and browser-held thresholds fold into these cells when the page reads the stored result (W1's frontend PR).
 
 ### `data_quality` — data_quality, gauge, every 360 min
 
@@ -405,6 +415,22 @@ A provider with no calls reads ok with the state idle.
 - One provider's success no longer masks another's failure (D30); the pin at test_verify_pipeline.py:759 is replaced.
 
 **Replaces.** llm_errors (any-provider rate gate, 24 h provider window); llm_burn_rate including its starved and idle arms; text_extraction_lag's abort arm (three detectors for one outage become one); the duplicate llm_spend definition (code 90 vs app_settings 130)
+
+### `curation_sync` — platform, alarm, every 60 min
+
+Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, wave W3); it was not in this plan's fifteen.
+
+**Measures.** Does every committed curation change still move the curation clock? Twelve deferred triggers are the clock's only writer, so a trigger a hygiene migration disabled, or a bump that stopped landing, leaves every open window showing stale curation with no error anywhere.
+- `triggers`: Problem unless exactly `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` are enabled (`tgenabled = 'O'`) and initially deferred; the facts name the tables whose trigger is off. A census pins the threshold equal to `CLOCKED_TABLES` (`tests/test_curation_sync_census.py` (j)).
+- `board_bumps`: Problem when a `property_pipeline_events` row of the last 24 h has no `board` clock row of its account changed at or after it. Exact: an event is written only in the transaction of a card change (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`, and the 696 seed stamps every account at the apply. Not measured while the clock is absent.
+- W4 adds `reads` (Watch when the clock read's `pg_stat_statements` calls have not advanced for 24 h) and `load` (Watch at ≥ 5 % of statement time).
+
+**Data.** pg_trigger (12 rows); the board ledger's last 24 h (~10 events a day) against `curation_clock`'s primary key. On the worker, after `notifications`, budget 5 s, no owner page.
+
+**Thresholds and their basis.** - Any departure is a Problem: both cells should never happen. The writer kill switch (§ 3.9 of the curation-sync design) turns `triggers` red by intent while it is in force.
+- Every worker alarm due at once now owes 7 × 45 + 180 + 5 + 5 = 505 s, past the 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path.
+
+**Replaces.** Nothing; new with curation sync.
 
 ### `migration_drift` — platform, alarm, every 60 min
 
@@ -1618,7 +1644,7 @@ The six questions, each with the answer the plan is built on: Q1 ceskereality's 
 
 - **D1 in place of L1.** The claim lane keeps mining the R2 archive; the archive's 7-day per-listing floor is deleted, so every changed body appends. The floor (W2a-7) refused ≥ 1,133 changed bodies a day on the HTML portals, among them the refetch that named the town of the 11 class-A ceskereality ads; its cost premise (8.9 GB/day of Postgres INSERT-then-DELETE) died when bodies moved to R2. Cost: ~1.1k more R2 PUTs a day (+8 %). L1 was dropped: ~390 MB/day of TOAST reads through shared_buffers, and "already mined" would have needed a new column and a 791k-row seed on a 26 GB hot table. The group advisory lock stays (it serialises re-pin and prune).
 - **L2.** `location_refetch` selects `location_steps.town_missing_sql()` over active ads (page older than 6 h, no first-seen term), not the pin-audit matview's `active_no_claims` bucket: 26 candidates at 16:05Z (ceskereality 22, realitymix 3, mmreality 1) against the bucket's 9. The matview and its pg_cron refresh stay (the pin-audit page reads them).
-- **One fragment.** `town_missing_sql` is the check's `cz_no_town_n`, the lane's set (carried verbatim: `location_steps` → `claims_common` → `loader_db` imports `scraper.db`, so importing it there is a cycle) and `located_no_town`'s spelling; the vocabulary rail pins all three.
+- **One fragment.** `town_missing_sql` is the check's `cz_no_town_n` (since W1 the scorecard view's `town_missing`, migration 698, split by evidence into the `town` and `town_withheld` cells), the lane's set (carried verbatim: `location_steps` → `claims_common` → `loader_db` imports `scraper.db`, so importing it there is a cycle) and `located_no_town`'s spelling; the vocabulary rail pins all three.
 - **Expected:** class A gains claims within ~1 h of the deploy (refetch tick +5 min, VERIFY drain, append, fast intake, resolver); `ceskereality/town` 34 → ~23, `realitymix/town` 3 → 0 (or 3 if their pages are gone but still listed), mmreality stays 1; the 24 withheld towns await Q3.
 
 ### Wave 5b as built (2026-10-23)

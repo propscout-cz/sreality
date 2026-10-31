@@ -47,6 +47,8 @@ pytestmark = pytest.mark.skipif(
 # below pins that, and it must stay out of this list.
 _TENANT_VIEWS: list[str] = [
     "collection_properties_public",
+    # The clock read (migration 696): invoker over curation_clock_audience() and the clock's own policy.
+    "curation_clock_public",
     # The kanban's cohort view (migration 417). It is invoker-mode over
     # property_pipeline_public, so its scoping is inherited rather than its
     # own -- which is exactly why it belongs here: inherited scoping is the
@@ -733,6 +735,8 @@ def seeded_tenant_rows(
         # this bare fixture row -- the row itself is still returned, which is
         # what the scoping assertion is about.
         where["pipeline_board_public"] = ("property_id = %s", (prop_pipe,))
+        # The signup bumped A's board (its default stages), so the clock holds A's board row.
+        where["curation_clock_public"] = ("account_id = %s AND family = 'board'", (a_acc,))
     try:
         yield where
     finally:

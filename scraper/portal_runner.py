@@ -51,6 +51,7 @@ from scraper.portal import (
 from scraper.portal_identity import Resolved
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
 from scraper.rate_limit import OUR_REFUSALS, RateLimiter
+from scraper.scraped_listing import ScrapedListing
 
 LOG = logging.getLogger("scraper.portal_runner")
 
@@ -95,6 +96,32 @@ class DrainItem:
     # same fetch twice while its hashes stayed put, biasing the measured change
     # rate LOW exactly when the drain is flaky.
     observation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+CONTENT_FREE_ERROR = "content-free page: no price, area, params, images or description"
+
+
+def content_free(payload: Any) -> bool:
+    """A parsed detail that states NOTHING about the ad is not the ad's page.
+
+    ceskereality's "Ujišťujeme se, že nejste robot!" interstitial parsed to exactly that on
+    2026-10-30 18:17Z, and the drain wrote it into 51 live ads as content: price, area,
+    description and images blanked, `last_seen_at` bumped, the queue row completed as
+    written — rules 2, 4 and 5 broken by one write. realitymix served a category page at a
+    detail URL the same way in August (and the ad is live again today, so that page was a
+    failed fetch, never a gone signal). Keyed on the PAYLOAD'S SHAPE, never the portal
+    (rule 21): every HTML portal and bazos hand the runner a `ScrapedListing` under
+    "listing"; sreality's API payload has another shape, and an interstitial there fails
+    to parse as JSON instead. A real ad with no price states an area or a description;
+    nothing real states none of the five.
+    """
+    listing = payload.get("listing") if isinstance(payload, Mapping) else None
+    if not isinstance(listing, ScrapedListing):
+        return False
+    raw = listing.raw or {}
+    return (listing.price_czk is None and listing.usable_area is None
+            and listing.estate_area is None and not listing.description
+            and not raw.get("params") and not raw.get("image_urls"))
 
 
 class Portal(Protocol):
@@ -1188,6 +1215,10 @@ def run_detail_drain(
                         deferred.append(item.native_id)
                         continue
                     item.discovered_at = enq_by_nid.get(item.native_id)
+                    if item.kind == "ok" and content_free(item.payload):
+                        # A failed fetch, not a write: attempts + 1, no snapshot, no
+                        # sighting (rules 2, 4, 5). The queue retries it like any error.
+                        item.kind, item.error = "error", CONTENT_FREE_ERROR
                     prio = prio_by_nid.get(item.native_id, db.QUEUE_PRIORITY_NEW)
                     if breaker.observe(prio, item.kind):
                         LOG.error("DRAIN %s source=%s; further gone verdicts this run are "

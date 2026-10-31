@@ -3099,7 +3099,7 @@
       "secrets": [],
       "concurrencyGroup": null,
       "cancelInProgress": null,
-      "timeoutMinutes": 9,
+      "timeoutMinutes": 12,
       "permissions": null,
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/test.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/test.yml"

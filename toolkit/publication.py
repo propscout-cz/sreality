@@ -8,16 +8,19 @@ can delay a property but never hide it.
 ONE expression, `visible_since`, defines both: published <=> visible_since <= now(); a watchdog's
 "what appears after it was switched on" is visible_since > active_since.
 
-The SQL surfaces carry the inline text verbatim (browse_projection, migration 669; its latest
-definition held to it by tests/test_browse_read_path_guardrail.py); the Python sites render it
-through these helpers (the EXISTS form, `visible_since_sql` or `CAP_SQL`), each registered in
-tests/test_property_location_ad_rail.py PUBLISHED_RULE_SITES. One cap, spelled here only.
+The SQL surfaces carry the inline text verbatim (browse_projection, migration 669, its latest
+definition held to it by tests/test_browse_read_path_guardrail.py; the location scorecard's
+served cohort, migration 698, held by tests/location_data/test_location_quality_view_contract.py);
+the Python sites render it through these helpers (the EXISTS form, `visible_since_sql` or
+`CAP_SQL`), each registered in tests/test_property_location_ad_rail.py PUBLISHED_RULE_SITES.
+One cap, spelled here only.
 """
 
 from __future__ import annotations
 
 # The one bounded wait. A change is a migration restating browse_projection's WHERE (665's recipe)
-# plus this constant; never a setting (ruling: no flags).
+# and location_quality_by_source's served cohort (698) plus this constant; never a setting (ruling:
+# no flags).
 CAP_SQL = "interval '6 hours'"
 
 
@@ -37,5 +40,5 @@ def published_property_predicate(property_id: str = "l.property_id") -> str:
             f" AND {published_predicate('pp')})")
 
 
-# The text browse_projection carries verbatim (migration 669).
+# The text browse_projection (migration 669) and the location scorecard's served cohort (698) carry verbatim.
 PUBLISHED_PREDICATE = published_predicate()

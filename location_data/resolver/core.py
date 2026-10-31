@@ -80,7 +80,11 @@ def resolve(
             if c.claim_type == "street_name" and step_bind.admissible(c, None) is None
             and normalized[c.id].rejections == ("town_as_street",)),
     )
-    position = step_bind.place(binding, pin_claim, declared=declared)
+    # ONE containment read, two readers (v5.9): `place()` sets a declared-blurred pin outside
+    # the bound obec aside, CHECK records that the pin disagreed.
+    pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
+    position = step_bind.place(
+        binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)
 
     # ---- 2. FILL. It answers the hierarchy AND the position the hierarchy implies: a row
     # the claims could not place is placed at the finest bound unit's own registry point, so
@@ -102,6 +106,7 @@ def resolve(
     verdict = step_check.check(
         ordered, normalized, binding, filled, position, graded.granularity,
         registry=ctx.registry, rank=ctx.granularity_rank, pin_claim=pin_claim,
+        pin_inside_bound_obec=pin_inside_obec,
     )
     granularity = verdict.granularity or graded.granularity
     czech = verdict.country_status == "cz"
