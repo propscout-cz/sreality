@@ -1,7 +1,7 @@
 /* THE panel's section card (.interface-design/system.md § Section cards, X1): a
- * <section> whose title bar holds the title (the h2 under the sheet's h1), an
+ * <section> whose title bar holds the title (the h2 under the panel's h1), an
  * optional bare count and optional actions pushed right, over a body. Every
- * card of the side sheet is built here, so none draws its own frame. No
+ * card of the side panel is built here, so none draws its own frame. No
  * `chrome` and no global `document` at import, so `card.test.ts` runs under node. */
 
 export interface CardOptions {

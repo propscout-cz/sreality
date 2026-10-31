@@ -2,7 +2,7 @@
  * tags) and the search-page card's collection menu: a checkable row per item,
  * the state lines for a list not read yet or failed (never drawn as empty), the
  * last write's failure beside the rows, and the link to where the list is kept.
- * Each surface styles the same class names in its own shadow root. */
+ * Each surface styles the same class names in its own stylesheet. */
 
 import type { Collection } from '../../frontend/src/lib/types';
 import { COLLECTIONS_URL } from './config';
@@ -25,7 +25,7 @@ export interface Checklist<T> {
   manage: { href: string; text: string } | null;
 }
 
-/* A list's state in one line; the side sheet draws a failed read as its failure lines ('err'). */
+/* A list's state in one line; the side panel draws a failed read as its failure lines ('err'). */
 export function stateLine(text: string, retry?: () => void, cls = 'state'): HTMLElement {
   const p = h('p', cls, text);
   if (retry != null) {
