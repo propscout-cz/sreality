@@ -1216,6 +1216,17 @@ component is slimmed twice — each wave rewrites one component and slims its st
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
   mirror of the shape test.
 
+- **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
+  2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
+  The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
+  process's (resolver version, registry label) pair changes (active listings first), the drain claims
+  by `(reason = 'full_sweep'), next_eligible_at, listing_id` so evidence always beats backfill, and a
+  boot that changed nothing sweeps 0 rows. Deleted: `.github/workflows/location_resolve.yml` (both
+  crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
+  `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
+  the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
+  The refetch lane ticks hourly, a constant.
+
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
 campaigns or schedules (except the plain-text location reader, ruled 2026-09-29; its stored reading

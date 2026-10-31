@@ -47,17 +47,19 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
-- location_resolve: every `realtime_location_resolve_interval_seconds`
-             (default 15), one bounded pass of THE location resolver drain
-             (location_data.resolver.drain.run — the same code
-             location_resolve.yml runs), budget
+- location_resolve: every `realtime_location_resolve_interval_seconds` (absent = 15 s,
+             0 = idle; the ONE control since W2 of the location programme, no flag),
+             first `drain.reconcile`: sweep the corpus when this process's
+             (resolver version, registry label) pair changed — a deploy, a registry
+             publish — active listings first; else ONE bounded pass of THE location
+             resolver drain (location_data.resolver.drain.run), budget
              `realtime_location_resolve_max_seconds` (default 240, clamped) over
              `realtime_location_resolve_batch_size` rows (default 250, clamped),
              draining `LOCATION_RESOLVE_WORKERS` slices CONCURRENTLY (env var,
-             default 4, clamped — a throughput knob, not a flag; see the
-             constant block below). DARK until
-             `realtime_location_resolve_enabled` is set. Safe beside
-             location_resolve.yml: both take the SAME scheduled_jobs lease row.
+             default 4, clamped — a throughput knob, not a flag). The ONLY runtime
+             of the resolver since 2026-10-31 (ruling Q9): the GitHub lane is gone;
+             the drain claims evidence rows ahead of the sweep's, under the
+             scheduled_jobs lease.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
              (location_data.claims_intake.run, the same code
@@ -67,16 +69,17 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
-- location_refetch: every `LOCATION_REFETCH_INTERVAL_S` (default 86400, first
-             tick a few minutes after start), queue the active ads with no town
+- location_refetch: every hour (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
+             the active ads with no town
              (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
              `LOCATION_REFETCH_CAP_PER_SOURCE` (default 500) rows per portal per
              tick. ceskereality and realitymix geocode an ad AFTER publishing it,
              so a listing fetched at discovery carried no location and nothing
              ever re-read it; the drain does the rest (a bazos category page
-             raises ListingGoneError: a gone verdict, rule #3). LIVE by default
-             (`LOCATION_REFETCH_ENABLED=0` idles it).
+             raises ListingGoneError: a gone verdict, rule #3). The predicate (a
+             page at least `LOCATION_REFETCH_MIN_AGE_S` old) bounds the traffic,
+             not the tick.
 - sold_comps: every `realtime_sold_comps_interval_seconds` (DARK: the seeded row is
              0), fetch registered sales from reas.cz for up to 5 obec cells — the
              towns where the deal pipeline holds a live card, stalest first, minus
@@ -307,19 +310,15 @@ ESTIMATION_JOB_LANE_SETTING = "estimation_job_lane_enabled"
 ESTIMATION_INTERVAL_DEFAULT = 5
 ESTIMATION_STUCK_MINUTES_DEFAULT = 15
 
-# location_resolve lane (Decision 8b): THE resolver drain
-# (location_data.resolver.drain.run) run from here instead of only from
-# location_resolve.yml. The drain's cost is round trips, not work — ~11 registry
-# round trips per listing at ~120 ms from a US GitHub runner measured 0.7
-# listings/s, and GitHub fires the schedule ~7x/day, against a >100k
-# dirty_locations queue. This worker sits next to the database in the EU, so the
-# same code costs ~1-2 ms per trip and runs continuously. The GH lane STAYS as
-# the backstop (and owns --full-sweep / --dry-run / --listing-id); the two can
-# never drain at once because both take the SAME scheduled_jobs lease row.
-# Named location_resolve, never "resolve"/"drain": this worker already has a
-# lane called `drain` (the portal detail drain) whose heartbeat key and
+# location_resolve lane: THE resolver drain (location_data.resolver.drain.run), and since the
+# location programme's W2 (ruling Q9, 2026-10-31) its ONLY runtime: the GitHub
+# location_resolve.yml lane is gone. Each pass first asks `drain.reconcile` whether this
+# process's (resolver version, registry label) pair changed — a deploy, a registry publish —
+# and if so spends the pass on the corpus sweep (active listings first); otherwise it drains,
+# evidence rows before backfill. The interval setting is the ONE control (absent = 15 s,
+# 0 = idle-not-dead); there is no flag. Named location_resolve, never "resolve"/"drain": this
+# worker already has a lane called `drain` (the portal detail drain) whose heartbeat key and
 # jobs cell (`lane/drain`) would become unreadable.
-LOCATION_RESOLVE_LANE_SETTING = "realtime_location_resolve_enabled"
 LOCATION_RESOLVE_INTERVAL_DEFAULT = 15
 LOCATION_RESOLVE_MAX_SECONDS_DEFAULT = 240
 # A pass must stay clear of the jobs check's 1200 s in-flight Watch (a
@@ -461,22 +460,18 @@ _INTAKE_FAST_CONTRACTS_PROJECTED = False
 # first) is what keeps a portal with thousands of dead ads polite: it drains over days
 # instead of flooding one drain pass. Env vars, not app_settings: like the intake lane,
 # these are properties of the service this process runs on, and the reader touching no
-# database is what lets the lane ship LIVE (see _read_location_refetch_interval).
-LOCATION_REFETCH_ENABLED_ENV = "LOCATION_REFETCH_ENABLED"
-LOCATION_REFETCH_INTERVAL_ENV = "LOCATION_REFETCH_INTERVAL_S"
+# database is what lets the lane ship LIVE.
 LOCATION_REFETCH_MIN_AGE_ENV = "LOCATION_REFETCH_MIN_AGE_S"
 LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
-LOCATION_REFETCH_INTERVAL_DEFAULT = 86400
+# One constant tick (W2). The predicate bounds traffic per listing (a page younger than
+# MIN_AGE is skipped), so the tick rate costs one ~1 s SELECT an hour and nothing else; an
+# hourly tick is what makes the lane's liveness judgeable (Watch after 3 h, not 3 days).
+LOCATION_REFETCH_TICK_SECONDS = 3600.0
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
 # the portals' geocoding lag, and it means a listing discovered today gets its second look
 # on TOMORROW's tick rather than waiting for the day after.
 LOCATION_REFETCH_MIN_AGE_DEFAULT = 21600
 LOCATION_REFETCH_CAP_DEFAULT = 500
-# The first tick waits, for two reasons: a redeploy restarts every lane at once (the drain's
-# first pass, the contract projection, the intake's first walk) and a daily lane has no
-# reason to compete for that minute; and a deploy loop must not fire a queue-writing pass
-# every time the container restarts.
-LOCATION_REFETCH_FIRST_DELAY_SECONDS = 300.0
 
 # sold_comps lane (sold-comps W2): REGISTERED SALES FOR THE TOWNS THE OPERATOR IS
 # ACTUALLY WORKING IN. A sale is an external fact with no account and no listing, so
@@ -800,11 +795,9 @@ def _read_estimation_stuck_minutes() -> int:
 
 
 def _read_location_resolve_interval() -> int:
-    # The flag gates the lane via interval<=0 (idle-not-dead, the _lane_loop
-    # contract): disabled => 0 (no lease attempt at all), enabled => the
-    # configured poll interval. Ships dark because the flag defaults absent.
-    if not _read_flag(LOCATION_RESOLVE_LANE_SETTING):
-        return 0
+    # ONE control, the sold_comps/autodedup convention: the interval IS the cadence and the
+    # kill switch (interval<=0 = idle-not-dead, the _lane_loop contract). Absent = 15 s. No
+    # flag: as the only runtime a dark default would mean a fresh environment never resolves.
     return _read_int(
         "realtime_location_resolve_interval_seconds",
         LOCATION_RESOLVE_INTERVAL_DEFAULT,
@@ -886,18 +879,6 @@ def _read_location_intake_fast_budget() -> int:
 def _read_location_intake_fast_bodies_cap() -> int:
     return _env_int(LOCATION_INTAKE_FAST_BODIES_CAP_ENV,
                     LOCATION_INTAKE_FAST_BODIES_CAP_DEFAULT, minimum=1, maximum=5000)
-
-
-def _read_location_refetch_interval() -> int:
-    # The flag gates the lane via interval<=0 (idle-not-dead, the _lane_loop contract).
-    # Ships LIVE — the lane is the fix itself, and an env var the operator must remember to
-    # set on the Railway service is a fix that never runs.
-    if not _env_flag(LOCATION_REFETCH_ENABLED_ENV, default=True):
-        return 0
-    # Floor of an hour: this lane writes to the shared queue, and nothing about it gets
-    # better by running more often than the portals geocode.
-    return _env_int(LOCATION_REFETCH_INTERVAL_ENV, LOCATION_REFETCH_INTERVAL_DEFAULT,
-                    minimum=3600, maximum=7 * 86400)
 
 
 def _read_location_refetch_min_age() -> int:
@@ -1514,10 +1495,10 @@ def _tune_resolver_log_level(*, idle: bool) -> None:
 
 
 def _location_resolve_sync() -> dict[str, Any]:
-    """One bounded pass of THE resolver drain (location_data.resolver.drain.run)
-    under THE shared scheduled_jobs lease, so this lane and location_resolve.yml
-    can never drain at once — plus an in-process lock, because an abandoned pass
-    outlives its lease. Lazy import keeps location_data off the worker's startup
+    """One pass of THE resolver under THE scheduled_jobs lease: `drain.reconcile`
+    (a corpus sweep when this process's version pair changed; the pass ends there),
+    else one bounded drain (location_data.resolver.drain.run) — plus an in-process
+    lock, because an abandoned pass outlives its lease. Lazy import keeps location_data off the worker's startup
     path; module-attribute calls (drain.run / job_lease.held) keep both patchable
     in tests. No try/except around run(): a raise is the signal — job_lease.held
     stamps last_outcome='failed' and re-raises, and _lane_loop records the
@@ -1573,7 +1554,7 @@ def _location_resolve_sync() -> dict[str, Any]:
                 if hold is None:
                     if not _RESOLVE_LEASE_BUSY_LOGGED:
                         _RESOLVE_LEASE_BUSY_LOGGED = True
-                        # Never says WHY: a lease held by location_resolve.yml
+                        # Never says WHY: a lease held by another worker process
                         # and an operator's pause (scheduled_jobs.paused_until)
                         # are the same answer here, and guessing between them
                         # misdirects whoever is asking why the queue is not
@@ -1584,6 +1565,15 @@ def _location_resolve_sync() -> dict[str, Any]:
                         )
                     return {"acquired": False, "session_pooler": session_pooler}
                 _RESOLVE_LEASE_BUSY_LOGGED = False
+                # A sweep pass does nothing else (W2): the next pass, 15 s later, drains,
+                # so a corpus sweep never shares the lease TTL with a drain budget. The
+                # fence is asked between sweep windows; a cut sweep records no pair and the
+                # next pass re-sweeps.
+                swept = drain.reconcile(conn, stop=hold.fenced)
+                if swept is not None:
+                    _RESOLVE_LAST_IDLE = False
+                    return {"acquired": True, "session_pooler": session_pooler,
+                            "swept": swept, "claimed": 0}
                 stats = drain.run(
                     conn, batch_size=batch_size, max_seconds=max_seconds,
                     workers=_read_location_resolve_workers())
@@ -1623,6 +1613,15 @@ async def _location_resolve_pass(
     if stop_event.is_set():
         return
     last = await asyncio.to_thread(_location_resolve_sync)
+    if last.get("swept"):
+        # The WORKER logger, on purpose: once the queue is idle the drain logger sits at
+        # WARNING and would hide the sweep. Carried in the lane's heartbeat under `swept`
+        # (not inside `last`, which the next pass overwrites 15 s later), so the acceptance
+        # read "a boot that changed nothing enqueued 0 rows" is one SELECT.
+        LOG.info("LOCATION_RESOLVE lane swept pair=%s enqueued=%s complete=%s",
+                 last["swept"]["pair"], last["swept"]["rows"], last["swept"]["complete"])
+        state["lanes"].setdefault("location_resolve", {})["swept"] = {
+            **last["swept"], "at": datetime.now(timezone.utc).isoformat()}
     # Only when the pass did work: at a 15 s cadence an unconditional summary is
     # 5.7k lines/day of "claimed=0" once the queue is drained. The heartbeat
     # records every pass either way.
@@ -1832,8 +1831,10 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One daily tick: read the active ads with no town whose page is old enough, and
-    queue them for one more detail fetch at VERIFY priority.
+    """One hourly tick: read the active ads with no town whose newest page or payload is at
+    least LOCATION_REFETCH_MIN_AGE_S old, and queue them for one more detail fetch at VERIFY
+    priority, at most LOCATION_REFETCH_CAP_PER_SOURCE per portal — so a townless ad is re-read
+    every 6 h or more while it stays townless.
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
@@ -2928,17 +2929,14 @@ async def _amain() -> int:
             lambda: _estimation_pass(stop_event, state),
             state,
             default_interval=ESTIMATION_INTERVAL_DEFAULT)),
-        # default_interval=0 is the FAIL-SAFE, not a default: _lane_loop keeps
-        # this value when the app_settings read RAISES, and the flag lives
-        # inside the read that just failed. A positive fallback would turn a
-        # dark, deliberately-idled lane ON for one pass on any pooler blip —
-        # e.g. mid-migration or mid-registry-load, which is exactly when it must
-        # not drain. (It named `epoch_job` until W2-a deleted the epoch engine.)
+        # default_interval is the lane's own cadence (W2): it is the only runtime of the
+        # resolver, so a settings read that fails must not idle it. A pass during a registry
+        # load is harmless — its rows carry the old label and the publish's sweep redoes them.
         ("location_resolve", lambda: _lane_loop(
             "location_resolve", stop_event, _read_location_resolve_interval,
             lambda: _location_resolve_pass(stop_event, state),
             state,
-            default_interval=0)),
+            default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT)),
         # default_interval is the lane's OWN cadence here, not 0: this reader touches no
         # database (env vars only), so it cannot fail the way the app_settings readers can,
         # and the lane ships LIVE.
@@ -2947,15 +2945,14 @@ async def _amain() -> int:
             lambda: _location_intake_fast_pass(stop_event, state),
             state,
             default_interval=LOCATION_INTAKE_FAST_INTERVAL_DEFAULT)),
-        # Daily, and it does NOT alarm as dead between ticks: the jobs check judges a lane
-        # late against the interval_s it wrote (past 3 x a day here), and a failing pass
-        # of a daily lane at once, since it passes about once per boot.
+        # Hourly, a constant (W2): the predicate bounds the traffic, the tick only decides
+        # how soon a townless ad's second look is queued and how soon liveness notices a
+        # dead lane (Watch after 3 h).
         ("location_refetch", lambda: _lane_loop(
-            "location_refetch", stop_event, _read_location_refetch_interval,
+            "location_refetch", stop_event, lambda: LOCATION_REFETCH_TICK_SECONDS,
             lambda: _location_refetch_pass(stop_event, state),
             state,
-            default_interval=LOCATION_REFETCH_INTERVAL_DEFAULT,
-            first_delay_seconds=LOCATION_REFETCH_FIRST_DELAY_SECONDS)),
+            default_interval=LOCATION_REFETCH_TICK_SECONDS)),
         # default_interval=0 for the location_resolve lane's reason above: the
         # interval IS the kill switch, so a settings-read failure must not wake a
         # lane the operator deliberately left dark — and this one spends an external

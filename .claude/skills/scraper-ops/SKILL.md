@@ -334,10 +334,10 @@ Per-lane notes:
   its slot. Ships **DARK**: idle until `estimation_job_lane_enabled` is set — the SAME flag makes
   `POST /estimations` route rows to the lane instead of an in-process BackgroundTask, so the
   cutover (and rollback) is one setting, no deploy.
-- **Location-resolve lane** (Decision 8b) — THE resolver drain from here, not only from the
-  `location_resolve.yml` cron (round-trip-bound: 0.7 listings/s from a US runner; W2-a cut the
-  per-listing registry reads from ~11 to ~4 and the writes from 7 to 1). Ships DARK; enable via
-  `realtime_location_resolve_enabled`. Live tuning:
+- **Location-resolve lane** (the ONLY resolver runtime since 2026-10-31, ruling Q9; the GH lane
+  and the flag are gone). A pass sweeps when the (resolver version, registry label) pair changed
+  (`drain.reconcile`; heartbeat `lanes.location_resolve.swept`), else drains, evidence first.
+  One control: `realtime_location_resolve_interval_seconds` (absent 15 s, 0 idles). Live tuning:
   `realtime_location_resolve_{interval_seconds,max_seconds,batch_size}` (15/240/250), interval `0`
   idles. Since W2-a5 a pass drains **`LOCATION_RESOLVE_WORKERS`** slices concurrently (env on the
   Railway service, default 4, clamped 1–8; one thread + one session connection each, disjoint by

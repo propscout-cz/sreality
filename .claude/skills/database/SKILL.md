@@ -470,7 +470,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
   to `ruian_streets` in the anchoring obec is not published, so `street_name IS NOT NULL` implies
   `ulice_kod IS NOT NULL` — but only on rows re-resolved at v5.2 or later, i.e. after the
-  `location_resolve.yml mode=full-resolve` sweep the bump triggers; check `resolver_version`
+  worker's own sweep that a bump triggers (W2: no hand dispatch); check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
   are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;

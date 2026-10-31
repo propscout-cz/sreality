@@ -32,7 +32,7 @@ from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
 from tests.migration_defs import MIGRATIONS, latest_definition
 
-FIXED = 11
+FIXED = 10
 ROOT = Path(__file__).resolve().parents[2]
 API_MAIN = ROOT / "api" / "main.py"
 
@@ -314,13 +314,6 @@ def test_the_db_heavy_census_fires() -> None:
     assert db_heavy_problems([*[j for j in jobs.declared() if j.name != "location_intake"], heavy_intake])
     overlapping = replace(_entry("property_sweep"), name="property_twin", resource="elsewhere")
     assert db_heavy_problems([*jobs.declared(), overlapping])
-    # property_sweep at 02:00: full_resolve's 01:00 run, killed at its timeout, holds through the kill grace.
-    at_two = [replace(j, offset_s=2 * jobs.HOUR) if j.name == "property_sweep" else j for j in jobs.declared()]
-    assert db_heavy_problems(at_two)
-    # A 40-minute full_resolve is done by 02:00 on its slot, not after waiting on intake's 00:35 run.
-    short = [replace(j, timeout_s=40 * 60) if j.name == "location_full_resolve" else j for j in at_two]
-    assert db_heavy_problems(short)
-    assert db_heavy_problems([j for j in short if j.name != "location_intake"]) == []
 
 
 def _module_constant(source: str, name: str) -> object:
@@ -473,7 +466,7 @@ GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # Until the walks move (#2029) that blocks onboarding a portal: a name added here needs an operator ruling.
 # The PR moving the last waiting job deletes this set, jobs.UNTIL_MOVED and the LEAVERS lines whose file is gone.
 ORIGINAL_UNTIL_MOVED = frozenset({
-    "stale_images", "rent_map", "map_overlays", "location_full_resolve", "property_sweep", "broker_sweep",
+    "stale_images", "rent_map", "map_overlays", "property_sweep", "broker_sweep",
     "location_intake", "clip", "ruian_load",
     "walk_bazos", "walk_bezrealitky", "walk_ceskereality", "walk_idnes", "walk_maxima", "walk_mmreality",
     "walk_realitymix", "walk_remax", "walk_sreality", "walk_web",
@@ -497,7 +490,7 @@ def _switches(argv: tuple[str, ...]) -> set[str]:
 
 def _invokes(job: Job, workflow: Workflow) -> bool:
     """The file runs this entry's job: its module, carrying the entry's switches unless the command builds every
-    flag in a shell variable (location_resolve.yml runs the drain twice; only the --full-sweep call is the job)."""
+    flag in a shell variable (a workflow may run one module twice; only the call carrying the job's switches is the job)."""
     return any(c.module == job.argv[0] and (not c.flags or _switches(job.argv) <= c.flags)
                for c in workflow.invocations)
 
@@ -548,9 +541,9 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    resolve = workflows["location_resolve.yml"]
-    tick_only = replace(resolve, invocations=tuple(c for c in resolve.invocations if "--full-sweep" not in c.flags))
-    assert pairing_problems(jobs.declared(), {**workflows, "location_resolve.yml": tick_only})
+    intake = workflows["location_claims_intake.yml"]
+    silent = replace(intake, invocations=tuple(c for c in intake.invocations if c.module != "location_data.claims_intake"))
+    assert pairing_problems(jobs.declared(), {**workflows, "location_claims_intake.yml": silent})
     stray = Workflow("phash2.yml", True, 600, (Invocation("scripts.compute_image_phash2", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "phash2.yml": stray})
     # ingest_boundaries.yml runs the overlay module by hand; only ATTENDED keeps it from being map_overlays' 2nd host.

@@ -5194,11 +5194,13 @@ row replays byte-identically from its inputs and the three version ids stamped o
 
 **THE SWEEP IS THE INVARIANT'S BACKSTOP, AND THE QUEUE IS RE-ENTRANT.** `_SWEEP_SQL` — ONE statement,
 driving off `listings` in id windows — enqueues every listing whose row is missing or carries a stale
-`resolver_version` / `registry_version`, which is also how a version bump reaches the corpus, plus a
-fourth arm: `obec_kod IS NULL AND country_status <> 'foreign'`, so every Czech listing without a town
-is re-resolved nightly (`location_resolve.yml`, 03:17 UTC, `mode=full-resolve`) until it has one or
-is determined foreign — the version arms could not express that, because a townless row is stamped at
-the CURRENT version tuple. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
+`resolver_version` / `registry_version`, which is how a version bump or a registry publish reaches
+the corpus. Since W2 of the location quality programme (ruling Q9, 2026-10-31) the WORKER runs it
+through `drain.reconcile` whenever its (resolver version, registry label) pair changes — active
+listings first — and the drain claims evidence rows (`claim_insert`, `operator_edit`) ahead of the
+sweep's; the GitHub `location_resolve.yml` lane, the lane's flag and every hand dispatch are gone,
+and so is the nightly red-line arm (13,224 townless rows re-resolved a day, 99.8 % inactive, 0 towns
+gained): a row changes only when evidence, code or the register changes. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
 operator edit) is `ON CONFLICT (listing_id) DO UPDATE SET enqueued_at = now(), attempts = 0,
 next_eligible_at = now()`, and every statement that FINISHES a queue row (both deletes and the
 failure stamp) is bounded by the `enqueued_at` the slice claimed, so evidence arriving mid-slice
