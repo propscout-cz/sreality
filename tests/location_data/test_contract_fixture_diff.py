@@ -212,11 +212,9 @@ def bodies_for(source: str) -> dict[str, tuple[Body, ...]]:
 # where a reader emits one, so a golden without one reads as before.
 _CLAIM_FIELDS = (
     "claim_type", "surface", "page_kind", "extraction_method",
-    "value_text", "value_num", "value_geom_wkt", "value_shape_wkt",
-    "value_jsonb", "distance_m", "travel_mode", "target_text",
-    "declared_precision_label", "declared_confidence", "declared_radius_m",
-    "claim_confidence", "blur_evidence", "licence_class",
-    "subject_scoped", "legacy_source_column",
+    "value_text", "value_num", "value_geom_wkt", "value_shape_wkt", "value_jsonb",
+    "declared_precision_label", "declared_radius_m",
+    "claim_confidence", "blur_evidence", "licence_class", "subject_scoped",
 )
 
 
@@ -425,10 +423,8 @@ def _diff_group(kind: str, identity: tuple[Any, ...], olds: list[dict[str, Any]]
                 news: list[dict[str, Any]], fields: tuple[str, ...]) -> list[str]:
     """One identity's items. Byte-identical items are matched by CONTENT before anything is
     paired positionally: an entry with `cardinality: many` emits several claims under one
-    extractor_id and claim_type (sreality's 13 `sr.idx.poi_distance` values, told apart only
-    by target_text/distance_m — inert until a W2 reader wires it up), and pairing those by
-    position alone would report a harmless reorder as N field changes and force a needless
-    re-bless."""
+    extractor_id and claim_type, and pairing those by position alone would report a harmless
+    reorder as N field changes and force a needless re-bless."""
     rest_old, rest_new = list(olds), list(news)
     for item in list(rest_new):
         if item in rest_old:
@@ -611,17 +607,16 @@ def _poi_golden(pois: list[tuple[str, int]]) -> dict[str, Any]:
         "fixtures": [{
             "listing": "520268", "body": "synthetic", "row": {}, "refusals": {},
             "claims": [{"extractor_id": "sr.idx.poi_distance", "claim_type": "poi_distance",
-                        "target_text": name, "distance_m": metres}
+                        "value_text": name, "value_num": metres}
                        for name, metres in pois],
         }],
     }
 
 
 def test_a_cardinality_many_reorder_is_not_read_as_a_field_change() -> None:
-    """`sr.idx.poi_distance` emits 13 claims under ONE extractor_id and claim_type, told
-    apart only by target_text/distance_m. Positional pairing would render a reorder as N
-    changed fields and force a re-bless that reviews nothing. Inert until W2 wires the
-    reader — the shape is asserted now so it is not rediscovered the hard way."""
+    """Several claims under ONE extractor_id and claim_type, told apart only by their values.
+    Positional pairing would render a reorder as N changed fields and force a re-bless that
+    reviews nothing."""
     pois = [("Park Riegrovy sady", 220), ("Náměstí Míru", 450), ("Vinohradská", 90)]
 
     assert diff_golden(_poi_golden(pois), _poi_golden(pois)) == []
@@ -634,7 +629,7 @@ def test_a_cardinality_many_reorder_is_not_read_as_a_field_change() -> None:
     moved_and_edited = [pois[2], pois[1], ("Park Riegrovy sady", 999)]
     rendered = "\n".join(diff_golden(_poi_golden(pois), _poi_golden(moved_and_edited)))
     assert "~ changed  claim sr.idx.poi_distance / poi_distance" in rendered
-    assert "distance_m: 220 -> 999" in rendered
+    assert "value_num: 220 -> 999" in rendered
 
 
 def test_the_diff_names_the_field_and_both_values() -> None:

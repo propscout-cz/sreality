@@ -287,8 +287,7 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
         optional_keys=frozenset({"labels"})),
     "conflict_signal": ReaderContract(
         substrates=_PAYLOAD_SURFACES, methods=_STRUCTURED,
-        locator_keys=frozenset({"json_pointer"}),
-        optional_keys=frozenset({"legacy_source_column"})),
+        locator_keys=frozenset({"json_pointer"})),
     # --- W2-6: DOM readers. `css` is required on all three, so a selector-less entry fails
     # CI rather than matching nothing forever in production.
     "html_text": ReaderContract(

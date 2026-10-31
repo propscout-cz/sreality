@@ -40,18 +40,13 @@
             "coords_source": "page",
             "ladder": "first_party_page"
           },
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
           "history_completeness": "locality_text_only",
           "subject_scoped": true,
-          "legacy_source_column": "listings.geom",
           "legacy_write_path_unknown": false
         },
         {
@@ -68,18 +63,13 @@
           "value_jsonb": {
             "source": "page"
           },
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
           "history_completeness": "locality_text_only",
           "subject_scoped": true,
-          "legacy_source_column": "raw_json.coords",
           "legacy_write_path_unknown": false
         },
         {
@@ -94,18 +84,13 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
           "history_completeness": "locality_text_only",
           "subject_scoped": true,
-          "legacy_source_column": "raw_json.locality_text",
           "legacy_write_path_unknown": false
         }
       ],

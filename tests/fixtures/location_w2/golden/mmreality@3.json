@@ -31,17 +31,12 @@
           "value_geom_wkt": "POINT(17.389086312 50.060813844)",
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         },
         {
           "extractor_id": "mm.det.accurate",
@@ -54,17 +49,12 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": "accurate",
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         },
         {
           "extractor_id": "mm.det.country",
@@ -77,17 +67,12 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         },
         {
           "extractor_id": "mm.det.district",
@@ -100,17 +85,12 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         },
         {
           "extractor_id": "mm.det.municipality",
@@ -123,17 +103,12 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         },
         {
           "extractor_id": "mm.det.municipality_part",
@@ -146,17 +121,12 @@
           "value_geom_wkt": null,
           "value_shape_wkt": null,
           "value_jsonb": null,
-          "distance_m": null,
-          "travel_mode": null,
-          "target_text": null,
           "declared_precision_label": null,
-          "declared_confidence": null,
           "declared_radius_m": null,
           "claim_confidence": null,
           "blur_evidence": "none",
           "licence_class": "portal",
-          "subject_scoped": true,
-          "legacy_source_column": null
+          "subject_scoped": true
         }
       ],
       "refusals": {}

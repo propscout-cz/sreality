@@ -311,14 +311,9 @@ class Claim:
     value_geom_wkt: str | None = None
     value_shape_wkt: str | None = None
     value_jsonb: Any | None = None
-    distance_m: int | None = None
-    travel_mode: str | None = None
-    target_text: str | None = None
     declared_precision_label: str | None = None
-    declared_confidence: str | None = None
     declared_radius_m: float | None = None
     subject_scoped: bool | None = None
-    legacy_source_column: str | None = None
     # NULL on every claim this lane writes since W3 deleted the headline's `low` (only the
     # operator writes one, 'exact'); the column goes with a later, destructive migration.
     claim_confidence: str | None = None
@@ -960,8 +955,7 @@ def claim_value_bytes(claim: Claim) -> int:
     if claim.value_jsonb is not None:
         total += len(json.dumps(claim.value_jsonb, ensure_ascii=False,
                                 default=str).encode("utf-8"))
-    for text in (claim.value_text, claim.value_geom_wkt, claim.value_shape_wkt,
-                 claim.target_text):
+    for text in (claim.value_text, claim.value_geom_wkt, claim.value_shape_wkt):
         if text is not None:
             total += len(text.encode("utf-8"))
     return total

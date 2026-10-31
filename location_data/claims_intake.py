@@ -286,9 +286,7 @@ def _read_conflict_signal(entry: Entry, row: ListingRow) -> list[Claim]:
     value = _text(json_pointer(row.raw_json, str(entry.locator["json_pointer"])))
     if value is None:
         return []
-    return [_base(entry, row, value_text=value, subject_scoped=False,
-                  legacy_source_column=str(entry.locator.get("legacy_source_column")
-                                            or "raw_json.address"))]
+    return [_base(entry, row, value_text=value, subject_scoped=False)]
 
 
 @reader("namespaced_id")
