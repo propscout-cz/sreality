@@ -26,7 +26,10 @@ for `cast_obce` or a street (`location_data/ruian_boundaries.LAYERS`), so:
     (`_named_unit`);
   * cast_obce -> BY NAME against the mirror's name index, inside the PIP'd obec;
   * ulice -> BY NAME inside the PIP'd obec (`_bind_street`), then the border
-    guard. An address pick binds the street its `regionalStructure` names.
+    guard. An address pick binds the street its `regionalStructure` names;
+  * adresni_misto (the address picker's flag only, W3b) -> that street's doors
+    of the picked number, or the obec's for a streetless village, read by the
+    resolver's own `address_points_by_number`: ONE door near the pick, or none.
 
 Suggestions are regional only (`type=regional`): a POI has no register unit.
 """
@@ -43,10 +46,13 @@ from fastapi import HTTPException
 
 from api import http_json
 from api.location_filter import ChipLevel
+from location_data.resolver.bind import REGISTRY_PIN_CONFLICT_M
 from location_data.resolver.composite import match_streets
 from location_data.resolver.geo import haversine_m
 from location_data.resolver.normalize import (
     case_fold,
+    house_number,
+    normalize_house_number,
     normalize_match_key,
     split_street_and_number,
 )
@@ -328,8 +334,8 @@ def _bind_street(
 def _resolve_street(
     conn: Any, *, version: int, name: str | None, obec_code: int,
     lat: float, lng: float,
-) -> tuple[int, str] | None:
-    """The picked street's (code, register name), or None with one LOG line."""
+) -> Street | None:
+    """The picked street, or None with one LOG line."""
     if not name or not any(ch.isalpha() for ch in name):
         # Blank or bare digits: no register street is spelled without a letter
         # (0 of 83,476, 2026-10-03), so the obec's street list is not even read.
@@ -352,21 +358,80 @@ def _resolve_street(
                 point.extent_m,
             )
             return None
-    return street.code, street.name
+    return street
+
+
+def _entry(regional_structure: Sequence[Any], type_: str) -> str | None:
+    """The name of the regionalStructure entry of this type, if any."""
+    return next(
+        (e["name"] for e in regional_structure
+         if isinstance(e, dict) and e.get("type") == type_ and isinstance(e.get("name"), str)),
+        None,
+    )
 
 
 def _street_of(type_: str, name: str, regional_structure: Sequence[Any]) -> str | None:
     """The name a pick is bound by: its own, except an address, which binds the
     `regional.street` entry of its regionalStructure (a street-less village
     address has none, and so binds nothing)."""
-    if type_ != "regional.address":
-        return name
-    return next(
-        (e["name"] for e in regional_structure
-         if isinstance(e, dict) and e.get("type") == "regional.street"
-         and isinstance(e.get("name"), str)),
-        None,
+    return name if type_ != "regional.address" else _entry(regional_structure, "regional.street")
+
+
+# The door's label: the ONE label (rule 25) over its register fields, as the row will read.
+_DOOR_LABEL_SQL = """
+SELECT location_display_label(
+         s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
+         ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
+         o.name, c.name, 'CZ', 'cz')
+  FROM ruian_address_points ap
+  LEFT JOIN ruian_streets s ON s.id = ap.street_id
+  LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
+  LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id
+ WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
+ LIMIT 1
+"""
+
+
+# THE ADDRESS PICKER'S DOOR (W3b). The number is the `regional.address` entry's; a street
+# entry binds as the chip does and, unbound, binds nothing (never the whole obec). One keyed
+# read of the resolver's own lookup — nothing searches the 3 M points — and exactly ONE door
+# of that number within `REGISTRY_PIN_CONFLICT_M` of the pick, else no code.
+def _resolve_address_point(
+    conn: Any, *, version: int, lat: float, lng: float, name: str,
+    regional_structure: Sequence[Any],
+) -> tuple[int, str | None] | None:
+    """The picked door's (kód ADM, label), or None with one LOG line."""
+    obec = _containing_chain(conn, version=version, lat=lat, lng=lng).get("obec")
+    slots = normalize_house_number(_entry(regional_structure, "regional.address") or "")
+    number, typ = house_number(slots)
+    if obec is None or number is None:
+        LOG.info("maps.resolve: address %r has no obec or number — no code", name)
+        return None
+    street = None
+    street_name = _street_of("regional.address", name, regional_structure)
+    if street_name is not None:
+        street = _resolve_street(conn, version=version, name=street_name, obec_code=obec[1],
+                                 lat=lat, lng=lng)
+        if street is None:
+            return None
+    co, znak = slots.get("cislo_orientacni"), slots.get("znak_orientacniho")
+    doors = SqlRegistryView(conn, version).address_points_by_number(
+        obec_kod=obec[1], street_name_norm=None if street is None else street.name_norm,
+        cislo_domovni=number, cislo_orientacni=None if co is None else int(str(co)),
+        typ_so=typ,
     )
+    near = [d for d in doors
+            if (co is None or (d.znak_orientacniho or "").lower() == (znak or ""))
+            and d.lat is not None and d.lon is not None
+            and haversine_m(lat, lng, d.lat, d.lon) <= REGISTRY_PIN_CONFLICT_M]
+    if len(near) != 1:
+        LOG.info("maps.resolve: address %r has %d doors within %.0f m of the pick — no code",
+                 name, len(near), REGISTRY_PIN_CONFLICT_M)
+        return None
+    with conn.cursor() as cur:
+        cur.execute(_DOOR_LABEL_SQL, (near[0].kod_adm,))
+        row = cur.fetchone()
+    return near[0].kod_adm, None if row is None else row[0]
 
 
 # THE NAME RULE (D5). The point places the chain; the pick's NAME picks the unit in
@@ -406,9 +471,10 @@ def _resolve_admin(
             obec_unit_id=obec_unit_id, obec_code=obec_code,
         ), obec_name
     if level == "ulice":
-        return level, _resolve_street(
+        street = _resolve_street(
             conn, version=version, name=name, obec_code=obec_code, lat=lat, lng=lng,
-        ), obec_name
+        )
+        return level, None if street is None else (street.code, street.name), obec_name
     unit = _named_unit(chain, level, name or "")
     if unit is None:
         LOG.info("maps.resolve: %s pick %r names no single unit of its chain — no code",
@@ -425,19 +491,26 @@ def resolve(
     type_: str,
     name: str,
     regional_structure: Sequence[Any],
+    address_point: bool = False,
 ) -> dict[str, Any]:
-    """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level."""
-    level = _TYPE_LEVEL.get(type_)
+    """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level.
+    With `address_point` (the address picker) an address pick answers its ONE door."""
+    door = address_point and type_ == "regional.address"
+    level = "adresni_misto" if door else _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
     if level is None:
         return out
     version = _registry_version(conn)
     if version is None:
         return out
-    out["level"], unit, out["context"] = _resolve_admin(
-        conn, version=version, lat=lat, lng=lng, level=level,
-        name=_street_of(type_, name, regional_structure),
-    )
+    if door:
+        unit = _resolve_address_point(conn, version=version, lat=lat, lng=lng, name=name,
+                                      regional_structure=regional_structure)
+    else:
+        out["level"], unit, out["context"] = _resolve_admin(
+            conn, version=version, lat=lat, lng=lng, level=level,
+            name=_street_of(type_, name, regional_structure),
+        )
     if unit is not None:
         out["id"], out["name"] = unit
     return out

@@ -14,7 +14,11 @@ from api import dependencies as deps
 from api import main as api_main
 from api import http_json, maps
 from location_data.name_index import normalize_street_name
-from location_data.resolver.resolve_db import _STREET_POINT_SQL, _STREETS_IN_OBEC_SQL
+from location_data.resolver.resolve_db import (
+    _ADDRESS_POINTS_BY_NUMBER_SQL,
+    _STREET_POINT_SQL,
+    _STREETS_IN_OBEC_SQL,
+)
 
 
 # Mirrors Mapy.cz's actual /v1/suggest shape: `label` is the result-class
@@ -799,6 +803,103 @@ def test_an_address_without_a_street_entry_binds_nothing(client):
     )
     assert body == _unbound("Pardubice")
     assert _STREETS_IN_OBEC_SQL not in executed
+
+
+# ---------------- the address picker's door (W3b: `address_point`) ----------------
+# Door rows are `_ADDRESS_POINT_COLUMNS` as `SqlRegistryView` reads them; kódy ADM are stand-ins.
+
+_TYNSKA_DOOR = (50.088368, 14.422374)
+
+
+def _door(kod: int, at: tuple[float, float], street: _Row | None, cp: int, co: int | None = None,
+          znak: str | None = None) -> tuple:
+    return (kod, 3214, street.obec if street else 583600, "11000", at[0], at[1],
+            street.code if street else None, normalize_street_name(street.name) if street else None,
+            street.name if street else None, cp, co, znak, None, None, None, "č.p.")
+
+
+def _doors(obec: int, street: _Row | None, cp: int, co: int | None, *rows: tuple) -> _Expect:
+    norm = normalize_street_name(street.name) if street else None
+    return _Expect(_ADDRESS_POINTS_BY_NUMBER_SQL,
+                   (_VERSION, obec, norm, norm, cp, cp, None, co, co, None, None), list(rows))
+
+
+def _label(kod: int, text: str) -> _Expect:
+    return _Expect(maps._DOOR_LABEL_SQL, (kod,), (text,))
+
+
+def _address(number: str, street: str | None, at: tuple[float, float], town: str = "Praha"
+             ) -> dict[str, Any]:
+    entries = [{"name": number, "type": "regional.address"}]
+    if street is not None:
+        entries.append({"name": street, "type": "regional.street"})
+    entries.append({"name": town, "type": "regional.municipality"})
+    return {"name": f"{street or town} {number}", "type": "regional.address", "lat": at[0],
+            "lng": at[1], "regional_structure": entries, "address_point": True}
+
+
+def test_an_address_pick_binds_its_one_door_on_its_bound_street(client):
+    """The street binds as the chip does, then ONE keyed read of its doors of that number."""
+    pick = _address("610/7", "Týnská ulička", _TYNSKA_DOOR)
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA),
+        _doors(554782, TYNSKA_ULICKA, 610, 7, _door(21717001, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7)),
+        _label(21717001, "Týnská ulička 610/7, Praha"),
+    ])
+    assert body == {"level": "adresni_misto", "id": 21717001,
+                    "name": "Týnská ulička 610/7, Praha", "context": None}
+
+
+def test_a_village_address_binds_by_obec_and_number_inside_the_slack(client):
+    at = (49.1902, 16.4201)
+    pick = _address("12", None, at, town="Ostrovačice")
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTROVACICE),
+        _doors(583600, None, 12, None, _door(21800001, (49.1905, 16.4204), None, 12)),
+        _label(21800001, "Ostrovačice"),
+    ])
+    assert (body["level"], body["id"]) == ("adresni_misto", 21800001)
+
+
+@pytest.mark.parametrize("doors", [
+    pytest.param((_door(1, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7),
+                  _door(2, (50.0886, 14.4226), TYNSKA_ULICKA, 610, 7)), id="two-in-the-slack"),
+    pytest.param((_door(1, (50.0920, 14.4224), TYNSKA_ULICKA, 610, 7),), id="one-400m-off"),
+    pytest.param((_door(1, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7, znak="a"),), id="another-letter"),
+    pytest.param((), id="none"),
+])
+def test_anything_but_one_door_near_the_pick_binds_nothing(client, doors):
+    pick = _address("610/7", "Týnská ulička", _TYNSKA_DOOR)
+    body, executed = _resolve_logged(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA), _doors(554782, TYNSKA_ULICKA, 610, 7, *doors),
+    ])
+    assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
+    assert maps._DOOR_LABEL_SQL not in executed
+
+
+def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client):
+    """Never widened to the whole obec: an unbound street is no door."""
+    pick = _address("12", "Nová", _TYNSKA_DOOR)
+    body, executed = _resolve_logged(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+    ])
+    assert body["id"] is None and _ADDRESS_POINTS_BY_NUMBER_SQL not in executed
+
+
+def test_an_address_without_a_number_reads_nothing_past_its_town(client):
+    pick = {**_address("x", "Týnská ulička", _TYNSKA_DOOR),
+            "regional_structure": [{"name": "Týnská ulička", "type": "regional.street"}]}
+    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
+    assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
+
+
+def test_the_flag_changes_nothing_but_an_address_pick(client):
+    """Browse never sets it; a street pick with it is still its street."""
+    pick = {**_street_pick("Na Rybníčkách", NA_RYBNICKACH), "address_point": True}
+    body = _street_resolve(client, pick, _PARDUBICE, _STREETS_PARDUBICE, NA_RYBNICKACH)
+    assert body == _bound(NA_RYBNICKACH, "Pardubice")
 
 
 def test_a_malformed_request_is_a_422_not_a_500(client):

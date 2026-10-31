@@ -301,6 +301,8 @@ class ResolveLocationIn(BaseModel):
     type: str
     name: str
     regional_structure: list[RegionalEntry] = Field(default_factory=list)
+    # The address picker's flag (W3b): an address pick answers its ONE door, not its street.
+    address_point: bool = False
 
 
 # --- curation -------------------------------------------------------------
