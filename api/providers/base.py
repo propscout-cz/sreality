@@ -111,9 +111,13 @@ class Usage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # Hosted code: the calls the provider reports, and its container time in dollars (an estimate: no provider reports it).
+    code_execution_requests: int = 0
+    hosted_code_usd: float = 0.0
 
 
-StopReason = Literal["tool_use", "end_turn", "max_tokens", "stop", "refusal", "model_context_window_exceeded"]
+StopReason = Literal["tool_use", "end_turn", "max_tokens", "stop", "refusal", "model_context_window_exceeded",
+                     "pause_turn"]
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,12 @@ class Completion:
     model: str
     raw: Any = field(repr=False, default=None)
     blocks: list[Block] | None = field(repr=False, default=None)
+    # Hosted code only: the commands the provider ran itself, the ids of those still waiting on this turn's tool results
+    # to run, the container they ran in, the files they left.
+    hosted_calls: tuple[ToolCall, ...] = ()
+    hosted_pending: tuple[str, ...] = ()
+    container: str | None = None
+    file_ids: tuple[str, ...] = ()
 
     @property
     def reply(self) -> list[Block]:
@@ -198,7 +208,7 @@ def compute_cost_usd(
         + usage.cache_read_tokens * price.cache_read_per_mtok
         + usage.cache_write_tokens * price.cache_write_per_mtok
     ) / 1_000_000
-    return round(cost, 6)
+    return round(cost + usage.hosted_code_usd, 6)
 
 
 # --- Provider protocol ----------------------------------------------------
@@ -230,6 +240,56 @@ class CompletionProvider(Protocol):
     ) -> Completion: ...
 
     def price_for(self, model: str) -> ModelPrice | None: ...
+
+
+@dataclass(frozen=True)
+class HostedCode:
+    """Turns on the provider's hosted code for one call; `container` resumes the one an earlier reply opened."""
+    container: str | None = None
+
+
+@dataclass(frozen=True)
+class HostedFile:
+    """A file going into or coming out of hosted code."""
+    name: str
+    media_type: str
+    data: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class HostedFileInfo:
+    """What a provider says of a produced file before its bytes are fetched, as written: nothing here is checked."""
+    name: str
+    media_type: str
+    size_bytes: int
+
+
+class HostedCodeProvider(CompletionProvider, Protocol):
+    """A provider that runs code itself. Only Anthropic does (ADR-0005); the agent loop is the only caller."""
+
+    def complete(
+        self,
+        *,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSchema],
+        model: str,
+        max_tokens: int = 4096,
+        tool_choice: str | None = None,
+        hosted_code: HostedCode | None = None,
+    ) -> Completion: ...
+
+    def upload_file(self, *, name: str, media_type: str, data: bytes, expires_in_s: int) -> str: ...
+
+    def input_block(self, file_id: str) -> Block: ...
+
+    def file_info(self, file_id: str) -> HostedFileInfo: ...
+
+    def download_file(self, file_id: str, *, max_bytes: int) -> bytes: ...
+
+    def delete_file(self, file_id: str) -> None: ...
+
+    def container_cost_usd(self, seconds: float) -> float: ...
 
 
 class BatchCapableProvider(CompletionProvider, Protocol):

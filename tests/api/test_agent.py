@@ -355,6 +355,8 @@ def test_the_estimators_anthropic_requests_stay_as_they_were(monkeypatch):
     bodies = _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", plain)
     assert _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", rich) == bodies
     assert set(json.loads(bodies[1])) == {"model", "max_tokens", "messages", "system", "tools"}
+    # #2068: the hosted code tool and its container belong to a code agent's calls alone.
+    assert all("type" not in tool for body in bodies for tool in json.loads(body)["tools"])
     assert json.loads(bodies[1])["max_tokens"] == 4096
     assert json.loads(bodies[1])["messages"][1] == {"role": "assistant", "content": [text, call]}
 
