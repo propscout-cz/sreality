@@ -317,7 +317,7 @@ Per-lane notes:
 - The sreality count-probe lane and its `index_walk.yml` dispatch were deleted in W0 (#2015): the worker triggers no
   GitHub workflow. Its `sreality_count_probe_state` table (mig 270) stays until a backed-up drop.
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
-  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` lease row through `job_lease` (#2107; migration 279's row too until gate #2110 passes): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
+  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` `job_lease` row: **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
   slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker, every broker number's one source), Browse patch), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
