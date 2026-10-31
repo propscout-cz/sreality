@@ -1,7 +1,8 @@
-"""realitymix@5 — the slim location contract (rule 25 / W1-c), scored against real bodies.
+"""realitymix@8 — the slim location contract (rule 25 / W1-c), scored against real bodies.
 
 Every test runs the SHIPPED entries (no hand-written locators) through the real readers, the
-real scoper and the real licence ladder. Six committed bodies:
+real scoper and the real licence ladder; the one exception rebuilds the RETIRED v7 marker selector
+on purpose, to show it stays silent on the hidden-geocode body that v8 declares (W4). Six committed bodies:
   * `tests/fixtures/location_w2/realitymix_detail.html` — the MODELLED page, the one the
     fixture-diff golden scores. A selector that works on a page written from the contract
     proves the shape, not the population, so it is never the only evidence for a carrier.

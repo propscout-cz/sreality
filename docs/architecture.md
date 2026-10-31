@@ -4996,7 +4996,11 @@ the reader, and the payload readers keep walking their own through `claims_commo
 That is how idnes@6 reads an unpinned ad's street off its map highlight ("Zvýrazněná ulice <name>",
 the one feature with no id, picked by its title) and off the address line when the page has no
 highlight, and how realitymix@7 reads its heading before the map's `data-address` (operator ruling
-2026-10-25). Two further rails: `ReaderContract`
+2026-10-25). realitymix@8 (W4, 2026-10-31) re-pointed that portal's `estimated` marker from
+`div#print-map, div#map` to `div#map` alone: where the agency gave no GPS the server writes its own
+geocode onto `#print-map` and leaves `#map` blank, so the blank interactive node is the only sign of a
+server geocode, and the first-match read of the print node had never seen it (the forecast of what
+moves is the roadmap's, not this page's). Two further rails: `ReaderContract`
 records each reader's whole `locator` appetite (the keys it requires plus the ones it merely reads),
 derived back out of the reader bodies by an AST scan over each reader and the helpers it delegates
 its locator to, and a locator key outside that union is refused — a declared key no reader consults
@@ -5179,11 +5183,7 @@ have lost the flag on 3,421 rows the moment a street bound, exactly where it say
 is wrong. The extent is in that threshold because a street is not a
 point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule would call half of its pins a
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
-`pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers. Since
-realitymix@8 (W4, 2026-10-31) that portal's `estimated` marker reads `div#map` alone: where the agency
-gave no GPS the server writes its own geocode onto `#print-map` and leaves `#map` blank, so a blank
-there is the server geocode, and ~11k pinned ads become declared estimates (~6.6k street-bound ones
-then stand on their street point).
+`pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
 
 **THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
 portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named
