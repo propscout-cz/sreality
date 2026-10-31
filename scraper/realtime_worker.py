@@ -532,9 +532,10 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
 # pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
-# under both. Every hosted ALARM due at once fits (7 × 45 s +
-# parsing's 180 s = 495 s, wave 6); a gauge that does not fit the rest is deferred to the next
-# 60 s tick, never started short (run_due).
+# under both. Every hosted ALARM due at once owes 7 × 45 s + parsing's 180 s + notifications' 5 s
+# + curation_sync's 5 s = 505 s (curation sync, migration 696): all but the last (parsing) fit, and
+# it, like a gauge that does not fit the rest, is deferred to the next 60 s tick, never started
+# short (run_due).
 HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
