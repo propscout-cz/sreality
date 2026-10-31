@@ -1319,58 +1319,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_images.yml"
     },
     {
-      "filename": "label_proposal_backfill.yml",
-      "name": "NEW DEDUP — Labeling secondary-CLIP proposals (sharded, dispatch-only)",
-      "description": "Wave 1 (docs/design/new-dedup/PROGRAM.md): scores every image currently in dedup_sim.labeling_sample against the operator's active Taxonomy v1 labels (dedup_sim.taxonomy_labels) using the stronger secondary CLIP checkpoint (dedup_sim_settings' labeling_secondary_model), writing one proposal row per image into dedup_sim.label_proposals for review on the Labeling page. Dispatch-only, not cron — the sample grows in bursts as the operator works through the program, not continuously. No-op if R2 is unconfigured or the taxonomy is still empty. Horizontally sharded (image_id %% 2), unlike the runner's clip job (scripts/clip_tag_backfill.py), which runs unsharded over the full corpus; this is a curated sample.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "limit",
-          "description": "Max images proposed per shard per run",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "Parallel R2 downloads",
-          "required": false,
-          "type": "string",
-          "default": "16",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report the pending count and exit without tagging",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "label-proposal-backfill",
-      "cancelInProgress": false,
-      "timeoutMinutes": 55,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/label_proposal_backfill.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
-    },
-    {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
       "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
