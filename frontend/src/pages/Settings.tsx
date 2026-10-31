@@ -47,7 +47,8 @@ import {
   type ClipTaggingRegionsPayload,
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
-import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
+import { cachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import { COLOR_SCHEMES, THEME_MODES, type ThemeMode } from '@/lib/appearance';
 import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from '@/components/SchemeSwatch';

@@ -25,7 +25,8 @@ import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { SegmentedBar } from '@/components/controls';
 import { pushToast } from '@/lib/toast';
 import { trainingSetKeys } from '@/lib/newDedupKeys';
-import { cachePatch, useOptimisticWrite, type CachePatch } from '@/lib/useOptimisticWrite';
+import { cachePatch, type CachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
 /* NEW DEDUP · Training set — a head's labels, in four trays.
  *

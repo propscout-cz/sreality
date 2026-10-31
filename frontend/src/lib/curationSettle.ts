@@ -32,9 +32,16 @@ import { actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
 import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
-import { holdReads, isOwed, revalidate, type ReadMode, type Revalidation } from '@/lib/revalidate';
+import {
+  cachePatch,
+  holdReads,
+  isOwed,
+  revalidate,
+  type CachePatch,
+  type ReadMode,
+  type Revalidation,
+} from '@/lib/revalidate';
 import { CURATED_SETS, CURATED_SET_NAMES, matchesScope, scopeActive, type CuratedSet } from '@/lib/setScope';
-import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
 import type { InfiniteListPage } from '@/lib/useInfiniteList';
 
 /** What a write moved: one curated set, or the dismissal. */
@@ -209,9 +216,10 @@ export function lensTargets(
 
 /** Settle a landed tag / collection write: judged before, put into its member
  * map (so the settle sees it before the map's own re-read lands), judged after,
- * then `reads` (the caller's tables, lib/curationSync) and the settle's re-reads
- * owed. One hold spans the paint and the re-read, so no read lands in between and
- * one still in flight is owed, not lost. Acting as an owner (`actAs`, lib/acting)
+ * then `reads` (the caller's table reads, lib/curationSync `tableReads` — passed
+ * in, since that module imports this one) and the settle's re-reads owed. One
+ * hold spans the paint and the re-read, so no read lands in between and one
+ * still in flight is owed, not lost. Acting as an owner (`actAs`, lib/acting)
  * only the owner's map moves: Browse never acts, so no Browse cohort is judged on
  * the owner's sets. */
 export function settleMemberWrite(
@@ -220,8 +228,7 @@ export function settleMemberWrite(
   propertyId: number,
   elementId: number,
   member: boolean,
-  actAs: string | null = null,
-  reads: readonly QueryKey[] = [],
+  { actAs = null, reads = [] }: { actAs?: string | null; reads?: readonly QueryKey[] } = {},
 ): void {
   const patches = [
     cachePatch<Map<number, number[]>>({ queryKey: actingKey(actAs, MEMBERS[set].key), exact: true }, (prev) => {

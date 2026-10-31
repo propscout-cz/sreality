@@ -29,7 +29,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { actingKey } from '@/lib/acting';
 import { pipelineKeys, type PipelineMembers } from '@/lib/queries';
-import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
+import { cachePatch, type CachePatch } from '@/lib/revalidate';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
 /* `actAs` (lib/acting): the owner's board entries while acting, else the caller's. */

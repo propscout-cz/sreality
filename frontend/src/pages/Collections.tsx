@@ -4,7 +4,7 @@ import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createCollection, deleteCollection } from '@/lib/api';
 import { useCollections } from '@/lib/collectionCache';
-import { revalidateTables } from '@/lib/curationSync';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import { BellGlyph } from '@/components/CollectionSaveMenu';
 import { Field } from '@/components/controls';
@@ -307,8 +307,7 @@ function CollectionRow({ c }: { c: Collection }) {
 
   const del = useMutation({
     mutationFn: () => deleteCollection(c.id),
-    // Migration 202 cascades its memberships away.
-    onSuccess: () => void revalidateTables(qc, ['collections', 'collection_properties']),
+    onSuccess: () => void revalidateTables(qc, deletedTables('collections')),
   });
 
   return (

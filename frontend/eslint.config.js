@@ -171,9 +171,15 @@ export default [
           // an owed read stays owed until a read issued after the change lands,
           // and a key a pending write holds waits for it. A hand-typed
           // invalidate over a curation key skips both — the drift that left
-          // StageManager's list without the members map. Syntactic, like the
-          // bans above: a key built elsewhere and passed in still slips
-          // through; curationSync.test.ts's key census is the gate.
+          // StageManager's list without the members map. What this selector
+          // guarantees: no invalidateQueries / refetchQueries / resetQueries
+          // call names a member of the four curation key factories in its own
+          // arguments. Syntactic, like the bans above: a key built elsewhere
+          // and passed in slips through, and cache edits (cancelQueries,
+          // setQueriesData, removeQueries) over a curation key are not banned.
+          // curationSync.test.ts's key census guarantees the other half: every
+          // factory member sits under a key some SYNC_TABLES table feeds (or is
+          // in NOT_SYNCED), so a re-read by table reaches it; it checks no call.
           selector:
             "CallExpression[callee.property.name=/^(invalidateQueries|refetchQueries|resetQueries)$/] MemberExpression[object.name=/^(pipelineKeys|curationKeys|dismissalKeys|pipelineShareKeys)$/]",
           message:

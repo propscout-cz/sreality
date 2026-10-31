@@ -27,7 +27,7 @@ import { useCallback, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { actOpts, useActAs } from '@/lib/acting';
 import { deleteTag, updateTag } from '@/lib/api';
-import { revalidateTables } from '@/lib/curationSync';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import type { Tag, TagColor } from '@/lib/types';
 import AnchoredPopover from '@/components/AnchoredPopover';
@@ -144,8 +144,7 @@ function Popover({
   const del = useMutation({
     mutationFn: () => deleteTag(tag.id, ...actOpts(actAs)),
     onSuccess: () => {
-      // Migration 202 cascades a deleted tag's memberships away.
-      void revalidateTables(qc, ['tags', 'property_tags'], actAs);
+      void revalidateTables(qc, deletedTables('tags'), actAs);
       onDeleted?.(tag.id);
       onClose();
     },

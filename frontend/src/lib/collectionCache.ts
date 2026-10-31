@@ -113,12 +113,7 @@ export const settleCollectionWrite = (
   member: boolean,
   actAs: string | null = null,
 ): void =>
-  settleMemberWrite(
-    qc,
-    'collections',
-    property_id,
-    collection_id,
-    member,
+  settleMemberWrite(qc, 'collections', property_id, collection_id, member, {
     actAs,
-    tableReads(['collection_properties'], actAs),
-  );
+    reads: tableReads(['collection_properties'], actAs),
+  });

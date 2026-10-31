@@ -17,7 +17,7 @@ import {
   updateCollection,
 } from '@/lib/api';
 import { settleCollectionWrite } from '@/lib/collectionCache';
-import { revalidateTables } from '@/lib/curationSync';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
@@ -188,8 +188,7 @@ function Header({
   const del = useMutation({
     mutationFn: () => deleteCollection(collection.id),
     onSuccess: () => {
-      // Migration 202 cascades its memberships away.
-      void revalidateTables(qc, ['collections', 'collection_properties']);
+      void revalidateTables(qc, deletedTables('collections'));
       navigate(ROUTES.collections.build(), { replace: true });
     },
     onError: (err: Error) => setError(err.message || 'Failed to delete'),

@@ -16,9 +16,14 @@
  * (query-core dedupes a query with no data onto its load), so it is awaited and
  * paid anew when it lands. Anything else — inactive, disabled — is paid once an
  * observer makes it active, a microtask later, joining the mount's own fetch.
+ * A scroll's page cancels a payment in flight (fetchNextPage's cancelRefetch
+ * default), silently: that read dispatches neither 'success' nor 'error'. Once
+ * the page settles the debt is paid again, a 'mount' one included (its mount
+ * came); a hold that drops the page leaves it to the release.
  * A 'mount' debt is paid only by a real mount (the query's first observer, or a
  * first observer's enable), never while it is on screen: a second reader joining
- * a mounted query pays nothing. A failed payment stays owed; `repayOwed`
+ * a mounted query pays nothing; a mount that came while the key was held is
+ * paid by the release. A failed payment stays owed; `repayOwed`
  * re-tries it at most MAX_ATTEMPTS times, then it falls to 'mount', so an error
  * never loops.
  *
@@ -27,7 +32,8 @@
  * query-core retryer.js) — a full one is owed; a page is only dropped, because
  * it was built on the pages from before the patches (query-core
  * infiniteQueryBehavior takes them when it starts) and the list's next scroll
- * asks for it again — then paints the patches through a per-query LEDGER
+ * asks for it again; a payment that page had cancelled is due at the release —
+ * then paints the patches through a per-query LEDGER
  * {base, patches[]}. While a key is held, any later non-page fetch on it — a
  * mount, a reconnect, a stray invalidate, a remote target — is cancelled and
  * owed. That cancel waits one microtask because query-core dispatches its
@@ -45,7 +51,11 @@
  *
  * EPOCH. `resetReads` (the identity change, lib/auth.tsx) drops every owed
  * read, hold and ledger; a hold of the previous account then paints, parks and
- * pays nothing, and a settle that releases it owes nothing. */
+ * pays nothing, and a settle that releases it owes nothing.
+ *
+ * Built on @tanstack/query-core 5.100.9 internals (Query.isStatic, the 'fetch'
+ * dispatch before the retryer, cancel with revert, fetchMeta.fetchMore, a
+ * manual setData): re-run revalidate.test.ts on any query-core bump. */
 
 import { useEffect } from 'react';
 import {
@@ -60,9 +70,20 @@ import {
   type QueryKey,
 } from '@tanstack/react-query';
 
-import type { CachePatch } from '@/lib/useOptimisticWrite';
-
 export type ReadMode = 'now' | 'mount';
+
+/** One optimistic cache write: which queries (prefix unless `exact`) and the value each holds while held. */
+export interface CachePatch {
+  filters: QueryFilters;
+  update: (old: unknown) => unknown;
+}
+
+export function cachePatch<T>(
+  filters: QueryFilters,
+  update: (old: T | undefined) => T | undefined,
+): CachePatch {
+  return { filters, update: update as (old: unknown) => unknown };
+}
 
 /** One read to owe: every cached query under `queryKey` (exactly it with `exact`). Default mode 'now'. */
 export interface Revalidation {
@@ -89,8 +110,12 @@ interface Debt {
   since: number;
   mode: ReadMode;
   attempts: number;
-  /* Owed 'now' but found inactive or disabled: paid when an observer enables it. */
+  /* Due but not payable yet — found inactive or disabled, or its mount came
+   * while held: the next payment that can run pays it, 'mount' or not. */
   waiting: boolean;
+  /* A read `pay` started or joined is in flight; that read's own success or
+   * error clears it, so a page that lands with it set cancelled that read. */
+  paying: boolean;
 }
 
 interface Start {
@@ -171,7 +196,7 @@ function owe(s: Scheduler, q: Query, mode: ReadMode): void {
     debt.attempts = 0;
     if (mode === 'now') debt.mode = 'now';
   } else {
-    s.debts.set(q.queryHash, { since, mode, attempts: 0, waiting: false });
+    s.debts.set(q.queryHash, { since, mode, attempts: 0, waiting: false, paying: false });
   }
 }
 
@@ -180,14 +205,18 @@ function owe(s: Scheduler, q: Query, mode: ReadMode): void {
  * 'mount' debt is due too. */
 function pay(s: Scheduler, q: Query, mount = false): Promise<unknown> | undefined {
   const debt = s.debts.get(q.queryHash);
-  if (!debt || isHeld(s, q)) return undefined;
-  if (debt.mode === 'mount' && !mount && !debt.waiting) return undefined;
+  if (!debt) return undefined;
+  // A mount makes a 'mount' debt due; one that came while held is paid by the release.
+  if (mount) debt.waiting = true;
+  if (isHeld(s, q)) return undefined;
+  if (debt.mode === 'mount' && !debt.waiting) return undefined;
   if (!q.isActive() || q.isStatic()) {
     // Due, but no enabled observer yet: the observer that enables it pays.
     debt.waiting = true;
     return undefined;
   }
   debt.waiting = false;
+  debt.paying = true;
   const inFlight = q.state.fetchStatus !== 'idle';
   const start = s.starts.get(q.queryHash);
   if (inFlight && start && !start.page && start.tick > debt.since) return q.promise?.then(noop, noop);
@@ -257,7 +286,9 @@ function listen(s: Scheduler): void {
       if (action.manual) return;
       const debt = s.debts.get(hash);
       const start = s.starts.get(hash);
-      if (!debt || start?.page) return;
+      if (!debt) return;
+      if (start?.page) return repayAfterPage(s, q, debt);
+      debt.paying = false;
       if (start && start.tick > debt.since) s.debts.delete(hash);
       else queueMicrotask(() => pay(s, q));
       return;
@@ -266,7 +297,9 @@ function listen(s: Scheduler): void {
       const debt = s.debts.get(hash);
       const start = s.starts.get(hash);
       // A cancel is no failed attempt: what it cancelled stays owed as it was.
-      if (!debt || start?.page || action.error instanceof CancelledError) return;
+      if (!debt || action.error instanceof CancelledError) return;
+      if (start?.page) return repayAfterPage(s, q, debt);
+      debt.paying = false;
       if (start && start.tick > debt.since) {
         debt.attempts += 1;
         if (debt.attempts >= MAX_ATTEMPTS) debt.mode = 'mount';
@@ -275,6 +308,24 @@ function listen(s: Scheduler): void {
       }
     }
   });
+}
+
+/* A page pays nothing, but a scroll's page cancels a read in flight
+ * (useInfiniteList's fetchNextPage takes query-core's cancelRefetch default).
+ * Once the page settles, a debt whose payment it cancelled is paid again —
+ * 'mount' or not, its mount came — and so is a 'now' debt not yet tried; a
+ * failed one waits for `repayOwed`. */
+function repayAfterPage(s: Scheduler, q: Query, debt: Debt): void {
+  if (!reclaim(debt) && (debt.mode !== 'now' || debt.attempts > 0)) return;
+  queueMicrotask(() => pay(s, q));
+}
+
+/* A payment a page cancelled is due again, by whichever payment runs next. */
+function reclaim(debt: Debt | undefined): boolean {
+  if (!debt?.paying) return false;
+  debt.paying = false;
+  debt.waiting = true;
+  return true;
 }
 
 function cancelHeld(s: Scheduler, q: Query, tick: number): void {
@@ -357,7 +408,8 @@ const toItem = (item: Revalidation | QueryKey): Revalidation =>
 /** Owe `items` and pay what can be paid now. With `release`, that hold is let go
  * in the same batch: a query both parked by it and named here is fetched once.
  * Settles when every read it started or joined has (parked and mount reads are
- * not waited for). */
+ * not waited for); a read a scroll's page cancels settles with that page, and
+ * the repayment after it is not waited for. */
 export function revalidate(
   qc: QueryClient,
   items: readonly (Revalidation | QueryKey)[],
@@ -408,6 +460,7 @@ export function holdReads(
     for (const q of cache.findAll(f)) {
       if (q.state.fetchStatus === 'idle') continue;
       if (q.state.fetchMeta?.fetchMore == null) owe(s, q, 'now');
+      else reclaim(s.debts.get(q.queryHash));
       void q.cancel({ revert: true });
     }
   }
