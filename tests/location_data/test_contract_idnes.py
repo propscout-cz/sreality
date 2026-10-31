@@ -154,17 +154,21 @@ def feature(native: str, lon: float, lat: float, *, address: str = "Na Balkáně
 
 
 def page(features: str = "[]", *, info: str = DISCLAIMER, disclaimer: bool = True,
+         detail_map: bool = True,
          address: str = "Na Balkáně, Tanvald - Šumburk nad Desnou, okres Jablonec nad Nisou",
          data_layer: dict[str, Any] | None = None, native: str = NATIVE) -> str:
     """A minimal idnes detail page in the SHAPE the contract's selectors address, with the
-    dataLayer push written the way the real page writes it (a nested handler included)."""
+    dataLayer push written the way the real page writes it (a nested handler included). The
+    detail map (`section#map-container`) carries the disclaimer in its overlay, as live."""
     fields = {"event": "viewDetail", "listing_id": native,
               "listing_localityRegion": "Liberecký kraj", "listing_localityCity": "Tanvald",
               "listing_localityCityArea": "Šumburk nad Desnou", "listing_localityState": "CZ"}
     fields.update(data_layer or {})
     return (
         "<!DOCTYPE html><html lang='cs'><body>"
-        + (f"<p class='b-detail__disclaimer'>{DISCLAIMER}</p>" if disclaimer else "")
+        + ("<section id='map-container' class='b-detail__map-wrapper'>"
+           + (f"<span id='overlayText'>{DISCLAIMER}</span>" if disclaimer else "")
+           + "</section>" if detail_map else "")
         + f"<div class='b-detail__info'>{address}</div>"
         + '<script type="application/json" data-maptiler-json>'
         + json.dumps({"mtMapOptions": {"zoom": 14}, "infoText": info,
@@ -293,6 +297,19 @@ def test_a_page_without_the_sentence_retracts_the_declaration() -> None:
                         scoped(page(info="Na mapě zobrazujeme jen nemovitosti s přesnou adresou.",
                                     disclaimer=False)))
     assert (tombstone.claim.retract, tombstone.claim.value_text) == (True, None)
+
+
+def test_a_page_without_the_detail_map_states_nothing_either_way() -> None:
+    """W3: the marker reads the detail map, the node a live listing page carries the sentence
+    in. A 2xx body without it — an interstitial, a soft-gone page, a bot wall, a foreign ad
+    drawn with no map — emits no tombstone, so it cannot clear a stored blur, and no label."""
+    for info in (DISCLAIMER, "Na mapě zobrazujeme jen nemovitosti s přesnou adresou."):
+        assert read("id.det.no_exact_disclaimer",
+                    scoped(page(info=info, disclaimer=False, detail_map=False))) == []
+    assert read("id.det.no_exact_disclaimer", scoped(
+        "<html><body><p>Přístup odepřen. Ověřte, že nejste robot.</p></body></html>")) == []
+    assert read("id.det.no_exact_disclaimer", scoped(FOREIGN.read_bytes()),
+                native=FOREIGN_NATIVE) == []
 
 
 # ------------------------------------------------------------ the town coverage line
@@ -835,9 +852,8 @@ def test_the_foreign_body_claims_a_country_the_resolver_maps_and_a_town_that_can
     document = scoped(FOREIGN.read_bytes())
     claims = {entry_id: [r.claim for r in read(entry_id, document, native=FOREIGN_NATIVE)]
               for entry_id in ENTRY_IDS if entry_id != "id.det.subject_feature"}
-    assert claims["id.det.no_exact_disclaimer"][0].retract   # no sentence: retracted (W3)
     assert {k: [c.value_text for c in v] for k, v in claims.items()} == {
-        "id.det.no_exact_disclaimer": [None],
+        "id.det.no_exact_disclaimer": [],   # no detail map: says nothing, retracts nothing
         "id.det.country": ["HR"],
         "id.det.kraj": [],
         "id.det.okres": [],

@@ -78,8 +78,11 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
         "3260342567e793274f496d789d1bb4edf42bec6c6e54119347ea3d586afe252a",
     ("ceskereality", "location_w2/ceskereality_detail.html"):
         "28d988eb7f224a2310fc7c6606a2728d4898951b0ee4d95305680f584226966e",
+    # Moved by idnes@7 (W3): the modelled page gained the detail map every live idnes body
+    # carries its disclaimer in (`section#map-container`), the node @7's marker reads. New
+    # BYTES, the same payload_norm@3 profile.
     ("idnes", "location_w2/idnes_detail.html"):
-        "c212524063f9841526115ea0788c8f32d1c4bbc199e0f4c49ff6f23da96c8c90",
+        "064268e7ac13ec62383488f7511bb831b63fb6cb6287c8a78a4c51687b7403f1",
     ("maxima", "location_w2/maxima_detail.html"):
         "b37cb00c8fdaef6445e0081245b8c2a7c34907df374eb8c9ae9f2ca411f6595d",
     # Moved once, in the mmreality@2 activation: the pinned fixture was re-authored so its
