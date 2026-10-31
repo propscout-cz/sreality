@@ -1718,7 +1718,7 @@ startup timeout", each ringing the `jobs` check's cron cell for a job this gauge
 ### `location_town_coverage` — the ONE location scorecard (W1, migration 698)
 
 `check_location_town_coverage` (cadence 21,600 s, label "Location quality" since W1, unit "cells", owner page
-`/location-quality`). Since W1 (2026-10-31, #2218) it reads ONE view, `location_quality_by_source` (migration 698,
+`/location-quality`, which renders this stored row through Health's `HEALTH_QUERY` and nothing else). Since W1 (2026-10-31, #2218) it reads ONE view, `location_quality_by_source` (migration 698,
 service_role only; long shape `cohort, source, metric, class, n, of_n, q50, q90, q95, q100`), in two statements:
 `where cohort <> 'sample'` (the invariants, ~12 s warm) and `where cohort = 'sample'` (the pin sample, 0.7 s warm,
 ~13 s cold; a failure leaves only the accuracy cells Not measured). Every UNION branch carries a literal cohort and

@@ -295,7 +295,7 @@ As built (location data quality W1, 2026-10-31, #2218, migration 698; label "Loc
 - Live: 44 (ceskereality 40, realitymix 3, mmreality 1), against 13,239 under the whole-corpus definition, of which 13,192 are inactive ads whose pages are gone. As built: 43 on 10-19 at 13:09Z (ceskereality 39, realitymix 3, mmreality 1), read in 3.1 s with the served predicate's hidden count (0.62 s without it) against the whole corpus's 6.5 s; the inactive 13,192 are a dated fact in the docs, not read each run.
 - Under the old definition: 0 ok rows in 132 runs and 59 alerts.
 
-**Replaces.** its whole-corpus alarm (W15 ruling reversed per Q2; 18 false 'Recovered' on timed-out runs); CoverageLine geo/street % (owned by Location Quality). Since W1 also the gauge's own `address_no_ku` (now `ku`) and `cz_no_town` facts; the Location Quality page's aggregates and browser-held thresholds fold into these cells when the page reads the stored result (W1's frontend PR).
+**Replaces.** its whole-corpus alarm (W15 ruling reversed per Q2; 18 false 'Recovered' on timed-out runs); CoverageLine geo/street % (owned by Location Quality). Since W1 also the gauge's own `address_no_ku` (now `ku`) and `cz_no_town` facts; the Location Quality page's aggregates and browser-held thresholds folded into these cells when the page began reading the stored result (W1 PR 2, 2026-10-31).
 
 ### `data_quality` — data_quality, gauge, every 360 min
 
