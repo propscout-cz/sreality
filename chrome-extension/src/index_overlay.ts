@@ -6,7 +6,7 @@
  * It runs on EVERY index page of a portal, whatever the category. Per card
  * (index_cards.ts): the pipeline / collection / hide controls for any listing
  * we have a property for, and — on sale apartments only — the yield badge,
- * ALWAYS clickable → opens the listing side sheet (panel.ts: the property's
+ * ALWAYS clickable → opens the side panel on its ad (panel.ts: the property's
  * facts, price history, curation and the Výnos estimate). Badge label: "Výnos MF X %"
  * (or the town's "X–Y %" range) when the property's MF result has a yield, else
  * "Odhad X %" when an estimation already exists, else "Odhadnout výnos".
@@ -30,11 +30,7 @@ import { APP_NAME } from '../../frontend/src/lib/brand';
 import { fmtCzk, fmtPct } from '../../frontend/src/lib/format';
 // The MF result's ONE shape rule and its yield text, shared with the SPA.
 import { mfShape, mfYieldLine } from '../../frontend/src/lib/mfReference';
-import {
-  API_NOT_CONFIGURED_DETAIL,
-  EXTENSION_RELOADED_DETAIL,
-  NOT_SIGNED_IN_DETAIL,
-} from './config';
+import { failureKind, type FailureKind } from './config';
 import { h } from './dom';
 import {
   PROCESSED_ATTR,
@@ -49,9 +45,8 @@ import { sleep, type Store } from './store';
 import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ApiResult, AuthState, PortalListing } from './types';
 
-type OpenPanel = (
-  ref: PortalRef, url: string, prefetched?: PortalListing | null,
-) => Promise<void>;
+/* A card asks the side panel to show its ad. */
+type OpenPanel = (ref: PortalRef, url: string) => void;
 
 const SCAN_DEBOUNCE_MS = 400;
 const MAX_LOOKUP_PER_PASS = 50;
@@ -69,10 +64,8 @@ const MAX_LOOKUP_PER_PASS = 50;
  * It shows while ANY listing card waits on the failed lookup — every card gets
  * controls from it now, so a rental or house search is as stuck as a flat one —
  * and never on a page without listing cards. It sits in the dock, bottom-LEFT,
- * above the "Skrýt skryté" bar: the listing sheet owns the right edge and a
- * badge click can open it while the notice is up (a new card's lookup failing
- * under an open sheet), so the two never share a side. × hides it until the
- * next page load (a soft-nav round trip through a listing keeps it hidden).
+ * above the "Skrýt skryté" bar. × hides it until the next page load (a soft-nav
+ * round trip through a listing keeps it hidden).
  *
  * Backoff: after a failure, observer-driven passes don't ask again for
  * LOOKUP_RETRY_AFTER_MS — a 401 costs no network, but in a real outage every
@@ -118,9 +111,6 @@ interface Hit {
   href: string;
 }
 
-/* What the notice offers: sign in; reload the page; retry; or nothing. */
-type FailureKind = 'signed_out' | 'reload' | 'error' | 'fatal';
-
 interface LookupFailure {
   kind: FailureKind;
   detail: string;
@@ -150,13 +140,6 @@ export interface IndexOverlayHandle {
    * called when a route change (SPA soft-nav) moves the tab off an index page,
    * so repeated navigations don't stack duplicate observers scanning the DOM. */
   stop: () => void;
-}
-
-export function failureKind(detail: string): FailureKind {
-  if (detail === NOT_SIGNED_IN_DETAIL) return 'signed_out';
-  if (detail === EXTENSION_RELOADED_DETAIL) return 'reload';
-  if (detail === API_NOT_CONFIGURED_DETAIL) return 'fatal';
-  return 'error';
 }
 
 export async function runIndexOverlay(
@@ -240,7 +223,7 @@ export async function runIndexOverlay(
     store,
     cache,
     badgeFor,
-    openPanel: (ref, href, listing) => { void openPanel(ref, href, listing); },
+    openPanel,
     veilOn: () => veil,
     flash: (message) => { dock?.flash(message); },
     onRefresh: () => { dock?.setCount(layer.dismissedCount()); },
