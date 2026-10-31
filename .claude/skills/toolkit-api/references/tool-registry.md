@@ -143,22 +143,23 @@ allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH
 
 `api/capabilities/visuals.py` over `toolkit/photo_assessment.py`: MARKET, COSTLY, takes one `property_id`. The judgement
 is shared by every agent, so it reads and writes on the service connection, in autocommit: `_connection` gives a
-COSTLY market tool no transaction and no READ ONLY bound, since a model call must not hold one open. What goes into a
+COSTLY market tool no transaction and no READ ONLY bound, since a model call must not hold one open (so its few indexed
+reads run on the service role's own timeout, not the 8 s). What goes into a
 row is an ad's public photos and the facet file, never an account's data; the row names no account, run, property or ad
 (`tests/test_photo_assessment_census.py`, which also holds that nothing but this tool names the cache).
 
 **A run lends it what it may spend** (`api/capabilities/run_scope.py`): `loop` sets a `RunScope` around each tool call
 (the run's own `LLMClient`, the money left, a tally, a bill) and `registry.call` hands it over as `ctx.run`. It is a
 ContextVar because `call_tool` is a two-argument closure each runner builds: no runner has to know a tool can spend, and
-a runner's own client (the one that stamps its run on `llm_calls`) reaches the tool. The bill is `run.charge`d as soon as
-the provider has billed; the loop `settle`s it after the call, refused or not, into the run's cost and the tool's journal
+a runner's own client (with #2070, the one that stamps its run on `llm_calls`) reaches the tool. The bill is `run.charge`d as soon as
+the provider has billed (should its ledger row fail, the slot stays taken and the worst case is charged); the loop `settle`s it after the call, refused or not, into the run's cost and the tool's journal
 step, so the cost cap sees it.
 
 **The order:** no usable picture is a `no_photos` result; a cached judgement is served to anyone, free, with or without a
 run; a miss while a live ad's photo is still downloading into the set is a `photos_pending` result, since the finished set
 would be paid for again (rare: no live ad of a 1-in-500 sample had one on 2026-11-01); only then `_pay`, which refuses before any money with no run, past `MAX_PAID_PER_RUN` (10) bills in this
 run, or when the worst case (`worst_case_usd`: every prompt token at the dearer rate, a reply at its limit) exceeds what
-is left. A cached answer takes no slot (ADR-0007's ten bounds vision cost); a reply refused by the schema is billed,
+is left after keeping enough for one more model call, so a paid tool never leaves a run unable to answer. A cached answer takes no slot (ADR-0007's ten bounds vision cost); a reply refused by the schema is billed,
 takes a slot and is not cached; a provider failure bills nothing and takes none. An interrupted run that starts over
 gets ten again, but what its first start paid for is now cached.
 
@@ -181,7 +182,7 @@ comparison measures it; at most about $0.32 on Opus. `llm_calls.called_for = 'as
 
 ## Adding a tool
 
-One `Entry` in `market.py` or `tenant.py`, its effect named at the declaration (`market._read` builds READ
+One `Entry` in `market.py` or `tenant.py` (or a module of its own beside them, like `visuals.py`), its effect named at the declaration (`market._read` builds READ
 entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § below; a write comes
 with #2072's inverse). Reuse
 `filter_model` for any registry filter; give every other field a `description`. The census (`tests/api/test_capabilities_census.py`)

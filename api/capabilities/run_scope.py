@@ -1,9 +1,4 @@
-"""What one agent run lends a paid tool: its model client, the money it has left, its tally and its bill.
-
-The loop sets it around each tool call. It travels in a ContextVar because `call_tool` is a two-argument closure over the
-Caller that each runner builds: this way every runner's own model client (the one that stamps the run on `llm_calls`)
-reaches the tool, and no runner has to know a tool can spend.
-"""
+"""What one agent run lends a paid tool: its model client, the money it has left, its tally and its bill."""
 
 from __future__ import annotations
 
@@ -12,9 +7,13 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from api.llm_client import LLMClient
+if TYPE_CHECKING:
+    from api.llm_client import LLMClient
 
+# The loop sets it round each tool call. A ContextVar, because `call_tool` is a two-argument closure over the Caller each
+# runner builds: every runner's own model client reaches the tool, and no runner has to know a tool can spend.
 _CURRENT: ContextVar["RunScope | None"] = ContextVar("agent_run_scope", default=None)
 
 
@@ -26,10 +25,10 @@ class RunScope:
     _cost_usd: float = 0.0
     _llm_call_id: int | None = None
 
-    def charge(self, cost_usd: float, llm_call_id: int) -> None:
+    def charge(self, cost_usd: float, llm_call_id: int | None) -> None:
         """Called as soon as the provider has billed, so a bill survives whatever the tool does next."""
         self._cost_usd += cost_usd
-        self._llm_call_id = llm_call_id
+        self._llm_call_id = llm_call_id or self._llm_call_id
 
     def settle(self) -> tuple[float, int | None]:
         """What the tool call just ended has spent, and its model call; the loop adds it to the run."""

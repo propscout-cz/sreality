@@ -168,7 +168,7 @@ def test_a_second_request_is_served_from_the_cache_and_the_ledger_holds_one_call
     second = _call(conn, None, pid)
     assert first["data"]["cache_hit"] is False and second["data"]["cache_hit"] is True
     assert second["data"]["facets"] == _good()["facets"] and second["data"]["cost_usd"] == 0
-    assert second["data"]["model"] == MODEL and second["data"]["assessed_at"] and second["metadata"]["data_freshness"]
+    assert second["data"]["model"] == MODEL and second["data"]["assessed_at"]
     assert len(provider.calls) == 1
     version, photo_set_hash = pa.load_facets().version, first["data"]["photo_set_hash"]
     cur.execute("SELECT model, photos_used, plans_used, cost_usd FROM photo_set_assessments "

@@ -50,18 +50,24 @@ def _pay(ctx: Context, photos: pa.PhotoSet, facets: pa.FacetFile) -> pa.Judgemen
     if worst > run.left_usd():
         raise _refused(f"this run's budget has ${max(run.left_usd(), 0):.2f} left and one assessment may cost "
                        f"${worst:.2f}; nothing was paid")
+    run.counts[NAME] += 1
     try:
         judged = pa.judge(run.llm, photos, facets, model=model)
     except pa.PhotosUnreadable as exc:
+        run.counts[NAME] -= 1
         raise _unavailable(f"{exc}; nothing was paid") from exc
     except ProviderError as exc:
+        run.counts[NAME] -= 1
         raise _unavailable(f"the model did not answer: {exc}") from exc
     except pa.InvalidReply as exc:
-        run.counts[NAME] += 1
         run.charge(exc.cost_usd, exc.llm_call_id)
         raise _refused(f"the model's reply was not a valid assessment and was not kept ({exc}); it was paid for and "
                        "used one of this run's assessments") from exc
-    run.counts[NAME] += 1
+    except Exception:
+        # The provider may have billed and its ledger row failed (the INSERT follows the bill): the slot stays taken and
+        # the bill is taken at its worst, so neither limit goes blind.
+        run.charge(worst, None)
+        raise
     run.charge(judged.cost_usd, judged.llm_call_id)
     return judged
 
@@ -70,7 +76,7 @@ def _assess(ctx: Context, args: AssessArgs) -> dict[str, Any]:
     photos = pa.photo_set(ctx.conn, args.property_id)
     if photos is None:
         raise ToolError(ToolErrorCode.NOT_FOUND, f"there is no property {args.property_id}")
-    return pa.assess(ctx.conn, photos, pay=lambda p, f: _pay(ctx, p, f))
+    return pa.assess(ctx.conn, photos, asked=args.property_id, pay=lambda p, f: _pay(ctx, p, f))
 
 
 ENTRIES = (

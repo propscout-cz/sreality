@@ -38,7 +38,7 @@ it (`api/`). They do not apply to the scraper.
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
    (default 7).** Don't trust `is_active` alone — a listing not seen for 30 days is
    functionally inactive.
-5. **No writes from the toolkit, with nine explicit exceptions.** Read-only by default. The
+5. **No writes from the toolkit, with ten explicit exceptions.** Read-only by default. The
    exceptions are:
    - `verify_listing_freshness` (and `scraper.freshness.freshness_check` that it wraps), so
      an agent can confirm a comparable is still valid before relying on it. Every call logs to
@@ -72,7 +72,7 @@ it (`api/`). They do not apply to the scraper.
    Every write-allowed exception caches an expensive external/LLM fact locally and
    auto-invalidates (a new snapshot or a model bump yields a fresh key); the LLM/OSM source is the truth, the table is a mirror. No other toolkit
    function may write. The API service should still connect with a read-only role if Postgres
-   permits; these nine paths then need a separately-elevated route. For now we ship with one
+   permits; these ten paths then need a separately-elevated route. For now we ship with one
    role and discipline.
    **Broker merge-review writes are durable decisions, not just status flips** (suppressions the nightly sweep
    honours, lifts, the `*_by` stamps): `references/broker-review-writes.md`.

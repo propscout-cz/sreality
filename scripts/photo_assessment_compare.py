@@ -119,7 +119,7 @@ def _score(value: Any) -> str:
     return "not visible" if value is None else str(value)
 
 
-def _verdict(rows: Sequence[FacetAgreement], models: Sequence[str], cheaper: str) -> str:
+def _verdict(rows: Sequence[FacetAgreement], cheaper: str) -> str:
     compared = sum(r.compared for r in rows)
     if not compared:
         return "No property was judged by both models, so this run says nothing about whether they agree."
@@ -143,7 +143,7 @@ def report(samples: Sequence[Sample], *, facets: Sequence[str], models: Sequence
     first, second = models
     rows = facet_agreement(samples, facets, models)
     both = [s for s in samples if first in s.judged and second in s.judged]
-    lines = [f"# Photo assessment: {first} against {second}", "", _verdict(rows, models, cheaper), ""]
+    lines = [f"# Photo assessment: {first} against {second}", "", _verdict(rows, cheaper), ""]
     if stopped_early:
         lines += [f"**This run stopped early:** {stopped_early}", ""]
     lines += [f"{len(samples)} properties were tried and {len(both)} were judged by both models, under prompt version "

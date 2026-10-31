@@ -1,10 +1,4 @@
-"""assess_property_visuals: a structured judgement of one property's photos and floor plan, for agents (ADR-0007).
-
-The facets and the prompt are one file the operator edits (`skills/photo-facets.md`), whose hash is the prompt version.
-A judgement is cached per photo set and prompt version in `photo_set_assessments`, shared by every agent: what goes in is
-an ad's public photos and that file, never anything of an account's. Write-allowed toolkit exception (LLM-backed cache).
-Not rule 14's parked condition scoring, and no other surface reads this cache.
-"""
+"""assess_property_visuals: one cached judgement of a property's photos, for agents (ADR-0007); a write-allowed exception."""
 
 from __future__ import annotations
 
@@ -28,6 +22,8 @@ if TYPE_CHECKING:
     from api.llm_client import LLMClient
     from api.providers import ModelPrice
 
+# What goes into the shared cache is an ad's public photos and the operator's file, never anything of an account's. Not
+# rule 14's parked condition scoring, and no other surface reads this cache.
 CALLED_FOR = "assess_property_visuals"
 TOOL_NAME = "record_photo_assessment"
 FACETS_PATH = Path(__file__).resolve().parents[1] / "skills" / "photo-facets.md"
@@ -44,6 +40,7 @@ MAX_REPLY_TOKENS = 8_000
 # Anthropic bills an image at about width * height / 750 tokens (a square is the worst shape for a long-edge limit).
 PHOTO_TOKENS_MAX = COMPARISON_MAX_EDGE ** 2 // 750 + 1
 PLAN_TOKENS_MAX = DOCUMENT_MAX_EDGE ** 2 // 750 + 1
+# The file asks for 200: a note a little over is still a note, and refusing it would throw a paid judgement away.
 EVIDENCE_MAX_CHARS = 300
 # scraper.db.pending_image_downloads stops trying here, so a photo counts as on its way only below it and only on a live
 # ad: what is counted always arrives or stops counting, and a property is never held back for good.
@@ -111,7 +108,7 @@ def tool_schema(facets: FacetFile) -> dict[str, Any]:
         "properties": {
             "score": {"type": ["integer", "null"], "minimum": 1, "maximum": 5,
                       "description": "1 poor to 5 excellent; null when the pictures do not show this facet."},
-            "evidence": {"type": "string", "minLength": 1, "maxLength": EVIDENCE_MAX_CHARS, "pattern": r"^[^\r\n]+$",
+            "evidence": {"type": "string", "minLength": 1, "maxLength": EVIDENCE_MAX_CHARS,
                          "description": "One line naming what the pictures show."},
         },
         "required": ["score", "evidence"],
@@ -133,9 +130,11 @@ def tool_schema(facets: FacetFile) -> dict[str, Any]:
 def schema_problem(reply_input: Any, facets: FacetFile) -> str | None:
     """Why this reply is no assessment, or None."""
     errors = sorted(Draft202012Validator(tool_schema(facets)["input_schema"]).iter_errors(reply_input), key=str)
-    if not errors:
-        return None
-    return f"{'/'.join(map(str, errors[0].absolute_path)) or 'the reply'}: {errors[0].validator} failed"
+    if errors:
+        return f"{'/'.join(map(str, errors[0].absolute_path)) or 'the reply'}: {errors[0].validator} failed"
+    # In Python, a JSON Schema pattern's `$` also matches before a final newline.
+    broken = [key for key, facet in reply_input["facets"].items() if re.search(r"[\r\n]", facet["evidence"])]
+    return f"facets/{broken[0]}/evidence: more than one line" if broken else None
 
 
 @dataclass(frozen=True)
@@ -326,7 +325,7 @@ def _store(conn: "psycopg.Connection", photos: PhotoSet, facets: FacetFile, judg
                                  "plans_used": len(photos.plans), "cost_usd": judged.cost_usd})
 
 
-def assess(conn: "psycopg.Connection", photos: PhotoSet, *,
+def assess(conn: "psycopg.Connection", photos: PhotoSet, *, asked: int,
            pay: Callable[[PhotoSet, FacetFile], Judgement]) -> dict[str, Any]:
     """The tool's envelope for `photos`: no usable picture is a result with no call, a cached judgement is served, and
     only a miss asks `pay`, the caller's bound on what a judgement may cost."""
@@ -361,9 +360,9 @@ def assess(conn: "psycopg.Connection", photos: PhotoSet, *,
         "data": data,
         "metadata": {
             "tool": CALLED_FOR,
-            "filters_used": {"property_id": photos.property_id},
+            "filters_used": {"property_id": asked},
             "result_count": 1 if data["status"] == "assessed" else 0,
             "queried_at": _now_iso(),
-            "data_freshness": data["assessed_at"],
+            "data_freshness": None,
         },
     }

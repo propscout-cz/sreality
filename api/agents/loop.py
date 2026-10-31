@@ -142,7 +142,14 @@ def _run(
     steps = 0
     calls = 0
     spent = 0.0
-    scope = run_scope.RunScope(llm=llm, left_usd=lambda: definition.limits.max_cost_usd - spent - container_reserve)
+
+    def left_for_tools() -> float:
+        """What a paid tool may spend: the run must still afford a model call to hear its result and answer."""
+        reply_floor = prompt_tokens * max(price.input_per_mtok, price.cache_write_per_mtok) / 1e6
+        reply_floor = samples * (reply_floor + MIN_REPLY_TOKENS * price.output_per_mtok / 1e6)
+        return definition.limits.max_cost_usd - spent - container_reserve - reply_floor
+
+    scope = run_scope.RunScope(llm=llm, left_usd=left_for_tools)
 
     def journal(kind: Literal["model", "tool", "file"], name: str, given: Any, output: Mapping[str, Any],
                 started: float, cost_usd: float = 0.0, llm_call_id: int | None = None) -> None:

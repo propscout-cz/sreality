@@ -232,6 +232,25 @@ def test_a_provider_failure_bills_nothing_uses_no_slot_and_may_be_retried(world:
     assert scope.counts[NAME] == 0 and world.cache == {}
 
 
+def test_a_bill_whose_ledger_row_failed_keeps_its_slot_and_is_charged_at_its_worst(
+        world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The INSERT follows the provider's bill: a database error there must not leave a retry free of both limits."""
+    scope, _ = world.scope(_assessment())
+    monkeypatch.setattr(scope.llm, "_record_call", lambda **kw: (_ for _ in ()).throw(RuntimeError("ledger down")))
+    with pytest.raises(ToolError) as failed:
+        world.call(scope, 7)
+    assert failed.value.code is ToolErrorCode.INTERNAL and scope.counts[NAME] == 1
+    cost, llm_call_id = scope.settle()
+    assert cost == pytest.approx(pa.worst_case_usd(World._set(7), pa.load_facets(), PRICE)) and llm_call_id is None
+
+
+def test_the_tool_echoes_the_id_it_was_asked_and_names_its_survivor_in_the_data(world: World) -> None:
+    world.sets[7] = World._set(9)
+    scope, _ = world.scope(_assessment())
+    out = world.call(scope, 7)
+    assert out["metadata"]["filters_used"] == {"property_id": 7} and out["data"]["property_id"] == 9
+
+
 def test_a_photo_it_cannot_read_pays_nothing(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     class Broken:
         def download_bytes(self, key: str) -> bytes:
@@ -288,6 +307,19 @@ def test_a_cap_spent_on_photos_stops_the_run_on_max_cost(world: World) -> None:
     outcome, _, _ = _run(world, [reply((NAME, {"property_id": 7}), model=MODEL), _assessment(usage=(100_000, 12_000)), _submit(7)],
                          agent=_agent(max_cost=0.7))
     assert outcome.stop_reason == "max_cost"
+
+
+def test_a_paid_tool_is_refused_rather_than_leave_the_run_unable_to_answer(world: World) -> None:
+    """The cap covers an assessment's worst case but not that and the reply that must follow: the answer still comes."""
+    photos, facets = World._set(7), pa.load_facets()
+    room_for_the_answer = loop.MIN_REPLY_TOKENS * PRICE.output_per_mtok / 1e6
+    cap = pa.worst_case_usd(photos, facets, PRICE) + room_for_the_answer * 0.9
+    outcome, steps, provider = _run(world, [reply((NAME, {"property_id": 7}), usage=(1, 1), model=MODEL), _submit()],
+                                    agent=_agent(max_cost=cap))
+    refused = next(s for s in steps if s.kind == "tool" and s.name == NAME)
+    assert refused.output["error"]["code"] == "refused" and "budget" in refused.output["error"]["message"]
+    assert outcome.stop_reason == "submit_result" and world.cache == {}
+    assert len(provider.calls) == 2
 
 
 def test_a_hit_adds_nothing_to_the_runs_cost(world: World) -> None:
