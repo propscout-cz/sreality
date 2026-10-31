@@ -1,22 +1,18 @@
-"""Location W1v: the OPERATOR claim producer (03 S7 rank 1, 05 5.5.5).
+"""Location W3b: the OPERATOR claim producer — the address picker (ruling Q5).
 
-One of the two claim producers (the contract-driven claim lane, over its three substrates,
-and operator input). A correction is the listing's ONE operator claim of its type
-(`surface='operator_input'`, `extraction_method='operator_manual'`, `licence_class='operator'`,
-`claim_confidence='exact'`), written through the one write, `claims_store.write_claims` (W3):
-a new value replaces the operator's previous one, the same value twice writes and enqueues
-nothing, and the resolver's read puts it ahead of the portal's claim of that type. No retract
-or re-mine reaches it: both act only on claims that carry a `contract_entry_id`.
-
-The synchronous projection refresh (05 5.5.5: operator-initiated changes are visible on the
-next read) is `resolve_now()` = `drain.run(only_listing_id=)`; `submit_correction` callers
-invoke it after the claim transaction commits. If it fails, the enqueue in the write
-guarantees the drain converges.
+The admin picks ONE register entity (an address point, a street or an obec) and `submit_pick`
+writes it on EVERY ad of the property as the four `PICK_TYPES`, in the register's own names;
+the types it does not state are tombstones, so a re-pick replaces the operator's whole
+statement and `pick=None` hands every ad back to its own words. Through the one write
+(`claims_store.write_claims`, W3): licence `operator` outranks the portal at read, an unchanged
+value writes nothing, and no retract or re-mine reaches it (no `contract_entry_id`).
+`resolve_now()` then refreshes the location ad (05 5.5.5); if it fails, the enqueue converges.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,133 +25,144 @@ from location_data.claims_store import write_claims
 LOG = logging.getLogger("location.operator_corrections")
 
 EXTRACTOR_ID = "operator.correction"
-EXTRACTOR_VERSION = "1"
+EXTRACTOR_VERSION = "2"
 
-# Text-valued claim types an operator can assert in W1v. `coordinate` (a pin
-# drag) is deliberately absent: it needs a geometry input surface and its own
-# licence reasoning; the policy row for it already exists (migration 400), so
-# adding it later is UI work, not schema work.
-ALLOWED_CLAIM_TYPES: frozenset[str] = frozenset({
-    "address_point_id",
-    "street_name",
-    "house_number_cp",
-    "house_number_co",
-    "psc",
-    "obec_name",
-    "cast_obce_name",
-    "okres_name",
-})
+# The picker's four types, a subset of the contract vocabulary (`contracts.CLAIM_TYPES`). A
+# pin (`coordinate`) is deliberately absent: the portal's pin stays as evidence (limit L2).
+PICK_TYPES: tuple[str, ...] = ("address_point_id", "street_name", "obec_name", "okres_name")
+# A picked level -> the `listing_location` column that holds its code once the pick binds.
+PICK_COLUMN: dict[str, str] = {
+    "adresni_misto": "ruian_adm_kod", "ulice": "ulice_kod", "obec": "obec_kod",
+}
 
 
 class CorrectionError(ValueError):
-    """Invalid correction input (maps to HTTP 422 at the API layer)."""
+    """Invalid pick (maps to HTTP 422 at the API layer)."""
 
 
-class UnknownListingError(CorrectionError):
-    pass
+class UnknownPropertyError(CorrectionError):
+    """No active property with ads (HTTP 404)."""
 
 
-class UnknownKodAdmError(CorrectionError):
-    pass
-
-
-_KOD_ADM_SQL = """
-    SELECT ap.kod_adm,
-           u_obec.name AS obec,
-           s.name      AS street,
-           ap.cislo_domovni::text AS cislo_domovni,
-           ap.cislo_orientacni    AS cislo_orientacni,
-           ap.psc::text           AS psc
-    FROM ruian_address_points ap
-    LEFT JOIN ruian_streets s
-           ON s.id = ap.street_id
-    LEFT JOIN ruian_admin_units u_obec
-           ON u_obec.id = ap.obec_unit_id
-    WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
+_ADS_SQL = """
+    SELECT l.id, l.source, l.source_id_native, l.id = p.location_listing_ref_id
+      FROM properties p JOIN listings l ON l.property_id = p.id
+     WHERE p.id = %s AND p.status = 'active'
+     ORDER BY l.id
 """
 
-# The read-your-writes echo (05 5.5.5), off `listing_location` since W2-b. The
-# axes it names are the answer table's own: no display label (derived at read),
-# no position_source / admin_assignment_method (the four-step resolver emits
-# neither), and `disputed` is the reason word itself, NULL when clean.
+_LISTINGS_SQL = """
+    SELECT id, source, source_id_native FROM listings WHERE id = ANY(%s) ORDER BY id
+"""
+
+# The register's names for a picked code, as (street, obec, okres); the okres is the obec's
+# parent at that level (Praha's parent is its kraj, so it has none). No row: not current.
+_REGISTER_SQL: dict[str, str] = {
+    "adresni_misto": "SELECT 1 FROM ruian_address_points WHERE kod_adm = %s AND valid_to IS NULL",
+    "ulice": """
+        SELECT s.name, o.name, k.name
+          FROM ruian_streets s
+          JOIN ruian_admin_units o ON o.id = s.obec_unit_id
+          LEFT JOIN ruian_admin_units k ON k.id = o.parent_id AND k.level = 'okres'
+         WHERE s.code = %s AND s.valid_to IS NULL
+         ORDER BY s.id DESC LIMIT 1
+    """,
+    "obec": """
+        SELECT NULL, o.name, k.name
+          FROM ruian_admin_units o
+          LEFT JOIN ruian_admin_units k ON k.id = o.parent_id AND k.level = 'okres'
+         WHERE o.level = 'obec' AND o.code = %s AND o.valid_to IS NULL
+         ORDER BY o.id DESC LIMIT 1
+    """,
+}
+
+_BATCH_SQL = """
+    INSERT INTO location_claim_batches
+        (lane, source, extractor_version, finished_at, row_count, outcome, note)
+    VALUES ('operator_correction', NULL, %s, now(), %s, 'ok', %s)
+"""
+
+# The read-your-writes echo (05 5.5.5): the codes a pick binds and the ONE label (rule 25).
 _PROJECTION_SQL = """
-    SELECT listing_id, granularity::text, match_confidence::text,
-           uncertainty_radius_m, ruian_adm_kod, street_name,
-           house_number_cp, house_number_co, psc, obec_name, okres_name,
-           disputed, resolver_version, resolved_at
-    FROM listing_location WHERE listing_id = %s
+    SELECT granularity::text, ruian_adm_kod, ulice_kod, obec_kod,
+           location_display_label(street_name, house_number_cp, house_number_co, obec_name,
+                                  cast_obce_name, country_code, country_status) AS label,
+           resolved_at
+      FROM listing_location WHERE listing_id = %s
 """
 
 
-def submit_correction(
-    conn: psycopg.Connection,
-    *,
-    listing_id: int,
-    claim_type: str,
-    value_text: str,
-    note: str | None = None,
+def _register_values(conn: psycopg.Connection, level: str, code: int) -> dict[str, str]:
+    if level not in _REGISTER_SQL:
+        raise CorrectionError(f"level {level!r} is not pickable; pick an address, a street or an obec")
+    with conn.cursor() as cur:
+        cur.execute(_REGISTER_SQL[level], (code,))
+        row = cur.fetchone()
+    if row is None:
+        raise CorrectionError(f"{level} {code} is not a current RÚIAN unit")
+    if level == "adresni_misto":
+        return {"address_point_id": str(code)}
+    return {t: v for t, v in zip(PICK_TYPES[1:], row) if v is not None}
+
+
+def _claims(ads: Sequence[tuple], values: dict[str, str]) -> list[Claim]:
+    """The four picker types on every ad: a value where the pick states one, else a tombstone."""
+    now = datetime.now(UTC)
+    return [
+        Claim(listing_id=ad[0], source=ad[1], source_id_native=ad[2], claim_type=t,
+              surface="operator_input", page_kind="none", extraction_method="operator_manual",
+              extractor_id=EXTRACTOR_ID, extractor_version=EXTRACTOR_VERSION,
+              contract_entry_id=None, first_observed_at=now, blur_evidence="none",
+              licence_class="operator", value_text=values.get(t), subject_scoped=True,
+              claim_confidence="exact", retract=t not in values)
+        for ad in ads for t in PICK_TYPES
+    ]
+
+
+def _write(cur: psycopg.Cursor, claims: list[Claim], note: str) -> tuple[int, int]:
+    written, enqueued = write_claims(cur, claims, reason="operator_edit")
+    cur.execute(_BATCH_SQL, (EXTRACTOR_VERSION, written, note))
+    return written, enqueued
+
+
+def submit_pick(
+    conn: psycopg.Connection, *, property_id: int, pick: tuple[str, int] | None,
+    by: str | None,
 ) -> dict[str, Any]:
-    """Write the listing's operator claim of this type (+ enqueue on change). One transaction."""
-    if claim_type not in ALLOWED_CLAIM_TYPES:
-        raise CorrectionError(
-            f"claim_type {claim_type!r} not correctable; allowed: "
-            + ", ".join(sorted(ALLOWED_CLAIM_TYPES))
-        )
-    value_text = (value_text or "").strip()
-    if not value_text:
-        raise CorrectionError("value_text must be non-empty")
-
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT id, source, source_id_native FROM listings WHERE id = %s",
-            (listing_id,),
-        )
-        listing = cur.fetchone()
-    if listing is None:
-        raise UnknownListingError(f"listing {listing_id} does not exist")
-
-    registry_echo: dict[str, Any] | None = None
-    if claim_type == "address_point_id":
-        if not value_text.isdigit():
-            raise CorrectionError("address_point_id must be a bare kod ADM (digits only)")
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(_KOD_ADM_SQL, (int(value_text),))
-            registry_echo = cur.fetchone()
-        if registry_echo is None:
-            raise UnknownKodAdmError(
-                f"kod ADM {value_text} is not a current address point in the RUIAN mirror"
-            )
-
-    claim = Claim(
-        listing_id=listing_id, source=listing["source"],
-        source_id_native=listing["source_id_native"], claim_type=claim_type,
-        surface="operator_input", page_kind="none", extraction_method="operator_manual",
-        extractor_id=EXTRACTOR_ID, extractor_version=EXTRACTOR_VERSION, contract_entry_id=None,
-        first_observed_at=datetime.now(UTC), blur_evidence="none", licence_class="operator",
-        value_text=value_text, subject_scoped=True, claim_confidence="exact")
+    """Write the pick on every ad of the property (+ enqueue the changed ones). One transaction."""
+    with conn.cursor() as cur:
+        cur.execute(_ADS_SQL, (property_id,))
+        ads = cur.fetchall()
+    if not ads:
+        raise UnknownPropertyError(f"property {property_id} is not an active property with ads")
+    values = {} if pick is None else _register_values(conn, *pick)
+    what = "cleared" if pick is None else f"{pick[0]} {pick[1]}"
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO location_claim_batches
-                    (lane, source, extractor_version, finished_at, row_count, outcome, note)
-                VALUES ('operator_correction', %s, %s, now(), 1, 'ok', %s)
-                """,
-                (listing["source"], EXTRACTOR_VERSION, note),
-            )
-            written, enqueued = write_claims(cur, [claim], reason="operator_edit")
-
+            written, enqueued = _write(
+                cur, _claims(ads, values), f"property {property_id}: {what} by {by}")
     return {
-        "listing_id": listing_id,
-        "source": listing["source"],
-        "claim_type": claim_type,
-        "value_text": value_text,
-        "written": written == 1,
-        "enqueued": enqueued == 1,
-        "registry_echo": registry_echo,
-        "resolved": False,
-        "projection": None,
+        "property_id": property_id,
+        "pick": None if pick is None else {"level": pick[0], "code": pick[1]},
+        "ads": [{"listing_id": a[0], "source": a[1], "location_ad": bool(a[3])} for a in ads],
+        "written": written,
+        "enqueued": enqueued,
     }
+
+
+def clear(conn: psycopg.Connection, listing_ids: Sequence[int]) -> int:
+    """Hand these ads back to their own words: four tombstones each (R1, the detach). Runs in
+    the caller's transaction; writes no batch row when no ad held an operator claim."""
+    if not listing_ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(_LISTINGS_SQL, (list(listing_ids),))
+        ads = cur.fetchall()
+        written, _ = write_claims(cur, _claims(ads, {}), reason="operator_edit")
+        if written:
+            ids = ", ".join(str(a[0]) for a in ads)
+            cur.execute(_BATCH_SQL, (EXTRACTOR_VERSION, written, f"listings {ids}: detached"))
+    return written
 
 
 def resolve_now(conn: psycopg.Connection, listing_id: int) -> bool:
