@@ -374,7 +374,7 @@ connection even opens (`deps.open_background_conn` in the handler, never a depen
 `test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
 service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role
 transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
-the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
+the handler-long `TenantConn` (committed before the response): its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
 (`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
 
 **Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
@@ -419,7 +419,7 @@ an assertion, and outlived the behaviour it described. A comment is not a rail.
   structurally, not enumerated, and so is the named exception above. It has its own
   non-vacuity sentinel.
 - `tests/api/test_tenant_conn_scope.py` — the COMMIT-BEFORE-RESPONSE CENSUS. An AST pass finds no
-  `Depends(tenant_conn)` in `api/` outside the `TenantConn` alias; a walk of the live app finds every route reaching
+  `Depends(tenant_conn)` in `api/` outside the `TenantConn` alias in `api/tenant_pool.py`; a walk of the live app finds every route reaching
   `tenant_conn` only function-scoped (with a mount sentinel); a commit patched to deadlock answers 503 `db_busy` on a
   card move and 5xx on a GET; an acting write resolves its account and writes on ONE connection.
 - `tests/api/test_account_scope_census.py` — the ACCOUNT-SCOPE CENSUS, one layer down: no

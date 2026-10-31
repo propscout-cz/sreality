@@ -293,22 +293,20 @@ back where it came from.
 _Avoid_: carry log, curation ledger, snapshot
 
 **Curation sync**:
-How every open window of a signed-in user follows a change to that user's curation, or to the shares
-that decide who sees it, made anywhere: another window, the phone, the extension, a delegate, a merge.
-The window learns from the curation clock that something changed and re-reads what it shows; it never
-renders from the signal. An open Browse, Feed or collection list keeps its rows, counts, map and stats
-until the next navigation; only the per-card marks follow at once.
+The catching-up of every open window of a signed-in user with a change to that user's curation, or to
+the shares that decide who sees it, made anywhere else (another window, the phone, the extension, a
+delegate, a merge). It is a re-read prompted by the curation clock, never a render from its signal.
 _Avoid_: live sync, live update, Realtime, push (alone), operator state sync
 
 **Curation clock**:
 One counter per account and family of curation (the board, dismissals, collections, tags, notes, links,
-shares) that only the database advances, once per committed change. Windows compare it for inequality;
-it holds no content and is not history.
+shares), advanced only by the database, once per committed change. It is a change signal compared only
+for inequality: it holds no content and is not history.
 _Avoid_: version, tick, revision, change log
 
 **Clock read**:
-One window's read of the curation clock: every 5 s on the desktop and every 15 s on the phone while
-the window is visible, and at once when it is shown again.
+One window's read of the curation clock, on a cadence while the window is visible and at once when it is
+shown again (the cadence: `docs/design/curation-sync.md` § 3.5).
 _Avoid_: probe, tick, poll (alone), heartbeat
 
 **Watchdog**:

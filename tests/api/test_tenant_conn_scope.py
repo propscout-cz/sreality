@@ -1,7 +1,4 @@
-"""The tenant transaction commits BEFORE the response (curation sync W0, docs/design/curation-sync.md § 3.6):
-routes and helpers take it as the ONE function-scoped alias `tenant_pool.TenantConn`, which FastAPI closes after
-the handler and the serialization but before the response is sent, so a failed COMMIT answers 5xx, never a 200
-for a write that rolled back; and only ONE alias, because the dependency cache keys on the scope."""
+"""The tenant transaction commits before the response, through ONE function-scoped alias `tenant_pool.TenantConn`."""
 
 from __future__ import annotations
 
@@ -19,15 +16,20 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
-from fastapi.routing import APIRoute
-
 from api import main as api_main
 from api import pipeline as pipeline_module
 from api import tenant_pool
 from tests.api._jwt import mint
+from tests.api._routes import flat_routes
 from tests.api._script_conn import ScriptConn
 
+# Curation sync W0 (docs/design/curation-sync.md § 3.6): FastAPI closes a function-scoped dependency after the
+# handler and the serialization but before the response is sent, so a failed COMMIT answers 5xx, never a 200 for a
+# write that rolled back. ONE alias, because the dependency cache keys on the scope: a bare Depends(tenant_conn)
+# beside it would be a second connection and transaction in the same request.
+
 _API = pathlib.Path(__file__).resolve().parents[2] / "api"
+_ALIAS_HOME = _API / "tenant_pool.py"
 _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = uuid.UUID("22222222-2222-2222-2222-222222222222")
 _OWNER = uuid.UUID("33333333-3333-3333-3333-333333333333")
@@ -49,11 +51,12 @@ def test_census_no_bare_depends_on_tenant_conn_outside_the_alias() -> None:
     for path in sorted(_API.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         alias_calls: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "TenantConn" for t in node.targets
-            ):
-                alias_calls |= {id(n) for n in ast.walk(node.value)}
+        if path == _ALIAS_HOME:  # the one assignment allowed to name tenant_conn
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "TenantConn" for t in node.targets
+                ):
+                    alias_calls |= {id(n) for n in ast.walk(node.value)}
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and _is_depends(node.func)):
                 continue
@@ -63,17 +66,6 @@ def test_census_no_bare_depends_on_tenant_conn_outside_the_alias() -> None:
             if target is not None and _names_tenant_conn(target) and id(node) not in alias_calls:
                 found.append(f"{path.relative_to(_API.parent)}:{node.lineno}")
     assert not found, f"take `conn: tenant_pool.TenantConn`, never Depends(tenant_conn): {found}"
-
-
-def _api_routes(routes: list[Any]) -> list[APIRoute]:
-    """Flattened: since 0.13x include_router appends one wrapper holding the original router."""
-    out: list[APIRoute] = []
-    for r in routes:
-        if isinstance(r, APIRoute):
-            out.append(r)
-        elif nested := getattr(getattr(r, "original_router", None), "routes", None) or getattr(r, "routes", None):
-            out.extend(_api_routes(nested))
-    return out
 
 
 def _subs(dependant: Any) -> Iterator[Any]:
@@ -86,7 +78,7 @@ def test_every_route_reaches_the_tenant_connection_only_through_the_function_sco
     _type, depends = typing.get_args(tenant_pool.TenantConn)
     assert depends.dependency is tenant_pool.tenant_conn and depends.scope == "function"
     reached: set[str] = set()
-    for route in _api_routes(api_main.app.routes):
+    for route in flat_routes(api_main.app.routes):
         for sub in _subs(route.dependant):
             if sub.call is tenant_pool.tenant_conn:
                 reached.add(route.path)
@@ -97,6 +89,7 @@ def test_every_route_reaches_the_tenant_connection_only_through_the_function_sco
 
 @pytest.fixture()
 def moves(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, uuid.UUID]]:
+    """`pipeline.move_card` (behind `PATCH /pipeline/cards/{id}`) stubbed: each (connection, account) it got."""
     seen: list[tuple[Any, uuid.UUID]] = []
 
     def move_card(conn: Any, pid: int, body: Any, *, account_id: uuid.UUID) -> dict[str, Any]:
@@ -104,40 +97,54 @@ def moves(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, uuid.UUID]]:
         return {"property_id": pid}
 
     monkeypatch.setattr(pipeline_module, "move_card", move_card)
-    monkeypatch.setattr(pipeline_module, "list_stages", lambda conn: {"data": []})
     return seen
 
 
 @pytest.fixture()
-def http(moves: list[tuple[Any, uuid.UUID]]) -> Any:
+def stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`pipeline.list_stages` (behind `GET /pipeline/stages`) stubbed to an empty board."""
+    monkeypatch.setattr(pipeline_module, "list_stages", lambda conn: {"data": []})
+
+
+@pytest.fixture()
+def http() -> Any:
     client = TestClient(api_main.app, raise_server_exceptions=False)
     client.headers["Authorization"] = f"Bearer {mint({'sub': _SUB})}"
     return client
 
 
-def _commit_raises(monkeypatch: pytest.MonkeyPatch, exc: BaseException | None) -> ScriptConn:
-    conn = ScriptConn([(lambda sql: "account_members" in sql, [(_ACCT,)])])
+def _member_conn() -> ScriptConn:
+    return ScriptConn([(lambda sql: "account_members" in sql, [(_ACCT,)])])
 
+
+def _commit_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     @contextlib.contextmanager
     def fake_transaction(claims: dict, *, act_as: uuid.UUID | None, method: str) -> Iterator[ScriptConn]:
-        yield conn
-        if exc is not None:  # only on a clean exit, as conn.transaction() commits only then
-            raise exc
+        yield _member_conn()
 
     monkeypatch.setattr(tenant_pool, "tenant_transaction", fake_transaction)
-    return conn
+
+
+def _commit_fails(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> None:
+    @contextlib.contextmanager
+    def fake_transaction(claims: dict, *, act_as: uuid.UUID | None, method: str) -> Iterator[ScriptConn]:
+        yield _member_conn()
+        raise exc  # reached only on a clean exit, as conn.transaction() commits only then
+
+    monkeypatch.setattr(tenant_pool, "tenant_transaction", fake_transaction)
 
 
 def test_a_card_move_whose_commit_deadlocks_answers_503_db_busy(
     http: Any, moves: list[tuple[Any, uuid.UUID]], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _commit_raises(monkeypatch, psycopg.errors.DeadlockDetected("deadlock detected"))
+    _commit_fails(monkeypatch, psycopg.errors.DeadlockDetected("deadlock detected"))
     res = http.patch("/pipeline/cards/7", json={"stage_id": 2})
     assert len(moves) == 1  # the write ran; its commit is what failed
     assert res.status_code == 503 and res.json()["detail"]["code"] == "db_busy"
     assert res.headers["retry-after"] == "5"
 
 
+@pytest.mark.usefixtures("stages")
 @pytest.mark.parametrize("exc, status", [
     (psycopg.errors.DeadlockDetected("deadlock detected"), 503),
     (psycopg.errors.LockNotAvailable("lock timeout"), 503),
@@ -146,17 +153,18 @@ def test_a_card_move_whose_commit_deadlocks_answers_503_db_busy(
 def test_a_read_whose_commit_fails_answers_5xx_never_200(
     http: Any, monkeypatch: pytest.MonkeyPatch, exc: BaseException, status: int,
 ) -> None:
-    _commit_raises(monkeypatch, exc)
+    _commit_fails(monkeypatch, exc)
     assert http.get("/pipeline/stages").status_code == status
 
 
+@pytest.mark.usefixtures("moves", "stages")
 def test_a_clean_commit_answers_200(http: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    _commit_raises(monkeypatch, None)
+    _commit_succeeds(monkeypatch)
     assert http.patch("/pipeline/cards/7", json={"stage_id": 2}).status_code == 200
     assert http.get("/pipeline/stages").status_code == 200
 
 
-class _CountedConn(ScriptConn):
+class _CloseRecordingConn(ScriptConn):
     closed = False
 
     def close(self) -> None:
@@ -167,10 +175,10 @@ class _CountedConn(ScriptConn):
 def test_an_acting_write_resolves_its_account_and_writes_on_one_connection(
     http: Any, moves: list[tuple[Any, uuid.UUID]], monkeypatch: pytest.MonkeyPatch, act_as: uuid.UUID | None,
 ) -> None:
-    opened: list[_CountedConn] = []
+    opened: list[_CloseRecordingConn] = []
 
-    def connect(dsn: str, **_kw: Any) -> _CountedConn:
-        conn = _CountedConn([
+    def connect(dsn: str, **_kw: Any) -> _CloseRecordingConn:
+        conn = _CloseRecordingConn([
             (lambda sql: "account_members" in sql, [(_ACCT,)]),
             (lambda sql: "acting_account_ids()" in sql, [(_OWNER,)]),
         ])
