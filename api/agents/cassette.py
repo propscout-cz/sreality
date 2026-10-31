@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 from api.agents.definition import Definition
-from api.agents.loop import Outcome, Step
+from api.agents.loop import Outcome, Step, plain_answer
 from api.capabilities.truncate import encode
 from api.providers import ModelPrice
 
@@ -19,6 +19,12 @@ VERSION = 1
 def plain(value: Any) -> Any:
     """`value` as JSON reads it back, so a recorded outcome and a replayed one compare equal."""
     return json.loads(encode(value))
+
+
+def plain_outcome(outcome: Outcome) -> dict[str, Any]:
+    """An outcome as a cassette keeps it: a file's facts, never its bytes."""
+    answer = None if outcome.answer is None else plain_answer(outcome.answer)
+    return plain({**asdict(replace(outcome, answer=None)), "answer": answer})
 
 
 def dump(path: Path, *, definition: Definition, provider: str, model: str, price: ModelPrice,
@@ -34,7 +40,7 @@ def dump(path: Path, *, definition: Definition, provider: str, model: str, price
         "price": asdict(price),
         "input": value,
         "steps": [asdict(step) for step in steps],
-        "outcome": asdict(outcome) if outcome is not None else None,
+        "outcome": plain_outcome(outcome) if outcome is not None else None,
     }
     path.write_text(json.dumps(plain(document), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 

@@ -3,11 +3,11 @@
  * the tool chips and the services' states all derive from `done`. tests/api/test_agent_platform_page.py holds the live
  * tools to the registry. */
 
-export const AS_OF = '2026-10-31';
+export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
+  'result check, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
 export interface Ticket {
@@ -44,7 +44,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2179, done: true, title: 'Models keep their own reply blocks across tool calls' },
       { n: 2066, done: false, title: 'Structured photo assessment with a cache' },
       { n: 2067, done: false, title: 'Valuo as a capped, recorded paid tool' },
-      { n: 2068, done: false, title: 'Agent Python on Claude\'s hosted code execution' },
+      { n: 2068, done: true, title: 'Agent Python on Claude\'s hosted code execution' },
       { n: 2069, done: false, title: 'The scout\'s folder, and your grading of ten shortlists' },
     ],
   },
