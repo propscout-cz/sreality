@@ -88,6 +88,18 @@ def test_a_three_tool_script_ends_on_an_accepted_answer_with_one_step_per_call()
     assert run.outcome.cost_usd == pytest.approx(sum(s.cost_usd for s in run.steps)) and run.outcome.cost_usd > 0
 
 
+def test_each_model_call_may_take_only_the_time_the_run_has_left() -> None:
+    ticks = itertools.chain([0.0, 0.0, 0.0, 0.0, 20.0, 20.0, 20.0], itertools.repeat(20.0))
+    run = _Run(reply(("probe_a", {})), reply((SUBMIT, {"markdown": "Done."})), clock=lambda: next(ticks))
+    assert run.outcome.stop_reason == "submit_result"
+    assert [c["timeout_s"] for c in run.provider.calls] == [60.0, 40.0]
+
+
+def test_a_definitions_tool_schemas_are_what_the_model_is_offered() -> None:
+    run = _Run(reply((SUBMIT, {"markdown": "Done."})))
+    assert [s["name"] for s in loop.tool_schemas(_agent())] == [t.name for t in run.provider.calls[0]["tools"]]
+
+
 def test_every_tool_result_goes_back_to_the_model_as_the_registry_shaped_it() -> None:
     refusal = ToolError(ToolErrorCode.INVALID_ARGUMENTS, "q must be positive")
     run = _Run(reply(("probe_a", {"q": -1}), ("probe_b", {})), reply(),

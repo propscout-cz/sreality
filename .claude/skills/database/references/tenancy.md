@@ -15,6 +15,12 @@ shape for each grain.
 - `current_account_ids()` — `LANGUAGE sql STABLE SECURITY DEFINER`, returns the caller's
   `account_members.account_id` set keyed off `auth.jwt() ->> 'sub'`.
 - `is_platform_admin()` — same shape against `admins`.
+- **An agent run's identity (migration 704, #2070).** The JWT-claims GUC of a run carries `run_account_id` beside
+  `sub`, set only by `api/agents/claims.caller_for`. It narrows: `current_account_ids()` and `acting_account_ids()`
+  intersect with that one account, `acting_account_ids()` ignores `x-act-as`, `is_platform_admin()` answers false. It
+  can only remove power, and without it all three answer as before (`tests/test_agent_runs_live.py`). Hence a run
+  started by an admin has no admin arm, and a two-membership user's run reads one account; a removed membership empties
+  the next tool call. The SYSTEM arm of 291's policies is every account's, a run's included.
 - Grants follow the skill body's "Default privileges" recipe: `handle_new_user()`
   (trigger-only) is executable by no client role; the other two grant `authenticated`
   EXECUTE, since RLS policies invoke them under the querying role.
@@ -406,8 +412,14 @@ and that list mirrors migration 291's three-arm policy (own account OR SYSTEM OR
 admin) rather than inventing a second tenancy definition. It never widens and never returns
 empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credential raises.
 
+`tests/api/test_tenant_caller_census.py` pins who calls `tenant_transaction` directly: `tenant_conn`, and each named
+exception below. A new caller argues its case here and joins the pinned set there. The same census pins the one place
+a caller gets claims, `api/agents/claims.caller_for`, so there is one claims shape: the executor hands the registry that
+caller and opens no transaction of its own.
+
 **Named exception — the tool registry (`api/capabilities/registry._connection`, #2062).** A TENANT tool runs
-inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's verified claims, never acting
+inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's claims (a run's, from the
+builder), never acting
 as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
 every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
 back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection

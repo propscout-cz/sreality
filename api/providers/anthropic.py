@@ -76,8 +76,12 @@ class AnthropicProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         client = self._sdk_client()
+        if timeout_s is not None:
+            # No retries under a deadline: the SDK's default two would each get the whole timeout.
+            client = client.with_options(timeout=timeout_s, max_retries=0)
         kwargs = self._request_kwargs(
             system=system,
             messages=[_msg_to_anthropic(m) for m in messages],

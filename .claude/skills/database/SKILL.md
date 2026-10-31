@@ -5,9 +5,7 @@ description: Use when working with this project's Postgres/Supabase database —
 
 # Database
 
-Everything for working with the Supabase Postgres store of record: reading cheaply, the
-three connection modes, migrations as the source of truth, the migration safety gate,
-multi-tenancy, and schema conventions. Full architectural rationale for the data model is
+Working with the Supabase Postgres store of record. Full architectural rationale for the data model is
 in `docs/architecture.md`.
 
 ## Reads: prefer psql over the Supabase MCP (cost)
@@ -96,8 +94,8 @@ tenant-scoped:
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
   `TENANT_POOL_DB_URL` raises. A GET/HEAD is READ ONLY, 8 s.
-  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for two named
-  callers (`references/tenancy.md`): the feedback route and the tool registry's tenant tools.
+  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager; its direct callers are
+  pinned by `tests/api/test_tenant_caller_census.py`, each named in `references/tenancy.md`.
 
 **Mutual exclusion over the pooler: three shapes, never a session advisory lock from Python.** Service-role
 Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), where autocommit statements land on
@@ -207,7 +205,7 @@ policy before assuming service-role-only access still applies everywhere. The mo
 separate `admins(user_id)` platform-admin allowlist (migration 286). Two SECURITY DEFINER
 helpers, `current_account_ids()` and `is_platform_admin()` (keyed off the JWT `sub` claim via
 `account_members`/`admins`), are the definition point for every per-account RLS policy; 641 adds the one
-sanctioned second, `acting_account_ids()`, read only by the eleven curation policies (§ Delegation) — don't hand-roll a third.
+sanctioned second, `acting_account_ids()`, read only by the eleven curation policies (§ Delegation) — don't hand-roll a third. An agent run's claim narrows all three (704, `references/tenancy.md`).
 
 Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
 `property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),

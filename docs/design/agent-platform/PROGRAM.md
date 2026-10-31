@@ -249,7 +249,8 @@ drawing render from a structured spec through git templates (tier 1), so AI-writ
 **Rails (censuses, F72).**
 1. Every entry declares all three classes.
 2. No handler opens a connection except through ctx.
-3. Only the API's dependencies and the agent-worker's one claims builder call `tenant_transaction`.
+3. Who calls `tenant_transaction` directly, and who builds a caller with claims: pinned by
+   `tests/api/test_tenant_caller_census.py`, not restated here.
 4. No input schema carries `account_id`, an act-as field, a user id or any principal field: identity comes only from
    the run.
 5. The market_cache class is allowed only for six agent cache writers, by name: `verify_listing_freshness`,
@@ -1055,8 +1056,8 @@ AR3 confirms both. *Entry condition:* the W0 probe result is recorded (it settle
    that crashes twice at one step fails with its reason.
 4. **Tenancy:** on the replay database, account A's run cannot read B's collections or pipeline; a two-membership
    user's run sees one account; an admin principal's run cannot write `manual_rental_estimates` or read SYSTEM or NULL
-   rows; a model-supplied account id is refused by the schema census; the claims builder is the only
-   `tenant_transaction` caller outside `api/`; the grant census of the three logins is green.
+   rows; a model-supplied account id is refused by the schema census; `tests/api/test_tenant_caller_census.py`
+   holds the `tenant_transaction` callers; the grant census of the three logins is green.
 5. **Approvals:** Valuo parks the run; a double approve makes exactly one call; the stored arguments run; edited
    arguments and an expired approval are refused; only the principal can approve, and an act-as run cannot reach the
    costly step; the approval is consumed in the same transaction as the Valuo write-ahead row.

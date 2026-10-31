@@ -5,8 +5,8 @@ Usage:
     python -m scripts.agent_run skills/<agent> --user <auth user id> --input @input.json --record run.json
 
 Needs SUPABASE_DB_URL (the market tools, and the llm_calls row every model call writes as 'agent_run'),
-TENANT_POOL_DB_URL (the user's own data, under their login) and the provider's API key. The loop calls no write
-tool: what the agent proposes is printed, never applied. A cassette holds everything the run read, the user's own
+TENANT_POOL_DB_URL (the user's own data, under their login, as a run reads it: one account, no admin powers) and the
+provider's API key. The loop calls no write tool: what the agent proposes is printed, never applied. A cassette holds everything the run read, the user's own
 collections and notes included: keep a production cassette out of git while the repository is public.
 """
 
@@ -20,11 +20,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from api import dependencies
-from api.agents import cassette, loop
+from api import dependencies, tenant_pool
+from api.agents import cassette, claims, loop
 from api.agents.definition import DefinitionError, InputError, load
 from api.capabilities import registry
-from api.capabilities.entry import Caller
 from api.llm_client import LLMClient
 from scraper import db
 
@@ -64,7 +63,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with db.connect() as conn:
-            caller = Caller(market=conn, claims={"sub": str(opts.user), "role": "authenticated"})
+            # No run row here, so the operator names the principal; the account is the one a route would resolve.
+            account = tenant_pool.resolve_account_id(conn, {"sub": str(opts.user)})
+            if account is None:
+                print(f"no account for user {opts.user}", file=sys.stderr)
+                return 2
+            caller = claims.caller_for(conn, principal_user_id=opts.user, account_id=account)
             llm = LLMClient(conn, providers=providers)
             outcome = loop.run(definition, value, provider=provider, llm=llm, record=record,
                                call_tool=lambda name, args: registry.call(caller, name, args))

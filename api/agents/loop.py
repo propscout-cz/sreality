@@ -66,6 +66,12 @@ def _reply_tokens(remaining_usd: float, prompt_tokens: int, price: ModelPrice) -
     return min(MAX_REPLY_TOKENS, math.floor(left * 1e6 / price.output_per_mtok))
 
 
+def tool_schemas(definition: Definition) -> list[dict[str, Any]]:
+    """What this agent's model is offered: its tools it may call, then the terminator."""
+    callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
+    return [s for s in registry.schemas() if s["name"] in callable_names] + [terminator.schema(definition)]
+
+
 def run(
     definition: Definition,
     value: Mapping[str, Any],
@@ -86,7 +92,7 @@ def run(
         raise DefinitionError(f"{provider} has no price for {model!r}")
 
     callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
-    tools = [s for s in registry.schemas() if s["name"] in callable_names] + [terminator.schema(definition)]
+    tools = tool_schemas(definition)
     opening = json.dumps(value, ensure_ascii=False, indent=2)
     messages = [Message(role="user", content=[TextBlock(text=opening)])]
     prompt_tokens = _bytes([definition.instructions, tools, opening])
@@ -118,7 +124,7 @@ def run(
 
         started = clock()
         response = llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions, tools=tools,
-                            model=model, provider=provider, max_tokens=max_tokens)
+                            model=model, provider=provider, max_tokens=max_tokens, timeout_s=deadline - started)
         calls += 1
         spent += response.cost_usd
         completion = response.completion

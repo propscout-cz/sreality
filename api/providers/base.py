@@ -199,6 +199,7 @@ class CompletionProvider(Protocol):
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion: ...
 
     def price_for(self, model: str) -> ModelPrice | None: ...

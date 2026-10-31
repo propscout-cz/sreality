@@ -78,6 +78,7 @@ class GeminiProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if not self._api_key:
             raise ProviderError(
@@ -95,6 +96,8 @@ class GeminiProvider:
         }
         if system:
             cfg_kwargs["system_instruction"] = system
+        if timeout_s is not None:
+            cfg_kwargs["http_options"] = types.HttpOptions(timeout=int(timeout_s * 1000))
         if tools:
             cfg_kwargs["tools"] = [
                 types.Tool(

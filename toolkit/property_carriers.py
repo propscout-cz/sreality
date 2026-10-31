@@ -283,6 +283,8 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
     ("property_merge_events", "prev_property_id"): _MERGE_LEDGER,
     ("property_merge_carries", "from_property_id"): _CARRY_RECORD,
     ("property_merge_carries", "to_property_id"): _CARRY_RECORD,
+    ("agent_artifacts", "property_id"):
+        "a run's output, naming the property as that run read it; a reader follows a merged-away id to its survivor",
     ("property_pipeline_events", "property_id"):
         "the pipeline's move log: history naming the property at the time; merges no longer "
         "write it (W3)",

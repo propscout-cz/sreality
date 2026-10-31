@@ -256,7 +256,8 @@ start runs, what agent search means, and model-written SQL.
 | §3.4 run + step tables, lease, cancel, FIFO claim, daily ceiling | **M1b** | n/a |
 | §3.4 reservations, priorities, journal resume, status trigger, waits, fan-in, triggers, chat | later | allowlist opens; long runs; multi-agent; #2000; demand |
 | §3.5 principal at submit, one claims builder, read-only reads, no act-as on runs | **M1b** | n/a |
-| §3.5 effect classes beyond read/write/costly/code, approvals, narrow logins, GUC narrowing, W8 binding | later | mid-run asks; strangers on the allowlist; paying tenants |
+| §3.5 narrowing | **M1b**, as a claim on the run rather than PROGRAM's two settings (#2070's criteria need it: one account for a two-membership user, no admin powers) | n/a |
+| §3.5 effect classes beyond read/write/costly/code, approvals, narrow logins, W8 binding | later | mid-run asks; strangers on the allowlist; paying tenants |
 | §3.6 artifacts | **M1b**, Supabase Storage | n/a |
 | §3.7 MCP, capability_calls | W5 | domain cutover + a user asks |
 | §3.8 mail | M3 drafts; W7 for the ledger and inbound | demand + rulings |

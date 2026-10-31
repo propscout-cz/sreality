@@ -170,7 +170,7 @@ it (`api/`). They do not apply to the scraper.
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
     journal) and ends it on `submit_result`, checked against the run's own tool results; `scripts/agent_run.py`
-    runs one locally and records a cassette. Only the estimator still reads the `skills` table (Settings,
+    runs one locally and records a cassette; `executor.py` queues them (`references/tool-registry.md`). Only the estimator still reads the `skills` table (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /

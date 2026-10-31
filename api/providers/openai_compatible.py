@@ -88,6 +88,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if not self._api_key:
             raise ProviderError(
@@ -106,7 +107,7 @@ class OpenAICompatibleProvider:
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=_TIMEOUT_S,
+                timeout=_TIMEOUT_S if timeout_s is None else timeout_s,
             )
         except requests.RequestException as exc:
             raise ProviderError(f"{self.name} call failed: {exc}") from exc

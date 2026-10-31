@@ -129,9 +129,12 @@ class LLMClient:
         self,
         conn: "psycopg.Connection",
         providers: dict[str, CompletionProvider] | None = None,
+        *,
+        agent_run_id: int | None = None,
     ) -> None:
         self._conn = conn
         self._providers: dict[str, CompletionProvider] = providers or {}
+        self._agent_run_id = agent_run_id
 
     def register_providers(
         self, providers: dict[str, CompletionProvider]
@@ -160,6 +163,7 @@ class LLMClient:
         estimation_run_id: int | None = None,
         provider: str | None = None,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> LLMResponse:
         """Single API used by every LLM caller in the codebase.
 
@@ -169,7 +173,8 @@ class LLMClient:
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
-        don't use it. `called_for` must be a value `llm_calls_called_for_check`
+        don't use it; `timeout_s` likewise bounds the whole call, its retries
+        included. `called_for` must be a value `llm_calls_called_for_check`
         admits (the latest migration restating it holds the list); the
         INSERT runs after the provider has billed.
         """
@@ -184,6 +189,8 @@ class LLMClient:
         extra_kwargs: dict[str, Any] = {}
         if tool_choice:
             extra_kwargs["tool_choice"] = tool_choice
+        if timeout_s is not None:
+            extra_kwargs["timeout_s"] = timeout_s
 
         mono_start = time.monotonic()
         try:
@@ -340,8 +347,8 @@ class LLMClient:
             "INSERT INTO llm_calls "
             "(called_for, provider, model, input_tokens, output_tokens, "
             "cache_read_tokens, cache_write_tokens, cost_usd, "
-            "duration_ms, estimation_run_id, error) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "duration_ms, estimation_run_id, error, agent_run_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING id"
         )
         with self._conn.transaction(), self._conn.cursor() as cur:
@@ -359,6 +366,7 @@ class LLMClient:
                     duration_ms,
                     estimation_run_id,
                     error,
+                    self._agent_run_id,
                 ),
             )
             row = cur.fetchone()
