@@ -104,7 +104,8 @@ def test_the_ids_block_is_exported_as_listed_and_its_ties_are_read_only(monkeypa
     assert shadow.tied_ads(conn, [5, 4, 5]) == [11, 12]
     sql, params, in_transaction = conn.executed[0]
     assert params == {"ids": [4, 5]} and in_transaction
-    assert all(table in sql for table in ("autodedup.verdicts", "member_ids", "property_id"))
+    assert all(table in sql for table in ("autodedup.verdicts", "autodedup.must_not_link",
+                                          "autodedup.operator_merges", "property_id"))
     monkeypatch.setattr(shadow, "fetch_block_ids",
                         lambda conn, block, **_: (list(block.ids) or [1, 2, 3], {}))
     sizes = shadow.block_sizes(None, [f"town:{BEROUN}", ids_block([3, 9])])

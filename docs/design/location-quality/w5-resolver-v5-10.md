@@ -49,7 +49,7 @@ Other measures:
 
 **Release.** `resolver:v5.10`. W2's reconcile sweeps the corpus on deploy. There is no migration and no hand step.
 
-**Ledger** (measured, § 9): −707 / +677 lines including tests, docs and the id block, this file aside.
+**Ledger** (measured, § 9): −715 / +712 lines including tests, docs and the id block, this file aside.
 
 **Defaults taken, no ruling needed:**
 - bazos keeps its existing label; no contract bump.
@@ -117,8 +117,8 @@ How each case comes out:
 
 ### 1.2 bazos: an area marker, not a portal name
 
-- Add `AREA_DECLARED_LABELS = frozenset({"approximate_location"})` next to `BLURRED_DECLARED_LABELS` (W3 bind.py:106). It is a subset of the blurred labels, so confidence caps and street precedence are unchanged.
-- Add a property on `DeclaredPrecision` (W3 bind.py:1001): `area = self.label in AREA_DECLARED_LABELS`.
+- Add `AREA_MARKER_LABELS = frozenset({"approximate_location"})` next to `BLURRED_DECLARED_LABELS` (W3 bind.py:106). It is a subset of the blurred labels, so confidence caps and street precedence are unchanged.
+- Add a property on `DeclaredPrecision` (W3 bind.py:1001): `area = self.label in AREA_MARKER_LABELS`.
 - This is the label the bazos contract already emits (`contracts/portals/bazos.yaml:76-84`, `bzs.det.blur_hint`). bazos is its only emitter, and all 52,185 active bazos pins carry it.
 - Default taken: Q3's "the bazos contract declares its pin an area marker" is read as the existing declaration, so there is no bazos@10 bump and no re-mine. Relabelling in the contract would cost a re-mine of every bazos page and a second shadow mode (`remine`), and would change no answer.
 - Other blurred labels (sreality `street`/`ward`/`quarter`/`municipality`/`not_address`, idnes `no_exact_address`, mmreality `regional`, realitymix `estimated`, maxima `Circle`/`LineString`) still refine inside their town (Q3: "a pin inside it refines").
@@ -462,13 +462,13 @@ Reads:
 
 | Area | Deleted | Added | Estimated |
 |---|---|---|---|
-| Resolver (`bind`, `check`, `grade`, `composite`, `fill`, `core`, `types`, `version`) | −312 | +216 | −217 / +83 |
-| Shadow `ids` block (`autodedup/cohort`, `export`, `shadow`) | −24 | +74 | −12 / +60 |
-| Tests | −262 | +288 | −170 / +165 |
-| Docs (architecture, CLAUDE.md rule 25, PROGRAM, wave-shadow, roadmap) | −109 | +99 | −60 / +35 |
-| **Total** | **−707** | **+677 (net −30)** | −460 / +345 |
+| Resolver (`bind`, `check`, `grade`, `composite`, `fill`, `core`, `types`, `version`) | −320 | +210 | −217 / +83 |
+| Shadow `ids` block (`autodedup/cohort`, `export`, `shadow`) | −25 | +82 | −12 / +60 |
+| Tests | −262 | +318 | −170 / +165 |
+| Docs (architecture, CLAUDE.md rule 25, PROGRAM, wave-shadow, roadmap) | −108 | +102 | −60 / +35 |
+| **Total** | **−715** | **+712 (net −3)** | −460 / +345 |
 
-The resolver nets −96 against the estimate's −134: `part_of`, `town_code` and the rewritten `place` docstring cost more than estimated. The tests net +26: the one-truth table, the MOMC-key, eponymous, Q2, KÚ-fix and `ids` tests outweigh the deletions.
+The resolver nets −110 against the estimate's −134: `part_of` and `town_code` cost more than estimated. The tests net +56: the one-truth table, the MOMC-key, eponymous, Q2, KÚ-fix, `ids` and must-not-link (live) tests outweigh the deletions.
 
 Rule changes:
 - Special cases go from 6 to 0: blurred-outside, coarsening, MOMC-as-quarter, SO tie, ZSJ lookup, the unit-id tie between levels.
@@ -498,9 +498,26 @@ No default here is unsafe, so W5 needs no new ruling. Watch on the shadow:
 ## As built (where the build differs from §§ 1–7)
 
 - **Names.** `bind.PART_NAME_LEVELS = (*MATCH_LEVELS, "katastralni_uzemi")` is the part-claim match list (the R4 part match and the `bind_towns` anchor). `composite.town_code` is the one "the ltree path's obec, else the chain's" read (four readers). `part_of(unit, town, registry)` takes the town's code.
-- **`resolve_street`.** A line naming any place below the town, a MOMC included, returns `street_names_part` (trap 2); `named_part` is the one část. A line naming two části of one town now reads as a place too (it was `no_match`, so R3 could run on it); no such row is known.
-- **The `ids` block** travels as one token, `ids:<id>+<id>…` (`cohort.ids_block`, read back by `parse_blocks`: key `ids`, code its count), so `chunks`, `group.json` and `run_export` carry it unchanged. `block_sizes` keys each block by its token, and `outside_group` counts an unquartered mover as exported by the group holding the `ids` block. `shadow.tied_ads` reads, in one read-only statement, the other side of every pair verdict (any word), the member sets of group verdicts and the property's sibling ads.
+- **`resolve_street`.** A line naming any place below the town, a MOMC included, returns `street_names_part` (trap 2); `named_part` is the one část. A line naming two části of one town now reads as a place too (it was `no_match`, so R3 could run on it). Default: it blocks R3; no such row known as of 2026-10-31. The count, on the verbatim key only (the type-word-stripped key is not modelled):
+  ```sql
+  SELECT count(*) FROM (
+    SELECT c.listing_id
+      FROM location_claims c
+      JOIN listings l ON l.id = c.listing_id AND l.is_active
+      JOIN listing_location ll ON ll.listing_id = c.listing_id
+      JOIN ruian_name_index n
+        ON n.name_norm = btrim(regexp_replace(lower(unaccent(c.value_text)), '[^a-z0-9]+', ' ', 'g'))
+       AND n.entity_kind = 'cast_obce'
+       AND n.registry_version_id = (SELECT id FROM registry_versions WHERE is_current)
+      JOIN ruian_admin_units u ON u.id = n.entity_id AND u.valid_to IS NULL
+     WHERE c.claim_type = 'street_name'
+       AND u.path::text ~ ('(^|\.)b' || ll.obec_kod || '(\.|$)')
+     GROUP BY c.listing_id
+    HAVING count(DISTINCT u.id) >= 2) twice;
+  ```
+- **The `ids` block** travels as one token, `ids:<id>+<id>…` (`cohort.ids_block`, read back by `parse_blocks`: key `ids`, code its count), so `chunks`, `group.json` and `run_export` carry it unchanged. `parse_blocks` is the one reader of the token: `block_sizes` keys each block by it, `outside_group` counts a mover as exported by the group whose `ids` block lists it, and the size log prints the block's key.
+- **The `ids` block's ties** are every ruling the judge reads (`evaluate.read_rulings`): pair verdicts and operator must-not-links, group verdicts and operator merges, plus the property's siblings (review, 2026-10-31; `tests/autodedup/test_shadow_ties_live.py`).
 - **Tests.** The grain rail is an autouse fixture in `tests/location_data/conftest.py` around `core.resolve`: every resolution any location test makes asserts `granularity == grain_of(keys)` (a second writer fails it; probed). The MOMC-key case uses the statutory mirror's "Praha 4" + Podolí (the mirror holds no Žižkov). The one-truth table runs every label through `core.resolve` inside, outside and without words.
-- **CLAUDE.md** rule 25 reads "ONE resolver writes `listing_location` (quarter a část obce, grain the finest key, position inside the town the words bind)", paid inside rule 25 (31,248 of 31,250 bytes).
+- **CLAUDE.md** rule 25 reads "ONE resolver writes `listing_location` (quarter = část; grain = finest key; position inside the words' town)", paid inside rule 25 (31,250 of 31,250 bytes).
 - **Also trimmed:** the stale `grade.DECLARED_CAP` note on `PRECISE_DECLARED_LABELS`, CHECK's W18 history comment, and `wave-shadow.md`'s W5 dispatch points at § 4.4 instead of copying it.
 - **Not run here:** the shadow (§ 4.4) and the acceptance reads (§ 8) need production; they run after the push.

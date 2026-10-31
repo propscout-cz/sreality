@@ -76,6 +76,8 @@ AGREEMENT_QUALIFIERS = frozenset({"psc", "okres", "kraj"})
 # climbs to its obec: "Černotín" in PSČ 334 43 is a část obce of Dnešice, "Zlaté Hory v
 # Jeseníkách" a katastrální území of Zlaté Hory. A part or a KÚ binds its town only through the
 # PSČ — or as the unique part a composite line names, whose town `_admits` tests like any other.
+# Hand-written, not MATCH_LEVELS: a town name never matches a MOMC here ("Praha 4" anchors its
+# town through the composite binder).
 TOWN_NAME_LEVELS = ("obec", "cast_obce", "katastralni_uzemi")
 # A part name is looked up at the match levels and as a KÚ (W5, ruling Q2): every match anchors
 # its town, and `composite.part_of` decides the část it binds.
@@ -120,7 +122,7 @@ BLURRED_DECLARED_LABELS = frozenset(
 # The labels that declare the pin an AREA marker (W5, ruling Q3): bazos' "Přibližná lokalita"
 # stands on a postal-area point (all 52,185 active bazos pins), so it never places a row the
 # words bound. A subset of the blurred labels, so caps and street precedence are unchanged.
-AREA_DECLARED_LABELS = frozenset({"approximate_location"})
+AREA_MARKER_LABELS = frozenset({"approximate_location"})
 # `accurate` is mmreality's `/accurate: true` branch — the portal asserting the pin IS the
 # address, the counterpart of its `regional` label above.
 PRECISE_DECLARED_LABELS = frozenset(
@@ -997,7 +999,7 @@ class DeclaredPrecision:
     @property
     def area(self) -> bool:
         """The pin is an AREA marker (W5): it never places a row the words bound."""
-        return self.label in AREA_DECLARED_LABELS
+        return self.label in AREA_MARKER_LABELS
 
 
 def the_pin(claims: Sequence[Claim]) -> Claim | None:
@@ -1052,30 +1054,14 @@ def place(
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None = None,
 ) -> Position:
-    """The ONE precedence rule (W18), in order:
-
-        registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  (FILL's unit point)
-
-    ONE TRUTH (v5.10, ruling Q3): where the words bound the row, the pin may be its position only
-    inside the bound town (`pin_inside_bound_obec`, the one read `core` hands in; None = not
-    asked) and never when the portal declares it an AREA marker (bazos "Přibližná lokalita", a
-    postal-area point). Without words (R7/R8, or nothing bound) the pin names its town and stays.
-    A pin that may not place the row is still EVIDENCE: the branches below measure it against the
-    register's point, and CHECK records `pin_outside_obec`.
-
-    The street beats a pin that may place the row only when it is DECLARED blurred, or lies
-    farther than `max(REGISTRY_PIN_CONFLICT_M, the street's extent)` from the street's centroid
-    — a street is not a point: Jiráskova in Mladá Boleslav spans 1,727 m, and a pin 800 m from
-    its centre is still on it. An EXACT pin that loses that way is a DISAGREEMENT, stamped
-    `pin_overridden` (CHECK: `pin_off_street`; GRADE: at most `medium`); one that agrees keeps the
-    position, the finer of two true answers. Beyond `REGISTRY_PIN_CONFLICT_M` a registry point
-    stays the position and GRADE caps the confidence: the cross-check flags, it never picks.
-
-    Reverse resolution (coordinate → street) is DERIVED, never a claim, so this never invents an
-    address from a pin. A row left unplaced here is placed by `fill.position` off the hierarchy
-    chain (W2-a3). Which point wins does not decide the grain: that is the row's finest key
-    (`grade.grain_of`).
-    """
+    """The ONE precedence rule (W18): registry ADDRESS POINT > bound STREET point > portal pin >
+    FILL's unit point (an unplaced `Position` here). One truth (v5.10, ruling Q3): where the words
+    bound the row, a pin may place it only inside the bound town (`pin_inside_bound_obec`, None =
+    not asked) and never as an AREA marker; without words (R7/R8) it names its town and stays. A
+    pin that may not place the row is still evidence the branches measure and CHECK flags. The
+    street beats a placeable pin that is declared blurred or farther than
+    `max(REGISTRY_PIN_CONFLICT_M, extent)` from its centroid (a street is not a point); an EXACT
+    pin losing that way is `pin_overridden`. The grain is not decided here (`grade.grain_of`)."""
     pin = pin_claim.point if pin_claim is not None else None
     words = binding.bound and not binding.pin_derived
     may_place = pin is not None and (

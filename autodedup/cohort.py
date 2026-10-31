@@ -24,8 +24,7 @@ class Block:
     grain: str
     code: int
     label: str
-    # An `ids` block's listings, exported as listed (the wave shadow's id grain, W5); its code
-    # is their count.
+    # An `ids` block's listings, exported as listed (the wave shadow's id grain); code = count.
     ids: tuple[int, ...] = ()
 
     def as_meta(self) -> dict[str, Any]:

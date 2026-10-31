@@ -58,16 +58,22 @@ select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.ca
  where l.id = any(%(ids)s::bigint[])
 """
 
-# The ads a ruling or a property ties to the listed ones: the other side of a pair verdict,
-# the member set of a group verdict, the sibling ads of their property.
+# The ads a ruling or a property ties to the listed ones, every ruling the judge reads
+# (`evaluate.read_rulings`): the other side of a pair verdict or an operator must-not-link, the
+# members of a group verdict or an operator merge, the sibling ads of their property.
 _TIES_SQL = """
-select case when v.listing_lo = any(%(ids)s::bigint[]) then v.listing_hi else v.listing_lo end
-  from autodedup.verdicts v
- where v.kind = 'pair'
-   and (v.listing_lo = any(%(ids)s::bigint[]) or v.listing_hi = any(%(ids)s::bigint[]))
+select case when p.lo = any(%(ids)s::bigint[]) then p.hi else p.lo end
+  from (select v.listing_lo, v.listing_hi from autodedup.verdicts v where v.kind = 'pair'
+        union all
+        select n.listing_lo, n.listing_hi from autodedup.must_not_link n
+         where n.source = 'operator') p (lo, hi)
+ where p.lo = any(%(ids)s::bigint[]) or p.hi = any(%(ids)s::bigint[])
 union
-select unnest(v.member_ids) from autodedup.verdicts v
- where v.kind = 'cluster' and v.member_ids && %(ids)s::bigint[]
+select unnest(g.member_ids)
+  from (select v.member_ids from autodedup.verdicts v where v.kind = 'cluster'
+        union all
+        select m.member_ids from autodedup.operator_merges m) g
+ where g.member_ids && %(ids)s::bigint[]
 union
 select s.id from public.listings l join public.listings s on s.property_id = l.property_id
  where l.id = any(%(ids)s::bigint[])
@@ -186,12 +192,14 @@ def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
     chunk = set(group.get("blocks") or ())
     if not chunk:
         return set()
-    ids_here = any(block.startswith("ids:") for block in chunk)
+    listed_here = {i for block in parse_blocks(" ".join(sorted(chunk))) for i in block.ids}
     out: set[int] = set()
     for mover in _jsonl(movers):
-        old, listed = side_block(mover.get("old")), _unquartered(mover)
-        if not (old in chunk or listed and ids_here or old is None and not listed):
-            out.add(int(mover["listing_id"]))
+        listing_id, old = int(mover["listing_id"]), side_block(mover.get("old"))
+        exported_somewhere = old is not None or _unquartered(mover)
+        exported_here = old in chunk or listing_id in listed_here
+        if exported_somewhere and not exported_here:
+            out.add(listing_id)
     return out
 
 
@@ -320,8 +328,8 @@ def main(argv: list[str] | None = None) -> int:
         sizes = block_sizes(conn, blocks)
     finally:
         conn.close()
-    for block in sorted(sizes):
-        print(f"[shadow] {block if len(block) < 40 else block[:36] + '…'} {sizes[block]} ads")
+    for text, block in zip(sorted(sizes), parse_blocks(" ".join(sorted(sizes)))):
+        print(f"[shadow] {block.key if block.ids else text} {sizes[text]} ads")
     index, count = args.block_group
     chunk = chunks(sizes, count)[index - 1]
     ads = sum(sizes[block] for block in chunk)

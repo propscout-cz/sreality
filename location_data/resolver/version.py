@@ -127,6 +127,8 @@ from __future__ import annotations
 #      quarter is a část only: MOMC is a match key that anchors its town; správní obvod and ZSJ
 #      are no level (2,834 MOMC codes and 200 SO ties re-bind). A part claim matches like a town
 #      name (a KÚ binds the část it spells), and a street keeps the claimed část where it has
-#      doors. The grain is the row's finest key. An address point without coordinates takes its
-#      část's KÚ. The bump re-resolves the corpus through W2's reconcile.
+#      doors. A street line naming two části of its town now reads as a place too, so R3 skips it
+#      (no such row known as of 2026-10-31; the count's SELECT: the W5 design, As built). The
+#      grain is the row's finest key. An address point without coordinates takes its část's KÚ.
+#      The bump re-resolves the corpus through W2's reconcile.
 RESOLVER_VERSION = "resolver:v5.10"

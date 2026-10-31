@@ -213,7 +213,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 
 ### W5: resolver v5.10
 **As built** (#2251; design and measurements: `w5-resolver-v5-10.md`). `RESOLVER_VERSION = "resolver:v5.10"`; W2's reconcile sweeps on deploy, no migration, no hand step.
-- **Position (Q3, one truth):** `bind.place`'s `may_place`. Where the words bound the row, a pin is its position only inside the bound obec's pip polygon (strict: no tolerance, so no registry distance read) and never when the portal declares an area marker (`AREA_DECLARED_LABELS`: the `approximate_location` bazos already emits on all 52,185 active pins, so no contract bump). Without words (R7/R8) the pin names its town. v5.9's declared-blurred exception is deleted; CHECK keeps `pin_outside_obec` as evidence and loses its coarsening.
+- **Position (Q3, one truth):** `bind.place`'s `may_place`. Where the words bound the row, a pin is its position only inside the bound obec's pip polygon (strict: no tolerance, so no registry distance read) and never when the portal declares an area marker (`AREA_MARKER_LABELS`: the `approximate_location` bazos already emits on all 52,185 active pins, so no contract bump). Without words (R7/R8) the pin names its town. v5.9's declared-blurred exception is deleted; CHECK keeps `pin_outside_obec` as evidence and loses its coarsening.
 - **Grain = `grade.grain_of(keys)`**, the one writer (`grade()`, `Grade`, `Binding.granularity`, `Verdict.granularity` and `coarser_of` deleted).
 - **Quarter = část obce only (Q1):** `MATCH_LEVELS = ("cast_obce", "momc")` and `composite.part_of` (a část itself, a KÚ the část its name spells, a MOMC nothing). MOMC stays a match key: the 1,607 remax "Praha N" rows still bind Praha. Správní obvod and ZSJ are no level. Part claims match like town names; a street keeps the claimed část when it has doors there (Q2).
 - **KÚ fix:** an address point with no coordinates takes its část's door KÚ (19405830).
@@ -230,6 +230,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 | bazos words-bound rows on their pin | 23,297 | 0 |
 | Grain differs from the finest key | 736 | 0 |
 | MOMC codes in `cast_obce_kod` | 2,834 | 0 |
+| Wrong-MČ rows | 518 | 0 |
 | Quarter grain with no část code (SO ties) | 200 | 0 |
 | Street rows without a část | 18,724 | ≤ 6,400 |
 | Praha with no quarter | 9,308 | ≤ 4,800 |
@@ -238,6 +239,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 | `location_town_coverage` | W1 reading | no redder |
 | `disputed/pin_outside_obec` | design §0 | about the same (evidence stays) |
 | Shadow gate | — | PASS on every slice |
+
+Residual, named: about 10 register-point slivers (not pins) and about 300 ceskereality ads with only a pin (R7: the pin names the town, the words cannot judge it).
 
 ### W6: one honest radius (v5.11)
 Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos, 100 % for remax.
@@ -290,7 +293,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 - **Rejected:** a cross-portal placeholder-pin list. idnes' two Brno placeholder points lie inside Brno, so the containment rule cannot replace them and they stay contract-local.
 
 ## Not covered (named, not built)
-- **Qualifier scoring:** an obec R4 with two qualifiers (55) beats a claimed part R4 (50). This is unmeasured. W5's one matcher may change it, so measure it before W5 or defer it explicitly.
+- **Qualifier scoring:** an obec R4 with two qualifiers (55) beats a claimed part R4 (50). This is unmeasured. **Deferred explicitly by W5** (2026-10-31): v5.10 changes no score (design § 10).
 - **KÚ below address grain:** 162,791 obec-grain and 54,379 street-grain rows have no KÚ (all rows). W1 shows coverage by grain. Most of the gap is structural: multi-KÚ streets and towns. W5's část lending closes it where a část lies in one KÚ.
 - **Issue 2 residue:** 10,408 town-only rows on the obec point (idnes 9,352) are structural, because the source withholds finer location. The row already says so honestly (obec grain, open ring, reach radius). No action.
 

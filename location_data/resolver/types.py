@@ -354,10 +354,8 @@ class Binding:
 class Position:
     """The one coordinate the row publishes, and where it came from.
 
-    `origin` is internal to the resolver — the answer table stores the point and its radius,
-    not a provenance vocabulary. It survives here because GRADE reads it (a blurred portal
-    pin cannot grade above `medium`) and CHECK reads it (only a PIN can fall outside the
-    town it claims; a registry point is inside by construction).
+    `origin` is internal to the resolver: GRADE reads it to ask whether a pin corroborates an
+    address point (`exact`); the answer table stores only the point and its radius.
     """
 
     lat: float | None

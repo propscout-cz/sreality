@@ -59,8 +59,9 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
 2. **Size, then export**: `python3 -m autodedup.shadow <dir>`. Blocks = each mover's old and new block at
    E300's grain (`blocks_for`: the quarter in Praha, Brno and Ostrava, the town elsewhere). A mover with a
    split-city side and no quarter (its candidates are the whole city) rides ONE `ids` block (W5,
-   `ids:<id>+<id>…`, exported as listed) with every ad a pair or group verdict or its property ties to it
-   (`tied_ads`), so both arms hold the mover and its ruled counterparts. It prints every block with
+   `ids:<id>+<id>…`, exported as listed) with every ad a ruling the judge reads (pair or group verdict,
+   must-not-link, operator merge) or its property ties to it (`tied_ads`), so both arms hold the mover
+   and its ruled counterparts. It prints every block with
    its ad count first (`block_sizes`, the export's own selection) and the fewest groups that fit the caps.
    `--block-group i/n` (default 1/1) sorts the blocks by key, cuts them into n contiguous groups and
    exports and judges group i only; `--max-blocks` (40) and `--max-ads` (60,000) apply to that group, and

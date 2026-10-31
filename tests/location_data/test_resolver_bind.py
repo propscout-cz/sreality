@@ -666,7 +666,7 @@ def test_one_truth_a_pin_places_a_row_only_inside_the_town_the_words_bound(label
     inside = _resolve(_pinned(label, _INSIDE, praha))
     outside = _resolve(_pinned(label, _OUTSIDE, praha))
     alone = _resolve(_pinned(label, _OUTSIDE))
-    expected = _PRAHA_POINT if label in step_bind.AREA_DECLARED_LABELS else _INSIDE
+    expected = _PRAHA_POINT if label in step_bind.AREA_MARKER_LABELS else _INSIDE
     assert ((inside.lat, inside.lon), inside.disputed) == (expected, None)
     assert ((outside.lat, outside.lon), outside.disputed) == (_PRAHA_POINT, "pin_outside_obec")
     assert (alone.obec_kod, (alone.lat, alone.lon), alone.disputed) == (532053, _OUTSIDE, None)
