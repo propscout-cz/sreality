@@ -1,7 +1,7 @@
 """Runs queue and execute durably: `submit` inserts one, `work_once` claims and runs the oldest it may, `cancel` flags one.
 
-The row is the job (ADR-0001). A claim holds a lease that every step and a heartbeat renew, compare-and-set on the row's
-`attempts`, so a worker that lost its run can write nothing more. An interrupted run (a lapsed lease, a SIGTERM) starts
+The row is the job (ADR-0001). A claim holds a lease that every step and a bounded heartbeat renew, compare-and-set on
+the row's `attempts`, so a worker that lost its run can write nothing more. An interrupted run (a lapsed lease, a SIGTERM) starts
 again from the beginning once, and fails with its reason the second time (spec #2055 story 25). Waiting never fails a run.
 Every switch and number is an `app_settings` row, read when used; an absent one stops rather than guesses.
 """
@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -41,6 +42,8 @@ IN_FLIGHT_CAP = "agent_account_in_flight_cap"
 _SETTINGS = (BRAKE, ALLOWLIST, DAILY_CEILING, RUNNING_CAP, IN_FLIGHT_CAP)
 
 LEASE_S = 120.0
+# Past every agent's wall clock (600 s at most, definition.limits): a worker still beating now is hung, not working.
+HEARTBEAT_CEILING_S = 900.0
 MAX_ATTEMPTS = 2
 SUMMARY_CHARS = 500
 
@@ -285,9 +288,10 @@ def _keep_lease(connect: Callable[[], psycopg.Connection], run: _Claimed) -> Ite
     """Renew between steps too: one model call may outlast the lease, and only a dead worker should lose its run. A
     connection of its own, since the run's may be inside a tool's transaction."""
     done = threading.Event()
+    ceiling = time.monotonic() + HEARTBEAT_CEILING_S
 
     def beat() -> None:
-        while not done.wait(LEASE_S / 3):
+        while not done.wait(LEASE_S / 3) and time.monotonic() < ceiling:
             try:
                 with connect() as conn:
                     conn.execute(_RENEW, {"lease": LEASE_S, "id": run.id, "attempts": run.attempts})
@@ -304,8 +308,8 @@ def _keep_lease(connect: Callable[[], psycopg.Connection], run: _Claimed) -> Ite
 
 
 def _answer_in_hand(step: loop.Step, output: Mapping[str, Any]) -> bool:
-    """A reply that only hands in an answer, or the answer accepted: already paid for, with nothing left to stop, so a
-    stop lands on the step after (a refused answer has one); stopping here would pay for it all again."""
+    """A reply that only hands in an answer, or the answer accepted: a shutdown waits for the step after (a refused
+    answer has one), since releasing here would pay for it all again."""
     if step.kind == "model":
         return [call["name"] for call in output["tool_calls"]] == [terminator.NAME]
     return step.name == terminator.NAME and "markdown" in output
@@ -326,11 +330,9 @@ def _recorder(conn: psycopg.Connection, run: _Claimed, stop: threading.Event) ->
                                 hashlib.sha256(encode(given).encode()).hexdigest(), encode(output)[:SUMMARY_CHARS],
                                 Jsonb({"input": given, "output": output}), step.llm_call_id, step.cost_usd,
                                 step.duration_ms))
-        if _answer_in_hand(step, output):
-            return
         if held[0]:
             raise _Cancelled
-        if stop.is_set():
+        if stop.is_set() and not _answer_in_hand(step, output):
             raise _Stopped
     return record
 

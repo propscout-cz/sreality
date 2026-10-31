@@ -866,7 +866,7 @@ separate tenant role first; the `pgrst.db_pre_request` gate covers the MCP risk)
 
 | Risk | Mitigation |
 |---|---|
-| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns; a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
+| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns (as built: the dev-only `scripts/agent_run.py`, with no run row, names it on its command line, MVP § 8); a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
 | agent-worker is deployed with a forbidden secret | the boot assertion's allowlist; no service DSN at all (D19); a Health cell that fails on any refusal |
 | A resume replays a side effect | (run, step) keys; stored arguments run verbatim; the outbox compare-and-set; the Valuo write-ahead row; the approval consumed by one function in the claim transaction |
 | A resume runs on different code | the tool-set sha compared on every resume; pending approvals re-validated or voided; "definition changed, re-run" |
@@ -1056,7 +1056,8 @@ AR3 confirms both. *Entry condition:* the W0 probe result is recorded (it settle
    that crashes twice at one step fails with its reason.
 4. **Tenancy:** on the replay database, account A's run cannot read B's collections or pipeline; a two-membership
    user's run sees one account; an admin principal's run cannot write `manual_rental_estimates` or read SYSTEM or NULL
-   rows; a model-supplied account id is refused by the schema census; `tests/api/test_tenant_caller_census.py`
+   rows (as built, #2070: 639 dropped that table, the admin arm on account-less rows is what is tested, and the SYSTEM
+   arm stays every account's); a model-supplied account id is refused by the schema census; `tests/api/test_tenant_caller_census.py`
    holds the `tenant_transaction` callers; the grant census of the three logins is green.
 5. **Approvals:** Valuo parks the run; a double approve makes exactly one call; the stored arguments run; edited
    arguments and an expired approval are refused; only the principal can approve, and an act-as run cannot reach the

@@ -171,13 +171,14 @@ Three entry points; nothing in production calls them until #2071 (routes) and #2
   or None for no such run on this account.
 
 **The lease.** Two minutes (`LEASE_S`), renewed by every journal write and by a heartbeat thread on its own connection,
-since one model call can outlast it. Every write by a worker is compare-and-set on `id`, `attempts` and `status =
+since one model call can outlast it; the heartbeat stops at `HEARTBEAT_CEILING_S` (15 min, past every agent's wall
+clock), so a hung worker lapses too. Every write by a worker is compare-and-set on `id`, `attempts` and `status =
 'running'`, so a worker that lost its run writes nothing more (`lost`). `attempts` is the start the row is on, from 1.
 
 **Interruption.** One transition for a lapsed lease and a SIGTERM: a cancel asked for wins; below `MAX_ATTEMPTS` (2) the
 run goes back on the queue at `attempts + 1` and starts from the beginning; at it, `failed` with its reason (spec
-story 25). Waiting never fails a run. A reply that only hands in an answer, or the accepted answer, is not stopped
-(already paid for, nothing left to stop). Any other exception ends the run `failed`; `error` holds a definition's own
+story 25). Waiting never fails a run. A shutdown spares a reply that only hands in an answer, or the accepted answer
+(a release would pay for it all again); a cancel does not. Any other exception ends the run `failed`; `error` holds a definition's own
 words, a generic line otherwise (the details are in the log and `llm_calls.error`).
 
 **The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger: an input

@@ -729,6 +729,20 @@ def test_a_long_model_call_keeps_its_lease_while_its_worker_lives(svc: psycopg.C
     assert _run(svc, run_id)["attempts"] == 1
 
 
+def test_a_hung_worker_stops_renewing_so_its_run_can_be_taken(svc: psycopg.Connection, world: dict[str, Any],
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """The heartbeat says the worker lives, not that it progresses; past every agent's wall clock it stops saying so."""
+    monkeypatch.setattr(executor, "LEASE_S", 0.6)
+    monkeypatch.setattr(executor, "HEARTBEAT_CEILING_S", 0.3)
+    run_id = _submit(svc, world, "a")
+
+    def hung(call: int) -> None:
+        time.sleep(1.5)
+        assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", run_id)
+    assert _work_on(_Model(ANSWER, during=hung)) == executor.Worked("lost", run_id)
+    assert _run(svc, run_id)["attempts"] == 2
+
+
 def test_sigterm_stops_between_steps_and_releases_then_the_retry_completes(svc: psycopg.Connection, world: dict[str, Any]) -> None:
     run_id = _submit(svc, world, "a")
     stop = threading.Event()
@@ -786,6 +800,13 @@ def test_cancel_between_steps_stops_the_run(svc: psycopg.Connection, world: dict
     row = _run(svc, run_id)
     assert row["status"] == "cancelled" and row["finished_at"] and row["lease_until"] is None and row["cost_usd"] > 0
     assert [s["name"] for s in _steps(svc, run_id)] == [MODEL], "the tool the model asked for never ran"
+
+
+def test_a_cancel_wins_over_an_answer_in_hand(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    """A shutdown spares a paid answer, since retrying would pay again; a cancel is the user saying stop."""
+    run_id = _submit(svc, world, "a")
+    assert _work_on(_Model(ANSWER, during=lambda call: _cancel(svc, world, run_id))) == executor.Worked("cancelled", run_id)
+    assert _run(svc, run_id)["result_markdown"] is None
 
 
 def test_cancelling_a_queued_run_ends_it_and_it_is_never_claimed(svc: psycopg.Connection, world: dict[str, Any]) -> None:

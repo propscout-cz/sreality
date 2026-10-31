@@ -8,7 +8,7 @@ so there is one claims shape. This file is the list; docs point here rather than
 
 BLIND SPOTS. A call in a class body (no function encloses it), a call through `getattr`, or the function passed around
 as a value and called elsewhere is not seen; an import alias is. A claims dict built key by key, or from another mapping,
-is not seen.
+is not seen, nor is one naming `sub` alone (`resolve_account_id`'s lookup in the local runner, which no caller is built from).
 """
 
 from __future__ import annotations
