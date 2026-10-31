@@ -42,7 +42,7 @@ the blocking probes (`blocking.probes_town_key`, E300), `features` (`dist_norm`,
    runs in a READ ONLY transaction.
 3. **The gate**: `python3 -m autodedup.harness shadow` (DB-free). `shadow.override` rewrites the movers'
    blocks with `build_location` (other records byte-identical); both arms run under the live scorer with
-   the labels' `must_not_link.jsonl` / `must_link.jsonl` (`run_and_report`, the body of `harness run`);
+   the labels' `must_not_link.jsonl` / `must_link.jsonl` (the same body as `harness run`);
    then `evaluate --base`; `shadow.judge` reads its report into `shadow.json` and the exit code.
    **PASS** = E111 clean on the candidate and no ruled pair moved against its ruling (a `same` pair the
    base held together split, a `different` pair newly joined). A ruling newly honoured is reported, not
