@@ -206,7 +206,8 @@ production.
   project, `ctx.shared.NAME`, a second place to rotate);
   GitHub keeps what CI, the canary and the attended forms read; the duplicated set is listed once in the
   toolkit-api skill. Deleted:
-  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: a new fine-grained
+  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, the Actions copy of `GEMINI_API_KEY` (Railway's API and
+  worker copies stay: `api/providers/gemini.py` serves the Gemini provider the run panel offers). Added: a new fine-grained
   token under the organisation for price-stats "Run now". No `RAILWAY_TOKEN`: M0 (#2060) applies
   `.railway/railway.ts` by hand in merge windows (operator ruling R2, 2026-10-26), and #2025 keeps it so, now and
   after W6: plan/apply in CI would need one project token per Railway project and an apply restarts services.
