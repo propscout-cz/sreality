@@ -236,6 +236,16 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_pipeline_shares_live.py -q
 
+      # The curation clock (migration 696) moves only at COMMIT, through twelve deferred constraint triggers: only a
+      # real schema committing as each writer (a tenant, a delegate, the service role, a cascade, a signup) shows one
+      # bump per transaction and family, nothing on a rollback, a failed commit when the counter cannot be locked,
+      # and each caller following exactly its audience (own, a read share's board, an edit share's six families).
+      - name: The curation clock moves once per committed change and each caller follows its audience (migration 696)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_curation_clock_live.py -q
+
       # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
       # party policy that hides while acting, and a trigger that stamps the owner and refuses the
       # unnamed working board. The test drives the API's own SQL under each tenant's RLS.

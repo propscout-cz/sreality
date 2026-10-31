@@ -755,9 +755,10 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
   lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6: its seven 45 s alarms,
-  `parsing`'s 180 s and, since notifications push W4, `notifications`' 5 s, 500 s in all, always fit — the
-  next worker alarm needs the pass or a budget reworked — and a gauge whose budget no longer fits what is left waits
-  for the next pass; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
+  `parsing`'s 180 s, `notifications`' 5 s (notifications push W4) and `curation_sync`'s 5 s (curation sync W3)
+  owe 505 s when every alarm falls due at once, so all but the last alarm (`parsing`) fit even at their whole
+  budgets and it is deferred one tick, like a gauge whose budget no longer fits what is left; a further alarm needs
+  the pass or a budget reworked; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
 - once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
   pipeline_check_results where run_at < now() - interval '35 days'`, 10,000 rows at a time by
@@ -769,7 +770,7 @@ dockerignored, which only `migration_drift` reads, and that check stays on GitHu
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
 worker's keys carry the 45 s per-check budget (180 s for `parsing`) and a staleness budget of 3 × cadence
 (30 min for `jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
-the `coverage` and `text_extraction` gauges, 18 h for `parsing` and the `data_quality` and
+`curation_sync` and the `coverage` and `text_extraction` gauges, 18 h for `parsing` and the `data_quality` and
 `location_town_coverage` gauges), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
 (it covers alarms only: a stopped gauge just reads Not measured on the page), its `health_lane` cell (no completed
 pass, a pass in flight or a failing spell for 10 min; a 500 s pass stays under the in-flight line, its row
@@ -1513,6 +1514,21 @@ imported inside the check: the registry must import with the base dependencies o
 The three-strike rule (iOS removes an origin's subscriptions after silent pushes) has no server
 signal: prevented in `sw.js` (always one notification), never measured here. Gauges (open rate,
 latency, skip mix, churn by `end_reason`) are design-doc SQL, reviewed after 7 days (PROGRAM.md § 3.9).
+
+## `curation_sync` — does every committed curation change move the clock? (curation sync W3, 2026-10-31)
+
+`check_curation_sync` in `scripts/checks/platform.py`, a platform alarm on the worker every hour, after
+`notifications`, no owner page, a 5 s budget (twelve catalog rows and the board ledger's last day). The curation
+clock (migration 696, `docs/design/curation-sync.md` § 3.9, `.claude/skills/database/references/tenancy.md`
+§ Curation clock) is advanced only by twelve deferred triggers, so its failures are silent everywhere else.
+
+| Cell | Problem | Why this line |
+|---|---|---|
+| `triggers` | fewer or more than `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` enabled and initially deferred; facts `expected`, `armed`, `found`, `off` (the tables) | a disabled trigger stops every open window following that table's changes with no error; the writer kill switch turns it red by intent while in force; `tests/test_curation_sync_census.py` (j) pins the threshold to `CLOCKED_TABLES` |
+| `board_bumps` | a `property_pipeline_events` row of the last 24 h that has no `board` clock row of its account changed at or after it; facts `events_24h`, `accounts`, `first_missed_at`; Not measured while `curation_clock` is absent | exact: an event is written only in a card change's transaction (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`; the 696 seed stamps every account at the apply |
+
+W4 adds `reads` (Watch: the clock read's `pg_stat_statements` calls stood still for 24 h) and `load` (Watch: its share
+of statement time ≥ 5 %). Both statements run on the replayed schema in `tests/test_curation_clock_live.py`.
 
 ## `parsing` — are new ads still read the way they were? (Health dashboard sprint wave 6)
 
