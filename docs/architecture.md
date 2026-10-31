@@ -978,9 +978,11 @@ rules. Identify which one a task belongs to before you start.
   pays it only with a read that started after it was owed — at once for an active query, at the
   next mount otherwise, never through `isInvalidated` — so a change can be delayed, never lost.
   `holdReads` (every optimistic write's hold) parks what a pending write's keys owe and cancels
-  any full read that starts on them meanwhile (a page read passes). The identity effect calls
-  `resetReads` before `queryClient.clear()`; `refetchOnReconnect` is off under the curation roots
-  (`applySyncQueryDefaults`), the curation clock's read being their one reconnect path (W4).
+  any full read that starts on them meanwhile (a page read that starts while held passes; one
+  already in flight is dropped). The identity effect calls `resetReads` before
+  `queryClient.clear()`. `applySyncQueryDefaults` (no reconnect refetch under the curation roots)
+  is wired only beside the curation clock's read, which replaces it; until then a reconnect
+  re-reads curation as before.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
@@ -3167,9 +3169,10 @@ renumber.** Navigate by area:
     the exact count drops by one (map, stats and counts re-read); an unknown member map or a
     possible newcomer re-reads that cohort whole. A map that said "out" before the write while the
     list shows the row is the stale side only while one of its reads is still owed
-    (`lib/revalidate` `isOwed`): then that cohort re-reads whole and nothing drops; otherwise the
-    LIST is stale — a change made elsewhere, which a Browse list follows only at its next mount
-    (ruling Q3(a), 2026-10-31) — and the row is judged like any other. Pipeline writes and
+    (`lib/revalidate` `isOwed`) or was read before the list was (`dataUpdatedAt`, which a patch
+    keeps): then that cohort re-reads whole and nothing drops; otherwise the LIST is stale — a
+    change made elsewhere, which a Browse list follows only at its next mount (ruling Q3(a),
+    2026-10-31) — and the row is judged like any other. Pipeline writes and
     dismissals settle at the click (`settlePatches` inside `useOptimisticWrite`, rolled back on
     failure); collection and tag writes (`settleCollectionWrite` / `settleTagWrite`) after the ack,
     under one momentary hold so no read lands between the member map and the Browse patches. It
@@ -3829,7 +3832,8 @@ renumber.** Navigate by area:
     (add/remove/move) from EVERY surface — the Browse funnels, the listing header
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
-    `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
+    `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches; what a card write re-reads is
+    `lib/curationSync`'s map (`property_pipeline`, `property_dismissals`).
     **Browse can be SCOPED to the pipeline** (`ListingFilters.pipeline`, a curated-set `SetScope`
     — rule #18; `?pipeline=any|<stage ids>` and `?pipeline_excluded=any|<stage ids>`, registry id
     `pipeline`, BROWSE agenda only): in the pipeline ("V pipeline"), in given stages, not in given

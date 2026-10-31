@@ -7,10 +7,10 @@
  * NOT refetched, their exact counts drop one, and Stats and the map re-read.
  * Restoring re-reads every Browse read, because a hidden row has to come back
  * (and leave the phone's hidden roll), and so does a FAILED dismissal: its
- * rollback restores the lists as they were when it was clicked, which would
- * otherwise resurrect a neighbour dismissed successfully meanwhile. Both
- * writes go through lib/useOptimisticWrite (rollback from `onSettled`, never
- * `onError`).
+ * rollback takes back only its own patch (every other pending or confirmed
+ * patch stays painted), but a page that landed meanwhile may already hold it.
+ * Both writes go through lib/useOptimisticWrite (rollback from `onSettled`,
+ * never `onError`).
  */
 
 import { useQuery } from '@tanstack/react-query';

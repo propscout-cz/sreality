@@ -210,6 +210,26 @@ describe('owe and pay', () => {
     expect(isOwed(qc, ['a'])).toBe(false);
   });
 
+  it('pays a read owed on a disabled query once an observer enables it', async () => {
+    const qc = client();
+    qc.setQueryData(['a'], 0);
+    const fn = counter(() => 4);
+    const observer = new QueryObserver(qc, { queryKey: ['a'], queryFn: fn, staleTime: Infinity, enabled: false });
+    const unmount = observer.subscribe(() => {});
+
+    void revalidate(qc, [['a']]);
+    await flush();
+    expect(fn).not.toHaveBeenCalled();
+    expect(isOwed(qc, ['a'])).toBe(true);
+
+    observer.setOptions({ queryKey: ['a'], queryFn: fn, staleTime: Infinity, enabled: true });
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(qc.getQueryData(['a'])).toBe(4);
+    expect(isOwed(qc, ['a'])).toBe(false);
+    unmount();
+  });
+
   it('drops the debt of a query that leaves the cache', () => {
     const qc = client();
     qc.setQueryData(['a'], 0);
@@ -270,6 +290,44 @@ describe("'mount' debts", () => {
     expect(isOwed(qc, ['list'])).toBe(false);
     expect(fn.mock.calls.length).toBeGreaterThan(2); // the full re-read, every page
     unmount();
+  });
+});
+
+describe("'mount' debts and a second reader", () => {
+  it('a reader joining a mounted query pays nothing; the next real mount does', async () => {
+    const qc = client();
+    qc.setQueryData(['count'], 0);
+    const fn = counter(() => 7);
+    const first = mount(qc, ['count'], fn);
+    void revalidate(qc, [{ queryKey: ['count'], mode: 'mount' }]);
+
+    const second = mount(qc, ['count'], fn); // e.g. the phone filter sheet over Browse
+    await flush();
+    expect(fn).not.toHaveBeenCalled();
+    expect(isOwed(qc, ['count'])).toBe(true);
+
+    first();
+    second();
+    mount(qc, ['count'], fn);
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, ['count'])).toBe(false);
+  });
+
+  it('a first reader mounted disabled pays when it is enabled', async () => {
+    const qc = client();
+    qc.setQueryData(['count'], 0);
+    const fn = counter(() => 7);
+    void revalidate(qc, [{ queryKey: ['count'], mode: 'mount' }]);
+    const observer = new QueryObserver(qc, { queryKey: ['count'], queryFn: fn, staleTime: Infinity, enabled: false });
+    observer.subscribe(() => {});
+    await flush();
+    expect(fn).not.toHaveBeenCalled();
+
+    observer.setOptions({ queryKey: ['count'], queryFn: fn, staleTime: Infinity, enabled: true });
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, ['count'])).toBe(false);
   });
 });
 
@@ -370,6 +428,41 @@ describe('holds', () => {
     expect(isOwed(qc, ['list'])).toBe(false);
   });
 
+  it('drop a page in flight when they register: it was built on the pages from before the patch', async () => {
+    const qc = client();
+    const server: Record<number, number[]> = { 0: [1, 42], 1: [3, 4] };
+    const late = deferred<number[]>();
+    let calls = 0;
+    const fn = vi.fn(async ({ pageParam }: { pageParam: number }) => {
+      calls += 1;
+      return calls === 2 ? late.promise : server[pageParam];
+    });
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: number[], all: number[][]) => (all.length < 2 ? all.length : undefined),
+      staleTime: Infinity,
+    });
+    observer.subscribe(() => {});
+    await flush();
+    const scrolled = observer.fetchNextPage(); // in flight at the click
+
+    const drop42 = cachePatch<InfiniteData<number[]>>({ queryKey: ['list'] }, (d) =>
+      d && { ...d, pages: d.pages.map((rows) => rows.filter((id) => id !== 42)) },
+    );
+    const hold = holdReads(qc, [{ queryKey: ['list'] }], [drop42]);
+    expect(isOwed(qc, ['list'])).toBe(false); // a page is not a full read: nothing owed
+    hold.release(); // the settle: settleMemberWrite releases in the same call
+
+    late.resolve([3, 4]);
+    await scrolled;
+    await flush();
+    expect(qc.getQueryData<InfiniteData<number[]>>(['list'])?.pages).toEqual([[1]]); // 42 stays dropped
+    await observer.fetchNextPage(); // the next scroll asks for the page again, on the patched pages
+    expect(qc.getQueryData<InfiniteData<number[]>>(['list'])?.pages).toEqual([[1], [3, 4]]);
+  });
+
   it('cancel a mount read on a held key', async () => {
     const qc = client();
     qc.setQueryData(['a'], 0);
@@ -426,6 +519,16 @@ describe('the ledger', () => {
     expect(qc.getQueryData(['count'])).toBe(9);
     b.release();
     expect(qc.getQueryData(['count'])).toBe(9);
+  });
+
+  it('keeps the time the base was read, through a paint and a rollback', () => {
+    const qc = client();
+    qc.setQueryData(['members'], [0], { updatedAt: 1_000 });
+    const a = holdReads(qc, [{ queryKey: ['members'] }], [add(1)]);
+    expect(qc.getQueryState(['members'])?.dataUpdatedAt).toBe(1_000);
+    a.rollback();
+    expect(qc.getQueryState(['members'])?.dataUpdatedAt).toBe(1_000);
+    a.release();
   });
 
   it('a write it did not make becomes the base, with the patches in it, never applied twice', () => {
@@ -532,6 +635,19 @@ describe('the epoch', () => {
     old.release();
     await flush();
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a settle that releases an older hold owes the new identity's reads nothing", async () => {
+    const qc = client();
+    qc.setQueryData(['a'], 1);
+    const old = holdReads(qc, [{ queryKey: ['a'] }]);
+    resetReads(qc);
+    const fn = counter(() => 3);
+    mount(qc, ['a'], fn); // the new identity's reader of the same key
+
+    await revalidate(qc, [['a']], { release: old });
+    expect(isOwed(qc, ['a'])).toBe(false);
+    expect(fn).not.toHaveBeenCalled();
   });
 });
 

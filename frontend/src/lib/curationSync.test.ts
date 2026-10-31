@@ -118,6 +118,13 @@ describe('familyTargets', () => {
     expect(browse.every((t) => t.queryKey[1] === unscoped)).toBe(true);
   });
 
+  it('a collections change elsewhere leaves an open collection page to its next mount; the marks follow at once', () => {
+    const targets = familyTargets(new QueryClient(), 'collections', null);
+    expect(targets).toContainEqual({ queryKey: curationKeys.anyCollection, mode: LENS_REREAD.lists });
+    expect(targets).toContainEqual({ queryKey: curationKeys.propertyCollectionMembers });
+    expect(targets).toContainEqual({ queryKey: curationKeys.collections });
+  });
+
   /* Ruling Q3(a), 2026-10-31: a remote lens change leaves lists, counts, map and
    * stats until navigation; only the marks follow at once. */
   it('LENS_REREAD leaves every Browse read to its next mount', () => {

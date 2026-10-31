@@ -14,31 +14,38 @@
  * an in-flight fetch started after the owe is joined, never restarted (the
  * starvation guard); an initial load from before it cannot be restarted
  * (query-core dedupes a query with no data onto its load), so it is awaited and
- * paid anew when it lands. Anything else — inactive, disabled, owed 'mount' —
- * is paid on the query's next `observerAdded`, a microtask later, joining the
- * mount's own fetch. A failed payment stays owed; `repayOwed` re-tries it at
- * most MAX_ATTEMPTS times, then it falls to 'mount', so an error never loops.
+ * paid anew when it lands. Anything else — inactive, disabled — is paid once an
+ * observer makes it active, a microtask later, joining the mount's own fetch.
+ * A 'mount' debt is paid only by a real mount (the query's first observer, or a
+ * first observer's enable), never while it is on screen: a second reader joining
+ * a mounted query pays nothing. A failed payment stays owed; `repayOwed`
+ * re-tries it at most MAX_ATTEMPTS times, then it falls to 'mount', so an error
+ * never loops.
  *
  * HOLD. `holdReads` registers synchronously inside the click: it cancels every
- * matching in-flight non-page fetch with revert (Query.cancel reverts at once,
- * query-core retryer.js) and owes it, then paints the patches through a
- * per-query LEDGER {base, patches[]}. While a key is held, any later non-page
- * fetch on it — a mount, a reconnect, a stray invalidate, a remote target — is
- * cancelled and owed. That cancel waits one microtask because query-core
- * dispatches its 'fetch' action before it creates the retryer it would cancel.
- * Page fetches (`fetchMeta.fetchMore`, useInfiniteList's fetchNextPage) pass,
- * so scrolling during a pending dismissal never turns into a list refetch.
- * `rollback()` drops this hold's patches and repaints base + the rest in order,
- * so overlapping writes roll back in any order with nothing erased and nothing
- * resurrected. A write onto a held query that is not the ledger's own (a landed
- * page, a site's setQueryData of a server answer) becomes the new base with the
- * patches baked in, never re-applied on top (a rollback then leaves it to the
- * re-read that follows). Owed reads on a held query park
- * until its last overlapping hold releases; the ledger then drops.
+ * matching in-flight fetch with revert (Query.cancel reverts at once,
+ * query-core retryer.js) — a full one is owed; a page is only dropped, because
+ * it was built on the pages from before the patches (query-core
+ * infiniteQueryBehavior takes them when it starts) and the list's next scroll
+ * asks for it again — then paints the patches through a per-query LEDGER
+ * {base, patches[]}. While a key is held, any later non-page fetch on it — a
+ * mount, a reconnect, a stray invalidate, a remote target — is cancelled and
+ * owed. That cancel waits one microtask because query-core dispatches its
+ * 'fetch' action before it creates the retryer it would cancel. A page fetch
+ * that STARTS while held (`fetchMeta.fetchMore`, useInfiniteList's
+ * fetchNextPage) passes: it builds on the patched pages, so scrolling during a
+ * pending dismissal never turns into a list refetch. `rollback()` drops this
+ * hold's patches and repaints base + the rest in order, so overlapping writes
+ * roll back in any order with nothing erased and nothing resurrected. A write
+ * onto a held query that is not the ledger's own (such a page, a site's
+ * setQueryData over the patched value) becomes the new base, the patches
+ * already in it, never re-applied on top (a rollback then leaves it to the
+ * re-read that follows). Owed reads on a held query park until its last
+ * overlapping hold releases; the ledger then drops.
  *
  * EPOCH. `resetReads` (the identity change, lib/auth.tsx) drops every owed
  * read, hold and ledger; a hold of the previous account then paints, parks and
- * pays nothing. */
+ * pays nothing, and a settle that releases it owes nothing. */
 
 import { useEffect } from 'react';
 import {
@@ -169,14 +176,15 @@ function owe(s: Scheduler, q: Query, mode: ReadMode): void {
 }
 
 /* Pay what `q` owes if it can be paid now; the promise settles when the read it
- * started or joined does. `mount`: the query was just mounted, so a 'mount'
- * debt is due too. */
+ * started or joined does. `mount`: the query just got its first observer, so a
+ * 'mount' debt is due too. */
 function pay(s: Scheduler, q: Query, mount = false): Promise<unknown> | undefined {
   const debt = s.debts.get(q.queryHash);
   if (!debt || isHeld(s, q)) return undefined;
-  if (debt.mode === 'mount' && !mount) return undefined;
+  if (debt.mode === 'mount' && !mount && !debt.waiting) return undefined;
   if (!q.isActive() || q.isStatic()) {
-    debt.waiting = debt.mode === 'now';
+    // Due, but no enabled observer yet: the observer that enables it pays.
+    debt.waiting = true;
     return undefined;
   }
   debt.waiting = false;
@@ -185,18 +193,18 @@ function pay(s: Scheduler, q: Query, mount = false): Promise<unknown> | undefine
   if (inFlight && start && !start.page && start.tick > debt.since) return q.promise?.then(noop, noop);
   // An initial load cannot be restarted: its landing pays anew (the 'success' arm of `listen`).
   if (inFlight && q.state.data === undefined) return q.promise?.then(noop, noop);
-  // A restart of an in-flight read dispatches no 'fetch' action: stamp its start here.
-  s.starts.set(q.queryHash, { tick: ++s.tick, page: false });
+  // The fetch (a restart included: its meta differs) dispatches 'fetch', which `listen` stamps.
   return q.fetch(undefined, { cancelRefetch: true }).catch(noop);
 }
 
 /* The ledger writes through Query.setData (what setQueryData calls), flagged so
- * `listen` does not take its own write for an external one. */
+ * `listen` does not take its own write for an external one. A patch keeps the
+ * time its base was read: lib/curationSettle judges which side is stale by it. */
 function write(s: Scheduler, q: Query, data: unknown): void {
   if (data === undefined) return;
   s.writing = q.queryHash;
   try {
-    q.setData(data, { manual: true });
+    q.setData(data, { manual: true, updatedAt: q.state.dataUpdatedAt });
   } finally {
     s.writing = null;
   }
@@ -215,7 +223,10 @@ function listen(s: Scheduler): void {
         s.ledgers.delete(hash);
         return;
       case 'observerAdded':
-        if (s.debts.has(hash)) queueMicrotask(() => pay(s, q, true));
+        if (s.debts.has(hash)) {
+          const first = q.getObserversCount() === 1;
+          queueMicrotask(() => pay(s, q, first));
+        }
         return;
       case 'observerOptionsUpdated':
         // Fires on every render of every observer: one map lookup, nothing more.
@@ -238,7 +249,8 @@ function listen(s: Scheduler): void {
       if (s.writing === hash) return;
       const ledger = s.ledgers.get(hash);
       if (ledger) {
-        // Not the ledger's own write: the new base, with every patch baked in.
+        // Not the ledger's own write: the new base. It was built on the patched value
+        // (a page from before the hold was cancelled when the hold registered).
         ledger.base = q.state.data;
         ledger.patches = [];
       }
@@ -352,6 +364,9 @@ export function revalidate(
   opts: { release?: Hold } = {},
 ): Promise<void> {
   const s = scheduler(qc);
+  const held = opts.release ? records.get(opts.release) : undefined;
+  // A write of the previous identity settling after resetReads owes the new one nothing.
+  if (held && held.s === s && held.rec.epoch !== s.epoch) return Promise.resolve();
   const cache = qc.getQueryCache();
   const touched = new Map<string, Query>();
   for (const item of items.map(toItem)) {
@@ -360,7 +375,6 @@ export function revalidate(
       touched.set(q.queryHash, q);
     }
   }
-  const held = opts.release ? records.get(opts.release) : undefined;
   if (held && held.s === s) for (const q of releaseRecord(s, held.rec)) touched.set(q.queryHash, q);
   const waits: Promise<unknown>[] = [];
   for (const q of touched.values()) {
@@ -392,8 +406,8 @@ export function holdReads(
   s.holds.set(rec.id, rec);
   for (const f of rec.filters) {
     for (const q of cache.findAll(f)) {
-      if (q.state.fetchStatus === 'idle' || q.state.fetchMeta?.fetchMore) continue;
-      owe(s, q, 'now');
+      if (q.state.fetchStatus === 'idle') continue;
+      if (q.state.fetchMeta?.fetchMore == null) owe(s, q, 'now');
       void q.cancel({ revert: true });
     }
   }

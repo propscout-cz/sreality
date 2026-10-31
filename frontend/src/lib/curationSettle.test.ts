@@ -186,14 +186,29 @@ describe('the settle', () => {
     expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS);
   });
 
-  /* The same "no" with no member read owed: the map is current, so the LIST is
-   * the stale side — a change made elsewhere it follows only at its next mount
-   * (ruling Q3(a)). A click that leaves the row out drops it like any other. */
+  it('a member map read before the list is the stale side even with nothing owed: that cohort re-reads whole', () => {
+    const qc = new QueryClient();
+    const f = filters({ tags: scope({ in: [1, 2] }) });
+    seed(qc, f, [[P, 3]]);
+    // Tag 2 was attached elsewhere after this map was read and before the list was.
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]), { updatedAt: Date.now() - 20_000 });
+
+    settleMemberWrite(qc, 'tags', P, 3, true);
+
+    expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[P, 3]]);
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(50);
+    expect(owedRoots(qc, f)).toEqual(SEEDED_ROOTS);
+  });
+
+  /* The same "no" from a map read after the list, nothing owed: the map is
+   * current, so the LIST is the stale side — a change made elsewhere it follows
+   * only at its next mount (ruling Q3(a)). A click that leaves the row out drops
+   * it like any other. */
   it('a list shown against a current map is the stale side: the row drops in place, the aggregates re-read', () => {
     const qc = new QueryClient();
     const f = filters({ tags: scope({ in: [1, 2] }) });
     seed(qc, f, [[P, 3]]);
-    qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]));
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]), { updatedAt: Date.now() + 1_000 });
 
     settleMemberWrite(qc, 'tags', P, 3, true);
 

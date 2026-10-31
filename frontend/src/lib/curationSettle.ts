@@ -13,11 +13,13 @@
  *   cannot judge                 → that cohort re-reads, nothing drops
  *
  * The map can say "no" BEFORE the write while the list shows the row. Which
- * side is stale? If one of the member reads the verdict stands on is still owed
- * (lib/revalidate `isOwed`), the MAP: that cohort re-reads, nothing drops. If
- * none is, the LIST — a change made elsewhere, which a list follows only at its
- * next mount (ruling Q3(a)): the row is judged like any other, so a click that
- * leaves it out drops it in place and only the aggregates re-read.
+ * side is stale? The MAP, if one of the member reads the verdict stands on is
+ * still owed (lib/revalidate `isOwed`) or was read before the list was: that
+ * cohort re-reads, nothing drops. Otherwise the LIST — a change made elsewhere
+ * after it was read, which a list follows only at its next mount (ruling
+ * Q3(a)): the row is judged like any other, so a click that leaves it out drops
+ * it in place and only the aggregates re-read. Read times are the cache's
+ * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger).
  *
  * `settlePatches` are CachePatches built BEFORE the member maps move (that is
  * when the before-verdict is taken) and judged when applied, after them;
@@ -102,9 +104,15 @@ const memberKeys = (propertyId: number, f: ListingFilters): QueryKey[] => [
   ...CURATED_SET_NAMES.filter((set) => scopeActive(f[set])).map((set) => MEMBERS[set].key),
 ];
 
-/* A "no" from a map whose read is still owed is the map's staleness, not the list's. */
-const staleMap = (qc: QueryClient, propertyId: number, f: ListingFilters): boolean =>
-  verdict(qc, propertyId, f) === false && memberKeys(propertyId, f).some((key) => isOwed(qc, key));
+/* A "no" from a map whose read is owed, or older than the list's, is the map's staleness. */
+function staleMap(qc: QueryClient, propertyId: number, f: ListingFilters, lists: readonly Query[]): boolean {
+  if (verdict(qc, propertyId, f) !== false) return false;
+  const listReadAt = Math.max(...lists.map((q) => q.state.dataUpdatedAt));
+  return memberKeys(propertyId, f).some((key) => {
+    const readAt = qc.getQueryState(key)?.dataUpdatedAt;
+    return isOwed(qc, key) || (readAt != null && readAt < listReadAt);
+  });
+}
 
 const holds = (data: unknown, propertyId: number): boolean =>
   ((data as InfiniteData<ListPage> | undefined)?.pages ?? []).some((p) =>
@@ -142,7 +150,7 @@ export function settlePatches(
   const patches: CachePatch[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const lists = queries.filter((q) => isList(q) && holds(q.state.data, propertyId));
-    if (lists.length === 0 || staleMap(qc, propertyId, f)) continue;
+    if (lists.length === 0 || staleMap(qc, propertyId, f, lists)) continue;
     let judged: boolean | null | undefined;
     const leaves = () => (judged === undefined ? (judged = verdict(qc, propertyId, f)) : judged) === false;
     for (const q of lists) {
@@ -162,7 +170,8 @@ export function settlePatches(
 }
 
 /** What to re-read once the write has landed; everything when it failed (the
- * rollback restored the lists as they were at the click). */
+ * rollback takes back only this write's patch, and a page that landed meanwhile
+ * may hold it). */
 export function settleRereads(
   qc: QueryClient,
   propertyId: number,

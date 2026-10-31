@@ -87,11 +87,16 @@ const TABLES = Object.keys(SYNC_TABLES) as SyncTable[];
  * per-property judge (lib/curationSettle). */
 export const LENS_REREAD = { lists: 'mount', aggregates: 'mount' } as const satisfies Record<string, ReadMode>;
 
+/* Own reads that are themselves a list — an open collection page's rows: a
+ * change made elsewhere re-reads them as LENS_REREAD.lists says (ruling Q3(a)). */
+const LIST_READS = new Set([hashKey(curationKeys.anyCollection)]);
+
 /** The roots every synced read sits under; none is lib/hydration's (hydration.test.ts). */
 export const SYNC_ROOTS: readonly QueryKey[] = [['pipeline'], ['curation'], ['dismissals'], ['pipeline-shares'], ['acting']];
 
-/** No reconnect refetch under SYNC_ROOTS: the curation clock's read is the one
- * reconnect path for curation, and a hidden tab stays at zero requests. */
+/** No reconnect refetch under SYNC_ROOTS, so a hidden tab stays at zero requests.
+ * main.tsx calls it only beside the curation clock's read, which then is the one
+ * reconnect path for curation; before that read exists it stays uncalled. */
 export function applySyncQueryDefaults(qc: QueryClient): void {
   for (const root of SYNC_ROOTS) qc.setQueryDefaults(root, { refetchOnReconnect: false });
 }
@@ -122,11 +127,13 @@ export function revalidateTables(
 /** What a change of `family` made elsewhere re-reads here: for an `owner` I follow
  * (a pipeline shared with me) that owner's acting reads only — never an own read
  * and never a Browse target; for my own accounts every read of the family and the
- * Browse cohorts its lenses move, as LENS_REREAD rules. */
+ * Browse cohorts its lenses move, lists among them as LENS_REREAD rules. */
 export function familyTargets(qc: QueryClient, family: CurationFamily, owner: string | null): Revalidation[] {
   const tables = TABLES.filter((t) => entry(t).family === family);
-  const reads: Revalidation[] = tableReads(tables, owner).map((queryKey) => ({ queryKey }));
-  if (owner != null) return reads;
+  if (owner != null) return tableReads(tables, owner).map((queryKey) => ({ queryKey }));
+  const reads: Revalidation[] = tableReads(tables, null).map((queryKey) =>
+    LIST_READS.has(hashKey(queryKey)) ? { queryKey, mode: LENS_REREAD.lists } : { queryKey },
+  );
   const lenses = new Set(tables.flatMap((t) => entry(t).lens ?? []));
   for (const lens of lenses) reads.push(...lensTargets(qc, lens, LENS_REREAD));
   return reads;

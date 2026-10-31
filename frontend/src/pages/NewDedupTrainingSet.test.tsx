@@ -506,9 +506,10 @@ describe('<NewDedupTrainingSet> changing a mark', () => {
     await waitFor(() => expect(tile).toHaveAttribute('data-state', 'positive'));
   });
 
-  /* The rollback is the snapshot, not a hand-written reverse patch: the reason
-   * a left-out row carried and the exact tray counts come back. The heads
-   * re-read is held open so only the rollback can restore the counts. */
+  /* The rollback takes the patch back out of the read it was painted on, not
+   * by a hand-written reverse patch: the reason a left-out row carried and the
+   * exact tray counts come back. The heads re-read is held open so only the
+   * rollback can restore the counts. */
   it('a failed change restores the row and the counts exactly', async () => {
     let reject!: (e: Error) => void;
     vi.mocked(api.setNewDedupTagAnnotation).mockReturnValue(
