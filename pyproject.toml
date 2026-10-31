@@ -40,7 +40,8 @@ dev = [
   "ruff==0.17.2",
 ]
 api = [
-  "fastapi>=0.115",
+  # Depends(scope="function") commits before the response (api/tenant_pool.TenantConn); 0.139 is the version verified.
+  "fastapi>=0.139",
   "uvicorn[standard]>=0.30",
   "anthropic>=0.40",
   # Gemini backend for the reasoning agent (api/providers/gemini.py).

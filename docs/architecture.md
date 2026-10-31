@@ -3196,7 +3196,12 @@ renumber.** Navigate by area:
     tenancy note below.**
     Same no-hard-delete spirit as the rest of the data model.
     **Every curation route runs on the tenant pool (`tenant_conn` + `verify_jwt`)** (hydration
-    sprint W-1c); one gated addition: `POST /collections/{id}/shares` also opens a service-role
+    sprint W-1c), **in one transaction per request, committed BEFORE the response is sent**: routes
+    and both account helpers take it as ONE alias, `tenant_pool.TenantConn` (function scope), so a
+    failed COMMIT (deadlock, lock timeout) answers 503 `db_busy` or 500, never a 200 for a write
+    that rolled back; a bare `Depends(tenant_conn)` beside it would open a second transaction
+    (curation sync W0, `docs/design/curation-sync.md` § 3.6; census
+    `tests/api/test_tenant_conn_scope.py`). One gated addition: `POST /collections/{id}/shares` also opens a service-role
     connection, in the handler and only after its tenant UPDATE gate passed (tenancy.md). Until then the collection CRUD (`POST /collections`,
     `GET`/`PATCH`/`DELETE /collections/{id}`) and every `/tags` route were still on the
     `get_db_conn` + `require_token` pair the rest of the module had already left: that pair is

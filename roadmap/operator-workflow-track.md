@@ -7,6 +7,31 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0 PR #2204, W1 PR #2205 in review)
+
+Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock per (account, family), advanced only
+by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
+while visible, and re-reads only what it holds through one table→read map and one read scheduler that its own writes
+use too. Rulings 2026-10-31: Q1 all curation plus the pipeline and collection shares (notifications, ad status and
+price, estimation runs out); Q2 ≤ 5 s desktop, ≤ 15 s phone, no Realtime doorbell (F7, only on a future ≈ 1 s
+ruling); Q3 (a), an open list keeps its rows, counts, map and stats until navigation and only the per-card marks
+follow; Q4 the extension stays a sender; Q5 last-writer-wins.
+
+- [ ] **W0: the API commits before it answers (#2198, PR #2204, in review).** `tenant_pool.TenantConn` (function
+      scope) on every tenant route and both account helpers, so a failed COMMIT answers 503 or 500, never a 200; the
+      charter (design doc, ADR-0008, three GLOSSARY terms).
+- [ ] **W1: one table→read map and one read scheduler (#2199, SPA, PR #2205, in review).** `lib/curationSync.ts` +
+      `lib/revalidate.ts` (owed reads, cache-enforced holds, patch ledger), the stale-side rule; closes D1, D2, D5.
+      What it built differently: the design's § 12 build ledger.
+- [ ] **W2: curation editors follow the server (#2200, SPA).** `lib/useServerDraft.ts` in the six editors; the
+      kanban drag and phone pager holds (D3).
+- [ ] **W3: the curation clock (#2201, DB), after W0 is live.** Migration 696 (claimed with the merge coordinator
+      before the file is written), its census and live lane, the `curation_sync` health alarm.
+- [ ] **W4: the clock reader in the SPA (#2202), after W1, W2 and the 696 apply.** One owner loop, 5 s / 15 s, the
+      same-browser nudge.
+- [ ] **Gate #2203**, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of statement time, no
+      clock deadlocks, the API error rate at baseline. Whoever closes it sets the index row back to 🟢.
+
 ### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
 
 Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it

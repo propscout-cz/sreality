@@ -266,14 +266,14 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
 
     @router.get("")
     @_runs(*lists)
-    def list_route(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+    def list_route(conn: tenant_pool.TenantConn) -> dict[str, Any]:
         return listing(conn, kind)
 
     @router.post("")
     @_runs(_insert_sql(kind))
     def create_route(
         body: kind.create_in,  # type: ignore[name-defined]
-        conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn,
         account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
     ) -> dict[str, Any]:
         return create(conn, kind, body.model_dump(), account_id=account_id)
@@ -281,21 +281,21 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     # Declared before the `/{id}` routes so PUT <prefix>/reorder is matched here, not captured by `/{id}`.
     @router.put("/reorder")
     @_runs(_reorder_sql(kind), *lists)
-    def reorder_route(body: ReorderIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+    def reorder_route(body: ReorderIn, conn: tenant_pool.TenantConn) -> dict[str, Any]:
         reorder(conn, kind, [str(i) for i in body.ids])
         return listing(conn, kind)
 
     if kind.groups:
         @router.put("/layout")
         @_runs(_reorder_sql(kind.groups), _layout_sql(kind), *lists)
-        def layout_route(body: LayoutIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+        def layout_route(body: LayoutIn, conn: tenant_pool.TenantConn) -> dict[str, Any]:
             return layout(conn, kind, [str(g) for g in body.groups],
                           [(str(i.id), None if i.group_id is None else str(i.group_id)) for i in body.items])
 
     @router.get(one)
     @_runs(_get_sql(kind))
     def get_route(
-        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn, set_id: uuid.UUID = Path(alias=kind.id_param),
     ) -> dict[str, Any]:
         return row_or_404(kind, get(conn, kind, str(set_id)))
 
@@ -303,15 +303,15 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     @_runs(_update_sql(kind, _fields(kind)), _get_for_update_sql(kind))
     def update_route(
         body: kind.update_in,  # type: ignore[name-defined]
+        conn: tenant_pool.TenantConn,
         set_id: uuid.UUID = Path(alias=kind.id_param),
-        conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
         return row_or_404(kind, update(conn, kind, str(set_id), changes(kind, body)))
 
     @router.delete(one)
     @_runs(_delete_sql(kind))
     def delete_route(
-        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn, set_id: uuid.UUID = Path(alias=kind.id_param),
     ) -> dict[str, Any]:
         if not delete(conn, kind, str(set_id)):
             raise HTTPException(status_code=404, detail=f"{kind.noun} not found")
