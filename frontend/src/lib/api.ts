@@ -13,6 +13,7 @@
  * signed-out tab off every page.
  */
 
+import type { WaitlistResponse } from './waitlist';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,
@@ -639,6 +640,9 @@ export const listSkills = (
   request<{ data: Skill[] }>('/admin/skills', {
     query: { include_archived: options.includeArchived ?? false },
   });
+
+/* The propscout.cz waitlist, newest first, for the admin Sign-ups page (GET /admin/waitlist, admin-only). */
+export const fetchWaitlistSignups = (): Promise<WaitlistResponse> => request<WaitlistResponse>('/admin/waitlist');
 
 export const getSkill = (name: string): Promise<Skill> =>
   request<Skill>(`/admin/skills/${encodeURIComponent(name)}`);

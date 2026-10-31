@@ -81,6 +81,7 @@ from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
+from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
@@ -290,6 +291,7 @@ app.include_router(images_router)
 # /waitlist (+ /answer) — the propscout.cz landing page's signup form. Public by design: a visitor
 # from an ad has no account; honeypot + rate limit + strict checks, 303 back to the page (api/routes/waitlist.py).
 app.include_router(waitlist_router)
+app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sign-ups page
 # /properties/{id}/download.zip — the property page's download: a PDF of the ad plus the
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.

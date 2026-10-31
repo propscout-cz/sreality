@@ -115,3 +115,18 @@ def record_answer(conn: Any, token: uuid.UUID, investor_type: str | None, note: 
             (investor_type, note, token),
         )
         return cur.rowcount == 1
+
+
+SIGNUP_COLUMNS = ("id", "email", "created_at", "consent_version", "page_variant", "utm", "investor_type", "note",
+                  "answered_at", "unsubscribed_at", "invited_at")
+LIST_MAX = 5000
+
+
+def list_signups(conn: Any, limit: int = LIST_MAX) -> list[dict[str, Any]]:
+    """Every signup, newest first (the admin Sign-ups page); at most `limit` rows."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {', '.join(SIGNUP_COLUMNS)} FROM waitlist_signups ORDER BY created_at DESC, id DESC LIMIT %s",
+            (limit,),
+        )
+        return [dict(zip(SIGNUP_COLUMNS, row)) for row in cur.fetchall()]

@@ -182,3 +182,40 @@ def test_the_landing_page_shows_the_recorded_consent_wording_under_every_form() 
         assert f'name="consent" value="{waitlist.CONSENT_VERSION}"' in form
         assert expected in _visible_text(form)
         assert 'name="web"' in form, "the honeypot"
+
+
+def _signup_row(i: int) -> tuple[Any, ...]:
+    return (i, f"a{i}@example.cz", "2026-10-31T17:53:57+00:00", waitlist.CONSENT_VERSION, "flip",
+            {"utm_source": "facebook"}, "rent", "Brno", None, None, None)
+
+
+def test_the_signups_list_is_admin_only(client: Any) -> None:
+    api_main.app.dependency_overrides.pop(deps.require_admin, None)
+    assert client.get("/admin/waitlist").status_code == 401
+
+
+def test_an_admin_reads_every_signup_newest_first(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = ScriptConn([(lambda q: q.startswith("SELECT id, email"), [_signup_row(2), _signup_row(1)])])
+    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
+    try:
+        body = client.get("/admin/waitlist").json()
+    finally:
+        api_main.app.dependency_overrides.clear()
+    assert body["truncated"] is False
+    assert [r["email"] for r in body["data"]] == ["a2@example.cz", "a1@example.cz"]
+    assert set(body["data"][0]) == set(waitlist.SIGNUP_COLUMNS)
+    sql, params = conn.executed[0]
+    assert "ORDER BY created_at DESC, id DESC" in sql and params == (waitlist.LIST_MAX + 1,)
+
+
+def test_the_signups_list_says_when_it_hit_its_cap(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(waitlist, "LIST_MAX", 2)
+    conn = ScriptConn([(lambda q: q.startswith("SELECT id, email"), [_signup_row(3), _signup_row(2), _signup_row(1)])])
+    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
+    try:
+        body = client.get("/admin/waitlist").json()
+    finally:
+        api_main.app.dependency_overrides.clear()
+    assert body["truncated"] is True and len(body["data"]) == 2

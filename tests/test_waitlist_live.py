@@ -86,3 +86,14 @@ def test_no_browser_role_reaches_the_table(tx: _Tx, role: str) -> None:
         assert cur.fetchone() == (False,)
         cur.execute("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.waitlist_signups'::regclass")
         assert cur.fetchone() == (True,)
+
+
+def test_the_admin_list_reads_every_column_newest_first(tx: _Tx) -> None:
+    waitlist.record_signup(tx, "first@example.cz", waitlist.CONSENT_VERSION, None, {})
+    token = waitlist.record_signup(tx, "second@example.cz", waitlist.CONSENT_VERSION, "najem", {"utm_source": "fb"})
+    assert token is not None
+    waitlist.record_answer(tx, token, "both", "Plzeň")
+    rows = [r for r in waitlist.list_signups(tx) if r["email"].endswith("@example.cz")]
+    assert [r["email"] for r in rows][:2] == ["second@example.cz", "first@example.cz"]
+    assert rows[0]["utm"] == {"utm_source": "fb"} and rows[0]["investor_type"] == "both" and rows[0]["note"] == "Plzeň"
+    assert set(rows[0]) == set(waitlist.SIGNUP_COLUMNS)

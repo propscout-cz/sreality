@@ -17,9 +17,10 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -29,6 +30,10 @@ from api import waitlist
 LOG = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
+
+# The admin Sign-ups page's read (frontend/src/pages/Signups.tsx): e-mails are personal data, so admin-only, and the
+# table is service-role only (mig 700), so it is served here, never read by the browser.
+admin_router = APIRouter(prefix="/admin/waitlist", tags=["waitlist"], dependencies=[Depends(deps.require_admin)])
 
 DEFAULT_LANDING_ORIGIN = "https://propscout.cz"
 
@@ -129,3 +134,10 @@ async def post_waitlist_answer(request: Request) -> RedirectResponse:
         except Exception:
             LOG.exception("WAITLIST answer failed")
     return _go(base, thanks, {"hotovo": "1"})
+
+
+@admin_router.get("")
+def get_waitlist_signups(conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
+    """Every signup, newest first, with `truncated` when the list hit its cap."""
+    rows = waitlist.list_signups(conn, waitlist.LIST_MAX + 1)
+    return {"data": rows[: waitlist.LIST_MAX], "truncated": len(rows) > waitlist.LIST_MAX}
