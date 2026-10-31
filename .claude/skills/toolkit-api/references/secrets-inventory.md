@@ -46,7 +46,6 @@ the worker's autodedup lane calls no provider). Both Railway copies are deleted.
 | `API_TOKEN` | Railway API | the static key was deleted 2026-10-13; the API accepts only a Supabase JWT |
 | `SUPABASE_JWT_SECRET` | Railway API | read by nothing since 2026-10-13 (`verify_jwt` uses the project JWKS) |
 | `EXT_API_TOKEN` | GH | the extension stopped sending a static key 2026-07-21 (Wave 1, #888); the build no longer reads it |
-| `SCRAPE_CHAIN_TOKEN` | GH | no workflow reads it since #2043 (price stats chains on its job's own `GITHUB_TOKEN`) |
 | `RUNPOD_API_KEY` | Railway worker | no worker code reads it (above) |
 
 Also in M0: the Supabase **legacy JWT secret**. If it sits under JWT Keys → Previously used, anyone who
@@ -79,7 +78,7 @@ cache, not a bad password: do not reset twice.
   regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
   A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
-  `SREALITY_SESSION_COOKIE`. The `GEMINI_API_KEY` Actions secret has no consumer.
+  `SREALITY_SESSION_COOKIE`.
 - Public values: `SUPABASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `EXT_SUPABASE_URL`, `EXT_API_BASE_URL`,
   `EXT_APP_BASE_URL`, every `VITE_*`.
 - `LOCATION_DB_DIRECT_URL` is read by one workflow but is not set as a secret (the job falls back to the pooler).
