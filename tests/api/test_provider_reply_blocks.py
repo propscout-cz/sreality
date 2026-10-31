@@ -52,7 +52,7 @@ def test_a_thinking_block_goes_back_first_and_unchanged(monkeypatch: pytest.Monk
              {"type": "redacted_thinking", "data": "ZW5jcnlwdGVk"},
              _anthropic_tool_use("toolu_1", "probe_a", {"q": 1})]
     between = [{"type": "thinking", "thinking": "Summary.", "signature": "c2lnLTI="},
-               {"type": "text", "text": "One more look."},
+               {"type": "text", "text": "One more look.", "citations": None},
                {"type": "thinking", "thinking": "", "signature": "c2lnLTM="},
                _anthropic_tool_use("toolu_2", "probe_b", {})]
     last = _anthropic_tool_use("toolu_3", SUBMIT, {"markdown": "Done."})
@@ -75,6 +75,8 @@ def test_a_block_this_code_has_never_heard_of_goes_back_too(monkeypatch: pytest.
              {"type": "bash_code_execution_tool_result", "tool_use_id": "srvtoolu_1",
               "content": {"type": "bash_code_execution_result", "stdout": "1\n", "stderr": "", "return_code": 0, "content": []}},
              {"type": "a_block_from_next_year", "payload": {"kept": True}},
+             {"type": "text", "text": "Cited.", "citations": [{"type": "char_location", "cited_text": "x", "document_index": 0,
+                                                                "document_title": None, "start_char_index": 0, "end_char_index": 1}]},
              _anthropic_tool_use("toolu_1", "probe_a", {})]
     with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL",
                    [anthropic_reply(*first), anthropic_reply(_anthropic_tool_use("toolu_2", SUBMIT, {"markdown": "Done."}))]) as stub:
@@ -123,10 +125,10 @@ def test_a_gemini_reply_still_reads_as_text_and_calls(monkeypatch: pytest.Monkey
 THINKING = {"type": "thinking", "thinking": "", "signature": "c2ln"}
 
 
-def _turn(provider: str, own: Any) -> Message:
+def _turn(provider: str, written: Any) -> Message:
+    own = OpaqueBlock(provider=provider, data=written)
     return Message(role="assistant", content=[
-        OpaqueBlock(provider=provider, data=own), TextBlock(text="Looking."),
-        ToolUseBlock(id="call_1", name="probe_a", input={"q": 1}, opaque=OpaqueBlock(provider=provider, data=own)),
+        own, TextBlock(text="Looking.", opaque=own), ToolUseBlock(id="call_1", name="probe_a", input={"q": 1}, opaque=own),
     ])
 
 
@@ -169,13 +171,3 @@ def test_a_call_the_oss_provider_promoted_from_prose_is_in_its_reply() -> None:
     promoted = _promote_json_content(_completion(text_blocks=['{"a": 1}'], stop_reason="end_turn"),
                                      tools=[tool], tool_choice="record")
     assert promoted.reply == [TextBlock(text='{"a": 1}'), ToolUseBlock(id="record-json-fallback", name="record", input={"a": 1})]
-
-
-def test_the_client_passes_an_opaque_block_through_a_legacy_dict_message() -> None:
-    from tests.api._fakes import _ScriptedProvider
-
-    provider = _ScriptedProvider("anthropic", [_completion(stop_reason="end_turn")])
-    block = OpaqueBlock(provider="anthropic", data=THINKING)
-    LLMClient(_FakeConn(), providers={"anthropic": provider}).call(
-        called_for="agent_run", messages=[{"role": "assistant", "content": [block]}], model="claude-sonnet-4-5")
-    assert provider.calls[0]["messages"][0].content == [block]

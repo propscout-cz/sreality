@@ -37,6 +37,7 @@ from api.providers.base import (
     ToolSchema,
     ToolUseBlock,
     Usage,
+    written_by,
 )
 
 LOG = logging.getLogger(__name__)
@@ -156,13 +157,13 @@ class GeminiProvider:
 def _msg_to_gemini(msg: Message, types: Any) -> Any:
     parts: list[Any] = []
     for block in msg.content:
-        if isinstance(block, TextBlock):
+        own = written_by(block, GeminiProvider.name)
+        if own is not None:
+            parts.append(own)
+        elif isinstance(block, TextBlock):
             parts.append(types.Part.from_text(text=block.text))
-        elif isinstance(block, OpaqueBlock):
-            if block.provider == GeminiProvider.name:
-                parts.append(block.data)
         elif isinstance(block, ToolUseBlock):
-            parts.append(block.own_block(GeminiProvider.name) or types.Part(
+            parts.append(types.Part(
                 function_call=types.FunctionCall(
                     name=block.name,
                     args=block.input,
@@ -230,8 +231,8 @@ def _tool_to_gemini(tool: ToolSchema) -> Any:
 
 
 def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
-    """The reply's text, its calls and all of it in order. A call's part goes back whole, and so does a text part that
-    carries one: Gemini 3 validates the thought_signature on the function calls in history."""
+    """The reply's text, its calls and all of it in order, every part whole: Gemini 3 validates the thought_signature
+    on the function calls in history, and a part with no text can carry one too."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
     reply: list[Block] = []
@@ -244,12 +245,13 @@ def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Blo
         if text:
             texts.append(text)
         fcall = getattr(part, "function_call", None)
+        own = OpaqueBlock(provider=GeminiProvider.name, data=part)
         if fcall is None:
-            if getattr(part, "thought_signature", None):
-                reply.append(OpaqueBlock(provider=GeminiProvider.name, data=part))
-            elif text:
-                reply.append(TextBlock(text=text))
-        if fcall is not None:
+            if text:
+                reply.append(TextBlock(text=text, opaque=own))
+            elif getattr(part, "thought_signature", None):
+                reply.append(own)
+        else:
             name = getattr(fcall, "name", "") or ""
             args = getattr(fcall, "args", None) or {}
             # SDK returns args as a dict-like; coerce to plain dict.
@@ -263,8 +265,7 @@ def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Blo
                 name=name,
                 input=args,
             ))
-            reply.append(ToolUseBlock(id=name, name=name, input=args,
-                                      opaque=OpaqueBlock(provider=GeminiProvider.name, data=part)))
+            reply.append(ToolUseBlock(id=name, name=name, input=args, opaque=own))
     return texts, tool_calls, reply
 
 

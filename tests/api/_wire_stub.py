@@ -15,7 +15,11 @@ import pytest
 class WireStub:
     def __init__(self, replies: list[dict[str, Any]]) -> None:
         self.replies = list(replies)
-        self.requests: list[dict[str, Any]] = []
+        self.bodies: list[bytes] = []
+
+    @property
+    def requests(self) -> list[dict[str, Any]]:
+        return [json.loads(body) for body in self.bodies]
 
 
 @contextmanager
@@ -25,7 +29,7 @@ def wire_stub(monkeypatch: pytest.MonkeyPatch, base_url_env: str, replies: list[
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            stub.requests.append(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+            stub.bodies.append(self.rfile.read(int(self.headers["content-length"])))
             status = 200 if stub.replies else 400
             body = json.dumps(stub.replies.pop(0) if stub.replies else {"error": "script exhausted"}).encode()
             self.send_response(status)

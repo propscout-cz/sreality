@@ -20,6 +20,7 @@ Plus one unit test for `TraceRecorder.reasoning(...)` step shape.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -325,7 +326,8 @@ _RECORD = {"estimated_monthly_rent_czk": 30000, "rent_p25_czk": 28000, "rent_p75
 _RELAX = {"radius_m": 1000, "min_results": 5}
 
 
-def _estimate_over_the_wire(monkeypatch, provider, env: str, replies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _estimator_bodies(monkeypatch, provider, env: str, replies: list[dict[str, Any]]) -> list[bytes]:
+    """The exact HTTP bodies one estimation sends, through the real SDK."""
     _patch_toolkit(monkeypatch)
     conn = _FakeConn(app_settings={})
     with wire_stub(monkeypatch, env, replies) as stub:
@@ -335,41 +337,41 @@ def _estimate_over_the_wire(monkeypatch, provider, env: str, replies: list[dict[
             provider=provider.name, recorder=TraceRecorder(), estimation_run_id=42,
         )
     assert result.metadata["stop_reason"] == "record_estimate"
-    return stub.requests
+    return stub.bodies
 
 
 def test_the_estimators_anthropic_requests_stay_as_they_were(monkeypatch):
-    """#2179 sends reply blocks back in the generic loop only: this production lane still sends text then calls."""
+    """#2179 sends reply blocks back in the generic loop only: this production lane still sends text then calls, so a
+    reply carrying thinking and extra fields produces the very bytes a plain one does."""
     pytest.importorskip("anthropic")
-    replies = [
-        anthropic_reply({"type": "thinking", "thinking": "", "signature": "c2ln"}, {"type": "text", "text": "Broad first."},
-                        {"type": "tool_use", "id": "t1", "name": "find_comparables_relaxed", "input": _RELAX,
-                         "caller": {"type": "direct"}}, model="claude-sonnet-4-5"),
-        anthropic_reply({"type": "tool_use", "id": "t2", "name": "record_estimate", "input": _RECORD},
-                        model="claude-sonnet-4-5"),
-    ]
-    requests = _estimate_over_the_wire(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", replies)
-    assert set(requests[1]) == {"model", "max_tokens", "messages", "system", "tools"}
-    assert requests[1]["max_tokens"] == 4096
-    assert requests[1]["messages"][1] == {"role": "assistant", "content": [
-        {"type": "text", "text": "Broad first."},
-        {"type": "tool_use", "id": "t1", "name": "find_comparables_relaxed", "input": _RELAX},
-    ]}
+    sonnet = "claude-sonnet-4-5"
+    text = {"type": "text", "text": "Broad first."}
+    call = {"type": "tool_use", "id": "t1", "name": "find_comparables_relaxed", "input": _RELAX}
+    record = {"type": "tool_use", "id": "t2", "name": "record_estimate", "input": _RECORD}
+    plain = [anthropic_reply(text, call, model=sonnet), anthropic_reply(record, model=sonnet)]
+    rich = [anthropic_reply({"type": "thinking", "thinking": "", "signature": "c2ln"}, {**text, "citations": None},
+                            {**call, "caller": {"type": "direct"}}, model=sonnet),
+            anthropic_reply({"type": "redacted_thinking", "data": "eA=="}, record, model=sonnet)]
+    bodies = _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", plain)
+    assert _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", rich) == bodies
+    assert set(json.loads(bodies[1])) == {"model", "max_tokens", "messages", "system", "tools"}
+    assert json.loads(bodies[1])["max_tokens"] == 4096
+    assert json.loads(bodies[1])["messages"][1] == {"role": "assistant", "content": [text, call]}
 
 
 def test_the_estimators_gemini_requests_stay_as_they_were(monkeypatch):
     pytest.importorskip("google.genai")
-    replies = [
-        gemini_reply({"text": "Broad first."},
-                     {"functionCall": {"name": "find_comparables_relaxed", "args": _RELAX}, "thoughtSignature": "c2ln"}),
-        gemini_reply({"functionCall": {"name": "record_estimate", "args": _RECORD}}),
-    ]
-    requests = _estimate_over_the_wire(monkeypatch, GeminiProvider(api_key="test"), "GOOGLE_GEMINI_BASE_URL", replies)
-    assert set(requests[1]) == {"contents", "systemInstruction", "tools", "generationConfig"}
-    assert requests[1]["contents"][1] == {"role": "model", "parts": [
-        {"text": "Broad first."},
-        {"functionCall": {"name": "find_comparables_relaxed", "args": _RELAX}},
-    ]}
+    text = {"text": "Broad first."}
+    call = {"functionCall": {"name": "find_comparables_relaxed", "args": _RELAX}}
+    record = {"functionCall": {"name": "record_estimate", "args": _RECORD}}
+    plain = [gemini_reply(text, call), gemini_reply(record)]
+    rich = [gemini_reply({**text, "thoughtSignature": "c2ln"}, {**call, "thoughtSignature": "c2ln"},
+                         {"text": "", "thoughtSignature": "c2ln"}),
+            gemini_reply({**record, "thoughtSignature": "c2ln"})]
+    bodies = _estimator_bodies(monkeypatch, GeminiProvider(api_key="test"), "GOOGLE_GEMINI_BASE_URL", plain)
+    assert _estimator_bodies(monkeypatch, GeminiProvider(api_key="test"), "GOOGLE_GEMINI_BASE_URL", rich) == bodies
+    assert set(json.loads(bodies[1])) == {"contents", "systemInstruction", "tools", "generationConfig"}
+    assert json.loads(bodies[1])["contents"][1] == {"role": "model", "parts": [text, call]}
 
 
 def test_a_sale_cohort_cannot_be_recorded_as_a_monthly_rent(monkeypatch):

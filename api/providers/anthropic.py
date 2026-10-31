@@ -31,6 +31,7 @@ from api.providers.base import (
     ToolSchema,
     ToolUseBlock,
     Usage,
+    written_by,
 )
 
 LOG = logging.getLogger(__name__)
@@ -283,13 +284,13 @@ class AnthropicProvider:
 def _msg_to_anthropic(msg: Message) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     for block in msg.content:
-        if isinstance(block, TextBlock):
+        own = written_by(block, AnthropicProvider.name)
+        if own is not None:
+            content.append(own)
+        elif isinstance(block, TextBlock):
             content.append({"type": "text", "text": block.text})
-        elif isinstance(block, OpaqueBlock):
-            if block.provider == AnthropicProvider.name:
-                content.append(block.data)
         elif isinstance(block, ToolUseBlock):
-            content.append(block.own_block(AnthropicProvider.name) or {
+            content.append({
                 "type": "tool_use",
                 "id": block.id,
                 "name": block.name,
@@ -325,18 +326,19 @@ def _tool_to_anthropic(tool: ToolSchema) -> dict[str, Any]:
 
 
 def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
-    """The reply's text, its calls and all of it in order. Whatever is not text or a call goes back as the SDK parsed it
-    (thinking, its signature, and #2068's server tools): the API refuses a later request whose thinking was edited."""
+    """The reply's text, its calls and all of it in order, every block as the SDK parsed it (thinking and its signature,
+    #2068's server tools): the API refuses a later request whose earlier turns were edited."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
     reply: list[Block] = []
     for block in getattr(raw, "content", None) or []:
         kind = _attr(block, "type")
+        own = OpaqueBlock(provider=AnthropicProvider.name, data=block)
         if kind == "text":
             text = _attr(block, "text") or ""
             texts.append(text)
             if text:
-                reply.append(TextBlock(text=text))
+                reply.append(TextBlock(text=text, opaque=own))
         elif kind == "tool_use":
             call = ToolCall(
                 id=str(_attr(block, "id") or ""),
@@ -344,10 +346,9 @@ def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall], list[
                 input=_attr(block, "input") or {},
             )
             tool_calls.append(call)
-            reply.append(ToolUseBlock(id=call.id, name=call.name, input=call.input,
-                                      opaque=OpaqueBlock(provider=AnthropicProvider.name, data=block)))
+            reply.append(ToolUseBlock(id=call.id, name=call.name, input=call.input, opaque=own))
         else:
-            reply.append(OpaqueBlock(provider=AnthropicProvider.name, data=block))
+            reply.append(own)
     return texts, tool_calls, reply
 
 

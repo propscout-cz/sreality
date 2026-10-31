@@ -35,15 +35,18 @@ class ToolSchema:
 # --- Conversation blocks --------------------------------------------------
 
 @dataclass(frozen=True)
-class TextBlock:
-    text: str
-
-
-@dataclass(frozen=True)
 class OpaqueBlock:
     """A reply block only the provider that wrote it can read: sent back to it verbatim, dropped by any other."""
     provider: str
     data: Any
+
+
+# `opaque` on the two blocks below: the block as its provider wrote it, for that provider's next request. Every other
+# provider reads the neutral fields.
+@dataclass(frozen=True)
+class TextBlock:
+    text: str
+    opaque: OpaqueBlock | None = None
 
 
 @dataclass(frozen=True)
@@ -51,11 +54,7 @@ class ToolUseBlock:
     id: str
     name: str
     input: dict[str, Any]
-    # The call as its provider wrote it, kept for that provider's next request; every other one reads the fields above.
     opaque: OpaqueBlock | None = None
-
-    def own_block(self, provider: str) -> Any:
-        return self.opaque.data if self.opaque is not None and self.opaque.provider == provider else None
 
 
 @dataclass(frozen=True)
@@ -73,6 +72,12 @@ class ImageBlock:
 
 
 Block = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | OpaqueBlock
+
+
+def written_by(block: Block, provider: str) -> Any:
+    """The raw data `provider` wrote for this block, to send back verbatim; None when it wrote none."""
+    opaque = block if isinstance(block, OpaqueBlock) else getattr(block, "opaque", None)
+    return opaque.data if opaque is not None and opaque.provider == provider else None
 
 
 @dataclass(frozen=True)
