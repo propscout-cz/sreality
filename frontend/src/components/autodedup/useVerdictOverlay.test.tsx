@@ -13,6 +13,7 @@ import * as api from '@/lib/api';
 import { autodedupKeys } from '@/lib/autodedupKeys';
 import { createMutationCache } from '@/lib/mutationCache';
 import * as toast from '@/lib/toast';
+import { watchReads } from '@/test/reads';
 import { useVerdictOverlay } from './useVerdictOverlay';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -42,12 +43,14 @@ function setup() {
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
+  // The progress counter the rulings page shows: what every verdict re-reads.
+  qc.setQueryData(autodedupKeys.validationProgress, {});
+  const reads = watchReads(qc);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
   const view = renderHook(() => useVerdictOverlay(), { wrapper });
-  return { ...view, invalidate };
+  return { ...view, ...reads };
 }
 
 const PAIR = { kind: 'pair' as const, verdict: 'same' as const, listing_lo: 1, listing_hi: 2 };
@@ -61,7 +64,7 @@ describe('useVerdictOverlay', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('paints the row while the verdict is in flight, per key, and puts the stored row back on failure', async () => {
-    const { result, invalidate } = setup();
+    const { result, reread } = setup();
     vi.mocked(api.postAutodedupVerdict).mockResolvedValueOnce({
       store_ready: true, data: stored('different'), must_not_link: true,
     } as VerdictResponse);
@@ -77,14 +80,13 @@ describe('useVerdictOverlay', () => {
     expect(result.current.isPending('1:2')).toBe(true);
     expect(result.current.isPending('3:4')).toBe(false);
 
-    invalidate.mockClear();
     await act(async () => write.reject(new Error('server down')));
     await waitFor(() => expect(result.current.isPending('1:2')).toBe(false));
     expect(result.current.overlay['1:2']).toEqual(stored('different'));
     // Its own wording, once — the global toast stays silent.
     expect(toast.pushToast).toHaveBeenCalledTimes(1);
     expect(toast.pushToast).toHaveBeenCalledWith('err', 'Uložení se nepovedlo: server down');
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: autodedupKeys.validationProgress });
+    expect(reread(autodedupKeys.validationProgress)).toBe(true);
   });
 
   it('removes a provisional row that had nothing under it', async () => {
@@ -99,7 +101,7 @@ describe('useVerdictOverlay', () => {
   });
 
   it('a split refused with 409 arms the confirm, rolls the badge back and toasts nothing', async () => {
-    const { result, invalidate } = setup();
+    const { result, reread } = setup();
     const write = deferred<SplitResponse>();
     vi.mocked(api.postAutodedupSplitVerdict).mockReturnValueOnce(write.promise);
     const input = {
@@ -117,6 +119,6 @@ describe('useVerdictOverlay', () => {
     expect('77' in result.current.overlay).toBe(false);
     expect(result.current.isPending('77')).toBe(false);
     expect(toast.pushToast).not.toHaveBeenCalled();
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: autodedupKeys.validationProgress });
+    expect(reread(autodedupKeys.validationProgress)).toBe(true);
   });
 });

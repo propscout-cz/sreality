@@ -20,7 +20,8 @@ import TagColorPicker from '@/components/TagColorPicker';
 import TagEditPopover from '@/components/curation/TagEditPopover';
 import { actOpts, useActAs } from '@/lib/acting';
 import { attachTag, createTag, detachTag } from '@/lib/api';
-import { revalidateTags, settleTagWrite } from '@/lib/tagCache';
+import { revalidateTables } from '@/lib/curationSync';
+import { settleTagWrite } from '@/lib/tagCache';
 import { useTagReads } from '@/lib/useCardTags';
 import type { TagColor } from '@/lib/types';
 
@@ -133,7 +134,7 @@ export function TagAssignList({
     onSuccess: (t) => {
       setCreateError(null);
       setQuery('');
-      revalidateTags(qc, actAs);
+      void revalidateTables(qc, ['tags'], actAs);
       attach.mutate(t.id);
     },
     onError: (err: Error) => setCreateError(err.message || 'Štítek se nepodařilo vytvořit'),

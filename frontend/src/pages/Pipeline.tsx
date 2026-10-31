@@ -24,7 +24,6 @@ import {
 } from '@/lib/api';
 import {
   ActingAs,
-  actingKey,
   actOpts,
   resetActiveBoard,
   SHARE_MODE_LABEL,
@@ -33,10 +32,11 @@ import {
   useActingReadOnly,
   type ActiveBoard,
 } from '@/lib/acting';
-import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { revalidateTables } from '@/lib/curationSync';
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
-import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import { matchesDistricts, pipelineShareKeys } from '@/lib/queries';
 import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
@@ -565,7 +565,7 @@ function ViewerLine({ share }: { share: PipelineShare }) {
   const leave = useMutation({
     mutationFn: () => unsharePipeline(share.account_id, 'shared_with_me'),
     onSuccess: () => {
-      void revalidatePipelineShares(qc);
+      void revalidateTables(qc, ['pipeline_shares']);
       resetActiveBoard();
     },
     /* Its failure shows under the line; an onError keeps the global toast off it. */
@@ -608,7 +608,7 @@ function PipelineSharing({ shares }: { shares: PipelineShares | null }) {
         sharePipeline(email, mode ?? 'read').then((next) => qc.setQueryData(pipelineShareKeys.all, next))
       }
       onRevoke={(account_id) =>
-        unsharePipeline(account_id, 'shared_with').then(() => revalidatePipelineShares(qc))
+        unsharePipeline(account_id, 'shared_with').then(() => revalidateTables(qc, ['pipeline_shares']))
       }
     />
   );
@@ -946,17 +946,13 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
   const [err, setErr] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState('');
 
-  /* Narrowed from a wholesale `['pipeline']` sweep to the two caches a stage
-   * edit can actually change: the stage list itself, and the board (whose
-   * columns and badges render from it). The old prefix also swept
-   * `card(id)` and `members` — and, had the decoration keys been nested under
-   * it, every thumbnail and broker line on the board as well. They are not
-   * (lib/hydration owns its own namespace, pinned by hydration.test.ts), but
-   * the sweep was still wider than the fact that changed. */
+  /* What a stage edit moves is lib/curationSync's `pipeline_stages` row: the
+   * stage list, the board (its columns) and the members map, whose stage label,
+   * colour and code every funnel badge renders from (property_pipeline_public
+   * joins the stages). The hand list it replaces omitted the members. */
   const invalidate = () => {
     setErr(null);
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.stages) });
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.board) });
+    void revalidateTables(qc, ['pipeline_stages'], actAs);
   };
   const onError = (e: unknown) =>
     setErr(e instanceof Error ? e.message : 'Akce selhala.');

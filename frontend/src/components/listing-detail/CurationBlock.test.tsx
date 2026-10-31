@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, type QueryKey } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import type { ArtifactLink, Collection, Note, Tag } from '@/lib/types';
@@ -54,7 +54,8 @@ import {
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
-import { ActingAs, actingKey } from '@/lib/acting';
+import { ActingAs } from '@/lib/acting';
+import { isOwed } from '@/lib/revalidate';
 import { slotInstant, viewingSlot, viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
@@ -92,18 +93,25 @@ function renderBlock() {
   return renderWithReads();
 }
 
+/* A mounted reader of `queryKey` elsewhere on the page (Browse's note marks, say):
+ * `fn` counts how often the scheduler re-reads it. */
+function Watch({ queryKey, fn }: { queryKey: QueryKey; fn: () => Promise<unknown> }) {
+  useQuery({ queryKey, queryFn: fn, staleTime: Infinity });
+  return null;
+}
+
 /* Renders over whatever the mocks hold now, so a test can fail one read first. */
-function renderWithReads() {
+function renderWithReads(watch?: { queryKey: QueryKey; fn: () => Promise<unknown> }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
   const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <CurationBlock property_id={42} listing_id={900} />
+        {watch && <Watch {...watch} />}
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { ...view, invalidate };
+  return { ...view, qc };
 }
 
 /* The phone's tags + artifact link + notes: the desktop keeps the tags in the
@@ -164,17 +172,17 @@ describe('<CurationBlock> note counts', () => {
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue(NOTE as never);
     vi.mocked(deletePropertyNote).mockResolvedValue({ deleted: true } as never);
-    const { invalidate } = renderWithReads();
-    const counts = () =>
-      invalidate.mock.calls.filter(([f]) => f?.queryKey === curationKeys.noteCounts).length;
+    const counts = vi.fn(async () => new Map<number, number>());
+    renderWithReads({ queryKey: curationKeys.noteCounts, fn: counts });
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(1));
 
     await user.type(await screen.findByRole('textbox', { name: 'Poznámky' }), 'Volat v pondělí.');
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
-    await waitFor(() => expect(counts()).toBe(1));
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(2));
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     await user.click(screen.getByRole('button', { name: 'Smazat' }));
-    await waitFor(() => expect(counts()).toBe(2));
+    await waitFor(() => expect(counts).toHaveBeenCalledTimes(3));
   });
 });
 
@@ -267,16 +275,18 @@ describe('<CurationBlock> note attachments', () => {
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
     mockReads();
     vi.mocked(uploadAttachment).mockResolvedValue({} as never);
-    const { invalidate } = renderWithReads();
+    renderWithReads();
     const file = pdf();
 
-    dropOn(await savedNote(), [file]);
+    const note = await savedNote();
+    const reads = vi.mocked(listPropertyNotes).mock.calls.length;
+    dropOn(note, [file]);
     await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
       42, file, expect.objectContaining({ note_id: NOTE.id })));
     expect(createPropertyNote).not.toHaveBeenCalled();
     expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull();
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
-      queryKey: curationKeys.propertyNotes(42) }));
+    // The note and its files are one record: it is re-read.
+    await waitFor(() => expect(vi.mocked(listPropertyNotes).mock.calls.length).toBeGreaterThan(reads));
   });
 
   it('names a refused file and never sends it', async () => {
@@ -355,7 +365,10 @@ describe('<CurationBlock> artifact link', () => {
   it('offers "+ Odkaz na artefakt", opens a named field, and saves a link', async () => {
     const user = userEvent.setup();
     mockReads();
-    vi.mocked(setPropertyArtifactLink).mockResolvedValue(LINK);
+    vi.mocked(setPropertyArtifactLink).mockImplementation(async () => {
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+      return LINK;
+    });
     renderWithReads();
 
     expect(screen.queryByRole('textbox', { name: 'Odkaz na artefakt' })).toBeNull();
@@ -408,11 +421,15 @@ describe('<CurationBlock> artifact link', () => {
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
-  it('shows a saved link as a clickable anchor, and replaces it in place', async () => {
+  it('shows a saved link as a clickable anchor, and replaces it', async () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
-    vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/page' });
+    vi.mocked(setPropertyArtifactLink).mockImplementation(async () => {
+      const saved = { ...LINK, url: 'https://example.cz/page' };
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, saved]]));
+      return saved;
+    });
     renderWithReads();
 
     expect(await screen.findByRole('link', { name: 'claude.ai/artifact/abc123' })).toBeInTheDocument();
@@ -432,7 +449,10 @@ describe('<CurationBlock> artifact link', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
-    vi.mocked(deletePropertyArtifactLink).mockResolvedValue({ deleted: true });
+    vi.mocked(deletePropertyArtifactLink).mockImplementation(async () => {
+      vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map());
+      return { deleted: true };
+    });
     renderWithReads();
 
     await user.click(await screen.findByRole('button', { name: 'Odebrat odkaz na artefakt' }));
@@ -647,7 +667,7 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
     vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    qc.setQueryData(curationKeys.noteCounts, new Map());
     vi.mocked(deletePropertyNote).mockResolvedValue({ deleted: true } as never);
     render(
       <QueryClientProvider client={qc}>
@@ -669,11 +689,11 @@ describe('<CurationBlock> shared notes', () => {
     // A note deleted as the owner re-reads the owner's notes, never Browse's note marks.
     fireEvent.click(within(note).getByRole('button', { name: 'Smazat poznámku' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Smazat' }));
+    const reads = vi.mocked(listPropertyNotes).mock.calls.length;
     await waitFor(() => expect(deletePropertyNote).toHaveBeenCalledWith(42, 11, { actAs: 'owner-1' }));
-    await waitFor(() =>
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.propertyNotes(42)) }),
-    );
-    expect(invalidate.mock.calls.some(([f]) => f?.queryKey === curationKeys.noteCounts)).toBe(false);
+    await waitFor(() => expect(vi.mocked(listPropertyNotes).mock.calls.length).toBeGreaterThan(reads));
+    expect(listPropertyNotes).toHaveBeenLastCalledWith(42, { actAs: 'owner-1' });
+    expect(isOwed(qc, curationKeys.noteCounts)).toBe(false);
   });
 
   it('speaks Czech on the phone: Sdílet s …, Sdíleno', async () => {
@@ -757,7 +777,8 @@ describe('<CurationBlock> viewings', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
-    const { invalidate } = renderWithReads();
+    const { qc } = renderWithReads();
+    qc.setQueryData(curationKeys.viewings, { data: [] });
 
     await user.click(await screen.findByRole('button', { name: 'Naplánovat prohlídku' }));
     const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
@@ -767,8 +788,8 @@ describe('<CurationBlock> viewings', () => {
     await user.click(screen.getByRole('button', { name: 'Uložit prohlídku' }));
     await waitFor(() =>
       expect(createPropertyNote).toHaveBeenCalledWith(42, sent('', false, '2030-05-14T12:30:00.000Z')));
-    // The Prohlídky tab reads the same notes: it is re-read too.
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.viewings }));
+    // The Prohlídky tab reads the same notes: it is re-read too, at its next mount.
+    await waitFor(() => expect(isOwed(qc, curationKeys.viewings)).toBe(true));
     expect(screen.queryByRole('group', { name: 'Termín prohlídky' })).toBeNull();
   });
 

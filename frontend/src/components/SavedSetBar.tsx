@@ -36,7 +36,8 @@ import {
   type Containers, type SavedSetLayout,
 } from '@/lib/savedSetLayout';
 import type { TagColor } from '@/lib/types';
-import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
+import { cachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import SavedSetSaveModal, { type SaveModalWords } from '@/components/SavedSetSaveModal';
 
 export type SavedSetItem = { id: string; name: string; color: TagColor | null; group_id?: string | null };

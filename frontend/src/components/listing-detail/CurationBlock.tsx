@@ -44,7 +44,7 @@ import {
 } from '@/lib/api';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys } from '@/lib/queries';
-import { browseReads } from '@/lib/curationSettle';
+import { revalidateTables } from '@/lib/curationSync';
 import { useTagReads } from '@/lib/useCardTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
 import { isMine, shareAudience } from '@/lib/collectionRules';
@@ -230,16 +230,10 @@ export function NotesRow({
     staleTime: 30_000,
   });
 
-  /* The Prohlídky tab reads the same notes. */
-  const refreshNotes = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: notesKey }),
-      qc.invalidateQueries({ queryKey: curationKeys.viewings }),
-    ]);
-  /* Browse's note marks — never moved by a note written as the owner. */
-  const refreshNoteCounts = () => {
-    for (const queryKey of browseReads(actAs, [curationKeys.noteCounts])) void qc.invalidateQueries({ queryKey });
-  };
+  /* Every note read (this property's, the Prohlídky tab's) and Browse's note
+   * marks, the latter never for a note written as the owner (lib/curationSync).
+   * A note's files ride with it, so both tables, always. */
+  const refreshNotes = () => revalidateTables(qc, ['property_notes', 'property_attachments'], actAs);
 
   const create = useMutation({
     /* The note first, then its files one by one; a file that fails leaves the note saved and
@@ -269,8 +263,7 @@ export function NotesRow({
       setError(null);
       setProblems(failed);
       setOpened(false);
-      refreshNotes();
-      refreshNoteCounts();
+      void refreshNotes();
     },
     onError: (err: ApiError | Error) =>
       setError(err.message || 'Poznámku se nepodařilo uložit'),
@@ -468,12 +461,7 @@ export function NotesRow({
                         refreshNotes,
                       )
                     }
-                    onDelete={() =>
-                      deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
-                        refreshNotes();
-                        refreshNoteCounts();
-                      })
-                    }
+                    onDelete={() => deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(refreshNotes)}
                     onFilesChanged={refreshNotes}
                   />
                 </li>

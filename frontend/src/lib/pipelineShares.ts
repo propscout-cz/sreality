@@ -11,7 +11,7 @@
  * the active board, ends "edit as owner"). */
 
 import { useEffect } from 'react';
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 
 import { getActiveBoard, resetActiveBoard, setActiveBoard, useActiveBoard, type ActiveBoard } from './acting';
 import { listPipelineShares } from './api';
@@ -44,10 +44,6 @@ export function useSharedBoardGuard(active: ActiveBoard, stages: readonly Pipeli
     if (active != null && stages?.length === 0) boardGone();
   }, [active, stages]);
 }
-
-/** Re-read both lists after a share, a revoke or a leave. */
-export const revalidatePipelineShares = (qc: QueryClient) =>
-  qc.invalidateQueries({ queryKey: pipelineShareKeys.all });
 
 /* Pure, for its test: what the server's lists say about the remembered board. */
 export function reconcileActiveBoard(

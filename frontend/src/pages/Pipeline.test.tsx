@@ -24,7 +24,7 @@ import Pipeline, { boardCollision, planMove } from './Pipeline';
 import type { Collection, PipelineBoardCard, PipelineStage, PropertySource, Tag } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
-import type { CityIndexDefinition, CuratedCity } from '@/lib/queries';
+import { pipelineKeys, type CityIndexDefinition, type CuratedCity } from '@/lib/queries';
 import { PIPELINE_CLOSED_LANE_WIDTH } from '@/lib/pipelineCardSize';
 import * as brokersApi from '@/lib/brokers';
 import { createMutationCache } from '@/lib/mutationCache';
@@ -38,6 +38,7 @@ import {
 } from '@/lib/acting';
 import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
 import { NewPropertyProvider } from '@/components/NewPropertyProvider';
+import { watchReads } from '@/test/reads';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -295,12 +296,14 @@ const STAGES_CLOSED: PipelineStage[] = [
 /* The header row the stage headers are pinned in (BoardFrame). */
 const headerRowOf = (label: string) => screen.getByText(label).parentElement!.parentElement!;
 
-function renderBoard(entry = '/pipeline') {
-  // The app's own MutationCache, so a failed write's global toast is real.
-  const qc = new QueryClient({
+// The app's own MutationCache, so a failed write's global toast is real.
+const boardClient = () =>
+  new QueryClient({
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+
+function renderBoard(entry = '/pipeline', qc: QueryClient = boardClient()) {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[entry]}>
@@ -821,6 +824,23 @@ describe('<Pipeline> board', () => {
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     expect(screen.queryByText('Lesní')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Typ' })).toBeInTheDocument();
+  });
+
+  /* D2: a stage edit re-reads what lib/curationSync's `pipeline_stages` row feeds —
+     the members map too, whose stage label, colour and code every funnel badge renders. */
+  it('a new stage re-reads the stages, the board and the members map', async () => {
+    vi.mocked(api.createPipelineStage).mockResolvedValue(STAGES[0]);
+    const qc = boardClient();
+    qc.setQueryData(pipelineKeys.members, new Map());
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const reads = watchReads(qc);
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Nová fáze' }), { target: { value: 'Nová' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat' }));
+    await waitFor(() => expect(reads.reread(pipelineKeys.members)).toBe(true));
+    expect(reads.reread(pipelineKeys.stages)).toBe(true);
+    expect(reads.reread(pipelineKeys.board)).toBe(true);
+    reads.stop();
   });
 
   it('names the stage-manager create field by its visible words', async () => {

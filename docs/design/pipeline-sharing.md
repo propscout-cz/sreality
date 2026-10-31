@@ -234,14 +234,16 @@ the database). Everything else answers as the caller. Without the header nothing
 - **One selection, one context, one option, one key segment.** The **active board** is an app-level
   selection made in the Pipeline tab's switcher and remembered per device (`localStorage`, the same
   shape as the desktop-view setting): "Můj pipeline" (default) or one board shared with me. `useActing()`
-  returns `{account_id, email, mode} | null` from an `<ActingAs>` provider that two places mount: the
-  Pipeline tab, always, when the active board is shared; the property page, when the active board is an
-  EDIT share and "Upravit jako {email}" is on. The two transports take `actAs`: `request(path, {actAs})`
+  returns `{account_id, email, mode} | null` from an `<ActingAs>` provider mounted by the Pipeline tab
+  (desktop and phone), always, when the active board is shared; by the new-property dialog opened from
+  such a board; and by the property page, when the active board is an EDIT share and "Upravit jako
+  {email}" is on. The two transports take `actAs`: `request(path, {actAs})`
   adds the header, `pgRead(builder, {actAs})` calls `setHeader`. The curation and pipeline hooks (the
   W3/W5 hook family in `lib/collectionCache.ts`, `lib/pipelineReads.ts`, `useCardTags`, `useArtifactLinks`,
   `useDismissal`, `NotesRow`'s reads, `usePipelineCard`/`useOptimisticWrite`'s keys and pending index,
   `curationSettle`) prefix their query keys with the acting account, so the owner's rows never land in
-  the caller's own caches and the two never collide. Browse, the Collections page, Notifications and the
+  the caller's own caches and the two never collide; what a write as the owner re-reads is
+  `lib/curationSync`'s map under the owner's segment, never an own-only read. Browse, the Collections page, Notifications and the
   extension never act: a shared active board changes nothing there.
 - **Pipeline tab:** the switcher above the kanban lists "Můj pipeline" plus every board shared with me,
   labelled `email · jen ke čtení | úpravy`; the choice is the active board. A shared board renders inside

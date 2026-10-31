@@ -3,7 +3,7 @@
  * the funnel files, the eye hides, and the bookmark opens the collection sheet,
  * where unchecking THIS collection is the removal (the shared
  * `CollectionSaveList`, so the write is `removePropertyFromCollection` and the
- * revalidation is `revalidateCollections`, the desktop row's own pair). A
+ * settle is `settleCollectionWrite`, the desktop row's own pair). A
  * collection shared with me is read-only: the sheet lists only my own
  * collections, so it offers no removal here, and the header says whose it is.
  *
@@ -38,7 +38,7 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { revalidateCollections } from '@/lib/collectionCache';
+import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import { listingKindLabel } from '@/lib/enums';
@@ -125,7 +125,7 @@ function Header({ collection }: { collection: Collection }) {
   const del = useMutation({
     mutationFn: () => deleteCollection(collection.id),
     onSuccess: () => {
-      revalidateCollections(qc);
+      void revalidateTables(qc, deletedTables('collections'));
       navigate(ROUTES.collections.build(), { replace: true });
     },
     onError: (err: Error) => setError(err.message || 'Sbírku se nepodařilo smazat.'),
@@ -249,7 +249,7 @@ function Editor({ collection, onDone }: { collection: Collection; onDone: () => 
   const save = useMutation({
     mutationFn: () => updateCollection(collection.id, { name: name.trim(), description: nextDescription }),
     onSuccess: () => {
-      revalidateCollections(qc, { collection_id: collection.id });
+      void revalidateTables(qc, ['collections']);
       onDone();
     },
     onError: (err: Error) => setError(err.message || 'Změny se nepodařilo uložit.'),
@@ -330,7 +330,7 @@ function MonitorSwitch({
     mutationFn: (next: boolean) => updateCollection(collection.id, { monitoring_enabled: next }),
     onSuccess: () => {
       setError(null);
-      revalidateCollections(qc, { collection_id: collection.id });
+      void revalidateTables(qc, ['collections']);
     },
     onError: (err: Error) => setError(err.message || 'Sledování se nepodařilo změnit.'),
   });
@@ -377,7 +377,7 @@ function MonitorSwitch({
 /* "Sdílet · N": the one ShareBlock, read-only shares (migration 610), as on the desktop. */
 function SharingCard({ collection, id }: { collection: Collection; id: string }) {
   const qc = useQueryClient();
-  const changed = () => revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
+  const changed = () => revalidateTables(qc, ['collection_shares']);
   return (
     <ShareBlock
       id={id}

@@ -23,6 +23,7 @@ import { ActingAs } from '@/lib/acting';
 import { collectionCardFilters } from '@/lib/collectionCards';
 import { propertyPath } from '@/lib/listingUrl';
 import { cardRow } from '@/test/cardRow';
+import { watchReads } from '@/test/reads';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -106,7 +107,7 @@ function renderPage({ path = '/collections/1', acting = null }: { path?: string;
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const invalidate = vi.spyOn(qc, 'invalidateQueries');
+  const reads = watchReads(qc);
   render(
     <QueryClientProvider client={qc}>
       <ActingAs share={acting}>
@@ -119,7 +120,7 @@ function renderPage({ path = '/collections/1', acting = null }: { path?: string;
       </ActingAs>
     </QueryClientProvider>,
   );
-  return { invalidate };
+  return { ...reads, qc };
 }
 
 /* jsdom has no IntersectionObserver; this one lets a test bring the end of the
@@ -204,17 +205,16 @@ describe('<CollectionDetail>', () => {
   describe('the header Sledovat switch', () => {
     it('is named by its visible label, described by its sentence, and writes monitoring', async () => {
       vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, monitoring_enabled: true });
-      const { invalidate } = renderPage();
+      const { reread, clear } = renderPage();
       const toggle = await screen.findByRole('switch', { name: 'Sledovat' });
+      clear();
       expect(toggle).toHaveAttribute('aria-checked', 'false');
       expect(toggle).toHaveAccessibleDescription(
         'Off — properties here are not monitored for changes. Alerts appear in the Notifications feed.',
       );
       fireEvent.click(toggle);
       await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { monitoring_enabled: true }));
-      await waitFor(() =>
-        expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collection(1) }),
-      );
+      await waitFor(() => expect(reread(curationKeys.collection(1))).toBe(true));
     });
 
     it('says a failed write under the header', async () => {
@@ -255,8 +255,9 @@ describe('<CollectionDetail>', () => {
 
     it('Save changes writes and flips back, focus on ⋯', async () => {
       vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, name: 'Vinohrady 2' });
-      const { invalidate } = renderPage();
+      const { reread, clear } = renderPage();
       await choose('Přejmenovat');
+      clear();
       fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: ' Vinohrady 2 ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
       await waitFor(() =>
@@ -267,7 +268,7 @@ describe('<CollectionDetail>', () => {
       );
       await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull());
       expect(actions()).toHaveFocus();
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collection(1) });
+      await waitFor(() => expect(reread(curationKeys.collection(1))).toBe(true));
     });
 
     it('Cancel writes nothing and flips back, focus on ⋯', async () => {
@@ -283,8 +284,11 @@ describe('<CollectionDetail>', () => {
 
     it('Smazat kolekci keeps its confirm: Cancel disarms, a double-click does not delete, the confirm does', async () => {
       vi.mocked(api.deleteCollection).mockResolvedValue({ deleted: true });
-      const { invalidate } = renderPage();
+      const { reread, clear, qc } = renderPage();
+      // The list page's read, cached from an earlier visit.
+      qc.setQueryData(curationKeys.collections, { data: [DATA.collection], total: 1 });
       await choose('Smazat kolekci');
+      clear();
       expect(screen.queryByRole('menu')).toBeNull();
       // The delete is offered once: the confirm, never a second idle button.
       expect(screen.queryByRole('button', { name: 'Delete collection' })).toBeNull();
@@ -298,7 +302,7 @@ describe('<CollectionDetail>', () => {
       fireEvent.click(confirm, { detail: 1 });
       await waitFor(() => expect(api.deleteCollection).toHaveBeenCalledWith(1));
       expect(await screen.findByText('collections list')).toBeInTheDocument();
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collections });
+      expect(reread(curationKeys.collections)).toBe(true);
     });
 
     it('says a failed delete under the header and stays', async () => {
@@ -367,8 +371,9 @@ describe('<CollectionDetail>', () => {
 
     it('shares with a typed email and revalidates the collection', async () => {
       vi.mocked(api.shareCollection).mockResolvedValue(OWNED.collection);
-      const { invalidate } = renderPage();
+      const { reread, clear } = renderPage();
       expect(await screen.findByRole('button', { name: 'Sdílet' })).toBeInTheDocument();
+      clear();
       await openSharing();
       expect(screen.getByText('Sharing')).toBeInTheDocument();
       expect(screen.getByText('Not shared with anyone.')).toBeInTheDocument();
@@ -380,9 +385,7 @@ describe('<CollectionDetail>', () => {
       await waitFor(() =>
         expect(api.shareCollection).toHaveBeenCalledWith(1, 'petr@example.cz'),
       );
-      await waitFor(() =>
-        expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collection(1) }),
-      );
+      await waitFor(() => expect(reread(curationKeys.collection(1))).toBe(true));
     });
 
     /* The one ShareBlock (components/ShareBlock) — a collection share has no
@@ -457,7 +460,7 @@ describe('<CollectionDetail>', () => {
        the listing header paint, so it has to revalidate the shared member map. */
     it('keeps the table as the second tab, with Remove revalidating the shared member map', async () => {
       vi.mocked(api.getCollection).mockResolvedValue(WITH_MEMBER);
-      const { invalidate } = renderPage();
+      const { reread, clear } = renderPage();
       fireEvent.click(await screen.findByRole('tab', { name: 'Table' }));
       expect(screen.getByRole('tab', { name: 'Table' })).toHaveAttribute('aria-selected', 'true');
       /* The table tab is the Properties card, its count the members; the table
@@ -468,18 +471,13 @@ describe('<CollectionDetail>', () => {
         .toHaveTextContent('1');
       expect(within(card).getByRole('table').closest('.overflow-hidden')).toHaveClass('border');
 
+      clear();
       fireEvent.click(screen.getByRole('button', { name: 'Remove listing from collection' }));
       await waitFor(() =>
         expect(api.removePropertyFromCollection).toHaveBeenCalledWith(1, 42),
       );
-      await waitFor(() =>
-        expect(invalidate).toHaveBeenCalledWith({
-          queryKey: curationKeys.propertyCollectionMembers,
-        }),
-      );
-      expect(invalidate).toHaveBeenCalledWith({
-        queryKey: curationKeys.collection(1),
-      });
+      await waitFor(() => expect(reread(curationKeys.propertyCollectionMembers)).toBe(true));
+      expect(reread(curationKeys.collection(1))).toBe(true);
     });
 
     /* The tab-strip ruling (2026-10-27, option A): arrow keys on every strip. */
@@ -635,15 +633,16 @@ describe('<CollectionDetail>', () => {
     it('leaves through its own grant, after a confirm', async () => {
       vi.mocked(api.getCollection).mockResolvedValue(SHARED);
       vi.mocked(api.unshareCollection).mockResolvedValue({ deleted: true });
-      const { invalidate } = renderPage();
+      const { reread, clear } = renderPage();
 
       fireEvent.click(await screen.findByRole('button', { name: 'Remove from my list' }));
+      clear();
       expect(api.unshareCollection).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
       await waitFor(() => expect(api.unshareCollection).toHaveBeenCalledWith(1, 'acc-me'));
       // Back to the list, which re-reads without the collection.
       expect(await screen.findByText('collections list')).toBeInTheDocument();
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collections });
+      expect(reread(curationKeys.collections)).toBe(true);
     });
 
     it('does not let a double-click through the confirm', async () => {

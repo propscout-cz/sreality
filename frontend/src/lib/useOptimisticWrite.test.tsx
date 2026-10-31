@@ -11,12 +11,8 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { useState, type ReactNode } from 'react';
 
 import { createMutationCache } from './mutationCache';
-import {
-  cachePatch,
-  useOptimisticWrite,
-  type OptimisticWrite,
-  type OptimisticWriteResult,
-} from './useOptimisticWrite';
+import { cachePatch } from './revalidate';
+import { useOptimisticWrite, type OptimisticWrite, type OptimisticWriteResult } from './useOptimisticWrite';
 import * as toast from '@/lib/toast';
 
 vi.mock('@/lib/toast', async (importOriginal) => {
@@ -112,52 +108,61 @@ describe('useOptimisticWrite', () => {
   it('rolls back BEFORE the re-read', async () => {
     const { qc, wrapper } = setup();
     const seen: unknown[] = [];
-    vi.spyOn(qc, 'invalidateQueries').mockImplementation(async () => {
-      seen.push(qc.getQueryData(['n']));
-    });
     const { result } = renderHook(
-      () =>
-        useOptimisticWrite({
+      () => ({
+        // The re-read starts from what is on screen: the rollback must be there first.
+        q: useQuery({
+          queryKey: ['n'],
+          queryFn: async () => {
+            seen.push(qc.getQueryData(['n']));
+            return 1;
+          },
+          staleTime: Infinity,
+        }),
+        w: useOptimisticWrite({
           mutationKey: ['write', 't'],
           mutationFn: (_: number) => boom(),
           patch: toTwo,
           revalidate: [['n']],
         }),
+      }),
       { wrapper },
     );
-    act(() => result.current.mutate(1));
+    act(() => result.current.w.mutate(1));
     await waitFor(() => expect(seen).toEqual([1]));
   });
 
   it('re-reads after every settle, and only after it', async () => {
     const { qc, wrapper } = setup();
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    qc.setQueryData(['a'], 0);
+    qc.setQueryData(['b'], 0);
+    const reads = { a: 0, b: 0 };
     const revalidate = vi.fn((_v: number, _failed: boolean) => [['a'], ['b']]);
     const first = deferred<string>();
     const { result } = renderHook(
-      () =>
-        useOptimisticWrite({
+      () => {
+        useQuery({ queryKey: ['a'], queryFn: async () => ++reads.a, staleTime: Infinity });
+        useQuery({ queryKey: ['b'], queryFn: async () => ++reads.b, staleTime: Infinity });
+        return useOptimisticWrite({
           mutationKey: ['write', 't'],
           mutationFn: (v: number) => (v === 1 ? first.promise : boom()),
           revalidate,
-        }),
+        });
+      },
       { wrapper },
     );
     act(() => result.current.mutate(1));
     await act(async () => {});
     expect(revalidate).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(reads).toEqual({ a: 0, b: 0 });
 
     await act(async () => first.resolve('ok'));
     await waitFor(() => expect(revalidate).toHaveBeenCalledWith(1, false, qc));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['a'] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['b'] });
+    await waitFor(() => expect(reads).toEqual({ a: 1, b: 1 }));
 
-    invalidate.mockClear();
     act(() => result.current.mutate(2));
     await waitFor(() => expect(revalidate).toHaveBeenCalledWith(2, true, qc));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['a'] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['b'] });
+    await waitFor(() => expect(reads).toEqual({ a: 2, b: 2 }));
   });
 
   it('lets a site own the message, never the rollback', async () => {
