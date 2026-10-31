@@ -684,7 +684,8 @@ tests.
   precision mix shows it.
 - **`location_pin_audit_mv.claims_now`** (EXISTS a claim under an ACTIVE contract) turns false over time
   under first-stater provenance (at once for bazos, idnes and realitymix after their bumps). As built:
-  left for W6 to delete — the column is selected by `frontend/src/lib/pinAudit.ts` and rendered nowhere.
+  left for W6 to delete (a bullet under PROGRAM.md § W6 owns it) — the column is selected by
+  `frontend/src/lib/pinAudit.ts` and rendered nowhere.
 - **Indexes with unattributed scans:** `location_claims_by_method` (347 MB, 266 k scans, no code
   reader) and `location_claims_geom` (105 MB, 1 scan). Not dropped in W3; attribute through
   pg_stat_statements first.

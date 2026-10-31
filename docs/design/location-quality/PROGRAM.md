@@ -245,6 +245,8 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
   - the hand table;
   - the dead declared-radius path;
   - `match_confidence`, together with its readers: the pin-audit matview (mig 524), its page and lib, and the Location Quality inspector column.
+  - from W3: the pin-audit matview's `claims_now` ("a claim under an ACTIVE contract"), false under W3's first-stater provenance once a bump restates values unchanged; it goes with the matview. If the matview outlives W6, fold `claims_now` into "a claim of a type its active contract declares" instead. Its one reader selects it and renders nothing (`frontend/src/lib/pinAudit.ts`).
+  - from W3: `claim_confidence` (ruling R6), written only by the operator ('exact') and shown only by the inspector; it holds the `match_confidence` enum.
 - **Monitoring:** the W1 accuracy cell watches drift. Recalibration after a contract change is the one standing hand step; the cell turns Watch to trigger it, and the table header records the contract versions it was fitted on.
 - **UX consult:** the popup "±" changes, and blurred classes hit the 2 km drawn-circle cap more often (bazos about 3 to 4 km after v5.9).
 - **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
