@@ -1,9 +1,9 @@
-/* The extension's ONE data layer, shared by the listing panel (panel.ts) and the
- * search-page cards (index_cards.ts): the transport and its session generation,
- * each property's curation, the lists that name it, and the one write path.
- * Surfaces subscribe and re-render from it. No DOM, no `chrome`, no runtime import
- * (node --test loads this file as it is): deps are injected (like ingest_flow.ts's),
- * so store.test.ts runs it under node.
+/* The extension's ONE data layer, one per context — the side panel's (panel.ts) and
+ * each portal page's (the search-page cards, the edge tab): the transport and its
+ * session generation, each property's curation, the lists that name it, and the one
+ * write path. Surfaces subscribe and re-render from it. No DOM, no `chrome`, no
+ * runtime import (node --test loads this file as it is): deps are injected (like
+ * ingest_flow.ts's), so store.test.ts runs it under node.
  *
  * Invariants (store.test.ts proves each; the focus one, dom.test.ts):
  *  1. One session generation: a reply to a call sent before an account change is
@@ -18,7 +18,10 @@
  *     the list, an unchanged reload notifies nobody (a rebuild under the pointer
  *     swallows the click being made).
  *  7. One live-deal rule for every surface (isLiveDeal).
- *  8. Focus is never stolen from the portal page (dom.ts keepFocus). */
+ *  8. Focus is never stolen from the portal page (dom.ts keepFocus).
+ *  9. Two contexts stay true: a write that lands is told (deps.written), and the
+ *     other context's store re-reads that property through an ad of it it holds —
+ *     stamped like a write of its own, so no lookup sent before it undoes it. */
 
 import type {
   ApiMessage, ApiResult, PipelineCardResult, PipelineMembership, PortalListing, PortalLookupItem,
@@ -45,11 +48,13 @@ export type Pending = Promise<WriteResult> | null;
 export type Store = ReturnType<typeof createStore>;
 
 export interface StoreDeps {
-  /* The raw transport; always resolves (content.ts wraps chrome.runtime.sendMessage). */
+  /* The raw transport; always resolves (transport.ts wraps chrome.runtime.sendMessage). */
   send: (message: ApiMessage) => Promise<ApiResult<unknown>>;
   sleep: (ms: number) => Promise<void>;
   /* The stored session's account changes (session.ts onAccountChange). */
   onAccountChange: (fn: (user: string | null) => void) => unknown;
+  /* A write of this property landed: the other context re-reads it (`reread`). */
+  written: (propertyId: number) => void;
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,6 +119,8 @@ function step(field: 'collection_ids' | 'tag_ids', id: number, member: boolean) 
 export function createStore(deps: StoreDeps) {
   let session = 0;
   const curations = new Map<number, Curation>();
+  /* One ad of each property a lookup answered: what a re-read asks for. */
+  const ads = new Map<number, PortalLookupItem>();
   /* Bumped by every step of a write; `written`: each property's last bump. */
   let clock = 0;
   const written = new Map<number, number>();
@@ -139,6 +146,7 @@ export function createStore(deps: StoreDeps) {
   deps.onAccountChange((user) => {
     session++;
     curations.clear();
+    ads.clear();
     written.clear();
     Object.assign(lists, blank());
     reading.clear();
@@ -197,7 +205,9 @@ export function createStore(deps: StoreDeps) {
   function seed(rows: readonly PortalListing[], sentAt: number): void {
     const changed: number[] = [];
     for (const row of rows) {
-      if (!row.found || row.property_id == null || (written.get(row.property_id) ?? -1) > sentAt) continue;
+      if (!row.found || row.property_id == null) continue;
+      ads.set(row.property_id, { source: row.source, source_id: row.source_id });
+      if ((written.get(row.property_id) ?? -1) > sentAt) continue;
       const held = curations.get(row.property_id);
       const next: Curation = {
         pipeline: row.pipeline, collection_ids: row.collection_ids, tag_ids: row.tag_ids, dismissed: row.dismissed,
@@ -231,6 +241,7 @@ export function createStore(deps: StoreDeps) {
       writing.delete(key);
       if (res.ok) {
         apply((c) => settle(c, res.data));
+        deps.written(propertyId);
         return { ok: true, on };
       }
       apply(revert);
@@ -259,19 +270,28 @@ export function createStore(deps: StoreDeps) {
       step(field, id, !add), () => { load(kind, true); });
   }
 
+  /* The one lookup: its rows become curation when it answers. */
+  function lookup(items: PortalLookupItem[]): Promise<ApiResult<PortalListing[]>> {
+    const sentAt = clock;
+    return call<PortalListing[]>({ type: 'lookup_listings', items }).then((res) => {
+      if (res.ok) seed(res.data, sentAt);
+      return res;
+    });
+  }
+
   return {
     call,
     retry,
     /* After the store dropped what the old account read. */
     onAccountChange: (fn: (user: string | null) => void) => listen(accountListeners, fn),
     subscribe: (fn: (propertyIds: readonly number[] | null) => void) => listen(subscribers, fn),
-    /* The one lookup: its rows become curation when it answers. */
-    lookup(items: PortalLookupItem[]): Promise<ApiResult<PortalListing[]>> {
-      const sentAt = clock;
-      return call<PortalListing[]>({ type: 'lookup_listings', items }).then((res) => {
-        if (res.ok) seed(res.data, sentAt);
-        return res;
-      });
+    lookup,
+    /* The other context wrote this property: read it again, if one held here. */
+    reread(propertyId: number): void {
+      const ad = ads.get(propertyId);
+      if (ad == null) return;
+      written.set(propertyId, ++clock);
+      void lookup([ad]);
     },
     curation: (propertyId: number): Curation | null => curations.get(propertyId) ?? null,
     list: <K extends ListKind>(kind: K) => lists[kind] as ListView<Lists[K]>,
