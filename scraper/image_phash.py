@@ -15,9 +15,14 @@ import io
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import TYPE_CHECKING
 
 from PIL import Image
+
+if TYPE_CHECKING:
+    import psycopg
+
+    from scraper.image_storage import R2Client
 
 LOG = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ _MASK64 = (1 << 64) - 1
 
 # A row at this count stays NULL for good. migrations/703's partial index names the same number (a test pins it).
 PHASH_MAX_ATTEMPTS = 5
+# About 5 s of the lane's 60 s interval at the measured ~0.1 s per UPDATE round trip, so it cannot starve the downloads.
 PHASH_RETRY_BATCH = 50
 PHASH_RETRY_WORKERS = 4
 
@@ -71,14 +77,14 @@ def hamming(a: int, b: int) -> int:
     return bin((a ^ b) & _MASK64).count("1")
 
 
-def select_unhashed(conn: Any, limit: int) -> list[tuple[int, str, int]]:
+def select_unhashed(conn: psycopg.Connection, limit: int) -> list[tuple[int, str, int]]:
     """Up to `limit` stored, unhashed rows still under the cap: (id, storage_path, phash_attempts)."""
     with conn.cursor() as cur:
         cur.execute(_SELECT_UNHASHED_SQL, {"limit": limit})
         return cur.fetchall()
 
 
-def _hash_one(r2: Any, image_id: int, key: str) -> tuple[int, int | None, str | None]:
+def _hash_one(r2: R2Client, image_id: int, key: str) -> tuple[int, int | None, str | None]:
     """Download + hash one image (worker thread; no DB I/O here)."""
     try:
         return image_id, to_signed64(compute_dhash(r2.download_bytes(key))), None
@@ -86,7 +92,7 @@ def _hash_one(r2: Any, image_id: int, key: str) -> tuple[int, int | None, str | 
         return image_id, None, str(exc)
 
 
-def _retry_r2() -> Any:
+def _retry_r2() -> R2Client:
     # Lazy like the rest of the image path: boto3 and the egress stack stay off this module's importers.
     from scraper import image_storage
 
@@ -96,7 +102,7 @@ def _retry_r2() -> Any:
 
 
 def retry_unhashed(
-    conn: Any, make_r2: Callable[[], Any] = _retry_r2, *, limit: int = PHASH_RETRY_BATCH,
+    conn: psycopg.Connection, make_r2: Callable[[], R2Client] = _retry_r2, *, limit: int = PHASH_RETRY_BATCH,
 ) -> dict[str, int]:
     """One bounded pass: hash what it can, count a failure on the rest. No work builds no R2 client."""
     rows = select_unhashed(conn, limit)
@@ -106,8 +112,7 @@ def retry_unhashed(
     r2 = make_r2()
     attempts = {image_id: done for image_id, _key, done in rows}
     with ThreadPoolExecutor(max_workers=PHASH_RETRY_WORKERS) as pool:
-        results = pool.map(lambda row: _hash_one(r2, row[0], row[1]), rows)
-        for image_id, value, error in results:
+        for image_id, value, error in pool.map(lambda row: _hash_one(r2, row[0], row[1]), rows):
             with conn.cursor() as cur:
                 if error is None:
                     cur.execute("UPDATE images SET phash = %s WHERE id = %s", (value, image_id))

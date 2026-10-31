@@ -169,11 +169,11 @@ removed wholesale in the 2026-08 NEW DEDUP cutoff (architectural rule #15; `docs
 and its workflows/scripts must never be resurrected; nothing auto-merges (merges are operator-ordered through
 `POST /properties/merge`; AUTODEDUP's `mode=apply` is dark until `app_settings.autodedup_apply_scope` names an area). The
 tagging/pHash/embedding lanes above ARE kept running because the rebuilt engine (`docs/design/new-dedup/PROGRAM.md`)
-consumes them, so treat a stalled `clip` job (`job/clip`, `fleet/photo_tags`) or `compute_image_phash.yml` as a real problem.
+consumes them, so treat a stalled `clip` job (`job/clip`, `fleet/photo_tags`) or a climbing `phash_given_up` in the images lane as a real problem.
 
 **CLIP tagging persists an embedding for every TAGGED image** (PR #748, ~19% coverage gap; PR #751 backfilled the tagged-but-vectorless backlog).
 **Any job that REPLACES an image's bytes under its existing `storage_path`** (none since the sreality re-master lane finished and was
-deleted, 2026-10-25) **must null `phash` and `clip_tagged_at` in the same transaction as its `rendition` stamp** (migration 496): those are
+deleted, 2026-10-25) **must null `phash` (zeroing `phash_attempts`) and `clip_tagged_at` in the same transaction as its `rendition` stamp** (migration 496): those are
 these producers' OWN predicates, so they recompute on their own; it deletes no label/review/CLIP-cache row.
 
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
