@@ -161,8 +161,9 @@ jobs:
           GROUP: ${{ inputs.group }}
         run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}"
 
+      # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"
-        if: ${{ steps.count.outputs.movers != '0' }}
+        if: ${{ steps.count.outputs.movers != '0' && hashFiles('shadow/base/cohort.jsonl.gz') != '' }}
         run: |
           python -m autodedup.harness shadow shadow/base/cohort.jsonl.gz shadow/positions.jsonl \
             shadow/labels --scorer shadow/scorer.json --out shadow/judge

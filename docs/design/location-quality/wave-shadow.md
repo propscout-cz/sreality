@@ -57,6 +57,18 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    E300's grain (`blocks_for`: the quarter in Praha, Brno and Ostrava, the town elsewhere; a split-city side
    with no quarter would export the whole city, so it is left out and counted). It prints every block with
    its ad count first (`block_sizes`, the export's own selection) and the fewest groups that fit the caps.
+   **Only the blocks a ruling is inside are kept** (default; `--all-blocks` opts out): one read-only
+   statement (`RULED_BLOCKS_SQL`) maps every advert the rulings name (pair verdicts, cluster verdicts'
+   member sets, operator must-not-links, Browse merges: the labels lane's sources) to its block. A block
+   holding no ruled advert cannot fail the gate: PASS is broken only by a ruled pair moving against its
+   ruling or a new operator negative inside a K-B family, and both need a ruled advert, so such a block
+   could add only D83 lines. A mover with a side in a ruled block keeps BOTH its blocks (it reaches the
+   cohort only through its old, stored one); a mover with no ruled side is `movers_unjudgeable`, never
+   unjudged, never a FAIL. The skip is printed (`N blocks skipped: no ruling inside (A ads)`) and recorded
+   as `blocks_skipped_no_ruling` in `group.json` and `shadow.json`; the groups and caps below apply to the
+   kept list. When no block is kept, nothing is exported and the gate step is skipped (an empty list
+   never reaches the export, which would read it as the trial cohort). W4's full gate (run 41226328406)
+   printed 515 blocks / 319,731 ads, 14 groups, before this filter.
    `--block-group i/n` (default 1/1) sorts the blocks by key, cuts them into n contiguous groups and
    exports and judges group i only; `--max-blocks` (40) and `--max-ads` (60,000) apply to that group, and
    a group over them is refused with exit 2, naming the n to dispatch. Then the group's cohort, the rulings

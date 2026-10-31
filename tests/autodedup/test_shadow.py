@@ -122,12 +122,13 @@ def test_an_oversized_shadow_is_refused_before_anything_is_exported(monkeypatch,
                         lambda conn, blocks: {block: 40_000 for block in blocks})
     monkeypatch.setattr(shadow, "export_cohort",
                         lambda *a, **k: pytest.fail("exported past the cap"))
-    assert shadow.main([str(tmp_path)]) == 2
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     printed = capsys.readouterr()
     assert f"town:{BEROUN} 40000 ads" in printed.out
     assert "groups needed under the caps: 2" in printed.out
     assert "dispatch --block-group i/2 for i in 1..2" in printed.err
-    assert shadow.main([str(tmp_path), "--max-ads", "1000000", "--max-blocks", "1"]) == 2
+    assert shadow.main([str(tmp_path), "--all-blocks", "--max-ads", "1000000",
+                        "--max-blocks", "1"]) == 2
 
 
 def test_blocks_are_cut_into_contiguous_sorted_groups_and_n_is_the_fewest_that_fit():
@@ -155,10 +156,83 @@ def test_a_group_exports_only_its_chunk_and_records_it(monkeypatch, tmp_path: Pa
     exported: list[list[str]] = []
     monkeypatch.setattr(shadow, "export_cohort",
                         lambda factory, out, blocks: exported.append(blocks) or {})
-    assert shadow.main([str(tmp_path), "--block-group", "2/4", "--max-ads", "50000"]) == 0
+    assert shadow.main([str(tmp_path), "--all-blocks", "--block-group", "2/4",
+                        "--max-ads", "50000"]) == 0
     assert exported == [["town:2"]]
     group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
     assert (group["group"], group["blocks"], group["all_blocks"]) == ("2/4", ["town:2"], 4)
+
+
+def _movers_three_blocks(tmp_path: Path, monkeypatch: Any) -> list[list[str]]:
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"listing_id": 1, "old": {"obec_kod": 1}, "new": {"obec_kod": 1}},
+        {"listing_id": 2, "old": {"obec_kod": 2}, "new": {"obec_kod": 2}},
+        {"listing_id": 3, "old": {"obec_kod": 3}, "new": {"obec_kod": 3}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([]))
+    monkeypatch.setattr(shadow, "block_sizes",
+                        lambda conn, blocks: {b: 100 * int(b.split(":")[1]) for b in blocks})
+    monkeypatch.setattr(shadow, "ruled_blocks", lambda conn: {"town:1", "town:77"})
+    exported: list[list[str]] = []
+    monkeypatch.setattr(shadow, "export_cohort",
+                        lambda factory, out, blocks: exported.append(blocks) or {})
+    return exported
+
+
+def test_only_the_blocks_a_ruling_is_inside_are_exported(monkeypatch, tmp_path: Path, capsys):
+    """Two of three blocks hold no ruling: no ruled pair can move there, so they could add only
+    D83 lines; they are skipped, counted, and their movers are unjudgeable (never unjudged)."""
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    assert shadow.main([str(tmp_path)]) == 0
+    assert exported == [["town:1"]]
+    assert "2 blocks skipped: no ruling inside (500 ads); 2 movers unjudgeable" in (
+        capsys.readouterr().out)
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert group["blocks_skipped_no_ruling"] == {"blocks": 2, "ads": 500}
+    assert (group["unjudgeable"], group["rulings_filter"]) == ([2, 3], True)
+
+
+def test_all_blocks_restores_every_movers_block(monkeypatch, tmp_path: Path):
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    monkeypatch.setattr(shadow, "ruled_blocks",
+                        lambda conn: pytest.fail("--all-blocks reads no ruling"))
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 0
+    assert exported == [["town:1", "town:2", "town:3"]]
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert group["blocks_skipped_no_ruling"] == {"blocks": 0, "ads": 0}
+    assert (group["unjudgeable"], group["rulings_filter"]) == ([], False)
+
+
+def test_a_mover_entering_a_ruled_block_brings_its_old_block():
+    """It reaches the cohort only through its old (stored) block, so both of its blocks stay;
+    a mover with no ruled side is unjudgeable."""
+    movers = [{"listing_id": 1, "old": {"obec_kod": 5}, "new": {"obec_kod": 1}},
+              {"listing_id": 2, "old": {"obec_kod": 6}, "new": {"obec_kod": 7}},
+              {"listing_id": 3, "old": {"obec_kod": PRAHA}, "new": {"obec_kod": 1}}]
+    assert shadow.judgeable(movers, {"town:1"}) == ({"town:5", "town:1"}, {2})
+
+
+def test_no_ruled_block_exports_nothing_and_never_the_trial_cohort(monkeypatch, tmp_path: Path,
+                                                                  capsys):
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    monkeypatch.setattr(shadow, "ruled_blocks", lambda conn: set())
+    assert shadow.main([str(tmp_path)]) == 0 and exported == []
+    assert "nothing in it can fail, nothing exported" in capsys.readouterr().out
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert (group["blocks"], group["unjudgeable"]) == ([], [1, 2, 3])
+
+
+def test_the_export_refuses_an_empty_block_list(tmp_path: Path):
+    with pytest.raises(ValueError):
+        shadow.export_cohort(lambda: pytest.fail("connected"), tmp_path, [])
+
+
+def test_the_ruled_blocks_read_is_the_labels_lanes_sources_at_the_export_grain():
+    sql = " ".join(shadow.RULED_BLOCKS_SQL.split())
+    for source in ("autodedup.verdicts v where v.kind = 'pair'", "v.kind = 'cluster'",
+                   "autodedup.must_not_link n where n.source = 'operator'",
+                   "autodedup.operator_merges", "'quarter:' || ll.cast_obce_kod",
+                   "'town:' || ll.obec_kod"):
+        assert source in sql, source
 
 
 def test_the_apply_scope_filter_is_the_apply_paths_own_predicate():
@@ -220,10 +294,12 @@ def _report(gained: list[list[Any]] = (), lost: list[list[Any]] = (), *,
 def _judge(report: dict[str, Any], *, changed: set[int] = frozenset(), listed: set[int] = None,
            cohort: set[int] = frozenset(range(1, 10)), together: set = frozenset(),
            recent: set = frozenset(), what_if: dict[str, Any] | None = None,
-           base_negatives: tuple = (), elsewhere: set[int] = frozenset()) -> dict[str, Any]:
+           base_negatives: tuple = (), elsewhere: set[int] = frozenset(),
+           unjudgeable: set[int] = frozenset()) -> dict[str, Any]:
     done = shadow.Override(set(changed if listed is None else listed), set(cohort), set(changed))
     return shadow.judge(report, done, base_e111=_e111(*base_negatives), together=set(together),
-                        recent=set(recent), what_if=what_if or {}, elsewhere=set(elsewhere))
+                        recent=set(recent), what_if=what_if or {}, elsewhere=set(elsewhere),
+                        unjudgeable=set(unjudgeable))
 
 
 def test_the_gate_fails_a_ruling_that_loses_its_standing():
@@ -259,6 +335,16 @@ def test_a_limited_run_or_an_unjudged_mover_is_partial_and_still_judged():
     assert _judge(_report(), what_if={"limit": 50})["partial"]
     verdict = _judge(_report(), changed={1}, listed={1, 404})
     assert verdict["partial"] and verdict["movers_unjudged"] == 1 and verdict["pass"]
+
+
+def test_an_unjudgeable_mover_is_neither_unjudged_nor_elsewhere_nor_partial():
+    """No ruling sits on either of its blocks: it cannot fail, so it is reported apart; the
+    recent `same` pairs are still counted over all of them (a skipped block holds none)."""
+    verdict = _judge(_report(), changed={1}, listed={1, 2, 3}, elsewhere={2, 3}, unjudgeable={3},
+                     recent={(1, 9), (40, 41)})
+    assert (verdict["movers_unjudgeable"], verdict["movers_elsewhere"],
+            verdict["movers_unjudged"], verdict["partial"]) == (1, 1, 0, False)
+    assert (verdict["recent_same"]["pairs"], verdict["recent_same"]["unjudged"]) == (2, 1)
 
 
 def test_a_mover_another_group_exports_is_not_unjudged(tmp_path: Path):
