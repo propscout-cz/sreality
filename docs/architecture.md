@@ -3919,7 +3919,9 @@ renumber.** Navigate by area:
     `property_ids_filter` (migration 378), which now carries only with-estimates ∩ broker. The
     funnels still render from `fetchPipelineMembers`. It is surfaced as a chip in the preset row
     (lit on the IN side only, `scopeIncludes`), and it behaves like the
-    other chips in that row: clicking it **loads a VIEW** — the scope over a NEUTRAL cohort
+    other chips in that row: clicking it **loads a VIEW** — the board's OPEN stages, by id (a deal closed
+    into a terminal stage is history, operator 2026-11-01; the whole pipeline when no stage is closed or the
+    stages are unread; the sidebar adds a closed stage back), over a NEUTRAL cohort
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters
