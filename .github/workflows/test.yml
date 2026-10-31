@@ -16,7 +16,9 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    # The suite takes 8–9 min on ubuntu-latest (2026-10-31: 8m12s, 8m22s, 8m23s, 9m03s); at 9 the
+    # job was cancelled mid-run on #2212 and read as a failed required check.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
 
