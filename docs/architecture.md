@@ -5016,7 +5016,11 @@ the reader, and the payload readers keep walking their own through `claims_commo
 That is how idnes@6 reads an unpinned ad's street off its map highlight ("Zvýrazněná ulice <name>",
 the one feature with no id, picked by its title) and off the address line when the page has no
 highlight, and how realitymix@7 reads its heading before the map's `data-address` (operator ruling
-2026-10-25). Two further rails: `ReaderContract`
+2026-10-25). realitymix@8 (W4, 2026-10-31) re-pointed that portal's `estimated` marker from
+`div#print-map, div#map` to `div#map` alone: where the agency gave no GPS the server writes its own
+geocode onto `#print-map` and leaves `#map` blank, so the blank interactive node is the only sign of a
+server geocode, and the first-match read of the print node had never seen it (the forecast of what
+moves is the roadmap's, not this page's). Two further rails: `ReaderContract`
 records each reader's whole `locator` appetite (the keys it requires plus the ones it merely reads),
 derived back out of the reader bodies by an AST scan over each reader and the helpers it delegates
 its locator to, and a locator key outside that union is refused — a declared key no reader consults
