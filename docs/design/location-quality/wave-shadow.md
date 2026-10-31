@@ -35,17 +35,20 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    - `remine` (W4): each listing of the contract's portal re-mined under `--contract` (payload via
      `claims_intake.extract_listing`, latest stored page via `claims_intake.scan_rows` +
      `page_readers.load_bodies` + `extract_pages`; entries projected by `contracts.entries_of`; claims
-     read back by `resolve_db.claim_from_intake`), then `what_if.restate`: `resolve_db._claims_sql` after
-     the bump (admissible licence, per claim type the newest version, a type the new contract stops
-     declaring not read, operator claims and other portals' untouched), pinned to that SQL's text by a
-     test. Re-mined claims get ids above every stored one (`NEW_CLAIM_ID`), as an insert would. A stored
-     page that would not re-mine (not fetched, refused, scope incomplete) keeps today's claims and is
-     counted failed, so the run exits 1.
-   - `purge` (W3): one claim per (listing, claim type, licence class), the newest observation of what
-     today's read returns (W3's keeper; the read already applies "newest version <= active").
+     read back by `resolve_db.claim_from_intake`), then `what_if.written`, W3's one write and one read
+     in Python: a mined portal claim replaces its type's portal claim, a tombstone (`absent: retract`)
+     removes it, silence keeps it, a type the new contract stops declaring is not read, the operator's
+     claim of a type still outranks. Re-mined claims get ids above every stored one (`NEW_CLAIM_ID`), as
+     an insert would. A stored page that would not re-mine (not fetched, refused, scope incomplete) keeps
+     today's claims and is counted failed, so the run exits 1.
+   - `purge` (W3): today's read is already one claim per type once W3 lands, so `what_if.purge` reads
+     every stored claim of the ids RAW (`_RAW_CLAIMS_SQL`: each claim's contract version, the portal's
+     active version, whether the active contract declares its type), keeps per (listing, claim type,
+     licence class) the purge's keeper (`keeper_rank`: newest version <= active, then the newest
+     observation, then the id; the same order as `scripts/location_claims_retire.py`, which a DB-lane
+     test holds to the purge's result), then applies the one read (`what_if.one_read`).
 
-   **`restate` and `purge` are deleted when W3 lands** (W3 replaces the read; `what_if --claims purge` then
-   reads all claims raw and applies the keeper rule).
+   (`what_if.restate`, the pre-W3 version-window read in Python, was deleted with W3, #2223.)
 
    A **mover** is a listing whose new row differs from `COHORT_LOCATION_SQL`'s row today in any field
    (numbers within 1e-6: the store keeps the radius as `numeric`). Writes `positions.jsonl` (each mover's

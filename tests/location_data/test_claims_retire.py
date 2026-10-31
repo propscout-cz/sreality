@@ -15,7 +15,8 @@ from typing import Any
 import psycopg
 import pytest
 
-from location_data import contracts
+from location_data import contracts, what_if
+from location_data.resolver import resolve_db
 from scripts import location_claims_retire as purge
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -169,3 +170,16 @@ def test_a_batch_that_would_lose_a_key_rolls_back_and_stops_the_run(
     with pytest.raises(purge.KeyLost):
         purge.purge(conn, purge.Totals(cursor=min(l1, l2) - 1), armed=True, pause=0)
     assert _left(conn, l1) == before
+
+
+@_live
+def test_the_wave_shadows_purge_reads_what_the_purge_leaves(conn: Any) -> None:
+    """`what_if --claims purge` (W3's shadow) spells the keeper in Python over a raw read; on the
+    same table it must hand the resolver exactly what the one read returns after the purge."""
+    l1, l2, _ = _seed(conn)
+    shadow = what_if.purge(conn, {l1: [], l2: []})
+    purge.purge(conn, purge.Totals(cursor=min(l1, l2) - 1), armed=True, pause=0)
+    after = {listing: resolve_db.load_claims(conn, listing) for listing in (l1, l2)}
+    assert {k: [c.id for c in v] for k, v in shadow.items()} == {
+        k: [c.id for c in v] for k, v in after.items()}
+    assert len(shadow[l1]) == 4   # street, the newest psc, cast obce; the operator outranks the town
