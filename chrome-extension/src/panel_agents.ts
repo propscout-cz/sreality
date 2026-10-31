@@ -157,7 +157,7 @@ export interface AgentsDeps {
   store: Store;
   repaint: () => void;
   /* Updates in place (an edit must not rebuild the input being typed in). */
-  shadow: () => ShadowRoot | null;
+  root: ParentNode;
 }
 
 export function createAgents(deps: AgentsDeps) {
@@ -220,15 +220,15 @@ export function createAgents(deps: AgentsDeps) {
     if (axis === 'cost') { s.costPerM2 = value; s.costTouched = true; }
     if (axis === 'price') { s.price = value; s.priceTouched = true; }
     if (axis === 'renovation') { s.renovation = value; s.renovationTouched = true; }
-    const root = deps.shadow();
-    root?.querySelectorAll<HTMLElement>('[data-yield]').forEach((n) => { n.textContent = fmtPct(computeYield(s)); });
-    const fh = root?.querySelector<HTMLElement>('[data-hint-for="cost"]');
+    const { root } = deps;
+    root.querySelectorAll<HTMLElement>('[data-yield]').forEach((n) => { n.textContent = fmtPct(computeYield(s)); });
+    const fh = root.querySelector<HTMLElement>('[data-hint-for="cost"]');
     if (fh != null) fh.textContent = fondHint(s);
-    const ah = root?.querySelector<HTMLElement>('[data-hint-for="renovation"]');
+    const ah = root.querySelector<HTMLElement>('[data-hint-for="renovation"]');
     if (ah != null) ah.textContent = acquisitionHint(s);
-    const status = root?.querySelector<HTMLElement>('[data-status]');
+    const status = root.querySelector<HTMLElement>('[data-status]');
     if (status != null) status.textContent = 'upraveno · uloženo';
-    const reset = root?.querySelector<HTMLElement>('[data-reset]');
+    const reset = root.querySelector<HTMLElement>('[data-reset]');
     if (reset != null) reset.hidden = false;
     schedulePatch();
   }

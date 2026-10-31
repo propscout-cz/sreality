@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build --mode content && vite build --mode background",
+    "build": "vite build --mode content && vite build --mode background && vite build --mode sidepanel",
     "watch": "vite build --mode content --watch",
     "type-check": "tsc --noEmit",
     "test": "node --test src/*.test.ts"

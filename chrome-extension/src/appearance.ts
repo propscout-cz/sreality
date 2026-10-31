@@ -1,10 +1,10 @@
-/* The user's appearance on the shadow roots the extension mounts. Each root
- * takes the app's tokens.css, whose `:host(…)` selectors read `data-scheme` and
- * `data-theme` off the HOST, so ONE call, themeHost, stamps a host by the app's
- * paint rule (lib/appearance). The pick is the profile's, served by
- * get_auth_state from the session token: asked at start and whenever the stored
- * session changes (a sign-in or sign-out, or the refresh that carries a new
- * pick); `system` follows the OS while the page is open. */
+/* The user's appearance on the shadow roots the extension mounts and on the side
+ * panel's own page. Each takes the app's tokens.css, whose `:host(…)` / `:root`
+ * selectors read `data-scheme` and `data-theme` off the HOST (the page's: <html>),
+ * so ONE call, themeHost, stamps it by the app's paint rule (lib/appearance). The
+ * pick is the profile's, served by get_auth_state from the session token: asked at
+ * start and whenever the stored session changes (a sign-in or sign-out, or the
+ * refresh that carries a new pick); `system` follows the OS while the page is open. */
 
 import { DEFAULT_APPEARANCE, followSystemDark, paintAppearance, type Appearance } from '../../frontend/src/lib/appearance';
 import { SESSION_KEY, onStoredChange } from './session';

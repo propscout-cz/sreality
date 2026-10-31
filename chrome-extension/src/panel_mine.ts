@@ -274,7 +274,6 @@ export function createMine(deps: MineDeps) {
     };
     trigger.onkeydown = (e) => {
       if (e.key !== 'Escape' || !closeOpen) return;
-      e.stopPropagation();
       closeOpen = false;
       repaint();
     };
@@ -378,7 +377,6 @@ export function createMine(deps: MineDeps) {
     }
     menu.appendChild(remove);
     menu.onkeydown = (e) => {
-      e.stopPropagation();  // ours, not the portal's (lightboxes close on Escape too)
       if (e.key === 'Escape') {
         closeOpen = false;
         repaint();
@@ -421,7 +419,6 @@ export function createMine(deps: MineDeps) {
     box.appendChild(actions);
     box.onkeydown = (e) => {
       if (e.key !== 'Escape') return;
-      e.stopPropagation();
       no.click();
     };
     return box;
@@ -454,7 +451,6 @@ export function createMine(deps: MineDeps) {
     // Escape on a chip or "+" shuts the open picker too (focus stays on the chip).
     row.onkeydown = (e) => {
       if (e.key !== 'Escape' || picker !== kind) return;
-      e.stopPropagation();
       picker = null;
       repaint();
     };
@@ -476,7 +472,6 @@ export function createMine(deps: MineDeps) {
     fill(box);
     box.onkeydown = (e) => {
       if (e.key !== 'Escape') return;
-      e.stopPropagation();
       picker = null;
       repaint();
       focus(`${kind}-add`);

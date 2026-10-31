@@ -1,23 +1,29 @@
-# PropScout.cz — Chrome extension (the listing side sheet + search-page controls)
+# PropScout.cz — Chrome extension (the listing side panel + search-page controls)
 
-Overlays what the app knows about a property — its facts, its price history
+Shows what the app knows about a property — its facts, its price history
 across every ad, the operator's pipeline, collections, tags and notes, the
 **"Výnos MF"** gross yield (`mf_gross_yield_pct`) and the comparables estimate,
-the same figures the SPA shows — on listing pages
+the same figures the SPA shows — beside listing pages
 across **every portal we scrape** (sreality, bazos, bezrealitky, idnes,
 maxima, remax, mmreality, ceskereality).
 
-- **Detail pages** get the **side sheet** (`src/panel.ts`, frame `src/sheet.ts`,
-  one closed shadow root, one stylesheet `src/panel.css` over the app's
-  `tokens.css`, in the user's scheme and theme): a full-height ~360 px sheet on
-  the right edge that covers the page (it never pushes it) and opens by itself.
-  Folded, it is a tab on that edge — the PS mark, the deal's stage badge, this
-  ad's price drop and the MF yield. The fold is remembered
-  (`chrome.storage.local` `panelFolded`; the old panel's `panelMinimized` is
-  read once and removed), and on a viewport under 1280 px the sheet starts
-  folded. The top bar: the wordmark, **V aplikaci ↗** (the ad's page in the
-  app, `/listing/{source}/{native_id}`), the **⋯** account menu (email +
-  **Odhlásit**, which signs out in every tab) and the fold. Under it:
+- **The side panel** is Chrome's own (`chrome.sidePanel`, operator ruling
+  2026-10-31: it shrinks the page beside it, never covers it): our page
+  `sidepanel.html` (`src/sidepanel.ts`; controller `src/panel.ts`, frame
+  `src/frame.ts`, one stylesheet `src/panel.css` over the app's `tokens.css`,
+  the document root in the user's scheme and theme). One global panel per
+  window: once open it stays open across the window's tabs and shows the
+  **active tab's subject** — a detail page's ad, or the search card last opened
+  in it; any other tab shows "Otevřete inzerát na podporovaném portálu.".
+  Chrome opens a side panel only on a user action, so it never opens by
+  itself: the toolbar icon toggles it, and a detail page's **edge tab**
+  (`src/edge_tab.ts`, a closed shadow root on the right edge: the PS mark, the
+  deal's stage badge, this ad's price drop and the MF yield) or a search
+  card's yield badge opens it; the edge tab hides while the panel is open in
+  that window. The top bar: the wordmark, **V aplikaci ↗** (the ad's page in
+  the app, `/listing/{source}/{native_id}`), the **⋯** account menu (email +
+  **Odhlásit**, which signs out in every tab) and **›**, which closes the
+  panel. Under it:
   - **The header** (`src/panel_header.ts`): deal · status · days on market, the
     title (type, disposition, area), the address, the facts by property type —
     a flat its floor, condition and ownership; a house its plot, condition and
@@ -61,14 +67,22 @@ maxima, remax, mmreality, ceskereality).
     `/listings/ingest` (admins only in v1), polls `GET /listings/ingest/{source}/{native_id}`
     every 2 s on the estimate's budget (Hledám inzerát → Stahuji stránku →
     Zakládám nemovitost), and once the ad is held with a property re-reads the
-    lookup, so the sheet fills as for any listing we have. A refused, gone or
+    lookup, so the panel fills as for any listing we have. A refused, gone or
     failed ad shows the API's one Czech sentence above the button; a
     non-admin's first click answers the admin sentence and hides the button
     until the account changes. The flow is `src/ingest_flow.ts` (no DOM, no
     `chrome`), tested by `npm test`.
-  - Signed out, a failed lookup (**Zkusit znovu**) and the first load (a static
-    skeleton in the cards' shape) are one card each. The sheet never takes
-    focus from the portal page; Escape closes its menus.
+  - No ad in the active tab, signed out, a failed lookup (**Zkusit znovu**) and
+    the first load (a static skeleton in the cards' shape) are one card each.
+    Escape closes its menus.
+  - **Two contexts, two stores.** Each tab's content script owns its subject
+    and its own store (search cards, edge tab); the side panel has its own over
+    the same transport. The panel opens a port to every tab of its window
+    (`chrome.tabs.connect`; a tab that loads later calls it, one dragged in is
+    connected as it arrives): the tab's subject goes up it, its closing shows
+    the edge tab again, and after a write lands in either the other re-reads
+    that property (`property_written`, property id only). No `tabs` permission:
+    the panel never reads a tab's URL, it asks the tab.
 - **Index / search pages — every category, not just flats** — get the Browse
   card's own controls on each listing card we have a property for, in the same
   order and with the same meaning as in the app (`src/index_cards.ts`):
@@ -96,12 +110,11 @@ maxima, remax, mmreality, ceskereality).
     it, corners matched), not by portal markup. A hidden card drawn barely
     visible gets no mark, and neither does a card guess that holds several
     listings (it could mark another listing's photo).
-  - All three write through the same routes as the side sheet and the app, are
+  - All three write through the same routes as the side panel and the app, are
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
-    page, and the sheet when it shows the same property (and the other way
-    round) — the cards and the sheet draw from one store (`src/store.ts`), so
-    neither has to tell the other.
+    page (they draw from the page's store, `src/store.ts`), and the side panel
+    re-reads it when it shows the same property (and the other way round).
   - A card is the outermost list item / article that still holds ONE listing,
     so a photo carousel that repeats the link on every slide gets one set of
     controls, not one per slide. The controls live in a closed shadow root per
@@ -113,7 +126,7 @@ maxima, remax, mmreality, ceskereality).
   parent of three or more items is the grid; smaller children (sort bars,
   pagination) are left alone.
 - **The corner dock** (`src/index_dock.ts`) sits **bottom-left** on every index
-  page with listing cards (the listing sheet owns the right edge): a **Skrýt skryté**
+  page with listing cards: a **Skrýt skryté**
   switch plus how many hidden properties this page holds. On (the default), a
   hidden property's card stays where it is but is drawn barely visible (10 %,
   greyscale; hovering lifts it enough to see what it is); off, it is drawn like
@@ -125,13 +138,13 @@ maxima, remax, mmreality, ceskereality).
 - **Sale apartments** additionally get the per-card yield badge, after the
   three controls: `Výnos MF X.X %` (or the
   town's `X.X–Y.Y %` range, its note in the tooltip) when the property's MF
-  result has a yield, otherwise a clickable **Odhadnout výnos** badge that opens
-  the side sheet (unfolded) for that ad. Only an ad we hold gets one. Controls and
+  result has a yield, otherwise a clickable **Odhadnout výnos** badge; either
+  opens the side panel on that ad. Only an ad we hold gets one. Controls and
   badges come only from a successful lookup; when it fails the page is not left
   silent — one small
   notice in the dock, above the switch, says
   why: **Přihlásit se přes Google** when signed out (a click first checks for
-  a session made elsewhere — the sheet, another tab — and skips the Google
+  a session made elsewhere — the side panel, another tab — and skips the Google
   round trip if there is one), **Obnovit stránku** when the extension was
   reloaded, updated, disabled or removed under the open tab (the overlay then
   stops scanning), the error + **Zkusit znovu** otherwise (no button for a
@@ -151,7 +164,7 @@ column on `estimation_runs`.
 
 ### Per-m² figures carry their basis (measure sprint W7)
 
-"One measure, one definition, one label" — the sheet **reads** per-m² numbers,
+"One measure, one definition, one label" — the panel **reads** per-m² numbers,
 it never derives them:
 
 - The header's per-m² is the lookup's `price_per_m2`, rendered with its
@@ -164,7 +177,7 @@ it never derives them:
   hover names the area's basis from `listings.area_basis` (migration 423).
 - The fond is **not multiplied by a parcel**, and *whether a fond applies* is
   decided in exactly one place — the server, on `area_basis` **or**
-  `category_main` (`api/portal_lookup._fond_default_czk_per_m2`). The sheet
+  `category_main` (`api/portal_lookup._fond_default_czk_per_m2`). The panel
   reads that answer rather than re-deriving it, because migration 423 added
   `area_basis` with no backfill: a land row not yet re-scraped has no stamp,
   and a client rule keyed on the stamp alone would disagree with the server.
@@ -179,7 +192,7 @@ it never derives them:
   this subject".
 - `POST /estimations` takes the ad's `listing_id` from the lookup (an
   estimation is always of an ad we hold; an ad we lack is added first) and is
-  **category-aware**: the sheet sends the subject's `category_main` and picks
+  **category-aware**: the panel sends the subject's `category_main` and picks
   `estimate_kind` from it (a subject being sold needs a rent, one already let
   needs a sale price, land is never estimated as a rent). **The category arm is
   latent today.** The estimation block only renders for apartments for sale we
@@ -197,7 +210,7 @@ The extension runs its **own** Supabase session — a separate sign-in from
 the SPA's, never the SPA's refresh token (Supabase rotates refresh tokens
 with reuse-detection, so sharing one between two independently-refreshing
 sessions would eventually log both out). Every API route now requires a
-real per-user session; the sheet shows a **"Přihlásit se přes Google"**
+real per-user session; the panel shows a **"Přihlásit se přes Google"**
 prompt until you sign in, and once you are, its **⋯** menu names the
 account and offers **Odhlásit**.
 
@@ -291,8 +304,9 @@ The output lands in `chrome-extension/dist/`. `npm test` runs the extension's
 unit tests (`src/*.test.ts`) with Node's built-in runner, which needs Node
 ≥ 22.18 to strip the types; `npm run type-check` type-checks them with the rest.
 
-`npm run build` runs vite **twice** — `--mode content`, then `--mode background`
-— and that is not a style choice. A manifest-declared content script is a
+`npm run build` runs vite **once per entry** — `--mode content`, then
+`--mode background`, then `--mode sidepanel` (the side panel's page script; the
+build copies `sidepanel.html` beside it) — and that is not a style choice. A manifest-declared content script is a
 *classic* script (MV3 has no module mode for `content_scripts[].js`), so
 `content.js` may not contain a static `import`. Rollup hoists any module shared
 between entries into a chunk, and the portal-id rules (`src/portals.ts` then,
@@ -323,7 +337,9 @@ signed out).
 4. Pick the `dist/` folder you downloaded (Option A) or built
    (Option B).
 5. Confirm the extension card shows "PropScout.cz — výnos & pipeline" with
-   the copper "%" icon.
+   the copper "%" icon. Pin it (the puzzle-piece menu → the pin) so its
+   toolbar icon, which opens and closes the side panel, stays in reach.
+   Chrome 116 or newer.
 
 **Unzip somewhere Windows won't decorate.** Chrome refuses to load a folder
 containing `desktop.ini` ("The filename is illegal"), and File Explorer creates
@@ -375,7 +391,7 @@ extension ID, same update channel, no reinstall.
    artifact from the Actions build, then zip the folder's *contents*).
 3. Fill the listing: description, an icon, at least one screenshot, a **privacy
    policy URL**, a **single-purpose statement**, and a justification for each
-   permission (`storage`, `identity`, `alarms`, `webNavigation`, and the two
+   permission (`storage`, `identity`, `alarms`, `webNavigation`, `sidePanel`, and the two
    `host_permissions` origins). See "Chrome Web Store submission" below.
 4. **Visibility → Unlisted**. Submit for review. (Unlisted items are still
    reviewed; expect hours to a few days.)
@@ -440,17 +456,20 @@ service must allow that origin or every request will be blocked.
 
 ## Use
 
-**First run:** the side sheet shows **"Přihlásit se přes Google"** —
-click it, complete the Google consent screen in the popup window that
-opens, and the sheet reloads signed in. Its **⋯** menu then names the
-account; **Odhlásit** there signs out in every tab (search pages drop their
-badges and card controls; an open sheet prompts).
+**First run:** open the side panel (the toolbar icon, or the PS tab on a
+listing's right edge); it shows **"Přihlásit se přes Google"** — click it,
+complete the Google consent screen in the popup window that opens, and the
+panel reloads signed in. Its **⋯** menu then names the account; **Odhlásit**
+there signs out in every tab (search pages drop their badges and card
+controls; the panel prompts).
 
 **On a listing detail page** (any supported portal):
 
-1. The side sheet opens on the right edge (folded to a tab on a window under
-   1280 px; the **›** in its top bar folds it, the tab unfolds it, and it
-   stays as you left it).
+1. A small PS tab sits on the right edge with the deal's stage, this ad's
+   price drop and the MF yield; click it (or the toolbar icon) and Chrome's
+   side panel opens beside the page, which narrows to make room. It stays
+   open as you move between listings and tabs in that window and follows
+   the tab in front; the **›** in its top bar (or the toolbar icon) closes it.
 2. The header says what the property is and what this ad asks; **V aplikaci ↗**
    opens it in the app.
 3. **Vývoj ceny** charts every ad of the property; **Moje** holds the pipeline
@@ -477,8 +496,8 @@ badges and card controls; an open sheet prompts).
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
-   clickable **Odhadnout výnos** badge that opens the side sheet, where the
-   estimate runs.
+   clickable **Odhadnout výnos** badge; either opens the side panel on that
+   ad, where the estimate runs.
 3. In the bottom-left corner, the **Skrýt skryté** switch: on, the properties
    you have hidden stay on the page as barely visible cards (hover one to peek
    at it, click its eye to bring it back); off, they look like every other
@@ -516,7 +535,8 @@ The bundle itself carries no secret and every write is per-user + RLS-scoped
   (`sourcemap:true` today is a dev/debug convenience — flip it off before
   packaging a store submission).
 - A privacy policy URL + per-permission justifications (`identity`,
-  `alarms`, `storage`, the two `host_permissions` origins) + a single-purpose
+  `alarms`, `storage`, `webNavigation`, `sidePanel`, the two `host_permissions`
+  origins) + a single-purpose
   statement in the Developer Dashboard listing.
 - Staged rollout, with the API kept backward-compatible across at least two
   extension versions. **No auth safety net remains**: the `verify_jwt`
