@@ -1145,7 +1145,7 @@ def _run_image_downloads(
         "taken_down": 0, "source_unavailable": 0, "not_an_image": 0,
         # The portal throttled us (429/403): the row stays pending, no attempt burned.
         "throttled": 0,
-        # Stored, but the inline hash failed: the rows the hourly backstop exists for.
+        # Stored, but the inline hash failed: the rows the images lane's retry exists for.
         "phash_missed": 0,
     }
     _PHASH_FAILURES_WARNED.clear()
@@ -1530,10 +1530,10 @@ _PHASH_FAILURES_WARNED: set[str] = set()
 def _phash_or_none(data: bytes) -> int | None:
     """Best-effort inline dHash of bytes already in hand (realtime Wave C-4).
 
-    Computing here deletes the hourly re-download hop for the common case; the
-    guard is absolute — undecodable bytes (or a missing Pillow) return None so
-    the store still succeeds with phash NULL, and scripts/compute_image_phash
-    remains the backfill/backstop. Lazy import: Pillow is a scraper-runtime
+    Computing here deletes the re-download hop for the common case; the guard is
+    absolute — undecodable bytes (or a missing Pillow) return None so the store
+    still succeeds with phash NULL, and the images lane's bounded retry
+    (scraper.image_phash.retry_unhashed) takes the row. Lazy import: Pillow is a scraper-runtime
     dependency, not an import-time requirement of this module.
     """
     try:
@@ -1546,7 +1546,7 @@ def _phash_or_none(data: bytes) -> int | None:
             _PHASH_FAILURES_WARNED.add(kind)
             LOG.warning(
                 "IMAGE phash_inline_failed %s: %s — stored with phash NULL for the "
-                "compute_image_phash backstop; further %s misses are counted in "
+                "images lane's retry; further %s misses are counted in "
                 "IMAGES done phash_missed",
                 kind, exc, kind,
             )

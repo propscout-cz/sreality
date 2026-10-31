@@ -1694,9 +1694,9 @@ renumber.** Navigate by area:
    native file; `sreality-1800-fit` the uncropped master; `sreality-749-crop` assessed/source
    gone/crop retained, TERMINAL; `native` a non-sreality file), plus `stored_width`/`stored_height`
    measured at upload. A job that REPLACES an object's bytes under its existing `storage_path`
-   must, in the same transaction as its `rendition` + dimensions stamp, null `phash` and
-   `clip_tagged_at` — the pHash and CLIP lanes' own selection predicates, so both recompute on
-   their own — and delete no label, review or CLIP-cache row. **No job replaces stored bytes
+   must, in the same transaction as its `rendition` + dimensions stamp, null `phash` (zeroing
+   `phash_attempts`) and `clip_tagged_at` — the pHash retry's and CLIP lane's own selection predicates, so
+   both recompute on their own — and delete no label, review or CLIP-cache row. **No job replaces stored bytes
    today** (the chokepoint that did this, `invalidate_derived_signals`, went with its only
    caller): the sreality re-master lane, the only one that ever did, ran
    2026-09-11 → 2026-10-25 (all six shards stamped `app_settings.sreality_remaster_last_complete`,
@@ -2520,7 +2520,7 @@ renumber.** Navigate by area:
     confirmed by their rulings. A property no longer mixed, or every pair across confirmed
     `same`, is a done row.
     **Signal producers keep running** — they are the substrate the new engine will consume, and
-    stopping them would leave a cold start: image pHash (`compute_image_phash.yml`), the
+    stopping them would leave a cold start: image pHash (taken at download, with a bounded retry in the worker's images lane), the
     self-hosted CLIP tagger and its embeddings (the job runner's `clip` job since #2032, which also re-tags from
     stored embeddings, writing `image_clip_tags` + `image_clip_embeddings`), and the operator's labeling corpus
     (`tag_taxonomy`, `image_tag_labels`, `image_border_cases`). `listing_image_comparisons`
