@@ -814,7 +814,7 @@ def _free_cell(engine: _Engine, kind: str, taken: _dt.datetime | None, expires: 
             and untaken > engine.interval + fail_min * 60):
         conditions.append(("fail", f"no pass has taken the lease in the {ago(untaken)} since "
                                    f"{origin}, while the lane runs every {engine.interval} s: the "
-                                   f"lane stopped taking it (Problem past {fail_min:g} min beyond "
+                                   f"lane stopped taking it or its row is paused (Problem past {fail_min:g} min beyond "
                                    "that wait)"))
     return judged("lease", conditions, said, value=round(untaken / 60), unit="min", facts=facts)
 

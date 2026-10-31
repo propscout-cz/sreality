@@ -251,7 +251,7 @@ Arms:
 
 Facts: merges in 24 h and 7 d by autodedup and by operator; newest merge age. Lane exceptions are judged by jobs, not here.
 
-**Data.** app_settings; autodedup.settings, rt_scope_ids, rt_fp (autodedup_rt_fp_decided_idx), rt_lease, verdicts, must_not_link; property_merge_events (source autodedup and operator only); broker_merge_suppressions; worker_heartbeats; the live-stream predicate in autodedup/ui_sql.py. Under 0.5 s.
+**Data.** app_settings; scheduled_jobs (the lease); autodedup.settings, rt_scope_ids, rt_fp (autodedup_rt_fp_decided_idx), verdicts, must_not_link; property_merge_events (source autodedup and operator only); broker_merge_suppressions; worker_heartbeats; the live-stream predicate in autodedup/ui_sql.py. Under 0.5 s.
 
 **Thresholds and their basis.** Rulings:
 - Problem at 1 or more. Live: 0 attributable to autodedup.

@@ -4,7 +4,7 @@
 where a lock taken on one backend and released on another silently strands. The row is the
 lock: a claim is a conditional UPDATE, a crashed holder's lease simply expires.
 
-Two shapes over one row:
+Three shapes over one row:
 
 * `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
   A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
@@ -27,7 +27,7 @@ Two shapes over one row:
   a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
   by `Hold.fenced` and ends each transaction with `fence` cannot commit under a lapsed lease. The release falls back to
   one fresh connection when the holding one died.
-* `acquire` / `end` / `end_predecessor` — the same lane row for a holder that outlives one `with` block (the autodedup
+* `acquire` / `end` / `predecessor` / `end_predecessor` — the same lane row for a holder that outlives one `with` block (the autodedup
   lane, adapted by `autodedup/rt_lease.py`: its take, its release and a shutdown's release sit on different connections).
   `end` lapses the lease instead of clearing it: the row keeps who held it and when it ended.
 """

@@ -999,7 +999,7 @@ def test_a_lease_no_pass_took_for_ten_minutes_past_the_lanes_wait_is_a_problem()
     lease = _cell("lease", lease=ended)
     assert lease["status"] == "fail" and lease["value"] == 12 and lease["unit"] == "min"
     assert lease["message"] == ("no pass has taken the lease in the 12 min since it ended, while "
-                                "the lane runs every 60 s: the lane stopped taking it (Problem "
+                                "the lane runs every 60 s: the lane stopped taking it or its row is paused (Problem "
                                 "past 10 min beyond that wait)")
     assert lease["facts"]["ended_by"] == "release"
     assert _cell("lease", lease=ended, apply_scope=_CLOSED)["status"] == "fail"
@@ -1019,7 +1019,7 @@ def test_the_lease_wait_counts_from_a_brake_lift_or_a_build_end_not_an_older_exp
     late = _cell("lease", lease=ended, history=[(_INTERVAL, 0, _ago(minutes=15))])
     assert late["status"] == "fail" and late["value"] == 15
     assert late["message"] == ("no pass has taken the lease in the 15 min since the brake lifted, "
-                               "while the lane runs every 60 s: the lane stopped taking it "
+                               "while the lane runs every 60 s: the lane stopped taking it or its row is paused "
                                "(Problem past 10 min beyond that wait)")
     assert late["facts"]["untaken_since"] == _ago(minutes=15).isoformat()
     built = _cell("lease", lease=ended, flag_at=_ago(minutes=5))

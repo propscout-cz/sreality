@@ -20,7 +20,7 @@ from autodedup.incremental_sql import RT_LEASE_READ_SQL
 from scraper import job_lease
 
 NAME: str = "autodedup_realtime"
-# The row's declarations, never read: it has no `due_at`, so nothing schedules it.
+# The row's declarations: it has no `due_at`, so nothing schedules it.
 _CADENCE: str = "10 minutes"
 _RUNNER: str = "railway-realtime-worker"
 # A seed or a live dispatch holds it for its job's own timeout (`autodedup.yml`,
@@ -99,8 +99,8 @@ def describe(conn: Any) -> str:
     if row is None:
         return "(no holder on record)"
     if not row["live"]:
-        return (f"free (last held by {row['holder']!r} until {row['expires_at']}); a take refused "
-                "now means its scheduled_jobs row is paused or retired")
+        return (f"free (last held by {row['holder']!r} until {row['expires_at']}); a refused take "
+                "means its scheduled_jobs row is paused or retired")
     return (f"held by {row['holder']!r} since {row['taken_at']}, until {row['expires_at']} — "
             f"if that writer is dead (its job ended, its worker restarted), pass "
             f"{RELEASE_ARG}={row['holder']} to end it first")
