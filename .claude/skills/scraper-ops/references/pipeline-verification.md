@@ -919,7 +919,7 @@ watcher. Facts `declared`, `registered`, `missing`, `undeclared`, `worker_up_s`.
 
 | reads | when |
 | --- | --- |
-| Problem | a declared job has no live row, the worker booted more than `jobs_runner_register_grace_s` (3600 s) ago (no heartbeat row counts as past it), and the previous measurement read it missing too: the runner's deploy failed or was skipped, it refused the entry, or an older image booted and retired it |
+| Problem | a declared job has no live row, the worker booted more than `jobs_runner_register_grace_s` (1800 s) ago (no heartbeat row counts as past it), and the previous measurement read it missing too: the runner's deploy failed or was skipped, it refused the entry, or an older image booted and retired it |
 | Watch | the same, read missing at this measurement only (in a deploy overlap both workers beat one heartbeat row, so one read can see the predecessor's old boot); or a live row this code does not declare, past the grace |
 | OK | inside the grace (`waiting for the runner's deploy (worker up N min)`), `N jobs declared on the job runner, all registered`, or `no job is declared on the job runner yet` |
 
