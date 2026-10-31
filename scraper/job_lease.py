@@ -62,6 +62,8 @@ clock: Callable[[], float] = time.monotonic
 TTL_S = 180
 # The holder stops its work this long before the database's expiry, so nothing runs on a lapsed lease.
 FENCE_MARGIN_S = 30
+# How often a `held` that may wait tries the lane again.
+WAIT_POLL_S = 10
 
 RELEASE_OUTCOMES = frozenset({"ok", "failed", "cancelled", "skipped", "timeout", "interrupted"})
 NOT_FAILURES = frozenset({"cancelled", "skipped", "interrupted"})
@@ -745,11 +747,19 @@ def end_predecessor(conn: psycopg.Connection, job_name: str, *, host: str, pid: 
 
 @contextmanager
 def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str = "github_actions",
-         ttl_s: int = 3600, holder: str | None = None,
+         ttl_s: int = 3600, holder: str | None = None, wait_s: float = 0,
          connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[Hold | None]:
-    """Yields this run's `Hold` on the lane, or None when another run holds it or it is paused or retired. Taking and
-    releasing it are bounded like a runner call; `connect` opens the release's fallback when `conn` died."""
-    hold = acquire(conn, job_name, cadence=cadence, runner=runner, ttl_s=ttl_s, holder=holder or holder_id())
+    """Yields this run's `Hold` on the lane, or None when another run holds it (past `wait_s`, tried every WAIT_POLL_S)
+    or it is paused or retired. Taking and releasing it are bounded like a runner call; `connect` opens the release's
+    fallback when `conn` died."""
+    holder = holder or holder_id()
+    give_up_at = clock() + wait_s
+    while True:
+        hold = acquire(conn, job_name, cadence=cadence, runner=runner, ttl_s=ttl_s, holder=holder)
+        if hold is not None or clock() >= give_up_at:
+            break
+        LOG.info("LEASE busy job=%s: trying again in %ds", job_name, WAIT_POLL_S)
+        time.sleep(WAIT_POLL_S)
     if hold is None:
         LOG.info("LEASE busy job=%s", job_name)
         yield None

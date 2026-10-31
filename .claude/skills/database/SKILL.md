@@ -104,12 +104,12 @@ Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), w
 different backends, so a session `pg_advisory_lock` strands on the backend that took it (PR #716's maintenance lock
 did within minutes, hence migration 279).
 - **Singleton lease** (one holder; a crashed one's lease expires): every new one goes through `scraper/job_lease.py`, one
-  `scheduled_jobs` row per lease — `held` for a lane (yields a `Hold` or None; a lane that never renews needs a TTL
+  `scheduled_jobs` row per lease — `held` for a lane (yields a `Hold` or None, `wait_s` waits; a lane that never renews needs a TTL
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
-  it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `acquire` / `end` when held across calls (autodedup), `claim` / `renew` /
+  it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
   `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
-  ledgers the older copies (`property_maintenance_lease`, `broker_resolution_lock`).
+  ledgers the older copies (`property_maintenance_lease`, until #2267, `broker_resolution_lock`).
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,

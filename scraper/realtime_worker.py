@@ -35,7 +35,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              what delivers "a new/changed listing reaches properties (and the
              Browse read model) within minutes". Safe beside the daily sweep
              and a hand run: all callers serialize on the maintenance
-             lease row (migration 279 — pooler-proof CAS; a session advisory
+             lease row (scraper.job_lease — pooler-proof CAS; a session advisory
              lock strands over the transaction pooler) — an incremental caller
              skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
@@ -289,7 +289,7 @@ class _PassLock:
 # run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
 # only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
 # it. Safe beside the daily sweep and a hand run by construction: all serialize
-# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# on the maintenance lease row (scraper.job_lease) inside run_incremental_pass (this
 # lane skips while another writer holds it).
 # 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
 # (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
