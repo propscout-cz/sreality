@@ -138,6 +138,22 @@ def test_an_older_worker_on_migration_192s_row_alone_still_excludes(
     assert _holders(conn) == (None, "older-worker"), "the new row was never taken, and the old holder keeps its row"
 
 
+def test_a_dead_holding_connection_releases_both_rows_through_reconnect(conn: psycopg.Connection) -> None:
+    """A phase that reconnected closed the connection the lease was taken on: the release opens its own, on both rows."""
+    opened: list[str] = []
+
+    def reconnect() -> psycopg.Connection:
+        opened.append("fresh")
+        return _connect()
+
+    holding = _connect()
+    with rb._resolution_lease(holding, "full", reconnect=reconnect) as hold:
+        assert hold is not None
+        holding.close()
+    assert opened == ["fresh", "fresh"], "one for each row"
+    assert _holders(conn) == (None, None)
+
+
 def test_a_lease_a_rival_took_stops_the_full_resolve(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rival took the row after it lapsed: the next renewal refuses, and the release leaves the rival's lease."""
 
@@ -152,16 +168,16 @@ def test_a_lease_a_rival_took_stops_the_full_resolve(conn: psycopg.Connection, m
 
 
 def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
-    """Racing writers on committed sessions: at most one inside at any moment, and every one releases."""
+    """Racing lane and full writers on committed sessions: at most one inside at any moment, and every one releases."""
     lock = threading.Lock()
     inside = {"now": 0, "most": 0, "entered": 0}
     failures: list[BaseException] = []
 
-    def writer() -> None:
+    def writer(mode: str) -> None:
         try:
             with _connect() as own:
                 for _ in range(25):
-                    with rb._resolution_lease(own, "incremental") as hold:
+                    with rb._resolution_lease(own, mode) as hold:
                         if hold is None:
                             continue
                         with lock:
@@ -174,7 +190,7 @@ def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
         except BaseException as exc:  # noqa: BLE001 - reported on the test's thread
             failures.append(exc)
 
-    threads = [threading.Thread(target=writer) for _ in range(4)]
+    threads = [threading.Thread(target=writer, args=(mode,)) for mode in ("incremental", "full") * 2]
     for t in threads:
         t.start()
     for t in threads:

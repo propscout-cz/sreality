@@ -47,7 +47,7 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     # Headroom for the worst case, re-derived with the retry bounds:
-    #   prefix  ~58 min — lock wait (<= _LOCK_WAIT_MAX_SECONDS, 21 min) and
+    #   prefix  ~58 min — lock wait (<= _LOCK_WAIT_MAX_SECONDS, 21 min a row) and
     #                     attribution share the --max-seconds 3000 (50 min) budget,
     #                     which is anchored at process start and checked at a chunk
     #                     boundary, so one chunk can overshoot it (measured 53.3 min);

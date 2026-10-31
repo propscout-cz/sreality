@@ -447,8 +447,8 @@ _LEASE_RUNNER = "railway-realtime-worker"
 _LOCK_POLL_SECONDS = 10
 # > the stale window, so the full sweep always outwaits a dead holder rather than
 # aborting RED with no work done. Raised with _LOCK_STALE_MIN — the two are one
-# decision. The wait is anchored at process start and the attribution budget
-# (--max-seconds) is anchored there too, so a long wait eats attribution time
+# decision. Each row waits up to this bound in turn. The attribution budget
+# (--max-seconds) is anchored at process start, so a long wait eats attribution time
 # rather than extending the job.
 _LOCK_WAIT_MAX_SECONDS = 1260
 
@@ -486,8 +486,7 @@ def _heartbeat_lock(conn: Any, holder: str) -> None:
     concurrently against a holder that thinks it is alone. Fail loud instead —
     RuntimeError is not an OperationalError, so db.run_resilient re-raises it
     immediately rather than replaying into the race, and _release_lock's own CAS
-    guard stops us clearing the new holder's lock on the way out. Mirrors
-    recompute_property_stats._renew_lease.
+    guard stops us clearing the new holder's lock on the way out.
     """
     with conn.cursor() as cur:
         cur.execute("UPDATE broker_resolution_lock SET heartbeat_at=now() WHERE id=1 AND holder=%(h)s",
@@ -513,11 +512,9 @@ def _release_lock(conn: Any, holder: str,
     never depended on the release landing — the CAS guard plus the lock's staleness
     TTL are what make takeover safe.
 
-    The fallback exists because the handle the caller holds can be a DEAD socket even
-    when the process still has a healthy path to the DB: the drivers only hand their
-    live connection back on a normal return, so a phase that reconnected and then died
-    on something non-transient leaves main() releasing on the connection run_resilient
-    already closed. One fresh connection, one holder-guarded CAS, close it again — the
+    The fallback exists because the handle the lease holds can be a DEAD socket even
+    when the process still has a healthy path to the DB: it is the connection the lease
+    was taken on, which run_resilient closed if a phase reconnected. One fresh connection, one holder-guarded CAS, close it again — the
     CAS makes the release safe from any connection."""
     exc: BaseException | None = None
     try:
@@ -546,7 +543,7 @@ def _release_lock(conn: Any, holder: str,
 
 
 def _renew_lock(conn: Any, hold: job_lease.Hold) -> None:
-    """Heartbeat between transactions; a lapsed lease raises, and neither is a transient error, so nothing replays."""
+    """Renews both rows between transactions; a lost lease raises an error run_resilient does not replay."""
     if not job_lease.renew(conn, hold):
         raise job_lease.LeaseLost("broker resolution lease lost mid-run (it lapsed or another run took it) — "
                                   "aborting rather than resolving concurrently")
@@ -562,7 +559,7 @@ def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
 @contextmanager
 def _resolution_lease(
     conn: Any, mode: str, *, wait_s: float = 0.0,
-    reconnect: Callable[[], Any] | None = None,
+    reconnect: Callable[[], Any] = db.connect,
 ) -> Iterator[job_lease.Hold | None]:
     """Yields this run's hold on the resolution lease, or None when another run holds it (past `wait_s`) or it is
     paused. The cutover row comes first and goes last."""
@@ -576,7 +573,7 @@ def _resolution_lease(
         return
     try:
         with job_lease.held(conn, BROKER_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
-                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s) as hold:
+                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s, connect=reconnect) as hold:
             yield hold
     finally:
         _release_lock(conn, holder, reconnect)
@@ -1734,7 +1731,7 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
     # after a pooler drop redoes exactly the same work rather than losing it. Note
     # what "claim" does NOT mean here: _CLAIM_DIRTY is a plain SELECT on an autocommit
     # connection — no row lock, no claim marker, nothing another run would respect.
-    # Exclusion comes from broker_resolution_lock; the scoped _DELETE_DIRTY is what keeps a concurrent
+    # Exclusion comes from the broker_resolution lease; the scoped _DELETE_DIRTY is what keeps a concurrent
     # enqueue safe. The 2026-08-10 23:10 red died on the rollup below with
     # 'SSL connection has been closed'.
     ids = sorted(claimed)
@@ -1848,10 +1845,11 @@ def main() -> int:
         # run_incremental_pass: its work is subsumed by whatever holds the lease).
         with _resolution_lease(conn, mode, wait_s=_LOCK_WAIT_MAX_SECONDS, reconnect=reconnect) as hold:
             if hold is None:
-                LOG.error("RESOLVE abort mode=full: could not acquire lock within %ds", _LOCK_WAIT_MAX_SECONDS)
+                LOG.error("RESOLVE abort mode=full: the lease is still held or paused after %ds of waiting",
+                          _LOCK_WAIT_MAX_SECONDS)
                 return 1
-            res, conn = _run_full(conn, free, franchise, auto_merge, args.batch_size,
-                                  deadline, hold, reconnect=reconnect)
+            res, _ = _run_full(conn, free, franchise, auto_merge, args.batch_size,
+                               deadline, hold, reconnect=reconnect)
             LOG.info("RESOLVE full done attached=%d auto_merges=%d queued=%d "
                      "suppressed=%d elapsed=%.1fs",
                      res["attached"], res["auto_merges"], res["queued"],

@@ -439,6 +439,19 @@ def test_each_write_transaction_ends_with_the_fence(write: Any) -> None:
         write(rb, refused, _hold())
 
 
+def test_the_rollup_and_the_firm_names_end_with_the_fence(monkeypatch: Any) -> None:
+    """The sweep's two statements with no timeout at all: the likeliest place for a lease to lapse."""
+    import scripts.resolve_brokers as rb
+
+    _stub_full_sweep(monkeypatch, [])
+    monkeypatch.setattr(rb, "recompute_brokers", lambda cur, bids: cur.execute("ROLLUP"))
+    monkeypatch.setattr(rb, "_FIRM_DISPLAY_NAMES", "FIRM NAMES")
+    conn = _ResilientConn("conn")
+    rb._run_full(conn, [], [], True, 2, None, _hold(), reconnect=lambda: conn)
+    for statement in ("ROLLUP", "FIRM NAMES"):
+        assert _FENCE in conn.executed[conn.executed.index(statement) + 1], statement
+
+
 def test_the_merge_phase_hands_its_hold_to_the_apply(monkeypatch: Any) -> None:
     """RED by: `_auto_merge` calling `_apply_merges` without the hold, which leaves the merge's commit unfenced."""
     import scripts.resolve_brokers as rb
@@ -459,9 +472,8 @@ def test_the_merge_phase_hands_its_hold_to_the_apply(monkeypatch: Any) -> None:
 
 
 def test_release_lock_falls_back_to_a_fresh_connection() -> None:
-    """main()'s `conn` is only rebound on a NORMAL return, so a run that
-    reconnected and then died non-transiently releases on the socket
-    run_resilient already closed — stranding the lock for a full staleness TTL
+    """The lease holds the connection it was taken on, so a run that reconnected
+    releases on the socket run_resilient already closed — stranding the lock for a full staleness TTL
     even though the process had a healthy path to the DB. The holder-guarded CAS
     is safe from any connection, so the release opens one of its own."""
     import scripts.resolve_brokers as rb
