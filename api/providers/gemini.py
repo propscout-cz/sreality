@@ -24,10 +24,12 @@ import os
 from typing import Any
 
 from api.providers.base import (
+    Block,
     Completion,
     ImageBlock,
     Message,
     ModelPrice,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolCall,
@@ -120,7 +122,7 @@ class GeminiProvider:
         except Exception as exc:
             raise ProviderError(f"gemini call failed: {exc}") from exc
 
-        text_blocks, tool_calls = _split_gemini_content(raw)
+        text_blocks, tool_calls, blocks = _split_gemini_content(raw)
         usage = _extract_gemini_usage(raw)
         stop_reason = _normalise_gemini_finish(raw, tool_calls)
         return Completion(
@@ -130,6 +132,7 @@ class GeminiProvider:
             usage=usage,
             model=model,
             raw=raw,
+            blocks=blocks,
         )
 
     def price_for(self, model: str) -> ModelPrice | None:
@@ -155,8 +158,11 @@ def _msg_to_gemini(msg: Message, types: Any) -> Any:
     for block in msg.content:
         if isinstance(block, TextBlock):
             parts.append(types.Part.from_text(text=block.text))
+        elif isinstance(block, OpaqueBlock):
+            if block.provider == GeminiProvider.name:
+                parts.append(block.data)
         elif isinstance(block, ToolUseBlock):
-            parts.append(types.Part(
+            parts.append(block.own_block(GeminiProvider.name) or types.Part(
                 function_call=types.FunctionCall(
                     name=block.name,
                     args=block.input,
@@ -223,18 +229,26 @@ def _tool_to_gemini(tool: ToolSchema) -> Any:
     )
 
 
-def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
+def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
+    """The reply's text, its calls and all of it in order. A call's part goes back whole, and so does a text part that
+    carries one: Gemini 3 validates the thought_signature on the function calls in history."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
+    reply: list[Block] = []
     candidates = getattr(raw, "candidates", None) or []
     if not candidates:
-        return texts, tool_calls
+        return texts, tool_calls, reply
     parts = getattr(candidates[0].content, "parts", None) or []
     for part in parts:
         text = getattr(part, "text", None)
         if text:
             texts.append(text)
         fcall = getattr(part, "function_call", None)
+        if fcall is None:
+            if getattr(part, "thought_signature", None):
+                reply.append(OpaqueBlock(provider=GeminiProvider.name, data=part))
+            elif text:
+                reply.append(TextBlock(text=text))
         if fcall is not None:
             name = getattr(fcall, "name", "") or ""
             args = getattr(fcall, "args", None) or {}
@@ -249,7 +263,9 @@ def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
                 name=name,
                 input=args,
             ))
-    return texts, tool_calls
+            reply.append(ToolUseBlock(id=name, name=name, input=args,
+                                      opaque=OpaqueBlock(provider=GeminiProvider.name, data=part)))
+    return texts, tool_calls, reply
 
 
 def _extract_gemini_usage(raw: Any) -> Usage:

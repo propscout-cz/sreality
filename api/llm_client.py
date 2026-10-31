@@ -36,6 +36,7 @@ from api.providers import (
     CompletionProvider,
     ImageBlock,
     Message,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolResultBlock,
@@ -419,7 +420,7 @@ def _to_neutral_message(msg: Any) -> Message:
 
 
 def _to_neutral_block(entry: Any) -> Block:
-    if isinstance(entry, (TextBlock, ToolUseBlock, ToolResultBlock, ImageBlock)):
+    if isinstance(entry, (TextBlock, ToolUseBlock, ToolResultBlock, ImageBlock, OpaqueBlock)):
         return entry
     if isinstance(entry, str):
         return TextBlock(text=entry)

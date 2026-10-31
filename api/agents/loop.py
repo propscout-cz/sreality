@@ -16,7 +16,7 @@ from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import encode
 from api.llm_client import LLMClient
-from api.providers import Message, ModelPrice, TextBlock, ToolResultBlock, ToolUseBlock
+from api.providers import Message, ModelPrice, TextBlock, ToolResultBlock
 
 CALLED_FOR = "agent_run"
 # A reply's limit covers the model's thinking too (Opus/Sonnet 5.5 always think): the ceiling is the non-streaming
@@ -25,7 +25,8 @@ CALLED_FOR = "agent_run"
 MAX_REPLY_TOKENS = 16_000
 MIN_REPLY_TOKENS = 4_096
 
-StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "end_turn", "max_tokens"]
+StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "end_turn", "max_tokens", "refusal",
+                     "model_context_window_exceeded"]
 
 
 @dataclass(frozen=True)
@@ -132,12 +133,9 @@ def run(
         # A turn's calls run only when the model ended it on them: one cut at its limit or stopped by a refusal may
         # carry a half-written call, and nothing in it runs.
         if completion.stop_reason != "tool_use" or not completion.tool_calls:
-            return outcome("max_tokens" if completion.stop_reason == "max_tokens" else "end_turn")
+            return outcome("end_turn" if completion.stop_reason in ("stop", "tool_use") else completion.stop_reason)
 
-        messages.append(Message(role="assistant", content=[
-            *(TextBlock(text=t) for t in completion.text_blocks if t),
-            *(ToolUseBlock(id=c.id, name=c.name, input=c.input) for c in completion.tool_calls),
-        ]))
+        messages.append(Message(role="assistant", content=completion.reply))
         results: list[ToolResultBlock] = []
         for call in completion.tool_calls:
             started = clock()

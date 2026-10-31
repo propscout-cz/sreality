@@ -40,10 +40,22 @@ class TextBlock:
 
 
 @dataclass(frozen=True)
+class OpaqueBlock:
+    """A reply block only the provider that wrote it can read: sent back to it verbatim, dropped by any other."""
+    provider: str
+    data: Any
+
+
+@dataclass(frozen=True)
 class ToolUseBlock:
     id: str
     name: str
     input: dict[str, Any]
+    # The call as its provider wrote it, kept for that provider's next request; every other one reads the fields above.
+    opaque: OpaqueBlock | None = None
+
+    def own_block(self, provider: str) -> Any:
+        return self.opaque.data if self.opaque is not None and self.opaque.provider == provider else None
 
 
 @dataclass(frozen=True)
@@ -60,7 +72,7 @@ class ImageBlock:
     data: str
 
 
-Block = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock
+Block = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | OpaqueBlock
 
 
 @dataclass(frozen=True)
@@ -96,7 +108,7 @@ class Usage:
     cache_write_tokens: int = 0
 
 
-StopReason = Literal["tool_use", "end_turn", "max_tokens", "stop"]
+StopReason = Literal["tool_use", "end_turn", "max_tokens", "stop", "refusal", "model_context_window_exceeded"]
 
 
 @dataclass(frozen=True)
@@ -108,6 +120,17 @@ class Completion:
     usage: Usage
     model: str
     raw: Any = field(repr=False, default=None)
+    blocks: list[Block] | None = field(repr=False, default=None)
+
+    @property
+    def reply(self) -> list[Block]:
+        """The assistant turn a tool-use loop sends back: the provider's own blocks in their order, else text then calls."""
+        if self.blocks is not None:
+            return list(self.blocks)
+        return [
+            *(TextBlock(text=t) for t in self.text_blocks if t),
+            *(ToolUseBlock(id=c.id, name=c.name, input=c.input) for c in self.tool_calls),
+        ]
 
 
 # --- Batch (async) result types -------------------------------------------

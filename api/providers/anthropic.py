@@ -18,10 +18,12 @@ from collections.abc import Iterator
 from api.providers.base import (
     BatchResultItem,
     BatchStatus,
+    Block,
     Completion,
     ImageBlock,
     Message,
     ModelPrice,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolCall,
@@ -252,7 +254,7 @@ class AnthropicProvider:
         return kwargs
 
     def _completion_from_raw(self, raw: Any, *, fallback_model: str) -> Completion:
-        text_blocks, tool_calls = _split_anthropic_content(raw)
+        text_blocks, tool_calls, blocks = _split_anthropic_content(raw)
         usage = _extract_anthropic_usage(raw)
         stop_reason = _normalise_stop_reason(getattr(raw, "stop_reason", None))
         return Completion(
@@ -262,6 +264,7 @@ class AnthropicProvider:
             usage=usage,
             model=getattr(raw, "model", fallback_model) or fallback_model,
             raw=raw,
+            blocks=blocks,
         )
 
     def _sdk_client(self) -> Any:
@@ -282,8 +285,11 @@ def _msg_to_anthropic(msg: Message) -> dict[str, Any]:
     for block in msg.content:
         if isinstance(block, TextBlock):
             content.append({"type": "text", "text": block.text})
+        elif isinstance(block, OpaqueBlock):
+            if block.provider == AnthropicProvider.name:
+                content.append(block.data)
         elif isinstance(block, ToolUseBlock):
-            content.append({
+            content.append(block.own_block(AnthropicProvider.name) or {
                 "type": "tool_use",
                 "id": block.id,
                 "name": block.name,
@@ -318,21 +324,31 @@ def _tool_to_anthropic(tool: ToolSchema) -> dict[str, Any]:
     }
 
 
-def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
-    blocks = getattr(raw, "content", None) or []
+def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
+    """The reply's text, its calls and all of it in order. Whatever is not text or a call goes back as the SDK parsed it
+    (thinking, its signature, and #2068's server tools): the API refuses a later request whose thinking was edited."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
-    for block in blocks:
+    reply: list[Block] = []
+    for block in getattr(raw, "content", None) or []:
         kind = _attr(block, "type")
         if kind == "text":
-            texts.append(_attr(block, "text") or "")
+            text = _attr(block, "text") or ""
+            texts.append(text)
+            if text:
+                reply.append(TextBlock(text=text))
         elif kind == "tool_use":
-            tool_calls.append(ToolCall(
+            call = ToolCall(
                 id=str(_attr(block, "id") or ""),
                 name=str(_attr(block, "name") or ""),
                 input=_attr(block, "input") or {},
-            ))
-    return texts, tool_calls
+            )
+            tool_calls.append(call)
+            reply.append(ToolUseBlock(id=call.id, name=call.name, input=call.input,
+                                      opaque=OpaqueBlock(provider=AnthropicProvider.name, data=block)))
+        else:
+            reply.append(OpaqueBlock(provider=AnthropicProvider.name, data=block))
+    return texts, tool_calls, reply
 
 
 def _extract_anthropic_usage(raw: Any) -> Usage:
@@ -352,10 +368,10 @@ def _extract_anthropic_usage(raw: Any) -> Usage:
 
 
 def _normalise_stop_reason(raw: Any) -> str:
-    # Anthropic uses: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
+    # Anthropic also uses "stop_sequence"; "pause_turn" belongs to server tools (#2068).
     if raw == "stop_sequence":
         return "stop"
-    if raw in ("end_turn", "tool_use", "max_tokens"):
+    if raw in ("end_turn", "tool_use", "max_tokens", "refusal", "model_context_window_exceeded"):
         return raw
     return "end_turn"
 
