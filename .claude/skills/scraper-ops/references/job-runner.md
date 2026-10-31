@@ -156,7 +156,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   `<subject>: not judged` cell per open `job/*` incident, so the teller neither recovers nor retires them.
 - **`job-runner/registry`** (the worker's `jobs` check, `scripts/checks/platform.py`): every name in
   `jobs.runner_jobs()` (the code the worker runs: main's) needs a live registered row. Missing past
-  `jobs_runner_register_grace_s` (3600 s) from the worker's boot, read missing at the previous measurement too: a
+  `jobs_runner_register_grace_s` (1800 s) from the worker's boot, read missing at the previous measurement too: a
   **Problem**, "the runner is not running this registry" (its build failed or was skipped, it refused the entry, or an
   older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
   one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
