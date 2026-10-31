@@ -5,7 +5,7 @@
  * PATCH /tags/{id} which preserves property_tags rows (the join is by tag_id,
  * not name).
  *
- * Revalidates through lib/tagCache — the tags index and the one member map —
+ * Re-reads through lib/curationSync's map (`tags`; a delete adds `property_tags`)
  * so renamed/recoloured chips repaint everywhere without a reload.
  *
  * NOT A MODAL, and it never was one: it announced `role="dialog"` with no
@@ -28,6 +28,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { actOpts, useActAs } from '@/lib/acting';
 import { deleteTag, updateTag } from '@/lib/api';
 import { deletedTables, revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import type { Tag, TagColor } from '@/lib/types';
 import AnchoredPopover from '@/components/AnchoredPopover';
 import TagColorPicker from '@/components/TagColorPicker';
@@ -106,28 +107,30 @@ function Popover({
   onDeleted?: (tagId: number) => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState(tag.name);
-  const [color, setColor] = useState<TagColor>(tag.color);
+  /* Name and colour follow the tag while untouched — a rename or recolour made
+   * elsewhere shows here — and only what the user changed is saved, so a change
+   * made elsewhere is never written back (D3, lib/useServerDraft). */
+  const name = useServerDraft(tag.name, trimDraft);
+  const color = useServerDraft<TagColor>(tag.color);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const captionId = useId();
 
-  const trimmed = name.trim();
+  const trimmed = name.value.trim();
   const dup =
     trimmed.length > 0 &&
     trimmed.toLowerCase() !== tag.name.toLowerCase() &&
     otherNames.includes(trimmed.toLowerCase());
-  const dirty = trimmed !== tag.name || color !== tag.color;
+  const nextName = name.edited();
+  const nextColor = color.edited();
+  const dirty = nextName != null || nextColor != null;
 
   const actAs = useActAs();
   const save = useMutation({
     mutationFn: () =>
       updateTag(
         tag.id,
-        {
-          name: trimmed !== tag.name ? trimmed : undefined,
-          color: color !== tag.color ? color : undefined,
-        },
+        { name: nextName ?? undefined, color: nextColor ?? undefined },
         ...actOpts(actAs),
       ),
     onSuccess: () => {
@@ -163,15 +166,17 @@ function Popover({
       <input
         type="text"
         aria-labelledby={captionId}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
+        value={name.value}
+        onChange={(e) => name.onChange(e.target.value)}
+        onFocus={name.onFocus}
+        onBlur={name.onBlur}
         maxLength={50}
         /* No `autoFocus`: AnchoredPopover moves focus to the first control in
          * the panel on mount — this input — and back to the pencil on close. */
         className="mt-1.5 w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]"
       />
       <div className="mt-2 flex items-center gap-1 flex-wrap">
-        <TagColorPicker value={color} onChange={(c) => c && setColor(c)} size="sm" />
+        <TagColorPicker value={color.value} onChange={(c) => c && color.onChange(c)} size="sm" />
       </div>
       {dup && (
         <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">

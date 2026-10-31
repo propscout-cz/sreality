@@ -16,7 +16,9 @@ import type {
   Active,
   ClientRect,
   DndContextProps,
+  DragCancelEvent,
   DragEndEvent,
+  DragStartEvent,
   DroppableContainer,
 } from '@dnd-kit/core';
 
@@ -39,6 +41,8 @@ import {
 import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
 import { NewPropertyProvider } from '@/components/NewPropertyProvider';
 import { watchReads } from '@/test/reads';
+import { revalidateTables } from '@/lib/curationSync';
+import { isOwed } from '@/lib/revalidate';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -58,6 +62,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     sharePipeline: vi.fn(),
     unsharePipeline: vi.fn(),
     createPipelineStage: vi.fn(),
+    updatePipelineStage: vi.fn(),
     ingestListing: vi.fn(),
     addPipelineCard: vi.fn(),
   };
@@ -843,6 +848,78 @@ describe('<Pipeline> board', () => {
     reads.stop();
   });
 
+  /* D3 (lib/useServerDraft): a stage field follows the server while untouched, so
+     a rename made elsewhere shows in the open editor and a focus and blur of the
+     untouched field writes nothing back over it. */
+  it('an outside rename followed by focus and blur of an untouched field writes nothing (D3)', async () => {
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+    const code = within(label.closest('li')!).getByRole('textbox', { name: 'Značka fáze' });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Nabídka (jinde)', code: '3' } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    await waitFor(() => expect(label).toHaveValue('Nabídka (jinde)'));
+    expect(code).toHaveValue('3');
+
+    fireEvent.focus(label);
+    fireEvent.blur(label);
+    fireEvent.focus(code);
+    fireEvent.blur(code);
+    expect(api.updatePipelineStage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a typed stage name over a change made elsewhere, and saves only that name', async () => {
+    vi.mocked(api.updatePipelineStage).mockResolvedValue({ ...STAGES[1], label: 'Moje nabídka' });
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+    fireEvent.focus(label);
+    fireEvent.change(label, { target: { value: 'Moje nabídka ' } });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Nabídka (jinde)', code: '3' } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    expect(label).toHaveValue('Moje nabídka ');
+
+    fireEvent.blur(label);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { label: 'Moje nabídka' }));
+    expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
+  });
+
+  /* The row stays open after a save: a rename made elsewhere that lands between
+     the save and its re-read is what the field shows next, never written over. */
+  it('a saved stage name follows the server after, even a rename made elsewhere meanwhile', async () => {
+    vi.mocked(api.updatePipelineStage).mockClear().mockResolvedValue({ ...STAGES[1], label: 'Moje nabídka' });
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+
+    /* Renamed elsewhere after this save commits and before its re-read starts. */
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Jejich nabídka' } : st)),
+    );
+    fireEvent.focus(label);
+    fireEvent.change(label, { target: { value: 'Moje nabídka' } });
+    fireEvent.blur(label);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { label: 'Moje nabídka' }));
+    await waitFor(() => expect(label).toHaveValue('Jejich nabídka'));
+
+    fireEvent.focus(label);
+    fireEvent.blur(label);
+    expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
+  });
+
   it('names the stage-manager create field by its visible words', async () => {
     renderBoard();
     fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
@@ -1161,6 +1238,93 @@ describe('<Pipeline> board', () => {
     expect(api.removePipelineCard).not.toHaveBeenCalled();
     expect(await screen.findByRole('button', { name: '9. Bought · 1' })).toBeInTheDocument();
     expect(screen.queryByText('Sadová')).toBeNull();
+  });
+
+  /* Decision 10 (docs/design/curation-sync.md): a drag holds the board, the
+     members map and the stages from pick-up to drop, so nothing repaints under
+     the card in hand; what was owed meanwhile lands after the drop. */
+  describe('a drag holds the board', () => {
+    const pickUp = () =>
+      act(async () => {
+        dnd.context?.onDragStart?.({ active: { id: 'card:42' } } as unknown as DragStartEvent);
+      });
+
+    it('a remote target during a drag lands after the drop', async () => {
+      const qc = boardClient();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+      await pickUp();
+
+      /* Changed elsewhere: another card added, as the curation clock would re-read it. */
+      const moved = { ...CARDS[0], stage_id: 3 };
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([moved, CARD_DUM]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await act(async () => {
+        await revalidateTables(qc, ['property_pipeline', 'pipeline_stages']);
+      });
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+      expect(screen.queryByText('Lesní')).toBeNull();
+
+      await act(async () => {
+        dnd.context?.onDragEnd?.({
+          active: { id: 'card:42' },
+          over: { id: 'stage:3' },
+        } as unknown as DragEndEvent);
+      });
+      await waitFor(() => expect(api.movePipelineCard).toHaveBeenCalledWith(42, 3));
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+      /* The drag's parked read and the move's settle are one board read. */
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before + 1);
+    });
+
+    it('a drag that starts while a board re-read is in flight shows no repaint mid-drag', async () => {
+      const qc = boardClient();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+
+      let land: (cards: PipelineBoardCard[]) => void = () => {};
+      vi.mocked(queries.fetchPipelineBoard)
+        .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
+        .mockResolvedValue([CARDS[0], CARD_DUM]);
+      act(() => {
+        void revalidateTables(qc, ['property_pipeline']);
+      });
+      await pickUp();
+      await act(async () => {
+        land([CARDS[0], CARD_DUM]);
+        await new Promise((resolve) => setTimeout(resolve, 0)); // query-core notifies on a timer
+      });
+      /* The read in flight at pick-up was cancelled and owed, never painted. */
+      expect(qc.getQueryData<PipelineBoardCard[]>(pipelineKeys.board)?.some((c) => c.property_id === 43)).toBe(false);
+      expect(screen.queryByText('Lesní')).toBeNull();
+
+      await act(async () => {
+        dnd.context?.onDragCancel?.({ active: { id: 'card:42' } } as unknown as DragCancelEvent);
+      });
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+    });
+
+    it('an unmount mid-drag lets go: the parked board read is paid on the next mount', async () => {
+      const qc = boardClient();
+      const view = renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+      await pickUp();
+
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await act(async () => {
+        await revalidateTables(qc, ['property_pipeline']);
+      });
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+      expect(isOwed(qc, pipelineKeys.board)).toBe(true);
+
+      /* Gone with the card in hand: no drop, no cancel. A hold left behind would
+         cancel the next mount's read and owe it again. */
+      view.unmount();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+      expect(isOwed(qc, pipelineKeys.board)).toBe(false);
+    });
   });
 
   /* The skeleton promises "no reflow, no jump": with the stages warm it is

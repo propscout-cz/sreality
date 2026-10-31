@@ -149,3 +149,55 @@ describe('<TagEditPopover> renaming', () => {
     expect(updateTag).not.toHaveBeenCalled();
   });
 });
+
+/* D3 (lib/useServerDraft): the open popover follows the tag while its fields are
+ * untouched, and saves only what the user changed — a rename made elsewhere is
+ * never written back. The host re-renders it with the re-read tag. */
+describe('<TagEditPopover> follows the tag while untouched', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function renderOpen() {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const ui = (tag: Tag) => (
+      <QueryClientProvider client={qc}>
+        <TagEditPopover tag={tag} otherNames={['jiný štítek']} />
+      </QueryClientProvider>
+    );
+    const view = render(ui(TAG));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tag k prohlídce' }));
+    return { field: screen.getByRole('textbox', { name: 'Edit tag' }), reread: (tag: Tag) => view.rerender(ui(tag)) };
+  }
+
+  it('shows a rename made elsewhere, and a colour change saves the colour alone', async () => {
+    vi.mocked(updateTag).mockResolvedValue({ ...TAG, name: 'prohlídka', color: 'sage' });
+    const { field, reread } = renderOpen();
+    reread({ ...TAG, name: 'prohlídka' });
+    expect(field).toHaveValue('prohlídka');
+    fireEvent.blur(field);
+    fireEvent.click(screen.getByLabelText('sage'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateTag).toHaveBeenCalledWith(3, { color: 'sage' }));
+    expect(vi.mocked(updateTag).mock.calls[0][1].name).toBeUndefined();
+  });
+
+  it('keeps a typed name over a change made elsewhere, and saves the name alone', async () => {
+    vi.mocked(updateTag).mockResolvedValue({ ...TAG, name: 'můj štítek' });
+    const { field, reread } = renderOpen();
+    fireEvent.change(field, { target: { value: 'můj štítek' } });
+    reread({ ...TAG, name: 'prohlídka', color: 'teal' });
+    expect(field).toHaveValue('můj štítek');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateTag).toHaveBeenCalledWith(3, { name: 'můj štítek' }));
+    expect(vi.mocked(updateTag).mock.calls[0][1].color).toBeUndefined();
+  });
+
+  it('offers no save when only the tag changed elsewhere', () => {
+    const { field, reread } = renderOpen();
+    fireEvent.focus(field);
+    reread({ ...TAG, name: 'prohlídka', color: 'teal' });
+    fireEvent.blur(field);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+});
