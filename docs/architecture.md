@@ -680,7 +680,8 @@ rules. Identify which one a task belongs to before you start.
   (`require_admin`; the table stays service-role only).
   Marketing cookies are opt-in: the Meta Pixel is not fetched before "Přijmout", and with `META_PIXEL_ID` empty
   (`src/landing/consent.ts`) there is no tracker and no bar. Its mockups are redraws with invented listings: never a
-  portal photo, a broker, an address or a person.
+  portal photo, a broker, an address or a person; the Chrome extension's side sheet (feature 5, `#ext-mock`) is drawn
+  without its AI agents card.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
   trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
