@@ -622,9 +622,10 @@ def post_estimations(
     """verify_jwt (not require_token) so a real per-user JWT gets its account
     stamped onto the run — but `conn` stays the service-role connection, NOT
     the tenant pool: a run's execution can run minutes long (agent mode), and
-    tenant_conn holds one pooler transaction open for the whole request
-    (Wave 1 W1-1 boundary; moving execution itself off the request process is
-    W1-3). resolve_account_id is plain SQL, safe on any connection."""
+    TenantConn holds one pooler transaction open for the whole handler,
+    committed before the response is sent (Wave 1 W1-1 boundary; moving
+    execution itself off the request process is W1-3). resolve_account_id
+    is plain SQL, safe on any connection."""
     account_id = tenant_pool.resolve_account_id(conn, claims) or deps.SYSTEM_ACCOUNT_ID
     return create_estimation_run(
         conn, client, llm_client, body, background_tasks=background_tasks,
@@ -665,7 +666,7 @@ def get_latest_estimations_by_listing(
 @app.get("/estimations/{run_id}")
 def get_estimation(
     run_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     row = get_estimation_run(conn, run_id)
     if row is None:
@@ -677,7 +678,7 @@ def get_estimation(
 def patch_estimation_scenario(
     run_id: int,
     body: s.ScenarioUpdateIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Persist the operator's yield-scenario overrides.
 
@@ -701,7 +702,7 @@ def patch_estimation_scenario(
 def get_estimation_trace_payload(
     run_id: int,
     step_n: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """RLS-only read: migration 292's policy on `estimation_trace_payloads` hides
     another account's step, so a foreign run answers the same 404 as a missing one."""
@@ -717,7 +718,7 @@ def get_estimation_trace_payload(
 @app.get("/estimations/{run_id}/feedback")
 def list_estimation_feedback(
     run_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     if not estimation_run_visible(conn, run_id):
         raise HTTPException(status_code=404, detail="estimation run not found")
@@ -857,7 +858,7 @@ def list_estimations(
 @app.post("/listings/lookup")
 def post_listings_lookup(
     body: s.PortalLookupIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     market_conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
     """Batch (source, native id) → MF rent/yield, the property's header facts (MS11 grain)
@@ -1039,7 +1040,7 @@ def get_building_attachment_raw(
 @app.post("/collections")
 def post_create_collection(
     body: s.CreateCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
@@ -1049,7 +1050,7 @@ def post_create_collection(
 
 @app.get("/collections")
 def get_list_collections(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_collections(conn)
 
@@ -1057,7 +1058,7 @@ def get_list_collections(
 @app.get("/collections/{collection_id}")
 def get_collection(
     collection_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.get_collection(conn, collection_id)
 
@@ -1066,7 +1067,7 @@ def get_collection(
 def patch_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
     curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
@@ -1076,7 +1077,7 @@ def patch_collection(
 @app.delete("/collections/{collection_id}")
 def delete_collection(
     collection_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_collection(conn, collection_id)
 
@@ -1085,7 +1086,7 @@ def delete_collection(
 def post_collection_properties(
     collection_id: int,
     body: s.AddPropertiesToCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.add_properties_to_collection(conn, collection_id, body)
 
@@ -1094,7 +1095,7 @@ def post_collection_properties(
 def delete_collection_property(
     collection_id: int,
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.remove_property_from_collection(
         conn, collection_id, property_id,
@@ -1109,7 +1110,7 @@ def delete_collection_property(
 def post_collection_share(
     collection_id: int,
     body: s.ShareCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     _own: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return curation.create_share(conn, deps.open_background_conn, collection_id, body)
@@ -1119,7 +1120,7 @@ def post_collection_share(
 def delete_collection_share(
     collection_id: int,
     account_id: uuid.UUID,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_share(conn, collection_id, str(account_id))
 
@@ -1208,7 +1209,7 @@ def get_price_stat_city_series(
 @app.get("/properties/{property_id}/notes")
 def get_property_notes(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_notes(conn, property_id)
 
@@ -1217,7 +1218,7 @@ def get_property_notes(
 def post_property_note(
     property_id: int,
     body: s.CreateNoteIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_note(conn, property_id, body, account_id=str(account_id))
@@ -1228,7 +1229,7 @@ def patch_property_note(
     property_id: int,
     note_id: int,
     body: s.UpdateNoteIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.update_note(conn, property_id, note_id, body)
 
@@ -1237,19 +1238,19 @@ def patch_property_note(
 def delete_property_note(
     property_id: int,
     note_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_note(conn, property_id, note_id)
 
 
 @app.get("/viewings")
-def get_viewings(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+def get_viewings(conn: tenant_pool.TenantConn) -> dict[str, Any]:
     return curation.list_viewings(conn)
 
 
 @app.get("/artifact-links")
 def get_artifact_links(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_artifact_links(conn)
 
@@ -1258,7 +1259,7 @@ def get_artifact_links(
 def put_property_artifact_link(
     property_id: int,
     body: s.SetArtifactLinkIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.set_artifact_link(conn, property_id, body, account_id=str(account_id))
@@ -1267,7 +1268,7 @@ def put_property_artifact_link(
 @app.delete("/properties/{property_id}/artifact-link")
 def delete_property_artifact_link(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_artifact_link(conn, property_id)
 
@@ -1275,9 +1276,9 @@ def delete_property_artifact_link(
 @app.post("/properties/{property_id}/attachments")
 def post_property_attachment(
     property_id: int,
+    conn: tenant_pool.TenantConn,
     file: UploadFile = File(...),
     note_id: int | None = Form(None),
-    conn: Any = Depends(tenant_pool.tenant_conn),
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return attachments_module.add_attachment(
@@ -1287,8 +1288,8 @@ def post_property_attachment(
 @app.get("/properties/{property_id}/attachments")
 def get_property_attachments(
     property_id: int,
+    conn: tenant_pool.TenantConn,
     note_id: int | None = None,
-    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     return attachments_module.list_attachments(conn, property_id, note_id)
 
@@ -1297,8 +1298,8 @@ def get_property_attachments(
 def get_property_attachment(
     property_id: int,
     attachment_id: int,
+    conn: tenant_pool.TenantConn,
     w: int | None = None,
-    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
     """The original's bytes, or with `?w=1080` an image's display copy (made on first request);
     only ever through this JWT proxy."""
@@ -1310,14 +1311,14 @@ def get_property_attachment(
 def delete_property_attachment(
     property_id: int,
     attachment_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return attachments_module.delete_attachment(conn, property_id, attachment_id)
 
 
 @app.get("/tags")
 def get_tags(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_tags(conn)
 
@@ -1325,7 +1326,7 @@ def get_tags(
 @app.post("/tags")
 def post_tag(
     body: s.CreateTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_tag(conn, body, account_id=str(account_id))
@@ -1335,7 +1336,7 @@ def post_tag(
 def patch_tag(
     tag_id: int,
     body: s.UpdateTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.update_tag(conn, tag_id, body)
 
@@ -1343,7 +1344,7 @@ def patch_tag(
 @app.delete("/tags/{tag_id}")
 def delete_tag(
     tag_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_tag(conn, tag_id)
 
@@ -1352,7 +1353,7 @@ def delete_tag(
 def post_attach_tag(
     property_id: int,
     body: s.AttachTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.attach_tag(conn, property_id, body)
 
@@ -1361,18 +1362,18 @@ def post_attach_tag(
 def delete_property_tag(
     property_id: int,
     tag_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.detach_tag(conn, property_id, tag_id)
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# Every route runs on the JWT-scoped `TenantConn`; the SPA reads membership
 # itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Pure display read — RLS scopes it, so no account is resolved."""
     return pipeline_module.list_stages(conn)
@@ -1381,7 +1382,7 @@ def get_pipeline_stages(
 @app.post("/pipeline/stages")
 def post_pipeline_stage(
     body: s.CreateStageIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.create_stage(conn, body, account_id=account_id)
@@ -1390,7 +1391,7 @@ def post_pipeline_stage(
 @app.post("/pipeline/stages/reorder")
 def post_pipeline_stages_reorder(
     body: s.ReorderStagesIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.reorder_stages(conn, body, account_id=account_id)
@@ -1400,7 +1401,7 @@ def post_pipeline_stages_reorder(
 def patch_pipeline_stage(
     stage_id: int,
     body: s.UpdateStageIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.update_stage(conn, stage_id, body, account_id=account_id)
@@ -1409,7 +1410,7 @@ def patch_pipeline_stage(
 @app.delete("/pipeline/stages/{stage_id}")
 def delete_pipeline_stage(
     stage_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.archive_stage(conn, stage_id, account_id=account_id)
@@ -1418,7 +1419,7 @@ def delete_pipeline_stage(
 @app.post("/pipeline/cards")
 def post_pipeline_card(
     body: s.AddPipelineCardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.add_card(conn, body, account_id=account_id)
@@ -1428,7 +1429,7 @@ def post_pipeline_card(
 def patch_pipeline_card(
     property_id: int,
     body: s.MoveCardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.move_card(conn, property_id, body, account_id=account_id)
@@ -1437,7 +1438,7 @@ def patch_pipeline_card(
 @app.delete("/pipeline/cards/{property_id}")
 def delete_pipeline_card(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.remove_card(conn, property_id, account_id=account_id)
@@ -1450,7 +1451,7 @@ def delete_pipeline_card(
 
 @app.get("/pipeline/shares")
 def get_pipeline_shares(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return shares_module.list_pipeline_shares(conn)
 
@@ -1458,7 +1459,7 @@ def get_pipeline_shares(
 @app.post("/pipeline/shares")
 def post_pipeline_share(
     body: s.SharePipelineIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     shares_module.grant(
@@ -1471,7 +1472,7 @@ def post_pipeline_share(
 def delete_pipeline_share(
     account_id: uuid.UUID,
     side: s.ShareSide,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Stop sharing my board with `account_id` (side=shared_with) or leave theirs (shared_with_me)."""
     return shares_module.revoke_pipeline(conn, str(account_id), side)
@@ -1484,7 +1485,7 @@ def delete_pipeline_share(
 @app.post("/dismissals")
 def post_dismissal(
     body: s.DismissPropertyIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return dismissals_module.dismiss(conn, body, account_id=account_id)
@@ -1493,7 +1494,7 @@ def post_dismissal(
 @app.delete("/dismissals/{property_id}")
 def delete_dismissal(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """RLS-only: "dismissed" is read under the plural acting_account_ids() (the caller's
     accounts without X-Act-As), so undo lifts every active row the caller can see."""

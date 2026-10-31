@@ -27,6 +27,7 @@ from fastapi.routing import APIRoute  # noqa: E402
 from api import dependencies as deps  # noqa: E402
 from api import tenant_pool  # noqa: E402
 from api.main import app  # noqa: E402
+from tests.api._routes import flat_routes  # noqa: E402
 
 # Routes that legitimately authenticate some other way. Every entry is a deliberate,
 # reviewable decision — adding one should take an argument, not a reflex.
@@ -86,31 +87,10 @@ def _bucket(route: APIRoute) -> str:
     return "public"
 
 
-def _collect(routes) -> list[APIRoute]:
-    """Flatten the app's route table across FastAPI versions.
-
-    Older versions splice an included router's routes directly into app.routes; since
-    0.13x `include_router` instead appends one `_IncludedRouter` wrapper holding the
-    original router. Recurse through either shape, or this returns almost nothing and
-    every assertion below passes vacuously (which is what the mount sentinel catches).
-    """
-    out: list[APIRoute] = []
-    for r in routes:
-        if isinstance(r, APIRoute):
-            out.append(r)
-            continue
-        nested = getattr(getattr(r, "original_router", None), "routes", None)
-        if nested is None:
-            nested = getattr(r, "routes", None)
-        if nested:
-            out.extend(_collect(nested))
-    return out
-
-
 def _api_routes() -> list[tuple[str, str, APIRoute]]:
     return [
         (method, r.path, r)
-        for r in _collect(app.routes)
+        for r in flat_routes(app.routes)
         for method in sorted(r.methods - {"HEAD", "OPTIONS"})
     ]
 

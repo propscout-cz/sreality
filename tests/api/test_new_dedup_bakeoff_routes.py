@@ -151,12 +151,9 @@ def test_buckets_passes_its_keys_through_and_needs_them(
 
 
 def test_every_bakeoff_route_is_admin_gated() -> None:
-    # Recent FastAPI wraps an included router rather than splicing its routes
-    # into app.routes, so the walk has to descend — the same shape
-    # tests/api/test_admin_route_coverage.py::_collect uses.
-    from tests.api.test_admin_route_coverage import _collect
+    from tests.api._routes import flat_routes
 
-    routes = [r for r in _collect(api_main.app.routes)
+    routes = [r for r in flat_routes(api_main.app.routes)
               if r.path.startswith(PREFIX)]
     assert len(routes) == 6, [r.path for r in routes]
     for route in routes:

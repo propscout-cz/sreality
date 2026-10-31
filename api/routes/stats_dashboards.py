@@ -96,7 +96,7 @@ def make_property_card(conn: psycopg.Connection, dashboard_id: uuid.UUID) -> dic
 @router.put("/stats/dashboards/{dashboard_id}/property-card")
 def put_property_card(
     dashboard_id: uuid.UUID,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return make_property_card(conn, dashboard_id)
 
@@ -137,7 +137,7 @@ def share_dashboard(
 def post_dashboard_share(
     dashboard_id: uuid.UUID,
     body: s.ShareDashboardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     _own: uuid.UUID = Depends(tenant_pool.require_account_id),  # sharing never delegates: 403 under X-Act-As
 ) -> dict[str, Any]:
     return share_dashboard(conn, deps.open_background_conn, dashboard_id, body)
@@ -147,14 +147,14 @@ def post_dashboard_share(
 def delete_dashboard_share(
     dashboard_id: uuid.UUID,
     account_id: uuid.UUID,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Revoke (owner) or leave (recipient): the party policy decides which; 0 rows -> 404."""
     return shares.revoke_dashboard(conn, str(dashboard_id), str(account_id))
 
 
 @router.get("/stats/dashboard")
-def get_stats_dashboard(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any] | None:
+def get_stats_dashboard(conn: tenant_pool.TenantConn) -> dict[str, Any] | None:
     """The caller's working board, or null (the SPA then shows its default charts)."""
     return working_board(conn)
 
@@ -162,7 +162,7 @@ def get_stats_dashboard(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[st
 @router.put("/stats/dashboard")
 def put_stats_dashboard(
     body: s.StatsDashboardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     """Replace the caller's working board; every chart was validated by the stats registry (422)."""
