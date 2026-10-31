@@ -6,7 +6,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery, type QueryKey } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -55,6 +55,7 @@ import {
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
+import { revalidateTables, type SyncTable } from '@/lib/curationSync';
 import { isOwed } from '@/lib/revalidate';
 import { slotInstant, viewingSlot, viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
@@ -843,5 +844,98 @@ describe('<CurationBlock> viewings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     expect(screen.getByText('Smazat prohlídku?')).toBeInTheDocument();
+  });
+});
+
+/* D3 (lib/useServerDraft): an open editor follows what it edits while the user has
+ * not touched it, and saves only what they changed — so an edit made elsewhere,
+ * re-read as the curation clock re-reads it, is never written back. */
+describe('<CurationBlock> editors follow the server while untouched', () => {
+  const VIEWING: Note = { ...NOTE, body: 'Vzít metr.', viewing_at: '2030-05-14T12:30:00+00:00' };
+  const changedElsewhere = (qc: QueryClient, table: SyncTable) =>
+    act(async () => {
+      await revalidateTables(qc, [table]);
+    });
+
+  beforeEach(() => {
+    vi.mocked(updatePropertyNote).mockReset().mockResolvedValue(NOTE as never);
+    vi.mocked(setPropertyArtifactLink).mockReset();
+  });
+
+  it('a note edited elsewhere shows in the open editor; moving the date sends the date alone', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    const { qc } = renderWithReads();
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
+
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...VIEWING, body: 'Vzít metr a baterku.' }] } as never);
+    await changedElsewhere(qc, 'property_notes');
+    await waitFor(() => expect(editor).toHaveValue('Vzít metr a baterku.'));
+
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '16:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() =>
+      expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-14T14:00:00.000Z' }));
+  });
+
+  it('a date moved elsewhere is followed, and a body edit sends the body alone', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
+    await user.clear(editor);
+    await user.type(editor, 'Nový text.');
+
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [{ ...VIEWING, body: 'Jinde.', viewing_at: '2030-05-15T12:30:00+00:00' }],
+    } as never);
+    await changedElsewhere(qc, 'property_notes');
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    await waitFor(() => expect(within(fields).getByLabelText('Den prohlídky')).toHaveValue('2030-05-15'));
+    expect(editor).toHaveValue('Nový text.');
+
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { body: 'Nový text.' }));
+  });
+
+  it('an artifact link changed elsewhere shows in the open field, and saving it writes nothing', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    expect(field).toHaveValue(LINK.url);
+
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, { ...LINK, url: 'https://example.cz/jinde' }]]));
+    await changedElsewhere(qc, 'property_artifact_links');
+    await waitFor(() => expect(field).toHaveValue('https://example.cz/jinde'));
+
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
+    expect(await screen.findByRole('link', { name: 'example.cz/jinde' })).toBeInTheDocument();
+    expect(setPropertyArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it('keeps a typed artifact link over a change made elsewhere, and saves it', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+    vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/moje' });
+    const { qc } = renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    await user.clear(field);
+    await user.type(field, 'https://example.cz/moje');
+
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, { ...LINK, url: 'https://example.cz/jinde' }]]));
+    await changedElsewhere(qc, 'property_artifact_links');
+    expect(field).toHaveValue('https://example.cz/moje');
+
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
+    await waitFor(() => expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://example.cz/moje'));
   });
 });

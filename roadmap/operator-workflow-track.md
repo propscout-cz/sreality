@@ -7,7 +7,7 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0 merged 2026-10-31, W1 PR #2205)
+### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0 + W1 merged 2026-10-31, W2 PR #2209)
 
 Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock per (account, family), advanced only
 by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
@@ -20,10 +20,10 @@ follow; Q4 the extension stays a sender; Q5 last-writer-wins.
 - [x] **W0: the API commits before it answers (#2198, PR #2204, merged 2026-10-31).** `tenant_pool.TenantConn` (function
       scope) on every tenant route and both account helpers, so a failed COMMIT answers 503 or 500, never a 200; the
       charter (design doc, ADR-0008, three GLOSSARY terms).
-- [x] **W1: one table→read map and one read scheduler (#2199, SPA, PR #2205).** `lib/curationSync.ts` +
+- [x] **W1: one table→read map and one read scheduler (#2199, SPA, PR #2205, merged 2026-10-31).** `lib/curationSync.ts` +
       `lib/revalidate.ts` (owed reads, cache-enforced holds, patch ledger), the stale-side rule; closes D1, D2, D5.
       What it built differently: the design's § 12 build ledger.
-- [ ] **W2: curation editors follow the server (#2200, SPA).** `lib/useServerDraft.ts` in the six editors; the
+- [x] **W2: curation editors follow the server (#2200, SPA, PR #2209).** `lib/useServerDraft.ts` in the six editors; the
       kanban drag and phone pager holds (D3).
 - [ ] **W3: the curation clock (#2201, DB), after W0 is live.** Migration 696 (claimed with the merge coordinator
       before the file is written), its census and live lane, the `curation_sync` health alarm.

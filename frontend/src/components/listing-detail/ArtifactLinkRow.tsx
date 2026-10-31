@@ -11,6 +11,7 @@ import { ApiError, deletePropertyArtifactLink, setPropertyArtifactLink } from '@
 import { artifactLinkLabel, safeHttpUrl } from '@/lib/artifactLink';
 import { actOpts, useActAs } from '@/lib/acting';
 import { revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { useArtifactLinks } from '@/lib/useArtifactLinks';
 import { fmtAbsolute } from '@/lib/format';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -35,7 +36,6 @@ export default function ArtifactLinkRow({
   const labelId = useId();
   const actAs = useActAs();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,6 +43,19 @@ export default function ArtifactLinkRow({
    * and the row closes once the read has landed, so it never shows the old link. */
   const linkQ = useArtifactLinks();
   const link = linkQ.data?.get(property_id) ?? null;
+  /* The field follows the stored link while untouched, so a link set elsewhere shows
+   * in an open field and is never saved back over (D3, lib/useServerDraft). */
+  const draft = useServerDraft(link?.url ?? '', trimDraft);
+  const open = () => {
+    draft.reset();
+    setError(null);
+    setEditing(true);
+  };
+  const close = () => {
+    setEditing(false);
+    draft.reset();
+    setError(null);
+  };
   const failed = readFailed(linkQ);
   const reread = () => revalidateTables(qc, ['property_artifact_links'], actAs);
 
@@ -50,8 +63,7 @@ export default function ArtifactLinkRow({
     mutationFn: (url: string) => setPropertyArtifactLink(property_id, url, ...actOpts(actAs)),
     onSuccess: async () => {
       await reread();
-      setEditing(false);
-      setError(null);
+      close();
     },
     onError: (err: ApiError | Error) => setError(err.message || 'Odkaz se nepodařilo uložit'),
   });
@@ -61,7 +73,6 @@ export default function ArtifactLinkRow({
     onSuccess: async () => {
       await reread();
       setConfirmingRemove(false);
-      setDraft('');
       setError(null);
     },
     onError: (err: ApiError | Error) => {
@@ -70,20 +81,21 @@ export default function ArtifactLinkRow({
     },
   });
 
-  const trimmed = draft.trim();
+  const trimmed = draft.value.trim();
   const showForm = !failed && !linkQ.isLoading && editing;
+  /* Only what the user typed is saved: an untouched field closes, whatever the link is now. */
   const submit = () => {
-    if (!safeHttpUrl(trimmed)) {
+    const next = draft.edited();
+    if (next == null) {
+      close();
+      return;
+    }
+    if (!safeHttpUrl(next)) {
       setError(NOT_A_URL);
       return;
     }
-    if (link && trimmed === link.url) {
-      setEditing(false);
-      setError(null);
-      return;
-    }
     setError(null);
-    save.mutate(trimmed);
+    save.mutate(next);
   };
 
   const iconBtn =
@@ -112,8 +124,10 @@ export default function ArtifactLinkRow({
           inputMode="url"
           aria-labelledby={bare ? undefined : labelId}
           aria-label={bare ? label : undefined}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          value={draft.value}
+          onChange={(e) => draft.onChange(e.target.value)}
+          onFocus={draft.onFocus}
+          onBlur={draft.onBlur}
           placeholder="https://…"
           maxLength={URL_MAX}
           autoFocus
@@ -124,10 +138,7 @@ export default function ArtifactLinkRow({
         />
         <button
           type="button"
-          onClick={() => {
-            setEditing(false);
-            setError(null);
-          }}
+          onClick={close}
           disabled={save.isPending}
           className={quiet}
         >
@@ -154,11 +165,7 @@ export default function ArtifactLinkRow({
           </span>
           <button
             type="button"
-            onClick={() => {
-              setDraft(link.url);
-              setError(null);
-              setEditing(true);
-            }}
+            onClick={open}
             aria-label="Upravit odkaz na artefakt"
             title="Upravit odkaz"
             className={`${iconBtn} hover:text-[var(--color-ink)]`}
@@ -197,11 +204,7 @@ export default function ArtifactLinkRow({
     body = (
       <button
         type="button"
-        onClick={() => {
-          setDraft('');
-          setError(null);
-          setEditing(true);
-        }}
+        onClick={open}
         className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
       >
         <span aria-hidden>+</span> {label}
