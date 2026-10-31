@@ -14,6 +14,7 @@ import { isSupabaseConfigured, supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
 import { resetReads } from './revalidate';
+import { useCurationSync } from './curationSyncOwner';
 import { syncAppBadge } from './appBadge';
 import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
@@ -196,6 +197,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       void endPushHere();
     }
   }, [loading, userId, sessionUncertain, queryClient]);
+
+  /* Curation sync (lib/curationSyncOwner): this window follows the signed-in
+   * user's curation through the curation clock. Declared AFTER the identity
+   * effect on purpose: on a change of user React runs every changed effect's
+   * cleanup before any setup, so a switch is stop → resetReads + clear() →
+   * start, and the new owner never sees the previous account's cache. Keyed on
+   * the user id: the hourly token refresh restarts nothing. */
+  useCurationSync(loading ? null : userId);
 
   /* Push rides the notifications gate, once the plan is read (admins never
    * wait for it): turning true (a launch, a sign-in) re-sends this device's

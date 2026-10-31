@@ -7,7 +7,7 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0–W2 merged 2026-10-31, W3 built, the 696 apply owed)
+### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0–W2 merged 2026-10-31, W3 and W4 built, the 696 apply owed)
 
 Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock per (account, family), advanced only
 by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
@@ -30,8 +30,13 @@ follow; Q4 the extension stays a sender; Q5 last-writer-wins.
       `tests/test_curation_sync_census.py` (a)–(j), the live lane `tests/test_curation_clock_live.py`, the
       `curation_sync` health alarm (`triggers`, `board_bumps`). What it built differently: the design's § 12 build
       ledger.
-- [ ] **W4: the clock reader in the SPA (#2202), after W1, W2 and the 696 apply.** One owner loop, 5 s / 15 s, the
-      same-browser nudge.
+- [ ] **W4: the clock reader in the SPA (#2202): built, PR pending; merges after W3 (the 696 apply).**
+      `lib/curationSyncOwner.ts` (one owner per signed-in window, mounted by `AuthProvider` after the identity effect:
+      5 s / 15 s while visible, at once on show, focus / online / the same-browser nudge, back-off, permanent-error
+      mode, the first-answer age rule), `fetchCurationClock` (never acting) + its read-contract test, `isPhoneFrame()`,
+      `applySyncQueryDefaults` called in `main.tsx`, the `reads` and `load` cells of `curation_sync`. What it built
+      differently: the design's § 12 build ledger. After its deploy: the Railway status, the § 9 read-only check, the
+      operator's two-window recipe, and the gate clock starts.
 - [ ] **Gate #2203**, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of statement time, no
       clock deadlocks, the API error rate at baseline. Whoever closes it sets the index row back to 🟢.
 
