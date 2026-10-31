@@ -127,44 +127,6 @@ def test_the_four_lanes_are_the_only_members_of_the_group():
     assert members == set(LOCATION_BATCH_WORKFLOWS)
 
 
-def test_the_resolve_drain_is_out_of_the_shared_group():
-    """The 2026-09-10 amendment, as a rail rather than a comment.
-
-    Re-adding the drain to `location-batch` would re-starve it behind the self-chaining
-    archive sweeps — the failure this reverses. Its own two guards have to stay: the
-    per-lane job group (never overlaps itself) and, in the drain, the `scheduled_jobs`
-    lease CAS (never overlaps the Railway worker lane)."""
-    wf = _workflow("location_resolve.yml")
-    group = (wf.get("concurrency") or {}).get("group", "")
-    # Mode-conditional, not absent: `full-resolve` opens with a corpus-wide bulk INSERT into
-    # dirty_locations and MUST still queue with the heavy lanes — on 2026-09-10 it overlapped
-    # the archive sweep, which bulk-inserts the same keys, and killed it with
-    # LockNotAvailable (run 34456211996). The drain must NOT be grouped that way.
-    assert "github.event.inputs.mode == 'full-resolve'" in group, (
-        "the resolve lane's group is no longer mode-conditional — a full-resolve enqueue "
-        "running beside an archive sweep deadlocks it out of dirty_locations"
-    )
-    assert f"'{OUTER_GROUP}'" in group, "full-resolve must still land in the heavy-lane group"
-    assert group.split("||")[-1].strip().strip("}").strip() != f"'{OUTER_GROUP}'", (
-        "the drain branch of the group expression is the heavy-lane group — that re-starves it"
-    )
-    inner = {
-        job["concurrency"]["group"]
-        for job in wf["jobs"].values()
-        if isinstance(job.get("concurrency"), dict)
-    }
-    assert inner == {"location-resolve"}, (
-        f"the drain's per-lane guard is {inner!r} — without it two ticks overlap"
-    )
-    assert "lease" in inspect.getsource(drain.main), (
-        "drain.main no longer takes the scheduled_jobs lease — with the outer group gone "
-        "that CAS is the only thing keeping a second drainer out"
-    )
-
-
-# ---------------------------------------------------------------- 2. loader_db helpers
-
-
 def test_env_timeout_s_never_yields_an_unbounded_or_broken_budget(monkeypatch):
     """0 means "no timeout" to Postgres — the exact state this mechanism exists to stop —
     so it is not reachable from an env var, and neither is a typo."""
@@ -308,10 +270,13 @@ def test_every_statement_the_drain_runs_outside_a_batch_is_bounded_too():
     )
 
 
-def test_the_sweep_gets_its_own_much_larger_budget():
-    """One corpus-wide anti-join is honestly minutes of work, so the per-batch ceiling
-    would fail it every time — but "minutes" is not "forever"."""
-    assert drain.DEFAULT_SWEEP_TIMEOUT_S > drain.DEFAULT_BATCH_TIMEOUT_S * 10
+def test_the_sweep_gets_its_own_budget_inside_the_workers_lease():
+    """One sweep window is an anti-join over a 250k-id slice: far more than a per-listing
+    statement (so the per-batch ceiling would fail it) and, measured, at most a few seconds —
+    and since W2 it runs under the worker lane's lease (740 s), which one window must never
+    outlive."""
+    assert drain.DEFAULT_SWEEP_TIMEOUT_S > drain.DEFAULT_BATCH_TIMEOUT_S * 5
+    assert drain.DEFAULT_SWEEP_TIMEOUT_S <= 600
     assert "SWEEP_TIMEOUT_ENV" in inspect.getsource(drain.enqueue_full_sweep)
 
 
@@ -600,12 +565,9 @@ def _chain_script() -> str:
 def _group_members() -> set[str]:
     """Every workflow that can hold `location-batch`, read off the workflows themselves.
 
-    NOT `LOCATION_BATCH_WORKFLOWS`, and the difference is the whole point of this helper:
-    `location_resolve.yml` joins the group through a mode-conditional EXPRESSION (a
-    full-resolve dispatch, or its own 03:17 cron), so a test that compares group membership
-    by equality — as `test_the_four_lanes_are_the_only_members_of_the_group` does, correctly,
-    for the permanent members — cannot see it. The chain must yield to it all the same: a
-    full-resolve is one of the two runs a chain hop evicted on 2026-09-10.
+    NOT `LOCATION_BATCH_WORKFLOWS`: read off the workflows' own concurrency blocks, so a
+    member that joins the group through an expression cannot hide from the chain's yield (the
+    resolve lane did, until the location programme's W2 took it off GitHub on 2026-10-31).
     """
     members = set()
     for path in sorted(_WORKFLOWS.glob("*.yml")):
@@ -647,14 +609,16 @@ def test_a_self_chaining_member_yields_to_every_other_member_first():
 
 
 def test_the_chain_asks_every_workflow_that_can_hold_the_group():
-    """The list the yield walks is a hand-written env var, and the one member most easily
-    left off it — `location_resolve.yml` — is the one the incident was about."""
+    """The list the yield walks is a hand-written env var; the member most easily left off it
+    (the resolve lane, before W2 took it off GitHub) was the one the 2026-09-10 incident was
+    about."""
     declared = set(_chain_step()["env"]["GROUP_WORKFLOWS"].split())
 
     assert declared == _group_members(), (
         f"GROUP_WORKFLOWS is {sorted(declared)}; the workflows that can hold "
         f"{OUTER_GROUP!r} are {sorted(_group_members())}"
     )
+
 
 
 # The chain's `gh run list` calls differ only by the jq filter they pass, so a stub that
@@ -820,63 +784,6 @@ def test_the_chain_yields_to_a_run_already_waiting_in_the_group(tmp_path: Path):
 
 
 @NEEDS_JQ
-def test_the_waiting_query_sees_a_queued_sibling_among_finished_runs(tmp_path: Path):
-    """gh's own filter, applied to gh's own shape. The list a real query returns is mostly
-    COMPLETED runs; a filter that let those through would make the chain yield for ever, and
-    one that dropped the queued run would make it never yield at all."""
-    out, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        waiting=_runs((10, "completed"), (11, "completed"), (4242, "queued")))
-
-    assert dispatched == []
-    assert "chain yields" in out and "4242" in out
-
-
-RESOLVE = "location_resolve.yml"
-
-
-def test_only_the_resolve_lane_is_counted_by_dispatch(tmp_path: Path):
-    """The exception has to stay an exception. Every other member of `location-batch` is in
-    it whatever fired the run; the resolve lane is the one whose group is decided per run."""
-    env = _chain_step()["env"]
-    dispatch_only = set(env["DISPATCH_ONLY_WORKFLOWS"].split())
-
-    assert dispatch_only == {RESOLVE}
-    assert dispatch_only <= set(env["GROUP_WORKFLOWS"].split())
-    # The rule is only expressible if the query asks for the field it keys on.
-    assert "--json databaseId,status,event" in _chain_script()
-
-
-@NEEDS_JQ
-def test_a_queued_resolve_drain_tick_does_not_stop_the_chain(tmp_path: Path):
-    """THE PRODUCTION DEFECT (2026-09-12). Hop 34681906422 yielded to run 34682089264 — a
-    routine 07:58 `schedule` tick of the resolve lane, mode=drain, which runs in
-    `location-resolve-lane` and never touches `location-batch`. `gh run list` cannot report
-    a run's group, so counting every queued resolve run meant a `*/15` cadence stopped the
-    chain almost every time and handed a 212 000-body backlog back to a cron that fires ~7
-    times a day."""
-    out, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        waiting_by_workflow={RESOLVE: _runs((34682089264, "queued", "schedule"))})
-
-    assert len(dispatched) == 1, out
-    assert "chain yields" not in out
-
-
-@NEEDS_JQ
-def test_a_dispatched_resolve_run_still_stops_the_chain(tmp_path: Path):
-    """The other half, and the reason the resolve lane is in the list at all: an operator's
-    full-resolve IS in `location-batch`, and it is one of the two runs a chain hop evicted on
-    2026-09-10."""
-    out, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        waiting_by_workflow={RESOLVE: _runs((555, "queued", "workflow_dispatch"))})
-
-    assert dispatched == []
-    assert "chain yields" in out and "555" in out
-
-
-@NEEDS_JQ
 def test_a_scheduled_tick_of_a_permanent_member_still_stops_the_chain(tmp_path: Path):
     """The exception is ONE workflow wide. The intake's own cron tick is a `schedule` run
     that really is queued on `location-batch` — the run the chain exists to let through."""
@@ -925,3 +832,16 @@ def test_a_summary_the_chain_cannot_read_chains_nothing(tmp_path: Path):
 
     assert dispatched == []
     assert "chain ends" in out
+
+
+@NEEDS_JQ
+def test_the_waiting_query_sees_a_queued_sibling_among_finished_runs(tmp_path: Path):
+    """gh's own filter, applied to gh's own shape. The list a real query returns is mostly
+    COMPLETED runs; a filter that let those through would make the chain yield for ever, and
+    one that dropped the queued run would make it never yield at all."""
+    out, dispatched = _run_chain(
+        tmp_path, BACKLOG,
+        waiting=_runs((10, "completed"), (11, "completed"), (4242, "queued")))
+
+    assert dispatched == []
+    assert "chain yields" in out and "4242" in out
