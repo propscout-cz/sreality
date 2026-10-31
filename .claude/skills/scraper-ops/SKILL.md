@@ -473,7 +473,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 **Detail drain** (the worker's drain lane, or an ad-hoc `--drain-only` / flagless run):
 - `DRAIN reclaimed stale claims=N` when a prior SIGKILLed run left claims behind
 - `DRAIN starting source=... max_claims=... workers=W batch=B budget=Ss` once
-- `DETAIL id=... gone (is_active=false)` / `DETAIL id=... error: ...` per non-ok listing (`error: content-free page: …` = an interstitial or a category page that parsed to nothing: an attempt, never a write); `DRAIN gone-rate breaker: ...` once when >50% of ≥20 ingest fetches read gone (later gones become failures); `gone flip matched no listing` when a gone key matches no row (INFO for a never-fetched NEW id); `could not mark id=... inactive` = a failed flip, retried (counted in errors)
+- `DETAIL id=... gone (is_active=false)` / `DETAIL id=... error: ...` per non-ok listing (`content-free page` = parsed to nothing: an attempt, never a write); `DRAIN gone-rate breaker: ...` once when >50% of ≥20 ingest fetches read gone (later gones become failures); `gone flip matched no listing` when a gone key matches no row (INFO for a never-fetched NEW id); `could not mark id=... inactive` = a failed flip, retried (counted in errors)
 - `DRAIN flush size=N new=... updated=... unchanged=... images=...` per batched write
   (one transaction per ~100 listings)
 - `DRAIN progress claimed=N new=... updated=... unchanged=... gone=... errors=... buffered=...`
