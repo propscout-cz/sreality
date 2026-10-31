@@ -7,7 +7,7 @@ import { APP_NAME } from '../../frontend/src/lib/brand';
 import { h, keepFocus } from './dom';
 import { lineIcon } from './glyphs';
 
-export interface Frame {
+interface Frame {
   /* The property's page in the app; null hides "V aplikaci". */
   appHref: string | null;
   /* Signed in as; null hides the account menu. */

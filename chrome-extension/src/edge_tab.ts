@@ -2,7 +2,9 @@
  * its side panel only on a user action — this tab, a search card or the toolbar
  * icon). A tab on the right edge in a closed shadow root: the PS mark, the deal's
  * stage badge, this ad's price drop and the MF yield, read through the page's
- * store; hidden while the side panel is open in this window. */
+ * store; hidden while the side panel is open in this window (the drop's price
+ * history is read only while the tab shows). Under an extension update it offers
+ * the page reload that reconnects it. */
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { APP_NAME, APP_SHORT } from '../../frontend/src/lib/brand';
@@ -10,6 +12,7 @@ import { MF_YIELD_TITLE, mfYieldText } from '../../frontend/src/lib/mfReference'
 import type { PortalRef } from '../../frontend/src/lib/portalIds';
 import type { PipelineStage } from '../../frontend/src/lib/types';
 import { themeHost } from './appearance';
+import { EXTENSION_RELOADED_DETAIL } from './config';
 import { h, keepFocus } from './dom';
 import { codeBadge, moveBadge, stageLook } from './glyphs';
 import { tabMarkList } from './panel_logic';
@@ -38,8 +41,13 @@ const CSS = `
     display: inline-flex; align-items: center; justify-content: center;
     font: 600 14px ui-serif, Georgia, serif; color: var(--color-chrome-accent); background: var(--color-chrome);
   }
-  .mono, .code, .move { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
-  .l4 { font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-ink-3); }
+  .mono, .code, .move {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums;
+  }
+  .l4 {
+    font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
   .tab-mf { display: flex; flex-direction: column; gap: 1px; font-size: 11px; line-height: 14px; }
   .tab-mf .mono { font-weight: 600; }
   .code { font-size: 11px; line-height: 14px; font-weight: 500; padding: 1px 5px; border-radius: var(--radius-xs); }
@@ -79,8 +87,12 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
   let listing: PortalListing | null = null;
   let move: number | null = null;
   let panelOpen = false;
+  /* The extension was updated or reloaded under this page: this script can reach nothing. */
+  let orphaned = false;
   /* Every ad shown is a new epoch: an answer for the last one never paints. */
   let epoch = 0;
+  /* The epoch whose price history was asked for. */
+  let historyAt = -1;
   let mount: Mount | null = null;
 
   /* Made on the first paint, and again after a portal that rebuilds <html>'s children took it. */
@@ -106,20 +118,39 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
     const curation = pid != null ? store.curation(pid) : null;
     const view = listing != null && curation != null ? { ...listing, ...curation } : listing;
     keepFocus(shadow, () => {
-      if (panelOpen) {
+      if (panelOpen && !orphaned) {
         box.replaceChildren();
         return;
       }
       const tab = h('button', 'tab');
       tab.dataset.key = 'open';
-      tab.title = 'Otevřít panel';
       // Named by its content (no aria-label), so the marks it shows are announced too.
       const mark = h('span', 'tab-mark', APP_SHORT);
       mark.setAttribute('aria-hidden', 'true');
-      tab.append(h('span', 'sr', `${APP_NAME} — otevřít panel`), mark, ...marks(view, move, store.list('stages').data));
-      tab.onclick = () => onOpen();
+      if (orphaned) {
+        tab.title = EXTENSION_RELOADED_DETAIL;
+        tab.append(h('span', 'sr', `${APP_NAME} — ${EXTENSION_RELOADED_DETAIL}`), mark, h('span', 'l4', 'Obnovit'));
+        tab.onclick = () => location.reload();
+      } else {
+        tab.title = 'Otevřít panel';
+        const shown = marks(view, move, store.list('stages').data);
+        tab.append(h('span', 'sr', `${APP_NAME} — otevřít panel`), mark, ...shown);
+        tab.onclick = () => onOpen();
+      }
       box.replaceChildren(tab);
     });
+  }
+
+  /* This ad's last price move, read once per ad and only while the tab shows. */
+  async function loadMove(): Promise<void> {
+    const row = listing;
+    const at = epoch;
+    if (panelOpen || historyAt === at || !row?.found || row.property_id == null) return;
+    historyAt = at;
+    const history = await store.call<PriceHistory>({ type: 'get_price_history', property_id: row.property_id });
+    if (at !== epoch || !history.ok) return;
+    move = adMove(priceSeries(row, history.data, Date.now()), row.listing_id);
+    paint();
   }
 
   /* This page's ad: its marks are read afresh. */
@@ -135,11 +166,7 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
     listing = row;
     if (row?.pipeline?.in_pipeline) store.ensure('stages');
     paint();
-    if (!row?.found || row.property_id == null) return;
-    const history = await store.call<PriceHistory>({ type: 'get_price_history', property_id: row.property_id });
-    if (at !== epoch || !history.ok) return;
-    move = adMove(priceSeries(row, history.data, Date.now()), row.listing_id);
-    paint();
+    await loadMove();
   }
 
   store.subscribe((changed) => {
@@ -162,6 +189,11 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
     /* The side panel opened or closed in this window. */
     setPanelOpen(open: boolean): void {
       panelOpen = open;
+      paint();
+      void loadMove();
+    },
+    setOrphaned(): void {
+      orphaned = true;
       paint();
     },
   };

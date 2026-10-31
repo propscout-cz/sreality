@@ -190,14 +190,20 @@ export function createPanel(store: Store) {
     show(at, res.data[0] ?? null);
   }
 
-  /* The active tab shows no ad. */
-  function clear(): void {
-    epoch++;
+  /* The active tab shows no ad: the empty card under the account menu, or the sign-in
+   * card — the panel opened from the toolbar is where a first sign-in happens. */
+  async function clear(): Promise<void> {
+    const at = ++epoch;
     ref = null;
     series = null;
     mine.reset(null);
     agents.reset(null);
-    set({ ...initial(), phase: 'empty', email: state.email });
+    // Known signed in: the empty card at once; else the session read decides.
+    set({ ...initial(), phase: state.email != null ? 'empty' : 'loading', email: state.email });
+    const auth = await store.call<AuthState>({ type: 'get_auth_state' });
+    if (!auth.ok) setIf(at, { phase: 'error', error: auth.detail });
+    else if (!auth.data.signedIn) setIf(at, { phase: 'signed_out', email: null });
+    else setIf(at, { phase: 'empty', email: auth.data.email });
   }
 
   async function ingest(): Promise<void> {
@@ -242,7 +248,8 @@ export function createPanel(store: Store) {
   store.onAccountChange((user) => {
     ingestForbidden = false;
     if (ref == null) {
-      set({ email: null, accountOpen: false });
+      state = { ...state, email: null };
+      void clear();
       return;
     }
     if (user != null) {

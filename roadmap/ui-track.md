@@ -128,12 +128,13 @@ toolkit work.
   it replaces the 2026-10-28 rulings "opens by itself", "covers the page", "not Chrome's sidePanel API" and "starts
   folded under 1280 px"). Our page `sidepanel.html`, one global panel per window showing the active tab's subject;
   opened by the toolbar icon, a listing's edge tab (the old folded tab, with its marks) or a search card's badge.
-  Deleted with the overlay: `sheet.ts`, the fold and its storage keys, the 1280 px rule, the covering CSS.
+  Deleted with the overlay: `sheet.ts`, the fold code, the 1280 px rule, the covering CSS. Nothing reads the
+  `panelFolded` / `panelMinimized` keys any more; installs keep them, inert (no cleanup owed).
 - **Done 2026-10-28 (branch `cleanup/lookup-old-panel-fields`): the lookup drops what only the old panel read** —
   `kind_label`, `sreality_id` and the ad's `subtype` / `last_seen_at`.
 - **Next (not built):** the section cards on `components/Panel.tsx` first, then the property page's tabs and the
   other detail pages. Owed by the panel: the chat and the three agents need their backends (agent platform). The
-  `content.js` growth the sheet caused (199,330 → 300,721 B) is gone with it: 194,123 B since the side panel, the
+  `content.js` growth the sheet caused (199,330 → 300,721 B) is gone with it: 195,001 B since the side panel, the
   filter registry riding only in `sidepanel.js`, an extension page loaded once per window.
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)

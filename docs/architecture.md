@@ -1111,8 +1111,17 @@ rules. Identify which one a task belongs to before you start.
   detail page's **edge tab** (`edge_tab.ts`, a closed shadow root on the right edge: PS mark, stage
   badge, this ad's price drop, MF, read through the page's store) or a search card's badge sends
   `{type:'panel', open:true}`, on which the background calls `sidePanel.open({windowId})` before any
-  await (the gesture must still be live). The edge tab hides while the port is up; the panel's
-  unload closes the port and brings it back. Its top bar holds the wordmark, "V aplikaci" (the
+  await (the gesture must still be live). The edge tab hides while the port is up (reading the
+  drop's price history only while it shows); the panel's unload closes the port and brings it back,
+  and so does `pagehide` into the back/forward cache, which closes ports without an onDisconnect in
+  the frozen page (`pageshow` calls the panel again; a load-time call replaces any port still held).
+  An extension update orphans the open pages' scripts: the edge tab turns into "obnovte stránku"
+  (its click reloads), and the panel, which cannot reach them, words its empty card to cover it. A
+  tab switch never loses work: `panel_mine` keeps a half-typed note per property, `panel_agents`
+  saves an edit still in its 500 ms debounce at once against its own run, and keeps a run in flight
+  per ad (the lookup serves finished runs only), so going back shows it running instead of offering
+  a second metered run. With no ad the panel still reads the session: the sign-in card when signed
+  out, else the empty card under the account menu. Its top bar holds the wordmark, "V aplikaci" (the
   `{VITE_APP_BASE_URL}/listing/{source}/{native}` deep link), the account menu (email + Odhlásit) and
   › (`window.close()`, which closes the side panel). Under it: the header (`panel_header.ts`: deal, status, days on market, title, address,
   the property type's fact chips, this ad's price in the live colour with its last move and per-m²
@@ -1188,7 +1197,7 @@ rules. Identify which one a task belongs to before you start.
   Keep the portal pages' bundle small. (2026-10-28: the overlay sheet grew `content.js` by half, most
   of it the filter registry `lib/enums.ts` loads; 2026-10-31: the panel moved to the side panel's
   own bundle, `sidepanel.js`, an extension page loaded once per window, and `content.js` is back to
-  194,123 B unminified, the registry no longer in it.)
+  195,001 B unminified, the registry no longer in it.)
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` (`transport.ts`, one `send` for the content script and the side
   panel) so `host_permissions` covers the API origin and the fetch isn't subject to the portal's

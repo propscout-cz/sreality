@@ -14,16 +14,22 @@ maxima, remax, mmreality, ceskereality).
   the document root in the user's scheme and theme). One global panel per
   window: once open it stays open across the window's tabs and shows the
   **active tab's subject** — a detail page's ad, or the search card last opened
-  in it; any other tab shows "Otevřete inzerát na podporovaném portálu.".
+  in it; any other tab shows "Vyberte inzerát na podporovaném portálu. Pokud
+  ho máte otevřený, obnovte stránku." (signed out: the sign-in card). A tab
+  switch keeps what is in progress: a half-typed note waits for its property,
+  an edit to the yield assumptions is saved at once, and an estimate still
+  running is shown again when its ad comes back (never a second run).
   Chrome opens a side panel only on a user action, so it never opens by
   itself: the toolbar icon toggles it, and a detail page's **edge tab**
   (`src/edge_tab.ts`, a closed shadow root on the right edge: the PS mark, the
   deal's stage badge, this ad's price drop and the MF yield) or a search
   card's yield badge opens it; the edge tab hides while the panel is open in
-  that window. The top bar: the wordmark, **V aplikaci ↗** (the ad's page in
-  the app, `/listing/{source}/{native_id}`), the **⋯** account menu (email +
-  **Odhlásit**, which signs out in every tab) and **›**, which closes the
-  panel. Under it:
+  that window (and reads its price history only while it shows). After an
+  extension update the open pages' scripts are cut off: the edge tab then
+  says so and its click reloads the page. The top bar: the wordmark,
+  **V aplikaci ↗** (the ad's page in the app, `/listing/{source}/{native_id}`),
+  the **⋯** account menu (email + **Odhlásit**, which signs out in every tab)
+  and **›**, which closes the panel. Under it:
   - **The header** (`src/panel_header.ts`): deal · status · days on market, the
     title (type, disposition, area), the address, the facts by property type —
     a flat its floor, condition and ownership; a house its plot, condition and
@@ -300,7 +306,10 @@ npm install
 npm run build
 ```
 
-The output lands in `chrome-extension/dist/`. `npm test` runs the extension's
+The output lands in `chrome-extension/dist/`. While working on one entry,
+`npm run watch -- sidepanel` (or `content`, `background`) rebuilds just that one
+on every save, after one full `npm run build`; reload the extension (and the
+portal page, for `content`) to pick it up. `npm test` runs the extension's
 unit tests (`src/*.test.ts`) with Node's built-in runner, which needs Node
 ≥ 22.18 to strip the types; `npm run type-check` type-checks them with the rest.
 

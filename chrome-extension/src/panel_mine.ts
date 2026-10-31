@@ -46,10 +46,16 @@ export function createMine(deps: MineDeps) {
   let error: string | null = null;
   let pickerError: string | null = null;
   let notes: Notes = blankNotes();
-  /* Drafts live outside the render (typing never repaints), reset with the property. */
+  /* Drafts live outside the render (typing never repaints), reset with the property —
+   * bar a half-typed note, which waits for its property's re-open (a tab switch back). */
   let draft = '';
+  const drafts = new Map<number, string>();
   let shareDraft = false;
   let editDraft = '';
+  store.onAccountChange(() => {
+    drafts.clear();
+    draft = '';
+  });
 
   function blankNotes(): Notes {
     return {
@@ -61,18 +67,23 @@ export function createMine(deps: MineDeps) {
   /* A new panel open (another ad, or the same one for another account): everything
    * this card held goes, the notes are read afresh. */
   function reset(next: PortalListing | null): void {
+    if (propertyId != null) {
+      if (draft.trim() !== '') drafts.set(propertyId, draft);
+      else drafts.delete(propertyId);
+    }
     listing = next;
     closeOpen = false;
     confirmRemove = false;
     picker = null;
     error = null;
     pickerError = null;
-    notes = blankNotes();
-    draft = '';
     shareDraft = false;
     editDraft = '';
     const id = next?.found ? next.property_id : null;
     propertyId = id;
+    draft = id != null ? drafts.get(id) ?? '' : '';
+    notes = blankNotes();
+    notes.expanded = draft !== '';
     if (id == null) return;
     store.load('stages');
     store.load('collections', true);
@@ -123,8 +134,10 @@ export function createMine(deps: MineDeps) {
     return shareAudience(ids, new Map(collections.map((c) => [c.id, c])));
   }
 
+  /* `landed` runs on success even when the panel has moved on (what it settles is not this card's). */
   async function noteWrite<T>(
     message: Parameters<Store['call']>[0], failed: string, row: boolean, apply: (list: Note[], data: T) => Note[],
+    landed?: () => void,
   ): Promise<boolean> {
     const mine = notes;
     if (propertyId == null) return false;
@@ -133,6 +146,7 @@ export function createMine(deps: MineDeps) {
     mine.error = null;
     repaint();
     const res = await store.call<T>(message);
+    if (res.ok) landed?.();
     if (mine !== notes) return false;
     mine.busy = false;
     mine.rowBusy = false;
@@ -152,10 +166,15 @@ export function createMine(deps: MineDeps) {
     const id = propertyId;
     const ok = await noteWrite<Note>({
       type: 'add_note', property_id: id, body, shared, origin_listing_ref_id: listing?.listing_id ?? null,
-    }, 'Uložení poznámky selhalo', false, (list, note) => [note, ...list]);
+    }, 'Uložení poznámky selhalo', false, (list, note) => [note, ...list], () => {
+      // Saved: its draft goes, wherever the panel is now.
+      drafts.delete(id);
+      if (id === propertyId) {
+        draft = '';
+        shareDraft = false;
+      }
+    });
     if (!ok) return;
-    draft = '';
-    shareDraft = false;
     // A list never read is not a list of one: read the whole one, the new note included.
     if (notes.list == null) void loadNotes(id);
     repaint();

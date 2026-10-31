@@ -84,8 +84,9 @@ export default defineConfig(({ mode }) => {
   return {
     build: {
       outDir: 'dist',
-      // Only the first pass clears dist — the second would delete content.js.
-      emptyOutDir: mode === 'content',
+      // Only the first pass clears dist — a later one would delete content.js — and never
+      // a watched rebuild (`npm run watch -- <entry>`), which keeps the other entries' files.
+      emptyOutDir: mode === 'content' && !process.argv.includes('--watch'),
       sourcemap: true,
       rollupOptions: {
         input: { [mode]: resolve(__dirname, entry.file) },

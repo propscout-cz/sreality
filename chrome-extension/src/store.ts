@@ -20,7 +20,8 @@
  *  7. One live-deal rule for every surface (isLiveDeal).
  *  8. Focus is never stolen from the portal page (dom.ts keepFocus).
  *  9. Two contexts stay true: a write that lands is told (deps.written), and the
- *     other context's store re-reads that property through an ad of it it holds. */
+ *     other context's store re-reads that property through an ad of it it holds —
+ *     stamped like a write of its own, so no lookup sent before it undoes it. */
 
 import type {
   ApiMessage, ApiResult, PipelineCardResult, PipelineMembership, PortalListing, PortalLookupItem,
@@ -288,7 +289,9 @@ export function createStore(deps: StoreDeps) {
     /* The other context wrote this property: read it again, if one held here. */
     reread(propertyId: number): void {
       const ad = ads.get(propertyId);
-      if (ad != null) void lookup([ad]);
+      if (ad == null) return;
+      written.set(propertyId, ++clock);
+      void lookup([ad]);
     },
     curation: (propertyId: number): Curation | null => curations.get(propertyId) ?? null,
     list: <K extends ListKind>(kind: K) => lists[kind] as ListView<Lists[K]>,

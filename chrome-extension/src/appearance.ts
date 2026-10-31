@@ -8,6 +8,8 @@
 
 import { DEFAULT_APPEARANCE, followSystemDark, paintAppearance, type Appearance } from '../../frontend/src/lib/appearance';
 import { SESSION_KEY, onStoredChange } from './session';
+import type { Store } from './store';
+import type { AuthState } from './types';
 
 type Pin = 'light' | undefined;
 /* Weak, so a host the page or a surface has removed is collected, not kept
@@ -35,9 +37,11 @@ export function themeHost(host: Element, pin?: 'light'): void {
   paint(host, pin);
 }
 
-export function followAppearance(read: () => Promise<Appearance | null>): void {
+/* The profile's pick, asked through the context's store, on every host themed here. */
+export function followAppearance(store: Pick<Store, 'call'>): void {
   const ask = (): void => {
-    void read().then((next) => {
+    void store.call<AuthState>({ type: 'get_auth_state' }).then((auth) => {
+      const next = auth.ok ? auth.data.appearance : null;
       if (next == null || (next.scheme === current.scheme && next.theme === current.theme)) return;
       current = next;
       repaint();

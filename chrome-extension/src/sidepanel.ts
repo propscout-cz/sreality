@@ -16,7 +16,7 @@ import { createSubjectRouter } from './panel_logic';
 import { onAccountChange } from './session';
 import { createStore, sleep } from './store';
 import { send } from './transport';
-import type { AuthState, PanelCall, PortMessage } from './types';
+import type { PanelCall, PortMessage } from './types';
 
 document.title = APP_NAME;
 const style = document.createElement('style');
@@ -31,12 +31,14 @@ const store = createStore({
   onAccountChange,
   written: (propertyId) => {
     const message: PortMessage = { type: 'property_written', property_id: propertyId };
-    for (const port of ports.values()) port.postMessage(message);
+    for (const port of ports.values()) {
+      try { port.postMessage(message); } catch { /* that tab just left: its disconnect drops it */ }
+    }
   },
 });
 const panel = createPanel(store);
 const router = createSubjectRouter((subject) => {
-  if (subject == null) panel.clear();
+  if (subject == null) void panel.clear();
   else void panel.open(subject.ref, subject.url);
 });
 
@@ -46,8 +48,12 @@ function drop(tabId: number, port: chrome.runtime.Port): void {
   router.forget(tabId);
 }
 
-function connect(tabId: number): void {
-  if (ports.has(tabId)) return;
+/* `fresh`: the tab called as a new document loaded (or came back from bfcache), so a
+ * port still held for it is dead, its disconnect not yet heard: replace it. */
+function connect(tabId: number, fresh = false): void {
+  const old = ports.get(tabId);
+  if (old != null && !fresh) return;
+  old?.disconnect();
   const port = chrome.tabs.connect(tabId, { name: PANEL_PORT });
   ports.set(tabId, port);
   router.connecting(tabId);
@@ -62,7 +68,8 @@ function connect(tabId: number): void {
 }
 
 chrome.runtime.onMessage.addListener((message: PanelCall, sender) => {
-  if (message.type === 'panel' && sender.tab?.id != null && router.ours(sender.tab)) connect(sender.tab.id);
+  const tabId = sender.tab?.id;
+  if (message.type === 'panel' && tabId != null && router.ours(sender.tab)) connect(tabId, !message.open);
 });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => { router.activate(tabId, windowId); });
 chrome.tabs.onAttached.addListener((tabId, { newWindowId }) => {
@@ -83,7 +90,4 @@ void chrome.windows.getCurrent().then(async ({ id }) => {
 });
 
 // The profile's scheme and theme on this page (appearance.ts).
-followAppearance(async () => {
-  const auth = await store.call<AuthState>({ type: 'get_auth_state' });
-  return auth.ok ? auth.data.appearance : null;
-});
+followAppearance(store);

@@ -38,7 +38,8 @@ function harness() {
     reply('lookup_listings', ok(rows));
     await answer;
   };
-  return { store, out, sent, told, notified, reply, flush, seed, switchAccount: (u: string | null) => switchAccount(u) };
+  const switchTo = (u: string | null): void => switchAccount(u);
+  return { store, out, sent, told, notified, reply, flush, seed, switchAccount: switchTo };
 }
 
 const ok = (data: unknown): ApiResult<unknown> => ({ ok: true, data });
@@ -251,13 +252,20 @@ test('9. two contexts stay true: a landed write is told, the other side re-reads
   await failed;
   assert.deepEqual(h.told, [1], 'only the write that landed');
 
-  // The other context wrote property 2: one lookup of the ad this side holds, and its row lands.
+  // The other context wrote property 2: one lookup of the ad this side holds, and its row
+  // lands; a lookup sent before the re-read, answering after it, does not undo it.
+  const older = h.store.lookup([]);
   h.store.reread(2);
-  const asked = h.out.find((o) => o.message.type === 'lookup_listings')?.message;
+  const asked = h.out.filter((o) => o.message.type === 'lookup_listings').at(-1)?.message;
   assert.deepEqual(asked, { type: 'lookup_listings', items: [{ source: 'idnes', source_id: 'x2' }] });
-  h.reply('lookup_listings', ok([row(2, { source: 'idnes', source_id: 'x2', dismissed: true })]));
+  h.out.splice(h.out.findIndex((o) => o.message === asked), 1)[0]
+    .resolve(ok([row(2, { source: 'idnes', source_id: 'x2', dismissed: true })]));
   await h.flush();
   assert.equal(h.store.curation(2)?.dismissed, true);
+  h.reply('lookup_listings', ok([row(2, { source: 'idnes', source_id: 'x2', dismissed: false })]));
+  await older;
+  assert.equal(h.store.curation(2)?.dismissed, true, 'the older answer predates the write');
+  assert.deepEqual(h.told, [1], 'a re-read is no write: nothing is told back (no loop)');
   h.store.reread(3);  // never looked up here: nothing to show, nothing sent
   h.switchAccount('user-b');
   h.store.reread(1);  // the account change forgot every ad

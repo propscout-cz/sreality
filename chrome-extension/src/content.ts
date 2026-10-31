@@ -18,7 +18,7 @@ import { runIndexOverlay, type IndexOverlayHandle } from './index_overlay';
 import { onAccountChange } from './session';
 import { createStore, sleep } from './store';
 import { send } from './transport';
-import type { AuthState, PanelCall, PanelSubject, PortMessage, RouteMessage } from './types';
+import type { PanelCall, PanelSubject, PortMessage, RouteMessage } from './types';
 
 let subject: PanelSubject | null = null;
 /* The side panel of this tab's window, while it is open. */
@@ -35,7 +35,10 @@ function callPanel(open: boolean): void {
   const message: PanelCall = { type: 'panel', open };
   try {
     chrome.runtime.sendMessage(message).catch(() => { /* nobody answers a call */ });
-  } catch { /* orphaned by an extension reload: only a page reload helps */ }
+  } catch {
+    // Orphaned (chrome.runtime.id is gone): an extension update or reload under this page.
+    edge.setOrphaned();
+  }
 }
 
 function setSubject(next: PanelSubject | null): void {
@@ -112,11 +115,14 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // The profile's scheme and theme on every themed shadow host (appearance.ts).
-followAppearance(async () => {
-  const auth = await store.call<AuthState>({ type: 'get_auth_state' });
-  return auth.ok ? auth.data.appearance : null;
-});
+followAppearance(store);
 renderForUrl(window.location.href);
 callPanel(false);
-// A page back from the back/forward cache lost its port as it went in: call again.
+/* The back/forward cache closes the panel's port as the page goes in, and the frozen
+ * page hears no onDisconnect: drop it here; back out, call the panel again. */
+window.addEventListener('pagehide', (e) => {
+  if (!e.persisted) return;
+  panelPort = null;
+  edge.setPanelOpen(false);
+});
 window.addEventListener('pageshow', (e) => { if (e.persisted) callPanel(false); });

@@ -21,10 +21,12 @@ function alertLine(text: string): HTMLElement {
   return p;
 }
 
-/* The active tab is no listing on a portal we read (or its page predates the extension). */
+/* The active tab shows no ad: a search page, a page off our portals — or a listing whose
+ * page predates an extension update (the panel cannot tell: only a reload reconnects it). */
 export function emptyCard(): HTMLElement {
   const card = buildCard({ title: 'Žádný inzerát' });
-  card.body.appendChild(h('p', '', 'Otevřete inzerát na podporovaném portálu.'));
+  const text = 'Vyberte inzerát na podporovaném portálu. Pokud ho máte otevřený, obnovte stránku.';
+  card.body.appendChild(h('p', '', text));
   return card.section;
 }
 

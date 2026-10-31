@@ -163,9 +163,21 @@ export interface AgentsDeps {
 export function createAgents(deps: AgentsDeps) {
   const { store, repaint } = deps;
   let s: Estimate = blank(null);
-  let patchTimer: ReturnType<typeof setTimeout> | null = null;
-  /* Every panel open is a new generation: a poll or a read for the last one stops applying. */
+  /* Runs in flight, by ad: the lookup serves only finished ones, so a re-open of the ad
+   * (a tab switch back) takes this one up again instead of offering a second metered run. */
+  const running = new Map<number, Estimate>();
+  /* An edit waiting out its debounce, bound to the estimate it was made on; and the last save. */
+  let pending: { timer: ReturnType<typeof setTimeout>; send: () => void } | null = null;
+  let saved: Promise<void> = Promise.resolve();
+  /* Every panel open is a new generation: a read for the last one stops applying. */
   let gen = 0;
+
+  // The new account's panel must not show (or save into) the last account's runs.
+  store.onAccountChange(() => {
+    running.clear();
+    if (pending != null) clearTimeout(pending.timer);
+    pending = null;
+  });
 
   async function loadQuota(at: number): Promise<void> {
     const res = await store.call<BillingMe>({ type: 'get_billing' });
@@ -174,44 +186,60 @@ export function createAgents(deps: AgentsDeps) {
     repaint();
   }
 
-  /* A new panel open: the latest estimate of this ad, and the allowance. */
+  /* A new panel open: the ad's run in flight, else its latest estimate (read after the
+   * last save lands, so an edit just flushed is in it), and the allowance. */
   function reset(listing: PortalListing | null): void {
+    flush();
     gen++;
-    if (patchTimer != null) clearTimeout(patchTimer);
-    patchTimer = null;
-    s = blank(listing);
+    const live = listing?.listing_id != null ? running.get(listing.listing_id) : undefined;
+    s = live ?? blank(listing);
     if (!isSaleFlat(listing) || listing == null) return;
     const at = gen;
     void loadQuota(at);
     const latest = listing.latest_estimation;
-    if (latest == null) return;
-    void store.call<EstimationRun>({ type: 'get_estimation', run_id: latest.estimation_id }).then((res) => {
-      if (at !== gen || !res.ok || res.data.status !== 'success') return;
-      seed(s, res.data);
-      repaint();
+    if (live != null || latest == null) return;
+    void saved
+      .then(() => store.call<EstimationRun>({ type: 'get_estimation', run_id: latest.estimation_id }))
+      .then((res) => {
+        if (at !== gen || !res.ok || res.data.status !== 'success') return;
+        seed(s, res.data);
+        repaint();
+      });
+  }
+
+  async function patch(est: Estimate): Promise<void> {
+    if (est.run == null) return;
+    const res = await store.call<EstimationRun>({
+      type: 'patch_scenario', run_id: est.run.id, body: scenarioBody(est),
     });
+    if (!res.ok) {
+      est.error = `Uložení selhalo: ${friendlyDetail(res.detail)}`;
+      if (est === s) repaint();
+      return;
+    }
+    // Nothing visible depends on the saved run: keep it without a repaint (focus stays in the field).
+    est.run = res.data;
+    if (est.error != null) {
+      est.error = null;
+      if (est === s) repaint();
+    }
   }
 
   function schedulePatch(): void {
-    if (patchTimer != null) clearTimeout(patchTimer);
-    const at = gen;
-    patchTimer = setTimeout(async () => {
-      patchTimer = null;
-      if (s.run == null) return;
-      const res = await store.call<EstimationRun>({ type: 'patch_scenario', run_id: s.run.id, body: scenarioBody(s) });
-      if (at !== gen) return;
-      if (!res.ok) {
-        s.error = `Uložení selhalo: ${friendlyDetail(res.detail)}`;
-        repaint();
-        return;
-      }
-      // Nothing visible depends on the saved run: keep it without a repaint (focus stays in the field).
-      s.run = res.data;
-      if (s.error != null) {
-        s.error = null;
-        repaint();
-      }
-    }, PATCH_DEBOUNCE_MS);
+    const est = s;
+    if (pending != null) clearTimeout(pending.timer);
+    const send = (): void => {
+      pending = null;
+      saved = patch(est);
+    };
+    pending = { timer: setTimeout(send, PATCH_DEBOUNCE_MS), send };
+  }
+
+  /* An edit still in its debounce is saved now, to its own run: the status already says "uloženo". */
+  function flush(): void {
+    if (pending == null) return;
+    clearTimeout(pending.timer);
+    pending.send();
   }
 
   /* An edit updates the yield and the hints IN PLACE — a repaint would rebuild the input. */
@@ -243,49 +271,53 @@ export function createAgents(deps: AgentsDeps) {
     schedulePatch();
   }
 
-  /* The poll runs up to ~6 min, longer than an operator stays on one listing: every
-   * apply is generation-guarded. The run still completes server-side and the next
-   * open of THAT listing loads it; only the display is dropped. */
+  /* The poll runs up to ~6 min, longer than an operator stays on one listing: it
+   * goes on while another ad is shown and lands in its own estimate (`running`), which
+   * a re-open of this ad shows again; an account change ends it. */
   async function createRun(): Promise<void> {
-    const subject = s.listing;
-    if (subject?.listing_id == null || s.busy) return;
-    const at = gen;
-    s.busy = true;
-    s.error = null;
+    const est = s;
+    const subject = est.listing;
+    const id = subject?.listing_id;
+    if (subject == null || id == null || est.busy) return;
+    const alive = (): boolean => running.get(id) === est;
+    const settle = (): void => {
+      running.delete(id);
+      est.busy = false;
+      if (est !== s) return;
+      // The allowance moved (a run consumed a slot) or is spent (the 429): read it again.
+      void loadQuota(gen);
+      repaint();
+    };
+    est.busy = true;
+    est.error = null;
+    running.set(id, est);
     repaint();
     const res = await store.call<EstimationRun>({
-      type: 'create_estimation', listing_id: subject.listing_id,
+      type: 'create_estimation', listing_id: id,
       estimate_kind: estimateKindFor(subject), category_main: subject.category_main,
     });
-    if (at !== gen) return;
+    if (!alive()) return;
     if (!res.ok) {
-      s.busy = false;
       // 429: the monthly allowance is spent (the atomic quota gate).
-      if (res.status === 429) {
-        void loadQuota(at);
-        s.error = 'Měsíční limit odhadů vyčerpán.';
-      } else {
-        s.error = `Odhad se nepodařilo spustit: ${friendlyDetail(res.detail)}`;
-      }
-      repaint();
+      est.error = res.status === 429
+        ? 'Měsíční limit odhadů vyčerpán.'
+        : `Odhad se nepodařilo spustit: ${friendlyDetail(res.detail)}`;
+      settle();
       return;
     }
     let row = res.data;
     for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
       if (row.status === 'success' || row.status === 'failed') break;
       await sleep(POLL_INTERVAL_MS);
-      if (at !== gen) return;  // navigated away: stop burning polls
+      if (!alive()) return;
       const next = await store.call<EstimationRun>({ type: 'get_estimation', run_id: row.id });
       if (!next.ok) break;
       row = next.data;
     }
-    if (at !== gen) return;
-    // A metered run consumed a slot (success, or failed once created).
-    void loadQuota(at);
-    s.busy = false;
-    if (row.status !== 'success') s.error = row.error_message ?? 'Odhad se nedokončil včas.';
-    else seed(s, row);
-    repaint();
+    if (!alive()) return;
+    if (row.status !== 'success') est.error = row.error_message ?? 'Odhad se nedokončil včas.';
+    else seed(est, row);
+    settle();
   }
 
   function field(key: Axis, label: string, suffix: string, value: number | null, hint?: string, disabled = false): HTMLElement {
