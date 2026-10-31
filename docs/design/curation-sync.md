@@ -465,9 +465,9 @@ export const HOLD_TTL_MS = 140_000;                           // ONLINE time; = 
    - Holds, rollbacks, releases and debts from an older epoch become no-ops. The previous account's in-flight write can therefore neither paint its rollback into the new cache nor park the new account's keys.
 
 **First answer (Decision 14b).**
-- Before the first read, `start()` owes every synced query already cached. Normally there are none, because the identity effect clears the cache.
-- On the first answer, a family counts as changed iff `age_ms ≤ (now − t0) + SYNC_START_MARGIN_MS` (10 s), where `t0` is `performance.now()` at start. Both sides are durations, so there is no clock skew. The window is the measured time since start, not a constant.
-- Why this is exact: every synced read in the cache started after `t0`. A commit missed by such a read therefore bumped (`changed_at`) no earlier than `t0 − d`, where `d` is the gap between a deferred bump and its commit becoming visible (milliseconds; the 10 s margin covers it). This holds however late the first good answer arrives, including after a PostgREST outage at boot.
+- Before the first read, `start()` owes every synced query already cached, in its family's mode (`familyTargets` of every own family, plus the `['acting']` root), **bar an initial load in flight** [V, W4]. Those are the norm, not none: `RequireAuth` mounts the page in the very commit in which the session is read, and React runs the page's effects (which start its reads) before `AuthProvider`'s. Such a load started within that commit, inside the margin below; owing it would read every mounted synced query twice on every launch (the cost R22 rejects). A read with data, or a refetch in flight, is owed.
+- On the first answer, a family counts as changed iff `age_ms ≤ (now − t0) + SYNC_START_MARGIN_MS` (10 s), where `t0` is `performance.now()` at start and `now` the answer's arrival. Both sides are durations, so there is no clock skew. The window is the measured time since start, not a constant.
+- Why this is exact: every synced read left unowed started after `t0`, give or take the commit that mounted the owner. A commit missed by such a read therefore bumped (`changed_at`) no earlier than `t0 − d`, where `d` is that commit's few milliseconds plus the gap between a deferred bump and its commit becoming visible; the 10 s margin covers it. This holds however late the first good answer arrives, including after a PostgREST outage at boot.
 - Later answers diff with `clockChanges` and collect all `familyTargets` into one `revalidate` call per answer. A disappeared row is treated as a change of that family and owner.
 - R22 rejects the empty-baseline alternative.
 
@@ -542,16 +542,16 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 - The loop never renders React.
 
 **Decision 12 (rewritten): the owner owns every trigger, and every trigger is visibility-gated.**
-- **Interval:** `SYNC_INTERVAL_MS[frame]` while `document.visibilityState === 'visible'`. Hidden means no timer and zero requests.
-- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now. A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V].
-- **`focus`, `online` and the nudge** (debounced 100 ms): request a read, ignored while hidden, coalesced with the read in flight (one follow-up), and never less than 1 s after the last read started.
+- **Interval:** `SYNC_INTERVAL_MS[frame]` from the last read's start (and never sooner than 1 s after its answer) while `document.visibilityState === 'visible'`; the frame is `isPhoneFrame()`, read at each answer. Hidden means no timer and zero requests: hiding aborts a read in flight and drops a pending nudge [V, W4].
+- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now. A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V]. A read that started under 1 s ago is already the shown page's, so the pair a bfcache restore fires reads once [V, W4].
+- **`focus`, `online` and the nudge** (coalesced over 100 ms): request a read, ignored while hidden, coalesced with the read in flight (one follow-up), and never less than 1 s after the last read started. As built, each asks for a read that starts after it: `focus` also takes one that started under 1 s before it (a desktop tab switch fires `visibilitychange` then `focus`, one read), `online` and the nudge do not (a read from before cannot have reached the server, or seen that commit) [V, W4]. A trigger that is already due reads at once; the start's first read waits one task, so a StrictMode remount sends one request.
 - **Errors:**
-  - Transient (network, 5xx, 408, 429): interval of 5 s × 2ⁿ, capped at 60 s, reset on success.
-  - Permanent (400, 401, 403, 404, e.g. the kill switch or a renamed view): no interval; triggers spaced at least 60 s apart.
+  - Transient (network, the 20 s deadline, 5xx, 408, 429): interval of 5 s × 2ⁿ, capped at 60 s, reset on success.
+  - Permanent (any other 4xx: 400, 401, 403, 404, e.g. the kill switch or a renamed view): no interval; triggers spaced at least 60 s apart. A transient failure while in this mode keeps it (no back-off timer); the first answer ends it [V, W4].
   - No toast and no retry storm.
 - The global focusManager is untouched (R12), and `refetchOnWindowFocus:false` stays, with its reason now stated: the owner supersedes it.
-- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. W4 calls it in `main.tsx` beside the owner; W1 left it uncalled, so reconnect refetch stays on until the clock read exists [V, W1].
-- The nudge is posted from one `MutationCache` subscription on every mutation `success`. Under W0, success means committed. There is a `typeof BroadcastChannel` fallback, and the whole owner is gated on `isSupabaseConfigured()`.
+- `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. `main.tsx` calls it beside the owner (W4; W1 left it uncalled until the clock read existed) [V, W4].
+- The nudge is posted from one `MutationCache` subscription on every mutation `success`, held by the owner (`qc.getMutationCache().subscribe`), so `stop()` ends it and a signed-out window posts nothing [V, W4]. Under W0, success means committed. Without `BroadcastChannel` the owner neither posts nor listens and still reads on its other triggers, and the whole owner is gated on `isSupabaseConfigured()`.
 
 **Decision 13: mount `useCurationSync(loading ? null : userId)` in `AuthProvider`, declared after the identity effect.**
 - React runs the changed cleanups before the setups, so an account switch runs **stop → `resetReads` + `clear()` → start**.
@@ -566,7 +566,7 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 | sign-in, launch | start; first answer by the age rule |
 | hourly TOKEN_REFRESHED | nothing: keyed on `userId`; each read calls `getSession()` (`index.mjs:524-529`) [V·r] |
 | account switch, sign-out | stop → reset + clear → start / nothing |
-| hidden | no reads |
+| hidden | no reads; a read in flight is aborted |
 | shown, pageshow | abort and read now |
 | focus, online, nudge | one read, ≥ 1 s gap, visible only |
 | PostgREST or DB down | transient back-off; first good answer diffs against the last good one; errored debts re-paid ≤ 3× |
@@ -649,8 +649,8 @@ Cells:
   - This is exact because events are written only in the transaction of a `property_pipeline` change (`api/pipeline.py:280,326,380`) [V·r].
   - `now()` is the transaction start, which is ≤ the bump's `clock_timestamp()`.
   - The seed makes it hold from the moment of apply.
-- `reads` (W4): **Watch** (never paged) when the `pg_stat_statements` call count for `curation_clock_public` has not advanced for 24 h. `quiet_since` is carried forward in the cell facts through `previous_result`. Not measured without the extension (CI). Worker read privilege on `pg_stat_statements` is [A].
-- `load` (W4): **Watch** when the clock read's share of total statement time between two measurements is ≥ 5 % (the re-costing trigger).
+- `reads` (W4): **Watch** (never paged) when the `pg_stat_statements` call count for `curation_clock_public` has not advanced for 24 h (`THRESHOLDS["CURATION_CLOCK_QUIET_H"]`). As built, the count is the entries run as `authenticated` whose text names the view (the pattern is a bound parameter, so the check's own statement never matches; a verification query run as postgres never counts). `quiet_since` is carried forward in the cell facts through `previous_result`; an evicted entry (fewer calls, no reset) is no advance, a statistics reset (`pg_stat_statements_info.stats_reset`) with calls since is one. Not measured without the extension (CI; the PREPARE sweep allowlists the read, the `cron.` precedent) [V, W4]. Worker read privilege on `pg_stat_statements`, and PostgREST's read being recorded under `authenticated` (it runs after `SET LOCAL ROLE`), are [A].
+- `load` (W4): **Watch** when the clock read's share of total statement time (`total_exec_time`) between two measurements is ≥ 5 % (`THRESHOLDS["CURATION_CLOCK_LOAD_PCT"]`, the re-costing trigger). A first measurement, a statistics reset or an evicted entry takes a baseline: the cell is Not measured (`unknown`, its facts kept for the next run) [V, W4].
 
 Registry edits (W3):
 - `CHECKS` (and the comment "these thirteen" → fourteen; the budget arithmetic comment at `verify_pipeline.py:449` becomes 7 × 45 + 180 + 5 + 5 = 505 s: when every alarm falls due at once, the last one defers one pass, an existing tested path).
@@ -1206,3 +1206,16 @@ Where a wave built something other than the design, the section concerned now sa
 3. `tests/test_curation_clock_live.py`: a fifth tenant E; item 6 counts firings and adds the property delete and the `account_id` move (§ 9). A trigger missing from `collection_properties`, `property_tags` or `property_attachments` had passed the first cascade case [V].
 4. `docs/architecture.md`: the DB half is a paragraph in rule 18 beside W0's (§ 6 lists it).
 5. The 696 apply (MCP, before the merge, after W0 is live) and its § 9 catalog check are owed.
+
+**W4 (#2202), as built** (two commits on W3's head `cb1dcd054`, the owner `d8a55f59a`):
+1. `lib/curationSyncOwner.ts`: the owner as § 3.5 lists it, a closure per `startCurationSync(qc)` (no module state, no cache entry). Decision 12 and Decision 14b now say what it does where it refines them: `focus` takes a read that started under 1 s before it, `online` and the nudge need one that starts after them (the nudge keeps the newest receipt time over its 100 ms coalescing, so a nudge arriving inside that window is never answered by an older read); a show within 1 s of a read's start is that read (a bfcache restore fires `pageshow` and `visibilitychange`: one read); hiding aborts the read in flight; the interval runs from the last read's start but never sooner than 1 s after its answer; a transient failure while in permanent-error mode keeps that mode; a due trigger reads at once, the start's first read one task later (StrictMode's remount stops it unsent); the next read is armed before an answer is processed, so a processing error cannot stop the loop.
+2. `lib/curationSyncOwner.ts` `cachedReads`: the start-time owe skips an initial load in flight (Decision 14b says why: owing it would read every mounted synced query twice per launch, the R22 cost); the charter's "normally there are none" did not hold, `RequireAuth` mounts the page in the commit that reads the session and the page's effects start its reads before `AuthProvider`'s.
+3. The nudge's `MutationCache` subscription is the owner's (`qc.getMutationCache().subscribe`), not `lib/mutationCache.ts`'s: `stop()` unsubscribes it, so only a signed-in window posts.
+4. `lib/queries.ts` `fetchCurationClock({ signal } = {})` over `CURATION_CLOCK_COLS` (`account_id,family,counter,mine,age_ms`); `tests/test_curation_clock_read_contract.py` pins it to the latest `curation_clock_public` (696), to `ClockRow`'s fields in `lib/curationSync.ts`, and to never naming `actAs`.
+5. `lib/phoneShell.ts` `isPhoneFrame()` = narrow screen and no desktop-view override, read live (the same two inputs as `usePhoneShell`); the owner reads it at each answer.
+6. `lib/auth.tsx` mounts `useCurationSync(loading ? null : userId)` after the identity effect; `lib/auth.test.tsx` pins stop → `resetReads` → `clear()` → start on a switch, stop alone on a sign-out, no start before the session is read nor on a token refresh; `lib/auth.push.test.tsx` mocks the owner away.
+7. `main.tsx` calls `applySyncQueryDefaults(queryClient)` (W1's item 14 closed); its focus comment names the owner.
+8. `scripts/checks/platform.py`: `reads` and `load` as § 3.9 now states, from one `pg_stat_statements` aggregate (`_CURATION_STATEMENTS_SQL`) plus the check's previous result; two `THRESHOLDS` (`CURATION_CLOCK_QUIET_H` 24, `CURATION_CLOCK_LOAD_PCT` 5.0); `board_bumps` no longer ends the check when the clock is absent. `tests/test_sql_schema_prepare.py` allowlists the read (the platform's extension, absent from the replayed schema, like `cron.`): it PREPAREs against PostgreSQL 17's `pg_stat_statements` [V], and unpreloaded it raises 55000, which the check reads as Not measured. `tests/test_curation_clock_live.py` is unchanged: in the replayed schema both cells read Not measured.
+9. Docs: `docs/architecture.md` Frontend territory (the clock is the re-read trigger, staleTime the backstop), `docs/design/pipeline-sharing.md` (a revoke reaches the recipient through the clock; the empty-read guard stays), `docs/design/health-dashboard.md` and `pipeline-verification.md` (the two cells as built), `references/tenancy.md` (rails), the track bullet.
+10. Tests: `lib/curationSyncOwner.test.ts` 28 (every § 9 case, plus: hiding aborts a read in flight, a page that starts hidden reads nothing, an owner's row maps to acting reads, the start-time owe, an errored debt re-paid at most 3 times, the nudge posted only on success, no `BroadcastChannel`, a signed-out window); `lib/auth.test.tsx` +2; `lib/phoneShell.test.tsx` +2; `tests/scripts/test_checks_curation_sync.py` 23 (17 new); `tests/test_curation_clock_read_contract.py` 3.
+11. Owed after the merge: the Railway status, the § 9 read-only check, the operator's manual recipe (§ 9), then gate #2203's 7 days.

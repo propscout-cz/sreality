@@ -252,7 +252,8 @@ never reset, never rendered.
   the seed); `tests/test_curation_sync_census.py` (a)-(j), each shown to bite; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
   commit-time failure, the read on `curation_clock_pkey`); the health alarm `curation_sync` (`triggers`,
-  `board_bumps`).
+  `board_bumps`; W4's `reads` and `load` watch the browsers' read in `pg_stat_statements`); the SPA's read-contract
+  test `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
 
 ## Composite PK: `property_pipeline` (migration 295)
 

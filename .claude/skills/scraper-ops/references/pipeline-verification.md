@@ -1518,7 +1518,8 @@ latency, skip mix, churn by `end_reason`) are design-doc SQL, reviewed after 7 d
 ## `curation_sync` — does every committed curation change move the clock? (curation sync W3, 2026-10-31)
 
 `check_curation_sync` in `scripts/checks/platform.py`, a platform alarm on the worker every hour, after
-`notifications`, no owner page, a 5 s budget (twelve catalog rows and the board ledger's last day). The curation
+`notifications`, no owner page, a 5 s budget (twelve catalog rows, the board ledger's last day, one
+`pg_stat_statements` aggregate and its own previous result). The curation
 clock (migration 696, `docs/design/curation-sync.md` § 3.9, `.claude/skills/database/references/tenancy.md`
 § Curation clock) is advanced only by twelve deferred triggers, so its failures are silent everywhere else.
 
@@ -1527,8 +1528,12 @@ clock (migration 696, `docs/design/curation-sync.md` § 3.9, `.claude/skills/dat
 | `triggers` | fewer or more than `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` enabled and initially deferred; facts `expected`, `armed`, `found`, `off` (the tables) | a disabled trigger stops every open window following that table's changes with no error; the writer kill switch turns it red by intent while in force; `tests/test_curation_sync_census.py` (j) pins the threshold to `CLOCKED_TABLES` |
 | `board_bumps` | a `property_pipeline_events` row of the last 24 h that has no `board` clock row of its account changed at or after it; facts `events_24h`, `accounts`, `first_missed_at`; Not measured while `curation_clock` is absent | exact: an event is written only in a card change's transaction (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`; the 696 seed stamps every account at the apply |
 
-W4 adds `reads` (Watch: the clock read's `pg_stat_statements` calls stood still for 24 h) and `load` (Watch: its share
-of statement time ≥ 5 %). Both statements run on the replayed schema in `tests/test_curation_clock_live.py`.
+| `reads` (W4, Watch only) | the browsers' clock read (`pg_stat_statements`, run as `authenticated`, naming `curation_clock_public`) has not advanced its calls for `CURATION_CLOCK_QUIET_H` (24 h); facts `calls`, `quiet_since` (carried from the previous result), `stats_reset` | no signed-in window follows curation: the reader kill switch, a read the SPA stopped sending, or nobody signed in; an evicted entry is no advance |
+| `load` (W4, Watch only) | that read's share of all statement time between two measurements ≥ `CURATION_CLOCK_LOAD_PCT` (5 %); facts `clock_ms`, `all_ms`, `stats_reset`, `share_pct`; a first measurement or a statistics reset is Not measured (a baseline) | the planned trigger to re-cost the interval (`docs/design/curation-sync.md` § 3.8; ~0.2 % expected) |
+
+`reads` and `load` are Not measured where `pg_stat_statements` cannot be read: absent (CI's replayed schema, so the
+PREPARE sweep allowlists the read and `tests/test_curation_clock_live.py` sees them Not measured), not preloaded, or
+not granted to the worker's role. The clock's own two statements run on the replayed schema in that live lane.
 
 ## `parsing` — are new ads still read the way they were? (Health dashboard sprint wave 6)
 

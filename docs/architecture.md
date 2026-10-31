@@ -985,9 +985,14 @@ rules. Identify which one a task belongs to before you start.
   `holdReads` (every optimistic write's hold) parks what a pending write's keys owe and cancels
   any full read that starts on them meanwhile (a page read that starts while held passes; one
   already in flight is dropped). The identity effect calls `resetReads` before
-  `queryClient.clear()`. `applySyncQueryDefaults` (no reconnect refetch under the curation roots)
-  is wired only beside the curation clock's read, which replaces it; until then a reconnect
-  re-reads curation as before.
+  `queryClient.clear()`.
+- **The curation clock is the re-read trigger; staleTime is the backstop** (`lib/curationSyncOwner.ts`).
+  One owner per signed-in window (`AuthProvider`, after the identity effect) reads
+  `curation_clock_public` every 5 s (15 s in the phone frame) while visible, at once when shown,
+  on focus / online / a same-browser nudge (`BroadcastChannel`, posted on every mutation success),
+  never while hidden, and owes each moved family's reads through `revalidate`. `main.tsx` calls
+  `applySyncQueryDefaults` beside it, so that read is curation's one reconnect path, and
+  `refetchOnWindowFocus` stays off.
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and
