@@ -28,7 +28,7 @@ import psycopg
 from autodedup.apply_scope import SCOPE_SETTING, Member, Scope, scope_fields
 from autodedup.apply_sql import SETTING_SQL
 from autodedup.blocking import SPLIT_CITY_OBEC_KODS
-from autodedup.cohort import parse_blocks
+from autodedup.cohort import ids_block, parse_blocks
 from autodedup.evaluate import DIFFERENT, RULINGS_FILES, SAME, read_rulings
 from autodedup.export import ARTIFACT_NAME, build_location, fetch_block_ids, run_export
 from autodedup.incremental import GENERATION
@@ -55,6 +55,21 @@ select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.ca
        ll.okres_kod
   from public.listings l
   left join public.listing_location ll on ll.listing_id = l.id
+ where l.id = any(%(ids)s::bigint[])
+"""
+
+# The ads a ruling or a property ties to the listed ones: the other side of a pair verdict,
+# the member set of a group verdict, the sibling ads of their property.
+_TIES_SQL = """
+select case when v.listing_lo = any(%(ids)s::bigint[]) then v.listing_hi else v.listing_lo end
+  from autodedup.verdicts v
+ where v.kind = 'pair'
+   and (v.listing_lo = any(%(ids)s::bigint[]) or v.listing_hi = any(%(ids)s::bigint[]))
+union
+select unnest(v.member_ids) from autodedup.verdicts v
+ where v.kind = 'cluster' and v.member_ids && %(ids)s::bigint[]
+union
+select s.id from public.listings l join public.listings s on s.property_id = l.property_id
  where l.id = any(%(ids)s::bigint[])
 """
 
@@ -92,6 +107,12 @@ def in_apply_scope(conn: psycopg.Connection, listing_ids: Iterable[int]) -> list
     return sorted(int(row[0]) for row in rows if scope.outside(Member.read(row)) is None)
 
 
+def tied_ads(conn: psycopg.Connection, listing_ids: Iterable[int]) -> list[int]:
+    """`_TIES_SQL` over the ids, read only."""
+    _, rows = read(conn, _TIES_SQL, {"ids": sorted(set(listing_ids))})
+    return sorted({int(row[0]) for row in rows if row[0] is not None})
+
+
 def side_block(side: dict[str, Any] | None) -> str | None:
     """A row's block at E300's grain: its quarter in a split city, else its town; None when
     it has no town, or sits in a split city with no quarter (its candidates are the whole city)."""
@@ -104,17 +125,27 @@ def side_block(side: dict[str, Any] | None) -> str | None:
     return None
 
 
-def blocks_for(movers: Iterable[dict[str, Any]]) -> tuple[list[str], int]:
-    """Each mover's old and new block, and the split-city sides with no quarter (never exported)."""
+def _unquartered(mover: dict[str, Any]) -> bool:
+    """A side in a split city with no quarter: its candidates are the whole city."""
+    return any(side and side.get("obec_kod") is not None and side_block(side) is None
+               for side in (mover.get("old"), mover.get("new")))
+
+
+def blocks_for(movers: Iterable[dict[str, Any]], ties: Callable[[list[int]], Iterable[int]]
+               ) -> list[str]:
+    """Each mover's old and new block; a mover with an unquartered side rides ONE `ids` block
+    with every ad `ties` binds to it (`tied_ads`), so both arms hold it and its rulings."""
     keys: dict[str, None] = {}
-    left_out = 0
+    listed: list[int] = []
     for mover in movers:
         for side in (mover.get("old"), mover.get("new")):
             if (block := side_block(side)) is not None:
                 keys[block] = None
-            elif side and side.get("obec_kod") is not None:
-                left_out += 1
-    return list(keys), left_out
+        if _unquartered(mover):
+            listed.append(int(mover["listing_id"]))
+    if listed:
+        keys[ids_block([*listed, *ties(sorted(set(listed)))])] = None
+    return list(keys)
 
 
 def parse_group(text: str) -> tuple[int, int]:
@@ -150,19 +181,24 @@ def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int |
 
 
 def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
-    """The movers whose old block another group exports: not judged here, and not unjudged."""
+    """The movers another group exports (by the old block, or the `ids` block an unquartered one
+    rides): not judged here, and not unjudged."""
     chunk = set(group.get("blocks") or ())
     if not chunk:
         return set()
-    return {int(mover["listing_id"]) for mover in _jsonl(movers)
-            if (block := side_block(mover.get("old"))) is not None and block not in chunk}
+    ids_here = any(block.startswith("ids:") for block in chunk)
+    out: set[int] = set()
+    for mover in _jsonl(movers):
+        old, listed = side_block(mover.get("old")), _unquartered(mover)
+        if not (old in chunk or listed and ids_here or old is None and not listed):
+            out.add(int(mover["listing_id"]))
+    return out
 
 
 def block_sizes(conn: psycopg.Connection, blocks: list[str]) -> dict[str, int]:
     """Each block's ad count, selected exactly as the export will select it."""
-    return {f"{block.grain}:{block.code}": len(fetch_block_ids(
-                conn, block, timeout_ms=_BLOCK_TIMEOUT_MS, negctl_max=1)[0])
-            for block in parse_blocks(" ".join(blocks))}
+    return {text: len(fetch_block_ids(conn, block, timeout_ms=_BLOCK_TIMEOUT_MS, negctl_max=1)[0])
+            for text, block in zip(blocks, parse_blocks(" ".join(blocks)))}
 
 
 def export_cohort(conn_factory: Callable[[], Any], shadow_dir: Path, blocks: list[str]
@@ -276,22 +312,22 @@ def main(argv: list[str] | None = None) -> int:
     from scraper import db
 
     shadow_dir = Path(args.shadow_dir)
-    blocks, left_out = blocks_for(_jsonl(shadow_dir / MOVERS_FILE))
-    if not blocks:
-        raise SystemExit(f"no exportable block in {shadow_dir / MOVERS_FILE}")
     conn = db.connect_read_only()
     try:
+        blocks = blocks_for(_jsonl(shadow_dir / MOVERS_FILE), lambda ids: tied_ads(conn, ids))
+        if not blocks:
+            raise SystemExit(f"no exportable block in {shadow_dir / MOVERS_FILE}")
         sizes = block_sizes(conn, blocks)
     finally:
         conn.close()
     for block in sorted(sizes):
-        print(f"[shadow] {block} {sizes[block]} ads")
+        print(f"[shadow] {block if len(block) < 40 else block[:36] + '…'} {sizes[block]} ads")
     index, count = args.block_group
     chunk = chunks(sizes, count)[index - 1]
     ads = sum(sizes[block] for block in chunk)
     needed = groups_needed(sizes, args.max_blocks, args.max_ads)
-    print(f"[shadow] {len(sizes)} blocks, {sum(sizes.values())} ads; {left_out} split-city sides "
-          f"without a quarter left out; group {index}/{count}: {len(chunk)} blocks, {ads} ads; "
+    print(f"[shadow] {len(sizes)} blocks, {sum(sizes.values())} ads; group {index}/{count}: "
+          f"{len(chunk)} blocks, {ads} ads; "
           f"groups needed under the caps: {needed if needed else 'none (one block is over)'}",
           flush=True)
     if len(chunk) > args.max_blocks or ads > args.max_ads:
@@ -305,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         {"group": f"{index}/{count}", "blocks": chunk, "ads": ads,
          "all_blocks": len(sizes), "all_ads": sum(sizes.values())},
         indent=1, sort_keys=True), encoding="utf-8")
-    print(json.dumps({**summary, "left_out": left_out}, indent=1, sort_keys=True))
+    print(json.dumps(summary, indent=1, sort_keys=True))
     print(f"[shadow] base cohort: {shadow_dir / 'base' / ARTIFACT_NAME}")
     return 0
 
