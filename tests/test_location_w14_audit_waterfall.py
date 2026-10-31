@@ -34,6 +34,9 @@ hold, and a migration is not importable at runtime, so this file is the rail:
 2. THE ARITHMETIC. `lost` is the previous chain step's count minus this one's,
    and every split partitions its parent. The SQL computes them; these tests check
    the SHAPE that computes them and the laws the migration proves at apply time.
+
+W1 (ruling Q7, 2026-10-31) deleted the audit page's reader and its read-contract tests;
+the table and its producer leave with the separate drop migration (ruling W1-c).
 """
 
 from __future__ import annotations
@@ -47,8 +50,6 @@ REPO = Path(__file__).resolve().parents[1]
 MIGRATIONS = REPO / "migrations"
 # The table, its grants and the hourly entry point: written once, in 523.
 W14 = MIGRATIONS / "523_location_w14_audit_waterfall.sql"
-PAGE = REPO / "frontend" / "src" / "pages" / "LocationPinAudit.tsx"
-READER = REPO / "frontend" / "src" / "lib" / "locationWaterfall.ts"
 
 _LINE_COMMENT = re.compile(r"--.*$", re.MULTILINE)
 
@@ -128,9 +129,6 @@ def test_the_relation_stores_keys_and_never_wording() -> None:
     body = _body().lower()
     assert "drop column if exists label_cs" in body
     assert "label_cs" not in _values_block().lower()
-    reader = READER.read_text(encoding="utf-8")
-    cols = re.search(r"const COLS = \[(.*?)\]", reader, re.DOTALL)
-    assert cols and "label_cs" not in cols.group(1)
 
 
 def test_the_waterfall_adds_no_column_to_listings() -> None:
@@ -268,45 +266,3 @@ def test_the_file_applies_statement_by_statement() -> None:
         assert "set lock_timeout = '5s';" in body
     assert "create table if not exists location_audit_waterfall" in _body(W14).lower()
 
-
-# ------------------------------------------------------------ the read contract
-
-
-def test_the_page_reads_every_column_the_migration_writes() -> None:
-    """A PostgREST select list naming a column the table does not publish is a 400
-    at runtime and nothing catches it before the operator opens the page."""
-    declared = set(
-        re.findall(
-            r"^\s{2}(\w+)\s+(?:text|smallint|bigint|numeric|timestamptz)",
-            _sql(W14).split("create table if not exists location_audit_waterfall")[1]
-            .split(");")[0],
-            re.MULTILINE,
-        )
-    )
-    reader = READER.read_text(encoding="utf-8")
-    cols = re.search(r"const COLS = \[(.*?)\]", reader, re.DOTALL)
-    assert cols, "the reader publishes no column list"
-    read = set(re.findall(r"'(\w+)'", cols.group(1)))
-    assert read <= declared, f"the reader asks for columns the table lacks: {read - declared}"
-    assert {"step_key", "n", "lost", "share_pct"} <= read
-    # W16: wording is not a column any more.
-    assert "label_cs" not in read
-
-
-def test_the_page_computes_no_step_of_its_own() -> None:
-    """The one rule the client side has: it renders what the store wrote — a client
-    that recomputed a step would be a second definition of the same question. Scoped
-    to the waterfall's own code (the summary matrix below it legitimately sums its
-    payload). RED by: deriving `lost` or a share in the component."""
-    page = PAGE.read_text(encoding="utf-8")
-    start = page.index("function WaterfallTable(")
-    component = page[start: page.index("\n}", start)]
-    reader = READER.read_text(encoding="utf-8")
-    for name, text in (("WaterfallTable", component), ("locationWaterfall.ts", reader)):
-        for bad in (".n -", "reduce(", "* 100"):
-            assert bad not in text, f"{name} recomputes a waterfall number ({bad})"
-    # It renders exactly what the store wrote — and the LABEL from the one wording
-    # module, keyed by the store's own step key (W16).
-    for field in ("row.n", "row.lost", "row.share_pct"):
-        assert field in component
-    assert "stepLabel(row.step_key, 'cs')" in component

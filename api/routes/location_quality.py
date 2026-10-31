@@ -1,4 +1,4 @@
-"""Location-quality dashboard + operator corrections — the consumer of
+"""Location inspector + operator corrections — the consumer of
 `listing_location`, the location program's one answer table.
 
 Mounted under `/location/*`, admin-gated at the router (single-operator
@@ -16,7 +16,8 @@ the response says which happened.
 W2-b deleted two route families with the tables under them: the frozen
 labelled samples (`/sample/*` — old-vs-new precision scoring, and "new" is now
 the only system) and the dark old-vs-new compare bench (`/compare/*`, whose
-pg_cron cohort joined both dropped projections).
+pg_cron cohort joined both dropped projections). W1 deleted `/quality/*`: the
+Location Quality page renders the gauge's stored cells.
 """
 
 from __future__ import annotations
@@ -42,16 +43,6 @@ def _check_source(source: str) -> str:
     if source not in _KNOWN_SOURCES:
         raise HTTPException(status_code=404, detail=f"unknown source {source!r}")
     return source
-
-
-@router.get("/quality/summary")
-def quality_summary(conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
-    return location_quality.corpus_summary(conn)
-
-
-@router.get("/quality/source/{source}")
-def quality_source(source: str, conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
-    return location_quality.source_overview(conn, _check_source(source))
 
 
 @router.get("/listing/{listing_id}")

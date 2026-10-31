@@ -1,45 +1,12 @@
-/* Location quality — typed wrappers over the admin-gated `/location/*` API.
- * The location tables are service-role-only, so the identity-gated API is the
- * SPA's only path to them. Envelope shape follows
+/* Location inspector + corrections — typed wrappers over the admin-gated
+ * `/location/*` API. The location tables are service-role-only, so the
+ * identity-gated API is the SPA's only path to them. Envelope shape follows
  * toolkit convention: `{ data, metadata }`.
  *
- * W2-b cut the page over to `listing_location` (the location program's one
- * answer table) and deleted the frozen-labelled-sample family with its two
- * tables — the samples existed to score old-vs-new precision, and "new" is the
- * only system now. */
+ * W1 deleted the two aggregate reads (`/location/quality/*`): the Location
+ * Quality page renders the location gauge's stored cells (lib/healthChecks). */
 
 import { apiGet, apiPost } from './api';
-
-export type MixRow = { value: string | null; n: number };
-
-export type SourceOverview = {
-  source: string;
-  grain: 'listing';
-  totals: {
-    active_rows: number;
-    street_or_better: number;
-    building_or_better: number;
-    /* Rule 25's invariant, read per portal: every active Czech listing has a town. */
-    with_obec_kod: number;
-    with_adm_kod: number;
-    with_ulice_kod: number;
-    disputed: number;
-    /* Rows still carrying an older registry label — drain lag, not data loss. */
-    stale_registry: number;
-  };
-  mixes: Record<string, MixRow[]>;
-  current_registry: { label: string; loaded_at: string } | null;
-};
-
-export type CorpusSummaryRow = {
-  source: string;
-  active_rows: number;
-  street_or_better: number;
-  building_or_better: number;
-  with_obec_kod: number;
-  disputed: number;
-  with_adm_kod: number;
-};
 
 export type InspectorClaim = {
   id: number;
@@ -80,12 +47,6 @@ export const LOCATION_SOURCES = [
   'bezrealitky', 'sreality', 'bazos', 'idnes', 'mmreality', 'remax',
   'ceskereality', 'realitymix', 'maxima', 'web',
 ] as const;
-
-export const fetchCorpusSummary = () =>
-  apiGet<Envelope<{ grain: string; sources: CorpusSummaryRow[] }>>('/location/quality/summary');
-
-export const fetchSourceOverview = (source: string) =>
-  apiGet<Envelope<SourceOverview>>(`/location/quality/source/${source}`);
 
 export const fetchInspector = (listingId: string) => {
   const trimmed = listingId.trim();

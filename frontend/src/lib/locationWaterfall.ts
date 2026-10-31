@@ -1,4 +1,6 @@
-/* The audit page's waterfall (`location_audit_waterfall`, migrations 523/524).
+/* The location waterfall's row shape (`location_audit_waterfall`, migrations
+ * 523/524). W1 deleted the audit page's reader of the hourly relation: only the
+ * dedup candidates funnel reads these rows now, from a run's `stats.waterfall`.
  *
  * The page used to state ONE number — the listings no consumer can see — with
  * nothing to read it against. This relation is the whole chain, from every
@@ -11,7 +13,7 @@
  * a listing is served once the store has a point for it, or has determined it is
  * abroad). A client that recomputed a step would be a second definition of the
  * same question, which is the one thing this wave exists to prevent — so this
- * module only fetches, orders and nests.
+ * module only orders and nests.
  *
  * THREE KINDS OF ROW:
  *   'chain'     the funnel itself — `lost` is the previous chain step's count
@@ -23,17 +25,10 @@
  *
  * ONE ROW SHAPE, TWO PRODUCERS (W16). The hourly audit relation writes these
  * rows; a NEW DEDUP candidate run stamps the SAME keys, kinds and columns into
- * its own `stats.waterfall`. So this is the type both readouts use, and the only
- * difference is `refreshed_at`, which only the hourly relation carries — a run's
- * rows are as-of the run. The WORDING of a step is in `lib/locationSteps.ts`;
- * `label_cs` left this table in migration 526 so a label could not differ by
- * surface.
+ * its own `stats.waterfall`; a run's rows are as-of the run. The WORDING of a
+ * step is in `lib/locationSteps.ts`; `label_cs` left this table in migration
+ * 526 so a label could not differ by surface.
  */
-
-import { supabase } from '@/lib/supabase';
-import { pgRead, type PgReadOptions } from '@/lib/pgRead';
-
-export const WATERFALL_RELATION = 'location_audit_waterfall';
 
 export type WaterfallKind = 'chain' | 'deduction' | 'split';
 
@@ -50,30 +45,7 @@ export interface WaterfallRow {
   lost: number | null;
   /* Share of EVERY listing ever collected — the point of the wave. */
   share_pct: number;
-  /* The hourly relation only; a run's stamped rows are as-of that run. */
-  refreshed_at?: string;
 }
-
-const COLS = [
-  'step_key', 'step_no', 'sub_no', 'kind', 'parent_key',
-  'n', 'lost', 'share_pct', 'refreshed_at',
-].join(',');
-
-export const WATERFALL_KEY = ['location-waterfall'] as const;
-
-export const fetchLocationWaterfall = async (
-  { signal }: PgReadOptions = {},
-): Promise<WaterfallRow[]> => {
-  const { data } = await pgRead<WaterfallRow[] | null>(
-    supabase
-      .from(WATERFALL_RELATION)
-      .select(COLS)
-      .order('step_no', { ascending: true })
-      .order('sub_no', { ascending: true }),
-    { signal },
-  );
-  return data ?? [];
-};
 
 export interface WaterfallStep {
   row: WaterfallRow;
@@ -100,8 +72,3 @@ export const groupWaterfall = (
   for (const bucket of splits.values()) bucket.sort((a, b) => a.sub_no - b.sub_no);
   return steps.map((row) => ({ row, splits: splits.get(row.step_key) ?? [] }));
 };
-
-/* One value across the relation — the hourly refresh that wrote it. */
-export const waterfallRefreshedAt = (
-  rows: ReadonlyArray<WaterfallRow>,
-): string | null => rows.find((r) => r.refreshed_at != null)?.refreshed_at ?? null;

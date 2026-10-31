@@ -197,23 +197,14 @@ def test_abroad_is_worded_as_an_answer_and_never_as_a_loss() -> None:
 # ------------------------------------------------------- 3. nobody hardcodes a step
 
 
-def _waterfall_table() -> str:
-    page = AUDIT_PAGE.read_text(encoding="utf-8")
-    start = page.index("function WaterfallTable(")
-    return page[start: page.index("\n}", start)]
-
-
 def test_no_surface_spells_a_step_name_of_its_own() -> None:
-    """The three readouts render `stepLabel(key, lang)`. RED by: a label pasted into a
+    """The readouts render `stepLabel(key, lang)`. RED by: a label pasted into a
     component — which is how "Known to the location engine" and "U kterých už systém polohu
     řešil" came to be the same set under two names on two pages."""
     ts = _ts_steps()
     surfaces = {
         # the funnel is English and is nothing but the chain, so both languages apply
         "CandidateFunnel.tsx": (FUNNEL.read_text(encoding="utf-8"), ("cs", "en")),
-        # scoped to the waterfall's own markup: the listing list below it has its own
-        # (deliberately fuller) Czech for the two hidden states
-        "LocationPinAudit.tsx/WaterfallTable": (_waterfall_table(), ("cs",)),
         "NewDedupCandidates.tsx": (CANDIDATES_PAGE.read_text(encoding="utf-8"), ("en",)),
     }
     for name, (text, langs) in surfaces.items():
@@ -232,8 +223,8 @@ _JS_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 
 
 def test_the_two_hidden_states_have_one_czech_name_on_the_audit_page() -> None:
-    """The hidden set's two states are the waterfall's split rows AND the listing list's
-    filter pill, header total and note — one number, four places. They were briefly reading
+    """The hidden set's two states name the listing list's filter pill, as they named the
+    waterfall's split rows until W1 deleted the page's waterfall. They were briefly reading
     two different Czech names ("nevyřešeno" in the split, "zpracováno, nerozhodnuto" in the
     list), which is the same fault as two names for one step, one level down. RED by: a
     state name typed back into the page instead of read from the module."""
