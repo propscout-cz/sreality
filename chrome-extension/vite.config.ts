@@ -2,8 +2,9 @@ import { defineConfig, loadEnv } from 'vite';
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 // Shared product brand — the SAME source the SPA + content script use, so the
-// chrome://extensions display name stays linked to the one definition.
-import { EXTENSION_NAME } from '../frontend/src/lib/brand';
+// chrome://extensions display name and the toolbar icon's title stay linked to
+// the one definition.
+import { APP_NAME, EXTENSION_NAME } from '../frontend/src/lib/brand';
 // The portal-id rules (shared with the SPA's paste-a-link) are the single source
 // of truth for "which hosts we run on" — content_scripts.matches is computed from
 // them below; manifest.json's checked-in list is a template that
@@ -12,7 +13,8 @@ import { PORTALS } from '../frontend/src/lib/portalIds';
 
 const APP_SRC = resolve(__dirname, '../frontend/src') + '/';
 
-/* ONE ENTRY PER PASS — `npm run build` runs vite twice, content then background.
+/* ONE ENTRY PER PASS — `npm run build` runs vite three times: content, background,
+ * then the side panel's page.
  *
  * A manifest-declared content script is a CLASSIC script: MV3 has no module mode
  * for `content_scripts[].js`, so content.js may not contain a static import.
@@ -29,15 +31,17 @@ const APP_SRC = resolve(__dirname, '../frontend/src') + '/';
  * below fails the build if content.js ever regains a static import.
  *
  * Vite's default `dist/` layout would nest assets under hashed paths — Chrome's
- * manifest expects flat filenames (`content.js`, `background.js`) at the dist
- * root, so we override the output naming and copy manifest.json across as a
- * post-build step. */
+ * manifest expects flat filenames (`content.js`, `background.js`,
+ * `sidepanel.html`) at the dist root, so we override the output naming and copy
+ * manifest.json and the page across as a post-build step. */
 
 /* The content script is IIFE (classic, self-contained); the service worker stays
- * ESM because manifest.json declares `background.type = "module"`. */
+ * ESM because manifest.json declares `background.type = "module"`, and the side
+ * panel's script is a module of its own page (sidepanel.html). */
 const ENTRIES = {
   content: { file: 'src/content.ts', format: 'iife' },
   background: { file: 'src/background.ts', format: 'es' },
+  sidepanel: { file: 'src/sidepanel.ts', format: 'es' },
 } as const;
 
 type EntryName = keyof typeof ENTRIES;
@@ -68,20 +72,21 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '');
 
   // `mode` selects the entry, so a bare `vite build` can't quietly emit half a
-  // bundle: it fails here naming the command that does both passes.
+  // bundle: it fails here naming the command that does every pass.
   const entry = ENTRIES[mode as EntryName];
   if (entry == null) {
     throw new Error(
       `build one entry at a time: vite build --mode ${Object.keys(ENTRIES).join('|')} ` +
-      `(got "${mode}"). Run \`npm run build\`, which runs both passes in order.`,
+      `(got "${mode}"). Run \`npm run build\`, which runs every pass in order.`,
     );
   }
 
   return {
     build: {
       outDir: 'dist',
-      // Only the first pass clears dist — the second would delete content.js.
-      emptyOutDir: mode === 'content',
+      // Only the first pass clears dist — a later one would delete content.js — and never
+      // a watched rebuild (`npm run watch -- <entry>`), which keeps the other entries' files.
+      emptyOutDir: mode === 'content' && !process.argv.includes('--watch'),
       sourcemap: true,
       rollupOptions: {
         input: { [mode]: resolve(__dirname, entry.file) },
@@ -124,14 +129,16 @@ export default defineConfig(({ mode }) => {
       {
         name: 'copy-static',
         closeBundle() {
-          // manifest.json is the template; its display `name` is stamped from the
-          // shared brand, and host_permissions from the two live origins the
+          // manifest.json is the template; its display `name` and the toolbar
+          // icon's title are stamped from the shared brand, and host_permissions
+          // from the two live origins the
           // background worker fetches — both computed at build so chrome://extensions
           // tracks the one source and the store listing never ships a wildcard.
           const manifest = JSON.parse(
             readFileSync(resolve(__dirname, 'manifest.json'), 'utf8'),
           );
           manifest.name = EXTENSION_NAME;
+          manifest.action.default_title = APP_NAME;
           manifest.host_permissions = [
             originPermission(env.VITE_API_BASE_URL),
             originPermission(env.VITE_SUPABASE_URL),
@@ -156,7 +163,7 @@ export default defineConfig(({ mode }) => {
             resolve(__dirname, 'dist', 'manifest.json'),
             JSON.stringify(manifest, null, 2) + '\n',
           );
-          for (const name of ['icon-16.png', 'icon-48.png', 'icon-128.png']) {
+          for (const name of ['icon-16.png', 'icon-48.png', 'icon-128.png', 'sidepanel.html']) {
             copyFileSync(
               resolve(__dirname, name),
               resolve(__dirname, 'dist', name),
