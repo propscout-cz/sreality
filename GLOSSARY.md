@@ -550,8 +550,9 @@ account and grants no access.
 _Avoid_: sign-up, lead, subscriber
 
 **Waitlist invitation**:
-The message that lets the person behind a waitlist entry create an account. Always the full term, so
-it is never taken for a share.
+The permission for the person behind a waitlist entry to create an account under that entry's email
+address, and the message that tells them. It decides nothing about plans. Always the full term, so it
+is never taken for a share.
 _Avoid_: invite (alone)
 
 **Extension**:
