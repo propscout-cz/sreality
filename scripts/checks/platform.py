@@ -987,11 +987,13 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 #                changed at or after it. Exact: an event is written only in the transaction of a card change
 #                (api/pipeline.py), whose commit bumps board at clock_timestamp() >= the event's now(); the 696 seed
 #                stamps every account at the apply, so events before it hold too.
-# Two watch the clock's READER (W4), from pg_stat_statements (Not measured without it, as in CI's replayed schema),
-# never paged: the browser's read is a statement run as authenticated naming curation_clock_public.
+# Two watch the clock's READER (W4), from pg_stat_statements (Not measured without it, as in CI's replayed schema,
+# or when the worker sees authenticated's statement text masked, lacking pg_read_all_stats), never paged: the
+# browser's read is a statement run as authenticated naming curation_clock_public.
 #   reads        Watch when its call count has not advanced for CURATION_CLOCK_QUIET_H: no signed-in window follows
 #                curation (the reader kill switch, a dead read in the SPA, or nobody signed in). `quiet_since` rides
-#                the cell's facts from one result to the next (previous_result); an evicted entry is no advance.
+#                the cell's facts from one result to the next (previous_result); fewer calls under the same reset (an
+#                evicted entry) is no advance, a reset with calls since is one.
 #   load         Watch when its share of all statement time between this measurement and the previous one is at
 #                least CURATION_CLOCK_LOAD_PCT: the planned trigger to re-cost the interval (§ 3.8). A statistics
 #                reset, or a first measurement, takes a baseline and judges nothing.
@@ -1019,14 +1021,16 @@ select count(*) filter (where e.missed), count(distinct e.account_id) filter (wh
 """
 
 
-# Cumulative since the statistics' reset: the clock read's calls and execution time, all statements' time, the reset.
+# Cumulative since the statistics' reset: the clock read's calls and execution time, all statements' time, the reset,
+# and authenticated's entries whose text the worker may not read (no pg_read_all_stats: the pattern cannot match them).
 _CURATION_STATEMENTS_SQL = """
-select coalesce(sum(s.calls) filter (where s.clock), 0)::bigint,
-       coalesce(sum(s.total_exec_time) filter (where s.clock), 0)::float8,
+select coalesce(sum(s.calls) filter (where s.browser and s.named), 0)::bigint,
+       coalesce(sum(s.total_exec_time) filter (where s.browser and s.named), 0)::float8,
        coalesce(sum(s.total_exec_time), 0)::float8,
-       (select i.stats_reset from pg_stat_statements_info i)
-  from (select p.calls, p.total_exec_time,
-               p.userid = to_regrole('authenticated')::oid and p.query ilike %(relation)s as clock
+       (select i.stats_reset from pg_stat_statements_info i),
+       count(*) filter (where s.browser and s.masked)
+  from (select p.calls, p.total_exec_time, p.userid = to_regrole('authenticated')::oid as browser,
+               p.query ilike %(relation)s as named, p.query = '<insufficient privilege>' as masked
           from pg_stat_statements p) s
 """
 # pg_stat_statements is the platform's extension, not a migration's: absent, unreadable or not preloaded.
@@ -1071,7 +1075,8 @@ def _curation_reads_cell(calls: int, reset: str | None, previous: dict[str, Any]
                          quiet_h: float) -> dict[str, Any]:
     """Watch once the clock read's call count has stood still for `quiet_h` (an evicted entry is no advance)."""
     before = previous.get("calls")
-    advanced = before is not None and calls > 0 and (calls != before or reset != previous.get("stats_reset"))
+    same_reset = reset == previous.get("stats_reset")
+    advanced = before is not None and calls > (int(before) if same_reset else 0)
     since = None if before is None or advanced else _as_utc(previous.get("quiet_since"))
     since = since or at
     quiet_s = (at - since).total_seconds()
@@ -1128,7 +1133,12 @@ def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
         why = f"pg_stat_statements cannot be read here ({_oneline(exc)})"
         not_measured.update(reads=why, load=why)
         return _result("curation_sync", cells, not_measured)
-    calls, clock_ms, all_ms, reset = row or (0, 0.0, 0.0, None)
+    calls, clock_ms, all_ms, reset, masked = row or (0, 0.0, 0.0, None, 0)
+    if masked:
+        why = (f"the worker cannot read other roles' statement text ({int(masked)} entries of authenticated show "
+               "<insufficient privilege>; grant it pg_read_all_stats)")
+        not_measured.update(reads=why, load=why)
+        return _result("curation_sync", cells, not_measured)
     reset_at = _iso(_as_utc(reset))
     previous = _previous_result(conn, "curation_sync")[1]
     cells.append(_curation_reads_cell(int(calls or 0), reset_at, _facts(previous, "reads"), at,

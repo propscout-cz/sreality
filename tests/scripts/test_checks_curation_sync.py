@@ -23,14 +23,16 @@ _NO_PGSS = pg_errors.UndefinedTable('relation "pg_stat_statements" does not exis
 
 
 def _answers(*, armed: int = 12, found: int = 12, off: list[str] | None = None,
-             bumps: Any = (0, 0, None, 9), statements: Any = _NO_PGSS,
+             bumps: Any = (0, 0, None, 9), statements: Any = _NO_PGSS, masked: int = 0,
              previous: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The clock's two reads; pg_stat_statements absent unless `statements` = (calls, clock_ms, all_ms, reset)."""
+    """The clock's two reads; pg_stat_statements absent unless `statements` = (calls, clock_ms, all_ms, reset), with
+    `masked` entries of authenticated whose text the worker may not read."""
     def one(answer: Any) -> Any:
         return answer if isinstance(answer, BaseException) else [answer]
+    stats = statements if isinstance(statements, BaseException) else (*statements, masked)
     return {plat._CURATION_TRIGGERS_SQL: [(armed, found, off or [])],
             plat._CURATION_BOARD_BUMPS_SQL: one(bumps),
-            plat._CURATION_STATEMENTS_SQL: one(statements),
+            plat._CURATION_STATEMENTS_SQL: one(stats),
             PREVIOUS_CELLS_SQL: [] if previous is None else [(_NOW - _dt.timedelta(hours=1), previous)]}
 
 
@@ -144,11 +146,19 @@ def test_reads_that_stood_still_for_24_h_are_a_watch_never_a_problem(hours: floa
                                            "stood at 150 since ")
 
 
-def test_an_evicted_entry_is_no_advance_and_a_reset_with_reads_since_is_one() -> None:
+@pytest.mark.parametrize("calls", [0, 50, 149])
+def test_fewer_calls_under_the_same_reset_an_evicted_entry_are_no_advance(calls: int) -> None:
+    """One of several entries evicted (and re-created lower) leaves the sum below the last: no read is proven."""
     since = _NOW - _dt.timedelta(hours=30)
-    evicted = plat.check_curation_sync(_Conn(_answers(statements=(0, 0.0, 0.0, _RESET),
+    evicted = plat.check_curation_sync(_Conn(_answers(statements=(calls, 0.0, 0.0, _RESET),
                                                       previous=_stored(calls=150, quiet_since=since))), T)
-    assert _cell(evicted, "reads")["status"] == "warn"
+    reads = _cell(evicted, "reads")
+    assert (reads["status"], reads["facts"]["quiet_since"]) == ("warn", since.isoformat())
+    assert reads["facts"]["calls"] == calls, "the next hour counts from the re-created entry's lower base"
+
+
+def test_a_reset_with_reads_since_is_an_advance() -> None:
+    since = _NOW - _dt.timedelta(hours=30)
     later = _RESET + _dt.timedelta(days=60)
     reset = plat.check_curation_sync(_Conn(_answers(statements=(150, 0.0, 0.0, later),
                                                     previous=_stored(calls=150, quiet_since=since))), T)
@@ -178,6 +188,17 @@ def test_load_takes_a_new_baseline_and_judges_nothing_when_the_two_measurements_
         statements: tuple[Any, ...]) -> None:
     out = plat.check_curation_sync(_Conn(_answers(statements=statements, previous=_stored())), T)
     assert _cell(out, "load")["status"] == "unknown"
+
+
+def test_statement_text_the_worker_may_not_read_leaves_reads_and_load_not_measured() -> None:
+    """Without pg_read_all_stats, authenticated's entries read <insufficient privilege>: zero calls would be a lie."""
+    out = plat.check_curation_sync(_Conn(_answers(statements=(0, 0.0, 9_000.0, _RESET), masked=3,
+                                                  previous=_stored(quiet_since=_NOW - _dt.timedelta(hours=30)))), T)
+    assert set(_cells(out)) == {"triggers", "board_bumps"} and out["status"] == "ok"
+    assert out["details"]["not_measured"] == {arm: (
+        "the worker cannot read other roles' statement text (3 entries of authenticated show <insufficient "
+        "privilege>; grant it pg_read_all_stats)") for arm in ("reads", "load")}
+    assert "'<insufficient privilege>'" in plat._CURATION_STATEMENTS_SQL
 
 
 @pytest.mark.parametrize("error", [

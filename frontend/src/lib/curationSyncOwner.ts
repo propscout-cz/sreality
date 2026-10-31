@@ -11,8 +11,11 @@
  *   15 s, ruling Q2), never sooner than SYNC_MIN_GAP_MS after an answer;
  * - at once when the page is shown (visibilitychange → visible, pageshow),
  *   aborting a read in flight from before: one across an iOS suspension could
- *   otherwise hang until PG_DEADLINE_MS. A read that started under
- *   SYNC_MIN_GAP_MS ago is already the shown page's, so a show is read once;
+ *   otherwise hang until PG_DEADLINE_MS. A read in flight that started under
+ *   SYNC_MIN_GAP_MS ago is already the shown page's (a bfcache restore fires
+ *   both events: one read); with none, a show under that gap after the last
+ *   start reads once the gap has passed (the hide before it aborted that read,
+ *   or disarmed the next);
  * - on focus, online and the nudge (another tab of this browser committed a
  *   write; coalesced over SYNC_NUDGE_DEBOUNCE_MS). Each asks for a read that
  *   starts after it — focus also takes one that started under SYNC_MIN_GAP_MS
@@ -21,11 +24,13 @@
  *   read in flight that cannot answer a trigger gets ONE follow-up, and no two
  *   reads start under SYNC_MIN_GAP_MS apart.
  * Hidden: no timer and no request; a read in flight is aborted, a nudge dropped.
- * A transient failure (network, deadline, 5xx, 408, 429) backs off 5 s × 2ⁿ up
- * to SYNC_BACKOFF_MAX_MS, reset by an answer. A permanent one (any other 4xx:
- * the reader kill switch's 403, a renamed view's 404 or 400, a lapsed session's
- * 401) stops the interval: a trigger then reads at most once per
- * SYNC_BACKOFF_MAX_MS, until an answer. Never a toast, never a retry storm.
+ * A transient failure (network, deadline, 5xx, 408, 429, and a lapsed session's
+ * 401, which passes once supabase-js refreshes the session) backs off 5 s × 2ⁿ
+ * up to SYNC_BACKOFF_MAX_MS, reset by an answer. A permanent one (any other
+ * 4xx: the reader kill switch's 403, a renamed view's 404 or 400) stops the
+ * interval: a trigger then reads at most once per SYNC_BACKOFF_MAX_MS, until an
+ * answer. Never a toast, never a retry storm; an answer whose processing throws
+ * is logged and the loop goes on.
  *
  * WHAT moved (Decision 14b). Before its first read the owner owes every synced
  * read already cached, bar an initial load in flight: that one began in the very
@@ -35,10 +40,13 @@
  * missed committed no earlier than t0 minus the bump-to-visible gap, which the
  * margin covers. So the first answer counts a family as changed iff
  * age_ms <= (now - t0) + SYNC_START_MARGIN_MS (both durations: no clock skew),
- * however late it lands. Every later answer is diffed against the last good one
- * (`clockChanges`; a vanished row, a revoked share, is a change of that family
- * and owner) and owes every moved family's targets in ONE `revalidate`; then
- * `repayOwed` retries a debt whose read failed (at most 3 times,
+ * however late it lands. now - t0 is the larger of the monotonic and the
+ * wall-clock time since start: performance.now() stands still while the device
+ * sleeps on some platforms (w3c/hr-time#115), and a page opened hidden reads
+ * first when it is shown. Every later answer is diffed against the last good
+ * one (`clockChanges`; a vanished row, a revoked share, is a change of that
+ * family and owner) and owes every moved family's targets in ONE `revalidate`;
+ * then `repayOwed` retries a debt whose read failed (at most 3 times,
  * lib/revalidate). The self-echo is kept (Decision 15).
  *
  * The nudge rides ONE MutationCache subscription: every mutation success (the
@@ -76,10 +84,10 @@ const ACTING_ROOT = ['acting'] as const;
 const isVisible = (): boolean => document.visibilityState === 'visible';
 const clock = (): number => performance.now();
 
-/* Network, deadline, 5xx, 408 and 429 may pass; any other answer of the server will not. */
+/* Network, deadline, 5xx, 408, 429 and 401 (a session not yet refreshed) may pass; any other 4xx will not. */
 const isPermanent = (err: unknown): boolean =>
   err instanceof ApiError && err.kind === 'http' && err.status >= 400 && err.status < 500
-  && err.status !== 408 && err.status !== 429;
+  && err.status !== 401 && err.status !== 408 && err.status !== 429;
 
 /* Every synced read cached before the first read could have read before t0, so
  * it is owed, in the mode its family owes it; an initial load in flight is not
@@ -104,6 +112,7 @@ function cachedReads(qc: QueryClient): Revalidation[] {
 export function startCurationSync(qc: QueryClient): { stop(): void } {
   if (!isSupabaseConfigured()) return { stop: () => {} };
   const t0 = clock();
+  const t0Wall = Date.now();
   let stopped = false;
   let last: Map<string, ClockRow> | null = null;
   let inFlight: AbortController | null = null;
@@ -153,8 +162,10 @@ export function startCurationSync(qc: QueryClient): { stop(): void } {
 
   function onShown(): void {
     if (stopped || !isVisible()) return;
-    if (broken || clock() - lastStart < SYNC_MIN_GAP_MS) return request(clock(), SYNC_MIN_GAP_MS);
-    read();
+    if (clock() - lastStart >= SYNC_MIN_GAP_MS) return broken ? request(clock(), SYNC_MIN_GAP_MS) : read();
+    // Under the gap: a read in flight is the shown page's, an armed one stands; with neither, a
+    // hide in between aborted that read or disarmed the next, so read again once the gap has passed.
+    if (!inFlight && !due) arm(lastStart + gap());
   }
 
   function onHidden(): void {
@@ -188,14 +199,19 @@ export function startCurationSync(qc: QueryClient): { stop(): void } {
     );
   }
 
-  /* An answer to an aborted, superseded or stopped read is dropped. */
+  /* An answer to an aborted, superseded or stopped read is dropped; one whose processing throws is logged. */
   function settle(ctrl: AbortController, then: () => void): void {
     if (stopped || inFlight !== ctrl) return;
     inFlight = null;
-    then();
-    if (followUp) {
-      followUp = false;
-      readAt(lastStart + gap());
+    try {
+      then();
+    } catch (err) {
+      console.error('[curation sync] a clock answer could not be processed', err);
+    } finally {
+      if (followUp) {
+        followUp = false;
+        readAt(lastStart + gap());
+      }
     }
   }
 
@@ -204,7 +220,8 @@ export function startCurationSync(qc: QueryClient): { stop(): void } {
     broken = false;
     const interval = SYNC_INTERVAL_MS[isPhoneFrame() ? 'phone' : 'desktop'];
     arm(Math.max(lastStart + interval, clock() + SYNC_MIN_GAP_MS));
-    const changed = clockChanges(last, rows, clock() - t0 + SYNC_START_MARGIN_MS);
+    const elapsed = Math.max(clock() - t0, Date.now() - t0Wall);
+    const changed = clockChanges(last, rows, elapsed + SYNC_START_MARGIN_MS);
     last = new Map(rows.map((row) => [clockKey(row), row]));
     const targets = changed.flatMap((row) => familyTargets(qc, row.family, row.mine ? null : row.account_id));
     if (targets.length > 0) void revalidate(qc, targets);

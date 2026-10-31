@@ -231,6 +231,26 @@ describe('what an answer re-reads', () => {
     expect(isOwed(qc, curationKeys.tags)).toBe(false);
   });
 
+  /* performance.now() stands still while the device sleeps on macOS and Linux (w3c/hr-time#115);
+   * vi.setSystemTime moves the wall clock alone, as a sleep does there. */
+  it('a page opened hidden and first shown after the device slept counts what changed during the sleep', async () => {
+    visibility = 'hidden';
+    await start();
+    qc.setQueryData(pipelineKeys.board, []);
+    qc.setQueryData(curationKeys.tags, []);
+    vi.setSystemTime(Date.now() + 8 * 3_600_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(performance.now()).toBeLessThan(3_600_000);
+    setVisibility('visible');
+    await answer([
+      ...mine().filter((r) => r.family !== 'board' && r.family !== 'tags'),
+      row('board', 7, { age: 2 * 3_600_000 }),
+      row('tags', 7, { age: 9 * 3_600_000 }),
+    ]);
+    expect(isOwed(qc, pipelineKeys.board)).toBe(true);
+    expect(isOwed(qc, curationKeys.tags)).toBe(false);
+  });
+
   it('a board counter change re-reads exactly its targets, in ONE revalidate per answer', async () => {
     await start();
     await answer(mine());
@@ -323,6 +343,47 @@ describe('triggers', () => {
     expect(revalidations()).toHaveLength(calls + 1);
   });
 
+  /* A desktop tab flick: visibilitychange, then focus, within a second of the last start. */
+  it('a hide and show within 1 s of a read the hide aborted read again once the gap has passed; the interval goes on', async () => {
+    await start();
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop + 300);
+    expect(h.reads).toHaveLength(2);
+    setVisibility('hidden');
+    expect(h.reads[1].signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    setVisibility('visible');
+    fire('focus');
+    expect(h.reads).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SYNC_MIN_GAP_MS - 600 - 1);
+    expect(h.reads).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.reads).toHaveLength(3);
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    expect(h.reads).toHaveLength(4);
+  });
+
+  it('a hide and show within 1 s of a read that had answered read again once the gap has passed; the interval goes on', async () => {
+    await start();
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop + 100);
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(200);
+    setVisibility('hidden');
+    await vi.advanceTimersByTimeAsync(300);
+    setVisibility('visible');
+    fire('pageshow');
+    fire('focus');
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SYNC_MIN_GAP_MS - 600);
+    expect(h.reads).toHaveLength(3);
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    expect(h.reads).toHaveLength(4);
+  });
+
   it('focus right after a read takes that read; online and a nudge get one starting after them, >= 1 s apart', async () => {
     await start();
     await answer(mine());
@@ -406,7 +467,39 @@ describe('failures', () => {
     expect(pushToast).not.toHaveBeenCalled();
   });
 
-  it.each([400, 401, 403, 404])(
+  /* supabase-js falls back to the anon key while a refresh fails; the next refresh ends it. */
+  it("a lapsed session's 401 backs off like a blip and resumes by itself once the session is refreshed", async () => {
+    await start();
+    await fail(http(401));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.reads).toHaveLength(2);
+    await fail(http(401));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.reads).toHaveLength(3);
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    expect(h.reads).toHaveLength(4);
+    expect(pushToast).not.toHaveBeenCalled();
+  });
+
+  it('an answer that cannot be processed is logged, and its follow-up and the interval go on', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await start();
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop + SYNC_MIN_GAP_MS);
+    expect(h.reads).toHaveLength(2);
+    fire('online');
+    await answer(null as unknown as ClockRow[]);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(h.reads).toHaveLength(3);
+    await answer(mine({ board: 2 }));
+    expect(shape(revalidations().at(-1)!)).toEqual(shape(familyTargets(qc, 'board', null)));
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    expect(h.reads).toHaveLength(4);
+    logged.mockRestore();
+  });
+
+  it.each([400, 403, 404])(
     'a permanent %i (the reader kill switch) stops the interval: at most one read per 60 s, never a toast',
     async (status) => {
       await start();
