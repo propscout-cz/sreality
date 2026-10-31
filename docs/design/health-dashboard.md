@@ -416,6 +416,22 @@ A provider with no calls reads ok with the state idle.
 
 **Replaces.** llm_errors (any-provider rate gate, 24 h provider window); llm_burn_rate including its starved and idle arms; text_extraction_lag's abort arm (three detectors for one outage become one); the duplicate llm_spend definition (code 90 vs app_settings 130)
 
+### `curation_sync` — platform, alarm, every 60 min
+
+Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, wave W3); it was not in this plan's fifteen.
+
+**Measures.** Does every committed curation change still move the curation clock? Twelve deferred triggers are the clock's only writer, so a trigger a hygiene migration disabled, or a bump that stopped landing, leaves every open window showing stale curation with no error anywhere.
+- `triggers`: Problem unless exactly `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` are enabled (`tgenabled = 'O'`) and initially deferred; the facts name the tables whose trigger is off. A census pins the threshold equal to `CLOCKED_TABLES` (`tests/test_curation_sync_census.py` (j)).
+- `board_bumps`: Problem when a `property_pipeline_events` row of the last 24 h has no `board` clock row of its account changed at or after it. Exact: an event is written only in the transaction of a card change (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`, and the 696 seed stamps every account at the apply. Not measured while the clock is absent.
+- W4 adds `reads` (Watch when the clock read's `pg_stat_statements` calls have not advanced for 24 h) and `load` (Watch at ≥ 5 % of statement time).
+
+**Data.** pg_trigger (12 rows); the board ledger's last 24 h (~10 events a day) against `curation_clock`'s primary key. On the worker, after `notifications`, budget 5 s, no owner page.
+
+**Thresholds and their basis.** - Any departure is a Problem: both cells should never happen. The writer kill switch (§ 3.9 of the curation-sync design) turns `triggers` red by intent while it is in force.
+- Every worker alarm due at once now owes 7 × 45 + 180 + 5 + 5 = 505 s, past the 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path.
+
+**Replaces.** Nothing; new with curation sync.
+
 ### `migration_drift` — platform, alarm, every 60 min
 
 **Measures.** Do the objects declared by the newest 25 migration files on main exist in the live catalog? The unchanged name probe, run on every canary run from the GitHub checkout (the image has no migrations/ folder).

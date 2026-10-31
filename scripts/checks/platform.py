@@ -1,4 +1,4 @@
-"""Platform checks: jobs, capacity and llm (the worker's health lane), migration_drift (GitHub).
+"""Platform checks: jobs, capacity, llm and curation_sync (the worker's health lane), migration_drift (GitHub).
 
 `check_jobs` judges every scheduled machine once, one cell per job: each GitHub workflow on
 main by its production runs (a `schedule` run, or a `push` on main), the canary's poller that
@@ -6,7 +6,8 @@ records them, each pg_cron job, each worker lane (from the heartbeat), each deri
 artifact and the job runner's registry (the watcher judges each runner job). `check_capacity`
 judges whether the database and the worker's memory keep up, against references an incident
 cannot erode. `check_llm` judges whether each provider is
-serving, per provider and per job, and whether fleet spend is sane. `check_migration_drift`
+serving, per provider and per job, and whether fleet spend is sane. `check_curation_sync` judges
+whether every committed curation change still moves the curation clock. `check_migration_drift`
 asks the live catalog whether the newest merged migrations exist; it reads a checkout, so it
 stays on GitHub. Each check takes the harness's `thresholds`, sends every statement through the
 per-check clock and imports neither the harness nor the worker; one that could measure nothing
@@ -973,6 +974,79 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     spend = [(f"{p}/{r[1]}", float(r[11] or 0)) for p, rows in calls.items() for r in rows]
     cells.append(_spend_cell(spend, thresholds))
     return _result("llm", cells, {})
+
+
+# --- curation_sync: does every committed curation change move the clock? -------------------
+#
+# Curation sync (docs/design/curation-sync.md § 3.9, migration 696): twelve deferred constraint triggers are the
+# curation clock's only writer, so a trigger disabled by a hygiene migration, or a bump that stopped landing, leaves
+# every open window showing stale curation with no error anywhere. Both cells are should-never-happen:
+#   triggers     Problem unless exactly CURATION_CLOCK_TRIGGERS triggers on bump_curation_clock() are enabled and
+#                initially deferred (the writer kill switch turns it red by intent while it is in force).
+#   board_bumps  Problem when a property_pipeline_events row of the last 24 h has no board clock row of its account
+#                changed at or after it. Exact: an event is written only in the transaction of a card change
+#                (api/pipeline.py), whose commit bumps board at clock_timestamp() >= the event's now(); the 696 seed
+#                stamps every account at the apply, so events before it hold too.
+
+_CURATION_TRIGGERS_SQL = """
+select count(*) filter (where t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable and t.tginitdeferred),
+       count(*),
+       coalesce(array_agg(c.relname::text order by c.relname)
+                  filter (where not (t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable
+                                     and t.tginitdeferred)), '{}')
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+ where t.tgfoid = to_regprocedure('public.bump_curation_clock()') and not t.tgisinternal
+"""
+
+_CURATION_BOARD_BUMPS_SQL = """
+select count(*) filter (where e.missed), count(distinct e.account_id) filter (where e.missed),
+       min(e.created_at) filter (where e.missed), count(*)
+  from (select e.account_id, e.created_at,
+               not exists (select 1 from curation_clock c
+                            where c.account_id = e.account_id and c.family = 'board'
+                              and c.changed_at >= e.created_at) as missed
+          from property_pipeline_events e
+         where e.created_at > now() - interval '24 hours') e
+"""
+
+
+def _curation_triggers_cell(conn: Any, expected: int) -> dict[str, Any]:
+    armed, found, off = fetchone(conn, _CURATION_TRIGGERS_SQL)
+    armed, found, off = int(armed or 0), int(found or 0), sorted(off or [])
+    facts = {"expected": expected, "armed": armed, "found": found, "off": off}
+    if armed == expected:
+        return _cell("triggers", "ok", f"all {expected} curation-clock triggers are enabled and deferred",
+                     value=armed, unit="triggers", facts=facts)
+    off_text = f"; off on {', '.join(off)}" if off else ""
+    return _cell("triggers", "fail", (
+        f"{armed} of {expected} curation-clock triggers are enabled and deferred ({found} found{off_text}): "
+        "a change to an unclocked table reaches no other open window. Re-enable them by a forward migration "
+        "(red by intent while the writer kill switch is in force)"), value=armed, unit="triggers", facts=facts)
+
+
+def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """Does every committed curation change still move the curation clock? Its triggers, and the board's bumps."""
+    at = _now(conn)
+    cells = [_curation_triggers_cell(conn, int(thresholds["CURATION_CLOCK_TRIGGERS"]))]
+    not_measured: dict[str, str] = {}
+    try:
+        missed, accounts, first, events = fetchone(conn, _CURATION_BOARD_BUMPS_SQL)
+    except _pg_errors.UndefinedTable as exc:
+        not_measured["board_bumps"] = f"the curation clock is absent ({_oneline(exc)})"
+        return _result("curation_sync", cells, not_measured)
+    missed, accounts, events = int(missed or 0), int(accounts or 0), int(events or 0)
+    facts = {"events_24h": events, "accounts": accounts, "first_missed_at": _iso(_as_utc(first))}
+    if missed:
+        oldest = _ago((at - _as_utc(first)).total_seconds())
+        cells.append(_cell("board_bumps", "fail", (
+            f"{missed} of {events} card events of the last 24 h ({accounts} accounts, the oldest {oldest} ago) "
+            "have no board clock bump at or after them: a committed card change moved no clock, so other open "
+            "windows never re-read it"), value=missed, unit="events", facts=facts))
+    else:
+        cells.append(_cell("board_bumps", "ok", f"every one of the {events} card events of the last 24 h bumped "
+                           "its account's board clock", value=0, unit="events", facts=facts))
+    return _result("curation_sync", cells, not_measured)
 
 
 # --- migration drift: merged is not applied (2026-08-25 outage) -----------------------------
