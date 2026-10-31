@@ -32,7 +32,8 @@ _MASK64 = (1 << 64) - 1
 
 # A row at this count stays NULL for good. migrations/703's partial index names the same number (a test pins it).
 PHASH_MAX_ATTEMPTS = 5
-# About 5 s of the lane's 60 s interval at the measured ~0.1 s per UPDATE round trip, so it cannot starve the downloads.
+# About 5 s of the lane's 60 s interval at the measured ~0.1 s per UPDATE round trip while R2 answers; a hung R2 holds
+# the lane for minutes at the timeouts below, and the downloads are stalled on that same R2 anyway.
 PHASH_RETRY_BATCH = 50
 PHASH_RETRY_WORKERS = 4
 

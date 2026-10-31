@@ -13,7 +13,7 @@ recorded — same pattern as `listing_summaries` (migration 027).
 Write-allowed exception per CLAUDE.md toolkit rule #5: same rationale
 as `summarize_listing` and `compare_listing_images` — the LLM is the
 source of truth for the extraction, we cache locally so the operator
-can iterate on the aggregator + rubric without re-billing per pass.
+can iterate on the rubric without re-billing per pass.
 
 This function is the per-listing primitive. The fleet-level discovery
 loop and the post-hoc clustering were one-off scripts, deleted under
