@@ -15,13 +15,17 @@ and deletes the query.
 
 FILL also places the row when BIND's pin election did not (W2-a3): **the portal pin when one
 was admissible, else the finest bound entity's own registry point** — a část obce's at the
-centroid of its own doors (v5.8), since RÚIAN draws it no polygon. 29 % of towned rows
+centroid of its own doors (v5.8), since RÚIAN draws it no polygon. Since v5.9 it also places a
+row whose elected pin is DECLARED blurred and lies outside the bound obec: `bind.place` sets
+that pin aside (operator ruling 2026-10-30, "the words decide"). 29 % of towned rows
 (8,706 of 29,892, measured 2026-09-12 08:05Z) carried `geom NULL` because the only position
 the resolver published was a pin, and a listing bound by NAME has none — so a row that knows
 its town would have vanished from W3's map, which re-sources lat/lng from `listing_location`
 with no fallback. The point is the registry's, so the granularity, the confidence and the
 radius are all unchanged: the LEVEL is what tells a reader how coarse the position is, and
-`disputed` is never set by this path — a town centre is not a disagreement with anything.
+FILL's point never causes a dispute — a town centre is not a disagreement with anything (a row
+FILL places because a declared-blurred pin was set aside, v5.9, still carries that pin's
+`pin_outside_obec`).
 Since v5.8 the radius is never smaller than the placed-on entity's own reach (the část's
 farthest door, the polygon's `containment_radius_m`): a row on Praha's point said 1 km and
 could be 17.6 km off.
@@ -37,9 +41,9 @@ only survivorship rule that outlived the policy table: `bind.operator_fields` is
 registry entity, else NULL** — a KÚ (or a ZSJ inside one) on the bound unit's chain; the one
 KÚ of a one-KÚ obec, which every entity inside it lies in; an address point's own KÚ; a street
 or část obce whose every RÚIAN door lies in one KÚ (the Q7 door rule). A portal pin never
-decides it, whatever the portal labels it: 66,165 idnes `no_exact_address` and 13,176 sreality
-`not_address` pins read as "precise" (`core.pin_is_precise`), so a pin-based KÚ would be a
-guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
+decides it, whatever the portal labels it: the labels a contract does not list as blurred read
+as "precise" (`core.pin_is_precise`; idnes `no_exact_address` and sreality `not_address` ARE
+blur-declared by their contracts since W1-c), so a pin-based KÚ would be a guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
 `core`, and a disputed row keeps its bound entity's.
 """
 
@@ -131,7 +135,8 @@ def fill(
 
 
 def position(filled: Fill, binding: Binding) -> Position:
-    """The position FILL publishes when BIND's pin election came back empty (W2-a3).
+    """The position FILL publishes when BIND's pin election came back empty (W2-a3), or when
+    `bind.place` set a declared-blurred pin outside the bound town aside (v5.9).
 
     It is a REGISTRY point, so nothing about it can contradict the row: CHECK's containment
     tests are asked of a portal pin only, because a point that came out of the mirror is
