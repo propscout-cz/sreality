@@ -9,6 +9,30 @@ import pytest
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "location_data"
 
+# The row's keys, finest first (W5): the grain every published row must carry.
+_KEYS = (("address_point", "ruian_adm_kod"), ("street", "ulice_kod"),
+         ("cast_obce_or_quarter", "cast_obce_kod"), ("obec", "obec_kod"), ("okres", "okres_kod"),
+         ("kraj", "kraj_kod"))
+
+
+@pytest.fixture(autouse=True)
+def _grain_is_the_finest_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W5's property rail, over EVERY resolution any test here makes: the published grain is the
+    row's finest key (`grade.grain_of`, the one writer), so no second writer can come back."""
+    from location_data.resolver import core
+
+    resolve = core.resolve
+
+    def checked(*args, **kwargs):
+        row = resolve(*args, **kwargs)
+        named = row.country_status == "foreign" and row.country_code
+        finest = next((g for g, k in _KEYS if getattr(row, k) is not None),
+                      "country" if named else "unknown")
+        assert row.granularity == finest, (row.listing_id, row.granularity, finest)
+        return row
+
+    monkeypatch.setattr(core, "resolve", checked)
+
 
 @pytest.fixture
 def ob_adr_zip(tmp_path: Path) -> Path:

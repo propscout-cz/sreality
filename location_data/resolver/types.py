@@ -66,9 +66,6 @@ class GranularityRank:
         except KeyError as exc:  # a rung with no rank row is a schema bug, never a default
             raise KeyError(f"no location_granularity_rank row for {granularity!r}") from exc
 
-    def coarser_of(self, a: str, b: str) -> str:
-        return a if self.rank(a) <= self.rank(b) else b
-
 
 # --------------------------------------------------------------------------- claims
 
@@ -321,7 +318,6 @@ class Binding:
     """
 
     target_kind: str  # address_point | street | admin_unit | none
-    granularity: str
     rung: str
     ruian_adm_kod: int | None = None
     ulice_kod: int | None = None
@@ -421,15 +417,6 @@ class Fill:
 
 
 @dataclass(frozen=True, slots=True)
-class Grade:
-    """GRADE's answer: one granularity, one confidence, one radius."""
-
-    granularity: str
-    match_confidence: str
-    uncertainty_radius_m: float
-
-
-@dataclass(frozen=True, slots=True)
 class Verdict:
     """CHECK's answer: which country this is, and whether anything about the row disagrees
     with itself. `disputed` is ONE lower_snake word, or None for a clean row."""
@@ -437,7 +424,6 @@ class Verdict:
     country_status: str  # cz | foreign | undetermined
     country_code: str | None = None
     disputed: str | None = None
-    granularity: str | None = None  # set when the check coarsens the grade
 
 
 @dataclass(frozen=True, slots=True)
