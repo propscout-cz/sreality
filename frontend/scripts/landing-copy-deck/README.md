@@ -15,9 +15,19 @@ text (`deck.js` `fnv`). Fields: `original` / `originalHtml` (what the page says 
 2. Republish with `publish_files` (slug + base_version from `get_artifact`, `mode: "replace"`, the printed list).
    The page declares `db` + `user`; republishing keeps the declaration.
 
+**The "Apply to live page" button** writes `requests/apply`:
+`{status: "requested", keys, count, requestedAt, by, message, pr, liveAt}`. It cannot start Claude: a local Claude Code
+session is never woken by an artifact. So the page hands the operator the sentence to send ("Apply my copy edits from
+the PropScout landing copy artifact."). Claude reports progress on the same document, and the page shows it live:
+- `db_write` update `status: "applying"`, plus a one-line `message` (with `ifVersion` from `db_get`);
+- after the deploy, `status: "live"`, `liveAt`, `pr` (the GitHub URL) and `message`;
+- or `status: "failed"` with the reason.
+
+The operator can set `cancelled`.
+
 **Applying edits:**
 
-1. `db_query` collection `edits` where `status == "pending"`.
+1. `db_get requests/apply` (the keys the operator sent), then `db_query` collection `edits` where `status == "pending"`.
 2. For each, find `originalHtml` in `frontend/landing/*.html` and replace it with `html`. Hidden texts are in
    `<title>`/`<meta>` or `src/landing/{shared,main,thanks}.ts`.
    - An edit flagged `legal` that touches the consent line also needs a new `api/waitlist.py` CONSENT_TEXTS version and

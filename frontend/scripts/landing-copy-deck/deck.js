@@ -26,6 +26,8 @@
   var state = { tab: 'uvod', variant: 'default', edit: true, hidden: false, panel: false, filter: 'pending' };
   var store = { db: null, uid: null, user: null, mode: 'connecting', chains: new Map() };
   var editing = null;
+  var request = null; // requests/apply: the operator's "publish these" request and Claude's progress on it
+  var APPLY_SENTENCE = 'Apply my copy edits from the PropScout landing copy artifact.';
 
   function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
   function fnv(s) {
@@ -147,6 +149,10 @@
         clearTimeout(timer);
         setStatus('error', err && err.code);
       });
+      db.doc('requests/apply').onSnapshot(function (snap) {
+        request = snap.exists ? snap.data() : null;
+        renderApply();
+      }, function () {});
     }, useLocal);
   }
   /* One write at a time per document: each key's writes run in order. */
@@ -307,6 +313,7 @@
     applyEdits();
     renderBar(tab);
     renderPanel();
+    renderApply();
   }
 
   /* ---------- Toolbar + panel ---------- */
@@ -323,14 +330,19 @@
       '<label class="cd-check"><input type="checkbox" id="cd-edit-toggle" checked> Edit text</label>' +
       '<label class="cd-check"><input type="checkbox" id="cd-hidden-toggle"> Show hidden states</label>' +
       '<span class="cd-status" id="cd-status" data-mode="connecting">Connecting…</span>' +
-      '<button type="button" class="cd-changes" id="cd-changes">Changes <b id="cd-count">0</b></button>';
+      '<button type="button" class="cd-changes" id="cd-changes">Changes <b id="cd-count">0</b></button>' +
+      '<button type="button" class="cd-apply" id="cd-apply">Apply to live page</button>' +
+      '<div class="cd-pop" id="cd-pop" role="dialog" aria-label="Apply copy edits" hidden></div>';
     document.body.insertBefore(b, document.body.firstChild);
     b.addEventListener('click', function (e) {
       var t = e.target.closest('[data-tab]');
       if (t) { go(t.getAttribute('data-tab')); return; }
       var v = e.target.closest('[data-variant-pick]');
       if (v) { state.variant = v.getAttribute('data-variant-pick'); render(); return; }
-      if (e.target.closest('#cd-changes')) { state.panel = !state.panel; render(); }
+      if (e.target.closest('#cd-changes')) { state.panel = !state.panel; render(); return; }
+      if (e.target.closest('#cd-apply')) { togglePop(); return; }
+      var act = e.target.closest('[data-pop]');
+      if (act) popAction(act.getAttribute('data-pop'), act);
     });
     b.querySelector('#cd-edit-toggle').addEventListener('change', function (e) { state.edit = e.target.checked; if (editing) editing.blur(); render(); });
     b.querySelector('#cd-hidden-toggle').addEventListener('change', function (e) { state.hidden = e.target.checked; render(); });
@@ -427,6 +439,113 @@
         function () { btn.textContent = 'Copy blocked'; });
     }
   }
+
+  /* ---------- Apply to the live page ----------
+   * The button records a request in the db (requests/apply). It cannot start Claude: a local Claude Code session is
+   * never woken by an artifact, so the popover hands the operator the one sentence to send. Claude moves the request
+   * through applying → live (with the PR) and marks each applied edit, and this page shows it live. */
+  function pendingKeys() {
+    var keys = [];
+    docs.forEach(function (d, key) { if (bucket(key, d) === 'pending') keys.push(key); });
+    return keys;
+  }
+  var popOpen = false;
+  function active() { return request && (request.status === 'requested' || request.status === 'applying'); }
+  function when(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function renderApply() {
+    var btn = document.getElementById('cd-apply');
+    if (!btn) return;
+    var n = pendingKeys().length;
+    btn.removeAttribute('data-state');
+    btn.disabled = false;
+    if (!store.db) {
+      btn.textContent = 'Apply to live page';
+      btn.disabled = true;
+      btn.title = 'Open this page on claude.ai, signed in, to send edits to Claude.';
+    } else if (active()) {
+      btn.textContent = request.status === 'applying' ? 'Claude is applying…' : 'Waiting for Claude…';
+      btn.setAttribute('data-state', request.status);
+      btn.title = '';
+    } else if (n) {
+      btn.textContent = 'Apply ' + n + (n === 1 ? ' change' : ' changes');
+      btn.title = '';
+    } else if (request && request.status === 'live') {
+      btn.textContent = 'Live ✓';
+      btn.setAttribute('data-state', 'live');
+      btn.title = '';
+    } else {
+      btn.textContent = 'Nothing to apply';
+      btn.disabled = true;
+      btn.title = 'Edit some text first.';
+    }
+    if (popOpen) renderPop();
+  }
+  function togglePop() { popOpen = !popOpen; renderPop(); }
+  function renderPop() {
+    var pop = document.getElementById('cd-pop');
+    if (!pop) return;
+    pop.hidden = !popOpen;
+    if (!popOpen) return;
+    var keys = pendingKeys();
+    var html = '';
+    var tell = '<p class="cd-pop-tell">Claude Code can’t be started from this page. Send it this sentence:</p>' +
+      '<p class="cd-pop-sentence">' + esc(APPLY_SENTENCE) + '</p>' +
+      '<div class="cd-pop-actions"><button type="button" class="cd-btn" data-pop="copy">Copy sentence</button>';
+    if (active()) {
+      html += '<h3>' + (request.status === 'applying' ? 'Claude is applying your changes' : 'Request sent') + '</h3>' +
+        '<p>' + request.count + (request.count === 1 ? ' change' : ' changes') + ' · requested ' + esc(when(request.requestedAt)) + '</p>' +
+        (request.message ? '<p class="cd-pop-msg">' + esc(request.message) + '</p>' : '') +
+        (request.status === 'requested' ? tell + '<button type="button" class="cd-btn cd-quiet" data-pop="cancel">Cancel request</button></div>' : '');
+    } else if (keys.length) {
+      var legal = keys.some(function (k) { return docs.get(k).legal; });
+      html += '<h3>Publish ' + keys.length + (keys.length === 1 ? ' change' : ' changes') + ' on propscout.cz?</h3>' +
+        '<ul class="cd-pop-list">' + keys.slice(0, 6).map(function (k) { return '<li>' + esc(docs.get(k).context || 'Page') + ': ' + esc(docs.get(k).text).slice(0, 80) + '</li>'; }).join('') +
+        (keys.length > 6 ? '<li>…and ' + (keys.length - 6) + ' more</li>' : '') + '</ul>' +
+        (legal ? '<p class="cd-pop-warn">Includes legal text. Changing the consent line starts a new consent version.</p>' : '') +
+        '<div class="cd-pop-actions"><button type="button" class="cd-btn cd-primary" data-pop="send">Send to Claude</button>' +
+        '<button type="button" class="cd-btn cd-quiet" data-pop="close">Not now</button></div>';
+      if (request && request.status === 'live') html += '<p class="cd-pop-last">Last published ' + esc(when(request.liveAt)) + '.</p>';
+    } else if (request && request.status === 'live') {
+      html += '<h3>Live on propscout.cz</h3><p>' + request.count + (request.count === 1 ? ' change' : ' changes') + ' published ' + esc(when(request.liveAt)) + '.</p>' +
+        (request.message ? '<p class="cd-pop-msg">' + esc(request.message) + '</p>' : '') +
+        (request.pr && /^https:\/\/github\.com\//.test(request.pr) ? '<p><a href="' + esc(request.pr) + '" target="_blank" rel="noopener">The change on GitHub</a></p>' : '');
+    } else {
+      html += '<h3>Nothing to apply</h3><p>Edit some text first; it shows up here.</p>';
+    }
+    if (request && request.status === 'failed' && !active()) html += '<p class="cd-pop-warn">Last request failed: ' + esc(request.message || 'no reason given') + '</p>';
+    pop.innerHTML = html;
+  }
+  function popAction(what, btn) {
+    if (what === 'close') { popOpen = false; renderPop(); return; }
+    if (what === 'copy') {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(APPLY_SENTENCE).then(function () { btn.textContent = 'Copied'; }, function () { btn.textContent = 'Copy blocked: select the text'; });
+      }
+      return;
+    }
+    if (!store.db) return;
+    if (what === 'send') {
+      var keys = pendingKeys();
+      if (!keys.length) return;
+      var doc = { status: 'requested', keys: keys, count: keys.length, requestedAt: new Date().toISOString(), by: store.uid || null,
+        message: '', pr: '', liveAt: '' };
+      request = doc;
+      renderApply();
+      write('requests/apply', function () { return store.db.doc('requests/apply').set(doc); });
+    } else if (what === 'cancel' && request && request.status === 'requested') {
+      var next = Object.assign({}, request, { status: 'cancelled', message: 'Cancelled on the page.' });
+      request = next;
+      renderApply();
+      write('requests/apply', function () { return store.db.doc('requests/apply').set(next); });
+    }
+  }
+  document.addEventListener('click', function (e) {
+    if (popOpen && !e.target.closest('#cd-pop, #cd-apply')) { popOpen = false; renderPop(); }
+  });
 
   function start() {
     index();

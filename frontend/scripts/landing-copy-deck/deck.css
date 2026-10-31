@@ -36,6 +36,32 @@
   border: 0; border-radius: 9px; padding: 8px 12px; background: var(--cd-accent); color: var(--cd-chrome); font: 600 13px/1 var(--sans); cursor: pointer;
 }
 .cd-changes b { display: inline-block; min-width: 18px; margin-left: 4px; padding: 2px 5px; border-radius: 99px; background: var(--cd-chrome); color: var(--cd-ink); font-size: 11px; }
+.cd-apply {
+  border: 1.5px solid var(--cd-accent); border-radius: 9px; padding: 7px 12px; background: transparent; color: var(--cd-ink);
+  font: 600 13px/1 var(--sans); cursor: pointer;
+}
+.cd-apply:hover:not([disabled]) { background: var(--cd-accent); color: var(--cd-chrome); }
+.cd-apply[disabled] { opacity: 0.45; cursor: default; }
+.cd-apply[data-state='requested'], .cd-apply[data-state='applying'] { border-color: var(--cd-edit); color: var(--cd-edit); }
+.cd-apply[data-state='live'] { border-color: transparent; color: var(--cd-accent); }
+.cd-pop {
+  position: absolute; top: calc(100% + 6px); right: 12px; width: min(360px, calc(100vw - 24px)); z-index: 1002;
+  background: #fff; color: #16181d; border-radius: 14px; padding: 16px; box-shadow: 0 24px 48px -16px rgba(0, 0, 0, 0.45);
+  font: 400 14px/1.45 var(--sans);
+}
+.cd-pop[hidden] { display: none; }
+.cd-pop h3 { margin: 0 0 6px; font: 600 16px/1.25 var(--display); color: #16181d; }
+.cd-pop p { margin: 6px 0; color: #41454e; }
+.cd-pop a { color: #1f6b5c; }
+.cd-pop-list { margin: 8px 0; padding-left: 18px; color: #41454e; font-size: 13px; }
+.cd-pop-warn { color: #a3392b !important; font-size: 13px; }
+.cd-pop-tell { font-size: 13px; }
+.cd-pop-sentence { padding: 8px 10px; background: #f2efe7; border-radius: 8px; color: #16181d !important; font: 500 13px/1.4 var(--mono); user-select: all; }
+.cd-pop-msg { padding: 8px 10px; background: #deece7; border-radius: 8px; color: #175246 !important; }
+.cd-pop-last { font-size: 12.5px; }
+.cd-pop-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cd-btn.cd-primary { background: #1f6b5c; border-color: #1f6b5c; color: #fff; }
+.cd-btn.cd-primary:hover { background: #175246; }
 .cd-bar :focus-visible, .cd-panel :focus-visible { outline: 2px solid var(--cd-accent); outline-offset: 2px; }
 
 /* Edit affordances on the page itself. */
