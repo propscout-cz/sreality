@@ -169,12 +169,13 @@ it (`api/`). They do not apply to the scraper.
 10. **An agent is one folder in repo-root `skills/`** (`skills/README.md`): frontmatter = a priced model per
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
-    journal) and ends it on `submit_result`, checked against the run's own tool results; `scripts/agent_run.py`
-    runs one locally and records a cassette; `executor.py` queues them (`references/tool-registry.md`). Only the estimator still reads the `skills` table (Settings,
+    journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
+    runs one locally (a cassette); `executor.py` queues them (`references/tool-registry.md`). Only the estimator still reads the `skills` table (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
-    completion types; `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
+    completion types (a tool loop sends `Completion.reply` back: the provider's own blocks in order, an
+    `OpaqueBlock` read only by its writer; the estimator still sends text + calls); `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
     (default `anthropic`). `provider_for_model` derives the backend from the model id
     prefix, so a lane that only knows its `app_settings` model routes without threading a
     provider argument. Adding a provider is a new file implementing the same Protocol,
@@ -197,7 +198,7 @@ it (`api/`). They do not apply to the scraper.
     `{"type": "tool", "name": ...}`, Gemini's `FunctionCallingConfig mode=ANY`, PR #768) so a
     caller that needs a guaranteed structured response (no prose fallback) can force it; pass
     it through `LLMClient.call(..., tool_choice=...)` — omitted, providers/fakes without the
-    param keep working.
+    param keep working; `hosted_code` too.
 12. **Never spell `price / area`. `toolkit/measures.py` is the only per-m² definition.**
     (Numbered last on purpose — the rules above are cited by code comments; never renumber.)
     `per_m2_sql(alias)` / `per_m2_basis_sql(alias)` render calls to `measure_price_per_m2` /

@@ -20,6 +20,7 @@ Plus one unit test for `TraceRecorder.reasoning(...)` step shape.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -35,9 +36,12 @@ from api.providers import (
 )
 from api.agents.definition import Limits
 from api.skills import Skill
+from api.providers.anthropic import AnthropicProvider
+from api.providers.gemini import GeminiProvider
 from toolkit.comparables import ComparableFilters, TargetSpec
 from toolkit.measures import MeasureBasisError
 from tests.api._fakes import _FakeConn, _ScriptedProvider
+from tests.api._wire_stub import anthropic_reply, gemini_reply, wire_stub
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +319,61 @@ def _run_to_terminator(monkeypatch, *, cohort_basis_value: str | None):
         skill=_make_skill(), provider="anthropic",
         recorder=TraceRecorder(), estimation_run_id=42,
     )
+
+
+_RECORD = {"estimated_monthly_rent_czk": 30000, "rent_p25_czk": 28000, "rent_p75_czk": 32000, "confidence": "medium",
+           "comparables_used": [100, 101, 102], "warnings": []}
+_RELAX = {"radius_m": 1000, "min_results": 5}
+
+
+def _estimator_bodies(monkeypatch, provider, env: str, replies: list[dict[str, Any]]) -> list[bytes]:
+    """The exact HTTP bodies one estimation sends, through the real SDK."""
+    _patch_toolkit(monkeypatch)
+    conn = _FakeConn(app_settings={})
+    with wire_stub(monkeypatch, env, replies) as stub:
+        result = agent_mod.run_agent_estimation(
+            conn, sreality_client=None, llm_client=LLMClient(conn, providers={provider.name: provider}),
+            target=_target(), filters=_filters(), purchase_price_czk=6_000_000, skill=_make_skill(),
+            provider=provider.name, recorder=TraceRecorder(), estimation_run_id=42,
+        )
+    assert result.metadata["stop_reason"] == "record_estimate"
+    return stub.bodies
+
+
+def test_the_estimators_anthropic_requests_stay_as_they_were(monkeypatch):
+    """#2179 sends reply blocks back in the generic loop only: this production lane still sends text then calls, so a
+    reply carrying thinking and extra fields produces the very bytes a plain one does."""
+    pytest.importorskip("anthropic")
+    sonnet = "claude-sonnet-4-5"
+    text = {"type": "text", "text": "Broad first."}
+    call = {"type": "tool_use", "id": "t1", "name": "find_comparables_relaxed", "input": _RELAX}
+    record = {"type": "tool_use", "id": "t2", "name": "record_estimate", "input": _RECORD}
+    plain = [anthropic_reply(text, call, model=sonnet), anthropic_reply(record, model=sonnet)]
+    rich = [anthropic_reply({"type": "thinking", "thinking": "", "signature": "c2ln"}, {**text, "citations": None},
+                            {**call, "caller": {"type": "direct"}}, model=sonnet),
+            anthropic_reply({"type": "redacted_thinking", "data": "eA=="}, record, model=sonnet)]
+    bodies = _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", plain)
+    assert _estimator_bodies(monkeypatch, AnthropicProvider(api_key="test"), "ANTHROPIC_BASE_URL", rich) == bodies
+    assert set(json.loads(bodies[1])) == {"model", "max_tokens", "messages", "system", "tools"}
+    # #2068: the hosted code tool and its container belong to a code agent's calls alone.
+    assert all("type" not in tool for body in bodies for tool in json.loads(body)["tools"])
+    assert json.loads(bodies[1])["max_tokens"] == 4096
+    assert json.loads(bodies[1])["messages"][1] == {"role": "assistant", "content": [text, call]}
+
+
+def test_the_estimators_gemini_requests_stay_as_they_were(monkeypatch):
+    pytest.importorskip("google.genai")
+    text = {"text": "Broad first."}
+    call = {"functionCall": {"name": "find_comparables_relaxed", "args": _RELAX}}
+    record = {"functionCall": {"name": "record_estimate", "args": _RECORD}}
+    plain = [gemini_reply(text, call), gemini_reply(record)]
+    rich = [gemini_reply({**text, "thoughtSignature": "c2ln"}, {**call, "thoughtSignature": "c2ln"},
+                         {"text": "", "thoughtSignature": "c2ln"}),
+            gemini_reply({**record, "thoughtSignature": "c2ln"})]
+    bodies = _estimator_bodies(monkeypatch, GeminiProvider(api_key="test"), "GOOGLE_GEMINI_BASE_URL", plain)
+    assert _estimator_bodies(monkeypatch, GeminiProvider(api_key="test"), "GOOGLE_GEMINI_BASE_URL", rich) == bodies
+    assert set(json.loads(bodies[1])) == {"contents", "systemInstruction", "tools", "generationConfig"}
+    assert json.loads(bodies[1])["contents"][1] == {"role": "model", "parts": [text, call]}
 
 
 def test_a_sale_cohort_cannot_be_recorded_as_a_monthly_rent(monkeypatch):

@@ -18,7 +18,8 @@ from api.capabilities import registry
 from api.capabilities.errors import ToolError, ToolErrorCode
 from scraper import db
 from scripts import agent_run
-from tests.api._agent_fixtures import install_probes, reply, write_folder
+from api.providers import HostedFile, ModelPrice
+from tests.api._agent_fixtures import ScriptedCodeProvider, code_reply, frontmatter, install_probes, reply, write_folder
 from tests.api._agent_replay import replay
 from tests.api._fakes import _FakeConn, _ScriptedProvider
 
@@ -76,6 +77,53 @@ def test_a_recorded_run_replays_to_the_same_outcome(
     replayed = replay(document, load(folder))
     assert cassette.plain(asdict(replayed)) == document["outcome"]
     assert document["outcome"]["stop_reason"] == "submit_result"
+
+
+def test_a_code_agent_takes_input_files_and_writes_its_answers_files(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    made = HostedFile(name="model.csv", media_type="text/csv", data=b"a\n1\n")
+    world["provider"] = ScriptedCodeProvider([code_reply((terminator.NAME, {"markdown": "Done.", "files": ["model.csv"]}), files=("f",))],
+                                             files={"f": made}, prices={"claude-sonnet-4-5": ModelPrice(1.0, 1.0)})
+    folder = write_folder(tmp_path, meta=frontmatter("probe_scout_v1", code=True))
+    source = tmp_path / "rents.csv"
+    source.write_bytes(b"rent\n9\n")
+    code = agent_run.main([str(folder), "--user", str(USER), "--input", '{"town": "Brno"}', "--file", str(source),
+                           "--out", str(tmp_path / "out")])
+    assert code == 0
+    assert (tmp_path / "out" / "model.csv").read_bytes() == b"a\n1\n"
+    assert world["provider"].uploaded[0][:3] == ("rents.csv", "text/csv", b"rent\n9\n")
+    printed = capsys.readouterr().out
+    assert json.loads(printed.split("Done.\n", 1)[1])["files"] == [{"name": "model.csv", "media_type": "text/csv", "bytes": 4}]
+
+
+def test_an_out_folder_it_cannot_make_spends_nothing(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x")
+    code = agent_run.main([str(write_folder(tmp_path)), "--user", str(USER), "--input", '{"town": "Brno"}',
+                           "--out", str(blocker / "out")])
+    assert code == 2
+    assert world["provider"].calls == []
+
+
+def test_an_input_file_for_an_agent_without_code_spends_nothing(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = tmp_path / "rents.csv"
+    source.write_bytes(b"rent\n9\n")
+    code = agent_run.main([str(write_folder(tmp_path)), "--user", str(USER), "--input", '{"town": "Brno"}', "--file", str(source)])
+    assert code == 2
+    assert "does not allow code" in capsys.readouterr().err
+    assert world["provider"].calls == []
+
+
+def test_a_missing_input_file_spends_nothing(
+        world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_folder(tmp_path, meta=frontmatter("probe_scout_v1", code=True))
+    code = agent_run.main([str(folder), "--user", str(USER), "--input", '{"town": "Brno"}',
+                           "--file", str(tmp_path / "absent.csv")])
+    assert code == 2
+    assert "absent.csv" in capsys.readouterr().err
+    assert world["provider"].calls == []
 
 
 def test_a_replay_that_leaves_the_recording_fails_loudly(world: dict[str, Any], tmp_path: Path) -> None:

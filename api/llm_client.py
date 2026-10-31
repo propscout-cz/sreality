@@ -34,6 +34,7 @@ from api.providers import (
     Block,
     Completion,
     CompletionProvider,
+    HostedCode,
     ImageBlock,
     Message,
     ProviderError,
@@ -164,6 +165,7 @@ class LLMClient:
         provider: str | None = None,
         tool_choice: str | None = None,
         timeout_s: float | None = None,
+        hosted_code: HostedCode | None = None,
     ) -> LLMResponse:
         """Single API used by every LLM caller in the codebase.
 
@@ -173,7 +175,8 @@ class LLMClient:
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
-        don't use it; `timeout_s` likewise replaces the provider's own request
+        don't use it; `hosted_code` likewise, and only a code agent's loop
+        sets it; `timeout_s` likewise replaces the provider's own request
         timeout, with no SDK retry under it (the HTTP client's connect and read
         limits, not a stopwatch). `called_for` must be a value `llm_calls_called_for_check`
         admits (the latest migration restating it holds the list); the
@@ -192,6 +195,8 @@ class LLMClient:
             extra_kwargs["tool_choice"] = tool_choice
         if timeout_s is not None:
             extra_kwargs["timeout_s"] = timeout_s
+        if hosted_code is not None:
+            extra_kwargs["hosted_code"] = hosted_code
 
         mono_start = time.monotonic()
         try:
