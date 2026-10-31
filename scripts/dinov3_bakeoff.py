@@ -1,8 +1,9 @@
 """DINOv3 bake-off — the pod-side harness for ENCODER-DECISION §5 Set 2 (job b).
 
-Consumes the manifest built by scripts/dinov3_bakeoff_manifest.py (presigned R2 URLs,
+Consumes the manifest scripts/dinov3_bakeoff_manifest.py built, deleted under Actions exit R6a
+(docs/design/new-dedup/PROGRAM.md says how to restore it): presigned R2 URLs,
 the five §5.2 populations, stored-CLIP cosines, the synthetic-transform recipes, the
-weights-canary fixture) and measures NEAR-DUPLICATE SEPARATION per encoder arm.
+weights-canary fixture. It measures NEAR-DUPLICATE SEPARATION per encoder arm.
 
 SELF-CONTAINED ON PURPOSE — no repo imports. It must run on a bare GPU pod holding
 nothing but this one file, the manifest, and pip-installed packages:
@@ -10,8 +11,8 @@ nothing but this one file, the manifest, and pip-installed packages:
     pip install torch transformers pillow requests huggingface_hub
     python3 dinov3_bakeoff.py --manifest dinov3_manifest.json --out results.json
 
-SCOPE, STATED PLAINLY. Nothing launches a pod. The manifest is built by a GitHub
-Actions workflow that holds the DB and R2 credentials a bare pod does not; running
+SCOPE, STATED PLAINLY. Nothing launches a pod. The manifest was built where the DB and
+R2 credentials are, which a bare pod does not hold; running
 THIS file against that manifest on a real GPU is a MANUAL step the operator performs
 by hand, when they choose to spend the ~$2 §5.3 estimates. There is no pod-launch
 automation here and there never should be in this file — a harness that can spend

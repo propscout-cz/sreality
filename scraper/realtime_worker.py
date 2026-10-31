@@ -1260,6 +1260,14 @@ def _run_images_sync(max_downloads: int) -> dict[str, Any]:
     return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
+def _run_phash_retry_sync() -> dict[str, int]:
+    # Lazy for the same reason: Pillow stays off the worker's startup path.
+    from scraper.image_phash import retry_unhashed
+
+    with db.connect() as conn:
+        return retry_unhashed(conn)
+
+
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
     slice_ = IMAGES_SLICE_DEFAULT
     try:
@@ -1281,17 +1289,27 @@ async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     if stop_event.is_set():
         return
     agg = await asyncio.to_thread(_run_images_sync, slice_)
+    retry: dict[str, int] = {}
+    if not stop_event.is_set():
+        try:
+            retry = await asyncio.to_thread(_run_phash_retry_sync)
+        except Exception as exc:  # noqa: BLE001 - the retry never costs the pass its download result
+            LOG.warning("images lane: phash retry failed: %s", exc)
     totals = {
         "downloaded": agg.get("images_stored", 0),
-        # Stored without an inline pHash (left for the hourly backstop); 0 in steady state.
+        # Stored without an inline pHash (left for the retry below); 0 in steady state.
         "phash_missed": agg.get("images_phash_missed", 0),
+        "phash_retried": retry.get("phash_retried", 0),
+        "phash_hashed": retry.get("phash_hashed", 0),
+        "phash_given_up": retry.get("phash_given_up", 0),
         "stopped_suspicious": bool(agg.get("stopped_suspicious", False)),
         "cap": slice_,
     }
     LOG.info(
-        "IMAGES lane downloaded=%d phash_missed=%d cap=%d stopped_suspicious=%s",
-        totals["downloaded"], totals["phash_missed"], slice_,
-        totals["stopped_suspicious"],
+        "IMAGES lane downloaded=%d phash_missed=%d phash_retried=%d phash_hashed=%d phash_given_up=%d "
+        "cap=%d stopped_suspicious=%s",
+        totals["downloaded"], totals["phash_missed"], totals["phash_retried"], totals["phash_hashed"],
+        totals["phash_given_up"], slice_, totals["stopped_suspicious"],
     )
     _record_pass(state, "images", totals)
 

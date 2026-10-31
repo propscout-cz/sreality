@@ -453,7 +453,6 @@ def test_the_workflow_reader(tmp_path: Path) -> None:
 
 # Scheduled files leaving by another PR, tolerated present or gone so the merge order does not matter.
 LEAVERS = {
-    "compute_image_phash.yml": "#2018 (PROGRAM R6a): pHash moves off the hourly schedule",
     "recompute_city_proximity.yml": "#2012 / PR #2040: city proximity moves onto pg_cron",
 }
 # A RUNNER entry's module may still run from these attended (dispatch-only) files.
@@ -544,8 +543,8 @@ def test_the_pairing_census_fires() -> None:
     intake = workflows["location_claims_intake.yml"]
     silent = replace(intake, invocations=tuple(c for c in intake.invocations if c.module != "location_data.claims_intake"))
     assert pairing_problems(jobs.declared(), {**workflows, "location_claims_intake.yml": silent})
-    stray = Workflow("phash2.yml", True, 600, (Invocation("scripts.compute_image_phash2", frozenset()),))
-    assert pairing_problems(jobs.declared(), {**workflows, "phash2.yml": stray})
+    stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
+    assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # ingest_boundaries.yml runs the overlay module by hand; only ATTENDED keeps it from being map_overlays' 2nd host.
     assert pairing_problems(jobs.declared(), workflows, attended={})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.

@@ -48,7 +48,8 @@ calls an LLM must do the same.
   operator-supplied attachment (floor plan, drawing, photo).
 - `discover_condition_markers` (`toolkit/condition_markers.py`, migration 064, cache
   `listing_marker_extractions`) — mines Czech technical-state phrases ("zateplená budova", "po
-  kompletní rekonstrukci") to feed the condition-scoring marker dictionary.
+  kompletní rekonstrukci") to feed the condition-scoring marker dictionary. Parked with rule #14; nothing
+  calls it since its fleet loop and clustering scripts were deleted (Actions exit R6a, #2018).
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
   curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact

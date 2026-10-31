@@ -85,10 +85,9 @@ W1 (shared prerequisites + labeling program):
       `phash_pair_notes` had zero live callers already); `image_training_examples` is superseded
       but not yet dropped (separately-gated destructive migration). "Border case" (#1113) is
       unaffected — still a whole-image flag orthogonal to any tag's state, still excluded from
-      Gate 1 the same way. Secondary-CLIP scoring (`scraper/label_proposal_tagger.py` +
-      `scripts/label_proposal_backfill.py`, dispatch-only GH Actions workflow) is separate infra
-      from the DINOv2/RunPod embeddings path below — a stronger CLIP checkpoint, CPU, no RunPod
-      dependency. Operator still needs to run several labeling rounds to reach Gate 1 (150 positive
+      Gate 1 the same way. Secondary-CLIP scoring, a stronger CLIP checkpoint on CPU, was separate infra
+      from the DINOv2/RunPod embeddings path below; its tagger, script and dispatch-only workflow are deleted
+      (Actions exit R6a, #2018) and the proposals it wrote stay reviewable. Operator still needs to run several labeling rounds to reach Gate 1 (150 positive
       images/tag) — the tool is built, the labeling itself is ongoing curation work. The per-tag
       trainer itself (docs/design/clip-linear-probe.md) is a separate, not-yet-built follow-up.
       Follow-up same day: every tile shows its image's already-assigned tags in one batched call

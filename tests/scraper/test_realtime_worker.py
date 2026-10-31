@@ -454,9 +454,14 @@ def _images_agg(**over: Any) -> dict[str, Any]:
     return agg
 
 
+def _retry_counts(**over: Any) -> dict[str, int]:
+    return {"phash_retried": 0, "phash_hashed": 0, "phash_given_up": 0, **over}
+
+
 def test_images_pass_runs_capped_active_only_download(monkeypatch):
     monkeypatch.setattr(rw, "_read_images_slice", lambda: 123)
     monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", _retry_counts)
     ran: list[int] = []
     monkeypatch.setattr(
         rw, "_run_images_sync", lambda cap: ran.append(cap) or _images_agg())
@@ -467,19 +472,74 @@ def test_images_pass_runs_capped_active_only_download(monkeypatch):
     assert images["passes"] == 1
     assert images["last"] == {
         "downloaded": 4, "phash_missed": 0, "stopped_suspicious": False, "cap": 123,
+        "phash_retried": 0, "phash_hashed": 0, "phash_given_up": 0,
     }
 
 
 def test_images_pass_heartbeat_carries_inline_phash_misses(monkeypatch):
-    """A stored image the inline hash missed is the hourly backstop's work; the
-    heartbeat carries the count so a silent inline failure is visible live."""
+    """A stored image the inline hash missed is the retry's work; the heartbeat
+    carries the count so a silent inline failure is visible live."""
     monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
     monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", _retry_counts)
     monkeypatch.setattr(
         rw, "_run_images_sync", lambda cap: _images_agg(images_phash_missed=3))
     state = rw._new_state()
     asyncio.run(rw._images_pass(asyncio.Event(), state))
     assert state["lanes"]["images"]["last"]["phash_missed"] == 3
+
+
+def test_images_pass_records_the_phash_retry_after_the_downloads(monkeypatch, caplog):
+    order: list[str] = []
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", lambda cap: order.append("download") or _images_agg())
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", lambda: order.append("retry") or _retry_counts(
+        phash_retried=5, phash_hashed=2, phash_given_up=1))
+    state = rw._new_state()
+
+    with caplog.at_level("INFO", logger="scraper.realtime_worker"):
+        asyncio.run(rw._images_pass(asyncio.Event(), state))
+
+    assert order == ["download", "retry"]
+    last = state["lanes"]["images"]["last"]
+    assert (last["phash_retried"], last["phash_hashed"], last["phash_given_up"]) == (5, 2, 1)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("IMAGES lane"))
+    assert "phash_retried=5 phash_hashed=2 phash_given_up=1" in line
+
+
+def test_a_failed_phash_retry_never_loses_the_download_result(monkeypatch, caplog):
+    def boom() -> dict[str, int]:
+        raise RuntimeError("pooler said no")
+
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", lambda cap: _images_agg())
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", boom)
+    state = rw._new_state()
+
+    with caplog.at_level("WARNING", logger="scraper.realtime_worker"):
+        asyncio.run(rw._images_pass(asyncio.Event(), state))
+
+    last = state["lanes"]["images"]["last"]
+    assert last["downloaded"] == 4 and last["phash_retried"] == 0
+    assert any("pooler said no" in r.getMessage() for r in caplog.records)
+
+
+def test_a_stop_during_the_downloads_skips_the_retry_but_records_them(monkeypatch):
+    stop = asyncio.Event()
+
+    def download(cap: int) -> dict[str, Any]:
+        stop.set()
+        return _images_agg()
+
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", download)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", lambda: pytest.fail("a stopping worker must not retry"))
+    state = rw._new_state()
+    asyncio.run(rw._images_pass(stop, state))
+    assert state["lanes"]["images"]["last"]["downloaded"] == 4
 
 
 def test_images_pass_slice_zero_records_an_off_pass(monkeypatch):
@@ -529,6 +589,22 @@ def test_run_images_sync_reuses_main_machinery_over_the_whole_queue(monkeypatch)
     monkeypatch.setattr(scraper_main, "_run_image_downloads", fake_run)
     assert rw._run_images_sync(250)["images_stored"] == 4
     assert seen == {"args": (250, rw.IMAGES_WORKERS), "kw": {}}
+
+
+def test_run_phash_retry_sync_runs_one_pass_on_its_own_connection(monkeypatch):
+    from scraper import image_phash
+
+    class _Conn:
+        def __enter__(self) -> "_Conn":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    conn = _Conn()
+    monkeypatch.setattr(rw.db, "connect", lambda: conn)
+    monkeypatch.setattr(image_phash, "retry_unhashed", lambda c: _retry_counts(phash_retried=c is conn))
+    assert rw._run_phash_retry_sync()["phash_retried"] == 1
 
 
 # --- heartbeat -----------------------------------------------------------------

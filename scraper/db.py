@@ -1338,8 +1338,8 @@ def mark_image_stored(
     height: int | None = None,
 ) -> None:
     """`phash` rides the same statement as `storage_path` (computed inline on
-    the bytes already in hand — Wave C-4); None preserves any existing hash so
-    the hourly compute_image_phash backfill stays the backstop. `rendition` /
+    the bytes already in hand — Wave C-4); None preserves any existing hash and
+    leaves the row to the images lane's retry (scraper.image_phash). `rendition` /
     `width` / `height` (migration 496) are written only when measured, so a
     caller that doesn't decode the bytes leaves them untouched."""
     extra = ""

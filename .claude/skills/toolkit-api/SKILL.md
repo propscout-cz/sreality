@@ -463,7 +463,7 @@ NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 - `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
   no Railway service reads it, so a Railway copy is dead and is deleted (M0, #2061). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  Its workflow consumers: `autodedup.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on
