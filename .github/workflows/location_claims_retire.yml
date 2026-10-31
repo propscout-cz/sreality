@@ -1,55 +1,50 @@
-name: "Ops: retire claims under old contract versions"
+name: "Ops: W3 claim purge (last run before migration 699)"
 
-# Deletes every `location_claims` row written under a RETIRED contract version
-# (`portal_contracts.is_active = false`) — W6-a of the location simplification
-# sprint, ~9.5 M of ~13.2 M rows measured 2026-09-13. NOT invisible to the resolver:
-# since v5.3 it reads, PER CLAIM TYPE, the newest version <= the active one a listing
-# carries (`resolve_db._claims_sql`), and the rail below is per LISTING. Location reader
-# W3: do NOT dispatch while text-less delisted bazos rows hold their bazos@7 town — they
-# never get a reading, so until the rail is per type that is permanent. Nothing is
-# enqueued — unlike `contracts.py --retract`, which withdraws evidence that was wrong.
+# LAST RUN BEFORE MIGRATION 699; DELETED IN W3's PR-2 (#2223). Dispatched with --ref the W3
+# branch. Keeps ONE `location_claims` row per (listing, claim type, licence class), the row
+# today's resolver reads (newest contract version <= the active one, then the newest
+# observation), and deletes the ≈ 8.8 M others (`scripts.location_claims_retire`). A key whose
+# only rows sit under a retired version keeps one; every batch re-counts the KEYS it left and
+# stops the run (exit 3) if one is missing. Nothing is enqueued: for 99.97 % of keys the
+# keeper is what the resolver reads now, and the RECEIPT names the rest (≈ 2.8 k listings,
+# re-mined by W3's rollout step 5).
 #
-# TWO STEPS, in this order, and the first is the point of the workflow:
+# THREE STEPS when armed, in this order:
+#   1. THE BACKUP (rule 1's pg_dump equivalent, ruling Q13): a `\copy` of the WHOLE table to a
+#      gzipped CSV, streamed to R2 at backups/w3-claims/<UTC date>/, one object per run attempt
+#      (a resumed run never overwrites the first, fuller one), sized before anything is deleted.
+#   2. THE PURGE: 2,000 listings a statement, `lock_timeout 5s` + `statement_timeout 120s`,
+#      0.5 s between batches; resumable from the logged cursor (`after_listing_id`).
+#   3. THE RECEIPT: the collapsed listing ids, gzipped, to R2 beside the backup.
 #
-#   1. THE BACKUP (CLAUDE.md rule 1's pg_dump equivalent). `\copy` of the doomed
-#      rows — the exact join the delete uses — to a gzipped CSV, streamed to R2 at
-#      backups/retired-claims/<UTC date>/ (never an artifact: the repository's
-#      artifacts are not private storage). The step prints the file size; a backup
-#      nobody sized is a backup nobody checked. It runs on dry_run too, so the
-#      operator can hold the CSV before arming anything.
-#   2. THE DELETE. `scripts.location_claims_retire`, 20,000-row id-keyset batches,
-#      `lock_timeout 5s` + `statement_timeout 120s` per batch, 0.5 s between them,
-#      resumable: a re-dispatch continues from wherever the last run stopped,
-#      because the cursor is re-derived from the same predicate.
+# dry_run=true (the default) walks and counts with the same statement and deletes nothing.
+# The real purge needs dry_run=false AND confirm=PURGE. A budget-exhausted run exits non-zero
+# on purpose: re-dispatch with the cursor it logged.
 #
-# dry_run=true (the default) resolves the doomed set, counts it and deletes
-# nothing. The real delete needs dry_run=false AND confirm=RETIRE.
-#
-# A budget-exhausted run exits NON-ZERO on purpose (`--max-seconds`, default
-# 20,000 s inside a 5.5 h job): a red run is the honest signal that work is left,
-# and re-dispatching finishes it. Nothing is left half-applied — the budget is
-# checked between batches, never inside one.
-#
-# Required secrets: SUPABASE_DB_URL (SUPABASE_DB_SESSION_URL preferred for the
-# `\copy`, which is one long-running statement).
+# Required secrets: SUPABASE_DB_URL (SUPABASE_DB_SESSION_URL preferred for the `\copy`), R2_*.
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "true = back up + count only. false = delete (needs confirm=RETIRE)."
+        description: "true = walk + count only. false = back up, purge, receipt (needs confirm=PURGE)."
         required: false
         default: true
         type: boolean
       confirm:
-        description: "Type RETIRE to arm the delete. Ignored when dry_run=true."
+        description: "Type PURGE to arm the delete. Ignored when dry_run=true."
         required: false
         default: ""
         type: string
-      batch_size:
-        description: "rows per DELETE statement"
+      listings_per_batch:
+        description: "listings per DELETE statement"
         required: false
-        default: "20000"
+        default: "2000"
+        type: string
+      after_listing_id:
+        description: "resume cursor: the listing id the last run logged (0 = from the start)"
+        required: false
+        default: "0"
         type: string
       max_seconds:
         description: "wall-clock budget; stops between batches, never mid-batch"
@@ -58,9 +53,8 @@ on:
         type: string
 
 concurrency:
-  # The shared cross-lane group (see location_registry_load.yml): at most ONE heavy
-  # location lane at a time. A 9.5 M-row delete beside the hourly intake and the
-  # */15 resolve drain is exactly the 2026-08-10 incident this group exists to stop.
+  # The shared cross-lane group (see location_registry_load.yml): at most ONE heavy location
+  # lane at a time, so the purge never runs beside the hourly intake's GitHub runs.
   group: location-batch
   cancel-in-progress: false
 
@@ -68,13 +62,10 @@ jobs:
   retire:
     runs-on: ubuntu-latest
     concurrency:
-      # INNER, per-lane: two concurrent retires would walk the same keyset and each
-      # re-scan the rows the other deleted. Never cancel in flight — a cancelled
-      # batch rolls back whole, and the run's committed batches are real progress.
+      # Two concurrent purges would walk the same keyset. Never cancel in flight: a cancelled
+      # batch rolls back whole, and the committed batches are real progress.
       group: location-claims-retire
       cancel-in-progress: false
-    # The delete's own budget is 20,000 s; this leaves room for the `\copy` of a
-    # multi-GB CSV ahead of it and stays inside GitHub's 6 h job ceiling.
     timeout-minutes: 340
     permissions:
       contents: read
@@ -82,6 +73,8 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       DATABASE_URL: ${{ secrets.SUPABASE_DB_SESSION_URL || secrets.SUPABASE_DB_URL }}
       PGCONNECT_TIMEOUT: "15"
+      BACKUP: w3_claims_${{ github.run_id }}_${{ github.run_attempt }}.csv.gz
+      RECEIPT: w3_purge_receipt_${{ github.run_id }}_${{ github.run_attempt }}.csv.gz
     steps:
       - uses: actions/checkout@v6
 
@@ -97,56 +90,65 @@ jobs:
       - name: Install psql
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
 
-      # THE BACKUP. The predicate is the delete's predicate, written as the join
-      # rather than as a subquery so that a reader can see it is the same set.
-      # `c.*` — every column, so the CSV is a restorable copy and not a summary.
-      - name: Back up the doomed rows (gzipped CSV)
+      - name: Guard the real purge
+        if: ${{ !inputs.dry_run }}
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "PURGE" ]; then
+            echo "::error::dry_run=false requires confirm=PURGE"
+            exit 1
+          fi
+
+      # `c.*`, every row: a restorable copy, not a summary. Streamed, never held in memory.
+      - name: Back up the whole table (gzipped CSV)
+        if: ${{ !inputs.dry_run }}
         run: |
           set -o pipefail
           psql -X -v ON_ERROR_STOP=1 "$DATABASE_URL" \
-            -c "\copy (select c.* from location_claims c join portal_contract_entries e on e.id = c.contract_entry_id join portal_contracts pc on pc.id = e.contract_id where not pc.is_active) to stdout csv header" \
-            | gzip > "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
-          ls -l "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
-          echo "backup size: $(du -h "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz" | cut -f1) ($(stat -c%s "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz") bytes)"
+            -c "\copy (select c.* from location_claims c) to stdout csv header" | gzip > "$BACKUP"
+          echo "backup: $(du -h "$BACKUP" | cut -f1) ($(stat -c%s "$BACKUP") bytes), $(( $(zcat "$BACKUP" | wc -l) - 1 )) CSV lines"
 
-      # One object an attempt (run id + attempt name it: a re-run after a partial delete must not
-      # overwrite the first attempt's larger backup), read back at its size before anything is deleted.
       - name: Store the backup in R2
+        if: ${{ !inputs.dry_run }}
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python -m scripts.backup_before_drop retired-claims --file "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+        run: python -m scripts.backup_before_drop w3-claims --file "$BACKUP"
 
-      - name: Guard the real delete
-        if: ${{ !inputs.dry_run }}
-        env:
-          CONFIRM: ${{ inputs.confirm }}
-        run: |
-          if [ "$CONFIRM" != "RETIRE" ]; then
-            echo "::error::dry_run=false requires confirm=RETIRE"
-            exit 1
-          fi
-
-      - name: Plan + count (delete nothing)
+      - name: Walk + count (delete nothing)
         if: ${{ inputs.dry_run }}
-        run: python3 -m scripts.location_claims_retire --dry-run
-
-      - name: Delete in bounded batches
-        if: ${{ !inputs.dry_run }}
         env:
-          BATCH_SIZE: ${{ inputs.batch_size }}
+          LISTINGS: ${{ inputs.listings_per_batch }}
+          AFTER: ${{ inputs.after_listing_id }}
           MAX_SECONDS: ${{ inputs.max_seconds }}
         run: |
-          set -o pipefail
-          python3 -m scripts.location_claims_retire \
-            --confirm RETIRE \
-            --batch-size "$BATCH_SIZE" \
-            --max-seconds "$MAX_SECONDS"
+          python3 -m scripts.location_claims_retire --dry-run \
+            --listings-per-batch "$LISTINGS" --after-listing-id "$AFTER" --max-seconds "$MAX_SECONDS"
 
-      # Reported, never asserted: autovacuum reclaims the space on its own schedule
-      # and a VACUUM here would be a second heavy statement on a hot table.
+      - name: Purge in bounded batches
+        if: ${{ !inputs.dry_run }}
+        env:
+          LISTINGS: ${{ inputs.listings_per_batch }}
+          AFTER: ${{ inputs.after_listing_id }}
+          MAX_SECONDS: ${{ inputs.max_seconds }}
+        run: |
+          python3 -m scripts.location_claims_retire --confirm PURGE --receipt "$RECEIPT" \
+            --listings-per-batch "$LISTINGS" --after-listing-id "$AFTER" --max-seconds "$MAX_SECONDS"
+
+      - name: Store the receipt in R2
+        if: ${{ always() && !inputs.dry_run && hashFiles(env.RECEIPT) != '' }}
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python -m scripts.backup_before_drop w3-claims --file "$RECEIPT"
+
+      # Reported, never asserted: autovacuum reclaims on its own schedule (ruling R7: no VACUUM
+      # FULL), and a VACUUM here would be a second heavy statement on a hot table.
       - name: Report what the table looks like afterwards
         if: ${{ !inputs.dry_run }}
         run: |
