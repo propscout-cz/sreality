@@ -1,11 +1,14 @@
-# W3: one current claim per fact (design, 2026-10-31)
+# W3: one current claim per fact (design 2026-10-31; as built 2026-10-31)
 
 Wave W3 of the location data quality programme (`PROGRAM.md`; rulings Q4, Q5, Q13; order Q14:
-W0 → W1 → W2 → W7 → W8 → W4 → **W3** → W3b → W5 → W5b → W6). Read-only preparation: no repo edit,
-no pytest. Code read at `main` bddea095d. Every production number was read on 2026-10-31 between
-13:10Z and 14:30Z through the Supabase MCP, SELECT only. `location_claims` was never scanned
-unfiltered except once for a licence-class count (one aggregate row). Where a number is a sample
-estimate, the sample and the scale factor are given.
+W0 → W1 → W2 → W7 → W8 → W4 → **W3** → W3b → W5 → W5b → W6). Ticket #2223. Built on branch
+`feature/location-w3-one-claim-per-fact` (PR-1: migration 699, `resolver:v5.9.1`; it carries W4's
+#2220 and merges after it); PR-2 is migration 700 and the purge's deletion. §§ 1–2 are the design as
+reviewed, with "As built" notes where the build differs or adds; §§ 3–6 and 8 are the as-built record.
+Every production number was read on 2026-10-31 between 13:10Z and 14:30Z through the Supabase MCP,
+SELECT only (code read at `main` bddea095d). `location_claims` was never scanned unfiltered except once
+for a licence-class count (one aggregate row). Where a number is a sample estimate, the sample and the
+scale factor are given.
 
 Samples used (all deterministic, by listing id):
 
@@ -264,6 +267,17 @@ SELECT (SELECT count(*) FROM up), (SELECT count(*) FROM gone), (SELECT count(*) 
   its ON CONFLICT: when the conflicting body was not the key's newest-observed body before this
   sighting, `contract_version = NULL`, so the bodies pass re-mines A after A→B→A (14 keys measured).
 
+**As built (§ 2.1).** `claims_intake._WRITE_CLAIMS_SQL` + `write_claims(cur, claims, reason)`, chunked
+by listing (a key never spans two statements) and returning (changed, enqueued). The recordset also
+carries `claim_confidence` (ruling R6: 'exact' for the operator, NULL else), set with the value. The
+readings half calls the same write and then stamps its readings in the same transaction (one statement
+less than before, no DELETE). `Claim.retract` lives on the intake claim (`claims_common.Claim`, what a
+reader emits); the resolver's stored-row `Claim` never sees a tombstone. `Claim.to_row()` is exactly the
+recordset. `operator_corrections` builds a `Claim` and calls `write_claims(..., reason='operator_edit')`;
+its API result says `written` (the `restatement` flag and `inserted` went; the Location Quality page
+reads `written`). The payload revert arm: `contract_version = CASE WHEN EXISTS (a newer-observed 2xx
+body of the key) THEN NULL ELSE … END` in `_APPEND_SQL`'s ON CONFLICT.
+
 ### 2.2 The one read
 
 `resolve_db._claims_sql` (resolve_db.py:145-175) becomes:
@@ -284,6 +298,9 @@ SELECT DISTINCT ON (c.listing_id, c.claim_type) <_CLAIM_COLUMNS>
 declared-type `EXISTS` (a type the active contract no longer declares is not read; today that filters
 nothing: 0 such keys in S1). It deletes the window, `pc.version <= act.version` and the three joins.
 **The resolver therefore sees at most one claim per type, and the operator's when there is one (Q5).**
+
+**As built (§ 2.2).** As drafted, plus `c.id DESC` as the last `ORDER BY` key (deterministic should a key
+ever hold two rows) and `resolve_db.ADMISSIBLE_LICENCE_CLASSES` (W2's tuple, read by the wave shadow).
 
 ### 2.3 What deletes (each rule is unreachable once the read returns ≤ 1 claim per type)
 
@@ -316,12 +333,25 @@ The 23-argument fingerprint:
 | `chunk_rows` docstring's fingerprint argument | claims_intake.py:1212-1215 (the listing-boundary rule stays: one key never spans two statements) |
 | the operator's hand copy and its "unconditional enqueue / restatement" rationale | operator_corrections.py:7-27, 76-153, the `restatement` result field (:251) |
 | Python mirror kept only to test the hash | claims_common.py:925-968 (`MIRROR_UNSAFE_CHARS`, `mirror_is_faithful`, `value_norm_mirror`) and their re-exports (claims_intake.py:98, 121, 124) |
-| `location_claim_fingerprint(23 args)` (mig 386), `location_value_norm(text)` (mig 382), column `claim_fingerprint`, index `location_claims_fingerprint` (1,098 MB) | migration 6NN+1 (§4); prod has no other caller of either function |
+| `location_claim_fingerprint(23 args)` (mig 386), `location_value_norm(text)` (mig 382), column `claim_fingerprint`, index `location_claims_fingerprint` (1,098 MB) | migration 700 (§4); prod has no other caller of either function |
 | the test that guards it | `tests/location_data/test_claims_intake_fingerprint.py` (189), `test_claims_slim_migration.py:140-151` |
 
 Follow-up cleanup (not counted below, own commit): the hash-only `Claim` inputs nobody stores
 (`travel_mode`, `target_text`, `distance_m`, `declared_confidence`, `legacy_source_column`) are threaded
 through about 30 reader sites and the 23 golden fixtures in `tests/fixtures/location_w2/golden/`.
+
+**As built (§ 2.3).** What replaced each rule: 1–3 `collect_constraints` reads each type once (a dict of
+the one claim per type); the one rule left between two TYPES is that a house-number claim outranks the
+number written in the street line. 4 `bind.the_pin` (THE coordinate with a position); `elect_pin`,
+`declared_rank` and the `pin_claim_id` threading are gone. 5 `read_declared_precision(claims)`: the
+precision declaration's label, else the coordinate's own; either stating blur blurs; the `blur_hint`,
+`uncertainty_geometry` and `map_zoom` arms went (no contract may declare those types). 6
+`composite.resolve_street(line, …, place_line=)` takes one line; a line reaching two streets still binds
+nothing; `Constraints.street_line` is a string. 7 `OPERATOR_METHOD`, `OPERATOR_FIELDS`, `operator_fields`
+and FILL's override are gone: the operator outranks at the read and binds through the register. The
+hash-only `Claim` inputs (`distance_m`, `travel_mode`, `target_text`, `declared_confidence`,
+`legacy_source_column`, and the `conflict_signal` reader's `legacy_source_column` key) went in their own
+commit with the 23 goldens that carried them.
 
 ### 2.4 Absence under A and under C
 
@@ -339,6 +369,10 @@ through about 30 reader sites and the 23 golden fixtures in `tests/fixtures/loca
   location block (`ad_kind` null, every slot null) is a failed reading (`extracted.error`, retried under
   `GIVE_UP_AFTER`), never a reading the claim lane mines. One UPDATE re-marks the 1,915 stored ones so they
   are re-read. This is the text-lane twin of W0's "an empty page is a failed fetch".
+
+**As built (§ 2.4).** The text lane's `_record` treats `text_reading.is_empty(payload)` (a `location`
+block whose `ad_kind`, `country` and every slot are null) as a failure: recorded with `extracted.error`,
+retried under GIVE_UP_AFTER, nothing written. The 1,915 stored ones are re-marked by Step 5's statement.
 
 ### 2.5 Presence markers state their absence
 
@@ -367,6 +401,13 @@ idnes@7, realitymix@9 (or fold into W4's realitymix@8 if W4's PR is still open).
   read blurred on its next re-mine. The 234 to 250 sreality/mmreality rows of §1.3 are not markers; the
   one-claim read alone fixes them.
 
+**As built (§ 2.5).** `html_marker` reads its node, then `_marks(node, …)`; a node that fails the test
+yields `_page_claim(entry, row, value=None, retract=True)` when `locator.absent == 'retract'` (any
+other value is refused; the key on another reader is refused by `READER_CONTRACTS`' appetite). Bumps:
+bazos@10, idnes@7 (`body` always exists, so every idnes page without the sentence retracts), realitymix@9
+(on W4's @8). No regression fixture carries a failing node, so the three new goldens equal their
+predecessors; the per-portal contract tests show the tombstones on real bodies.
+
 ### 2.6 Rule 25 and the docs that move in the same PR
 
 - CLAUDE.md rule 25 (line 249): "Only `claims_intake` and `operator_corrections` write
@@ -380,235 +421,184 @@ idnes@7, realitymix@9 (or fold into W4's realitymix@8 if W4's PR is still open).
 
 ---
 
-## 3. Deletion ledger versus additions
+## 3. Deletion ledger versus additions (as built)
 
-Approximate lines (code + tests + workflow + docs), from the line ranges above.
+Measured on the branch: every W3 commit (`git log --grep '#2223' --no-merges`), W4's merged commits and
+`main` excluded.
 
-| Deleted | Lines |
-|---|---|
-| retire script, workflow, test | −711 |
-| fingerprint test | −189 |
-| claims_intake: fingerprint SQL and comment, two CTEs, readings supersession, `claim_types`, superseded stat, docstrings | −95 |
-| operator_corrections: hand-copied statement, restatement rationale, result flag | −95 |
-| claims_common mirror | −44 |
-| resolve_db: window, version rail and its comment, three joins | −85 |
-| bind: tie rules 1-5 and 7, `elect_pin`, `declared_rank`, `pin_claim_id` threading, operator fields | −95 |
-| fill/core/composite: operator override, pin plumbing, multi-claim pooling | −25 |
-| tests that pin deleted behaviour (version-window cases in test_resolver_admissibility, elect_pin/declared_rank/operator_fields cases, readings supersession cases), net of their replacements | ≈ −150 |
-| test_claims_slim_migration `test_the_fingerprint_function_is_untouched` | −12 |
-| architecture.md supersession/window/retire prose | ≈ −45 |
-| **Total deleted** | **≈ −1,550** |
+| Class | Added | Deleted | Net |
+|---|---|---|---|
+| Code, SQL, workflows (`location_data/`, `scripts/`, `toolkit/`, `scraper/`, `.github/`, `migrations/`, `contracts/`, `frontend/`) | +936 | −1,077 | −141 |
+| Tests | +970 | −975 | −5 |
+| Golden fixtures (the 23 rewritten, three new version goldens) | +417 | −1,080 | −663 |
+| Docs (CLAUDE.md, architecture, skills, track, PROGRAM, wave-shadow) and `workflow-docs.json` | +124 | −128 | −4 |
+| **PR-1 without this design doc** | **+2,447** | **−3,260** | **−813** |
+| This design doc (new file) | +677 | 0 | +677 |
 
-| Added | Lines |
-|---|---|
-| the one upsert's ON CONFLICT DO UPDATE … WHERE, the `gone` CTE, `write_claims` | +35 |
-| the one read (DISTINCT ON, operator first) | +15 |
-| `html_marker` `absent: retract` + `Claim.retract` + 3 contract lines + validator key | +15 |
-| payloads revert CASE arm | +6 |
-| migration 6NN + 6NN+1 (SQL with comments) | +110 |
-| purge (the retire script re-aimed for its one last run, deleted in PR-2) | 0 net (lives only between PR-1 and PR-2) |
-| new tests (§6) | +260 |
-| text-lane empty-block rule (companion) | +10 |
-| **Total added** | **≈ +450** |
-
-**Net ≈ −1,100 lines** (plan said −700; the retire test and the test deletions were not in its count).
-Schema: −1 column (`claim_fingerprint`), −2 functions, indexes 7 → 6 (−fingerprint, −listing,
-−ephemeral, +key). Rules: 7 tie rules → 0; 4 supersession paths → 2; 2 identities per row → 1.
+Against the plan's −1,100: the retire script, workflow and test (≈ −700) stay in PR-1, re-aimed as the
+purge, and go in PR-2 with migration 700 (+≈ 20); the two follow-ups the coordinator added after the
+design (the R4 sweep arm, the wave shadow's raw purge) are +326 / −107 (code +155 / −42). Where it went: `bind.py` −64,
+`resolve_db.py` −69, `operator_corrections.py` −99, `claims_common.py` −57, `claims_intake.py` −39, the
+fingerprint test −189, the operator NOT NULL test −53, the version-window tests −77; the one write
++85, migration 699 +106, the new tests (one write, live, purge, markers, text lane) +337.
+Schema after PR-2: −1 column, −2 functions, indexes 7 → 5 (−fingerprint, −listing, −ephemeral, +key).
+Rules: 7 tie rules → 0; 4 supersession paths → 2; 2 identities per row → 1.
 
 ---
 
-## 4. Migration draft
+## 4. Migrations and the purge (as built)
 
-Two numbered files (claim both numbers ≥ 699 with the merge coordinator; 696-698 are taken), plus the
-purge run in between. Destructive steps are pre-approved by Q13, each with an R2 backup and a receipt.
+Two numbered files: **699** in PR-1, **700** in PR-2 (drafted below as text; append-only numbering, so
+PR-2 adds the file). Destructive steps are pre-approved by Q13, each with an R2 backup and a receipt.
+Nothing here assumes migration 697 (W2's three-reason CHECK and `dirty_locations_claim` index): every
+reason W3 writes (`claim_insert`, `operator_edit`, `full_sweep`) is valid before and after it.
 
-### Step 0: backup (Q13)
-`backup_before_drop` workflow, target the whole relation: `python -m scripts.backup_before_drop
-w3-claims location_claims` → `backups/w3-claims/<UTC date>/location_claims.sql.gz` (pg_dump, schema +
-data, session URL). Covers the purge and the column drop (`claim_fingerprint` is not recomputable: 11 of
-its inputs were never stored). Size estimate ≈ 1 GB gz (the 09-13 retire CSV was 596 MB for 9.4 M
-rows); `\copy` of 9.4 M rows took 78 s then, so a few minutes. Receipt = the workflow's printed size and
-row count.
+### Steps 0 + 1: backup and purge, one dispatch of the re-aimed `location_claims_retire.yml`
+The workflow's first armed step is the backup: a streamed `\copy (select c.* from location_claims c)`
+→ gzip → R2 `backups/w3-claims/<UTC date>/w3_claims_<run>_<attempt>.csv.gz` (one object per attempt,
+so a resumed run never overwrites the first, fuller one; the log prints bytes and CSV lines). The
+design's `backup_before_drop w3-claims location_claims` was not used: `_dump_table` holds the whole
+pg_dump in memory (a ≈ 4 GB text dump on a 7–8 GB private-repo runner). Then
+`scripts.location_claims_retire --confirm PURGE` (LAST RUN BEFORE 699; DELETED IN PR-2):
+- Keeper per (listing_id, claim_type, licence_class) = the row the old read served:
+  `ORDER BY (pc.version <= act.version) DESC NULLS LAST, pc.version DESC NULLS FIRST,
+  first_observed_at DESC, id DESC`. Keyset over `listings.id`, 2,000 listings a statement,
+  `SET LOCAL lock_timeout '5s'` + `statement_timeout '120s'`, 0.5 s pause, a lost lock retried 5 times,
+  resumable from the logged cursor (`--after-listing-id`). The dry run executes the same statement
+  with the delete disarmed (`AND %(armed)s`).
+- The safety check counts KEYS: after each batch's delete, the distinct keys left in its listing
+  range must be ≥ the keys it kept, else the batch rolls back and the run exits 3. A key whose only
+  rows sit under a retired version keeps one (the ≈ 15.7 k, logged as `kept_retired_version`).
+- Receipt: every listing that lost a row of its keeper's own version (the rows the old window read
+  beside the keeper, ≈ 2.8 k), gzipped CSV to R2 beside the backup, for Step 5.
 
-### Step 1: the batched purge (PR-1's re-aimed `location_claims_retire.yml`, dispatched with `--ref`)
-The keeper per key is the row today's resolver reads: newest version ≤ active, then newest observation.
-Keyset over `listings.id`, 2,000 listings per statement, each its own transaction:
-
-```sql
-SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '120s';
-WITH batch AS (SELECT id FROM listings WHERE id > %(after)s ORDER BY id LIMIT 2000),
-ranked AS (
-  SELECT c.id, row_number() OVER (
-           PARTITION BY c.listing_id, c.claim_type, c.licence_class
-           ORDER BY (pc.version <= act.version) DESC NULLS LAST, pc.version DESC NULLS FIRST,
-                    c.first_observed_at DESC, c.id DESC) AS rn
-    FROM batch b JOIN location_claims c ON c.listing_id = b.id
-    LEFT JOIN portal_contract_entries pce ON pce.id = c.contract_entry_id
-    LEFT JOIN portal_contracts pc ON pc.id = pce.contract_id
-    LEFT JOIN portal_contracts act ON act.source = pc.source AND act.is_active
-), del AS (
-  DELETE FROM location_claims c USING ranked r WHERE c.id = r.id AND r.rn > 1 RETURNING c.listing_id)
-SELECT count(*), (SELECT max(id) FROM batch) FROM del;
 ```
-
-- Measured: the selection for 2,000 listings (31 k claims) runs in 1.7 s on prod (EXPLAIN ANALYZE,
-  index-driven, 3.5 k buffer reads). With the delete (≈ 16 k rows across 7 indexes) and a 0.5 s pause,
-  ≈ 3.5 s a batch; 1,082,934 listings → 542 batches → **≈ 30 to 45 minutes** (the 09-13 retire deleted
-  9.44 M rows in 750 s by id keyset; this predicate is heavier).
-- No enqueue: for 99.97 % of keys the keeper is what the resolver reads now; the ≈ 2.8 k listings whose
-  keeper changes (the same-version duplicates, §1.2) re-resolve in W3's version sweep (Step 4).
-- Resumable: the cursor is the listing id; re-running re-derives the same keepers.
-- The script also writes the ≈ 2.8 k collapsed listing ids to its receipt (R2), for Step 5.
-
-### Step 2: migration 6NN (apply after the purge, before the merge; statement-autocommit runner as 498)
-
-```sql
--- 6NN_location_w3_one_claim_per_fact.sql
-set lock_timeout = '5s';                  -- ACCESS EXCLUSIVE, metadata only; re-run on timeout
-alter table location_claims alter column claim_fingerprint drop not null;   -- new writer omits it
-
-begin;                                    -- writers wait (their lock_timeout) and retry; readers run
-set local lock_timeout = '10s';
-set local statement_timeout = '15min';
-lock table location_claims in share row exclusive mode;
-delete from location_claims c using (    -- rows the old writer added after the purge passed them
-  select id from (
-    select id, row_number() over (partition by listing_id, claim_type, licence_class
-                                  order by first_observed_at desc, id desc) rn
-      from location_claims
-     where (listing_id, claim_type, licence_class) in (
-           select listing_id, claim_type, licence_class from location_claims
-            group by 1, 2, 3 having count(*) > 1)) r
-   where rn > 1) d
- where c.id = d.id;
-create unique index location_claims_key on location_claims (listing_id, claim_type, licence_class);
-commit;
-
-drop index concurrently if exists location_claims_listing;   -- the key serves listing_id lookups
+gh workflow run location_claims_retire.yml --ref feature/location-w3-one-claim-per-fact -f dry_run=true
+gh workflow run location_claims_retire.yml --ref feature/location-w3-one-claim-per-fact \
+  -f dry_run=false -f confirm=PURGE -f listings_per_batch=2000 -f after_listing_id=0 -f max_seconds=20000
 ```
+A budget-exhausted run exits 2 and logs `resume with --after-listing-id N`: re-dispatch with
+`-f after_listing_id=N`. Expect ≈ 542 batches, 30–45 min; summary line
+`PURGE summary armed=True complete=True … deleted≈8.8M kept_retired_version≈15.7k collapsed_listings≈2.8k`.
 
-- Lock budget: one GROUP BY over a 3.6 GB heap (≈ 6 M live rows) plus a 6 M-row btree build: about 1 to
-  2 minutes of SHARE ROW EXCLUSIVE. Readers (resolver drain, Browse never reads claims) are not blocked;
-  intake batches hit their 20 s lock_timeout, roll back and resume from their cursors.
-- New index ≈ 200 MB (16 key bytes + tuple overhead, 6 M entries).
-- **Between this apply and the deploy** the old writer (`ON CONFLICT (claim_fingerprint) DO NOTHING`,
-  targeted) raises unique_violation on any changed value: its batch rolls back and retries next tick.
-  No data loss (the readings statement rolls back its DELETE too); a stall of at most the deploy time
-  (≈ 5 to 10 min) on batches that carry a value change.
+### Step 2: migration 699 (after the purge, before the merge)
+`migrations/699_location_w3_one_claim_per_fact.sql`, statement autocommit (as 498, 653):
+1. `alter table location_claims alter column claim_fingerprint drop not null` (the new writer omits it).
+2. A guard, no lock: refuse when > 50,000 keys still hold several rows (an unpurged table).
+3. `begin; set local lock_timeout '10s'; lock table location_claims in share row exclusive mode;` the
+   straggler dedup (rows the old writer added after the purge passed them; keeper the newest
+   observation, then id); `create unique index if not exists location_claims_key (listing_id,
+   claim_type, licence_class)`; `commit;` — ≈ 1–2 min, readers run, intake batches wait and retry.
+4. `drop index concurrently if exists location_claims_listing`.
+5. A `$post$` receipt: the key valid and unique, the old index gone, the column nullable.
 
-### Step 3: merge PR-1, Railway rolls out (worker + API)
+```
+gh workflow run apply_migration.yml --ref feature/location-w3-one-claim-per-fact \
+  -f file=699_location_w3_one_claim_per_fact.sql -f dry_run=false -f confirm=APPLY
+psql "$SUPABASE_DB_URL" -c "select indisvalid, indisunique from pg_index where indexrelid = 'location_claims_key'::regclass"
+psql "$SUPABASE_DB_URL" -c "select to_regclass('location_claims_listing'), count(*) from location_claims"
+```
+Never through the MCP (DROP INDEX CONCURRENTLY cannot run in a transaction block). Between this apply
+and the deploy the old writer's `ON CONFLICT (claim_fingerprint) DO NOTHING` raises unique_violation on a
+changed value: its batch rolls back and retries next tick, nothing is lost. CI replays 699 and re-runs
+it (retry contract).
+
+### Step 3: merge PR-1 (after W4's #2220), Railway rolls out worker + API
+`gh api repos/propscout-cz/sreality/commits/<sha>/status` until both services report success.
 
 ### Step 4: re-resolution
-PR-1 bumps `RESOLVER_VERSION` (the read and bind semantics change). With W2 live (Q14 puts W2 before
-W3), the worker's (resolver version, registry label) trigger sweeps the corpus, active first. If W2 were
-not live: today's hand dispatch of `location_resolve.yml` full-resolve.
+`RESOLVER_VERSION` = `resolver:v5.9.1`: the worker's reconcile (W2) sweeps the corpus on boot, active
+first. The three contract bumps declare the same claim types as their predecessors, so the R4 arm
+(§ 8) sweeps no portal on their account.
 
-### Step 5: scoped re-mine of the collapsed keys
-For the ≈ 2.8 k listings from Step 1's receipt: un-stamp their latest bodies (`contract_version = NULL`)
-and readings (`mined_contract_version = NULL`) so the hourly lane re-mines them; run
-`claims_intake --mode full --source sreality` once (payload substrate; writes only the ≈ 1.4 % A→B→A
-guesses, about 12 sreality pins). The three marker contract bumps (§2.5) re-mine every latest body of
-bazos, idnes and realitymix through the hash gate anyway.
+### Step 5: re-mine and re-read (by hand, right after the deploy, before the next :35 intake run)
+- The receipt's listings: un-stamp their latest bodies and readings so they re-mine
+  (`:ids` = the receipt's ids):
+  `update portal_raw_payloads p set contract_version = null from listings l where l.id = any(:ids) and
+  p.source = l.source and p.source_id_native = l.source_id_native and p.page_kind = 'detail';`
+  `update listing_description_enrichments set mined_contract_version = null where listing_id = any(:ids);`
+  The first intake run on the new code re-walks every body anyway (the bump moves the version set, so
+  the bodies cursor restarts at 0), so the un-stamped bodies ride it. Then the payload half once:
+  `gh workflow run location_claims_intake.yml --ref main -f mode=full -f source=sreality`.
+- The 1,915 empty readings (ruling R2), re-marked failed so the text lane re-reads them:
+  `update listing_description_enrichments e set extracted = e.extracted || jsonb_build_object('error',
+  'empty location block: ad_kind and every slot null', 'attempts', 1) where e.extracted ? 'location'
+  and e.extracted -> 'error' is null and jsonb_typeof(e.extracted -> 'location') = 'object' and not
+  exists (select 1 from jsonb_each(e.extracted -> 'location') cell where coalesce(cell.value ->> 'value',
+  '') <> '');` — expect ≈ 1,915 rows. Run it after the deploy: the old text lane would re-store an empty
+  answer as a reading.
 
-### Step 6: migration 6NN+1 (PR-2, after one green intake tick on the new code)
-
+### Step 6: migration 700 (PR-2, after one green intake tick on the new code)
 ```sql
--- 6NN+1_location_w3_drop_fingerprint.sql
+-- 700_location_w3_drop_fingerprint.sql (PR-2; destructive, covered by the Step 1 backup)
 set lock_timeout = '5s';
 drop index concurrently if exists location_claims_fingerprint;   -- 1,098 MB
-drop index concurrently if exists location_claims_ephemeral;     -- 0 rows; the class is refused at write
+drop index concurrently if exists location_claims_ephemeral;     -- 0 rows; the class is never read
 alter table location_claims drop column if exists claim_fingerprint;
 drop function if exists location_claim_fingerprint(bigint, text, text, text, text, text, text, text,
   text, bigint, text, text, numeric, geometry, geometry, jsonb, integer, text, text, text, text,
   numeric, text);
 drop function if exists location_value_norm(text);
+-- $post$: the column, both indexes and both functions are gone.
 ```
+PR-2 also deletes `scripts/location_claims_retire.py`, `location_claims_retire.yml` (and its
+`GROUP_WORKFLOWS` entry, the workflow-docs entry, `test_workflow_artifacts`' backup test, the
+`test_location_batch_hardening` group list entry, the migrations.yml lane entry) and
+`tests/location_data/test_claims_retire.py`; `tests/location_data/test_claims_slim_migration.py`'s
+KEPT_COLUMNS stays (it pins 498).
 
-PR-2 also deletes the purge script, its workflow and test, and the fingerprint test.
-
-### Step 7: space (maintenance, outside the migration files)
-- `REINDEX INDEX CONCURRENTLY` on `location_claims_pkey`, `_by_method`, `_contract_entry`, `_geom`
-  (online): index total 2,671 MB → ≈ 0.6 GB.
-- The heap stays 3.6 GB with ≈ 2.1 GB free space after the purge. The upsert inserts ≈ 50 k rows a day,
-  so the space is not reused for years. Reclaiming it needs `VACUUM FULL location_claims` (ACCESS
-  EXCLUSIVE, ≈ 2 to 4 min: the resolver and intake stall that long) or pg_repack (available, not
-  installed). Ruling R7 in §8.
-
-### CI replay
-- `migrations.yml` replays every file with `psql -f` (statement autocommit), so `CONCURRENTLY` and the
-  explicit `begin … commit` work (precedents 605, 618, 625, 635, 653). On an empty table the dedup and
-  the build are no-ops.
-- `test_claims_slim_migration.py` pins 498's own text (immutable): the partition, create-nothing and
-  shadow tests stay green. `test_every_claim_write_inserts_exactly_the_kept_columns` changes to the new
-  writer set (`KEPT_COLUMNS − {id, claim_fingerprint}`, one shared statement instead of three);
-  `test_the_fingerprint_function_is_untouched` goes in PR-2.
-- `tests/sql_corpus` PREPAREs the new upsert: its `ON CONFLICT (listing_id, claim_type, licence_class)`
-  needs 6NN in the same PR (it is). After PR-2 the corpus check fails any statement that still names
-  `claim_fingerprint`, `location_claim_fingerprint` or `location_value_norm`.
+### Step 7: space (maintenance, outside the migration files; ruling R7)
+`REINDEX INDEX CONCURRENTLY` on `location_claims_pkey`, `_by_method`, `_contract_entry`, `_geom` (online):
+index total 2,671 MB → ≈ 0.6 GB. No VACUUM FULL: the ≈ 2.1 GB of heap free space stays (the upsert
+inserts ≈ 50 k rows a day).
 
 ---
 
-## 5. Rollout order
+## 5. Rollout order (as built)
 
-1. **Prerequisites:** W2 live (the version sweep, Step 4). W4 merged (realitymix@8 lands first; W3's
-   marker bump is realitymix@9, or folds into @8 if W4 is still open). #2194 (v5.9) merged long since.
-2. **PR-1 (draft early):** the code (§2), the re-aimed purge, 6NN, RESOLVER_VERSION bump, contract
-   bumps bazos@10 / idnes@7 / realitymix@9, docs and rule-25 text, tests.
-3. **Standing autodedup shadow gate, before Step 2.** Praha (town 554782 and its 112 quarter blocks),
-   Pardubice, Liberec, 7 more towns and 30 okresy are in the live `autodedup_apply_scope`. W3 moves the
-   inputs of ≈ 2.1 to 2.5 k active ads (≈ 2,289 pins, 1,040 of them > 50 m; 104 towns; 41 PSČ; 50
-   streets; ≈ 250 blur flags) plus the marker clears. A 2 % sample put **17 of 33 movers (≈ 52 %) inside
-   the apply scope** (okres in the 30 districts or obec in the 10 towns). So: run the branch's resolver
-   over the movers' post-purge claims (pure function, no write), feed the changed rows to one shadow
-   autodedup generation on the approved-split sessions; pass = no approved session changes verdict.
-   `DECISION_MODULES` are untouched (W3 is `location_data/` only).
-4. Steps 0 → 1 → 2 → 3 → 4 → 5 of §4, then PR-2 (Step 6) after one green intake tick, then Step 7.
-5. **W3b after W3** (the address picker writes operator claims through `write_claims`; outranking is
-   §2.2's ORDER BY). W5 after W3 (bind.py overlap: W3 empties `collect_constraints` of its tie idioms
-   first).
+1. **Prerequisites:** W2 live (#2216 merged; its reconcile sweeps v5.9.1). W4 (#2220) merged first:
+   realitymix@9 is built on its @8 and this branch carries #2220's commits.
+2. **Standing autodedup shadow gate, before Step 2** (PROGRAM.md; ≈ 52 % of movers sit in the live
+   apply scope). From this branch, before the purge: `location_wave_shadow.yml` with
+   `--claims purge` (W3's keeper over a raw read, then the one read, `what_if.purge`) over the movers'
+   ids (the active listings with ≥ 2 rows of one type at the effective version, plus the
+   precision-declaration and marker cohorts), then `autodedup.shadow` + `harness shadow`; pass = no
+   ruled pair moved against its ruling. The ids bound the work (the shadow finds the movers itself):
+   ```
+   gh workflow run location_wave_shadow.yml --ref feature/location-w3-one-claim-per-fact \
+     -f wave=w3-one-claim -f claims=purge -f scope=apply -f ids_sql="SELECT c.listing_id FROM
+     location_claims c JOIN listings l ON l.id = c.listing_id AND l.is_active GROUP BY c.listing_id,
+     c.claim_type, c.licence_class HAVING count(DISTINCT (c.value_text, c.value_num,
+     ST_AsText(c.value_geom), c.value_jsonb::text, c.declared_precision_label, c.blur_evidence)) > 1"
+   ```
+   (active listings holding two values for one key; one aggregate over the table, read-only.)
+3. Steps 0 + 1 (backup + purge, dry run first), Step 2 (699), Step 3 (merge + deploy), Step 4 (automatic),
+   Step 5 (hand: re-stamp + payload re-mine + readings re-mark).
+4. PR-2 (Step 6) after one green intake tick; then Step 7.
+5. **W3b after W3** (the address picker writes operator claims through `write_claims`; outranking is the
+   read's ORDER BY). W5 after W3 (bind.py overlap).
 
 ---
 
-## 6. Test plan
+## 6. Tests (as built)
 
-Offline (pytest, no DB):
-1. `write_claims` builds ONE statement for both writers; `operator_corrections` imports it (no
-   `INSERT INTO location_claims` text left in operator_corrections.py; a grep rail).
-2. The statement's ON CONFLICT target is the key, its `WHERE` compares exactly the eight value columns,
-   and `first_observed_at`/`contract_entry_id` move only inside the `DO UPDATE` (static parse).
-3. `_claims_sql`: no `OVER (`, no `version <=`, one `DISTINCT ON (c.listing_id, c.claim_type)`, operator
-   first; `test_the_claims_select_maps_onto_claim_positionally` stays green.
-4. `html_marker`: node present + marker absent + `absent: retract` → one tombstone; node absent → none;
-   `absent` refused on any other reader (contract validator).
-5. bind: with one claim per type, `collect_constraints` / `read_declared_precision` give the old answers
-   on the existing single-claim fixtures; the deleted symbols are gone (`elect_pin`, `declared_rank`,
-   `operator_fields`, `OPERATOR_FIELDS`).
-6. `test_resolver_jobs._enqueue_ctes` → {the shared upsert, `_RETRACT_BATCH_SQL`}; the bump semantics
-   tests stay.
-7. Migration static rails (new `tests/location_data/test_claims_key_migration.py`): 6NN creates exactly
-   `location_claims_key (listing_id, claim_type, licence_class)`, locks SHARE ROW EXCLUSIVE before its
-   dedup, drops `location_claims_listing` concurrently, drops NOT NULL on `claim_fingerprint`; 6NN+1 drops
-   the column, both functions and two indexes, creates nothing; no runtime SQL names a dropped object.
-
-DB lanes (`scripts/local_pg.sh`):
-8. **Idempotence:** mine the same payload twice → second call writes 0 rows, enqueues 0; a contract bump
-   with unchanged values → 0 rows, provenance unchanged; a changed value → 1 UPDATE, same `id`, new
-   `first_observed_at` and entry, 1 enqueue; A→B→A → ends on A.
-9. Two claims of one key in one batch → one row, no "cannot affect row a second time".
-10. **Readings under A:** a null slot keeps the stored value; an empty block writes nothing; stamps still
-    move.
-11. **Operator beats portal:** portal street X + operator street Y → the resolver reads Y; a portal
-    re-mine updates X beneath it; deleting the operator row serves X again; operator A→B→A writes and
-    enqueues each time; the same value twice writes nothing.
-12. **Retract:** deletes the values the version first stated (including ones a later version
-    re-confirmed), enqueues those listings, survives a concurrent upsert (ctid moved).
-13. **Activation of an older version:** claims first stated by the newer version stay readable until a
-    re-mine changes them (no version filter).
-14. Tombstone end to end: a marker claim, then a page without the marker → claim deleted, listing
-    enqueued, resolved unblurred.
-15. Payload revert: A→B→A body → `contract_version` NULL → re-mined.
-16. EXPLAIN rail: the read over a 250-listing slice uses `location_claims_key` and costs no more than
-    today's 11 ms / 1.2 k buffers.
+Offline: `test_claims_one_write.py` (the key, the eight compared value columns, provenance only in the
+SET, the tombstone's `gone`, enqueue only on change); `test_claims_slim_migration.py` (one writer,
+`operator_corrections` holds no INSERT); `test_resolver_admissibility.py` (the one read's text, a fake
+loader obeying it); `test_page_reader_canon.py` + `test_claims_intake_contracts.py` (`absent: retract`,
+its refusals); the contract tests on real bodies (bazos, idnes, realitymix tombstones; W4's regression
+kept); `test_resolver_jobs.py` (the R4 reconcile arm, the portal sweep); `test_what_if.py` (raw purge,
+keeper order, write-then-read); `test_text_reading.py` + `test_description_extraction.py` (an empty
+block is a failure); `test_claims_retire.py` offline pins (keeper, keyset, KEYS check).
+DB lanes (`scripts/local_pg.sh test`, CI's migrations job): `test_claims_one_write_live.py` (write on
+change, A→B→A, two of one key in a batch, operator outranks while the portal updates beneath, the
+tombstone, a retract of a first stater, an inactive version's claim still read, the key serves the
+read); `test_claims_retire.py` (the purge over a pre-699 table: every keeper case, the receipt, a key-loss
+rollback, the shadow's purge equal to the real one); `test_readings_half_live.py` (ruling A);
+`test_payloads.py` (the revert arm); `test_checks_quality_sql_live.py` (one coordinate per ad);
+`test_sql_schema_prepare.py` (every new statement PREPAREs). Deleted with their rules: the fingerprint
+test, the operator SQL NOT NULL test, the pin-election, blur_hint, operator-bypass and version-window
+tests.
 
 ---
 
@@ -632,46 +622,43 @@ DB lanes (`scripts/local_pg.sh`):
 
 ## 8. Risks and rulings
 
-**Rulings needed**
-- **R1 (Q4, known).** Recommend **A** (§1.4): half the 630/397 are empty readings A keeps correctly and C
-  would wipe; on genuine re-judgements the sample is 5 to 4; C needs a new payload-substrate stamp.
-- **R2 (new). Empty location block = failed reading** in the text lane (§2.4): 1,915 stored readings
-  re-marked and re-read; heals ≈ 300 towns and ≈ 200 streets. Text-lane territory (llm-pipelines);
-  ship with W3 or as its own ticket before it.
-- **R3 (new, design). Tombstone instead of `absent_label`** for the three markers (§2.5). The critic
-  accepted a label; the tombstone needs no reader to learn a sentinel and adds no rows. Either needs the
-  three contract bumps.
-- **R4 (new). Retract semantics under first-stater provenance:** retracting version N removes every
-  value N first stated, including values later versions re-confirmed; those types are empty until a
-  full re-mine. The rule becomes "retract and activation are each followed by one full re-mine of that
-  source" (today's bump hand step, now also for retract). Optional automation: W2's sweep trigger could
-  include the active-contract string (`_ACTIVE_VERSIONS_SQL`), which also closes W2's own "not covered:
-  an activation that drops a claim type" (w2 design line 271).
-- **R5. Backfill of the 625/394 already-deleted reading values:** recommend none (§1.4).
-- **R6. `claim_confidence`:** only the operator writes it ('exact'); only the inspector shows it
-  (`toolkit/location_quality.py:115`, `frontend/src/lib/locationQuality.ts:52`). W6 cannot drop the
-  `match_confidence` enum while this column uses it. Drop it in 6NN+1 (two reader edits) or leave it to
-  W6.
-- **R7. Heap bloat:** `VACUUM FULL` in a quiet window (≈ 2 to 4 min ACCESS EXCLUSIVE; resolver and
-  intake stall) reclaims ≈ 2.1 GB; or install pg_repack; or accept the dead space. REINDEX CONCURRENTLY
-  is online and recommended regardless.
+**Rulings (taken 2026-10-31, recorded in #2223; the operator may override)**
+- **R1 (Q4) = A** (§1.4): a silent reader writes nothing; the readings DELETE is gone.
+- **R2: empty location block = failed reading**, shipped with W3 (`text_reading.is_empty`; the 1,915
+  stored ones re-marked in Step 5).
+- **R3: tombstone, not a stored label** (`absent: retract`, §2.5; bazos@10, idnes@7, realitymix@9).
+- **R4: a retract or an activation is followed by one full re-mine of that source** (the hand step,
+  `claims_intake --mode full --source X`; bodies and readings re-mine by their stamps). Automation built
+  as a follow-up on top of W2: `drain.reconcile` compares each active contract's DECLARED claim types
+  (`_DECLARED_TYPES_SQL`), the one contract fact the read asks, beside the (resolver version, registry
+  label) pair; a portal whose set moved has every listing re-resolved (`enqueue_portal_sweep`), a
+  same-type bump moves nothing (its re-mine enqueues what it changes), and a portal a retract left with
+  no active contract is not swept until one returns (sweeping it would blank it). This closes W2's
+  "an activation that drops a claim type". Keyed on declared types rather than the version string on
+  purpose: a version-keyed sweep would re-resolve a whole portal (≈ 550 k listings for sreality) on
+  every bump for no answer change.
+- **R5: no backfill** of the 625/394 already-deleted reading values.
+- **R6: `claim_confidence` stays** for W6 (the upsert carries it: 'exact' for the operator, NULL else).
+- **R7: no VACUUM FULL;** REINDEX CONCURRENTLY only (Step 7).
 
 **Risks**
 - **Purge keeper guesses wrong on reverts:** keeping the newest row is wrong for the ≈ 1.4 % A→B→A keys
-  until Step 5 re-mines them.
+  until Step 5 re-mines them (the receipt names them).
 - **Provenance of survivors** is the version active at purge time, so a later retract of exactly that
   version would delete most of that portal's claims (R4's re-mine restores them).
-- **Old code after 6NN, before the deploy:** batches with a changed value fail and retry (no loss);
-  keep 6NN → merge → deploy back to back.
+- **Old code after 699, before the deploy:** batches with a changed value fail and retry (no loss);
+  keep 699 → merge → deploy back to back.
 - **Shadow gate:** ≈ 52 % of movers sit in the live apply scope (§5).
 - **idnes rewording its sentence** would, with `absent: retract`, clear every idnes disclaimer on the
   next re-mine (today it would only stop new ones). That is the honest reading of the page; the W1
   precision mix shows it.
 - **`location_pin_audit_mv.claims_now`** (EXISTS a claim under an ACTIVE contract) turns false over time
-  under first-stater provenance. If W1 has not already folded the matview, change it to "a claim of a
-  type its active contract declares" in PR-1, or let W6 delete it as planned.
+  under first-stater provenance (at once for bazos, idnes and realitymix after their bumps). As built:
+  left for W6 to delete — the column is selected by `frontend/src/lib/pinAudit.ts` and rendered nowhere.
 - **Indexes with unattributed scans:** `location_claims_by_method` (347 MB, 266 k scans, no code
   reader) and `location_claims_geom` (105 MB, 1 scan). Not dropped in W3; attribute through
   pg_stat_statements first.
 - **Inactive listings:** their payload claims are re-mined only in full mode, so the purge decides
   their keeper (≈ 730 listings with two values); acceptable, no verdict served from them.
+- **The R4 arm is process-local** (like W2's pair): a contract change made while no worker runs is not
+  seen. The intake loads contracts while the worker runs, so in practice it is.
