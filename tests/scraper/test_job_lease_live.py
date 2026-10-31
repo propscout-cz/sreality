@@ -532,6 +532,47 @@ def test_retire_touches_only_rows_this_runner_registered(cur: Any) -> None:
     assert kept.name in job_lease.retire(cur.connection, []), "an empty registry retires every owned row"
 
 
+def test_a_held_wait_retries_up_to_its_bound_and_then_yields_none(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = cur.connection
+    name = f"test-lane-{uuid.uuid4().hex[:12]}"
+    now = [0.0]
+    naps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        naps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(job_lease, "clock", lambda: now[0])
+    monkeypatch.setattr(job_lease.time, "sleep", sleep)
+    with job_lease.held(conn, name, cadence="15 minutes") as first:
+        assert first is not None
+        with job_lease.held(conn, name, cadence="15 minutes") as no_wait:
+            assert no_wait is None
+        assert naps == [], "no wait asked: one try"
+        with job_lease.held(conn, name, cadence="15 minutes", wait_s=25) as gave_up:
+            assert gave_up is None
+        assert naps == [job_lease.WAIT_POLL_S] * 3, "the bound is the clock's, the last try lands at or past it"
+    assert _row(cur, name)["lease_holder"] is None
+
+
+def test_a_held_wait_takes_the_lane_when_its_holder_lets_go(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = cur.connection
+    name = f"test-lane-{uuid.uuid4().hex[:12]}"
+    naps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        naps.append(seconds)
+        _expire(cur, name)
+
+    monkeypatch.setattr(job_lease.time, "sleep", sleep)
+    with job_lease.held(conn, name, cadence="15 minutes"):
+        with job_lease.held(conn, name, cadence="15 minutes", wait_s=600, holder="full:me") as hold:
+            assert hold is not None
+            assert hold.holder == "full:me"
+            assert _row(cur, name)["lease_holder"] == "full:me"
+    assert naps == [job_lease.WAIT_POLL_S]
+
+
 def _open_lapsed(cur: Any, name: str, holder: str = "A") -> None:
     cur.execute("INSERT INTO job_runs (job_name, holder) VALUES (%s, %s)", (name, holder))
     cur.execute("UPDATE scheduled_jobs SET lease_holder = %s, lease_expires_at = now() - interval '1 second'"
