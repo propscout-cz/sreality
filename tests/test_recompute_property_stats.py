@@ -833,12 +833,13 @@ def test_every_write_transaction_of_the_sweep_ends_with_the_fence(monkeypatch: A
         if sql == "BEGIN":
             txn = []
         elif sql == "COMMIT":
-            if any(w in q for q in txn for w in ("WITH batch AS", "DELETE FROM dirty_properties")):
+            if any(w in q for q in txn for w in ("WITH batch AS", "DELETE FROM dirty_properties",
+                                                 "UPDATE properties p SET")):
                 writes += 1
                 assert "FOR UPDATE" in txn[-1] and "scheduled_jobs" in txn[-1], txn[-1]
         else:
             txn.append(sql)
-    assert writes == 3, "two batches and the finalize"
+    assert writes == 4, "two batches, the reconcile and the finalize"
 
 
 def test_a_refused_fence_stops_the_sweep_before_it_stamps(monkeypatch: Any) -> None:

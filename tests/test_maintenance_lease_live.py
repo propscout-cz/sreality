@@ -129,6 +129,23 @@ def test_the_scheduled_jobs_row_excludes_on_its_own(
         assert _holders(conn) == ("rival", None)
 
 
+@pytest.mark.parametrize("kind", ["incremental", "full"])
+def test_an_older_worker_on_migration_279s_row_alone_still_excludes(
+    conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    """The deploy overlap: older code holds only the old row, so the new row is free and must not be enough."""
+    monkeypatch.setattr(rps.time, "sleep", lambda s: None)
+    conn.execute("UPDATE property_maintenance_lease SET holder = 'older-worker', expires_at = now() + interval '1 hour'")
+    with _connect() as other:
+        if kind == "incremental":
+            assert rps.run_incremental_pass(other)["skipped"] is True
+        else:
+            monkeypatch.setattr(rps, "_MAX_LEASE_WAIT_SECONDS", 0.001)
+            with pytest.raises(RuntimeError, match="failing RED"):
+                _sweep_main(monkeypatch)
+    assert _holders(conn) == (None, "older-worker"), "the new row was never taken, and the old holder keeps its row"
+
+
 def test_a_lapsed_lease_stops_the_sweep_before_it_stamps(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rival took the row after it lapsed: the sweep's next renewal refuses, and its release leaves the rival's lease."""
     stamps: list[Any] = []
