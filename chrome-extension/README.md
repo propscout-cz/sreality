@@ -222,10 +222,30 @@ account and offers **Odhlásit**.
 
 Under the hood: `chrome.identity.launchWebAuthFlow` opens the Google
 consent screen via Supabase GoTrue's PKCE flow; the code exchange and the
-periodic silent refresh (every ~30 min, via `chrome.alarms` — MV3 kills
-any in-memory timer when the service worker is evicted) happen entirely in
-the background worker. No secret ships in the bundle for this — the
-Supabase anon key is a public client key, same posture as the SPA.
+token refresh happen entirely in the background worker. No secret ships in
+the bundle for this — the Supabase anon key is a public client key, same
+posture as the SPA.
+
+**The session survives idle time and network blips** (`src/token_source.ts`,
+tested in `token_source.test.ts` against a fake GoTrue that rotates refresh
+tokens with reuse detection):
+
+- Every API call takes its token from it: a token near expiry is refreshed
+  first, so a session left idle for days is refreshed by the next call. No
+  timer, so no `alarms` permission.
+- One refresh at a time: concurrent calls share it (two refreshes on one
+  token would trip Supabase's reuse detection and revoke the session).
+- A refresh with no answer, a timeout (15 s), a 5xx or a 429 **keeps** the
+  session; that call fails with "zkuste to znovu" and the next one refreshes.
+- Only a refresh token the auth service refuses (invalid, reused, revoked)
+  signs out, and the panel shows the sign-in card.
+
+**Permissions:** `storage` (the session and two panel preferences),
+`identity` (the Google sign-in) and `sidePanel`; no host permissions. The
+content script runs on the portal hosts that serve pages (below). The
+sign-in card says what the extension sends once signed in and links
+https://propscout.cz/soukromi (the store requires that disclosure in the
+extension's own UI).
 
 **One-time setup for a NEW deployment** (already done for the operator's
 existing Railway + Supabase project — skip unless standing up a fresh one):
@@ -525,10 +545,23 @@ wrong one).
 
 The host list and the URL→id rules live in ONE module the SPA shares,
 `frontend/src/lib/portalIds.ts` (imported cross-tree like `lib/brand.ts`; the
-SPA's paste-a-link uses the same rules). The build writes
-`content_scripts.matches` from it; the checked-in `manifest.json` list is a
-template that `frontend/src/lib/portalIds.test.ts` keeps equal to it, so a new
-host goes in both.
+SPA's paste-a-link uses the same rules). Each portal names all its `hosts` (a
+pasted link on any of them resolves) and its `pageHosts`, the ones that answer
+with pages. The build writes `content_scripts.matches` from the page hosts
+only: `sreality.cz`, `bezrealitky.cz`, `bezrealitky.com`, `remax-czech.cz`,
+`mmreality.cz`, `ceskereality.cz` and `www.realitymix.cz` redirect every path
+to their page host (checked 2026-11-01), so the script never runs there and the
+install warning doesn't name them. The checked-in `manifest.json` list is a
+template that `frontend/src/lib/portalIds.test.ts` keeps equal to the page
+hosts, so a new page host goes in both (and in `release/allowed.ts`).
+
+**Soft navigation.** sreality and bezrealitky change the address through the
+History API, without a new document, and a manifest content script is injected
+only into a new document. The content script watches the Navigation API itself
+(`currententrychange`), which reaches its isolated world, and re-decides what to
+show; no `webNavigation` permission. Live-checked on every supported portal
+(#2277): index → ad and ad → ad, soft on sreality and bezrealitky (.cz and
+.com), full page loads on the rest.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the

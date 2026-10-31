@@ -36,7 +36,21 @@ export function signedOutCard(busy: boolean, error: string | null, onSignIn: () 
   card.body.appendChild(h('p', '', 'Pro zobrazení dat se prosím přihlaste.'));
   if (error != null) card.body.appendChild(alertLine(error));
   card.body.appendChild(primary(busy ? 'Přihlašuji…' : 'Přihlásit se přes Google', 'sign-in', busy, onSignIn));
+  card.body.appendChild(disclosure());
   return card.section;
+}
+
+/* What the extension sends once signed in, said where the user decides to sign in: the
+ * Chrome Web Store allows browsing data only for a feature its UI describes (#2279). */
+function disclosure(): HTMLElement {
+  const p = h('p', 'meta', 'Po přihlášení rozšíření posílá na PropScout.cz portál a čísla inzerátů, které na '
+    + 'podporovaných portálech otevřete nebo máte ve výsledcích hledání, aby k nim ukázalo vaše údaje. ');
+  const link = h('a', 'link', 'Ochrana osobních údajů');
+  link.href = 'https://propscout.cz/soukromi';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  p.appendChild(link);
+  return p;
 }
 
 /* An ad we do not hold: the offer to add it; while the flow runs its step stands
