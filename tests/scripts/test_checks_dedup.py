@@ -17,6 +17,7 @@ import pytest
 from autodedup import apply, incremental, incremental_lane, rt_lease, ui_sql
 from autodedup import incremental_sql as isql
 from autodedup.apply_sql import SETTING_SQL
+from scraper import job_lease
 from autodedup.incremental_scope import parse_scope
 from scripts.checks import common
 from scripts.checks import dedup as dd
@@ -1257,7 +1258,7 @@ def test_the_apply_scope_reads_as_the_reconciles_own_gate(value: Any) -> None:
                                     "rt_seed:h:1:1792398060", "dispatch:39169897786-1",
                                     "h:1:1792398060:extra"])
 def test_a_pass_holder_is_the_shape_the_engines_predecessor_rule_matches(holder: str) -> None:
-    pattern = re.search(r"holder ~ '([^']+)'", isql._RT_LEASE_PREDECESSOR_WHERE).group(1)
+    pattern = re.search(r"holder ~ '([^']+)'", job_lease._PREDECESSOR_WHERE).group(1)
     assert (dd._holder(holder)[0] == "pass") == bool(re.search(pattern, holder))
 
 

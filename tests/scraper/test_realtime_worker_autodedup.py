@@ -628,7 +628,7 @@ def test_one_worker_pass_is_the_engines_pass(world, tmp_path, monkeypatch) -> No
         assert world.lease[LANE_NAME]["expires_at"] <= world.now, "the lease was released"
         targets = _write_targets(world.statements[before:])
         assert targets, "the pass wrote nothing"
-        assert all(t.startswith("autodedup.") for t in targets), sorted(targets)
+        assert all(t.startswith("autodedup.") or t == "scheduled_jobs" for t in targets), sorted(targets)
         assert world.statements_in_tx, "the pass ran as the engine's one transaction"
 
 
@@ -672,10 +672,9 @@ def test_a_worker_pass_inside_a_seed_is_a_green_skip(world, tmp_path, monkeypatc
         return original(conn, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane, "cut_calibration", pass_mid_seed)
-    out = seed_lane(world, tmp_path / "again", fresh="true")
+    seed_lane(world, tmp_path / "again", fresh="true")
 
     assert during and (during[0]["skipped"], during[0]["reason"]) == (1, "leased")
-    assert out["reset"]["rt_lease"] == 0
     assert world.lease[LANE_NAME]["expires_at"] <= world.now, "the seed freed the lease"
     after = rw._autodedup_sync()
     assert after["ran"] is True and after["errors"] == 0, after
@@ -797,7 +796,7 @@ def _stranded_by_my_predecessor(world: FakePg) -> str:
 
 
 def _released_lines(caplog: pytest.LogCaptureFixture, dead: str) -> int:
-    return sum(f"a predecessor of this container died holding autodedup.rt_lease: {dead}; "
+    return sum(f"a predecessor of this container died holding rt_lease: {dead}; "
                "released" in record.getMessage() for record in caplog.records)
 
 
@@ -1002,10 +1001,10 @@ def test_a_shutdown_releases_the_lease_of_the_pass_in_flight_on_a_fresh_connecti
 
 def test_the_shutdown_release_never_ends_another_writers_lease(monkeypatch) -> None:
     """A seed or dispatch may hold the row by the time the signal's release runs. The fake
-    reads the holder predicate from RT_LEASE_RELEASE_SQL itself, so dropping `and holder =`
+    reads the holder predicate from _END_LANE_SQL itself, so dropping `and holder =`
     from the statement fails this test: the seed's live row would be ended."""
     from autodedup import rt_lease
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from datetime import timedelta
 
     world = FakePg()
@@ -1014,7 +1013,7 @@ def test_the_shutdown_release_never_ends_another_writers_lease(monkeypatch) -> N
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: world.other_session())
 
     assert rw._autodedup_release_lease("host:1:1") is True
-    assert RT_LEASE_RELEASE_SQL in world.statements, "the release ran"
+    assert _END_LANE_SQL in world.statements, "the release ran"
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == ("rt_seed:gh:7:7", True)
 
@@ -1043,7 +1042,7 @@ def test_the_shutdown_release_never_raises(monkeypatch, caplog) -> None:
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: broken)
     assert rw._autodedup_release_lease("host:1:1") is False
     assert broken.closed
-    assert sum("could not release autodedup.rt_lease" in r.getMessage()
+    assert sum("could not release rt_lease" in r.getMessage()
                for r in caplog.records) >= 1
 
 
@@ -1166,6 +1165,12 @@ class _CancellableSession:
     def transaction(self) -> Any:
         return self.world.transaction()
 
+    @property
+    def info(self) -> Any:
+        return self.world.info
+
+    autocommit = True
+
     def cancel_safe(self, *, timeout: float) -> None:
         self.cancelled = True
 
@@ -1199,6 +1204,9 @@ class _CancellableCursor:
 
     def fetchall(self) -> list[tuple]:
         return self.inner.fetchall()
+
+    def fetchone(self) -> tuple | None:
+        return self.inner.fetchone()
 
 
 def test_a_statement_running_at_the_signal_is_cancelled_and_the_pass_rolls_back(

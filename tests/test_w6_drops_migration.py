@@ -131,7 +131,6 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
     a mistyped brake key would read as braked (an absent row is 0, as the worker reads it), a
     lost check would pass. Each names the worker's brake, the lane's lease and the full sweep's
     holder as their owners write them, and raises its refusal."""
-    from autodedup.incremental_sql import RT_LEASE_READ_SQL, RT_LEASE_TAKE_SQL
     from scraper.realtime_worker import AUTODEDUP_INTERVAL_SETTING
     from scripts.recompute_property_stats import _TRY_LEASE_SQL, _new_holder
 
@@ -150,8 +149,6 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
         "and idx_scan > 0)",
     ):
         assert check + refuse in production, check
-    assert "insert into autodedup.rt_lease" in RT_LEASE_TAKE_SQL
-    assert "l.expires_at > now() as live" in RT_LEASE_READ_SQL
     assert "UPDATE property_maintenance_lease" in _TRY_LEASE_SQL
     assert "expires_at < now()" in _TRY_LEASE_SQL
     assert _new_holder("full").startswith("full:")

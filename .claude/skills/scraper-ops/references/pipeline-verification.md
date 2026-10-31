@@ -1323,7 +1323,7 @@ cannot see.
 (`app_settings.autodedup_apply_scope`), decides into the **live generation**
 (`autodedup.incremental.GENERATION`), pauses its merges while it **builds** an area it was just
 seeded on (`autodedup.settings` `rt_bootstrap:rt`), and runs one pass, seed or batch run at a time
-under the **lease** (`autodedup.rt_lease`). An ad's **decision** is its `autodedup.rt_fp` row:
+under the **lease** (`rt_lease`: `scheduled_jobs` row `autodedup_realtime`). An ad's **decision** is its `autodedup.rt_fp` row:
 `first_decided_at` is stamped at the start of the pass that committed it and kept on every later
 refresh. An **engine merge** is a live `property_merge_events` row whose `source` is
 `autodedup.apply.MERGE_SOURCE`, an **operator merge** one whose `source` is `'operator'`; a split's

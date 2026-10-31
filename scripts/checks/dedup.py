@@ -111,7 +111,7 @@ _OPEN_READING_MAX_S = 7 * 86400
 # apply._Writer spell them inline (no constant to import; tests pin both writers).
 _SEED_HOLDER, _DISPATCH_HOLDER = "rt_seed:", "dispatch:"
 # A worker pass's holder, `<host>:<pid>:<the second its pass started>`: the shape
-# incremental_sql._RT_LEASE_PREDECESSOR_WHERE matches (a test pins the two against each other).
+# job_lease._PREDECESSOR_WHERE matches (a test pins the two against each other).
 _PASS_HOLDER = re.compile(r"[^:]+:[0-9]+:([0-9]{1,18})")
 # RT_FP_READ_SQL's `first_decided_epoch` column (a test pins its place in the select list).
 _FP_DECIDED_COLUMN = 14

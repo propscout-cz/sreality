@@ -579,7 +579,7 @@ _PUSH_PASS_LOCK = _PassLock("push")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
-# groups and RECONCILES under the engine's own lease (`autodedup.rt_lease`): the groups it
+# groups and RECONCILES under the engine's own lease (`rt_lease`): the groups it
 # re-clustered become production merges through toolkit.property_identity.merge_property_set,
 # inside the area app_settings.autodedup_apply_scope names; it never splits. The engine bounds
 # its own time — a pass past its deadline rolls back (nothing written, no cursor moved) and
@@ -613,7 +613,7 @@ _load_library: Callable[[str], Any] = ctypes.CDLL
 _AUTODEDUP_PASS_LOCK = _PassLock("autodedup")
 # SHUTDOWN (E941). Railway SIGTERMs the old deployment once the new one is online and, by
 # default, SIGKILLs it 0 s later (docs.railway.com/deployments/reference): no handler ran, a
-# pass in flight died holding `autodedup.rt_lease`, and the next worker's passes were skipped
+# pass in flight died holding `rt_lease`, and the next worker's passes were skipped
 # "leased" until the lease's 2,400 s TTL — 40 minutes, three times on 2026-10-06/07. Letting
 # the pass FINISH instead would need a drain past its 1,050 s deadline, and the watchdog would
 # end that drain at 300 s anyway: the heartbeat lane stops at SIGTERM like every lane, and the
@@ -645,7 +645,7 @@ _AUTODEDUP_STORE_WARNED = False
 # standing refusal would otherwise write the same line 1,440 times a day.
 _AUTODEDUP_LAST_OUTCOME: str | None = None
 # This process's boot second (E948). One worker process runs per container and a restart in
-# place keeps the hostname and the pid, so a live `autodedup.rt_lease` whose holder names both
+# place keeps the hostname and the pid, so a live `rt_lease` whose holder names both
 # and an earlier second was taken by a predecessor that died holding it (2026-10-10: most likely
 # the OOM killer, which sends no SIGTERM): a pass releases it before its take, and the engine
 # logs it, unless the claim cap is at its floor.
@@ -2318,7 +2318,7 @@ def _return_memory() -> float | None:
 
 
 def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
-    """End `holder`'s `autodedup.rt_lease` row on a FRESH, bounded connection (E941). Best
+    """End `holder`'s `rt_lease` row on a FRESH, bounded connection (E941). Best
     effort and never raises: it runs on the shutdown path, where a raise helps nobody and the
     lease still ends by its TTL. The statement is keyed by holder, so a row another writer has
     taken since is never ended by it. First, the statement the pass may be running on
@@ -2341,10 +2341,10 @@ def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
                 conn.close()
     except Exception as exc:  # noqa: BLE001 — a shutdown path never raises
         LOG.warning(
-            "AUTODEDUP: shutdown could not release autodedup.rt_lease for %s (%s: %s); it "
+            "AUTODEDUP: shutdown could not release rt_lease for %s (%s: %s); it "
             "expires by its TTL", holder, type(exc).__name__, exc)
         return False
-    LOG.info("AUTODEDUP: shutdown released autodedup.rt_lease for %s", holder)
+    LOG.info("AUTODEDUP: shutdown released rt_lease for %s", holder)
     return True
 
 

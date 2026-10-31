@@ -390,7 +390,7 @@ nothing else.
   never escapes the pass (3 in a row quarantine the set for 24 h); each group's transaction sets
   its own 25 s statement / 5 s lock timeouts. The worker itself never names the chokepoint.
 - **One writer.** The engine keeps its watermark in `autodedup.scan_cursor` and its lease in
-  `autodedup.rt_lease`. `rt_seed` holds that lease through its transaction, and a LIVE dispatched
+  `rt_lease` (a `scheduled_jobs` row). `rt_seed` holds that lease through its transaction, and a LIVE dispatched
   `apply` / `unapply` holds it for its run, so a worker pass that fires meanwhile is a green
   `skipped: leased`; every refusal names the holder, and `release_lease=<holder>` ends the lease a
   dead writer left (a pass whose own connection the server terminated releases its lease itself,

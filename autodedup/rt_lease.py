@@ -1,8 +1,8 @@
-"""THE writer's lease of the autodedup lane: one row of `autodedup.rt_lease`, by name.
+"""THE writer's lease of the autodedup lane: an adapter over `scraper.job_lease`, which owns the
+row (`scheduled_jobs.autodedup_realtime`) and every statement that writes it (#2109).
 
 The worker's pass, `rt_seed` and a live `apply` / `unapply` each hold it for their run, so one
-of them at a time writes the live stream or production merges (A9). Lease-row CAS, never
-`pg_advisory_lock`: a session lock strands over the transaction pooler. Every refusal names the
+of them at a time writes the live stream or production merges (A9). Every refusal names the
 holder and when its lease ends; `release_stale` is the path for a holder that died with it (a
 killed dispatch holds it for its whole TTL), `release_predecessor` the worker's own for a process
 that died with it (E948, which `predecessor` only names), and a release that fails while another
@@ -14,18 +14,15 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import suppress
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
-from autodedup.incremental_sql import (
-    RT_LEASE_HOLD_SQL,
-    RT_LEASE_PREDECESSOR_SQL,
-    RT_LEASE_READ_SQL,
-    RT_LEASE_RELEASE_PREDECESSOR_SQL,
-    RT_LEASE_RELEASE_SQL,
-    RT_LEASE_TAKE_SQL,
-)
+from autodedup.incremental_sql import RT_LEASE_READ_SQL
+from scraper import job_lease
 
 NAME: str = "autodedup_realtime"
+# The row's declarations, never read: it has no `due_at`, so nothing schedules it.
+_CADENCE: str = "10 minutes"
+_RUNNER: str = "railway-realtime-worker"
 # A seed or a live dispatch holds it for its job's own timeout (`autodedup.yml`,
 # `timeout-minutes: 300`), so a running one can never lose it to a pass.
 DISPATCH_TTL_S: int = 300 * 60
@@ -44,46 +41,31 @@ _clock: Callable[[], float] = time.monotonic
 LOG = logging.getLogger(__name__)
 
 
-def _rows(conn: Any, sql: str, params: Mapping[str, Any]) -> list[tuple]:
-    with conn.cursor() as cur:
-        cur.execute(sql, dict(params))
-        return list(cur.fetchall())
-
-
 def take(conn: Any, holder: str, ttl: int) -> bool:
-    rows = _rows(conn, RT_LEASE_TAKE_SQL, {"name": NAME, "holder": holder, "ttl": ttl})
-    return bool(rows) and str(rows[0][0]) == holder
+    return job_lease.acquire(conn, NAME, cadence=_CADENCE, runner=_RUNNER, ttl_s=ttl,
+                             holder=holder) is not None
 
 
 def release(conn: Any, holder: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(RT_LEASE_RELEASE_SQL, {"name": NAME, "holder": holder})
-
-
-def _predecessor(conn: Any, sql: str, hostname: str, pid: int, booted_epoch: int) -> str | None:
-    rows = _rows(conn, sql, {"name": NAME, "host": hostname, "pid": str(int(pid)),
-                             "booted": int(booted_epoch)})
-    return str(rows[0][0]) if rows else None
+    job_lease.end(conn, NAME, holder)
 
 
 def release_predecessor(conn: Any, hostname: str, pid: int, booted_epoch: int) -> str | None:
     """End the live lease a dead predecessor of this process (this hostname and pid, a second
     before `booted_epoch`) left; its holder, or None (E948)."""
-    return _predecessor(conn, RT_LEASE_RELEASE_PREDECESSOR_SQL, hostname, pid, booted_epoch)
+    return job_lease.end_predecessor(conn, NAME, host=hostname, pid=pid, booted_epoch=booted_epoch)
 
 
 def predecessor(conn: Any, hostname: str, pid: int, booted_epoch: int) -> str | None:
     """The holder of that same lease, read and left live (E948)."""
-    return _predecessor(conn, RT_LEASE_PREDECESSOR_SQL, hostname, pid, booted_epoch)
+    return job_lease.predecessor(conn, NAME, host=hostname, pid=pid, booted_epoch=booted_epoch)
 
 
 # The outcome a run reports when its lease ended under it (E941).
 LEASE_LOST: str = "lease_lost"
-
-
-class LeaseLost(Exception):
-    """The holder's lease ended while its run still ran — released by the worker's shutdown
-    (E941) or by a `release_lease=` dispatch that took the holder for dead."""
+# The holder's lease ended while its run still ran: released by the worker's shutdown (E941) or by
+# a `release_lease=` dispatch that took the holder for dead.
+LeaseLost = job_lease.LeaseLost
 
 
 def hold(conn: Any, holder: str) -> None:
@@ -91,14 +73,17 @@ def hold(conn: Any, holder: str) -> None:
     holder's live lease row until the transaction ends, or raise `LeaseLost` so it rolls back
     (E941). A run whose lease was released under it then never commits beside the next holder,
     and a release that arrives after this statement waits for the commit."""
-    if not _rows(conn, RT_LEASE_HOLD_SQL, {"name": NAME, "holder": holder}):
-        raise LeaseLost(f"autodedup.rt_lease is no longer held by {holder!r}: "
-                        f"{describe(conn)}")
+    try:
+        job_lease.fence(conn, job_lease.Hold(NAME, holder, 0, 0.0))
+    except LeaseLost as exc:
+        raise LeaseLost(f"rt_lease is no longer held by {holder!r}: {describe(conn)}") from exc
 
 
 def current(conn: Any) -> dict[str, Any] | None:
     """The row as it stands: holder, taken_at, expires_at and whether it is still live."""
-    rows = _rows(conn, RT_LEASE_READ_SQL, {"name": NAME})
+    with conn.cursor() as cur:
+        cur.execute(RT_LEASE_READ_SQL, {"name": NAME})
+        rows = list(cur.fetchall())
     if not rows:
         return None
     holder, taken_at, expires_at, live = rows[0]
@@ -113,6 +98,9 @@ def describe(conn: Any) -> str:
         return f"(its holder could not be read: {type(exc).__name__})"
     if row is None:
         return "(no holder on record)"
+    if not row["live"]:
+        return (f"free (last held by {row['holder']!r} until {row['expires_at']}); a take refused "
+                "now means its scheduled_jobs row is paused or retired")
     return (f"held by {row['holder']!r} since {row['taken_at']}, until {row['expires_at']} — "
             f"if that writer is dead (its job ended, its worker restarted), pass "
             f"{RELEASE_ARG}={row['holder']} to end it first")
@@ -126,7 +114,7 @@ def release_stale(conn: Any, holder: str) -> dict[str, Any]:
         return {"released": None, "reason": "no live lease to release"}
     if str(row["holder"]) != holder:
         raise SystemExit(
-            f"{RELEASE_ARG}={holder}: autodedup.rt_lease is {describe(conn)} — not that "
+            f"{RELEASE_ARG}={holder}: rt_lease is {describe(conn)} — not that "
             "holder's; nothing was released and nothing was written.")
     release(conn, holder)
     return {"released": holder, "expires_at_was": str(row["expires_at"])}
@@ -159,7 +147,7 @@ def release_after(conn: Any, holder: str, original: BaseException | None, *,
                 failed = again
             else:
                 if original is not None:
-                    original.add_note(f"releasing autodedup.rt_lease for {holder!r} failed on "
+                    original.add_note(f"releasing rt_lease for {holder!r} failed on "
                                       f"the pass's connection ({type(exc).__name__}: {exc}); "
                                       "released on the fresh one")
                 return True
@@ -169,7 +157,7 @@ def release_after(conn: Any, holder: str, original: BaseException | None, *,
             tries, last = _release_on_new_connections(connect, holder)
             spent = _clock() - started
             if last is None:
-                landed = (f"releasing autodedup.rt_lease for {holder!r} failed "
+                landed = (f"releasing rt_lease for {holder!r} failed "
                           f"({type(exc).__name__}: {exc}); released on a new connection "
                           f"{spent:.0f} s later (try {tries})")
                 if original is not None:
@@ -181,7 +169,7 @@ def release_after(conn: Any, holder: str, original: BaseException | None, *,
             tried = f"{tries} new connection{'s' if tries != 1 else ''} over {spent:.0f} s, the last with "
         if original is None:
             raise failed
-        original.add_note(f"releasing autodedup.rt_lease for {holder!r} also failed "
+        original.add_note(f"releasing rt_lease for {holder!r} also failed "
                           f"({tried}{type(failed).__name__}: {failed}); it expires by itself")
         return False
 
