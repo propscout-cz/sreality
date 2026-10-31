@@ -690,5 +690,8 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     (`utm_source=claude-test`, a test row, exclude or delete it) stored with consent version, variant and answer.
     **Owed:** the Meta Pixel id (no tracker until then); a Czech lawyer's read of the consent + privacy text
     (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in).
+    **Copy deck** (2026-10-31): the operator edits the copy in place in an artifact that mirrors the built pages
+    (https://claude.ai/artifact/BCWsBLb1Vj78wSdmJgd73x); edits land in its db, Claude applies them. Rebuild and
+    republish it after every landing change: `frontend/scripts/landing-copy-deck/README.md`.
     **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), an admin
     view of signups, refreshing the proof numbers.

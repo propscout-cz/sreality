@@ -17,3 +17,4 @@ vite.config.d.ts
 vite.config.js
 vite.landing.config.d.ts
 vite.landing.config.js
+.copy-deck/
