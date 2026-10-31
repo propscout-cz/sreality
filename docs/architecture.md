@@ -911,11 +911,12 @@ rules. Identify which one a task belongs to before you start.
   artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
   remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
   board, and "Upravit jako", stay desktop-only. The pager keeps its place under a change made
-  elsewhere: the stage on screen and a tab tap's destination are stage ids, so a stage archived
-  elsewhere hands over to its neighbour and a reorder never retargets a tap, and a finger on the
-  pages or a scroll still settling holds the board and the members map (`useReadHold`), so a
-  remote change lands after the gesture. Its one filter, **Lokalita**, is the desktop bar's:
-  the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
+  elsewhere: the stage on screen (the one remembered) and a tab tap's destination are stage ids,
+  so a stage archived elsewhere hands over to its neighbour, a stage added or reordered never
+  changes what is on screen and never retargets a tap, and a finger on the pages or a scroll
+  still settling holds the board and the members map (`useReadHold`), so a remote change lands
+  after the gesture; the pager's own re-aim is no gesture. Its one filter, **Lokalita**, is the
+  desktop bar's: the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
   `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
@@ -990,7 +991,8 @@ rules. Identify which one a task belongs to before you start.
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and
-  artifact-link editors).
+  artifact-link editors). An editor that stays open after a save (the stage row) calls `saved()`,
+  so the next server value ends the draft even when a change made elsewhere beat the re-read.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
   route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route

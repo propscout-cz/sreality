@@ -95,6 +95,41 @@ describe('useServerDraft', () => {
     expect(result.current.value).toBe('Prohlídka 2');
   });
 
+  /* A field that stays open after a save (the stage row): a change made elsewhere
+     can land between the save and its re-read, so the server never reaches the
+     draft. Marked saved, the draft ends at the next server value, whatever it is. */
+  it('ends a saved draft at the next server value, even a change made elsewhere', () => {
+    const { result, rerender } = field('A', trim);
+    act(() => result.current.onFocus());
+    act(() => result.current.onChange('X'));
+    act(() => result.current.onBlur());
+    expect(result.current.edited()).toBe('X');
+    act(() => result.current.saved());
+    /* The re-read has not come yet: the field keeps the saved text. */
+    rerender({ server: 'A' });
+    expect(result.current.value).toBe('X');
+    rerender({ server: 'Y' });
+    expect(result.current.value).toBe('Y');
+    expect(result.current.edited()).toBeNull();
+    act(() => result.current.onFocus());
+    act(() => result.current.onBlur());
+    expect(result.current.edited()).toBeNull();
+    rerender({ server: 'Z' });
+    expect(result.current.value).toBe('Z');
+  });
+
+  it('keeps a saved draft the user typed into again, over a server change', () => {
+    const { result, rerender } = field('A');
+    act(() => result.current.onChange('X'));
+    act(() => result.current.saved());
+    act(() => result.current.onFocus());
+    act(() => result.current.onChange('X2'));
+    act(() => result.current.onBlur());
+    rerender({ server: 'Y' });
+    expect(result.current.value).toBe('X2');
+    expect(result.current.edited()).toBe('X2');
+  });
+
   it('compares through normalize: whitespace alone is no edit', () => {
     const { result } = field('Zájem', trim);
     act(() => result.current.onFocus());

@@ -42,6 +42,7 @@ import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
 import { NewPropertyProvider } from '@/components/NewPropertyProvider';
 import { watchReads } from '@/test/reads';
 import { revalidateTables } from '@/lib/curationSync';
+import { isOwed } from '@/lib/revalidate';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -895,6 +896,30 @@ describe('<Pipeline> board', () => {
     expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
   });
 
+  /* The row stays open after a save: a rename made elsewhere that lands between
+     the save and its re-read is what the field shows next, never written over. */
+  it('a saved stage name follows the server after, even a rename made elsewhere meanwhile', async () => {
+    vi.mocked(api.updatePipelineStage).mockClear().mockResolvedValue({ ...STAGES[1], label: 'Moje nabídka' });
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+
+    /* Renamed elsewhere after this save commits and before its re-read starts. */
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Jejich nabídka' } : st)),
+    );
+    fireEvent.focus(label);
+    fireEvent.change(label, { target: { value: 'Moje nabídka' } });
+    fireEvent.blur(label);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { label: 'Moje nabídka' }));
+    await waitFor(() => expect(label).toHaveValue('Jejich nabídka'));
+
+    fireEvent.focus(label);
+    fireEvent.blur(label);
+    expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
+  });
+
   it('names the stage-manager create field by its visible words', async () => {
     renderBoard();
     fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
@@ -1277,6 +1302,28 @@ describe('<Pipeline> board', () => {
         dnd.context?.onDragCancel?.({ active: { id: 'card:42' } } as unknown as DragCancelEvent);
       });
       expect(await screen.findByText('Lesní')).toBeInTheDocument();
+    });
+
+    it('an unmount mid-drag lets go: the parked board read is paid on the next mount', async () => {
+      const qc = boardClient();
+      const view = renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+      await pickUp();
+
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await act(async () => {
+        await revalidateTables(qc, ['property_pipeline']);
+      });
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+      expect(isOwed(qc, pipelineKeys.board)).toBe(true);
+
+      /* Gone with the card in hand: no drop, no cancel. A hold left behind would
+         cancel the next mount's read and owe it again. */
+      view.unmount();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+      expect(isOwed(qc, pipelineKeys.board)).toBe(false);
     });
   });
 

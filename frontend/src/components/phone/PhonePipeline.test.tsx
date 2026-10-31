@@ -376,6 +376,22 @@ describe('phone pipeline, changes made elsewhere', () => {
     await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
     expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
     expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
+    /* The neighbour is the stage on screen now, so it is the one remembered. */
+    expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBe('3');
+  });
+
+  it('with no stage remembered, a stage added before the entry stage elsewhere leaves the entry stage on screen', async () => {
+    const { qc } = renderPipeline();
+    expect(await screen.findByRole('tab', { name: /^Zájem/ })).toHaveAttribute('aria-selected', 'true');
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue([
+      { id: 5, key: 'idea', label: 'Nápad', position: 0, color: 'sand', is_terminal: false, is_entry: false, code: null },
+      ...STAGES,
+    ]);
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(tab(/^Nápad/)).toBeInTheDocument());
+    expect(tab(/^Zájem/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Nápad/)).toHaveAttribute('aria-selected', 'false');
   });
 
   describe('with the pages laid out', () => {
@@ -405,8 +421,11 @@ describe('phone pipeline, changes made elsewhere', () => {
       await waitFor(() =>
         expect(within(screen.getByRole('tablist', { name: 'Fáze' })).getAllByRole('tab').at(-1)).toBe(tab(/^Koupeno/)),
       );
+      /* The re-aim: the pages land on the tapped stage's new page at once. */
+      expect(pager.scrollLeft).toBe(900);
 
-      /* The tap's scroll arrives where it was aimed before the reorder. */
+      /* A scroll event from the old aim — a smooth scroll the browser did not cut
+         short — arriving where the tap pointed before the reorder. */
       pager.scrollLeft = 600;
       fireEvent.scroll(pager);
       await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
@@ -414,6 +433,67 @@ describe('phone pipeline, changes made elsewhere', () => {
       expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
       expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBe('3');
     });
+
+    it('a re-aim after a reorder elsewhere is no gesture: the board is not held', async () => {
+      const { qc } = renderPipeline();
+      const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+      expect(pager.scrollLeft).toBe(0);
+
+      /* Prohlídka moved before Zájem elsewhere: Zájem is page 1 now. */
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+        STAGES.map((st) => (st.id === 2 ? { ...st, position: 0 } : st)),
+      );
+      await changedElsewhere(qc, 'pipeline_stages');
+      await waitFor(() => expect(pager.scrollLeft).toBe(300));
+      expect(tab(/^Zájem/)).toHaveAttribute('aria-selected', 'true');
+      /* The scroll event the browser sends for that landing. */
+      fireEvent.scroll(pager);
+
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+        ...CARDS,
+        { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+      ]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await changedElsewhere(qc, 'property_pipeline');
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before + 1);
+      await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+    });
+  });
+
+  it('a remote add during a scroll waits for the pages to come to rest', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    pager.scrollLeft = 120;
+    fireEvent.scroll(pager);
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a remote add waits for the last finger to lift', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    fireEvent.touchStart(pager, { touches: [{}, {}] });
+    fireEvent.touchEnd(pager, { touches: [{}] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+
+    fireEvent.touchEnd(pager, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
   });
 
   it('a remote add during an active touch waits for the finger to lift', async () => {

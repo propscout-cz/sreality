@@ -1119,12 +1119,17 @@ function StageEditorRow({
     onError,
   });
 
-  /* Only what the user typed is saved; an emptied name is refused, back to the stage's. */
+  /* Only what the user typed is saved; an emptied name is refused, back to the stage's.
+   * The row stays open after a save, so the saved draft is marked: the next value
+   * the server reads back ends it, even a change made elsewhere meanwhile. */
   const saveLabel = () => {
     label.onBlur();
     const next = label.edited();
     if (next === '') label.reset();
-    else if (next != null) update.mutate({ label: next });
+    else if (next != null) {
+      update.mutate({ label: next });
+      label.saved();
+    }
   };
 
   /* Empty box = no code: the badge falls back to the ordinal rather than
@@ -1132,7 +1137,9 @@ function StageEditorRow({
   const saveCode = () => {
     code.onBlur();
     const next = code.edited();
-    if (next != null) update.mutate({ code: next === '' ? null : next });
+    if (next == null) return;
+    update.mutate({ code: next === '' ? null : next });
+    code.saved();
   };
 
   return (

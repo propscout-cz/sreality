@@ -372,7 +372,9 @@ function HeaderEditor({
     mutationFn: () =>
       updateCollection(collection.id, {
         ...(nextName != null && { name: nextName }),
-        ...(nextDescription != null && { description: nextDescription === '' ? null : nextDescription }),
+        /* A cleared description goes as '': PATCH /collections reads null as "not
+         * given" (coalesce), so null alone is refused and never clears it. */
+        ...(nextDescription != null && { description: nextDescription }),
       }),
     onSuccess: () => {
       setError(null);

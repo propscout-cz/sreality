@@ -18,6 +18,13 @@
  * showing whatever the server holds by then, and a saved draft hands the field
  * back to the server when the re-read brings its value: no flash of the old one.
  *
+ * `saved()` says the draft went to the server. An editor that stays open after a
+ * save (the stage row) calls it, because a change made elsewhere can land between
+ * the save and its re-read: the server then never reaches the draft. A saved
+ * draft also ends, unfocused, at the first server value other than the one it was
+ * saved over, so the field follows whatever the server holds next instead of
+ * keeping the saved text to write it back. Typing again unmarks it.
+ *
  * `edited()` is what to save: the draft (through `normalize`, which every
  * comparison uses too), or null when there is nothing to write — no draft, no
  * net change, or the server already holds it. A server change is never written
@@ -36,12 +43,16 @@ export interface ServerDraft<T extends string> {
   onBlur(): void;
   /** What to save, or null: the user changed nothing net, or the server already holds it. */
   edited(): T | null;
+  /** The draft went to the server: the next server value, whatever it is, ends it. */
+  saved(): void;
   reset(): void;
 }
 
 interface Draft<T> {
   value: T;
   base: T;
+  /* Saved: the server's value when it was. */
+  over: T | null;
 }
 
 interface State<T> {
@@ -52,12 +63,14 @@ interface State<T> {
 const UNTOUCHED = { draft: null, focused: false } as const;
 
 /* A draft the field does not hold on to (not focused) ends when it holds no net
- * change or the server has reached it. */
+ * change, the server has reached it, or — saved — the server moved since. */
 function settle<T extends string>(s: State<T>, server: T, normalize: (v: T) => T): State<T> {
   const d = s.draft;
   if (!d || s.focused) return s;
   const v = normalize(d.value);
-  return v === normalize(d.base) || v === normalize(server) ? { draft: null, focused: false } : s;
+  const now = normalize(server);
+  const moved = d.over != null && now !== normalize(d.over);
+  return v === normalize(d.base) || v === now || moved ? { draft: null, focused: false } : s;
 }
 
 const asIs = <T>(v: T): T => v;
@@ -80,7 +93,9 @@ export function useServerDraft<T extends string>(
   return {
     value: draft ? draft.value : server,
     onChange: (v) =>
-      setState((s) => settle({ focused: s.focused, draft: { value: v, base: s.draft?.base ?? server } }, server, normalize)),
+      setState((s) =>
+        settle({ focused: s.focused, draft: { value: v, base: s.draft?.base ?? server, over: null } }, server, normalize),
+      ),
     onFocus: () => setState((s) => (s.focused ? s : { ...s, focused: true })),
     onBlur: () => setState((s) => settle({ ...s, focused: false }, server, normalize)),
     edited: () => {
@@ -88,6 +103,8 @@ export function useServerDraft<T extends string>(
       const v = normalize(draft.value);
       return v === normalize(draft.base) || v === normalize(server) ? null : v;
     },
+    saved: () =>
+      setState((s) => (s.draft ? settle({ ...s, draft: { ...s.draft, over: server } }, server, normalize) : s)),
     reset: () => setState(UNTOUCHED),
   };
 }
