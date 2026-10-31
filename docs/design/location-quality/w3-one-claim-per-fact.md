@@ -467,7 +467,8 @@ reason W3 writes (`claim_insert`, `operator_edit`, `full_sweep`) is valid before
 ### Steps 0 + 1: backup and purge, one dispatch of the re-aimed `location_claims_retire.yml`
 The workflow's first armed step is the backup: a streamed `\copy (select c.* from location_claims c)`
 → gzip → R2 `backups/w3-claims/<UTC date>/w3_claims_<run>_<attempt>.csv.gz` (one object per attempt,
-so a resumed run never overwrites the first, fuller one; the log prints bytes and CSV lines). The
+so a resumed run never overwrites the first, fuller one). The count and the copy share one
+repeatable-read snapshot, and the step fails unless the CSV parses to exactly `count(*)` records. The
 design's `backup_before_drop w3-claims location_claims` was not used: `_dump_table` holds the whole
 pg_dump in memory (a ≈ 4 GB text dump on a 7–8 GB private-repo runner). Then
 `scripts.location_claims_retire --confirm PURGE` (LAST RUN BEFORE 699; DELETED IN PR-2):

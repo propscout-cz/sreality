@@ -100,14 +100,30 @@ jobs:
             exit 1
           fi
 
-      # `c.*`, every row: a restorable copy, not a summary. Streamed, never held in memory.
-      - name: Back up the whole table (gzipped CSV)
+      # `c.*`, every row: a restorable copy, not a summary. Streamed, never held in memory. The
+      # count and the copy share ONE repeatable-read snapshot (the live intake writes meanwhile),
+      # and the step fails unless the CSV holds exactly that many records (csv-parsed, not
+      # newline-counted: a value may carry a newline).
+      - name: Back up the whole table (gzipped CSV), verified against count(*)
         if: ${{ !inputs.dry_run }}
         run: |
           set -o pipefail
-          psql -X -v ON_ERROR_STOP=1 "$DATABASE_URL" \
-            -c "\copy (select c.* from location_claims c) to stdout csv header" | gzip > "$BACKUP"
-          echo "backup: $(du -h "$BACKUP" | cut -f1) ($(stat -c%s "$BACKUP") bytes), $(( $(zcat "$BACKUP" | wc -l) - 1 )) CSV lines"
+          psql -X -q -At -v ON_ERROR_STOP=1 "$DATABASE_URL" > backup_count.txt <<SQL
+          begin isolation level repeatable read read only;
+          select count(*) from location_claims;
+          \copy (select c.* from location_claims c) to program 'gzip > $BACKUP' csv header
+          commit;
+          SQL
+          python3 - "$BACKUP" backup_count.txt <<'PY'
+          import csv, gzip, sys
+          csv.field_size_limit(sys.maxsize)
+          with gzip.open(sys.argv[1], "rt", encoding="utf-8", newline="") as f:
+              rows = sum(1 for _ in csv.reader(f)) - 1
+          want = int(open(sys.argv[2]).read().split()[0])
+          print(f"backup: {rows} rows; the snapshot held {want}")
+          sys.exit(0 if rows == want else 1)
+          PY
+          echo "backup: $(du -h "$BACKUP" | cut -f1) ($(stat -c%s "$BACKUP") bytes)"
 
       - name: Store the backup in R2
         if: ${{ !inputs.dry_run }}
