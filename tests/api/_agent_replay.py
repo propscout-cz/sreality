@@ -14,7 +14,8 @@ from api.agents.definition import Definition
 from api.agents.loop import Outcome, run
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.llm_client import LLMClient
-from api.providers import Completion, ModelPrice, ToolCall, Usage
+from api.providers import Completion, HostedFile, ModelPrice, ProviderError, ToolCall, Usage
+from tests.api._agent_fixtures import ScriptedCodeProvider
 from tests.api._fakes import _FakeConn, _ScriptedProvider
 
 
@@ -26,7 +27,17 @@ def _completion(output: dict[str, Any]) -> Completion:
         usage=Usage(**output["usage"]),
         model=output["model"],
         raw=None,
+        hosted_calls=tuple(ToolCall(**call) for call in output.get("hosted_calls", ())),
+        container=output.get("container"),
+        file_ids=tuple(output.get("file_ids", ())),
     )
+
+
+def _fake_file(output: dict[str, Any]) -> HostedFile | Exception:
+    """A produced file as its journal step remembers it: right name, type and size, its bytes never recorded."""
+    if "error" in output:
+        return ProviderError(output["error"])
+    return HostedFile(name=output["name"], media_type=output["media_type"], data=bytes(output["bytes"]))
 
 
 def _ran_in_the_registry(step: dict[str, Any]) -> bool:
@@ -39,11 +50,11 @@ def replay(document: dict[str, Any], definition: Definition) -> Outcome:
     if document["outcome"] is None:
         raise ValueError("an incomplete cassette (its run raised) is for reading, not replay")
     steps = document["steps"]
-    provider = _ScriptedProvider(
-        document["provider"],
-        [_completion(s["output"]) for s in steps if s["kind"] == "model"],
-        prices={document["model"]: ModelPrice(**document["price"])},
-    )
+    completions = [_completion(s["output"]) for s in steps if s["kind"] == "model"]
+    prices = {document["model"]: ModelPrice(**document["price"])}
+    provider = (ScriptedCodeProvider(completions, name=document["provider"], prices=prices,
+                                     files={s["input"]["file_id"]: _fake_file(s["output"]) for s in steps if s["kind"] == "file"})
+                if definition.code else _ScriptedProvider(document["provider"], completions, prices=prices))
     served = iter([s for s in steps if _ran_in_the_registry(s)])
 
     def call_tool(name: str, args: Any) -> dict[str, Any]:

@@ -216,7 +216,7 @@ def test_an_answer_must_be_the_only_call_in_its_turn() -> None:
 
 
 def _accept(raw: Any, agent: Definition | None = None, seen: set[int] = frozenset({7})) -> terminator.Answer:
-    return terminator.accept(raw, definition=agent or _agent(), seen=seen, produced=set())
+    return terminator.accept(raw, definition=agent or _agent(), seen=seen, produced={})
 
 
 @pytest.mark.parametrize(("raw", "code", "match"), [
