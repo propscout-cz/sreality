@@ -80,7 +80,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -873,39 +873,59 @@ def _write_slice(conn: psycopg.Connection, resolutions: list[Any]) -> None:
         )
 
 
+# A no-write caller's change to a page's claims before the four steps (the wave shadow's W3
+# purge, W4 re-mine): listing id -> claims in, the same shape out.
+ClaimChange = Callable[[psycopg.Connection, dict[int, list[Claim]]], dict[int, list[Claim]]]
+
+
+def recompute(
+    conn: psycopg.Connection, listing_ids: Sequence[int], *, batch_size: int = DEFAULT_BATCH,
+    deadline: float | None = None, claim_change: ClaimChange | None = None,
+) -> Iterator[tuple[list[int], list[Any] | Exception]]:
+    """The no-write read path (`--dry-run`, `what_if`): prefetch, claim change, warm, resolve."""
+    # SELECTs only: no lease, no queue row. A failed page comes back as its exception, and the
+    # deadline ends the walk, never the caller's report.
+    timeout_s = _batch_timeout_s()
+    with _bounded(conn, timeout_s):
+        registry_version_id, registry_label = resolve_db.current_registry_version(conn)
+    cache = resolve_db.RunCache()
+    ctx = _context(conn, registry_version_id, cache)
+    for at in range(0, len(listing_ids), batch_size):
+        if deadline is not None and time.monotonic() >= deadline:
+            return
+        page = [int(i) for i in listing_ids[at : at + batch_size]]
+        try:
+            with _bounded(conn, timeout_s):
+                slice_ = _prefetch(conn, page, timeout_s=_prefetch_timeout_s(),
+                                   restore_s=timeout_s)
+                if claim_change is not None:
+                    slice_.claims = claim_change(conn, {i: slice_.claims.get(i, []) for i in page})
+                with contextlib.suppress(Exception), conn.transaction():
+                    _warm(slice_, ctx, cache)
+                new = [_compute_one(i, ctx, registry_label, slice_) for i in page]
+        except Exception as exc:  # noqa: BLE001 - one page, never the caller's report
+            yield page, exc
+            continue
+        yield page, new
+
+
 def dry_run(
     conn: psycopg.Connection, *, batch_size: int = DEFAULT_BATCH,
     max_seconds: int = DEFAULT_MAX_SECONDS, only_listing_id: int | None = None,
 ) -> dict[str, Counter[str]]:
-    """Re-resolve the sample and compare each answer with the row it would replace. Writes
-    nothing, so it needs no lease and claims no queue row. A page that fails is counted and
-    skipped, and the deadline ends the loop, never the report."""
+    """Re-resolve the sample and compare each answer with the row it would replace."""
     deadline = time.monotonic() + max_seconds
-    timeout_s = _batch_timeout_s()
-    with _bounded(conn, timeout_s) as cur:
-        registry_version_id, registry_label = resolve_db.current_registry_version(conn)
+    with _bounded(conn, _batch_timeout_s()) as cur:
         cur.execute(_SAMPLE_SQL, (None if only_listing_id is None else [only_listing_id],))
-        stored = cur.fetchall()
-    cache = resolve_db.RunCache()
-    ctx = _context(conn, registry_version_id, cache)
+        stored = {int(row[0]): row for row in cur.fetchall()}
     tally: dict[str, Counter[str]] = {"*": Counter(of=len(stored))}
-    for at in range(0, len(stored), batch_size):
-        rows = stored[at : at + batch_size]
-        if time.monotonic() >= deadline:
-            break
-        try:
-            with _bounded(conn, timeout_s):
-                slice_ = _prefetch(conn, [int(r[0]) for r in rows],
-                                   timeout_s=_prefetch_timeout_s(), restore_s=timeout_s)
-                with contextlib.suppress(Exception), conn.transaction():
-                    _warm(slice_, ctx, cache)
-                new = [_compute_one(int(r[0]), ctx, registry_label, slice_) for r in rows]
-        except Exception as exc:  # noqa: BLE001 - one page, never the report
-            tally["*"]["failed"] += len(rows)
-            LOG.warning("SAMPLE rows %d.. failed: %s", at, exc)
+    for page, new in recompute(conn, list(stored), batch_size=batch_size, deadline=deadline):
+        if isinstance(new, Exception):
+            tally["*"]["failed"] += len(page)
+            LOG.warning("SAMPLE page from listing %d failed: %s", page[0], new)
             continue
-        for row, item in zip(rows, new):
-            _tally(tally.setdefault(item.source, Counter()), row, item)
+        for listing_id, item in zip(page, new):
+            _tally(tally.setdefault(item.source, Counter()), stored[listing_id], item)
     for source, counts in sorted(tally.items()):
         LOG.info("SAMPLE source=%s %s", source, " ".join(f"{k}={v}" for k, v in counts.items()))
     return tally

@@ -394,6 +394,15 @@ def connect_session(
     )
 
 
+def connect_read_only() -> psycopg.Connection:
+    """`connect_session()` whose every `conn.transaction()` opens as BEGIN READ ONLY."""
+    # Transaction-scoped: a session `SET` would leak to the next client of a pooler backend. A
+    # statement outside a transaction block is not covered; the wave shadow runs none.
+    conn = connect_session()
+    conn.read_only = True
+    return conn
+
+
 _T = TypeVar("_T")
 
 # Bounded retry budget for a transient DB error on the detail drain's long-held

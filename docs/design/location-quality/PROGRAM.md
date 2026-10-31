@@ -110,7 +110,7 @@ Each wave below replaces several local rules with one rule.
 - The RÚIAN vintage is due 11-01 (GH cron '0 10 1 * *', throttled). If it publishes before W2 lands, it also needs today's hand full-resolve.
 - W0 runs beside W1 on the scraper track.
 - W3 and W4 can swap if W3 waits on its destructive gate. W5 depends on W3 only for code overlap in bind.py, so it can go first if W3's gate waits.
-- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation on the approved-split sessions before deploy. DECISION_MODULES stay untouched.
+- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
@@ -233,7 +233,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
   - `match_confidence`, together with its readers: the pin-audit matview (mig 524), its page and lib, and the Location Quality inspector column.
 - **Monitoring:** the W1 accuracy cell watches drift. Recalibration after a contract change is the one standing hand step; the cell turns Watch to trigger it, and the table header records the contract versions it was fitted on.
 - **UX consult:** the popup "±" changes, and blurred classes hit the 2 km drawn-circle cap more often (bazos about 3 to 4 km after v5.9).
-- **Deploy gate:** autodedup's `dist_norm` inputs shift, so a shadow re-validation on the approved-split sessions must pass. `DECISION_MODULES` stay untouched.
+- **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
 
 ### W7: registry
 - **Praha's okres:** obec Praha and ORP 19 take okres 9999 from ČÚZK's own SHP pack. A load assertion guards the value; reading each obec's okres from OBCE_P would remove the constant altogether.

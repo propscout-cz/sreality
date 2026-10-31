@@ -46,7 +46,7 @@ from location_data.claims_common import apply_transforms
 from location_data.claims_intake import Entry, ListingRow
 from location_data.html_scope import ScopeRegister, ScopedDocument, scope_html
 from location_data.resolver import check
-from location_data.resolver.types import Claim as ResolverClaim
+from location_data.resolver.what_if import as_resolver_claim
 from location_data.page_readers import (
     PAGE_READERS,
     ArchivedPayload,
@@ -113,17 +113,6 @@ def entries() -> dict[str, Entry]:
 
 def entry(entry_id: str) -> Entry:
     return entries()[entry_id]
-
-
-def resolver_claim(claim: Any) -> ResolverClaim:
-    """The intake claim as `location_claims` hands it back to the resolver — the two
-    dataclasses are different shapes, and what this test needs to prove is that the VALUE
-    the contract writes is one CHECK maps."""
-    return ResolverClaim(
-        id=1, listing_id=1, source="idnes", claim_type=claim.claim_type,
-        surface="archived_html", extraction_method=claim.extraction_method,
-        licence_class=claim.licence_class, observed_at=CLOCK, value_text=claim.value_text,
-        subject_scoped=claim.subject_scoped)
 
 
 def row(native: str = NATIVE) -> ListingRow:
@@ -858,4 +847,4 @@ def test_the_foreign_body_claims_a_country_the_resolver_maps_and_a_town_that_can
         read("id.det.subject_feature", document, native=FOREIGN_NATIVE)
     # The claim as the resolver reads it: a bare alpha-2 IS the code, and HR is not CZ, so
     # CHECK answers `foreign` with `country_code='HR'` instead of `undetermined`.
-    assert check.country_codes([resolver_claim(claims["id.det.country"][0])], {}) == {"HR"}
+    assert check.country_codes([as_resolver_claim(claims["id.det.country"][0], 1)], {}) == {"HR"}

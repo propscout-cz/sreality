@@ -699,6 +699,15 @@ _LISTINGS_FULL_SQL = (
     LIMIT %(batch_size)s
 """)
 
+# An explicit listing set in the scan's record shape: the wave shadow re-mines these
+# (`resolver.what_if`), reading the same latest stored body the lane would.
+_LISTINGS_BY_ID_SQL = (
+    _SELECT_COLUMNS + " NULL::bigint\n"
+    + _FROM_LISTINGS + _BODY_JOIN + """
+    WHERE l.id = ANY(%(ids)s::bigint[])
+    ORDER BY l.id
+""")
+
 # THE CHANGE-DRIVEN SELECTION (W1-a2; the measurement is in the module docstring).
 #
 # THE WINDOW STANDS BEHIND THE CLOCK — `_SNAPSHOT_SEED_SQL` has the why, and since W7-a by
@@ -1197,6 +1206,12 @@ def _row_from_record(record: tuple[Any, ...]) -> ScanRow:
         row=row, body=body, body_unmined=bool(body_unmined),
         contract_version=int(contract_version) if contract_version is not None else None,
         snapshot_cursor=int(snapshot_cursor) if snapshot_cursor is not None else None)
+
+
+def scan_rows(cur: psycopg.Cursor, listing_ids: Sequence[int]) -> list[ScanRow]:
+    """The scan's rows (listing, latest stored detail body) for an explicit id set."""
+    cur.execute(_LISTINGS_BY_ID_SQL, {"ids": list(listing_ids)})
+    return [_row_from_record(record) for record in cur.fetchall()]
 
 
 def chunk_rows(

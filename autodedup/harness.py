@@ -6,6 +6,7 @@
     python3 -m autodedup.harness pair out/cohort.jsonl.gz 101 102 --settings w31 --model w6_gold
     python3 -m autodedup.harness evaluate runs/r1 labels/ [--base runs/r0] [--reference truth16/]
     python3 -m autodedup.harness fit runs/r1 --operator-labels operator_labels.jsonl --out runs/r1/fit
+    python3 -m autodedup.harness shadow base/cohort.jsonl.gz positions.jsonl labels/ --scorer scorer.json --out judge/
 
 No database, no network, no secrets: the artifact is the whole input, and it carries no PII by
 contract (PROGRAM.md E28). `run` is `run_pass` over a MemoryStore (SW1): one decision path for the
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from autodedup import evaluate as evaluation
-from autodedup import revocation, seals
+from autodedup import revocation, seals, shadow
 from autodedup.calibration_cut import CalibrationCut
 from autodedup.dataset import (
     CATALOG_POP_MIN,
@@ -69,6 +70,7 @@ from autodedup.labels import (
     load_all_operator_labels,
     operator_label_pairs,
 )
+from autodedup.labels_lane import MUST_LINK_FILE, MUST_NOT_LINK_FILE
 from autodedup.model import CALIBRATION_METHODS, LogisticModel, hand_initialised
 from autodedup.settings import Settings
 from autodedup.store_score import storable
@@ -549,22 +551,22 @@ def write_run(store: MemoryStore, dataset: Dataset, fps: Mapping[int, Fingerprin
     }
 
 
-def cmd_run(args: argparse.Namespace, out: Any) -> int:
-    settings = named_settings(args.settings)
-    model = named_model(args.model)
+def run_and_report(artifact: str | Path, out_dir: Path, settings: Settings,
+                   model: LogisticModel, must_not_link: frozenset[tuple[int, int]],
+                   must_link: frozenset[tuple[int, int]], out: Any,
+                   withhold_photos: bool = False) -> dict[str, Any]:
+    """`run` over one artifact, its summary written to `run.json` and printed."""
     clock = time.perf_counter()
-    dataset = load(args.artifact)
+    dataset = load(artifact)
     load_seconds = time.perf_counter() - clock
-    out_dir = Path(args.out)
-    summary = run(dataset, settings, model, out_dir,
-                  load_must_not_link(args.must_not_link), load_must_not_link(args.must_link),
-                  withhold_photos=args.withhold_photos)
-    summary["artifact"] = str(args.artifact)
+    summary = run(dataset, settings, model, out_dir, must_not_link, must_link,
+                  withhold_photos=withhold_photos)
+    summary["artifact"] = str(artifact)
     summary["timings"]["load_s"] = load_seconds
     (out_dir / RUN_FILE).write_text(json.dumps(summary, indent=2, sort_keys=True),
                                     encoding="utf-8")
     zones = summary["zones"]
-    print(f"run {args.artifact} -> {out_dir}  calibration {summary['calibration_digest']}",
+    print(f"run {artifact} -> {out_dir}  calibration {summary['calibration_digest']}",
           file=out)
     print(f"  listings {summary['n_listings']}  pairs {summary['pairs_scored']}"
           f"  stored {summary['pairs_stored']}  passes {summary['passes']}", file=out)
@@ -577,6 +579,13 @@ def cmd_run(args: argparse.Namespace, out: Any) -> int:
               file=out)
     print(f"  timings {json.dumps({k: round(v, 2) for k, v in summary['timings'].items()})}",
           file=out)
+    return summary
+
+
+def cmd_run(args: argparse.Namespace, out: Any) -> int:
+    run_and_report(args.artifact, Path(args.out), named_settings(args.settings),
+                   named_model(args.model), load_must_not_link(args.must_not_link),
+                   load_must_not_link(args.must_link), out, args.withhold_photos)
     return 0
 
 
@@ -830,6 +839,44 @@ def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
     return 0
 
 
+def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
+    """A location wave's shadow: base vs movers, live scorer, `evaluate --base`; 0 = PASS."""
+    scorer = json.loads(Path(args.scorer).read_text(encoding="utf-8"))
+    settings = Settings.from_dict(scorer["settings"])
+    model = model_of_version(scorer.get("model_version"))
+    root, rulings = Path(args.out), Path(args.rulings)
+    candidate = root / "candidate" / "cohort.jsonl.gz"
+    movers = shadow.override(Path(args.artifact), Path(args.positions), candidate)
+    links = (load_must_not_link(str(rulings / MUST_NOT_LINK_FILE)),
+             load_must_not_link(str(rulings / MUST_LINK_FILE)))
+    for arm, artifact in (("base", args.artifact), ("candidate", candidate)):
+        run_and_report(artifact, root / arm, settings, model, *links, out)
+    cmd_evaluate(argparse.Namespace(run_dir=str(root / "candidate"), rulings=str(rulings),
+                                    base=str(root / "base"), reference=None, artifact=None,
+                                    out=None), out)
+    report = json.loads((root / "candidate" / "evaluate.json").read_text(encoding="utf-8"))
+    verdict = shadow.judge(report, movers)
+    # A mover outside every exported block (no row today, a split-city row with no quarter) is
+    # in neither arm: the gap is printed, never hidden.
+    verdict["movers_listed"] = sum(1 for line in Path(args.positions).open(encoding="utf-8")
+                                   if line.strip())
+    (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
+                                           encoding="utf-8")
+    print(f"shadow {'PASS' if verdict['pass'] else 'FAIL'}  movers in cohort "
+          f"{verdict['movers_in_cohort']} of {verdict['movers_listed']}"
+          f"  E111 {'REVOKED' if verdict['revoked'] else 'clean'}"
+          f"  rulings broken {len(verdict['broken_rulings'])}"
+          f"  newly honoured {len(verdict['honoured_rulings'])}", file=out)
+    for lo, hi, ruling, _ in verdict["broken_rulings"]:
+        print(f"  BROKEN {lo} x {hi} ({ruling})", file=out)
+    for name, rows in verdict["d83_touching_movers"].items():
+        print(f"  D83 {name} touching a mover: {len(rows)}", file=out)
+        for lo, hi, *tags in rows[:args.show]:
+            print(f"    {lo} x {hi} {' '.join(str(tag) for tag in tags if tag)}", file=out)
+    print(f"wrote {root / shadow.SHADOW_FILE}", file=out)
+    return 0 if verdict["pass"] else 1
+
+
 def split_seed_from_map(value: str | None, given: int, out: Any) -> int:
     """A committed map carries the seed that partitions it, so a holdout is never re-randomised.
 
@@ -985,6 +1032,17 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="the cohort.jsonl.gz (default: the run.json's own)")
     evaluate_parser.add_argument("--out", default=None, help="directory for evaluate.json")
     evaluate_parser.set_defaults(func=cmd_evaluate)
+
+    shadow_parser = sub.add_parser(
+        "shadow", help="a location wave's movers, base vs candidate under the live scorer")
+    shadow_parser.add_argument("artifact", help="the base cohort.jsonl.gz (`autodedup.shadow`)")
+    shadow_parser.add_argument("positions", help="positions.jsonl (`resolver.what_if`)")
+    shadow_parser.add_argument("rulings", help="the labels export directory")
+    shadow_parser.add_argument("--scorer", required=True, help="scorer.json (`autodedup.shadow`)")
+    shadow_parser.add_argument("--out", required=True, help="directory for both arms")
+    shadow_parser.add_argument("--show", type=int, default=50,
+                               help="D83 edges printed per list (all are in shadow.json)")
+    shadow_parser.set_defaults(func=cmd_shadow)
 
     fit = sub.add_parser("fit", help="fit and calibrate a model from labels (PROGRAM.md §6)")
     fit.add_argument("run_dir", help="a directory written by `run`")

@@ -56,6 +56,7 @@ from typing import Any
 import psycopg
 
 from location_data import payload_norm
+from location_data.claims_common import Entry
 from scraper import db
 
 LOG = logging.getLogger("location_data.contracts")
@@ -1055,6 +1056,21 @@ def extractor_version(contract: PortalContract | str, version: int | None = None
     if isinstance(contract, PortalContract):
         return f"contract:{contract.source}@{contract.version}"
     return f"contract:{contract}@{version}"
+
+
+def entries_of(contract: PortalContract) -> list[Entry]:
+    """The contract's entries as the extractor reads them, ids 1000+ in file order, contract 1."""
+    return [
+        Entry(id=1000 + index, source=contract.source, contract_id=1,
+              contract_version=contract.version, entry_id=entry.entry_id,
+              surface=entry.surface, page_kind=entry.page_kind, locator=entry.locator,
+              claim_type=entry.claim_type, extraction_method=entry.extraction_method,
+              subject_scope=entry.subject_scope, transform=tuple(entry.transform),
+              precision_map=entry.precision_map,
+              default_blur_evidence=entry.default_blur_evidence,
+              default_licence_class=entry.default_licence_class, guards=tuple(entry.guards))
+        for index, entry in enumerate(contract.entries)
+    ]
 
 
 # ------------------------------------------------------------------ projection
