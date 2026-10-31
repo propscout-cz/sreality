@@ -22,7 +22,7 @@
 | Kinds | Four: password reset, waitlist confirmation, waitlist invitation, notification email. Launch news is not built. |
 | Provider | Resend, sending from Ireland. Account data is stored in the US, and the privacy page says so. |
 | Addresses | `mail.propscout.cz` for password reset and notifications; `novinky.propscout.cz` for waitlist email. The sender is `PropScout <tym@…>`. The bare domain stays Google Workspace only. |
-| Replies | Reply-To `podpora@propscout.cz`, an alias into the `info@` inbox. `/soukromi` shows `info@propscout.cz`. |
+| Replies | Reply-To `support@propscout.cz`. `/soukromi` shows `info@propscout.cz`. |
 | Resend account | `info@propscout.cz` becomes a second admin. Supabase and the API each get their own sending-only key. |
 | Who gets in | Only an invited address may create an account. Opening to the public is a later ruling. |
 | Waitlist invitation | Permission to create an account under the waitlist entry's address, and the email saying so. It decides nothing about plans; any gate comes after login. |
