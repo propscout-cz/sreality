@@ -152,10 +152,16 @@ def test_a_reply_cut_at_its_limit_runs_nothing() -> None:
     assert run.outcome.stop_reason == "max_tokens" and run.dispatched == []
 
 
-def test_a_turn_that_did_not_end_on_its_calls_runs_nothing() -> None:
-    """Anthropic reports a refusal or a context-window stop as end_turn, possibly over a half-written call."""
-    run = _Run(reply(("probe_a", {}), stop="end_turn"))
-    assert run.outcome.stop_reason == "end_turn" and run.dispatched == []
+@pytest.mark.parametrize("stop", ["end_turn", "refusal", "model_context_window_exceeded"])
+def test_a_turn_that_did_not_end_on_its_calls_runs_nothing(stop: str) -> None:
+    """A refusal or a context-window stop can sit over a half-written call; the run ends on the stop's own name."""
+    run = _Run(reply(("probe_a", {}), stop=stop))
+    assert run.outcome.stop_reason == stop and run.dispatched == []
+
+
+def test_a_stop_sequence_and_a_tool_turn_with_no_call_read_as_an_ended_turn() -> None:
+    assert _Run(reply(text="Done.", stop="stop")).outcome.stop_reason == "end_turn"
+    assert _Run(reply(text="Done.", stop="tool_use")).outcome.stop_reason == "end_turn"
 
 
 def test_an_answer_that_arrives_after_the_deadline_is_still_checked() -> None:
@@ -210,7 +216,7 @@ def test_an_answer_must_be_the_only_call_in_its_turn() -> None:
 
 
 def _accept(raw: Any, agent: Definition | None = None, seen: set[int] = frozenset({7})) -> terminator.Answer:
-    return terminator.accept(raw, definition=agent or _agent(), seen=seen, produced=set())
+    return terminator.accept(raw, definition=agent or _agent(), seen=seen, produced={})
 
 
 @pytest.mark.parametrize(("raw", "code", "match"), [
