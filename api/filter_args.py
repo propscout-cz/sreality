@@ -15,7 +15,7 @@ from toolkit import filter_registry as fr
 _SCALARS: dict[fr.FilterType, type] = {
     fr.FilterType.INT: int, fr.FilterType.FLOAT: float, fr.FilterType.BOOL: bool, fr.FilterType.STRING: str,
 }
-_INT4_MAX = 2**31 - 1
+INT4_MAX = 2**31 - 1
 
 
 def as_str_list(v: Any) -> Any:
@@ -150,7 +150,7 @@ def filter_model(
         # a sale, plots ≤ 5 000 m²) and would refuse real values. An integer's one ceiling is its int4 column.
         bounds = {"ge": (f.constraints or {}).get("min")}
         if f.type is fr.FilterType.INT and not _vocabulary(f):
-            bounds["le"] = _INT4_MAX
+            bounds["le"] = INT4_MAX
         fields[fid] = (annotation, Field(... if fid in required else default,
                                          description=_description(f, descriptions.get(fid, f.description)),
                                          **bounds))

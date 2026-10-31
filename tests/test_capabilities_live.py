@@ -3,11 +3,16 @@ as that user, acting for no one; every tool read is READ ONLY at `authenticated`
 places a property we hold at its location ad and returns the toolkit's own envelope; search_properties selects, under
 the user's login, exactly the properties the Watchdog matches for the same filters (#2063); the dossier is the property
 page's read under the user's login and the brokers the page's, at most twenty people a call; the
-own context is what each user reads in their own identity, a collection shared with them included (#2063). Runs in
-CI's migrations job (`TEST_DATABASE_URL`)."""
+own context is what each user reads in their own identity, a collection shared with them included (#2063); the cohort
+statistics are the Stats dashboard function's own answer for the same filters, and the prices achieved are its
+sold-market lens round a subject, without the subject, beside the page's registered sales (#2064). Runs in CI's
+migrations job (`TEST_DATABASE_URL`)."""
 
 from __future__ import annotations
 
+import itertools
+import json
+import math
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -25,6 +30,7 @@ from api.dependencies import SYSTEM_ACCOUNT_ID
 from api.filter_args import Args
 from api.notifications import WatchdogFilterSpec, _build_match_clauses
 from api.property_search import PAGE_MAX
+from api.stats_pivot import PARAMS
 from tests._live_property import (
     REQUIRED_DB,
     _advert,
@@ -36,7 +42,7 @@ from tests._live_property import (
     db_url,
     signups,
 )
-from tests._tenant_scope import tool_call
+from tests._tenant_scope import scoped, tool_call
 from tests.test_location_ad_readers_live import POINT, RING, _placed
 from toolkit import ComparableFilters, TargetSpec, find_comparables_relaxed
 from toolkit.browse_read_model import sync_browse_list
@@ -210,6 +216,19 @@ def test_a_tool_reads_read_only_at_authenticateds_8s_and_leaves_the_service_conn
     assert _session(svc) == ("off", True)
     assert _call_as_a(svc, users)["data"] == ["on", "8s"]
     assert _session(svc) == ("off", True)
+
+
+@pytest.mark.usefixtures("tenant_pool_db")
+def test_a_tenant_read_resolves_postgis_where_production_keeps_it(
+        svc: psycopg.Connection, users: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replay keeps PostGIS in `public`, so only the path itself can be pinned here: the pool role's own default
+    lacks `extensions`, and in_map_area (every Browse read) failed under the login in production without it."""
+    def path(ctx: Context, args: _Bare) -> dict[str, Any]:
+        with ctx.conn.cursor() as cur:
+            cur.execute("SELECT current_setting('search_path')")
+            return {"data": cur.fetchone()[0]}
+    _probe(monkeypatch, Tenancy.TENANT, path)
+    assert _call_as_a(svc, users)["data"] == "public, extensions"
 
 
 @TENANCIES
@@ -627,3 +646,227 @@ def test_the_brokers_are_the_pages_until_the_twenty_first_person(cur: Any) -> No
         {"kept": 20, "total": 23}, [many], 23, False)
     first = out["data"][0]
     assert (first["primary_email"], first["primary_phone"]) == ("lp-0@rk.test", "+420 700 000 000")
+
+
+# --- the Stats dashboard and the prices achieved, under the user's login (#2064) ----------------------------------
+
+_LP_TOWN = 990_710_001   # a synthetic nine-digit RÚIAN code: no real town's is that long
+_LP_CHIP = {"name": "Lp", "level": "obec", "id": _LP_TOWN}
+_CENTRE = (13.91, 49.41)  # (lng, lat), clear of every other seed
+_LISTING_IDS = itertools.count(9_720_000_001)
+_TOTAL = {"rows": [], "cols": [], "measure": "ppm2"}
+
+
+def _postgis_as_in_production(cur: Any) -> None:
+    """Production's PostGIS lives in `extensions`, where `authenticated` may run it (Browse's circle and the page's
+    registered sales read through it); the replay's lives in `public`, where migration 299 revoked PUBLIC's EXECUTE.
+    The grants roll back with the test."""
+    cur.execute("DO $$ DECLARE f regprocedure; BEGIN FOR f IN SELECT d.objid::regprocedure FROM pg_depend d "
+                "JOIN pg_extension e ON e.oid = d.refobjid WHERE e.extname = 'postgis' "
+                "AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e' LOOP "
+                "EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated', f); END LOOP; END $$")
+
+
+def _east_north(metres: tuple[float, float]) -> tuple[float, float]:
+    """The point that many metres east and north of the centre, as (lng, lat)."""
+    east, north = metres
+    return (_CENTRE[0] + east / (111_320 * math.cos(math.radians(_CENTRE[1]))), _CENTRE[1] + north / 111_320)
+
+
+def _browse_row(cur: Any, *, at: tuple[float, float] = (0, 0), active: bool = False, tom: int = 30,
+                observed: bool = True, cm: str = "byt", ct: str = "prodej", disposition: str = "2+kk",
+                condition: str = "dobry", area: int = 60, price: int = 6_000_000) -> int:
+    """A published property straight into Browse's read model (a table since migration 590, seeded as
+    tests/test_stats_pivot_live.py seeds it) in town _LP_TOWN, `at` metres from the centre: its status, time on market
+    (its last sighting a day ago), observed flag and per-m² price with its basis from migration 425's measure."""
+    pid = _property(cur)
+    lng, lat = _east_north(at)
+    cur.execute(
+        "INSERT INTO browse_list (property_id, listing_id, is_active, category_main, category_type, disposition, "
+        "  condition, area_m2, price_czk, price_per_m2, price_per_m2_basis, tom_days, tom_observed, first_seen_at, "
+        "  last_seen_at, lat, lng, obec_id, all_sources, active_sources) "
+        "VALUES (%(pid)s, %(lid)s, %(active)s, %(cm)s, %(ct)s, %(disposition)s, %(condition)s, %(area)s, %(price)s, "
+        "  measure_price_per_m2(%(price)s::numeric, %(area)s::numeric, %(cm)s::text, %(ct)s::text), "
+        "  measure_price_per_m2_basis(%(cm)s::text, %(ct)s::text), %(tom)s, %(observed)s, "
+        "  now() - make_interval(days => %(tom)s + 1), now() - interval '1 day', %(lat)s, %(lng)s, %(town)s, "
+        "  '{sreality}', %(live)s)",
+        {"pid": pid, "lid": next(_LISTING_IDS), "active": active, "cm": cm, "ct": ct, "disposition": disposition,
+         "condition": condition, "area": area, "price": price, "tom": tom, "observed": observed, "lat": lat,
+         "lng": lng, "town": _LP_TOWN, "live": ["sreality"] if active else []})
+    return pid
+
+
+def _dashboard(cur: Any, user: uuid.UUID, spec: dict[str, Any], **args: Any) -> dict[str, Any]:
+    """browse_stats_properties as the Stats dashboard calls it, as `user`: buildBrowseStatsArgs' keys as it fills them
+    for these filters, by hand (every other parameter at the function's default)."""
+    sent = {"hide_dismissed": True, "status_filter": "any", "include_no_price": False,
+            "portal_excluded_active_only": False, "tom_observed_only": False, **args, "spec": json.dumps(spec)}
+    with scoped(user, cur=cur):
+        cur.execute("SELECT public.browse_stats_properties("
+                    + ", ".join(f"{k} => %({k})s::{PARAMS[k]}" for k in sent) + ")", sent)
+        return cur.fetchone()[0]
+
+
+_IN_TOWN = {"districts_filter": ["Lp"], "districts_excluded_filter": [False], "districts_levels": ["obec"],
+            "districts_ids": [_LP_TOWN]}
+
+
+def _town(cur: Any) -> list[int]:
+    """Fourteen properties for sale in the town: two layouts, two conditions, live and ended, prices rising."""
+    return [_browse_row(cur, at=(10 * i, 0), active=i % 3 != 0, disposition=("2+kk", "3+kk")[i % 2],
+                        condition=("dobry", "novostavba")[i % 3 == 1], area=50 + i, price=5_000_000 + 150_000 * i)
+            for i in range(14)]
+
+
+@pytest.mark.parametrize("spec", [
+    {"rows": ["disposition", "condition"], "cols": [], "measure": "ppm2"},
+    {"rows": ["obec"], "cols": ["disposition"], "measure": "price"},
+], ids=["layout-by-condition", "town-by-layout"])
+def test_cohort_statistics_are_the_dashboards_answer_for_the_same_filters(
+        cur: Any, users: dict[str, Any], spec: dict[str, Any]) -> None:
+    _town(cur)
+    out = tool_call(cur, users["a"], "aggregate_properties", {"category_type": "prodej", "districts": [_LP_CHIP], **spec})
+    assert out["data"] == _dashboard(cur, users["a"], spec, category_type_filter="prodej", **_IN_TOWN)
+    assert (out["data"]["refused"], out["data"]["filtered"], out["metadata"]["result_count"]) == (None, 14, 14)
+    assert out["metadata"]["price_per_m2_basis"] == "sale_capital_czk_m2"
+    if spec["rows"] == ["obec"]:
+        assert {tuple(c["keys"]) for c in out["data"]["cells"]} == {(), (str(_LP_TOWN),)}
+
+
+def test_cohort_statistics_take_the_circle_and_the_filters_as_the_dashboard_sends_them(
+        cur: Any, users: dict[str, Any]) -> None:
+    _postgis_as_in_production(cur)
+    _town(cur)
+    lng, lat = _CENTRE
+    spec = {"rows": ["condition"], "cols": [], "measure": "ppm2"}
+    out = tool_call(cur, users["a"], "aggregate_properties", {
+        "category_type": "prodej", "circle": {"lat": lat, "lng": lng, "radius_m": 105}, "dispositions": ["2+kk"],
+        "min_area_m2": 52, "status": "active", **spec})
+    direct = _dashboard(cur, users["a"], spec, category_type_filter="prodej", circle_lat=lat, circle_lng=lng,
+                        circle_radius_m=105, dispositions_filter=["2+kk"], area_min_filter=52, status_filter="active")
+    assert out["data"] == direct
+    # It discriminates: i = 2, 4, 8 and 10 (2+kk, live, from 52 m², within 105 m); 6 ended, 12 lies 120 m off.
+    assert direct["filtered"] == 4
+
+
+def test_a_cohort_of_two_deal_types_is_refused_and_has_no_unit(cur: Any, users: dict[str, Any]) -> None:
+    _town(cur)
+    _browse_row(cur, ct="pronajem", price=20_000, active=True)
+    out = tool_call(cur, users["a"], "aggregate_properties", {"category_type": None, "districts": [_LP_CHIP]})
+    assert out["data"] == _dashboard(cur, users["a"], _TOTAL, **_IN_TOWN)
+    assert (out["data"]["refused"], out["data"]["cells"], out["metadata"]["price_per_m2_basis"]) == (
+        "mixed_category", [], "mixed")
+
+
+def test_cohort_statistics_leave_out_what_the_user_dismissed_as_browse_does(cur: Any, users: dict[str, Any]) -> None:
+    """The lens only the user's login can judge: A's dismissal hides the property from A's statistics, not B's."""
+    pids = _town(cur)
+    cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)", (users["a_acc"], pids[0]))
+
+    def filtered(user: str, **more: Any) -> int:
+        out = tool_call(cur, users[user], "aggregate_properties",
+                        {"category_type": "prodej", "districts": [_LP_CHIP], **more})
+        return out["data"]["filtered"]
+    assert (filtered("a"), filtered("a", show_dismissed=True), filtered("b")) == (13, 14, 14)
+    assert _dashboard(cur, users["a"], _TOTAL, category_type_filter="prodej", **_IN_TOWN)["filtered"] == 13
+
+
+def _sale(cur: Any, at: tuple[float, float], *, area: float, price: int, kind: str = "byt") -> str:
+    lng, lat = _east_north(at)
+    record = f"lp-{uuid.uuid4()}"
+    cur.execute("INSERT INTO sold_transactions (source, source_record_id, sold_at, price_czk, category_main, "
+                "category_type, area_m2, geom, raw) VALUES ('reas', %s, current_date - 90, %s, %s, 'prodej', %s, "
+                "ST_SetSRID(ST_MakePoint(%s, %s), 4326), '{}'::jsonb)", (record, price, kind, area, lng, lat))
+    return record
+
+
+def _evidence(cur: Any) -> tuple[dict[str, int], int]:
+    """Round the centre: properties that left the market after 1, 2, 30, 45, 59, 60 and 61 days, observed from their
+    first ad, 10 m apart per day; a live one, one first seen in a sweep, one 3 km off; and the subject, a property we
+    hold that left after 30 days, its own ad placed at the centre. Its ad's id comes too."""
+    seeds = {f"t{d}": _browse_row(cur, at=(10 * d, 0), tom=d, price=5_000_000 + 10_000 * d) for d in (
+        1, 2, 30, 45, 59, 60, 61)}
+    seeds["live"] = _browse_row(cur, at=(0, 30), active=True)
+    seeds["unobserved"] = _browse_row(cur, at=(0, 60), observed=False)
+    seeds["far"] = _browse_row(cur, at=(3_000, 0))
+    now = datetime.now(timezone.utc)
+    seeds["subject"] = _property(cur)
+    ad = _advert(cur, seeds["subject"], source="sreality", active=False, disposition="2+kk", area_m2=60,
+                 first_seen_at=now - timedelta(days=31), last_seen_at=now - timedelta(days=1))
+    _placed(cur, ad, _CENTRE, "address_point", 10, town_code=_LP_TOWN)
+    _recompute(cur, seeds["subject"])
+    sync_browse_list(cur.connection, [seeds["subject"]])
+    cur.execute("UPDATE browse_list SET tom_observed = true WHERE property_id = %s", (seeds["subject"],))
+    return seeds, ad
+
+
+def test_achieved_prices_are_the_sold_lens_round_a_held_subject_without_it(cur: Any, users: dict[str, Any]) -> None:
+    """The default window keeps 2 to 60 days, both ends included; a reasoned wider one adds 61; the subject (at the
+    centre, 30 days) is never its own evidence, asked by property or by ad."""
+    _postgis_as_in_production(cur)
+    seeds, ad = _evidence(cur)
+    names = {pid: n for n, pid in seeds.items()}
+    out = tool_call(cur, users["a"], "market_evidence", {"property_id": seeds["subject"]})
+    assert [names[r["property_id"]] for r in out["data"]["proxy"]] == ["t2", "t30", "t45", "t59", "t60"]
+    assert {(r["evidence"], r["price_per_m2_basis"]) for r in out["data"]["proxy"]} == {
+        ("proxy", "sale_capital_czk_m2")}
+    summary = out["data"]["proxy_summary"]
+    assert (summary["evidence"], summary["filtered"], summary["n"], summary["price_per_m2_basis"]) == (
+        "proxy", 5, 5, "sale_capital_czk_m2")
+    assert out["metadata"]["subject"]["property_id"] == seeds["subject"]
+    assert out["metadata"]["window"] == {"tom_days_min": 2, "tom_days_max": 60, "default": True, "reason": None}
+    by_ad = tool_call(cur, users["a"], "market_evidence", {"listing_id": ad})
+    assert by_ad["data"]["proxy"] == out["data"]["proxy"]
+    wider = tool_call(cur, users["a"], "market_evidence", {"property_id": seeds["subject"], "tom_days_max": 90,
+                                                           "window_reason": "a segment that sells slowly"})
+    assert {names[r["property_id"]] for r in wider["data"]["proxy"]} == {"t2", "t30", "t45", "t59", "t60", "t61"}
+    assert wider["metadata"]["window"]["reason"] == "a segment that sells slowly"
+    with pytest.raises(ToolError) as info:
+        tool_call(cur, users["a"], "market_evidence", {"property_id": seeds["subject"], "tom_days_max": 90})
+    assert info.value.code is ToolErrorCode.INVALID_ARGUMENTS
+
+
+def test_the_proxy_summary_is_the_stats_tabs_sold_market_statistic(cur: Any, users: dict[str, Any]) -> None:
+    """From a point (no property of its own to leave out), the summary is the dashboard's answer under its sold-market
+    lens over the same circle: inactive, observed from the first ad, dismissed included, 2 to 60 days."""
+    _postgis_as_in_production(cur)
+    seeds, _ = _evidence(cur)
+    cur.execute("INSERT INTO property_dismissals (account_id, property_id) VALUES (%s, %s)",
+                (users["a_acc"], seeds["t30"]))
+    lng, lat = _CENTRE
+    out = tool_call(cur, users["a"], "market_evidence", {"point": {"lat": lat, "lng": lng}, "category_main": "byt",
+                                                         "category_type": "prodej"})
+    lens = _dashboard(cur, users["a"], _TOTAL, status_filter="inactive", tom_observed_only=True, hide_dismissed=False,
+                      tom_days_min=2, tom_days_max=60, category_main_filter=["byt"], category_type_filter="prodej",
+                      circle_lat=lat, circle_lng=lng, circle_radius_m=1000)
+    [total] = lens["cells"]
+    summary = out["data"]["proxy_summary"]
+    assert {k: summary[k] for k in ("filtered", "sample", "excluded", "min_n", "refused")} == {
+        k: lens[k] for k in ("filtered", "sample", "excluded", "min_n", "refused")}
+    assert {k: summary[k] for k in ("n", "mean", "median", "p10", "p25", "p75", "p90", "small")} == {
+        k: total[k] for k in ("n", "mean", "median", "p10", "p25", "p75", "p90", "small")}
+    assert (lens["filtered"], summary["price_per_m2_basis"]) == (6, lens["basis"])
+
+
+def test_registered_sales_come_labelled_with_their_basis_and_small_units_out_of_the_median(
+        cur: Any, users: dict[str, Any]) -> None:
+    _postgis_as_in_production(cur)
+    seeds, _ = _evidence(cur)
+    flats = [_sale(cur, (0, 50 * (n + 1)), area=60, price=6_000_000 + 300_000 * n) for n in range(6)]
+    small = _sale(cur, (0, 400), area=25, price=4_000_000)
+    _sale(cur, (0, 450), area=120, price=9_000_000, kind="dum")
+    out = tool_call(cur, users["a"], "market_evidence", {"property_id": seeds["subject"]})
+    rows = out["data"]["registered"]
+    assert [r["source_record_id"] for r in rows] == [*flats, small]   # flats only (the subject's), nearest first
+    assert {(r["evidence"], r["price_per_m2_basis"]) for r in rows} == {("registered", "sale_capital_czk_m2")}
+    summary = out["data"]["registered_summary"]
+    per_m2 = sorted(r["price_per_m2"] for r in rows[:6])
+    assert {k: summary[k] for k in ("evidence", "sales", "more", "n", "held_out", "mixed_kinds",
+                                    "price_per_m2_basis")} == {
+        "evidence": "registered", "sales": 7, "more": False, "n": 6, "held_out": 1, "mixed_kinds": False,
+        "price_per_m2_basis": "sale_capital_czk_m2"}
+    assert summary["median_price_per_m2"] == pytest.approx((per_m2[2] + per_m2[3]) / 2)
+    assert out["metadata"]["registered_refused"] is None and "registered_coverage" in out["metadata"]
+    rent = tool_call(cur, users["a"], "market_evidence", {"property_id": seeds["subject"], "category_type": "pronajem"})
+    assert rent["data"]["registered"] == [] and rent["metadata"]["registered_refused"]
+
