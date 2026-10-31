@@ -52,9 +52,10 @@ it (`api/`). They do not apply to the scraper.
      (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `compare_listing_images`, which writes the pairwise visual comparison to
      `listing_image_comparisons` (canonical-ordered pair) on cache miss.
+   - `assess_property_visuals`, one judgement per photo set and prompt version in `photo_set_assessments`
+     (`references/tool-registry.md`).
    - `extract_building_units`, which writes the structural unit decomposition to
-     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss —
-     the vision extractor behind the building-paste flow.
+     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `read_floor_plan`, which writes a structured Claude-vision analysis of one
      operator-supplied attachment to `building_attachment_analyses` (keyed on
      `(attachment_id, model)`) on cache miss. Only callable inside the building flow; the
@@ -62,7 +63,7 @@ it (`api/`). They do not apply to the scraper.
      `building_run_id`.
    - `discover_condition_markers`, which writes a structured list of Czech "condition
      markers" to `listing_marker_extractions` (keyed on `(sreality_id, snapshot_id)`) on
-     cache miss — feeds the condition-scoring marker dictionary.
+     cache miss.
    - `score_listing_condition` (PARKED, rule #14: dispatch-only; nothing reads its levels), which writes per-listing building/apartment condition levels
      (1..5) + matched marker_ids + per-axis confidence to `listing_condition_scores` (keyed
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`

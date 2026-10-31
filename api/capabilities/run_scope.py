@@ -1,0 +1,51 @@
+"""What one agent run lends a paid tool: its model client, the money it has left, its tally and its bill.
+
+The loop sets it around each tool call. It travels in a ContextVar because `call_tool` is a two-argument closure over the
+Caller that each runner builds: this way every runner's own model client (the one that stamps the run on `llm_calls`)
+reaches the tool, and no runner has to know a tool can spend.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+
+from api.llm_client import LLMClient
+
+_CURRENT: ContextVar["RunScope | None"] = ContextVar("agent_run_scope", default=None)
+
+
+@dataclass
+class RunScope:
+    llm: LLMClient
+    left_usd: Callable[[], float]
+    counts: Counter[str] = field(default_factory=Counter)
+    _cost_usd: float = 0.0
+    _llm_call_id: int | None = None
+
+    def charge(self, cost_usd: float, llm_call_id: int) -> None:
+        """Called as soon as the provider has billed, so a bill survives whatever the tool does next."""
+        self._cost_usd += cost_usd
+        self._llm_call_id = llm_call_id
+
+    def settle(self) -> tuple[float, int | None]:
+        """What the tool call just ended has spent, and its model call; the loop adds it to the run."""
+        bill = self._cost_usd, self._llm_call_id
+        self._cost_usd, self._llm_call_id = 0.0, None
+        return bill
+
+
+def current() -> RunScope | None:
+    return _CURRENT.get()
+
+
+@contextlib.contextmanager
+def running(scope: RunScope | None) -> Iterator[None]:
+    token = _CURRENT.set(scope)
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
