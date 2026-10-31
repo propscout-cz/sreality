@@ -11,7 +11,7 @@ name: "Ops: Location wave shadow (the engine gate)"
 #     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
 #
 # Steps (docs/design/location-quality/wave-shadow.md): `what_if` re-resolves the listings
-# `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply.Scope`'s own
+# `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
 # predicate) with this ref's resolver after the wave's claim change (`remine` re-mines the stored
 # pages under the contract at `contract_ref`, read with `git show`); `autodedup.shadow` sizes the
 # movers' old and new blocks, refusing more than 40 blocks or 60,000 ads (exit 2), then exports

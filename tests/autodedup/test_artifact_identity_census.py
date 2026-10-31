@@ -94,7 +94,7 @@ def test_the_lane_writer_census_covers_the_package() -> None:
     """A new module under autodedup/ that writes an artifact must join the list rather than
     quietly sit outside the rail. Modules that only compute are listed as exempt."""
     exempt = {
-        "__init__.py", "agreement.py", "blocking.py", "body_align.py", "candidates.py",
+        "__init__.py", "agreement.py", "apply_scope.py", "blocking.py", "body_align.py", "candidates.py",
         "calibration_cut.py", "category_splits.py", "cluster.py",
         "cohort.py", "dataset.py", "decide.py", "demonstrate.py", "development.py",
             "family.py", "features.py",

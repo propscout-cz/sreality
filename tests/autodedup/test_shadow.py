@@ -102,11 +102,11 @@ def test_the_export_step_calls_the_exporters_in_process_and_reads_the_live_score
 
 def test_no_shadow_path_imports_the_lane_that_writes_the_ledger_row():
     """`autodedup.iterations` rows are written by `lane.run` (and `record`). The shadow reaches
-    the exporters directly; importing every shadow module, the scoped path's `apply` included,
-    must not even load the lane or the ledger writer."""
-    code = ("import sys, autodedup.shadow, autodedup.harness, autodedup.apply, "
-            "location_data.what_if; "
-            "print([m for m in ('autodedup.lane', 'autodedup.iterations') if m in sys.modules])")
+    the exporters directly, and the apply scope through `apply_scope`: importing every shadow
+    module loads neither the lane, nor the ledger writer, nor the apply path."""
+    code = ("import sys, autodedup.shadow, autodedup.harness, location_data.what_if; "
+            "print([m for m in ('autodedup.lane', 'autodedup.iterations', 'autodedup.apply') "
+            "if m in sys.modules])")
     loaded = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             check=True, cwd=Path(__file__).resolve().parents[2]).stdout.strip()
     assert loaded == "[]"
@@ -127,17 +127,18 @@ def test_an_oversized_shadow_is_refused_before_anything_is_exported(monkeypatch,
     assert shadow.main([str(tmp_path), "--max-ads", "1000000", "--max-blocks", "1"]) == 2
 
 
-def test_the_apply_scope_filter_is_the_apply_paths_own_predicate(monkeypatch):
-    from autodedup import apply
-
-    monkeypatch.setattr(apply, "read_scope_setting", lambda conn: {
-        "category_types": ["prodej"], "blocks": [f"town:{BEROUN}", "quarter:490245"]})
+def test_the_apply_scope_filter_is_the_apply_paths_own_predicate():
+    """`apply_scope.Scope.outside` over the live row (a JSON string here, as a legacy row reads),
+    without importing the apply path."""
+    setting = json.dumps({"category_types": ["prodej"],
+                          "blocks": [f"town:{BEROUN}", "quarter:490245"]})
     facts = [(1, 10, "prodej", "byt", BEROUN, 7, 3202), (2, 11, "prodej", "byt", PRAHA, 490245,
              None), (3, 12, "prodej", "byt", PRAHA, 400000, None),
              (4, 13, "pronajem", "byt", BEROUN, 7, 3202), (5, None, "prodej", "byt", None, None,
                                                          None)]
-    conn = _Conn(facts)
+    conn = _Conn([(setting,)], facts)
     assert shadow.in_apply_scope(conn, [1, 2, 3, 4, 5]) == [1, 2]
+    assert "app_settings" in conn.executed[0][0]
     assert all(in_transaction for *_rest, in_transaction in conn.executed)
 
 
@@ -288,10 +289,11 @@ def test_harness_shadow_fails_when_e110_is_revoked(tmp_path: Path):
 
 
 class _Conn:
-    """A connection whose every statement answers `rows`, recording whether a transaction held."""
+    """A connection answering its statements in turn (the last answer repeats); records if a
+    transaction held."""
 
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.rows, self.executed, self.depth = rows, [], 0
+    def __init__(self, *answers: list[tuple[Any, ...]]) -> None:
+        self.answers, self.executed, self.depth = list(answers), [], 0
         self.description = [SimpleNamespace(name="value")]
 
     @contextmanager
@@ -310,7 +312,7 @@ class _Conn:
         self.executed.append((sql, params, self.depth > 0))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
-        return self.rows
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
 
     def close(self) -> None:
         return None

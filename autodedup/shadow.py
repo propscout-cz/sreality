@@ -25,6 +25,8 @@ from typing import Any, Callable, Iterable, Iterator, NamedTuple
 
 import psycopg
 
+from autodedup.apply_scope import SCOPE_SETTING, Member, Scope, scope_fields
+from autodedup.apply_sql import SETTING_SQL
 from autodedup.blocking import SPLIT_CITY_OBEC_KODS
 from autodedup.cohort import parse_blocks
 from autodedup.evaluate import DIFFERENT, RULINGS_FILES, SAME, read_rulings
@@ -46,7 +48,7 @@ MAX_BLOCKS: int = 40
 RECENT_SINCE: str = "2026-10-27"
 _BLOCK_TIMEOUT_MS: int = 600_000
 
-# One advert's apply-scope facts by listing id, in `apply.Member` order (`PROPERTY_LISTINGS_SQL`'s).
+# One advert's apply-scope facts by listing id, in `Member` order (`PROPERTY_LISTINGS_SQL`'s).
 _SCOPE_FACTS_SQL = """
 select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.cast_obce_kod,
        ll.okres_kod
@@ -79,16 +81,14 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def in_apply_scope(conn: psycopg.Connection, listing_ids: Iterable[int]) -> list[int]:
-    """The ids the live apply scope admits, by its own predicate (`apply.Scope.outside`, E904)."""
-    from autodedup import apply  # the merge path's imports, paid only by a scoped shadow
-
-    with conn.transaction():
-        setting = apply.read_scope_setting(conn)
-    scope = apply.Scope(**apply.scope_fields(setting))
+    """The ids the live apply scope admits, by its own predicate (`apply_scope.Scope.outside`)."""
+    _, rows = read(conn, SETTING_SQL, {"key": SCOPE_SETTING})
+    value = rows[0][0] if rows else None
+    scope = Scope(**scope_fields(json.loads(value) if isinstance(value, str) else value))
     if problems := scope.live_problems():
-        raise SystemExit(f"{apply.SCOPE_SETTING} admits nothing: {'; '.join(problems)}")
+        raise SystemExit(f"{SCOPE_SETTING} admits nothing: {'; '.join(problems)}")
     _, rows = read(conn, _SCOPE_FACTS_SQL, {"ids": list(listing_ids)})
-    return sorted(int(row[0]) for row in rows if scope.outside(apply.Member.read(row)) is None)
+    return sorted(int(row[0]) for row in rows if scope.outside(Member.read(row)) is None)
 
 
 def blocks_for(movers: Iterable[dict[str, Any]]) -> tuple[list[str], int]:

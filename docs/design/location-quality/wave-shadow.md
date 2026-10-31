@@ -21,13 +21,15 @@ on the session, which a pooler would hand to the next client. `autodedup.shadow.
 way `location_data.what_if` and `autodedup.shadow` reach SQL, and the exporters' own `_run` opens a
 transaction per statement; an AST rail (`tests/location_data/test_what_if.py`) pins all four. The cohort and
 rulings exports are called in-process (`run_export`, `run_labels`), never through `lane.run`, the writer
-of the `autodedup.iterations` row; an import rail proves no shadow path even loads `autodedup.lane`.
+of the `autodedup.iterations` row; an import rail proves no shadow path even loads `autodedup.lane`
+or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, moved verbatim out of
+`apply.py`, which imports it back).
 
 ## Three steps, three commands
 1. **Post-wave positions**: `location_data/what_if.py`. Re-resolves an id list (`--ids <file>` or
    `--ids-sql "<SELECT>"`, run as one subquery on the extended protocol, so `COMMIT; ...` cannot escape
    the read-only transaction; `--scope apply` keeps the ids the live apply scope admits, by
-   `apply.Scope.outside`; `--limit N` the lowest N) with the checkout's resolver over `drain.recompute`
+   `apply_scope.Scope.outside`; `--limit N` the lowest N) with the checkout's resolver over `drain.recompute`
    (the `--dry-run` read path: prefetch, the claim change, warm, the four steps). One claim change a wave:
    - `none` (W5, W5b, W6): today's claims, the branch's resolver.
    - `remine` (W4): each listing of the contract's portal re-mined under `--contract` (payload via
