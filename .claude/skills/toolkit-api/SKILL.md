@@ -457,8 +457,6 @@ the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webh
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (fine-grained PAT) — no workflow reads it since #2013 (price stats chains on its job's own
-  `GITHUB_TOKEN`); only the worker's count-probe dispatch falls back to it, until #2015 deletes that lane and the secret.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
