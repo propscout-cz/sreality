@@ -676,3 +676,17 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").
+12. **Waitlist landing page on propscout.cz — built 2026-10-31 (draft PR, `feature/landing-waitlist`); go-live owed.**
+    Operator ask: a conversion-oriented pre-launch page for Facebook/Instagram ads, primary action a waitlist signup.
+    Copy follows Joanna Wiebe's method (one reader: Czech flip + buy-to-rent investors; voice-of-customer mined from
+    1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone
+    screens with invented listings (no portal photo, broker, address or person; nothing from Browse, no agents).
+    Built: `frontend/landing/` + `src/landing/` (own Vite build, `vite.landing.config.ts`), Caddy serves it on the bare
+    domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 699);
+    cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
+    **Owed before ads run:** the operator's company name, IČO, seat and contact e-mail (placeholders in the consent line,
+    footer and `/soukromi`, plus `api/waitlist.py` CONSENT_TEXTS); a Czech lawyer's read of the consent + privacy text;
+    the Meta Pixel id; then go-live: register `propscout.cz` on the vite service, point the apex at it in Cloudflare
+    (the 302-to-app redirect rule becomes www → apex), add the domain to `.railway/railway.ts`, submit a test signup.
+    **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), an admin
+    view of signups, refreshing the proof numbers.

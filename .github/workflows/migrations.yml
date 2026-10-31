@@ -289,6 +289,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_notifications_push_live.py -q
 
+      # The landing-page waitlist (migration 699): ON CONFLICT hands a token to a new email only, the CHECKs refuse
+      # what the API never sends, an answer lands once, and no browser role reaches the table — the hermetic route
+      # tests only script these statements.
+      - name: The waitlist stores an email once and answers once (migration 699)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_waitlist_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make
