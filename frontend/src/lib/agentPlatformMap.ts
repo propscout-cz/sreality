@@ -211,7 +211,7 @@ export const CANT_DO: { head: string; text: string }[] = [
   { head: 'See another account.', text: 'Your own data is read under your login. A file request across accounts returns nothing.' },
   { head: 'Write its own database queries.', text: 'It calls named tools with checked inputs.' },
   { head: 'Invent a property.', text: 'Every cited property must have come from that run\'s tool results.' },
-  { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, photos on at most 10 properties per run, Valuo at most 3 per run plus a monthly cap.' },
+  { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, at most 10 paid photo assessments per run, Valuo at most 3 per run plus a monthly cap.' },
   { head: 'Start for just anyone.', text: 'Only accounts on the allowlist can start a run.' },
 ];
 

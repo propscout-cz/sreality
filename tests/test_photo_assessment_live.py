@@ -69,6 +69,27 @@ def test_a_photo_set_is_the_canonical_ads_stored_pictures_in_its_order(cur: Any)
     assert photos.stored == 3 and photos.pending == 1
 
 
+def test_a_photo_is_on_its_way_only_on_a_live_ad_and_below_the_attempts_the_download_gives_up_at(cur: Any) -> None:
+    pid, ad = _placed(cur)
+    _image(cur, ad, 1)
+    waiting = _image(cur, ad, 2, stored=False)
+    assert pa.photo_set(cur.connection, pid).pending == 1
+    cur.execute("UPDATE images SET download_attempts = %s WHERE id = %s", (pa.DOWNLOAD_GIVES_UP_AT, waiting))
+    assert pa.photo_set(cur.connection, pid).pending == 0, "given up: it is never coming"
+    cur.execute("UPDATE images SET download_attempts = 0 WHERE id = %s", (waiting,))
+    cur.execute("UPDATE listings SET is_active = false WHERE id = %s", (ad,))
+    assert pa.photo_set(cur.connection, pid).pending == 0, "an ended ad holds nothing back"
+
+
+def test_two_tagging_models_tied_on_time_give_one_answer(cur: Any) -> None:
+    pid, ad = _placed(cur)
+    image = _image(cur, ad, 1)
+    for model, tag in (("b", "kitchen"), ("a", "floor_plan")):
+        cur.execute("INSERT INTO image_clip_tags (image_id, fine_tag, logical_tag, confidence, model, tagged_at) "
+                    "VALUES (%s, %s, %s, 0.9, %s, '2026-10-01T00:00:00Z')", (image, tag, tag, model))
+    assert [p.image_id for p in pa.photo_set(cur.connection, pid).plans] == [image]
+
+
 def test_the_newest_tag_decides_a_plan_and_a_new_stored_photo_is_a_new_set(cur: Any) -> None:
     pid, ad = _placed(cur)
     image = _image(cur, ad, 1, tag="floor_plan")

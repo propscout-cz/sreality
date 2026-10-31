@@ -158,6 +158,31 @@ def test_no_usable_photo_is_a_clear_result_with_no_model_call_and_no_slot(world:
     assert provider.calls == [] and scope.counts[NAME] == 0
 
 
+def test_a_photo_on_its_way_defers_a_paid_judgement_because_the_finished_set_would_be_paid_for_again(world: World) -> None:
+    photos = (pa.Photo(700, "img/7.jpg", None, 800, 600),)
+    world.sets[7] = pa.PhotoSet(property_id=7, listing_id=70, stored=1, pending=2, photos=photos, plans=())
+    scope, provider = world.scope()
+    out = world.call(scope, 7)
+    assert out["data"]["status"] == "photos_pending" and out["data"]["facets"] is None and "2" in out["data"]["note"]
+    assert provider.calls == [] and scope.counts[NAME] == 0
+
+
+def test_a_photo_on_its_way_does_not_hide_a_judgement_already_held(world: World) -> None:
+    held = pa.PhotoSet(property_id=7, listing_id=70, stored=1, pending=2, plans=(),
+                       photos=(pa.Photo(700, "img/7.jpg", None, 800, 600),))
+    world.sets[7] = held
+    world.cache[(held.hash, pa.load_facets().version)] = {
+        "facets": _good()["facets"], "model": MODEL, "created_at": "2026-11-01T10:00:00+00:00"}
+    assert world.call(None, 7)["data"]["cache_hit"] is True
+
+
+def test_a_photo_on_its_way_past_the_cap_changes_nothing_so_it_defers_nothing(world: World) -> None:
+    photos = tuple(pa.Photo(i, f"img/{i}.jpg", None, 800, 600) for i in range(pa.MAX_PHOTOS))
+    world.sets[7] = pa.PhotoSet(property_id=7, listing_id=70, stored=pa.MAX_PHOTOS, pending=2, photos=photos, plans=())
+    scope, _ = world.scope(_assessment())
+    assert world.call(scope, 7)["data"]["status"] == "assessed"
+
+
 def test_an_unknown_property_is_not_found(world: World) -> None:
     world.sets[7] = None
     with pytest.raises(ToolError) as refused:

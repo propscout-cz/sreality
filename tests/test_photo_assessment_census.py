@@ -43,6 +43,12 @@ def test_no_other_python_imports_the_module_but_the_tool_and_the_comparison() ->
     assert importers == {"api/capabilities/visuals.py", "scripts/photo_assessment_compare.py"}
 
 
+def test_no_python_but_the_tool_the_comparison_and_the_module_names_the_tool() -> None:
+    """The estimator's hard-wired tool list (api/agent.py), Browse's routes and the watchdog are all held here."""
+    names = _naming("assess_property_visuals", {t: p for t, p in _TREES.items() if p == "*.py"})
+    assert names == {OWNER, "api/capabilities/visuals.py"}
+
+
 def test_the_cache_holds_nothing_of_an_account() -> None:
     """A row is shared by every agent: no account, user, run, property or ad, and no llm_calls id, which can name a run."""
     sql = (ROOT / _MIGRATION).read_text(encoding="utf-8")

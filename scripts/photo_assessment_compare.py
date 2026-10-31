@@ -124,9 +124,11 @@ def _verdict(rows: Sequence[FacetAgreement], models: Sequence[str], cheaper: str
     if not compared:
         return "No property was judged by both models, so this run says nothing about whether they agree."
     overall = sum(r.agreed for r in rows) / compared
+    same = sum(r.exact + r.both_null for r in rows) / compared
     weakest = min((r for r in rows if r.compared), key=lambda r: r.agreement or 0.0)
-    head = (f"The two models gave the same judgement (within one point, or both saying a facet cannot be seen) on "
-            f"{overall:.0%} of the {compared} facet scores compared. Their weakest facet is {weakest.facet}, at "
+    head = (f"The two models were within one point of each other, or both said a facet cannot be seen, on {overall:.0%} of "
+            f"the {compared} facet scores compared, and gave exactly the same answer on {same:.0%}. One point on a "
+            f"five-point scale is a loose test, so read both numbers. Their weakest facet is {weakest.facet}, at "
             f"{_pct(weakest.agreement)}.")
     if overall >= AGREE_OVERALL and (weakest.agreement or 0.0) >= AGREE_FACET:
         return (f"{head} **They agree**, by the proposed bar ({AGREE_OVERALL:.0%} overall, {AGREE_FACET:.0%} on every "

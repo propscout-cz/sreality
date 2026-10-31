@@ -81,7 +81,8 @@ ENTRIES = (
         "it, and a one-line evidence note, per facet (view, neighbourhood as seen, shared spaces, kitchen, bathrooms, "
         "equipment, finish quality, lighting, styling, as the operator's facet file names them). Judged once per set "
         f"of photos: data.cache_hit means it cost nothing. A run may pay for at most {MAX_PAID_PER_RUN}, so ask only "
-        "about a shortlist; a cached one takes no slot. status 'no_photos' (see note) is an answer, with facets null. "
+        "about a shortlist; a cached one takes no slot. status 'no_photos' or 'photos_pending' (see note) is an answer, "
+        "with facets null and nothing paid; after 'photos_pending', ask again later. "
         "This is what the pictures show, not the condition the portal states, and no cohort statistic uses it.",
         args=AssessArgs, handler=_assess, tenancy=Tenancy.MARKET, effect=Effect.COSTLY,
     ),

@@ -45,6 +45,9 @@ MAX_REPLY_TOKENS = 8_000
 PHOTO_TOKENS_MAX = COMPARISON_MAX_EDGE ** 2 // 750 + 1
 PLAN_TOKENS_MAX = DOCUMENT_MAX_EDGE ** 2 // 750 + 1
 EVIDENCE_MAX_CHARS = 300
+# scraper.db.pending_image_downloads stops trying here, so a photo counts as on its way only below it and only on a live
+# ad: what is counted always arrives or stops counting, and a property is never held back for good.
+DOWNLOAD_GIVES_UP_AT = 5
 
 _FACET_HEADING = re.compile(r"^### (.*)$", re.M)
 _FACET_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -171,10 +174,16 @@ class PhotoSet:
     def usable(self) -> bool:
         return bool(self.photos or self.plans)
 
+    @property
+    def incomplete(self) -> bool:
+        """A photo on its way would change this set, so judging it now would pay twice for one property (story 11)."""
+        return self.pending > 0 and len(self.photos) < MAX_PHOTOS
+
 
 _ADS_SQL = """
 SELECT l.id, count(i.storage_path),
-       count(i.id) FILTER (WHERE i.storage_path IS NULL AND i.unavailable_reason IS NULL)
+       count(i.id) FILTER (WHERE l.is_active AND i.storage_path IS NULL AND i.unavailable_reason IS NULL
+                                 AND i.download_attempts < %(gives_up_at)s)
 FROM listings l
 JOIN properties p ON p.id = l.property_id
 LEFT JOIN images i ON i.listing_id = l.id
@@ -187,7 +196,7 @@ _IMAGES_SQL = """
 SELECT i.id, i.storage_path, i.rendition, i.stored_width, i.stored_height, tag.logical_tag
 FROM images i
 LEFT JOIN LATERAL (SELECT t.logical_tag FROM image_clip_tags t WHERE t.image_id = i.id
-                   ORDER BY t.tagged_at DESC LIMIT 1) tag ON true
+                   ORDER BY t.tagged_at DESC, t.model LIMIT 1) tag ON true
 WHERE i.listing_id = %(listing_id)s AND i.storage_path IS NOT NULL
 ORDER BY i.sequence ASC NULLS LAST, i.id ASC
 """
@@ -220,7 +229,7 @@ def photo_set(conn: "psycopg.Connection", property_id: int) -> PhotoSet | None:
     if survivor is None:
         return None
     with conn.cursor() as cur:
-        cur.execute(_ADS_SQL, {"property_id": survivor})
+        cur.execute(_ADS_SQL, {"property_id": survivor, "gives_up_at": DOWNLOAD_GIVES_UP_AT})
         ads = cur.fetchall()
         chosen = next((ad for ad in ads if ad[1]), None)
         if chosen is None:
@@ -336,13 +345,18 @@ def assess(conn: "psycopg.Connection", photos: PhotoSet, *,
     else:
         row = _lookup(conn, photos.hash, facets.version)
         data["cache_hit"] = row is not None
-        if row is None:
-            judged = pay(photos, facets)
-            _store(conn, photos, facets, judged)
-            row = _lookup(conn, photos.hash, facets.version)
-            data["cost_usd"] = judged.cost_usd
-        data.update(status="assessed", facets=row["facets"], model=row["model"], assessed_at=row["created_at"],
-                    photo_set_hash=photos.hash)
+        if row is None and photos.incomplete:
+            data.update(status="photos_pending",
+                        note=f"{photos.pending} of this property's photos are still downloading. Nothing was assessed "
+                             "or paid, since the finished set would be judged and paid for again. Ask again later.")
+        else:
+            if row is None:
+                judged = pay(photos, facets)
+                _store(conn, photos, facets, judged)
+                row = _lookup(conn, photos.hash, facets.version)
+                data["cost_usd"] = judged.cost_usd
+            data.update(status="assessed", facets=row["facets"], model=row["model"], assessed_at=row["created_at"],
+                        photo_set_hash=photos.hash)
     return {
         "data": data,
         "metadata": {

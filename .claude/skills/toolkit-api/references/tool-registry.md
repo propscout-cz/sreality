@@ -155,7 +155,8 @@ the provider has billed; the loop `settle`s it after the call, refused or not, i
 step, so the cost cap sees it.
 
 **The order:** no usable picture is a `no_photos` result; a cached judgement is served to anyone, free, with or without a
-run; only a miss reaches `_pay`, which refuses before any money with no run, past `MAX_PAID_PER_RUN` (10) bills in this
+run; a miss while a live ad's photo is still downloading into the set is a `photos_pending` result, since the finished set
+would be paid for again (rare: no live ad of a 1-in-500 sample had one on 2026-11-01); only then `_pay`, which refuses before any money with no run, past `MAX_PAID_PER_RUN` (10) bills in this
 run, or when the worst case (`worst_case_usd`: every prompt token at the dearer rate, a reply at its limit) exceeds what
 is left. A cached answer takes no slot (ADR-0007's ten bounds vision cost); a reply refused by the schema is billed,
 takes a slot and is not cached; a provider failure bills nothing and takes none. An interrupted run that starts over
