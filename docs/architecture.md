@@ -3298,6 +3298,20 @@ renumber.** Navigate by area:
     `latest_delegated_edit()` (cleared once the owner changes the row), labelled through
     `share_party_emails()`, now over every share kind (647 added dashboards) and the owner's own ledger actors. The ledger names rows, not properties, so it
     needs no carrier; cards and curation stay owned by exactly one account.
+    **The curation clock (migration 696, `docs/design/curation-sync.md` § 3.2-3.4): only the database says
+    that curation changed, and who FOLLOWS a change is stated once.** `curation_clock` holds one counter per
+    (account, family: `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`), advanced only by
+    `bump_curation_clock()`, a definer function on twelve DEFERRED constraint row triggers (the eleven curation
+    tables bar `property_pipeline_events`, plus both share tables, whose rows bump both parties): once per
+    committed transaction, account and family, nothing on a rollback, every writer seen (the API, the carriers,
+    signup, cascades). A counter is a signal, never state and never history: windows compare it for inequality
+    and re-read (W4). `curation_clock_audience()` (invoker, `current_account_ids()`, never acting) is "follow,
+    never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
+    the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
+    (invoker) is the one read. The event table is not curation and is not clocked (rule 16). Its rails:
+    `tests/_tenant_registry.py` (`CLOCKED_TABLES` / `NOT_CLOCKED`), `tests/test_curation_sync_census.py`,
+    `tests/test_curation_clock_live.py`, the `curation_sync` health alarm; the kill switches:
+    `.claude/skills/database/references/tenancy.md` § Curation clock.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a
