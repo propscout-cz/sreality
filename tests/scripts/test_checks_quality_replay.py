@@ -104,7 +104,9 @@
 # quantiles to 1 dp. Migration 698 was not yet applied, so its view body ran as written, in the
 # statement below. The resolver then running was resolver:v5.9 (#2194, deployed; its sweep had
 # enqueued 1,076,970 rows 2.6 min before, so most rows still read v5.8). The same session read the
-# registry: current ruian:2026-09-30, source date 09-30, nothing newer staged.
+# registry: current ruian:2026-09-30, source date 09-30, nothing newer staged. The sample's property
+# join gained `p.is_active` after this export (review of #2221): a sampled ad is active, so its
+# property reads active but for the rollup's lag, and the sample rows stand.
 #   select md5(t), t from (
 #     select string_agg(concat_ws(',', cohort, coalesce(source, ''), metric, coalesce(class, ''), n,
 #                                 coalesce(of_n::text, ''), coalesce(round(q50, 1)::text, ''),

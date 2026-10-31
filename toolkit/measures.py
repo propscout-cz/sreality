@@ -203,13 +203,9 @@ def wilson_lower(hits: int, n: int, z: float = 1.96) -> float | None:
 
 
 def wilson_upper(hits: int, n: int, z: float = 1.96) -> float | None:
-    """The Wilson score interval's upper bound of hits / n; None when nothing was counted."""
-    if n == 0:
-        return None
-    p, z2 = hits / n, z * z
-    centre = p + z2 / (2 * n)
-    margin = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
-    return min(1.0, (centre + margin) / (1 + z2 / n))
+    """The Wilson score interval's upper bound of hits / n (one minus the misses' lower bound)."""
+    low = wilson_lower(n - hits, n, z)
+    return None if low is None else 1.0 - low
 
 
 # --- the Python mirror ----------------------------------------------------

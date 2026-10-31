@@ -5280,7 +5280,8 @@ and `{portal}/town` is RED until zero; one holding none is PAGE-WITHHELD, `{port
 Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7): `{portal}/ku` (below),
 `{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
 zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
-the rank table, Problem when its Wilson upper bound is under the portal's fixed floor), `{portal}/accuracy`
+the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
+operator rules the floors, W1-b), `{portal}/accuracy`
 (radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
 over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and

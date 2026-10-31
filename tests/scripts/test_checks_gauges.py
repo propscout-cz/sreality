@@ -597,11 +597,12 @@ def test_accuracy_is_watch_on_its_lower_bound_and_never_problem(hits: int, n: in
 
 @pytest.mark.parametrize("share, n, status", [
     (0.641, 106_000, "ok"),      # sreality on 10-31, floor 0.57
-    (0.565, 106_000, "fail"),    # under the floor, upper bound too
+    (0.565, 106_000, "warn"),    # under the floor, upper bound too: Watch only until W1-b is ruled
     (0.56, 210, "ok"),           # under the floor, but its upper bound is not
     (0.40, 199, "unknown")])     # under min_n: no verdict
 def test_the_street_floor_is_judged_on_the_upper_bound_over_min_n(share: float, n: int,
                                                                   status: str) -> None:
+    """The floors are unruled (W1-b): a street cell is Watch at worst, never Problem."""
     cell = _cells(_location(_stock(_portal("sreality", ads=n, street_share=share)))[0])[
         "sreality/street"]
     hits = round(n * share)
@@ -616,7 +617,7 @@ def test_the_street_floor_is_judged_on_the_upper_bound_over_min_n(share: float, 
 def test_served_street_is_the_fleet_share_against_its_own_floor() -> None:
     stock = _stock(*[_portal(p, cohort="served", ads=10_000, street_share=0.40) for p in _LIVE])
     cell = _cells(_location(stock)[0])["served/street"]
-    assert (cell["status"], cell["value"], cell["facts"]["floor"]) == ("fail", 40.0, 0.44)
+    assert (cell["status"], cell["value"], cell["facts"]["floor"]) == ("warn", 40.0, 0.44)
     assert cell["facts"]["by_portal"]["bazos"] == 0.4
 
 
@@ -632,6 +633,9 @@ def test_a_resolve_lag_is_watch_once_and_problem_on_the_second_reading(
                                                          RESOLVER_VERSION: (700, 20)}))
     cell = _cells(_location(stock, previous=previous)[0])["freshness/version"]
     assert (cell["status"], cell["value"]) == (status, 320)
+    if status == "fail":
+        assert "rows still behind the running resolver version after 6 h" in cell["message"]
+        assert "lanes.location_resolve.swept" in cell["message"]
     assert {k: cell["facts"][k] for k in ("rows", "behind", "stale_registry")} == {
         "rows": 50_000 * 8 + 1_000, "behind": 300, "stale_registry": 320}
 

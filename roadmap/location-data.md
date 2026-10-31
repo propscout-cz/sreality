@@ -1253,12 +1253,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `location_town_coverage` gauge, relabelled "Location quality", reads it in two statements and emits
   67 cells with fixed lines: `{p}/town` unresolved red until zero, `{p}/town_withheld` page-withheld
   Watch, `{p}/ku`, `{p}/outside` (strict pip containment), `{p}/street` (Wilson upper bound under a
-  fixed per-portal floor), `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location
-  ad, `registry`, `freshness/version`, `freshness/evidence`. Day one on the 10-31 13:09Z export: every
-  portal's `outside` plus `served/outside` Problem (11,568 published, bazos 10,459), 0 unresolved, 27
-  page-withheld. Owed: the frontend PR (the Location Quality page renders the stored cells; its two
-  routes and the toolkit aggregates go), then migration B (the audit waterfall and pin-audit counters
-  dropped: destructive, awaits the operator's ruling).
+  fixed per-portal floor: WATCH ONLY until the operator rules the 0.9x floors, W1-b, unruled),
+  `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
+  `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
+  fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
+  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. Owed: the frontend PR
+  (the Location Quality page renders the stored cells; its two routes and the toolkit aggregates go),
+  then migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c,
+  awaits the operator's ruling).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

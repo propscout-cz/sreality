@@ -1726,15 +1726,16 @@ rendered verbatim (`tests/location_data/test_location_quality_view_contract.py`)
 | `<portal>/town_withheld` | the same set holding no town-bearing claim: the page names no town (Q6) | 1 or more | never |
 | `<portal>/ku` | Czech address-grain rows with a town and no `katastr_kod` at the running `RESOLVER_VERSION`, the degenerate-boundary obce excused; facts KÚ coverage by grain | never | 1 or more |
 | `<portal>/outside` | positions CHECK flagged (`pin_outside_obec`, `pin_outside_cz`, `country_conflict`) the town's pip polygon does not cover (Q3, strict); facts the disputed mix | never | 1 or more |
-| `<portal>/street` | (address + street) / Czech ads with a town, by the rank table; facts share, bounds, n, grains | never | Wilson UPPER bound under `location_street_floor[portal]` over `location_street_floor_min_n` (200) |
+| `<portal>/street` | (address + street) / Czech ads with a town, by the rank table; facts share, bounds, n, grains | Wilson UPPER bound under `location_street_floor[portal]` over `location_street_floor_min_n` (200) | never, until the operator rules the floors (W1-b) |
 | `<portal>/accuracy` | radius cover on the `id % 10 = 0` sample (truth: a word-bound address point); facts `pin_error_m` per declared label | Wilson LB under 0.90 over 30+ (`location_radius_cover_watch`, `location_accuracy_min_n`) | never, until W6 |
-| `served/town`, `served/town_withheld`, `served/outside`, `served/street` | the same over published properties at their location ad (rule 15); facts per portal | as above | as above; `served/street` under 0.44 (`location_served_street_floor`) |
+| `served/town`, `served/town_withheld`, `served/outside`, `served/street` | the same over published properties at their location ad (rule 15); facts per portal | as above; `served/street` under 0.44 (`location_served_street_floor`) | as above |
 | `registry` | the RÚIAN registry's current version and any staged load (`registry_versions`) | never | no current version, a load staged for more than 24 h (`location_registry_max_staged_hours`), or a current version older than 40 d (`location_registry_max_age_days`) |
 | `freshness/version` | rows not at `RESOLVER_VERSION`, plus rows at it on a stale registry label (each once) | its first non-zero reading | non-zero in this AND the previous stored result |
 | `freshness/evidence` | the oldest `claim_insert`/`operator_edit` resolve waiting (min); backfill a fact | never | past 60 min (`location_evidence_backlog_max_min`) |
 
 A resolver bump reads `freshness/version` Watch at once and Problem at the next pass if its sweep is not done in
-6 h; `<portal>/ku` reads the running version only, so mid-sweep it counts the re-resolved rows. Wave 6's history
+6 h (v5.9's took about 9-10 h): the cell cannot tell a sweep still running from one that never started, so its
+message points at the worker heartbeat's `lanes.location_resolve.swept`; `<portal>/ku` reads the running version only, so mid-sweep it counts the re-resolved rows. Wave 6's history
 follows (the `<portal>/town` value counted unresolved and withheld together until W1, and carried the KÚ condition).
 
 Rule 25's invariant: every served listing has a row and every active Czech listing has a town; foreign is a

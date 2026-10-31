@@ -23,9 +23,12 @@ So: one definition per step, spelled here once and RENDERED into every producer.
 
 NO WORDING LIVES HERE. A step's Czech and English labels live in exactly one file,
 frontend/src/lib/locationSteps.ts, because a better sentence must never cost a migration.
-A migration cannot import Python, so `refresh_location_audit_waterfall()` carries these
-expressions VERBATIM and tests/test_location_steps_vocabulary.py pins the two spellings
-together — the same rail W5 uses to keep the serving surfaces on one rule.
+A migration cannot import Python, so two SQL carriers hold these expressions VERBATIM:
+`refresh_location_audit_waterfall()` (pinned by tests/test_location_steps_vocabulary.py) and the
+location scorecard view `location_quality_by_source` (migration 698: the step flags,
+`town_missing_sql()` and `town_evidence_sql()`, pinned by
+tests/location_data/test_location_quality_view_contract.py) — the same rail W5 uses to keep the
+serving surfaces on one rule.
 """
 
 from __future__ import annotations

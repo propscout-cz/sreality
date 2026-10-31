@@ -11,13 +11,17 @@ other's branches (a window function in a branch blocks the qual's pushdown: meas
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
 from location_data import location_steps as ls
 from location_data.claims_common import served_location_predicate
+from location_data.resolver import resolve_db
 from scripts.checks import quality as qc
 from scripts.checks.common import NEW_AD_H
+from tests.location_data.test_location_schema_contracts import _clean as _location_corpus
+from tests.location_data.test_location_schema_contracts import _statements, _values_rows
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +38,13 @@ INLINE = {
     "cohort_rows": "a feeder read once, by `b`",
 }
 COHORTS = {"listing", "served", "sample", "queue"}
+# The view's four grain classes as its `agg` FILTERs spell them after `b.has_town and b.country_status = 'cz' and`.
+GRAIN_FILTERS = {
+    "address": "b.is_address_grain",
+    "street": "b.rank >= (select rank from street_rank) and not b.is_address_grain",
+    "quarter": "b.rank > (select rank from obec_rank) and b.rank < (select rank from street_rank)",
+    "obec": "b.rank = (select rank from obec_rank)",
+}
 
 
 def _squeeze(text: str) -> str:
@@ -174,6 +185,75 @@ def test_outside_is_strict_containment_over_the_placed_rows_check_flagged() -> N
     assert "g.purpose = 'pip'" in outside and "st_covers(g.geom, b.geom)" in outside
     assert "st_dwithin" not in outside and "st_distance" not in outside
     assert "count(*) filter (where b.has_town and b.geom is not null) as placed_n" in _squeeze(_ctes()["agg"][1])
+
+
+def test_outside_probes_with_the_one_containing_obec_statement() -> None:
+    """The probe is resolve_db.CONTAINING_OBEC_SQL's FROM ... LIMIT 1 block, verbatim but for its version parameter and
+    its point, so the resolver and this cell can never disagree about which town a point is in."""
+    sql = resolve_db.CONTAINING_OBEC_SQL
+    block = sql[sql.index("FROM ruian_admin_unit_geometries g"):sql.index("LIMIT 1") + len("LIMIT 1")]
+    assert block.count("%s") == 1 and block.count(resolve_db._PT) == 1
+    rendered = block.replace("%s", "(select id from cur)").replace(resolve_db._PT, "b.geom")
+    assert _squeeze(rendered) in _squeeze(_ctes()["outside"][1])
+
+
+def _check_disputed_classes() -> set[str]:
+    """Every class CHECK can write: the string literals location_data passes as `disputed=` (a pass-through of a
+    verdict's own `disputed` aside; anything else fails, so a computed class cannot hide from this rail)."""
+    found: set[str] = set()
+    other: list[str] = []
+    for path in sorted((ROOT / "location_data").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.keyword) and node.arg == "disputed"):
+                continue
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                found.add(node.value.value)
+            elif not (isinstance(node.value, ast.Attribute) and node.value.attr == "disputed"):
+                other.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+    assert not other, f"a disputed value that is neither a literal nor a pass-through: {other}"
+    return found
+
+
+def test_every_disputed_class_check_writes_is_a_column_of_the_mix() -> None:
+    """The mix is wide columns in `agg`: a class CHECK starts writing would be dropped silently, so it fails here
+    until the view, the gauge's `_DISPUTED` and its vocabulary all name it."""
+    classes = _check_disputed_classes()
+    assert classes == set(qc._DISPUTED) == {c for m, c in qc.LOCATION_VIEW_VOCABULARY if m == "disputed"}
+    agg = _squeeze(_ctes()["agg"][1])
+    for cls in classes:
+        assert f"count(*) filter (where b.disputed = '{cls}') as d_{cls}" in agg, cls
+    flagged = re.search(r"b\.disputed in \(([^)]*)\)", _ctes()["outside"][1]).group(1)
+    assert {c.strip(" '") for c in flagged.split(",")} <= classes
+
+
+def _rank_seed() -> dict[str, tuple[int, bool]]:
+    """location_granularity_rank as every migration seeds it: granularity -> (rank, is_address_grain)."""
+    seed: dict[str, tuple[int, bool]] = {}
+    for stmt in _statements(_location_corpus()):
+        if re.match(r"\s*insert into location_granularity_rank\b", stmt):
+            for row in _values_rows(stmt + ";", "location_granularity_rank"):
+                seed[row[0].strip("'")] = (int(row[1]), row[2] == "true")
+    return seed
+
+
+def test_the_grain_classes_partition_every_town_grain_of_the_rank_table() -> None:
+    """Grains are wide columns in `agg` too: every granularity the rank table holds at obec rank or finer falls in
+    exactly ONE of the four classes, so a new rung is neither dropped nor counted twice."""
+    agg = _squeeze(_ctes()["agg"][1])
+    for grain, predicate in GRAIN_FILTERS.items():
+        assert f"count(*) filter (where b.has_town and b.country_status = 'cz' and {predicate}) as g_{grain}" in agg
+    assert tuple(GRAIN_FILTERS) == qc._GRAINS == tuple(c for m, c in qc.LOCATION_VIEW_VOCABULARY if m == "grain")
+    seed = _rank_seed()
+    obec, street = seed["obec"][0], seed["street"][0]
+    classes = {"address": lambda rank, address: address,
+               "street": lambda rank, address: rank >= street and not address,
+               "quarter": lambda rank, address: obec < rank < street,
+               "obec": lambda rank, address: rank == obec}
+    towned = {g: v for g, v in seed.items() if v[0] >= obec}
+    assert {"obec", "street", "address_point"} <= set(towned)
+    for granularity, (rank, address) in towned.items():
+        hits = [name for name, test in classes.items() if test(rank, address)]
+        assert len(hits) == 1, f"{granularity} (rank {rank}) falls in {hits}"
 
 
 def test_the_ku_invariant_keeps_its_one_excuse_at_the_current_registry() -> None:

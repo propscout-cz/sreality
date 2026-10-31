@@ -116,20 +116,24 @@ townless as materialized (
    where b.town_missing
    group by b.cohort, b.source),
 -- Strict containment (ruling Q3, no tolerance): is the POSITION inside the bound town's authoritative polygon (the
--- pip pieces tile it; resolve_db.CONTAINING_OBEC_SQL)? Asked only where CHECK flagged the elected pin: elsewhere the
--- position is a register point or a pin CHECK already found inside (a 1/50 sample of the rest: 4 of 7,333 outside,
--- register-point slivers). Read over the rows `placed_n` counts, so the count is a subset of its denominator.
+-- pip pieces tile it)? The probe is the one containing-obec statement, resolve_db.CONTAINING_OBEC_SQL's FROM ... LIMIT 1
+-- block, verbatim but for its version parameter and its point (pinned by the contract test). Asked only where CHECK
+-- flagged the elected pin: elsewhere the position is a register point or a pin CHECK already found inside (a 1/50
+-- sample of the rest: 4 of 7,333 outside, register-point slivers). Read over the rows `placed_n` counts, so the count
+-- is a subset of its denominator.
 outside as materialized (
   select b.cohort, b.source, count(*) as position_outside_n
     from b
    where b.disputed in ('pin_outside_obec', 'pin_outside_cz', 'country_conflict')
      and b.has_town and b.geom is not null
-     and (select u.code
-            from ruian_admin_unit_geometries g
-            join ruian_admin_units u on u.id = g.unit_id
-           where g.registry_version_id = (select id from cur) and g.purpose = 'pip'
-             and u.level = 'obec' and st_covers(g.geom, b.geom)
-           limit 1) is distinct from b.obec_kod
+     and (SELECT u.code
+            FROM ruian_admin_unit_geometries g
+            JOIN ruian_admin_units u ON u.id = g.unit_id
+           WHERE g.registry_version_id = (select id from cur)
+             AND g.purpose = 'pip'
+             AND u.level = 'obec'
+             AND ST_Covers(g.geom, b.geom)
+           LIMIT 1) is distinct from b.obec_kod
    group by b.cohort, b.source),
 -- Freshness and the KÚ invariant per resolver version (the gauge picks the version the code runs). The per-source total
 -- is a window HERE, never in a UNION branch: a window function in a branch blocks the cohort qual's pushdown.
@@ -171,8 +175,9 @@ stock as materialized (
       ('grain',    'quarter',          a.g_quarter,                       a.g_address + a.g_street + a.g_quarter + a.g_obec),
       ('grain',    'obec',             a.g_obec,                          a.g_address + a.g_street + a.g_quarter + a.g_obec)
     ) v(metric, class, n, of_n)),
--- THE SAMPLE (pin accuracy): every tenth listing-cohort ad whose own row, or its property's location ad, is an address
--- point bound from words (a pin never yields one). The pin is its newest coordinate claim with a position.
+-- THE SAMPLE (pin accuracy): every tenth listing-cohort ad whose own row, or its live property's location ad (the
+-- served cohort's property filter), is an address point bound from words (a pin never yields one). The pin is its
+-- newest coordinate claim with a position.
 smp as materialized (
   select l.id, l.source, ll.geom, ll.uncertainty_radius_m, gr.is_address_grain,
          case when ll.granularity = 'address_point' then ll.geom
@@ -180,7 +185,7 @@ smp as materialized (
     from listings l
     join listing_location ll on ll.listing_id = l.id
     join location_granularity_rank gr on gr.granularity = ll.granularity
-    left join properties p on p.id = l.property_id and p.status = 'active'
+    left join properties p on p.id = l.property_id and p.status = 'active' and p.is_active
     left join listing_location tl on tl.listing_id = p.location_listing_ref_id
    where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 = 0),
 pin as materialized (

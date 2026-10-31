@@ -951,8 +951,9 @@ def _outside_cell(subject: str, portal: str | None, card: _Card, cohort: str,
 def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | None,
                  min_n: int, cohort: str,
                  by_portal: Mapping[str, _Card] | None = None) -> dict[str, Any]:
-    """The one street share, (address + street) / Czech ads with a town by the rank table: Problem
-    when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression)."""
+    """The one street share, (address + street) / Czech ads with a town by the rank table: Watch
+    when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression); never
+    Problem until the operator rules the floors (W1-b)."""
     grains = {g: _n(card, "grain", g) for g in _GRAINS}
     hits, n = grains["address"] + grains["street"], _of(card, "grain", "address")
     facts: dict[str, Any] = {"n": n, "floor": floor, "grains": grains}
@@ -970,8 +971,9 @@ def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | N
                            f"{min_n} this arm needs", "%", facts)
     said = (f"{hits:,} of {n:,} Czech {cohort} with a town are placed at street grain or finer "
             f"({hits / n:.1%}; upper bound {facts['upper_bound']:.1%})")
-    conditions = ([("fail", f"{said}, under the fixed floor {floor:.0%}: a parser or contract "
-                            "regression — check the portal's street and address claims")]
+    conditions = ([("warn", f"{said}, under the fixed floor {floor:.0%} (Watch until the floors are "
+                            "ruled, W1-b): a parser or contract regression — check the portal's "
+                            "street and address claims")]
                   if facts["upper_bound"] < floor else [])
     return judged(subject, conditions, f"{said}; floor {floor:.0%}",
                   value=round(100 * hits / n, 2), unit="%", portal=portal, facts=facts)
@@ -1015,7 +1017,8 @@ def _metres(value: Any) -> float | None:
 
 def _version_cell(listing: Mapping[str, _Card], previous: Mapping[str, Any]) -> dict[str, Any]:
     """Rows a re-resolve is owed: not at the code's RESOLVER_VERSION, or at it on a stale registry
-    label (each counted once). Watch on the first reading, Problem when the previous one held any."""
+    label (each counted once). Watch on the first reading, Problem when the previous one, 6 h
+    earlier, held any: a sweep that never started and one still running read alike."""
     versions: dict[str, int] = {}
     stale = stale_current = 0
     for card in listing.values():
@@ -1037,8 +1040,10 @@ def _version_cell(listing: Mapping[str, _Card], previous: Mapping[str, Any]) -> 
     if not lag:
         conditions = []
     elif before:
-        conditions = [("fail", f"{said}, and the previous reading held {before:,}: the sweep has "
-                               "not run — dispatch the location resolve")]
+        conditions = [("fail", f"{said}: rows still behind the running resolver version after 6 h "
+                               f"(the previous reading held {before:,}) — the worker heartbeat's "
+                               "lanes.location_resolve.swept tells a sweep still running from one "
+                               "that never started")]
     else:
         conditions = [("warn", f"{said} (Problem if the next reading still holds any)")]
     return judged("freshness/version", conditions,
