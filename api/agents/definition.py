@@ -22,8 +22,10 @@ from api.providers import CompletionProvider
 SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-_KEYS = frozenset({"name", "description", "preferred_model", "allowed_tools", "limits", "input", "output"})
-_OPTIONAL = frozenset({"output"})
+_KEYS = frozenset({"name", "description", "preferred_model", "allowed_tools", "limits", "input", "output", "code"})
+_OPTIONAL = frozenset({"output", "code"})
+# ADR-0005: code runs on Claude's hosted execution, so an agent that may run code names no other model.
+HOSTED_CODE_PROVIDERS = frozenset({"anthropic"})
 _FENCE = "---\n"
 
 
@@ -55,6 +57,7 @@ class Definition:
     input_schema: Mapping[str, Any]
     output_schema: Mapping[str, Any] | None
     sha: str
+    code: bool = False
 
     def check_input(self, value: object) -> None:
         errors = sorted(Draft202012Validator(self.input_schema).iter_errors(value), key=lambda e: list(e.path))
@@ -138,6 +141,14 @@ def _schema(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _code(value: Any, models_by_provider: Mapping[str, str]) -> bool:
+    if not isinstance(value, bool):
+        raise DefinitionError("code must be true or false")
+    if value and (other := sorted(set(models_by_provider) - HOSTED_CODE_PROVIDERS)):
+        raise DefinitionError(f"code runs on Claude only (ADR-0005), so preferred_model cannot name {other}")
+    return value
+
+
 # --- loading ---------------------------------------------------------------------------------------------------------
 
 def _split(raw: str) -> tuple[Any, str]:
@@ -183,16 +194,18 @@ def _parse(folder: Path) -> Definition:
     for path, data in contents.items():
         sha.update(f"{json.dumps(path)}:{len(data)}:".encode() + data)
     references = "".join(f"\n\n## {path}\n\n{content.strip()}" for path, content in texts.items() if content.strip())
+    model_map = models(meta["preferred_model"], dependencies.get_providers())
     return Definition(
         name=name,
         description=text(meta["description"], "description"),
         instructions=text(body, "the skill body") + references,
         tools=tuple(tool_names(meta["allowed_tools"], registry.ENTRIES)),
-        models=models(meta["preferred_model"], dependencies.get_providers()),
+        models=model_map,
         limits=limits(meta["limits"]),
         input_schema=_schema(meta["input"], "input"),
         output_schema=_schema(meta["output"], "output") if "output" in meta else None,
         sha=sha.hexdigest(),
+        code=_code(meta.get("code", False), model_map),
     )
 
 

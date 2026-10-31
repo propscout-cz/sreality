@@ -5,18 +5,19 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
 from api.agents import terminator
-from api.agents.definition import Definition, DefinitionError
+from api.agents.definition import HOSTED_CODE_PROVIDERS, Definition, DefinitionError
+from api.agents.hosted_code import RunFiles, describe
 from api.capabilities import registry
 from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import encode
 from api.llm_client import LLMClient
-from api.providers import Message, ModelPrice, TextBlock, ToolResultBlock
+from api.providers import Completion, HostedCode, HostedFile, Message, ModelPrice, TextBlock, ToolResultBlock
 
 CALLED_FOR = "agent_run"
 # A reply's limit covers the model's thinking too (Opus/Sonnet 5.5 always think): the ceiling is the non-streaming
@@ -24,6 +25,11 @@ CALLED_FOR = "agent_run"
 # likely to be cut off.
 MAX_REPLY_TOKENS = 16_000
 MIN_REPLY_TOKENS = 4_096
+# With hosted code one request can sample the model this many times on its own before it pauses (docs: stop reasons);
+# whether `max_tokens` spans them the docs do not say, so a code call is budgeted as if each sample paid in full.
+SERVER_LOOP_SAMPLES = 10
+# The hosted tool's own description is in the prompt too; the docs publish no figure for it.
+HOSTED_TOOL_PROMPT_TOKENS = 2_000
 
 StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "end_turn", "max_tokens", "refusal",
                      "model_context_window_exceeded"]
@@ -31,10 +37,11 @@ StopReason = Literal["submit_result", "max_iterations", "max_cost", "timeout", "
 
 @dataclass(frozen=True)
 class Step:
-    """One journal line, in the order the run made it: a model call (`name` = the model) or a tool call."""
+    """One journal line, in the order the run made it: a model call (`name` = the model), a tool call, or a produced
+    file fetched (`name` = its id)."""
 
     n: int
-    kind: Literal["model", "tool"]
+    kind: Literal["model", "tool", "file"]
     name: str
     input: Any
     output: Mapping[str, Any]
@@ -51,15 +58,21 @@ class Outcome:
     cost_usd: float
 
 
+def plain_answer(answer: terminator.Answer) -> dict[str, Any]:
+    """An answer for a journal or a cassette: a file's facts, never its bytes."""
+    return {**asdict(replace(answer, files=())), "files": [describe(f) for f in answer.files]}
+
+
 def _bytes(value: Any) -> int:
     """An upper bound on the tokens `value` costs as input: a byte-level tokenizer spends at most one per byte."""
     return len(encode(value).encode())
 
 
-def _reply_tokens(remaining_usd: float, prompt_tokens: int, price: ModelPrice) -> int:
+def _reply_tokens(remaining_usd: float, prompt_tokens: int, price: ModelPrice, samples: int = 1) -> int:
     """The longest reply whose worst case fits the budget: every prompt token at the dearer of the input and
-    cache-write rates (the provider may write the prefix to its cache), every reply token at the output rate."""
-    left = remaining_usd - prompt_tokens * max(price.input_per_mtok, price.cache_write_per_mtok) / 1e6
+    cache-write rates (the provider may write the prefix to its cache), every reply token at the output rate, for
+    each of the `samples` one call may take."""
+    left = remaining_usd / samples - prompt_tokens * max(price.input_per_mtok, price.cache_write_per_mtok) / 1e6
     if left <= 0:
         return 0
     if price.output_per_mtok == 0:
@@ -76,8 +89,34 @@ def run(
     call_tool: Callable[[str, Any], dict[str, Any]],
     record: Callable[[Step], None],
     clock: Callable[[], float] = time.monotonic,
+    inputs: Sequence[HostedFile] = (),
 ) -> Outcome:
-    """Run `definition` on `value`. `call_tool` is the registry call under the run's caller; `record` journals."""
+    """Run `definition` on `value`. `call_tool` is the registry call under the run's caller; `record` journals.
+    `inputs` go into a code agent's container. Every file the run put at or got from the provider leaves it at the end."""
+    if definition.code and provider not in HOSTED_CODE_PROVIDERS:
+        raise DefinitionError(f"{definition.name} runs code, which is Claude only (ADR-0005), not {provider}")
+    if inputs and not definition.code:
+        raise DefinitionError(f"{definition.name} does not allow code, so it takes no input files")
+    files = RunFiles(llm, provider)
+    try:
+        return _run(definition, value, provider=provider, llm=llm, call_tool=call_tool, record=record, clock=clock,
+                    inputs=inputs, files=files)
+    finally:
+        files.release()
+
+
+def _run(
+    definition: Definition,
+    value: Mapping[str, Any],
+    *,
+    provider: str,
+    llm: LLMClient,
+    call_tool: Callable[[str, Any], dict[str, Any]],
+    record: Callable[[Step], None],
+    clock: Callable[[], float],
+    inputs: Sequence[HostedFile],
+    files: RunFiles,
+) -> Outcome:
     definition.check_input(value)
     model = definition.models.get(provider)
     if model is None:
@@ -89,21 +128,35 @@ def run(
     callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
     tools = [s for s in registry.schemas() if s["name"] in callable_names] + [terminator.schema(definition)]
     opening = json.dumps(value, ensure_ascii=False, indent=2)
-    messages = [Message(role="user", content=[TextBlock(text=opening)])]
+    messages = [Message(role="user", content=[TextBlock(text=opening), *files.upload(inputs)])]
     prompt_tokens = _bytes([definition.instructions, tools, opening])
+    samples = 1
+    container_reserve = 0.0
+    if definition.code:
+        prompt_tokens += HOSTED_TOOL_PROMPT_TOKENS
+        samples = SERVER_LOOP_SAMPLES
+        container_reserve = files.container_cost_usd(definition.limits.wall_clock_timeout_s)
+    container: str | None = None
     deadline = clock() + definition.limits.wall_clock_timeout_s
     seen: set[int] = set()
-    produced: set[str] = set()
     steps = 0
     calls = 0
     spent = 0.0
 
-    def journal(kind: Literal["model", "tool"], name: str, given: Any, output: Mapping[str, Any],
+    def journal(kind: Literal["model", "tool", "file"], name: str, given: Any, output: Mapping[str, Any],
                 started: float, cost_usd: float = 0.0, llm_call_id: int | None = None) -> None:
         nonlocal steps
         steps += 1
         record(Step(n=steps, kind=kind, name=name, input=given, output=output, cost_usd=cost_usd,
                     duration_ms=int((clock() - started) * 1000), llm_call_id=llm_call_id))
+
+    def next_prompt(completion: Completion, results: Sequence[ToolResultBlock] = ()) -> int:
+        """The next call's prompt, from what this one reported. A server-side loop may report the sum of its samples, so a
+        code call's report can read many times the real prompt: the prompt plus what the reply added also bounds it."""
+        usage = completion.usage
+        added = _bytes([asdict(r) for r in results])
+        reported = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens + usage.output_tokens + added
+        return min(reported, prompt_tokens + _bytes(completion.reply) + added) if definition.code else reported
 
     def outcome(stop_reason: StopReason, answer: terminator.Answer | None = None) -> Outcome:
         return Outcome(stop_reason=stop_reason, answer=answer, model_calls=calls, cost_usd=round(spent, 6))
@@ -113,13 +166,14 @@ def run(
             return outcome("max_iterations")
         if clock() >= deadline:
             return outcome("timeout")
-        max_tokens = _reply_tokens(definition.limits.max_cost_usd - spent, prompt_tokens, price)
+        max_tokens = _reply_tokens(definition.limits.max_cost_usd - spent - container_reserve, prompt_tokens, price, samples)
         if max_tokens < MIN_REPLY_TOKENS:
             return outcome("max_cost")
 
         started = clock()
         response = llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions, tools=tools,
-                            model=model, provider=provider, max_tokens=max_tokens)
+                            model=model, provider=provider, max_tokens=max_tokens,
+                            hosted_code=HostedCode(container=container) if definition.code else None)
         calls += 1
         spent += response.cost_usd
         completion = response.completion
@@ -129,7 +183,19 @@ def run(
             "stop_reason": completion.stop_reason,
             "usage": asdict(completion.usage),
             "model": completion.model,
+            **({"hosted_calls": [asdict(c) for c in completion.hosted_calls], "hosted_pending": list(completion.hosted_pending),
+                "container": completion.container, "file_ids": list(completion.file_ids)} if definition.code else {}),
         }, started, response.cost_usd, response.llm_call_id)
+        container = completion.container or container
+        for file_id in completion.file_ids:
+            started = clock()
+            journal("file", file_id, {"file_id": file_id}, files.collect(file_id, late=started >= deadline), started)
+        # A paused server-side loop resumes on its own reply sent back as it came: another billed call, so the caps
+        # above bound it like any other.
+        if completion.stop_reason == "pause_turn":
+            messages.append(Message(role="assistant", content=completion.reply))
+            prompt_tokens = next_prompt(completion)
+            continue
         # A turn's calls run only when the model ended it on them: one cut at its limit or stopped by a refusal may
         # carry a half-written call, and nothing in it runs.
         if completion.stop_reason != "tool_use" or not completion.tool_calls:
@@ -141,10 +207,11 @@ def run(
             started = clock()
             try:
                 if call.name == terminator.NAME:
-                    if len(completion.tool_calls) > 1:
+                    # Code still waiting on this turn counts: its output could not have backed the answer.
+                    if len(completion.tool_calls) > 1 or completion.hosted_pending:
                         raise ToolError(ToolErrorCode.REFUSED, f"{terminator.NAME} must be the only call in its turn")
-                    answer = terminator.accept(call.input, definition=definition, seen=seen, produced=produced)
-                    journal("tool", call.name, call.input, asdict(answer), started)
+                    answer = terminator.accept(call.input, definition=definition, seen=seen, produced=files.produced)
+                    journal("tool", call.name, call.input, plain_answer(answer), started)
                     return outcome("submit_result", answer)
                 if call.name not in callable_names:
                     raise ToolError(ToolErrorCode.UNKNOWN_TOOL, f"{call.name!r} is not one of this agent's tools")
@@ -159,6 +226,4 @@ def run(
             journal("tool", call.name, call.input, result, started)
             results.append(ToolResultBlock(tool_use_id=call.id, content=encode(result), is_error=error))
         messages.append(Message(role="user", content=list(results)))
-        usage = completion.usage
-        prompt_tokens = (usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
-                         + usage.output_tokens + _bytes([asdict(r) for r in results]))
+        prompt_tokens = next_prompt(completion, results)

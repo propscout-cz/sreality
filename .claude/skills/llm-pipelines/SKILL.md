@@ -27,6 +27,7 @@ auto-invalidates, logs to `llm_calls` under a distinct `called_for`, and is a wr
 exception per Toolkit rule #5. System prompts and model IDs are operator-tunable via
 `app_settings` (model defaults `claude-sonnet-4-5`).
 A tool loop's turn goes back as `Completion.reply` (thinking, thought signatures): `toolkit-api` rule 11.
+Hosted code, its files and cost: `skills/README.md` § Code.
 The three the estimation agent can call (`summarize_listing`, `compare_listing_images`,
 `read_floor_plan`) take an optional `estimation_run_id`; the agent's handlers pass the run's id,
 so the nested call's `llm_calls` row counts toward the run's cost, its `max_cost_usd` cap (re-read
