@@ -88,8 +88,10 @@ describe('the start form', () => {
     expect(await screen.findByText('Finds properties.')).toBeInTheDocument();
     expect(screen.getByLabelText(/town/)).toBeInTheDocument();
     expect(screen.getByLabelText(/budget/)).toHaveAttribute('inputmode', 'numeric');
+    expect(screen.getByRole('textbox', { name: 'town *' })).toHaveAttribute('aria-required', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
     expect(await screen.findByText('Required.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'town *' })).toHaveAccessibleDescription(/Required/);
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -135,7 +137,7 @@ describe('the start form', () => {
   it('says when a started run will only wait', async () => {
     options.mockResolvedValue({ ...OPEN, queue: 'dark' });
     mount();
-    expect(await screen.findByText(/waits in the queue until it is switched on/)).toBeInTheDocument();
+    expect(await screen.findByText(/waits until it is switched on/)).toBeInTheDocument();
   });
 });
 
@@ -178,6 +180,7 @@ describe('the list', () => {
       await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(1));
       expect(screen.getByRole('link', { name: '#7' })).toBeInTheDocument();
       expect(screen.queryByRole('alert')).toBeNull();
+      expect(await screen.findByText(/The last refresh failed/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

@@ -645,7 +645,7 @@ export const listSkills = (
 /* The propscout.cz waitlist, newest first, for the admin Sign-ups page (GET /admin/waitlist, admin-only). */
 export const fetchWaitlistSignups = (): Promise<WaitlistResponse> => request<WaitlistResponse>('/admin/waitlist');
 
-/* Agent runs (api/routes/agent_runs.py): every one the caller's own account, never acted for. */
+/* Agent runs (api/routes/agent_runs.py): never acted for, so no wrapper here takes `actAs`. */
 export const fetchAgentRunOptions = (): Promise<AgentRunOptions> => request<AgentRunOptions>('/runs/options');
 export const fetchAgentRuns = (): Promise<{ data: AgentRunRow[]; truncated: boolean }> =>
   request<{ data: AgentRunRow[]; truncated: boolean }>('/runs');

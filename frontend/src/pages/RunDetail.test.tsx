@@ -216,7 +216,7 @@ describe('cancel', () => {
     expect(screen.getByRole('button', { name: 'Cancel run' })).toBeInTheDocument();
   });
 
-  it('offers nothing on a run that has ended, and shows a failed cancel', async () => {
+  it('offers nothing on a run that has ended', async () => {
     mount();
     await screen.findByText('A shortlist.');
     expect(screen.queryByRole('button', { name: 'Cancel run' })).toBeNull();
@@ -233,6 +233,43 @@ describe('cancel', () => {
 });
 
 describe('live refresh', () => {
+  it('says the diary may be short when the read at the end of a run fails, and offers another', async () => {
+    fetchRun.mockResolvedValue(run({ status: 'running', result_markdown: null, finished_at: null }));
+    fetchSteps.mockResolvedValue({ data: [step({ name: 'rank_brokers' })] });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mount();
+      await screen.findAllByText('rank_brokers');
+      fetchRun.mockResolvedValue(run());
+      fetchSteps.mockRejectedValue(new ApiError('database busy', 503, null));
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(await screen.findByText(/this list may be short/)).toBeInTheDocument();
+      fetchSteps.mockResolvedValue({ data: [step({ name: 'rank_brokers' }), step({ n: 2, name: 'submit_result' })] });
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await screen.findAllByText('submit_result');
+      expect(screen.queryByText(/this list may be short/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads a run the queue holds rarely, not every few seconds', async () => {
+    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [] });
+    fetchRun.mockResolvedValue(run({ status: 'queued', result_markdown: null, finished_at: null, started_at: null }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mount();
+      await screen.findByText(/switched off/);
+      const reads = fetchRun.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(fetchRun.mock.calls.length - reads).toBeLessThanOrEqual(3);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fetchRun.mock.calls.length).toBeGreaterThan(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the last good read on screen when a poll fails', async () => {
     fetchRun.mockResolvedValue(run({ status: 'running', result_markdown: null, finished_at: null }));
     fetchSteps.mockResolvedValue({ data: [step({ name: 'rank_brokers' })] });
@@ -246,6 +283,7 @@ describe('live refresh', () => {
       await waitFor(() => expect(fetchRun.mock.calls.length).toBeGreaterThan(1));
       expect(screen.getAllByText('rank_brokers').length).toBeGreaterThan(0);
       expect(screen.queryByRole('alert')).toBeNull();
+      expect((await screen.findAllByText(/The last refresh failed/)).length).toBeGreaterThan(0);
     } finally {
       vi.useRealTimers();
     }

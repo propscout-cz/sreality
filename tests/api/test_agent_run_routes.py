@@ -8,6 +8,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from api import dependencies as deps  # noqa: E402
 from api import tenant_pool  # noqa: E402
 from api.main import app  # noqa: E402
 from tests.api._jwt import mint  # noqa: E402
@@ -37,6 +38,7 @@ def test_each_run_route_is_on_the_tenant_gate_and_never_acts(key: tuple[str, str
     assert tenant_pool.tenant_conn in calls, "reads go under RLS, and the account comes from the caller's membership"
     assert tenant_pool.require_account_id in calls, "an act-as header is a 403 and a run acts for its own user"
     assert tenant_pool.require_acting_account_id not in calls
+    assert deps.get_db_conn not in calls, "the service role opens in the handler, after the gate (tenancy.md)"
 
 
 @pytest.mark.parametrize("method, path", sorted(ROUTES))

@@ -1,24 +1,24 @@
 import type { AgentRunStatus } from '@/lib/agentRuns';
 
-/* A run's state word. A state, not a health verdict (StatusDot's rule), so the word sits in a chip: only an ending has a
- * tone, and a live run reads ochre, as an estimation run's chip does. */
+/* A run's state word in a chip: a state, not a health verdict (StatusDot's rule). The word stays ink, because ochre text
+ * fails contrast, and the wash carries the tone: ochre while live, sage or brick at the end, a bare rule when cancelled. */
 const TONE: Readonly<Record<AgentRunStatus, string>> = {
-  queued: 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]',
-  running: 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]',
-  succeeded: 'bg-[var(--color-sage-soft)] text-[var(--color-sage)]',
-  failed: 'bg-[var(--color-brick-soft)] text-[var(--color-brick)]',
-  cancelled: 'border border-[var(--color-rule-strong)] text-[var(--color-ink-3)]',
+  queued: 'bg-[var(--color-ochre-soft)]',
+  running: 'bg-[var(--color-ochre-soft)]',
+  succeeded: 'bg-[var(--color-sage-soft)]',
+  failed: 'bg-[var(--color-brick-soft)]',
+  cancelled: 'border border-[var(--color-rule-strong)]',
 };
 
 export function RunStateChip({ status }: { status: AgentRunStatus }) {
   return (
-    <span className={`inline-block rounded-[var(--radius-xs)] px-2 py-0.5 text-[0.65rem] font-medium uppercase tracking-wide ${TONE[status]}`}>
+    <span className={`inline-block rounded-[var(--radius-xs)] px-2 py-0.5 text-[0.78rem] font-medium text-[var(--color-ink)] ${TONE[status]}`}>
       {status}
     </span>
   );
 }
 
-export const asJson = (value: unknown): string => {
+const asJson = (value: unknown): string => {
   try {
     return JSON.stringify(value, null, 2) ?? String(value);
   } catch {

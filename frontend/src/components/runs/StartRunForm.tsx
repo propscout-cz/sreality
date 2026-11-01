@@ -1,35 +1,37 @@
-import { useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import ErrorBanner from '@/components/ErrorBanner';
 import { Field } from '@/components/controls';
 import { startAgentRun } from '@/lib/api';
 import {
-  agentRunKeys, buildInput, fieldsOf, type AgentOption, type FormField, type FormValues, type QueueState,
+  agentRunKeys, buildInput, fieldsOf, QUEUE_HOLD, type AgentOption, type FormField, type FormValues, type QueueState,
 } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 const BOX = 'w-full min-w-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-2 py-1.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] aria-[invalid=true]:border-[var(--color-brick)]';
 
-const QUEUE_NOTE: Readonly<Partial<Record<QueueState, string>>> = {
-  dark: 'The executor is switched off: a run you start now waits in the queue until it is switched on.',
-  parked: 'Agent runs are paused for now (the daily spending ceiling or a setting): a run you start now waits in the queue.',
-};
+const captionOf = (field: FormField): string => `${field.name.replace(/_/g, ' ')}${field.required ? ' *' : ''}`;
 
-function FieldControl({ field, value, error, onChange }: {
+function FieldControl({ field, value, errorId, onChange }: {
   field: FormField;
   value: string | boolean | undefined;
-  error?: string;
+  errorId?: string;
   onChange: (next: string | boolean) => void;
 }) {
-  const invalid = error ? true : undefined;
+  const caption = captionOf(field);
+  const named = {
+    'aria-required': field.required || undefined,
+    'aria-invalid': errorId ? true : undefined,
+    'aria-describedby': errorId,
+  };
   const text = typeof value === 'string' ? value : '';
   if (field.kind === 'boolean') {
-    return <input type="checkbox" aria-label={field.name} checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
+    return <input type="checkbox" aria-label={caption} {...named} checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
   }
   if (field.kind === 'choice') {
     return (
-      <select className={BOX} aria-label={field.name} value={text} aria-invalid={invalid} onChange={(e) => onChange(e.target.value)}>
+      <select className={BOX} aria-label={caption} {...named} value={text} onChange={(e) => onChange(e.target.value)}>
         <option value="">—</option>
         {field.options?.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
@@ -37,16 +39,33 @@ function FieldControl({ field, value, error, onChange }: {
   }
   if (field.kind === 'json') {
     return (
-      <textarea className={`${BOX} font-mono`} rows={3} aria-label={field.name} value={text} aria-invalid={invalid} placeholder="JSON"
+      <textarea className={`${BOX} font-mono`} rows={3} aria-label={caption} {...named} value={text} placeholder="JSON"
         onChange={(e) => onChange(e.target.value)} />
     );
   }
   const numeric = field.kind === 'integer' || field.kind === 'number';
   return (
-    <input className={`${BOX} ${numeric ? 'font-mono tabular-nums' : ''}`} aria-label={field.name} value={text} aria-invalid={invalid}
+    <input className={`${BOX} ${numeric ? 'font-mono tabular-nums' : ''}`} aria-label={caption} {...named} value={text}
       inputMode={field.kind === 'integer' ? 'numeric' : field.kind === 'number' ? 'decimal' : undefined}
       placeholder={field.kind === 'list' ? 'Separated by commas' : undefined}
       onChange={(e) => onChange(e.target.value)} />
+  );
+}
+
+function FormFieldBlock({ field, value, error, onChange }: {
+  field: FormField;
+  value: string | boolean | undefined;
+  error?: string;
+  onChange: (next: string | boolean) => void;
+}) {
+  const errorId = useId();
+  return (
+    <div className="min-w-0">
+      <Field label={captionOf(field)} help={field.description} as="control">
+        <FieldControl field={field} value={value} errorId={error ? errorId : undefined} onChange={onChange} />
+      </Field>
+      {error && <p id={errorId} className="mt-1 text-[0.78rem] text-[var(--color-brick)]">{error}</p>}
+    </div>
   );
 }
 
@@ -102,13 +121,8 @@ export default function StartRunForm({ agents, queue }: { agents: AgentOption[];
       {fields.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {fields.map((field) => (
-            <div key={field.name} className="min-w-0">
-              <Field label={`${field.name.replace(/_/g, ' ')}${field.required ? ' *' : ''}`} help={field.description} as="control">
-                <FieldControl field={field} value={values[field.name]} error={errors[field.name]}
-                  onChange={(next) => change(field.name, next)} />
-              </Field>
-              {errors[field.name] && <p className="mt-1 text-[0.78rem] text-[var(--color-brick)]">{errors[field.name]}</p>}
-            </div>
+            <FormFieldBlock key={field.name} field={field} value={values[field.name]} error={errors[field.name]}
+              onChange={(next) => change(field.name, next)} />
           ))}
         </div>
       )}
@@ -119,7 +133,7 @@ export default function StartRunForm({ agents, queue }: { agents: AgentOption[];
           Start run
         </button>
         {start.isPending && <span className="text-sm text-[var(--color-ink-3)]">Starting…</span>}
-        {queue && QUEUE_NOTE[queue] && <span className="text-[0.78rem] text-[var(--color-ink-3)]">{QUEUE_NOTE[queue]}</span>}
+        {queue && QUEUE_HOLD[queue] && <span className="text-[0.78rem] text-[var(--color-ink-3)]">{QUEUE_HOLD[queue]}</span>}
       </div>
     </form>
   );

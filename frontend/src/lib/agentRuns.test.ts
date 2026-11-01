@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInput, citedIds, fieldsOf, fmtRunCost, isLive, stepsByAttempt, toTrace, waitingNote, type AgentRunStep } from './agentRuns';
+import { buildInput, citedIds, fieldsOf, fmtRunCost, isLive, pollMs, stepsByAttempt, toTrace, waitingNote, type AgentRunStep } from './agentRuns';
 
 const step = (over: Partial<AgentRunStep>): AgentRunStep => ({
   attempt: 1, n: 1, kind: 'tool', name: 'search_properties', summary: '{"data":[]}', input: { town: 'Brno' }, text: null,
@@ -9,6 +9,18 @@ const step = (over: Partial<AgentRunStep>): AgentRunStep => ({
 describe('isLive', () => {
   it('holds only while the worker may still act', () => {
     expect(['queued', 'running', 'succeeded', 'failed', 'cancelled'].filter((s) => isLive(s))).toEqual(['queued', 'running']);
+  });
+});
+
+describe('pollMs', () => {
+  it('reads often while a run can move, rarely while the queue holds it, and not once none is live', () => {
+    expect(pollMs(['running', 'queued'], 'dark')).toBe(3000);
+    expect(pollMs(['queued'], 'open')).toBe(3000);
+    expect(pollMs(['queued'], undefined)).toBe(3000);
+    expect(pollMs(['queued'], 'dark')).toBe(30_000);
+    expect(pollMs(['queued', 'succeeded'], 'parked')).toBe(30_000);
+    expect(pollMs(['succeeded', 'failed'], 'open')).toBe(false);
+    expect(pollMs([], 'open')).toBe(false);
   });
 });
 
@@ -60,7 +72,7 @@ describe('waitingNote', () => {
   it('says why a queued run waits, and that waiting never fails it', () => {
     expect(waitingNote(row, 'dark')).toMatch(/switched off/);
     expect(waitingNote(row, 'parked')).toMatch(/paused/);
-    expect(waitingNote(row, 'open')).toMatch(/next free slot/);
+    expect(waitingNote(row, 'open')).toMatch(/free slot/);
     expect(waitingNote(row, undefined)).toMatch(/queued/i);
   });
   it('says a stop is on its way and that a retry began again', () => {

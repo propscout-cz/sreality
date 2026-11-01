@@ -3,6 +3,7 @@ pool, real `executor`, a scripted model. Runs in CI's migrations job (`TEST_DATA
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from api import dependencies as deps  # noqa: E402
 from api import main as api_main  # noqa: E402
 from api.agents import executor  # noqa: E402
+from api.routes import agent_runs  # noqa: E402
 from tests._live_property import REQUIRED_DB, db_url  # noqa: E402
 from tests.api._agent_fixtures import reply  # noqa: E402
 from tests import test_agent_runs_live as ledger  # noqa: E402
@@ -43,6 +45,7 @@ people = ledger.people
 world = ledger.world
 
 
+@contextlib.contextmanager
 def _service_conn() -> Iterator[psycopg.Connection]:
     conn = _connect()
     try:
@@ -55,7 +58,7 @@ def _service_conn() -> Iterator[psycopg.Connection]:
 def as_user(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[uuid.UUID], TestClient]]:
     """A test client signed in as one user: verify_jwt answers with their claims, the rest is the real path."""
     monkeypatch.setenv("TENANT_POOL_DB_URL", db_url())
-    api_main.app.dependency_overrides[deps.get_db_conn] = _service_conn
+    monkeypatch.setattr(deps, "open_background_conn", _service_conn)
 
     def sign_in(user: uuid.UUID) -> TestClient:
         api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": str(user), "role": "authenticated"}
@@ -65,7 +68,6 @@ def as_user(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[uuid.UUID], T
         yield sign_in
     finally:
         api_main.app.dependency_overrides.pop(deps.verify_jwt, None)
-        api_main.app.dependency_overrides.pop(deps.get_db_conn, None)
 
 
 def test_an_allowlisted_token_starts_a_run_and_reads_its_steps(svc: psycopg.Connection, world: dict[str, Any],
@@ -90,6 +92,7 @@ def test_an_allowlisted_token_starts_a_run_and_reads_its_steps(svc: psycopg.Conn
     assert [(s["attempt"], s["n"], s["kind"], s["name"]) for s in steps] == [
         (1, 1, "model", row["model"]), (1, 2, "tool", OWN_CONTEXT), (1, 3, "model", row["model"]), (1, 4, "tool", SUBMIT)]
     assert steps[0]["text"] == ["Looking."] and steps[1]["input"] == {} and "payload" not in steps[0]
+    assert steps[1]["text"] is None, "a tool result's own `text` stays in the diary"
     assert steps[1]["summary"] and steps[0]["cost_usd"] > 0
 
     listed = client.get("/runs").json()
@@ -221,10 +224,12 @@ def test_a_two_membership_user_starts_on_the_oldest_and_reads_both(svc: psycopg.
 
 
 def test_the_list_says_when_it_is_cut_short(svc: psycopg.Connection, world: dict[str, Any],
-                                            as_user: Callable[[uuid.UUID], TestClient]) -> None:
+                                            as_user: Callable[[uuid.UUID], TestClient],
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent_runs, "LIST_LIMIT", 2)
     client = as_user(world["a"])
     ids = [client.post("/runs", json=BODY).json()["id"] for _ in range(3)]
-    listed = client.get("/runs", params={"limit": 2}).json()
+    listed = client.get("/runs").json()
     assert [r["id"] for r in listed["data"]] == ids[:0:-1] and listed["truncated"] is True
 
 
@@ -256,6 +261,21 @@ def test_options_says_truthfully_whether_a_queued_run_can_move(svc: psycopg.Conn
     _set(svc, setting, value)
     assert as_user(world["a"]).get("/runs/options").json()["queue"] == state
     assert _work_on(_Model()).state == state, "the page's word is the executor's own"
+
+
+def test_another_accounts_cancel_never_opens_the_service_role(svc: psycopg.Connection, world: dict[str, Any],
+                                                              as_user: Callable[[uuid.UUID], TestClient],
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate comes first: a foreign id is refused on the tenant connection alone (tenancy.md, Second instance)."""
+    run_id = executor.submit(svc, principal_user_id=world["a"], account_id=world["a_acc"], agent=AGENT,
+                             value={"town": "Brno"}).run_id
+    client = as_user(world["b"])
+
+    def must_not_open() -> Any:
+        raise AssertionError("the service role opened before the gate")
+
+    monkeypatch.setattr(deps, "open_background_conn", must_not_open)
+    assert client.post(f"/runs/{run_id}/cancel").status_code == 404
 
 
 def test_a_folder_that_does_not_load_is_not_offered_and_the_others_still_are(world: dict[str, Any],

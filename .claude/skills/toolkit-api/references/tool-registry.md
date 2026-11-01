@@ -236,12 +236,11 @@ changing the SQL the tool runs. The live tenant check is `tests/test_capabilitie
 Three entry points; the routes below call two, and nothing claims a run until #2075 (agent-worker).
 
 **Routes (`api/routes/agent_runs.py`, #2071).** `POST`/`GET /runs`, `GET /runs/{id}`, `/steps`, `POST /runs/{id}/cancel`,
-`GET /runs/options`, all `require_account_id` on the router (act-as 403; a start lands on the oldest membership), pinned
-by `tests/api/test_agent_run_routes.py`. Reads by RLS alone; a step's `summary` stands in for a tool's whole result, so
-polling stays light. Cancel reads the run's account under RLS, then `executor.cancel` on the service connection.
-`/runs/options` is what the SPA's form and nav follow: `start_refusal` is the ONE gate (`submit` applies it first, so a
-refused caller learns nothing of the agents); a new gate joins `_refusal` and every surface follows. Refused callers
-read no agents and `queue: null`. Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
+`GET /runs/options`, pinned by `tests/api/test_agent_run_routes.py`; their tenancy: `database/references/tenancy.md`, Fourth
+instance. A step's `summary` stands in for a tool's whole result, so polling stays light. `/runs/options` is what the SPA's
+form and nav follow: `start_refusal` is the ONE gate (`submit` applies it first, so a refused caller learns nothing of the
+agents); a new gate joins `_refusal` and every surface follows. Refused callers read no agents and `queue: null`.
+Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
 
 - **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
   service connection, for the identity a route stamped from the caller's own token: the allowlist

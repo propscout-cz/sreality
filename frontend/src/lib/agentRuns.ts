@@ -5,7 +5,7 @@
  * the step words, and an ad's text can steer the model. So a page renders it as React text only (never markdown, never
  * dangerouslySetInnerHTML, nothing that autolinks), and the one link a run gets is built here from an id. */
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchAgentRun, fetchAgentRunOptions, fetchAgentRuns, fetchAgentRunSteps } from './api';
 import { fmtUsd, fmtUsdPerCall } from './format';
 import type { Trace, TraceStep } from './types';
@@ -76,6 +76,8 @@ export interface StartAgentRun {
 }
 
 const LIVE_POLL_MS = 3000;
+/* A run the queue cannot move can wait for days: nothing will change until the brake or the ceiling does. */
+const WAITING_POLL_MS = 30_000;
 
 export const isLive = (status: string | undefined): boolean => status === 'queued' || status === 'running';
 
@@ -87,6 +89,13 @@ export const agentRunKeys = {
   steps: (id: number) => ['agent-runs', 'steps', id] as const,
 };
 
+/* How often to read runs in these states: often while one can move, rarely while all wait on the queue, not once none is live. */
+export function pollMs(statuses: readonly string[], queue: QueueState | null | undefined): number | false {
+  if (!statuses.some(isLive)) return false;
+  const canMove = statuses.includes('running') || queue == null || queue === 'open';
+  return canMove ? LIVE_POLL_MS : WAITING_POLL_MS;
+}
+
 /* The Shell's nav and the pages share this one read. `enabled` is false before a session exists. */
 export const useAgentRunOptions = ({ enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {}) =>
   useQuery({
@@ -94,31 +103,48 @@ export const useAgentRunOptions = ({ enabled = true, live = false }: { enabled?:
     queryFn: fetchAgentRunOptions,
     enabled,
     staleTime: 5 * 60_000,
-    refetchInterval: live ? 15_000 : false,
+    refetchInterval: live ? WAITING_POLL_MS : false,
   });
 
-export const useAgentRuns = () =>
-  useQuery({
+const useCachedQueue = () => {
+  const queryClient = useQueryClient();
+  return () => queryClient.getQueryData<AgentRunOptions>(agentRunKeys.options)?.queue;
+};
+
+export const useAgentRuns = () => {
+  const queue = useCachedQueue();
+  return useQuery({
     queryKey: agentRunKeys.list,
     queryFn: fetchAgentRuns,
-    refetchInterval: (q) => ((q.state.data?.data ?? []).some((r) => isLive(r.status)) ? LIVE_POLL_MS : false),
+    refetchInterval: (q) => pollMs((q.state.data?.data ?? []).map((r) => r.status), queue()),
   });
+};
 
-export const useAgentRun = (id: number | null) =>
-  useQuery({
+export const useAgentRun = (id: number | null) => {
+  const queue = useCachedQueue();
+  return useQuery({
     queryKey: agentRunKeys.run(id ?? 0),
     queryFn: () => fetchAgentRun(id as number),
     enabled: id != null,
-    refetchInterval: (q) => (isLive(q.state.data?.status) ? LIVE_POLL_MS : false),
+    refetchInterval: (q) => pollMs(q.state.data ? [q.state.data.status] : [], queue()),
   });
+};
 
-export const useAgentRunSteps = (id: number | null, live: boolean) =>
-  useQuery({
+export const useAgentRunSteps = (id: number | null, status: AgentRunStatus) => {
+  const queue = useCachedQueue();
+  return useQuery({
     queryKey: agentRunKeys.steps(id ?? 0),
     queryFn: () => fetchAgentRunSteps(id as number),
     enabled: id != null,
-    refetchInterval: live ? LIVE_POLL_MS : false,
+    refetchInterval: () => pollMs([status], queue()),
   });
+};
+
+/* Why a queued run isn't moving, for a queue that holds it. */
+export const QUEUE_HOLD: Readonly<Partial<Record<QueueState, string>>> = {
+  dark: 'The executor is switched off, so a queued run waits until it is switched on.',
+  parked: 'Agent runs are paused for now (the daily spending ceiling or a setting), so a queued run waits until that lifts.',
+};
 
 /* Why a live run is not simply working, or null when it is. */
 export function waitingNote(
@@ -130,10 +156,8 @@ export function waitingNote(
     return run.attempts > 1 ? 'Its first attempt was interrupted, so it started again from the beginning.' : null;
   }
   if (run.status !== 'queued') return null;
-  if (queue === 'dark') return 'Queued. The executor is switched off, so this run waits until it is switched on.';
-  if (queue === 'parked') return 'Queued. Agent runs are paused for now (the daily spending ceiling or a setting); this run starts when that lifts.';
-  if (queue === 'open') return 'Queued. It starts at the next free slot.';
-  return 'Queued.';
+  if (queue === 'open') return 'Queued. It starts when the worker has a free slot.';
+  return queue && QUEUE_HOLD[queue] ? `Queued. ${QUEUE_HOLD[queue]}` : 'Queued.';
 }
 
 /* --- the diary as the Timeline's trace ------------------------------------------------------------------------------ */

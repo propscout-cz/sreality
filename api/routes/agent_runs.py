@@ -1,9 +1,4 @@
-"""POST + GET /runs, GET /runs/options, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md).
-
-`require_account_id` on the router makes an act-as header a 403 everywhere and resolves the account a start lands on: the
-user's oldest membership, the app's one rule, with no picker. A second membership still reads both accounts' runs, since
-reads go by RLS alone. Writes and settings go through `api/agents/executor.py` on the service connection.
-"""
+"""POST + GET /runs, GET /runs/options, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
 
 from __future__ import annotations
 
@@ -11,7 +6,7 @@ import uuid
 from typing import Any
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from psycopg.rows import dict_row
 
 from api import dependencies as deps
@@ -25,7 +20,6 @@ router = APIRouter(prefix="/runs", tags=["agent-runs"], dependencies=[Depends(te
 _NOT_FOUND = "no such run"
 _REFUSED_STATUS = {"not_allowlisted": 403, "in_flight_cap": 429}
 LIST_LIMIT = 50
-_LIST_MAX = 200
 
 _LIGHT = ("id, agent, status, attempts, provider, model, cost_usd::float8 AS cost_usd, stop_reason, error, input, "
           "cancel_requested_at, created_at, started_at, finished_at")
@@ -34,14 +28,16 @@ _RUN = (f"SELECT {_LIGHT}, result_markdown, cited_property_ids, files, proposals
         "commit_sha FROM agent_runs WHERE id = %s")
 # Light enough to poll: a step's question and the model's words, with `summary` standing in for a tool's whole result.
 _STEPS = """
-SELECT attempt, n, kind, name, summary, payload -> 'input' AS input, payload #> '{output,text}' AS text,
+SELECT attempt, n, kind, name, summary, payload -> 'input' AS input,
+       CASE WHEN kind = 'model' THEN payload #> '{output,text}' END AS text,
        cost_usd::float8 AS cost_usd, duration_ms, created_at
   FROM agent_run_steps WHERE run_id = %s ORDER BY attempt, n"""
-_OWNER = "SELECT account_id FROM agent_runs WHERE id = %s"
+_RUN_ACCOUNT = "SELECT account_id FROM agent_runs WHERE id = %s"
 
 
-def _owner(conn: psycopg.Connection, run_id: int) -> uuid.UUID:
-    row = conn.execute(_OWNER, (run_id,)).fetchone()
+def _account_of_run(conn: psycopg.Connection, run_id: int) -> uuid.UUID:
+    """The account of a run this caller can read; any other id, a foreign one included, is the same 404."""
+    row = conn.execute(_RUN_ACCOUNT, (run_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     return row[0]
@@ -57,15 +53,16 @@ def _rows(conn: psycopg.Connection, sql: str, *params: Any) -> list[dict[str, An
 def run_options(
     account: uuid.UUID = Depends(tenant_pool.require_account_id),
     claims: dict = Depends(deps.verify_jwt),
-    svc: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
     """What this caller's start form may offer. A refused account reads only why: no definition, no platform state."""
-    refusal = executor.start_refusal(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account)
-    if refusal is not None:
-        return {"start": {"allowed": False, "reason": refusal}, "queue": None, "agents": []}
+    with deps.open_background_conn() as svc:
+        refusal = executor.start_refusal(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account)
+        if refusal is not None:
+            return {"start": {"allowed": False, "reason": refusal}, "queue": None, "agents": []}
+        queue = executor.queue_state(svc)
     agents = [{"name": d.name, "description": d.description, "input_schema": d.input_schema}
               for d in executor.offered_agents()]
-    return {"start": {"allowed": True, "reason": None}, "queue": executor.queue_state(svc), "agents": agents}
+    return {"start": {"allowed": True, "reason": None}, "queue": queue, "agents": agents}
 
 
 @router.post("", status_code=201)
@@ -74,11 +71,11 @@ def start_run(
     response: Response,
     account: uuid.UUID = Depends(tenant_pool.require_account_id),
     claims: dict = Depends(deps.verify_jwt),
-    svc: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
     try:
-        run = executor.submit(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account, agent=body.agent,
-                              value=body.input, idempotency_key=body.idempotency_key)
+        with deps.open_background_conn() as svc:
+            run = executor.submit(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account, agent=body.agent,
+                                  value=body.input, idempotency_key=body.idempotency_key)
     except executor.SubmitRefused as exc:
         raise HTTPException(status_code=_REFUSED_STATUS[exc.reason], detail=str(exc)) from exc
     except (DefinitionError, InputError) as exc:
@@ -89,9 +86,9 @@ def start_run(
 
 
 @router.get("")
-def list_runs(conn: tenant_pool.TenantConn, limit: int = Query(LIST_LIMIT, ge=1, le=_LIST_MAX)) -> dict[str, Any]:
-    rows = _rows(conn, _LIST, limit + 1)
-    return {"data": rows[:limit], "truncated": len(rows) > limit}
+def list_runs(conn: tenant_pool.TenantConn) -> dict[str, Any]:
+    rows = _rows(conn, _LIST, LIST_LIMIT + 1)
+    return {"data": rows[:LIST_LIMIT], "truncated": len(rows) > LIST_LIMIT}
 
 
 @router.get("/{run_id}")
@@ -104,14 +101,16 @@ def read_run(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
 
 @router.get("/{run_id}/steps")
 def read_run_steps(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
-    _owner(conn, run_id)
+    _account_of_run(conn, run_id)
     return {"data": _rows(conn, _STEPS, run_id)}
 
 
 @router.post("/{run_id}/cancel")
-def cancel_run(run_id: int, conn: tenant_pool.TenantConn, svc: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
+def cancel_run(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
     """A queued run ends now, a running one at its next step (`executor.cancel`); an ended one is left as it is."""
-    status = executor.cancel(svc, run_id=run_id, account_id=_owner(conn, run_id))
+    account = _account_of_run(conn, run_id)
+    with deps.open_background_conn() as svc:
+        status = executor.cancel(svc, run_id=run_id, account_id=account)
     if status is None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     return {"id": run_id, "status": status}
