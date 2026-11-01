@@ -349,14 +349,15 @@ function Firms({ rows }: { rows: BrokerMembership[] }) {
 function Offer({ brokerId }: { brokerId: number }) {
   const filters = useMemo(() => brokerCardFilters(brokerId), [brokerId]);
   const sort = DEFAULT_SORT;
+  const cardsKey = browseKeys.cards(filters, sort);
   const list = useInfiniteList<CardRow>({
-    queryKey: browseKeys.cards(filters, sort),
+    queryKey: cardsKey,
     queryFn: (cursor, signal) => fetchListingsForCards(filters, sort, cursor as KeysetCursor | null, { signal }),
     pageSize: CARD_PAGE_SIZE,
     getRowId: (r) => r.property_id,
   });
   /* A dismissal elsewhere moves the roll at once, but never under a finger (ruling Q3(c)). */
-  const hand = useListHold([browseKeys.cards(filters, sort)]);
+  const hand = useListHold([cardsKey]);
   return (
     <section {...hand} aria-label="Nabídka" className="border-t border-[var(--color-rule)]">
       <DayRule label="Nabídka" />

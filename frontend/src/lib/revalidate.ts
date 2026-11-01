@@ -52,10 +52,14 @@
  *
  * PARK. `parkReads` is a hand on a list (lib/useListHold, ruling Q3(c) of
  * 2026-11-01): it holds only this scheduler's own re-reads. An owed read parks
- * until the release, and a full read in flight on an owed query that has data
- * is cancelled and stays owed. The list's own reads pass: its first load (a new
- * filter or sort under the hand), a page, a refetch it or the user asks for. It
- * paints nothing and has no TTL: the hand leaving, or the list unmounting, ends it.
+ * until the release, and a payment in flight on a query with data when the hand
+ * arrives is cancelled and stays owed, unless the user asked for that read
+ * (`ASKED` meta, lib/useInfiniteList's `refetch`: it pays the debt as it lands).
+ * Every other read passes: a first load, a page, a refetch the list's observer
+ * starts (a sort revisited, a remount), a refresh the user asks for. A reconnect
+ * refetch never starts on a list root (lib/curationSync `applySyncQueryDefaults`),
+ * so none lands under a hand. It paints nothing and has no TTL: the hand
+ * leaving, or the list unmounting, ends it.
  *
  * EPOCH. `resetReads` (the identity change, lib/auth.tsx) drops every owed
  * read, hold and ledger; a hold of the previous account then paints, parks and
@@ -63,7 +67,9 @@
  *
  * Built on @tanstack/query-core 5.100.9 internals (Query.isStatic, the 'fetch'
  * dispatch before the retryer, cancel with revert, fetchMeta.fetchMore, a
- * manual setData): re-run revalidate.test.ts on any query-core bump. */
+ * manual setData, `observer.refetch({ meta })` passing its meta through to the
+ * fetch though RefetchOptions does not name it): re-run revalidate.test.ts on
+ * any query-core bump. */
 
 import { useEffect } from 'react';
 import {
@@ -79,6 +85,14 @@ import {
 } from '@tanstack/react-query';
 
 export type ReadMode = 'now' | 'mount';
+
+/* query-core's FetchMeta (a fetch's `meta`, the query's `fetchMeta` while it runs), not exported by name. */
+type FetchMeta = NonNullable<Query['state']['fetchMeta']>;
+
+/** Fetch meta of a read the user asked for (a list's own refresh): a hand never parks it. */
+export const ASKED = { asked: true } as const;
+const isAsked = (meta: FetchMeta | null | undefined): boolean =>
+  (meta as Partial<typeof ASKED> | null | undefined)?.asked === true;
 
 /** One optimistic cache write: which queries (prefix unless `exact`) and the value each holds while held. */
 export interface CachePatch {
@@ -516,9 +530,10 @@ function handle(s: Scheduler, rec: HoldRecord): Hold {
 }
 
 /** A hand on a list (lib/useListHold): park this scheduler's payments on every
- * query `filters` match until the release. A full read in flight on an owed
- * query that has data is cancelled and stays owed (it would land under the
- * hand); a first load, a page and any read the list itself starts pass. */
+ * query `filters` match until the release. A payment in flight on an owed query
+ * that has data is cancelled and stays owed (it would land under the hand) unless
+ * the user asked for that read; a first load, a page and any read the list itself
+ * starts pass. */
 export function parkReads(qc: QueryClient, filters: readonly QueryFilters[]): Hold {
   const s = scheduler(qc);
   const rec: HoldRecord = {
@@ -536,7 +551,7 @@ export function parkReads(qc: QueryClient, filters: readonly QueryFilters[]): Ho
     for (const q of s.qc.getQueryCache().findAll(f)) {
       const debt = s.debts.get(q.queryHash);
       if (!debt || q.state.fetchStatus === 'idle' || q.state.data === undefined) continue;
-      if (q.state.fetchMeta?.fetchMore != null) continue;
+      if (q.state.fetchMeta?.fetchMore != null || isAsked(q.state.fetchMeta)) continue;
       due(debt);
       void q.cancel({ revert: true });
     }

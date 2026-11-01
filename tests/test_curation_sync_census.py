@@ -29,7 +29,8 @@
 #       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
 #       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
 #       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts. It reads the audience's
-#       LAST definition (709's): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
+#       LAST definition (709's) and every ALTER FUNCTION on it after that, in that migration or a later one (the last
+#       SECURITY clause stands): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
 #       DEFINER_AUDIENCE_FILTERS verbatim (the caller's accounts as `me`; a share to one of them as recipient, from none
 #       of them, none while acting: the whole WHERE)
 #   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
@@ -423,20 +424,30 @@ DEFINER_AUDIENCE_FILTERS = (
     "and not public.acting() group by s.account_id",
 )
 _DEFINE_AUDIENCE = re.compile(r"create (?:or replace )?function (?:public\.)?curation_clock_audience\(\)(.*?)\$\$(.*?)\$\$")
+_ALTER_AUDIENCE = re.compile(r"alter function (?:public\.)?curation_clock_audience\(\)([^;]*);")
 
 
 def _audience_definition(text: str) -> tuple[str, str]:
-    """(its attributes, its body) of the curation_clock_audience() that the migration `text` defines."""
-    m = _DEFINE_AUDIENCE.search(_norm(_strip_comments(text)))
+    """(its attributes, its body) of the curation_clock_audience() `text` defines; an ALTER FUNCTION after the
+    definition moves its SECURITY clause, the last one standing."""
+    norm = _norm(_strip_comments(text))
+    m = _DEFINE_AUDIENCE.search(norm)
     assert m, "the migration lost curation_clock_audience()"
-    return m.group(1), m.group(2)
+    attributes = m.group(1)
+    for alter in _ALTER_AUDIENCE.finditer(norm, m.end()):
+        if "security invoker" in alter.group(1):
+            attributes = attributes.replace("security definer", "") + " security invoker"
+        elif "security definer" in alter.group(1):
+            attributes += " security definer"
+    return attributes, m.group(2)
 
 
 def _audience_migration(migrations: Migrations) -> tuple[str, str]:
-    """The migration whose curation_clock_audience() stands: the last to define it (696, then 709)."""
-    defined = [(n, t) for n, t in migrations if _DEFINE_AUDIENCE.search(_norm(_strip_comments(t)))]
+    """The migration whose curation_clock_audience() stands (the last to define it: 696, then 709): its name, and
+    its text followed by every later migration's, so an ALTER FUNCTION on the audience after it is read too."""
+    defined = [i for i, (_n, t) in enumerate(migrations) if _DEFINE_AUDIENCE.search(_norm(_strip_comments(t)))]
     assert defined, "no migration defines curation_clock_audience()"
-    return defined[-1]
+    return migrations[defined[-1]][0], "\n".join(t for _n, t in migrations[defined[-1]:])
 
 
 def rail_i(policies: dict[str, tuple[str, str | None, str | None]], audience_text: str,
@@ -725,6 +736,16 @@ def test_the_audience_rail_reads_the_last_definition_and_bites_on_a_bare_definer
     assert _audience_migration([*migrations, ("999_census_bite.sql", later)])[1] == later
     invoker = text.replace("stable security definer", "stable").replace("\n     and not public.acting()", "")
     assert rail_i(policies, invoker, CLOCKED_TABLES) == [], "an invoker body is backed by pipeline_shares' policy"
+    # A definer made by ALTER FUNCTION, in the same migration or a later one, is a definer; an ALTER back to invoker
+    # is not (the last SECURITY clause stands).
+    definer = "\nalter function public.curation_clock_audience() security definer;"
+    assert rail_i(policies, invoker + definer, CLOCKED_TABLES), "a bare body made definer by ALTER FUNCTION"
+    assert rail_i(policies, _audience_migration([*migrations, ("998_bite.sql", invoker), ("999_bite.sql", definer)])[1],
+                  CLOCKED_TABLES), "a bare body made definer by a later migration's ALTER FUNCTION"
+    assert rail_i(policies, invoker + definer + "\nalter function curation_clock_audience() security invoker;",
+                  CLOCKED_TABLES) == []
+    assert rail_i(policies, text + "\nalter function public.curation_clock_audience() security invoker;",
+                  CLOCKED_TABLES) == [], "709's body back to invoker is backed by the policy again"
 
 
 def test_the_count_rail_bites_on_a_threshold_that_drifts() -> None:
