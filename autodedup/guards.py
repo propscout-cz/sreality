@@ -50,11 +50,12 @@ GALLERY_EXEMPT_MIN_AREA_M2: float = 20.0
 GALLERY_EXEMPT_MIN_PHOTOS: int = 3
 GALLERY_EXEMPT_MIN_COVERAGE: float = 0.80
 GALLERY_EXEMPT_PRICE_TOL: float = 0.02
-# C4c (2026-11-01): the share of the fan-out cap a candidate only the C4b window admits may take
-# (`gallery_window_quota`). It is seated after every base candidate and only in a slot none
-# took, so it can never displace one: on the 11-01 replay of eight towns the window, filling
-# slots in posting order, pushed 147 merge-zone pairs out of repost series (146 read SAME).
-GALLERY_WINDOW_CAP_SHARE: float = 0.5
+# C4c (2026-11-01): the share of the fan-out cap a candidate only an area exemption admits may
+# take (`exemption_window_quota`). It is seated after every base candidate and only in a slot
+# none took, so it can never displace one: on the 11-01 replay of eight towns the C4b window,
+# filling slots in posting order, pushed 147 merge-zone pairs out of repost series (146 read
+# SAME), and the realitymix basis exemption the last 3 (Hradec).
+EXEMPTION_WINDOW_CAP_SHARE: float = 0.5
 
 
 def area_rel_diff(a: float | None, b: float | None) -> float | None:
@@ -91,21 +92,22 @@ def area_gallery_bar(a: GuardSide, b: GuardSide, cfg: Settings) -> float | None:
     return bar
 
 
-def in_gallery_window(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
-    """C4c: whether only the C4b window lets the pair's area gap through the veto: past
-    `area_reject_pct`, not basis-exempt, within `area_gallery_bar`. Read of a pair
-    `pair_veto` passed, to seat it after the base candidates."""
-    bar = area_gallery_bar(a, b, cfg)
-    if bar is None:
-        return False
+def in_exemption_window(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
+    """C4c: whether only an exemption lets the pair's area gap through the veto: past
+    `area_reject_pct`, but basis-exempt (`area_basis_exempt`) or within `area_gallery_bar`
+    (C4b). Read of a pair `pair_veto` passed, to seat it after the base candidates."""
     gap = area_rel_diff(a.area_m2, b.area_m2)
-    return (gap is not None and cfg.area_reject_pct < gap <= bar
-            and not area_basis_exempt(a, b, gap, cfg))
+    if gap is None or gap <= cfg.area_reject_pct:
+        return False
+    if area_basis_exempt(a, b, gap, cfg):
+        return True
+    bar = area_gallery_bar(a, b, cfg)
+    return bar is not None and gap <= bar
 
 
-def gallery_window_quota(cap: int) -> int:
-    """C4c: the most C4b window candidates one listing's retrieval seats."""
-    return int(cap * GALLERY_WINDOW_CAP_SHARE)
+def exemption_window_quota(cap: int) -> int:
+    """C4c: the most exemption-window candidates one listing's retrieval seats."""
+    return int(cap * EXEMPTION_WINDOW_CAP_SHARE)
 
 
 def gallery_coverage(a: set[int], b: set[int], tight: int) -> float:

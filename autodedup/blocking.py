@@ -14,9 +14,10 @@ Hard guards (E2-E5) are applied INSIDE retrieval, before the fan-out cap spends 
 candidate the rule floor will veto anyway must not displace the one true duplicate (E17 says
 the cap can only discard the weakest evidence class). Every refusal is counted once per pair,
 by the rule that refused it, so the blocking stats still show what the rule floor removed.
-C4c: a candidate only the C4b window lets past the area clause (`guards.in_gallery_window`) is
-held aside and seated after the fill, in the slots no base candidate took and at most
-`guards.gallery_window_quota` of them, so the window can never displace a base candidate.
+C4c: a candidate only an area exemption lets past the 8 % bar (the realitymix basis exemption or
+the C4b gallery window, `guards.in_exemption_window`) is held aside and seated after the fill,
+in the slots no base candidate took and at most `guards.exemption_window_quota` of them, so an
+exemption can never displace a base candidate.
 
 E300 (W30) adds a seventh, the `town` probe, behind `attr_probe_town_grain`: the attribute
 probes key on the resolver's finest grain (a cast obce where one was found), so an advert
@@ -31,7 +32,7 @@ from __future__ import annotations
 from typing import Any
 
 from autodedup.fingerprint import Fingerprint
-from autodedup.guards import gallery_window_quota, in_gallery_window, pair_veto
+from autodedup.guards import exemption_window_quota, in_exemption_window, pair_veto
 from autodedup.settings import Settings
 
 # Fan-out fills in this order (E17), so the cap can only ever discard the weakest class.
@@ -238,8 +239,8 @@ class BlockIndex:
     def candidates(self, fp: Fingerprint) -> dict[int, set[str]]:
         """Other listing ids -> the probes that reached them, filled in priority order.
 
-        Guard-dead candidates are dropped before the cap sees them (E2-E5 ahead of E17); C4b
-        window candidates take only the slots the base candidates left (C4c)."""
+        Guard-dead candidates are dropped before the cap sees them (E2-E5 ahead of E17); a
+        candidate only an area exemption admits takes only a slot the base ones left (C4c)."""
         if not self._finalized:
             raise RuntimeError("BlockIndex.candidates before finalize")
         by_probe: dict[str, list[tuple[str, Any]]] = {probe: [] for probe in self.probes}
@@ -248,7 +249,7 @@ class BlockIndex:
         out: dict[int, set[str]] = {}
         window: dict[int, set[str]] = {}
         cap = self.settings.max_candidates_per_listing
-        quota = gallery_window_quota(cap)
+        quota = exemption_window_quota(cap)
         for probe in self.probes:
             for _, key in by_probe[probe]:
                 if key in self.exploded[probe]:
@@ -262,7 +263,7 @@ class BlockIndex:
                     if hit is not None:
                         hit.add(probe)
                     elif len(out) < cap and not self._guarded(fp, other):
-                        if not in_gallery_window(fp, self.fingerprints[other], self.settings):
+                        if not in_exemption_window(fp, self.fingerprints[other], self.settings):
                             out[other] = {probe}
                         elif len(window) < quota:
                             window[other] = {probe}

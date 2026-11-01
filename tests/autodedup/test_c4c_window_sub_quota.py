@@ -1,11 +1,14 @@
-"""C4c: a candidate only the C4b window admits never displaces a base candidate.
+"""C4c: a candidate only an area exemption admits never displaces a base candidate.
 
 C4b lets retrieval pass every pair whose areas sit 8-20 % apart (the decision settles it on the
 two galleries). On the 2026-11-01 replay of eight towns those candidates, filling the 60-a-listing
-cap in posting order, pushed 147 merge-zone pairs out of repost series (146 read SAME). So a
-window candidate is held aside and seated after the fill, only in the slots no base candidate
-(one the 8 % bar passes) took, and at most `gallery_window_quota` of them. The cohort pass
-(`BlockIndex.candidates`) and the lane (`incremental.retrieve`, `retrieve_posted`) seat the same.
+cap in posting order, pushed 147 merge-zone pairs out of repost series (146 read SAME); with the
+sub-quota the replay kept 182 gains and lost 3, all three to the realitymix basis exemption, which
+widens retrieval the same way. So a candidate that passes the veto only through an exemption (the
+basis exemption or the C4b window) is held aside and seated after the fill, only in the slots no
+base candidate (one the plain 8 % bar passes) took, and at most `exemption_window_quota` of them.
+The cohort pass (`BlockIndex.candidates`) and the lane (`incremental.retrieve`,
+`retrieve_posted`) seat the same.
 """
 
 from __future__ import annotations
@@ -19,9 +22,9 @@ from autodedup import guards, harness, incremental
 from autodedup.blocking import BlockIndex
 from autodedup.dataset import Dataset, Meta
 from autodedup.guards import (
-    GALLERY_WINDOW_CAP_SHARE,
-    gallery_window_quota,
-    in_gallery_window,
+    EXEMPTION_WINDOW_CAP_SHARE,
+    exemption_window_quota,
+    in_exemption_window,
     pair_veto,
 )
 from autodedup.incremental import GuardRow, Keyer, _fill, guard_row, retrieve, retrieve_posted
@@ -33,25 +36,32 @@ SUBJECT = 1
 WINDOW_FIRST = 2
 BASE_FIRST = 100
 DIAL = {"byt": 0.20}
+BASIS = {"realitymix": 0.15}
+FLOOR = {"source": "realitymix", "attrs": {"area_basis": "floor"}}
 
 
-def cfg(cap: int, dial: dict[str, float] = DIAL) -> Settings:
+def cfg(cap: int, dial: dict[str, float] = DIAL,
+        basis: dict[str, float] | None = None) -> Settings:
     return replace(Settings(), area_veto_gallery_exempt=dict(dial),
+                   area_veto_basis_floor_exempt=dict(basis or {}),
                    max_candidates_per_listing=cap)
 
 
-def world(base: int, window: int) -> Dataset:
-    """One 60 m2 flat at one address with `base` 60 m2 flats (ids from 100) and `window` 70 m2
-    ones (14 % apart, ids from 2): every window id posts before every base id, so a fill in
-    posting order would seat the window first."""
-    ids = ([(SUBJECT, 60.0)] + [(WINDOW_FIRST + n, 70.0) for n in range(window)]
-           + [(BASE_FIRST + n, 60.0) for n in range(base)])
-    listings = {listing_id: _listing(listing_id, area_m2=area) for listing_id, area in ids}
+def world(base: int, window: int, realitymix: int = 0) -> Dataset:
+    """One 60 m2 flat at one address with `base` 60 m2 flats (ids from 100), `window` 70 m2
+    ones (14 % apart, the C4b window; ids from 2) and after them `realitymix` 68 m2 realitymix
+    ones stating the floor area (12 % apart, the basis exemption): every window id posts before
+    every base id, so a fill in posting order would seat the window first."""
+    ids = ([(SUBJECT, 60.0, {})] + [(WINDOW_FIRST + n, 70.0, {}) for n in range(window)]
+           + [(WINDOW_FIRST + window + n, 68.0, FLOOR) for n in range(realitymix)]
+           + [(BASE_FIRST + n, 60.0, {}) for n in range(base)])
+    listings = {listing_id: _listing(listing_id, area_m2=area, **extra)
+                for listing_id, area, extra in ids}
     return Dataset(meta=Meta(), listings=listings, images_by_listing={})
 
 
-def window_ids(count: int) -> set[int]:
-    return set(range(WINDOW_FIRST, WINDOW_FIRST + count))
+def window_ids(count: int, first: int = WINDOW_FIRST) -> set[int]:
+    return set(range(first, first + count))
 
 
 def base_ids(count: int) -> set[int]:
@@ -85,16 +95,29 @@ def test_the_world_s_two_classes_are_what_they_say() -> None:
     subject = GuardRow(SUBJECT, "byt", "prodej", 60.0, "2+kk", 3)
     wide = GuardRow(WINDOW_FIRST, "byt", "prodej", 70.0, "2+kk", 3)
     near = GuardRow(BASE_FIRST, "byt", "prodej", 60.0, "2+kk", 3)
-    assert pair_veto(subject, wide, cfg(60)) is None and in_gallery_window(subject, wide, cfg(60))
+    assert pair_veto(subject, wide, cfg(60)) is None
+    assert in_exemption_window(subject, wide, cfg(60))
     assert pair_veto(subject, near, cfg(60)) is None
-    assert not in_gallery_window(subject, near, cfg(60))
+    assert not in_exemption_window(subject, near, cfg(60))
     assert pair_veto(subject, wide, cfg(60, {})) == "area"
-    assert not in_gallery_window(subject, wide, cfg(60, {}))
+    assert not in_exemption_window(subject, wide, cfg(60, {}))
+
+
+def test_a_realitymix_floor_area_twelve_percent_apart_is_a_window_candidate() -> None:
+    subject = GuardRow(SUBJECT, "byt", "prodej", 60.0, "2+kk", 3, "sreality", None)
+    floor = GuardRow(WINDOW_FIRST, "byt", "prodej", 68.0, "2+kk", 3, "realitymix", "floor")
+    near = GuardRow(BASE_FIRST, "byt", "prodej", 60.0, "2+kk", 3, "realitymix", "floor")
+    on = cfg(60, {}, BASIS)
+    assert pair_veto(subject, floor, on) is None and in_exemption_window(subject, floor, on)
+    assert in_exemption_window(floor, subject, on)
+    assert pair_veto(subject, near, on) is None and not in_exemption_window(subject, near, on)
+    assert pair_veto(subject, floor, cfg(60, {})) == "area"
+    assert not in_exemption_window(subject, floor, cfg(60, {}))
 
 
 def test_the_share_is_half_the_cap() -> None:
-    assert GALLERY_WINDOW_CAP_SHARE == 0.5
-    assert gallery_window_quota(60) == 30
+    assert EXEMPTION_WINDOW_CAP_SHARE == 0.5
+    assert exemption_window_quota(60) == 30
 
 
 def test_a_cap_full_of_base_candidates_seats_no_window_candidate() -> None:
@@ -117,8 +140,8 @@ def test_the_window_reaches_by_every_probe_that_meets_it() -> None:
 
 def test_the_share_bounds_the_window(monkeypatch: pytest.MonkeyPatch) -> None:
     found = seated(world(base=0, window=8), cfg(10))[SUBJECT]
-    assert set(found) == window_ids(gallery_window_quota(10)) == window_ids(5)
-    monkeypatch.setattr(guards, "GALLERY_WINDOW_CAP_SHARE", 0.2)
+    assert set(found) == window_ids(exemption_window_quota(10)) == window_ids(5)
+    monkeypatch.setattr(guards, "EXEMPTION_WINDOW_CAP_SHARE", 0.2)
     found = seated(world(base=1, window=8), cfg(10))[SUBJECT]
     assert set(found) == base_ids(1) | window_ids(2)
 
@@ -140,6 +163,33 @@ def test_with_the_dial_empty_the_window_never_opens() -> None:
 def test_without_a_window_pair_the_dial_retrieves_as_the_eight_percent_bar(cap: int) -> None:
     ds = world(base=6, window=0)
     assert seated(ds, cfg(cap)) == seated(ds, cfg(cap, {}))
+    assert seated(ds, cfg(cap, DIAL, BASIS)) == seated(ds, cfg(cap, {}))
+
+
+# ------------------------------------------------- the realitymix basis exemption
+
+
+def test_a_realitymix_window_candidate_cannot_displace_a_base_candidate() -> None:
+    found = seated(world(base=6, window=0, realitymix=4), cfg(4, {}, BASIS))[SUBJECT]
+    assert set(found) == base_ids(4)
+
+
+def test_a_realitymix_window_candidate_takes_the_leftover_slots() -> None:
+    found = seated(world(base=3, window=0, realitymix=3), cfg(4, {}, BASIS))[SUBJECT]
+    assert set(found) == base_ids(3) | window_ids(1)
+    found = seated(world(base=3, window=0, realitymix=3), cfg(10, {}, BASIS))[SUBJECT]
+    assert set(found) == base_ids(3) | window_ids(3)
+
+
+def test_both_exemptions_share_one_quota_in_fill_order() -> None:
+    found = seated(world(base=0, window=4, realitymix=4), cfg(10, DIAL, BASIS))[SUBJECT]
+    assert set(found) == window_ids(4) | window_ids(1, WINDOW_FIRST + 4)
+
+
+def test_with_the_basis_dial_empty_the_realitymix_gap_is_vetoed() -> None:
+    off = cfg(4, {})
+    found = seated(world(base=2, window=0, realitymix=4), off)
+    assert set(found[SUBJECT]) == base_ids(2)
 
 
 # ------------------------------------------------------- a loose phash probe (E960)
