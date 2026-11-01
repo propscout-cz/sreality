@@ -539,16 +539,50 @@ def test_no_browser_role_writes_the_clock(world: _World) -> None:
             _as(world.a.user, sql, params)
 
 
-# --- 11. the read is served by the primary key -----------------------------------------------------------------
+# --- 11. one clock read evaluates the audience once (706, F16 #2308) ----------------------------------------------
+
+_READ = "SELECT account_id, family, counter, mine, age_ms FROM curation_clock_public"
+
 
 def _plan_nodes(plan: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Every node of a JSON plan, its SubPlans and InitPlans included (they sit in `Plans` too)."""
     yield plan
     for child in plan.get("Plans", []):
         yield from _plan_nodes(child)
 
 
-def test_the_clock_read_uses_the_primary_key_at_scale(world: _World) -> None:
-    """2,000 accounts with a counter each (through the trigger), analyzed inside a transaction rolled back after."""
+def _analyzed_read(cur: psycopg.Cursor[Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The read's analyzed plan in the caller's scope: (its top node, every audience node in it)."""
+    cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_READ}")
+    out = cur.fetchone()[0]
+    top = (json.loads(out) if isinstance(out, str) else out)[0]["Plan"]
+    return top, [n for n in _plan_nodes(top) if "curation_clock_audience" in
+                 (n.get("Function Name"), n.get("Relation Name"))]
+
+
+def test_one_clock_read_evaluates_the_audience_once_and_maps_mine(world: _World) -> None:
+    """696 evaluated it four times per read (three policy arms and the view's join: 4.9 ms mean in production against
+    gate #2203's 2.5 ms); the policy is now one pair lookup and the view reads `mine` from current_account_ids()."""
+    a, c = world.a.acc, world.c.acc
+    with scoped(world.c.user) as conn:
+        with conn.cursor() as cur:
+            top, audience = _analyzed_read(cur)
+            cur.execute(_READ)
+            rows = {(acc, fam): mine for acc, fam, _n, mine, _age in cur.fetchall()}
+    assert len(audience) == 1, top
+    assert audience[0]["Actual Loops"] == 1, f"the audience ran once, not per row: {top}"
+    assert {acc for acc, _f in rows} == {a, c}, rows
+    assert all(mine for (acc, _f), mine in rows.items() if acc == c), f"own rows are mine: {rows}"
+    assert not any(mine for (acc, _f), mine in rows.items() if acc == a), f"the shared owner's are not: {rows}"
+    assert {f for acc, f in rows if acc == a} == set(EDIT_FAMILIES), rows
+
+
+def test_the_clock_read_evaluates_the_audience_once_at_scale(world: _World) -> None:
+    """2,000 accounts with a counter each (through the trigger), analyzed inside a transaction rolled back after.
+    Before 706 the view's join probed curation_clock_pkey per followed account (ROWS 4 kept it there); since 706 the
+    read scans the clock under ONE hashed SubPlan, O(clock rows), the trade charter § 3.8 states. The audience must
+    still run once, never per row, at any size."""
+    a, c = world.a.acc, world.c.acc
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
@@ -558,17 +592,17 @@ def test_the_clock_read_uses_the_primary_key_at_scale(world: _World) -> None:
             cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
             cur.execute("ANALYZE curation_clock")
             with scoped(world.c.user, cur=cur):
-                cur.execute("EXPLAIN (FORMAT JSON) SELECT account_id, family, counter, mine, age_ms "
-                            "FROM curation_clock_public")
-                plan = cur.fetchone()[0]
+                top, audience = _analyzed_read(cur)
+                cur.execute(_READ)
+                accounts = {r[0] for r in cur.fetchall()}
     finally:
         conn.rollback()
         conn.close()
-    plan = json.loads(plan) if isinstance(plan, str) else plan
-    nodes = [n for n in _plan_nodes(plan[0]["Plan"]) if n.get("Relation Name") == "curation_clock"
-             or n.get("Index Name") == "curation_clock_pkey"]
-    assert any(n.get("Index Name") == "curation_clock_pkey" for n in nodes), plan
-    assert not any(n["Node Type"] == "Seq Scan" for n in nodes), plan
+    scans = [n for n in _plan_nodes(top) if n.get("Relation Name") == "curation_clock"]
+    assert len(audience) == 1 and audience[0]["Actual Loops"] == 1, top
+    assert len(scans) == 1 and "hashed SubPlan" in scans[0].get("Filter", ""), (
+        f"the policy probes one hash of the followed pairs per row, never a per-row audience: {top}")
+    assert accounts == {a, c}, accounts
 
 
 # --- 12-13. the health check's reads and the catalog -------------------------------------------------------------

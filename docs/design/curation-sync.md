@@ -312,6 +312,32 @@ end $post$;
 
 **After 696, as built (#2244):** migration `701_curation_clock_service_role_read.sql` grants the service role SELECT on `curation_clock` (the Backend territory's rule that the service role reads anything; 696's `revoke all … from service_role` had taken it with the writes). The service role still holds no INSERT, UPDATE, DELETE or TRUNCATE, and nothing on `curation_clock_public`: the view is the browser's read, its audience reads the caller's accounts from the JWT, and only `authenticated` executes `curation_clock_audience()`, so a service-role SELECT on the view would be refused (and, with EXECUTE, empty). A backend reader reads the table, whole.
 
+**After 696, F16 (#2308): the read evaluates its audience once.** The policy and the view above made one read evaluate `curation_clock_audience()` four times: once in each of the policy's three arms (three hashed SubPlans) and once more in the view's join. Production measured that read at 4.9 ms mean over 1,266 calls (~133 shared buffers each, 2026-11-01), against gate #2203's 2.5 ms line. Migration `706_curation_clock_read_one_audience.sql` replaces both. Who follows whom is unchanged, the grants are 701's, and the audience function is untouched:
+
+```sql
+-- One hashed SubPlan over the (account, family) pairs the audience follows: the audience runs once per statement.
+-- ALTER, not drop + create: under statement autocommit the gap would answer every clock read empty.
+alter policy curation_clock_audience_read on public.curation_clock
+  using ((account_id, family) in (
+    select a.account_id, f.family
+      from public.curation_clock_audience() a
+     cross join lateral unnest(case
+       when a.mine then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares']
+       when a.edit then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links']
+       else array['board'] end) as f(family)));
+
+-- No join on the audience: the policy already keeps only the followed rows. `mine` is the caller's own accounts.
+create or replace view public.curation_clock_public with (security_invoker = true) as
+  select c.account_id, c.family, c.counter, c.account_id in (select public.current_account_ids()) as mine,
+         greatest(0, extract(epoch from statement_timestamp() - c.changed_at) * 1000)::bigint as age_ms
+    from public.curation_clock c;
+```
+
+- The CASE goes in order: own rows carry `mine` and `edit`, an edit share only `edit`, a read share neither. So own accounts follow all seven families, an edit share the board and the five curation families, a read share the board. Census (i) reads the families off that CASE.
+- The audience is not inlined (its `SET search_path` rules that out), so it is one Function Scan wherever it is called. Locally, one evaluation (0.33 ms) is the sum of its SECURITY DEFINER `current_account_ids()` calls, three in its body and two in `pipeline_shares`' policy [V, local].
+- **The trade:** PostgreSQL never pulls a policy's subquery up into a join, so a hashed SubPlan cannot drive an index. Without the view's join, nothing probes `curation_clock_pkey` per followed account: the read scans the clock table under the one hashed SubPlan, O(clock rows). § 3.8 has the numbers.
+- `$post$` asserts one SELECT policy for `authenticated` whose expression names the audience once, the view invoker with its five columns and no audience call, and 701's grants.
+
 **Decision 3: deferred constraint row triggers.** A no-op UPDATE is skipped, and the bump runs **once per (transaction, account, family)**.
 - Row triggers never fire on 0-row statements. That matters because there are about 21k autodedup steps a day that touch no curation [V·r].
 - Row triggers never fire on TRUNCATE either: a TRUNCATE of a clocked table moves no counter, so every open window keeps the rows it showed. **Never TRUNCATE a clocked table; delete instead.** Census (e) flags one in code or in a migration after 696 [V, #2244].
@@ -641,7 +667,12 @@ def require_acting_account_id(conn: TenantConn, ...) -> uuid.UUID: ...
 ### 3.8 Cost model
 
 Formulas:
-- **Clock reads:** visible windows ÷ T × ~1.8 KB, at ~2.3 ms of DB each (`pipeline_stages_public` mean 2.28 ms over 2,426 calls) [V·r].
+- **Clock reads:** visible windows ÷ T × ~1.8 KB, at ~2.3 ms of DB each (`pipeline_stages_public` mean 2.28 ms over 2,426 calls) [V·r]. **Measured (F16, #2308):**
+  - Production, under 696's read: 4.9 ms mean over 1,266 calls, ~133 shared buffers a call (2026-11-01) [V]. Each read evaluated the audience four times (§ 3.2).
+  - Migration 706 evaluates it once. A local lane database shaped like production (10 accounts, 6 members, 1 edit share; 300 warm reads as the share's recipient, 2026-11-01) went from 1.11 ms and 25 buffers to 0.42 ms and 8 buffers; the owner went from 1.08 ms and 21 buffers to 0.40 ms and 7 buffers [V, local].
+  - The production figure after the apply is owed to gate #2203: the same EXPLAIN, and a `pg_stat_statements` re-sample over ≥ 500 calls.
+  - **The trade (706):** the read scans `curation_clock`, O(clock rows), where 696's join probed `curation_clock_pkey` per followed account. Locally, at 2,000 accounts × 7 families (14,000 rows), the 706 read costs 1.35 ms and 250 buffers. 696's read cost 1.06–1.33 ms there; keeping the view's join beside the new policy would cost 0.58–0.66 ms, with two evaluations [V, local].
+  - So the 706 read costs about what 696's did once the clock holds ~2,000 accounts. Putting the view's join back restores the key probe for the price of that second evaluation. It is one forward migration, and the `load` cell (§ 3.9) is its trigger.
 - **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets, the lens lists and aggregates of every mounted Browse cohort included (ruling Q3(c), W6; under Q3(a), W1–W4, they waited for the next mount). A list under a hand pays once, at the leave. Coalesced per answer per window. The self-echo is included.
 
 | Scenario | Clock reads | Fan-out |
@@ -1039,7 +1070,7 @@ Each wave is one PR, with a draft PR opened early.
     - with `request.headers` `x-act-as` (valid owner, foreign owner, garbage) each caller sees own rows only and no error;
     - `curation_clock_audience()` returns only own accounts and share owners;
     - anon is denied.
-11. `EXPLAIN (format json)` of the read as a tenant uses `curation_clock_pkey`, with no seq scan on the clock.
+11. `EXPLAIN (format json)` of the read as a tenant uses `curation_clock_pkey`, with no seq scan on the clock. **Since 706 (F16):** `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` of the read shows exactly one `curation_clock_audience` node, run once; the same read maps `mine` right for own rows and an edit share's rows. At 2,000 accounts the audience still runs once, and the clock scan's filter is the one hashed SubPlan, not a per-row audience (§ 3.2, the trade).
 12. The `board_bumps` SQL returns 0 after scripted card writes.
 13. Catalog: 12 enabled deferred triggers; definer bump; invoker audience; no browser or service-role DML on the clock; view `security_invoker`; seed complete.
 
@@ -1113,6 +1144,7 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 - **F13** A "moved elsewhere" cue.
 - **F14** An open property merged away elsewhere follows its survivor: re-read the open property when an own curation family moves.
 - **F15** The self-echo re-reads no list: each committed local write reports the families it bumped, and the owner skips the lens list targets of a family whose counter moved by no more than this window's own writes since the last answer (§ 3.8). Until then a triage run refetches the list at its echoes (≤ one per clock answer, on the phone about every 15 s).
+- **F16** (built, #2308, migration 706): the clock read evaluates its audience once (§ 3.2, § 3.8, § 12).
 
 (F6 became W0.)
 
@@ -1311,3 +1343,16 @@ Where a wave built something other than the design, the section concerned now sa
    - The Feed's Skryté roll follows a hide and a restore made elsewhere (item 6's gap closed): `lensTargets` owes `browseKeys.cohortCards(FEED_HIDDEN_FILTERS)` as a list for the dismissed lens; the roll's key moved to `lib/feed` (`feedHiddenKey`).
    - Stated, not changed: the self-echo's list refetch during a triage run (§ 3.8; F15; the operator's call), the page scrollbar as a leave (Decision 7b, the release), parks in risk 14. `useListHold` hashes its keys without a cast.
    - Tests: `lib/useListHold.test.tsx` 12 (the two keyboard cases replaced by two that fail on the code as first built; +2 `useHeld`), `lib/curationSync.test.ts` 53 (the dismissal case also pins the Skryté roll), `pages/CollectionDetail.test.tsx` 41 (+3, the W6 case rewritten), `pages/phone/PhoneCollectionDetail.test.tsx` +1, `pages/Feed.test.tsx` +1; each new or rewritten case fails on the code as first built. Full vitest 4437 [V].
+
+**F16 (#2308), as built** (follow-up found while re-baselining gate #2203 after W6; branch `fix/curation-clock-read-one-audience` off `93cb1358e`):
+1. `migrations/706_curation_clock_read_one_audience.sql`. The number was claimed: 702 and 703 are on main from other sessions, and 704 and 705 sit in open PRs. The policy and the view are as § 3.2 shows.
+   - It uses `ALTER POLICY`, not the house's drop + create. Under statement autocommit that gap would answer every clock read empty, and each open window would read all its rows as gone.
+   - `CREATE OR REPLACE VIEW` kept 701's grants (checked on the lane database: the view `authenticated=r`, the table `authenticated=r`, `service_role=r`), so the migration grants nothing. `$post$` checks them.
+   - Applied twice by `psql -f` to a copy of the pre-706 schema; the second run changed nothing.
+2. The audience function is unchanged. Inlining was never the cause: the ticket read the view's audience as inlined, but `proconfig` (`search_path=""`) keeps the planner from inlining it, and every plan shows a Function Scan on it.
+   - Why the view's evaluation cost 2.7 ms and 275 buffers in the production EXPLAIN, against ~0.8 ms for each policy arm, is not established. Locally all four cost about the same (0.25–0.34 ms, 5–6 buffers each). One evaluation (0.33 ms) is the sum of its parts: three `current_account_ids()` calls in its body (~0.06 ms each) and the `pipeline_shares` read under its policy (0.14 ms, two more calls) [V, local].
+3. **Deviation, the operator's call:** the 2,000-account live test no longer asserts `curation_clock_pkey`. The task asked for one evaluation and for the primary key to stay in use. PostgreSQL turns a policy's subquery into a SubPlan and never pulls it up into a join, so one evaluation in the policy cannot drive an index, and a join in the view is a second evaluation. The test now pins what 706 guarantees at any size: one audience node, run once, and the clock scan's filter is the hashed SubPlan. § 3.8 has the cost at scale and the way back.
+4. `tests/test_curation_sync_census.py` (i): `policy_arms` reads the one pair lookup. It requires a single `curation_clock_audience()` call and no `*_account_ids` in the policy, then reads the families per caller kind off the CASE in order. The checks became: own = every clocked table, read share = 641's board, edit share = board + 641's edit tables, no share follows `shares`. Its bite cases were rewritten for the new text, plus four new ones: an arm on neither flag, the edit arm ahead of own, a bypass through `current_account_ids()`, and a second audience call. Rail (h) needed no change (DDL is no write).
+5. `tests/test_curation_clock_live.py`: new `test_one_clock_read_evaluates_the_audience_once_and_maps_mine` (exactly one audience node in the analyzed plan, `Actual Loops` 1; `mine` true on the edit recipient's own rows and false on the owner's six). `test_the_clock_read_uses_the_primary_key_at_scale` became `test_the_clock_read_evaluates_the_audience_once_at_scale` (item 3). The audience cases (items 7–10) are unchanged and green, and the clock lane has 35 tests.
+6. Docs: § 3.2 (706's SQL and the trade), § 3.8 (measured before and after, and the scale trade), § 9 item 11, § 11 F16; `references/tenancy.md` § Curation clock (the one-evaluation rule, its WHY and the trade); `docs/architecture.md` rule 18's clock paragraph (one evaluation per read).
+7. Owed: apply 706 through `apply_migration.yml` before the merge. After the apply, run the same EXPLAIN in production and re-sample `pg_stat_statements` about an hour later (gate #2203's line: ≤ 2.5 ms over ≥ 500 calls). The before and after numbers go on gate #2203.

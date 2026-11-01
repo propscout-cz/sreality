@@ -225,10 +225,21 @@ never reset, never rendered.
   follows whom: the caller's own accounts follow every family (`mine`); an owner who shared their pipeline is
   followed for `board` by a read share and for `board` + the five curation families by an edit share (`edit`);
   nobody follows another account's `shares`. The one policy, `curation_clock_audience_read` (FOR SELECT), restates
-  641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its arms to
-  `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker; `_TENANT_VIEWS`). A clock
-  read sends no `x-act-as`; one sent anyway hides the share rows (`pipeline_shares_party … and not acting()`), so it
-  fails closed to the caller's own rows, never an error.
+  641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its CASE (own / edit share /
+  read share → families) to `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker;
+  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows
+  (`pipeline_shares_party … and not acting()`), so it fails closed to the caller's own rows, never an error.
+- **One audience evaluation per read** (migration 706, F16 #2308). The policy is ONE `(account_id, family) in
+  (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine … when a.edit … else
+  array['board'] end) …)`, a single hashed SubPlan, and the view has no join on the audience. Its `mine` is
+  `account_id in (select current_account_ids())`. WHY: 696's three OR arms plus the view's join evaluated the
+  audience four times per read. That cost 4.9 ms mean in production against gate #2203's 2.5 ms; each evaluation is
+  about five definer `current_account_ids()` calls, whatever the table sizes. Never name the audience twice in the
+  policy or call it from the view; the live lane asserts one audience node per read. THE TRADE: a policy's subquery
+  never becomes a join, so the read scans `curation_clock` under that hashed SubPlan. That is O(clock rows), no
+  longer a `curation_clock_pkey` probe per followed account, and costs about 696's read at ~2,000 accounts
+  (`docs/design/curation-sync.md` § 3.8). The audience is never inlined (its `SET search_path`), so it is one
+  Function Scan wherever it appears.
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
@@ -263,9 +274,11 @@ never reset, never rendered.
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
-  commit-time failure, the read on `curation_clock_pkey`); the health alarm `curation_sync` (`triggers`,
-  `board_bumps`; W4's `reads` and `load` watch the browsers' read in `pg_stat_statements`); the SPA's read-contract
-  test `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
+  commit-time failure, one audience evaluation per read, at 2,000 accounts too); 706's `$post$` (one policy naming
+  the audience once, the view's five columns with no audience call, 701's grants); the health alarm
+  `curation_sync` (`triggers`, `board_bumps`; W4's `reads` and `load` watch the browsers' read in
+  `pg_stat_statements`); the SPA's read-contract test `tests/test_curation_clock_read_contract.py` (the owner's
+  select list against the view, never acting).
 
 ## Composite PK: `property_pipeline` (migration 295)
 
