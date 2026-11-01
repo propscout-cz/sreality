@@ -52,8 +52,7 @@ it (`api/`). They do not apply to the scraper.
      (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `compare_listing_images`, which writes the pairwise visual comparison to
      `listing_image_comparisons` (canonical-ordered pair) on cache miss.
-   - `assess_property_visuals`, one judgement per photo set and prompt version in `photo_set_assessments`
-     (`references/tool-registry.md`).
+   - `assess_property_visuals` (`references/tool-registry.md`), one judgement per photo set and prompt version.
    - `extract_building_units`, which writes the structural unit decomposition to
      `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `read_floor_plan`, which writes a structured Claude-vision analysis of one
