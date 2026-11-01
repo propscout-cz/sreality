@@ -66,7 +66,7 @@ calls an LLM must do the same.
   call also returns a `location` block (`location_data/text_reading.py`: ad_kind, town, part, street,
   č.p./č.o./č.ev., each quoted), stored RAW in `listing_description_enrichments.extracted`. **W3/W4**: the
   claim lane (hourly, and the worker right after each pass) mines the CURRENT reading (V1–V4) into bazos@10's
-  claims (a value replaces the stored one, a null slot keeps it: W3), stamped `mined_contract_version` (mig 581); no model call. A
+  claims, stamped `mined_contract_version` (mig 581); no model call. A
   `not_property` advert keeps its town; business premises are an offer (that edit: ≈ 54.7k re-reads, ≈ $25).
   The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
   `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
@@ -74,8 +74,8 @@ calls an LLM must do the same.
   (delisted adverts only once per schema; they are never filled), so batch such edits. Concurrency
   + the one pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
   NULL-only (`coalesce`), active rows only, with the `dirty_properties` enqueue in the same CTE and
-  no snapshot; a failed call is cached with an attempt count and given up on after 5 (so is an
-  empty location block, `ad_kind` and every slot null, on an `llm_text` portal: W3, `text_reading.is_empty`).
+  no snapshot; a failed call is cached with an attempt count and given up on after 5 (W3: so is an
+  empty location block on an `llm_text` portal, `text_reading.is_empty`).
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
   convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN

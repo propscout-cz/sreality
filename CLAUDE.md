@@ -246,7 +246,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY store of a listing's location (`listings`/
     `properties` hold none, a property one pointer, rule 15; no serving flag or granularity floor): a place read joins `ll on ll.listing_id =
     l.id`, casting `ll.geom::geography` for metres (uncast = DEGREES). Only `claims_intake` and `operator_corrections` write `location_claims`, both
-    through the one keyed upsert (one claim per listing, type and author; the operator outranks the portal); ONE resolver writes `listing_location`; at most TWELVE claim types, ≤ 1 contract entry each, the `obec_name` entry mandatory;
+    via one keyed upsert (one claim per listing, type, author; the operator outranks the portal); ONE resolver writes `listing_location`; ≤ TWELVE claim types, ≤ 1 contract entry each, `obec_name` mandatory;
     every display is `location_display_label`, every place filter `<level>_id = any(codes)`. Browse/map/watchdog/dedup serve a listing only
     if resolved or determined foreign, by ONE predicate (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every
     served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a default); a field is added only by operator ruling or a measured slowdown, only to `browse_list` (architecture.md § rule 25, § Location data).
