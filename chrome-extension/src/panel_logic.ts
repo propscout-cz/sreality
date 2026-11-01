@@ -50,6 +50,12 @@ export function createSubjectRouter(show: (subject: PanelSubject | null) => void
     connecting(tabId: number): void { said.set(tabId, 'connecting'); },
     tell(tabId: number, subject: PanelSubject | null): void { said.set(tabId, subject); heard(tabId); },
     forget(tabId: number): void { said.delete(tabId); heard(tabId); },
+    /* The tab finished loading and no page of it called in: nothing of ours is there. */
+    settled(tabId: number): void {
+      if (said.get(tabId) !== 'connecting') return;
+      said.delete(tabId);
+      heard(tabId);
+    },
   };
 }
 

@@ -57,13 +57,23 @@ function connect(tabId: number, fresh = false): void {
   const port = chrome.tabs.connect(tabId, { name: PANEL_PORT });
   ports.set(tabId, port);
   router.connecting(tabId);
+  let answered = false;
   port.onMessage.addListener((message: PortMessage) => {
+    answered = true;
     if (message.type === 'subject') router.tell(tabId, message.subject);
     else store.reread(message.property_id);
   });
   port.onDisconnect.addListener(() => {
     void chrome.runtime.lastError;  // a tab without our content script; read: Chrome logs an unchecked one
-    drop(tabId, port);
+    if (!answered) {
+      drop(tabId, port);
+      return;
+    }
+    /* A page that answered and went: its tab is loading the next one. The panel holds
+     * what it shows until that page calls in, or the tab loads without one (settled). */
+    if (ports.get(tabId) !== port) return;
+    ports.delete(tabId);
+    router.connecting(tabId);
   });
 }
 
@@ -72,6 +82,9 @@ chrome.runtime.onMessage.addListener((message: PanelCall, sender) => {
   if (message.type === 'panel' && tabId != null && router.ours(sender.tab)) connect(tabId, !message.open);
 });
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => { router.activate(tabId, windowId); });
+chrome.tabs.onUpdated.addListener((tabId, { status }) => {
+  if (status === 'complete' && !ports.has(tabId)) router.settled(tabId);
+});
 chrome.tabs.onAttached.addListener((tabId, { newWindowId }) => {
   if (router.ours({ windowId: newWindowId })) connect(tabId);
 });
