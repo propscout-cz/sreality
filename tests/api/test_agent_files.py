@@ -66,7 +66,7 @@ def _file(name: str = "report.csv", data: bytes = b"a,b\n", media_type: str = "t
 
 
 def _store(store: Any, *files: HostedFile) -> list[agent_files.StoredFile]:
-    return agent_files.store_files(files, store=store, account_id=ACCOUNT, run_id=7, attempt=2)
+    return agent_files.store_files(files, target=store, account_id=ACCOUNT, run_id=7, attempt=2)
 
 
 @pytest.mark.parametrize("name", ["../../other-account/x.csv", "/etc/passwd", "a/b/c.csv", "..", "%2e%2e%2fx"])
@@ -160,6 +160,7 @@ def test_the_real_store_uploads_to_the_private_bucket_idempotently_typed_as_noth
     [call] = wire.calls
     assert (call["method"], call["url"]) == ("POST", "https://ref.supabase.co/storage/v1/object/agent-files/acc/7/2/abc")
     assert call["headers"]["apikey"] == "sb_secret_x" and call["headers"]["x-upsert"] == "true"
+    assert "Authorization" not in call["headers"], "Supabase refuses a secret key as a bearer token: it is not a JWT"
     assert call["headers"]["Content-Type"] == OCTET and call["data"] == b"bytes" and call["timeout"]
 
 

@@ -298,12 +298,12 @@ billed call under every cap. A reply ending `refusal`, `model_context_window_exc
 `failed`, its stop reason on the row.
 
 **Files.** `agent_artifacts` holds what a run kept, written with the verdict under the held lease: a lost attempt writes no
-row. `agent_runs.files` still holds names and no route reads it. A `file` step holds a produced file's facts. The bytes
+row. `agent_runs.files` is no longer written or read. A `file` step holds a produced file's facts. The bytes
 are in the private bucket `agent-files` under `{account}/{run}/{attempt}/{sha256}` (`api/agents/agent_files.py`, one seam,
 `FileStore`, one real implementation): no model word reaches a key. An upload that fails marks the file (`storage_key`
 NULL) and the run succeeds. Each attempt has its own `RunFiles`, messages and container, and deletes what it put at the
 provider when it ends, a lease lost or a SIGTERM included: a retry uploads its inputs afresh and cannot name a deleted
-one. `work_once` passes no inputs: nothing asks for them yet.
+one. `work_once` passes no inputs: no ticket gives a user a way to hand a run a file.
 
 **The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger (a DELETE
 passes only once its run is gone, the cascade from an account's deletion): an input

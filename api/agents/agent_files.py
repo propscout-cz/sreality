@@ -1,8 +1,4 @@
-"""A run's produced files in Supabase Storage (ADR-0006): the executor stores them, the run route serves them, a sweep
-removes what no row wants. The bucket is private with no policy, so the row's RLS, read by the route, is the one gate.
-
-Nothing about an object comes from the model: its key is ours and its stored type is bare bytes. A name and a type stay on
-the row as data, and only `file_response` turns them into a browser's headers."""
+"""A run's produced files in Supabase Storage (ADR-0006): stored by the executor, served by the run route, swept when no row wants them."""
 
 from __future__ import annotations
 
@@ -51,6 +47,8 @@ class StoreError(Exception):
 
 
 class FileStore(Protocol):
+    """The bucket: nothing about an object comes from the model. Its key is ours and its stored type is bare bytes."""
+
     def put(self, key: str, data: bytes) -> None: ...
     def get(self, key: str) -> bytes | None: ...
     def delete(self, keys: Sequence[str]) -> None: ...
@@ -61,7 +59,8 @@ class SupabaseStore:
 
     def __init__(self, url: str, key: str) -> None:
         self._base = f"{url.rstrip('/')}/storage/v1/object/{BUCKET}"
-        self._auth = {"apikey": key, "Authorization": f"Bearer {key}"}
+        # `apikey` alone: Supabase refuses a secret key on `Authorization: Bearer`, since it is not a JWT.
+        self._auth = {"apikey": key}
 
     def _call(self, method: str, url: str, *, headers: Mapping[str, str] | None = None, **body: Any) -> requests.Response:
         try:
@@ -130,19 +129,22 @@ def _put(target: FileStore, key: str, data: bytes) -> str | None:
     return None
 
 
-def store_files(files: Sequence[HostedFile], *, store: FileStore | None, account_id: uuid.UUID, run_id: int,
+def store_files(files: Sequence[HostedFile], *, target: FileStore | None, account_id: uuid.UUID, run_id: int,
                 attempt: int) -> list[StoredFile]:
     """Upload an accepted answer's files, each under a key of ours. Never raises: a file that cannot be kept is marked and
     the run still succeeds, since its answer is paid for and the provider has already dropped the bytes."""
-    if store is None and files:
+    if target is None and files:
         LOG.error("AGENT_FILE no store on this service: run=%s keeps %s file(s) as names only", run_id, len(files))
     deadline = _monotonic() + STORE_BUDGET_S
     stored = []
     for file in files:
         sha = hashlib.sha256(file.data).hexdigest()
         key = None
-        if store is not None and _monotonic() < deadline:
-            key = _put(store, f"{account_id}/{run_id}/{attempt}/{sha}", file.data)
+        if target is not None:
+            if _monotonic() < deadline:
+                key = _put(target, f"{account_id}/{run_id}/{attempt}/{sha}", file.data)
+            else:
+                LOG.warning("AGENT_FILE out of time run=%s attempt=%s sha=%s: kept as a name only", run_id, attempt, sha)
         stored.append(StoredFile(file.name, file.media_type, len(file.data), sha, key))
     return stored
 
@@ -169,6 +171,6 @@ def sweep(conn: psycopg.Connection) -> None:
         names = [row[0] for row in conn.execute(_ORPHANS, (BUCKET, ORPHAN_AGE_S, SWEEP_BATCH)).fetchall()]
         if names:
             target.delete(names)
-            LOG.info("AGENT_FILE swept %s orphan(s)", len(names))
+            LOG.info("AGENT_FILE asked storage to remove %s orphan(s)", len(names))
     except (StoreError, psycopg.Error) as exc:
         LOG.warning("AGENT_FILE sweep failed, next hour tries again: %s", exc)

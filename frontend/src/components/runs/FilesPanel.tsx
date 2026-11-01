@@ -6,8 +6,8 @@ import { fmtBytes } from '@/lib/attachments';
 import { saveBlob } from '@/lib/shareFiles';
 
 /* A run's files: names, sizes, a download. A name is the model's words, so it is React text and nothing here opens a file:
- * the bytes only ever leave as a saved download, never as an object URL a tab could render on this origin (this app has no
- * Content-Security-Policy to stop a page that ran here). The API has already typed them as inert (api/agents/agent_files.py). */
+ * the bytes only leave through saveBlob as a download, never in a tab that could render them on this origin (this app has
+ * no Content-Security-Policy to stop a page that ran here). The API has already typed them as inert (api/agents/agent_files.py). */
 
 function FileRow({ runId, file }: { runId: number; file: AgentRunFile }) {
   const [busy, setBusy] = useState(false);

@@ -80,7 +80,7 @@ any provider. `run_python` is the name the design and the admin page give it; th
 - **Files stay.** Each file of an accepted answer goes to the private `agent-files` bucket and gets an `agent_artifacts`
   row, in the transaction of the verdict, so a run shows only the attempt that finished (`api/agents/agent_files.py`). A
   file that cannot be stored is marked `Not stored` and the run still succeeds. The Runs page offers a download, through
-  the API and never as active content. Input files have no caller: `work_once` passes none and the spec asks for none.
+  the API and never as active content. `work_once` passes no input files: no ticket gives a user a way to hand a run one.
 - **Files leave.** When the run ends, however it ends, every file it uploaded or got is deleted from Anthropic. A
   failed delete is a warning naming the file id. Ids are known only from a reply that came back, so a process killed
   mid-run, or a model call that failed after its code ran (a timeout, a 5xx), leaves produced files there until someone

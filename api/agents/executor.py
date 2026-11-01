@@ -184,7 +184,7 @@ UPDATE agent_runs SET definition_sha = %(definition_sha)s, tool_set_sha = %(tool
 _FINISH = f"""
 UPDATE agent_runs
    SET status = %(status)s, stop_reason = %(stop_reason)s, error = %(error)s, result_markdown = %(result_markdown)s,
-       cited_property_ids = %(cited_property_ids)s, files = %(files)s, proposals = %(proposals)s, output = %(output)s,
+       cited_property_ids = %(cited_property_ids)s, proposals = %(proposals)s, output = %(output)s,
        lease_until = NULL, finished_at = now(), cost_usd = {_LEDGER_COST}
  WHERE {_HELD}"""
 
@@ -461,8 +461,6 @@ def _finish(conn: psycopg.Connection, run: _Claimed, status: Literal["succeeded"
         "status": status, "stop_reason": stop_reason, "error": error,
         "result_markdown": _storable(answer.markdown) if answer else None,
         "cited_property_ids": list(answer.cited_property_ids) if answer else [],
-        # Names only, and read by no route: agent_artifacts holds each file's facts.
-        "files": [_no_nul(file.name) for file in answer.files] if answer else [],
         "proposals": Jsonb(_storable(answer.proposed_actions) if answer else []),
         "output": Jsonb(_storable(answer.output)) if answer and answer.output is not None else None,
     }
@@ -518,8 +516,8 @@ def _execute(conn: psycopg.Connection, run: _Claimed, providers: Mapping[str, Co
     if outcome.answer is None:
         return _finish(conn, run, "failed", stop_reason=outcome.stop_reason,
                        error=f"the run ended without an accepted answer: {outcome.stop_reason}")
-    stored = agent_files.store_files(outcome.answer.files, store=agent_files.store(), account_id=run.account_id, run_id=run.id,
-                                     attempt=run.attempts)
+    stored = agent_files.store_files(outcome.answer.files, target=agent_files.store(), account_id=run.account_id,
+                                     run_id=run.id, attempt=run.attempts)
     return _finish(conn, run, "succeeded", stop_reason=outcome.stop_reason, answer=outcome.answer, stored=stored)
 
 

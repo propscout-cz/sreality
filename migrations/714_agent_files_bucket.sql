@@ -10,9 +10,9 @@
 --   run: only the attempt that finishes writes rows, in the same transaction as its verdict.
 -- BYTES WITH NO ROW (an attempt that lost its lease; an account's deletion, which cascades the rows) go in agent_files.sweep,
 --   which reads storage.objects on the service connection. storage_key's index keeps that NOT EXISTS cheap.
--- APPLY AROUND THE MERGE, AND BEFORE #2075 SWITCHES THE EXECUTOR ON. The merged code reads no new column and no worker runs
---   yet, so neither order breaks anything today. On a live executor without this file every upload is refused, and marking
---   the file as not stored fails its insert, so the run retries and pays again.
+-- APPLY BEFORE MERGING (apply_migration.yml). The merged code reads no new column and no worker runs yet, so a late apply
+--   breaks nothing today. On a live executor without this file every upload is refused, and marking the file as not stored
+--   fails its insert, so the run retries and pays again: #2075 must not switch on before it.
 -- Additive and idempotent: a re-apply sets the bucket back to these limits and leaves its objects. No secret is involved.
 -- Verify:
 --   select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'agent-files';  -- f, 20971520, {application/octet-stream}
@@ -32,6 +32,7 @@ create unique index if not exists agent_artifacts_run_name_uq on agent_artifacts
 create index if not exists agent_artifacts_storage_key_idx on agent_artifacts (storage_key) where storage_key is not null;
 comment on column agent_artifacts.kind is 'The media type the producer named: a fact, never what a browser is served (agent_files.file_response).';
 comment on column agent_artifacts.storage_key is 'The object in bucket agent-files; NULL when its bytes could not be kept.';
+comment on column agent_runs.files is 'Unused since #2073, always empty from then: agent_artifacts holds a run''s files. Dropping it is a later destructive migration.';
 
 commit;
 

@@ -351,9 +351,8 @@ Database:
   gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
   worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
   ever calls `connect_session()`.
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
-  compatibility; the v1 scraper connects to Postgres directly and does not need them.
-  (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (`sb_secret_...`, **not** a JWT): scrapers
+  don't read them; the key is `api/agents/agent_files.py`'s (secrets inventory). **On the
   Railway API service, `SUPABASE_URL` is now load-bearing**, not just forward-compatible:
   `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs (its only verifier;
   `SUPABASE_JWT_SECRET` is read by nothing since 2026-10-13 and can be deleted from Railway).

@@ -224,6 +224,7 @@ export const NEEDS_YOU: { head: string; text: string; ticket?: number }[] = [
   { head: 'Rotate the GitHub tokens.', text: 'The last credentials pending.', ticket: 2061 },
   { head: 'Set the allowlist and plan.', text: 'Put the accounts on the allowlist and on the Pilot plan (Settings, Tiers). Until both are done, nobody can start a run.', ticket: 2075 },
   { head: 'Give the API and agent-worker the Supabase secret key.', text: 'Variable SUPABASE_SERVICE_ROLE_KEY on both, and SUPABASE_URL on agent-worker. Without it a run still answers, but its files are marked not stored and nothing can be downloaded.', ticket: 2075 },
+  { head: 'Confirm files download through the API.', text: 'Your ruling said the website reads them directly from Supabase. As built they pass through the API, which sets safe download headers and needs the key above. The reasoning is in ADR-0006.', ticket: 2073 },
   { head: 'Pick the Valuo monthly cap.', text: 'One number, the same for every account. No agent can call Valuo until it is set, and your own clicks on the property page count towards it.' },
   { head: 'Edit the photo facet list.', text: 'Claude drafts version 1.', ticket: 2066 },
   { head: 'Grade 10 scout shortlists.', text: 'This happens before the production path is finished.', ticket: 2069 },
