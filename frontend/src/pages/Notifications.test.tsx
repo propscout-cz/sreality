@@ -487,6 +487,25 @@ describe('<Notifications> follows the curation clock', () => {
     expect(row).toHaveAccessibleDescription('');
   });
 
+  it('a failed read offers a retry; a failed re-read keeps the rows, the banner under them', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    vi.mocked(listNotifications).mockRejectedValue(new Error('down'));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    expect(await screen.findByText(/Failed to load/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name })).toBeInTheDocument();
+
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Failed to load/)).toBeNull());
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('');
+  });
+
   it('a mark-seen that fails puts the row and the count back', async () => {
     const { qc } = renderPage();
     await waitFor(() => expect(listNotifications).toHaveBeenCalled());

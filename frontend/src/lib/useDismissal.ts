@@ -19,7 +19,7 @@ import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { dismissProperty, undismissProperty } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { browseReads, settlePatches, settleRereads } from '@/lib/curationSettle';
-import { dismissalKeys, fetchIsDismissed } from '@/lib/queries';
+import { dismissalKeys, fetchIsDismissed, notificationKeys } from '@/lib/queries';
 import { dismissToast, pushToast } from '@/lib/toast';
 import { cachePatch } from '@/lib/revalidate';
 import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
@@ -34,6 +34,9 @@ export function useDismissal(property_id: number) {
   const actAs = useActAs();
   const stateKey = actingKey(actAs, dismissalKeys.state(property_id));
   const countKey = actingKey(actAs, dismissalKeys.count);
+  /* A hidden property's alerts leave the bell and the feed; an owner's dismissal, made
+   * acting, moves no bell of mine (lib/curationSync `property_dismissals`). */
+  const bell = actAs ? [] : [notificationKeys.all];
   const state = useQuery({
     queryKey: stateKey,
     queryFn: () => fetchIsDismissed(property_id, ...actOpts(actAs)),
@@ -44,7 +47,7 @@ export function useDismissal(property_id: number) {
     mutationKey: actingKey(actAs, ['write', 'dismissal', 'restore']),
     mutationFn: () => undismissProperty(property_id, ...actOpts(actAs)),
     patch: () => [cachePatch({ queryKey: stateKey, exact: true }, () => false)],
-    revalidate: [stateKey, countKey, ...browseReads(actAs, browseKeys.all)],
+    revalidate: [stateKey, countKey, ...bell, ...browseReads(actAs, browseKeys.all)],
   });
 
   const dismiss = useOptimisticWrite({
@@ -57,6 +60,7 @@ export function useDismissal(property_id: number) {
     revalidate: (_vars, failed, qc) => [
       stateKey,
       countKey,
+      ...bell,
       ...settleRereads(qc, property_id, 'dismissed', failed, actAs),
     ],
     onSuccess: () => {

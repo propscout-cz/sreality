@@ -52,7 +52,14 @@ export const SYNC_TABLES = {
     reads: [pipelineKeys.stages, pipelineKeys.board, pipelineKeys.members],
     lens: 'pipeline',
   },
-  property_dismissals: { family: 'dismissals', reads: [dismissalKeys.all], lens: 'dismissed' },
+  /* A dismissal also hides a property's alerts (api/notifications REACHABLE_SQL), so the
+   * bell and the feed read it too (W7); own only, a delegate never reads my bell. */
+  property_dismissals: {
+    family: 'dismissals',
+    reads: [dismissalKeys.all],
+    ownReads: [notificationKeys.all],
+    lens: 'dismissed',
+  },
   collections: {
     family: 'collections',
     reads: [curationKeys.collections],
@@ -97,10 +104,11 @@ export type SyncTable = keyof typeof SYNC_TABLES;
 
 /* What a DELETE on a table writes besides it: every foreign-key action onto a
  * synced table — `on delete cascade` from migrations 202 (memberships) and 610
- * (collection shares), `on delete set null (note_id)` from 660 (a note's files
- * stay, unlinked). A stage DELETE has none: 295's card key restricts it. */
+ * (collection shares), 206 (a monitor's alerts), `on delete set null (note_id)`
+ * from 660 (a note's files stay, unlinked). A stage DELETE has none: 295's card key
+ * restricts it. */
 const ON_DELETE: Readonly<Partial<Record<SyncTable, readonly SyncTable[]>>> = {
-  collections: ['collection_properties', 'collection_shares'],
+  collections: ['collection_properties', 'collection_shares', 'notification_dispatches'],
   tags: ['property_tags'],
   property_notes: ['property_attachments'],
 };

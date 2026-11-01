@@ -682,7 +682,7 @@ def require_acting_account_id(conn: TenantConn, ...) -> uuid.UUID: ...
 
 **Decision 16 (changed): in scope** are the 12 tables above and every surface that reads them: kanban, phone stages, Browse glyphs, lens aggregates, property header and `CurationBlock`, collections, viewings, note counts, files, links, the share switcher and revocation. Every writer is covered.
 
-**In since W7 (#2327, migration 715; ruling Q1b re-ruled 2026-11-01):** the notification bell's number, the feed and the Watchdog list, through an eighth family, `notifications`, on `notification_dispatches` and `notification_subscriptions` (own-only). A mark-seen anywhere, an event a producer writes, a merge's re-point and a retired or edited watchdog move it; `VISIBLE_SQL`'s dependence on `notification_subscriptions.retired_at` is covered by the second trigger. Its dependence on `properties.first_seen_at` (a merge withdrawing a 'new' event, rule 16's `RETRACTED_SQL`) is not: market data carries no clock (rail f), so that case reaches the bell at its next mount, as every market-side change does. The 30 s and 60 s polls are gone.
+**In since W7 (#2327, migration 715; ruling Q1b re-ruled 2026-11-01):** the notification bell's number, the feed and the Watchdog list, through an eighth family, `notifications`, on `notification_dispatches` and `notification_subscriptions` (own-only). A mark-seen anywhere, an event a producer writes, a merge's re-point and a retired or edited watchdog move it; `VISIBLE_SQL`'s dependence on `notification_subscriptions.retired_at` is covered by the second trigger, and its dependence on `property_dismissals` by that table's own family, which owes the bell and the feed too. Its dependence on `properties.first_seen_at` (a merge withdrawing a 'new' event, rule 16's `RETRACTED_SQL`) is not covered: market data carries no clock (rail f), so that case reaches the bell at its next read, the next change of the family or a reload. The 30 s and 60 s polls are gone; only a read that failed asks again (the bell each minute, the feed's Retry).
 
 **Explicitly out:**
 - Ad status and price (the "Stav" filter); a census forbids clocking `listings`, `properties` or `listing_snapshots`.
@@ -775,9 +775,9 @@ Registry edits (W3):
 **Kill switches (Decision 19).**
 - **Reader:** a forward migration `revoke select on curation_clock_public, curation_clock from authenticated; revoke execute on function curation_clock_audience() from authenticated;`.
   - Clients go to permanent-error mode, which sheds the load.
-  - Polls are unaffected (Q1b out).
+  - No poll stands behind it since W7: the bell and the feed stop following too, until a reload. (Until W7: polls unaffected.)
   - Re-enabling takes a migration that re-grants.
-- **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 12, carrying `-- ci-allow-clock-disable: <reason>`.
+- **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 14, carrying `-- ci-allow-clock-disable: <reason>`.
   - It is non-destructive (database skill).
   - The `triggers` cell goes red while it is in force, by intent.
   - Census (a) and (d) do not read the enabled state and are unaffected.
@@ -912,7 +912,7 @@ Each wave is one PR, with a draft PR opened early.
   - `curation_clock` (the clock itself);
   - `delegated_edits` (written in its curation row's transaction);
   - `property_pipeline_events` (same, board);
-  - `notification_dispatches` (Q1b);
+  - `notification_dispatches` (Q1b; clocked since W7, § 3.7);
   - presets, groups, subscriptions, estimations, buildings, entitlements, dashboards and dashboard shares (F5).
 - `tests/test_tenant_isolation_live.py`: `curation_clock_public` added to `_TENANT_VIEWS`.
 - `tests/test_curation_sync_census.py` (offline):
@@ -1468,4 +1468,5 @@ Where a wave built something other than the design, the section concerned now sa
 5. Named residual: a merge that moves a property's `first_seen_at` can withdraw a 'new' event (`RETRACTED_SQL`) without touching that account's dispatch rows, so the bell shows it until its next read. The clock cannot see market data (rail f). With the polls gone that read comes at the next change of the family, a reload or a remount; ruling Q1b's concern, accepted here and flagged to the operator in the PR.
 6. Assumptions the ruling did not state, each flagged in the PR body: a new event moves the bell live too; the Watchdog list follows (its table is clocked for the bell); the feed holds under the hand; the polls are removed rather than kept beside the clock.
 7. Tests: `pages/Notifications.test.tsx` +6 (no poll; a row read elsewhere follows; held under the pointer and paid at the leave; a click under the pointer repaints with the write in flight; a failed write puts both back; the plain click), `lib/unreadCount.test.tsx` +2 (the bell follows the clock, no poll, never on a share), `pages/NotificationOpen.test.tsx` (owed, not invalidated); `tests/test_curation_clock_live.py` +1 (the operator's case) and two more table rows of the per-table case.
-8. Owed after the deploy: the Railway status, the health `triggers` cell at 14, the operator's two-window recipe on the bell, and the trigger count and the bell's reads on gate #2203.
+8. Adversarial review repairs: `VISIBLE_SQL` also reads `property_dismissals`, which the first build missed, so a hidden property's alerts stayed on the bell until the next tick: its table entry owes `notificationKeys.all` (own only), and `useDismissal` re-reads it locally. A collection delete cascades to `notification_dispatches` (206), so `ON_DELETE` names it. With no poll a failed read had no way back: a failed first load of the bell showed 0, and the clock read goes to PostgREST, so it keeps answering while the API is down. The bell asks again each minute only while its last read failed; the feed offers a Retry and keeps its rows when a re-read or a page fails.
+9. Owed after the deploy: the Railway status, the health `triggers` cell at 14 (Problem from the apply until the worker runs this merge: `verify_pipeline` pins the count exactly, so apply right before enqueueing), the operator's two-window recipe on the bell, and the trigger count and the bell's reads on gate #2203.

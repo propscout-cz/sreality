@@ -41,6 +41,7 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
+import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
@@ -53,6 +54,7 @@ import type {
 type SourceFilter = NotificationSourceKind | 'all';
 
 const PAGE_SIZE = 50;
+const noop = () => {};
 
 /* dispatchTarget's answer for a row with nothing to open: the feed itself. */
 const FEED = ROUTES.notifications.build();
@@ -118,6 +120,17 @@ export default function Notifications() {
   });
 
   const rows = feed.rows;
+  /* No poll comes back for a failed read, so it offers its own retry; a failed next
+   * page or re-read keeps the rows already drawn, the banner under them. */
+  const failed = feed.isError ? (
+    <ErrorBanner
+      flush={rows.length === 0}
+      title="Failed to load:"
+      message={feed.error?.message ?? 'The notifications did not load.'}
+      retryLabel="Retry"
+      onRetry={feed.isFetchNextPageError ? feed.fetchNextPage : feed.refetch}
+    />
+  ) : null;
   /* Shell's one unread observer (lib/unreadCount), the number the bells show. */
   const { count: unread } = useUnreadCount();
 
@@ -144,10 +157,8 @@ export default function Notifications() {
       <div {...hand} className="mt-7 max-md:mt-4">
         {feed.isLoading ? (
           <div className="text-sm text-[var(--color-ink-3)]">Loading…</div>
-        ) : feed.isError ? (
-          <div className="text-sm text-[var(--color-brick)]">
-            Failed to load: {feed.error?.message}
-          </div>
+        ) : failed && rows.length === 0 ? (
+          failed
         ) : rows.length === 0 ? (
           <EmptyState seen={seen} />
         ) : (
@@ -162,13 +173,15 @@ export default function Notifications() {
             {/* Only while there is more: the list ends silently, as it did under the button. */}
             {feed.hasNextPage && (
               <InfiniteSentinel
-                onReach={feed.fetchNextPage}
+                /* A failed next page waits for the banner's retry: it would ask again in a loop. */
+                onReach={feed.isFetchNextPageError ? noop : feed.fetchNextPage}
                 hasNextPage
                 isFetchingNextPage={feed.isFetchingNextPage}
                 loadedCount={rows.length}
                 total={null}
               />
             )}
+            {failed}
           </>
         )}
       </div>

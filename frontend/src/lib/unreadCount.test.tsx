@@ -1,6 +1,6 @@
 /* The unread count's one observer (W5a, AUDIT F9): Shell mounts it once, and
  * every reader (the desktop badge, the phone bell, the Notifications page) gets
- * its number from it, so one poll serves both frames. Gated by the agenda, as
+ * its number from it, so one read serves both frames. Gated by the agenda, as
  * the nav item is; a mark-read anywhere re-reads it through the curation clock (W7).
  * The same number is the installed app's icon badge (ruling R4, lib/appBadge);
  * in the page only this observer sets it (an identity change clears it). */
@@ -70,7 +70,7 @@ describe('the unread observer', () => {
     expect(api.getNotificationUnreadCount).toHaveBeenCalledTimes(1);
   });
 
-  it('polls nothing and hides every bell when the plan has no notifications agenda', () => {
+  it('reads nothing and hides every bell when the plan has no notifications agenda', () => {
     signIn(false, { notifications: false });
     renderReaders();
     expect(screen.getByText('badge: hidden')).toBeInTheDocument();
@@ -114,12 +114,15 @@ describe('the unread observer', () => {
     expect(familyTargets(qc, 'notifications', 'owner-1')).toEqual([]);
   });
 
-  it('polls nothing: the clock is its one trigger', async () => {
+  it('polls nothing while its reads succeed; only a failed read asks again', async () => {
     signIn(false, { notifications: true });
     const qc = renderReaders();
     expect(await screen.findByText('bell: 4')).toBeInTheDocument();
-    const query = qc.getQueryCache().find({ queryKey: notificationKeys.unreadCount });
-    expect(query?.observers[0].options.refetchInterval).toBeUndefined();
+    const query = qc.getQueryCache().find({ queryKey: notificationKeys.unreadCount })!;
+    const interval = query.observers[0].options.refetchInterval as (q: typeof query) => number | false;
+    expect(interval(query)).toBe(false);
+    query.setState({ status: 'error' });
+    expect(interval(query)).toBe(60_000);
   });
 });
 

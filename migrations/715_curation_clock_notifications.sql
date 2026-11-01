@@ -14,9 +14,12 @@
 --   does for any family since 696, and a row that appears counts as moved (lib/curationSync clockChanges), so the first
 --   change is followed like any other. An SPA deployed before this migration meets a family it does not know and
 --   re-reads nothing for it (familyTargets over an empty table set) until its own deploy, keeping its polls until then.
+--   The third table VISIBLE_SQL reads, property_dismissals, is clocked since 696: its family re-reads the bell in the SPA.
 -- WHAT THE CLOCK STILL CANNOT SEE: a merge that moves a property's first_seen_at can withdraw a 'new' event
 --   (api/notifications.py RETRACTED_SQL) without touching that account's dispatch rows; market data carries no clock
---   (census rail f), so that case reaches the bell at its next mount, as every market-side change does.
+--   (census rail f), so that case reaches the bell at its next read: the next change of the family, or a reload.
+-- THE GAP: scripts/verify_pipeline.py pins the trigger count exactly, so the health `triggers` cell reads Problem from
+--   this apply until the worker deploys the merge carrying 14. Apply right before enqueueing the merge.
 -- COST: the producers write dispatches as service_role, one statement per transaction (api/notifications.py
 --   _commit_one). The trigger fires per row and bumps each (account, family) once per transaction, so a set-based
 --   monitor statement that writes for N accounts adds N clock updates and N row locks at its commit; an ON CONFLICT DO
