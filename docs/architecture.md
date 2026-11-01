@@ -1009,6 +1009,17 @@ rules. Identify which one a task belongs to before you start.
   never while hidden, and owes each moved family's reads through `revalidate`. `main.tsx` calls
   `applySyncQueryDefaults` beside it, so that read is curation's one reconnect path, and
   `refetchOnWindowFocus` stays off.
+- **An open Browse, Feed or collection list follows a change made elsewhere at once, but not
+  under the hand** (ruling Q3(c), 2026-11-01; `LENS_REREAD` `'now'`). Within one clock read its
+  rows leave and enter (every loaded page re-read from the first) and its count, map and stats
+  re-read. While the pointer is over the list or a finger is down on it (keyboard focus is no
+  hand), `lib/useListHold` holds the list's own keys through `parkReads`: the scheduler's
+  re-reads park and are paid when the hand leaves; the list's first load, its pages and its own
+  refetch pass, the count, map and stats are never held, and a click of the user's own composes
+  through its own hold. A new list surface spreads `useListHold(keys)` on its container; rows
+  drawn from a read that also carries a count (the collection page's table) are held in the view
+  with `useHeld`, never by holding that read. The Feed's Skryté roll, which no lens engages, is
+  owed by name on every dismissal change (`lensTargets`).
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and
@@ -1053,20 +1064,21 @@ rules. Identify which one a task belongs to before you start.
   path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
-  `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
+  `closeBundle` hook overwrites it at build time from `PORTALS[].pageHosts` (same pattern already
   used there for `name`), and `portalIds.test.ts` fails when the template
-  and the rules name different hosts, so onboarding a new portal means its rule in
+  and the page hosts differ, so onboarding a new portal means its rule in
   `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
   stays empty: the background worker calls the API and the auth service under ordinary CORS, and the
   store package's guard (`chrome-extension/release/allowed.ts`, a hand-written literal) holds the
   permissions, the portal sites and the empty host list; CI fails a PR whose build differs from it. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
   API) rather than a full page load, which MV3's manifest-declared content script does NOT
-  re-inject for. `background.ts` listens for `chrome.webNavigation.onHistoryStateUpdated`
-  (`webNavigation` permission, filtered to the same `PORTALS` host list) and relays the new URL
-  to the tab's already-injected content script (`route_changed` message), which re-runs its
-  page-type decision (`content.ts`, the entry and router) without needing a real reload — this
-  fixed the "panel only appears after F5" bug. The router keys on the **listing identity**
+  re-inject for. The content script watches the Navigation API itself (`currententrychange`,
+  which reaches its isolated world; live-checked on nine of the ten page hosts, ceskereality by hand, #2277) and re-runs its
+  page-type decision (`content.ts`, the entry and router) without a reload — no webNavigation
+  permission any more, which was the install warning's "read your browsing history" line. This fixed the
+  "panel only appears after F5" bug. The content script runs only on each portal's `pageHosts`
+  (`portalIds.ts`): the redirect-only hosts stay in `hosts` for pasted links. The router keys on the **listing identity**
   (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't
   re-open the side panel and discard the operator's note draft + calculator edits. Every panel
   open is a new **epoch** (`panel.ts`): anything resuming after an `await` (the lookup, the price
@@ -3247,8 +3259,8 @@ renumber.** Navigate by area:
     list shows the row is the stale side only while one of its reads is still owed
     (`lib/revalidate` `isOwed`) or was read before the list was (`dataUpdatedAt`, which a patch
     keeps): then that cohort re-reads whole and nothing drops; otherwise the LIST is stale — a
-    change made elsewhere, which a Browse list follows only at its next mount (ruling Q3(a),
-    2026-10-31) — and the row is judged like any other. Pipeline writes and
+    change made elsewhere whose re-read has not landed, or waits under the user's hand (ruling
+    Q3(c), 2026-11-01) — and the row is judged like any other. Pipeline writes and
     dismissals settle at the click (`settlePatches` inside `useOptimisticWrite`, rolled back on
     failure); collection and tag writes (`settleCollectionWrite` / `settleTagWrite`) after the ack,
     under one momentary hold so no read lands between the member map and the Browse patches. It
@@ -5076,7 +5088,11 @@ the reader, and the payload readers keep walking their own through `claims_commo
 That is how idnes@6 reads an unpinned ad's street off its map highlight ("Zvýrazněná ulice <name>",
 the one feature with no id, picked by its title) and off the address line when the page has no
 highlight, and how realitymix@7 reads its heading before the map's `data-address` (operator ruling
-2026-10-25). Two further rails: `ReaderContract`
+2026-10-25). realitymix@8 (W4, 2026-10-31) re-pointed that portal's `estimated` marker from
+`div#print-map, div#map` to `div#map` alone: where the agency gave no GPS the server writes its own
+geocode onto `#print-map` and leaves `#map` blank, so the blank interactive node is the only sign of a
+server geocode, and the first-match read of the print node had never seen it (the forecast of what
+moves is the roadmap's, not this page's). Two further rails: `ReaderContract`
 records each reader's whole `locator` appetite (the keys it requires plus the ones it merely reads),
 derived back out of the reader bodies by an AST scan over each reader and the helpers it delegates
 its locator to, and a locator key outside that union is refused — a declared key no reader consults

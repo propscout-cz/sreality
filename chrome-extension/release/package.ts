@@ -91,10 +91,15 @@ export function checkPackage(
     violations.push('manifest has a "key": the store assigns the ID, so the package must not pin one');
   }
 
+  // A host counts where an address names it (after `//` or as a subdomain's tail), so the
+  // display name "PropScout.cz" never reads as one even if the app moves to the bare domain.
   const text = JSON.stringify(manifest).toLowerCase();
   const hosts = new Set([...deployedHosts, ...DEPLOYED_HOST_MARKERS].map((h) => h.toLowerCase()).filter(Boolean));
   for (const host of hosts) {
-    if (text.includes(host)) violations.push(`manifest names a deployed hostname: ${host}`);
+    const escaped = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(//|\\.)${escaped}(?![a-z0-9-])`).test(text)) {
+      violations.push(`manifest names a deployed hostname: ${host}`);
+    }
   }
 
   const description = typeof manifest.description === 'string' ? manifest.description : '';
@@ -105,7 +110,7 @@ export function checkPackage(
 
   for (const [path, body] of Object.entries(files)) {
     if (path.endsWith('.map')) violations.push(`${path}: source maps stay out of the store package`);
-    else if (/\/[/*][#@] sourceMappingURL=/.test(body)) {
+    else if (/\/[/*][#@]\s*sourceMappingURL=/.test(body)) {
       violations.push(`${path} references a source map (sourceMappingURL)`);
     }
   }

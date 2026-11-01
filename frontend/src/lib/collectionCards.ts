@@ -8,6 +8,7 @@
  * pages list it apart from the collection's own read. */
 
 import { useMemo } from 'react';
+import type { QueryKey } from '@tanstack/react-query';
 
 import { browseKeys } from '@/lib/browseKeys';
 import { useCollectionMembers } from '@/lib/collectionCache';
@@ -28,6 +29,14 @@ export function collectionCardFilters(id: number): ListingFilters {
     showDismissed: true,
     collections: { set: null, in: [id], out: [] },
   };
+}
+
+/** What a hand on the collection page holds (lib/useListHold): its cards in
+ * every order. Never the collection's own read, which also carries the header's
+ * name and member count (a count is never held): the rows drawn from it, the
+ * table and the phone's "Bez karty" lines, are held in the view (`useHeld`). */
+export function collectionListKeys(id: number): QueryKey[] {
+  return [browseKeys.cohortCards(collectionCardFilters(id))];
 }
 
 export function useCollectionCards({

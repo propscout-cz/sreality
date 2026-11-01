@@ -99,6 +99,8 @@ test('a source map fails, as a file or as a reference in a script', () => {
   assert.match(check(pkg(manifest(), { 'content.js.map': '{}' })).join('\n'), /content\.js\.map/);
   const v = check(pkg(manifest(), { 'background.js': 'x();\n//# sourceMappingURL=background.js.map\n' }));
   assert.match(v.join('\n'), /background\.js.*sourceMappingURL/);
+  const tight = check(pkg(manifest(), { 'content.js': 'y();\n//#sourceMappingURL=data:application/json;base64,e30=\n' }));
+  assert.match(tight.join('\n'), /content\.js.*sourceMappingURL/);
 });
 
 test('a deployed hostname anywhere in the manifest fails', () => {
@@ -110,8 +112,11 @@ test('a deployed hostname anywhere in the manifest fails', () => {
   assert.match(auth.join('\n'), /supabase\.co/);
 });
 
-test('the brand name is not a deployed hostname', () => {
-  assert.deepEqual(check(pkg(manifest({ name: 'PropScout.cz' }))), []);
+test('the brand name is not a deployed hostname, even when the app lives on the bare domain', () => {
+  const m = manifest({ name: 'PropScout.cz — výnos & pipeline', action: { default_title: 'PropScout.cz' } });
+  assert.deepEqual(checkPackage(pkg(m), ALLOWED, ['propscout.cz']), []);
+  const url = manifest({ homepage_url: 'https://propscout.cz/' });
+  assert.match(checkPackage(pkg(url), ALLOWED, ['propscout.cz']).join('\n'), /propscout\.cz/);
 });
 
 test('a description over 132 characters fails; 132 passes', () => {

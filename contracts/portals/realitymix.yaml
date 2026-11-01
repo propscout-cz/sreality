@@ -10,11 +10,15 @@
 # word-ending test (`address_part_street:loose`): since W18 a street is kept only when it
 # binds in RÚIAN in the ad's town, and a part of the town named in that slot binds as the
 # part (resolver v5.7) — which is what the test stood guard against ('Stráň' on 8662169).
-# The 'estimated' marker now fires on an EMPTY `data-gps-*` too, the map script's own test,
-# and Prague's quarter is read one crumb higher, where its chain puts it.
+# Prague's quarter is read one crumb higher, where its chain puts it.
+#
+# v8 (W4, 2026-10-31): the 'estimated' marker reads `div#map` alone. Where the agency gave no
+# GPS, the server fills `div#print-map` with its own geocode of `data-address` (it drops
+# 'okres X': Beroun -> Moravský Beroun) and leaves `div#map` blank, so v7's first-match
+# read of the print node never fired on those ~31 % of pinned pages.
 
 portal: realitymix
-contract_version: 7
+contract_version: 8
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -106,14 +110,15 @@ extractions:
     licence_class: portal
     precision_cap: {granularity_max: address_point, position_source_max: portal_pin}
     guards: [reject_outside_cz_bbox]
-    notes: "The agency-supplied pin; the Nominatim fallback runs in the browser and never
-      reaches the HTML. `div#map` is the only carrier on the b1 refetch."
+    notes: "The page's pin. Where `div#map` is blank it is the server's geocode of
+      `data-address`, and `rm.det.agency_est_flag` declares it 'estimated'. `div#map` is the
+      only carrier on the b1 refetch."
 
   - id: rm.det.agency_est_flag
     locator_kind: html_selector
     extraction_method: portal_declared_quality
     page_kind: detail
-    locator: {reader: html_marker, css: "div#print-map, div#map",
+    locator: {reader: html_marker, css: "div#map",
               blank_attrs: [data-gps-lat, data-gps-lon], value_label: estimated}
     claim_type: precision_declaration
     blur_evidence: declared
@@ -122,9 +127,9 @@ extractions:
       granularity_max: obec
       position_source_max: derived_geocode
       blurred_labels: [estimated]
-    notes: "The map JS's own predicate (`if (lat && lon)`) on the node `rm.det.gps` reads:
-      an absent or EMPTY `data-gps-*` means the browser geocodes the address, so the page
-      declares a blurred position. A page with no map block declares nothing."
+    notes: "The interactive map's own predicate (`if (lat && lon)`): an absent or EMPTY
+      `data-gps-*` on `div#map` is the page saying 'Pozice na mapě je pouze orientační'. A
+      page with no `div#map` declares nothing."
 
   - id: rm.det.breadcrumb_kraj
     locator_kind: jsonld

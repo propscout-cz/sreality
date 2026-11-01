@@ -42,7 +42,6 @@ from location_data.html_scope import ScopeRegister, scope_html
 from location_data.page_readers import (
     ARCHIVE_SURFACE,
     PAGE_READERS,
-    POSITION_BRANCH_PORTAL_GEOCODED,
     POSITION_BRANCH_PORTAL_PIN,
     ArchivedPayload,
     PageRead,
@@ -118,9 +117,8 @@ def test_blur_evidence_is_clamped_to_the_two_values_a_migration_may_write():
             assert_stampable(raw_claim(archive_entry(blur_evidence=value)))
 
 
-def test_only_portal_and_odbl_may_be_emitted():
-    assert page_readers.ARCHIVE_EMITTABLE_LICENCE_CLASSES == {"portal", "odbl"}
-    for value in ("ephemeral_display_only", "cc_by_ruian", "operator"):
+def test_only_portal_may_be_emitted():
+    for value in ("odbl", "ephemeral_display_only", "cc_by_ruian", "operator"):
         with pytest.raises(IntakeRefused, match="licence_class"):
             assert_stampable(raw_claim(archive_entry(licence_class=value)))
 
@@ -174,27 +172,6 @@ def test_remax_admits_the_same_pin_on_both_substrates_once_it_is_stamped():
         "remax", None, substrate=SUBSTRATE_ARCHIVED_HTML, entry_id="rx.det.gps").admitted
 
 
-def test_realitymix_nominatim_branch_is_odbl_never_portal():
-    """C6: ODbL follows the geometry, not the republisher. `/build/maps.913b4199.js` calls
-    nominatim.openstreetmap.org whenever `data-gps-*` is absent."""
-    pinned = coordinate_verdict(
-        "realitymix", None, substrate=SUBSTRATE_ARCHIVED_HTML,
-        entry_id="rm.det.gps", portal_pin_present=True)
-    geocoded = coordinate_verdict(
-        "realitymix", None, substrate=SUBSTRATE_ARCHIVED_HTML,
-        entry_id="rm.det.gps", portal_pin_present=False)
-    assert pinned.licence_class == "portal"
-    assert geocoded.admitted and geocoded.licence_class == "odbl"
-
-
-def test_a_portal_with_no_geocoded_branch_refuses_a_pinless_coordinate():
-    verdict = coordinate_verdict(
-        "remax", None, substrate=SUBSTRATE_ARCHIVED_HTML,
-        entry_id="rx.det.gps", portal_pin_present=False)
-    assert not verdict.admitted
-    assert verdict.reason == "coordinate_provenance_unestablished"
-
-
 def test_an_unruled_locator_gets_no_coordinate():
     """A later per-portal PR cannot license a second coordinate locator by declaring
     `claim_type: coordinate`; it has to add a row to the table and argue for it."""
@@ -224,13 +201,11 @@ def test_the_archived_rules_name_the_seven_entries_and_only_current_licence_spel
         "rx.det.gps", "rm.det.gps", "id.det.subject_feature", "mm.det.point",
         "mx.det.map_features", "bzs.det.link_pin", "cr.det.page_pin"}
     declared = {r.licence_class for r in ARCHIVED_COORDINATE_RULES.values()}
-    declared |= {r.geocoded_licence_class for r in ARCHIVED_COORDINATE_RULES.values()
-                 if r.geocoded_licence_class}
     # 00 §6.2 retired first_party / portal_first_party / portal_payload / portal_osm_derived
     # / ruian_ccby; the six survivors are the `licence_class` enum's members.
     assert declared <= {"portal", "cc_by_ruian", "odbl", "commercial_permanent",
                         "ephemeral_display_only", "operator"}
-    assert declared == {"portal", "odbl"}
+    assert declared == {"portal"}
 
 
 def test_the_payload_arm_takes_only_the_portals_own_pin():
@@ -311,28 +286,15 @@ def _realitymix_coordinate(branch: str | None, licence_class: str = "portal"):
 
 
 def test_the_ladder_stamps_the_licence_class_and_the_reader_cannot_overrule_it():
-    """C6 is decided once, in `ARCHIVED_COORDINATE_RULES`, not once per portal reader.
-
-    This is the exact shape the old inference got wrong: the reader left `'portal'` on the
-    claim (the contract entry's default — what a reader that says nothing produces) while
-    declaring it read the Nominatim branch. The branch decides, so the position is filed
-    `'odbl'`."""
-    result = _realitymix_coordinate(POSITION_BRANCH_PORTAL_GEOCODED, licence_class="portal")
-    assert [c.licence_class for c in result.claims] == ["odbl"]
-
-
-def test_the_pin_branch_is_first_party_even_if_the_reader_stamped_odbl():
-    """And symmetrically: a reader cannot licence-launder in the other direction either."""
+    """C6 is decided once, in `ARCHIVED_COORDINATE_RULES`, not once per portal reader."""
     result = _realitymix_coordinate(POSITION_BRANCH_PORTAL_PIN, licence_class="odbl")
     assert [c.licence_class for c in result.claims] == ["portal"]
 
 
-@pytest.mark.parametrize("branch", [None, "portal_pin_blurred", ""])
+@pytest.mark.parametrize("branch", [None, "portal_pin_blurred", "portal_geocoded", ""])
 def test_a_coordinate_read_that_does_not_declare_its_branch_is_refused(branch):
-    """The failure this closes: a Nominatim-fallback reader that simply forgets to say so
-    would inherit the entry's `licence_class: portal` default and file a republished OSM
-    position as first-party, with nothing anywhere to catch it. A required argument cannot
-    be forgotten quietly — and the refusal names the entry."""
+    """A required argument cannot be forgotten quietly, and the refusal names the entry.
+    `portal_geocoded` was realitymix's never-declared ODbL branch, deleted in W4."""
     with pytest.raises(IntakeRefused, match="position_branch") as excinfo:
         _realitymix_coordinate(branch)
     assert "rm.det.gps" in str(excinfo.value)
