@@ -109,7 +109,7 @@ REGISTRY_PIN_CONFLICT_M = 300.0
 # within 5 m is the words' own door 97.7 % of the time (96.5 % against a sibling ad's), where two
 # word-bound doors of one property agree 97.1 %; 10 m falls to 93.4 % on sibling truths and buys 2 %.
 PIN_DOOR_M = 5.0
-PIN_DOOR_RUNG = "R5"
+PIN_DOOR_RUNG = "R5"  # set after the ranking, so it has no score
 
 
 # Portal-declared labels that mean "this pin is not address-grade". The portal contract maps
@@ -1048,7 +1048,7 @@ def read_declared_precision(claims: Sequence[Claim]) -> DeclaredPrecision:
 def pin_inside_bound_obec(
     binding: Binding, pin_claim: Claim | None, registry: RegistryView
 ) -> bool | None:
-    """The ONE containment question `place()` and CHECK both read: does the pin lie inside the
+    """The ONE containment question `pin_door`, `place()` and CHECK read: does the pin lie inside the
     obec the CLAIMS bound? None when it is not asked — no pin, no bound town (a region-only
     bind), or a town the pin itself established (R7/R8, where the comparison is circular). The
     drain pre-answers `containing_obec` for every claim coordinate in the slice, so this is one

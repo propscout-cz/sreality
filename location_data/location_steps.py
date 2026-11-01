@@ -25,8 +25,8 @@ NO WORDING LIVES HERE. A step's Czech and English labels live in exactly one fil
 frontend/src/lib/locationSteps.ts, because a better sentence must never cost a migration.
 A migration cannot import Python, so two SQL carriers hold these expressions VERBATIM:
 `refresh_location_audit_waterfall()` (pinned by tests/test_location_steps_vocabulary.py) and the
-location scorecard view `location_quality_by_source` (migration 698: the step flags,
-`town_missing_sql()` and `town_evidence_sql()`, pinned by
+location scorecard view `location_quality_by_source` (migration 717: the step flags,
+`town_missing_sql()`, `town_evidence_sql()` and `pin_truth_sql()`, pinned by
 tests/location_data/test_location_quality_view_contract.py) — the same rail W5 uses to keep the
 serving surfaces on one rule.
 """
@@ -90,7 +90,7 @@ def _located_no_town_sql(flags: str) -> str:
 def town_missing_sql(*, loc: str = "ll", rank: str = "gr") -> str:
     """Rule 25's invariant, broken: not determined foreign and no town, off a LEFT JOIN of the
     answer row — so a listing with no row counts (foreign is a determination, never a default).
-    The scorecard view (migration 698) counts it; the `location_refetch` lane acts on it."""
+    The scorecard view (migration 717) counts it; the `location_refetch` lane acts on it."""
     flags = step_flags_sql(loc=loc, rank=rank)
     return _no_town(flags["is_foreign"], flags["has_town"])
 
@@ -113,6 +113,40 @@ def town_evidence_sql(listing_id: str = "b.id", claims: str = "ec") -> str:
         f" AND {claims}.subject_scoped IS NOT FALSE"
         f" AND ({claims}.claim_type <> 'coordinate' OR {claims}.value_geom IS NOT NULL))"
     )
+
+
+# The claims a DOOR THE WORDS NAMED rests on. Since W5b a pin names doors too, so address grain is
+# no truth: truth is a door one of these names. Every type here feeds `bind.Constraints.names_a_door`,
+# so a door a pin named can never be a truth (rail: the view's contract test).
+WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
+
+
+def word_door_sql(listing_id: str, claims: str = "w") -> str:
+    """The listing states a door: the words' evidence for its address grain (W5b)."""
+    types = ", ".join(f"'{t}'" for t in WORD_DOOR_CLAIM_TYPES)
+    return (
+        f"EXISTS (SELECT 1 FROM location_claims {claims}"
+        f" WHERE {claims}.listing_id = {listing_id}"
+        f" AND {claims}.claim_type IN ({types})"
+        f" AND {claims}.subject_scoped IS NOT FALSE)"
+    )
+
+
+def pin_truth_sql(residue: str) -> str:
+    """Pin-accuracy rows for `l.id % 10 {residue}`: each ad older than the listing edge, its truth
+    a door the words named, its own else its live property's location ad's (`own_door` says
+    which). W1's sample is '= 0'; a calibration fits on '<> 0', the same fragment."""
+    return f"""select l.id, l.source, ll.geom, ll.uncertainty_radius_m, ll.obec_kod, d.own_door,
+         case when d.own_door then ll.geom when d.location_door then tl.geom end as truth,
+         case when d.own_door then ll.obec_kod when d.location_door then tl.obec_kod end as truth_obec
+    from listings l
+    join listing_location ll on ll.listing_id = l.id
+    left join properties p on p.id = l.property_id and p.status = 'active' and p.is_active
+    left join listing_location tl on tl.listing_id = p.location_listing_ref_id
+    cross join lateral (
+      select ll.granularity = 'address_point' and {word_door_sql("l.id")} as own_door,
+             tl.granularity = 'address_point' and {word_door_sql("tl.listing_id")} as location_door) d
+   where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 {residue}"""
 
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:

@@ -106,7 +106,8 @@
 # enqueued 1,076,970 rows 2.6 min before, so most rows still read v5.8). The same session read the
 # registry: current ruian:2026-09-30, source date 09-30, nothing newer staged. The sample's property
 # join gained `p.is_active` after this export (review of #2221): a sampled ad is active, so its
-# property reads active but for the rollup's lag, and the sample rows stand.
+# property reads active but for the rollup's lag, and the sample rows stand. W5b relabelled the
+# export's radius cover below_address -> given_bind, the class the gauge reads since migration 717.
 #   select md5(t), t from (
 #     select string_agg(concat_ws(',', cohort, coalesce(source, ''), metric, coalesce(class, ''), n,
 #                                 coalesce(of_n::text, ''), coalesce(round(q50, 1)::text, ''),

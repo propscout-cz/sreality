@@ -1,4 +1,4 @@
-"""W1: the location scorecard view (migration 698) is the ONE definition of every location quality number.
+"""W1: the location scorecard view (migrations 698, 717) is the ONE definition of every location quality number.
 
 Static over the migration text, like test_location_schema_contracts.py: no database, so it runs in every lane. A
 migration cannot import Python, so each shared definition the view carries VERBATIM is pinned here against the module
@@ -15,17 +15,21 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from location_data import location_steps as ls
 from location_data.claims_common import served_location_predicate
-from location_data.resolver import resolve_db
+from location_data.resolver import bind as step_bind
+from location_data.resolver import normalize, resolve_db
 from scripts.checks import quality as qc
 from scripts.checks.common import NEW_AD_H
+from tests.location_data import mini_mirror as mm
 from tests.location_data.test_location_schema_contracts import _clean as _location_corpus
 from tests.location_data.test_location_schema_contracts import _statements, _values_rows
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "migrations" / "698_location_quality_scorecard.sql"
+MIGRATION = ROOT / "migrations" / "717_location_w5b_scorecard_truth.sql"
 VIEW = "public.location_quality_by_source"
 
 # The CTEs left inline, each with why: the three scalar lookups the planner runs once as InitPlans, and the two feeders
@@ -193,8 +197,47 @@ def test_outside_probes_with_the_one_containing_obec_statement() -> None:
     sql = resolve_db.CONTAINING_OBEC_SQL
     block = sql[sql.index("FROM ruian_admin_unit_geometries g"):sql.index("LIMIT 1") + len("LIMIT 1")]
     assert block.count("%s") == 1 and block.count(resolve_db._PT) == 1
+    assert _squeeze("OFFSET 0) o ORDER BY o.code LIMIT 1") in _squeeze(block), "a border point replays"
     rendered = block.replace("%s", "(select id from cur)").replace(resolve_db._PT, "b.geom")
     assert _squeeze(rendered) in _squeeze(_ctes()["outside"][1])
+
+
+def test_the_sample_is_the_pin_truth_fragment_rendered_verbatim() -> None:
+    """W5b: the truth is a door the WORDS named, one fragment, which W6's calibration renders too."""
+    assert _squeeze(ls.pin_truth_sql("= 0")) == _squeeze(_ctes()["smp"][1])
+    assert _squeeze(ls.word_door_sql("l.id")) in _squeeze(_ctes()["smp"][1])
+
+
+@pytest.mark.parametrize("claim_type", ls.WORD_DOOR_CLAIM_TYPES)
+def test_a_word_door_claim_is_a_door_the_resolver_refuses_to_refine(claim_type: str) -> None:
+    """The rail: the view's word-door set is a subset of `names_a_door`, so a door a pin named can never
+    be a truth. A claim type added to one side only fails here."""
+    claim = mm.claim(1, claim_type, value_text="12")
+    assert step_bind.collect_constraints([claim], normalize.normalize_all([claim])).names_a_door
+
+
+def test_a_pin_is_judged_by_the_door_it_would_name_given_the_bind() -> None:
+    """The door probe is resolve_db._DOORS_NEAR_SQL's FROM ... WHERE block, verbatim but for its point and its
+    bind.PIN_DOOR_M; '+door' marks exactly one door; a truth in another obec is no pin's error."""
+    sql = resolve_db._DOORS_NEAR_SQL
+    block = sql[sql.index("FROM ruian_address_points ap"):sql.index("ORDER BY 2, 1")]
+    rendered = block.replace("%s", str(step_bind.PIN_DOOR_M)).replace(resolve_db._PT, "c.value_geom")
+    pin = _squeeze(_ctes()["pin"][1])
+    assert _squeeze(rendered) in pin
+    assert "case when count(*) = 1 then (array_agg(n.geom))[1] end as geom" in pin and "limit 2" in pin
+    assert "st_distance(coalesce(d.geom, c.value_geom)::geography, s.truth::geography) as err_m" in pin
+    assert "|| case when d.geom is not null then '+door' else '' end as label" in pin
+    assert "where s.truth is not null and s.obec_kod = s.truth_obec" in pin
+
+
+def test_radius_cover_judges_the_rows_not_on_their_own_door_and_counts_the_wrong_town() -> None:
+    branches = {re.search(r"'radius_cover', '(\w+)'", b).group(1): _squeeze(b)
+                for b in _branches() if "'radius_cover'" in b}
+    assert set(branches) == {"given_bind", "wrong_town"}
+    assert ("where s.truth is not null and s.geom is not null and not s.own_door "
+            "and s.obec_kod = s.truth_obec") in branches["given_bind"]
+    assert "count(*) filter (where s.obec_kod <> s.truth_obec)" in branches["wrong_town"]
+    assert "from smp s where s.truth is not null group by s.source" in branches["wrong_town"]
 
 
 def _check_disputed_classes() -> set[str]:

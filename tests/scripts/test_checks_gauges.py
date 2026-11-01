@@ -446,7 +446,7 @@ def _portal(source: str, *, ads: int = 50_000, foreign: int = 0, no_row: int = 0
 def _sample(source: str, *, hits: int = 290, n: int = 300,
             pins: dict[str, tuple[int, float]] | None = None) -> list[tuple[Any, ...]]:
     """One source's sample rows: radius cover hits of n, and pin error per label (n, q95 m)."""
-    rows = [("sample", source, "radius_cover", "below_address", hits, n, None, None, None, None)]
+    rows = [("sample", source, "radius_cover", "given_bind", hits, n, None, None, None, None)]
     for label, (count, q95) in (pins or {"undeclared": (n, 40.0)}).items():
         rows.append(("sample", source, "pin_error_m", label, count, None, Decimal("5.5"),
                      Decimal(str(q95 / 2)), Decimal(str(q95)), Decimal(str(q95 * 3))))
@@ -584,7 +584,9 @@ def test_accuracy_is_watch_on_its_lower_bound_and_never_problem(hits: int, n: in
                                                                status: str) -> None:
     sample = [r for p in _LIVE if p != "sreality" for r in _sample(p)]
     sample += _sample("sreality", hits=hits, n=n, pins={"gps": (40, 108.0), "street": (30, 713.0)})
+    sample = [*sample, ("sample", "sreality", "radius_cover", "wrong_town", 2, n + 2, None, None, None, None)]
     cell = _cells(_location(sample=sample)[0])["sreality/accuracy"]
+    assert (cell["facts"]["wrong_town"], cell["facts"]["with_truth"]) == (2, n + 2)
     assert cell["status"] == status
     assert cell["facts"]["pin_error_m"] == {
         "gps": {"n": 40, "q50": 5.5, "q90": 54.0, "q95": 108.0, "max": 324.0},
