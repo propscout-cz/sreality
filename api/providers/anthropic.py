@@ -93,9 +93,13 @@ class AnthropicProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
         hosted_code: HostedCode | None = None,
     ) -> Completion:
         client = self._sdk_client()
+        if timeout_s is not None:
+            # No retries under a deadline: the SDK's default two would each get the whole timeout.
+            client = client.with_options(timeout=timeout_s, max_retries=0)
         tool_dicts = [_tool_to_anthropic(t) for t in tools]
         if hosted_code is not None:
             # First, so the cache breakpoint stays on the last tool that varies by agent.
