@@ -1554,7 +1554,7 @@
         "R2_SECRET_ACCESS_KEY",
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "location-wave-shadow",
+      "concurrencyGroup": "location-wave-shadow-${{ inputs.wave }}",
       "cancelInProgress": false,
       "timeoutMinutes": 300,
       "permissions": "contents: read, actions: read",
