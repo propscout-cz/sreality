@@ -273,6 +273,10 @@ never reset, never rendered.
   rows each caller reads on one backend after another warmed its plan, and a caller in several accounts following
   each as own; ≤ 40 buffers warm at both sizes is a ceiling against a scan of a full clock, not against 708 (~20).
   Production after 709: 0.973 ms mean and 18.3 buffers over the first 30 reads (2026-11-01).
+  GRANTS ON A HOT FUNCTION (the skill's recipe, its one exception): 709's `CREATE OR REPLACE` keeps the ACL, so it
+  revokes from `public`, `anon` and `service_role` and grants `authenticated` without ever revoking from it. Under
+  statement autocommit a revoke-then-grant pair on a function every open window calls each 5 s would refuse every
+  clock read in between; the same holds for any function its callers reach that often.
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
