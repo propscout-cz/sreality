@@ -44,6 +44,22 @@ test('a closed port says none; only a change of ad re-opens, the first answer al
   assert.deepEqual(shown, [null, 'A', null], 'the page left for one without our script');
 });
 
+test('a tab loading its next page holds the panel until that page calls in or loads without one', () => {
+  const { r, shown } = router();
+  r.connecting(3);
+  r.start(7, 3);
+  r.tell(3, ad('A'));
+  r.connecting(3);
+  assert.deepEqual(shown, ['A'], 'the old page went: no empty card flashes between listings');
+  r.tell(3, ad('B'));
+  assert.deepEqual(shown, ['A', 'B']);
+  r.settled(3);
+  assert.deepEqual(shown, ['A', 'B'], 'a page that called in is not settled away');
+  r.connecting(3);
+  r.settled(3);
+  assert.deepEqual(shown, ['A', 'B', null], 'loaded without our script: the empty state');
+});
+
 test('a call is this panel\'s only from a tab of its window, and only once it knows its window', () => {
   const { r } = router();
   assert.equal(r.ours({ windowId: 7 }), false, 'before start');

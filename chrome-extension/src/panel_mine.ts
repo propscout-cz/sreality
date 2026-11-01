@@ -47,10 +47,11 @@ export function createMine(deps: MineDeps) {
   let pickerError: string | null = null;
   let notes: Notes = blankNotes();
   /* Drafts live outside the render (typing never repaints), reset with the property —
-   * bar a half-typed note, which waits for its property's re-open (a tab switch back). */
+   * bar a half-typed note and its shared tick, which wait for its property's re-open
+   * (a tab switch back). */
   let draft = '';
-  const drafts = new Map<number, string>();
   let shareDraft = false;
+  const drafts = new Map<number, { body: string; shared: boolean }>();
   let editDraft = '';
   store.onAccountChange(() => {
     drafts.clear();
@@ -68,7 +69,7 @@ export function createMine(deps: MineDeps) {
    * this card held goes, the notes are read afresh. */
   function reset(next: PortalListing | null): void {
     if (propertyId != null) {
-      if (draft.trim() !== '') drafts.set(propertyId, draft);
+      if (draft.trim() !== '') drafts.set(propertyId, { body: draft, shared: shareDraft });
       else drafts.delete(propertyId);
     }
     listing = next;
@@ -77,11 +78,12 @@ export function createMine(deps: MineDeps) {
     picker = null;
     error = null;
     pickerError = null;
-    shareDraft = false;
     editDraft = '';
     const id = next?.found ? next.property_id : null;
     propertyId = id;
-    draft = id != null ? drafts.get(id) ?? '' : '';
+    const kept = id != null ? drafts.get(id) : undefined;
+    draft = kept?.body ?? '';
+    shareDraft = kept?.shared ?? false;
     notes = blankNotes();
     notes.expanded = draft !== '';
     if (id == null) return;
