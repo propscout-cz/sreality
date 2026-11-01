@@ -143,10 +143,8 @@ deny-all RLS (CI-enforced) is the backstop. Functions: 612 removed the built-in 
 so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
 function already has. Recipe, on every function you write: `revoke all on function <sig> from
 public, anon, authenticated;`, then `grant execute` to `authenticated` (or `service_role`) only
-where a caller needs it. Exception: when `CREATE OR REPLACE` rewrites a function its callers
-reach every second (the clock's audience, 709), leave the role that must keep calling it out of
-the revoke and re-grant it: under statement autocommit a revoke-then-grant pair refuses every
-call in between.
+where a caller needs it. Exception for a function callers reach every second:
+`references/tenancy.md` § Curation clock (709's grants).
 
 ## Migration safety policy (under autopilot)
 
