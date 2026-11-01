@@ -110,6 +110,8 @@ REGISTRY_PIN_CONFLICT_M = 300.0
 # word-bound doors of one property agree 97.1 %; 10 m falls to 93.4 % on sibling truths and buys 2 %.
 PIN_DOOR_M = 5.0
 PIN_DOOR_RUNG = "R5"  # set after the ranking, so it has no score
+# The claims that state a door. `names_a_door` refuses on them, the scorecard's truth rests on them.
+WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
 
 
 # Portal-declared labels that mean "this pin is not address-grade". The portal contract maps
@@ -207,13 +209,6 @@ class Constraints:
     kod_adm: int | None = None
     pin: tuple[float, float] | None = None
     claim_ids: dict[str, tuple[int, ...]] = field(default_factory=dict)
-
-    @property
-    def names_a_door(self) -> bool:
-        """The words name a door (R0/R1's evidence): a kód, a č.p./č.ev. or a č.o., the street
-        line's included. Bound or not, a pin cannot pick another."""
-        return (self.kod_adm is not None or self.cislo_domovni is not None
-                or self.cislo_orientacni is not None)
 
 
 def collect_constraints(
@@ -604,6 +599,7 @@ def bind(
             if town in constraining_obec_kods and (claimed := part_of(unit, town, registry)):
                 said.append(_Part(claimed, _ids(constraints, "cast_obce_name"),
                                   ("obec_constrained",)))
+    part_claim_unmatched = bool(constraints.cast_obce_keys) and not said
     if towns.composite.part is not None:
         said.append(_Part(towns.composite.part, _ids(constraints, "obec_name"),
                           ("obec_constrained",)))
@@ -839,6 +835,14 @@ def bind(
             relaxations=top.relaxations,
             ambiguous=ambiguous,
             source_claim_ids=top.source_claim_ids,
+            words_part_ids=tuple(sorted({p.unit.unit_id for p in (*said, *found)})),
+            # A part claim that matched no část (a MOMC is none), a street line that bound nothing
+            # and names no part (`ambiguous_streets` too), a locality line the town was only
+            # composed from ("Praha 4", "Praha 4 - Podolí"): nothing a door can be checked against.
+            words_unchecked=(
+                part_claim_unmatched or towns.composite.bound
+                or (bool(constraints.street_line or place_line) and top.ulice_kod is None
+                    and line.named_part is None)),
         ),
         constraints,
     )
@@ -1060,39 +1064,48 @@ def pin_inside_bound_obec(
     return covering is not None and covering.code == binding.obec_kod
 
 
+def names_a_door(stored: Sequence[Claim]) -> bool:
+    """The words state a door, bound or not: ANY stored claim of a door type, parsed or not, or a
+    digit in the street line ("12a" parses as nothing; "28. října" pays for it)."""
+    return any(c.claim_type in WORD_DOOR_CLAIM_TYPES
+               or (c.claim_type == "street_name" and any(ch.isdigit() for ch in c.value_text or ""))
+               for c in stored)
+
+
 def pin_door(
     binding: Binding,
     constraints: Constraints,
     pin_claim: Claim | None,
     *,
+    stored: Sequence[Claim],
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None,
     registry: RegistryView,
 ) -> Binding:
     """THE MAP IS THE SOURCE WHEN IT IS THERE (W5b, ruling Q8): where the words bound a town, a
     část or a street and named no door, an exact pin inside the bound town names the ONE RÚIAN
-    door within `PIN_DOOR_M` of it, when that door lies in the words' obec, část and street. Below
-    the words and never across them: two doors, or a door elsewhere, refine nothing, silently."""
-    pin = pin_claim.point if pin_claim is not None else None
-    if (pin is None or declared.blurred or pin_inside_bound_obec is not True
-            or binding.target_kind not in ("street", "admin_unit") or constraints.names_a_door):
+    door within `PIN_DOOR_M` of it, when that door agrees with every word that can check it (obec,
+    street, each část claimed, PSČ). It never contradicts the words, so what no door can be checked
+    against refuses too (`names_a_door`, `Binding.words_unchecked`): a lost refinement costs
+    nothing. Refusals are silent; the words stand."""
+    # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
+    if (pin_claim is None or pin_claim.point is None or declared.blurred
+            or pin_inside_bound_obec is not True or binding.words_unchecked
+            or binding.target_kind not in ("street", "admin_unit") or names_a_door(stored)):
         return binding
-    near = registry.doors_near(*pin, PIN_DOOR_M)
-    door = registry.address_point(near[0][0]) if len(near) == 1 else None
-    # The finest unit the words bound: a street's část, else the bound unit, a část (R4 carries it
-    # as `admin_unit_id`) or the obec itself.
-    words_unit = binding.cast_obce_unit_id or binding.admin_unit_id
+    near = registry.doors_near(*pin_claim.point)
+    door = registry.address_point(near[0]) if len(near) == 1 else None
     if (door is None or door.obec_kod != binding.obec_kod
             or (binding.ulice_kod is not None and door.ulice_kod != binding.ulice_kod)
-            or (words_unit is not None
-                and words_unit not in (door.cast_obce_unit_id, door.obec_unit_id))):
+            or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
+            or (constraints.psc is not None and door.psc != constraints.psc)):
         return binding
     return replace(
         binding, target_kind="address_point", rung=PIN_DOOR_RUNG,
         ruian_adm_kod=door.kod_adm, ulice_kod=door.ulice_kod, street_name=door.street_name,
         cast_obce_unit_id=door.cast_obce_unit_id, lat=door.lat, lon=door.lon,
         street_extent_m=None, street_katastr_kod=None,
-        source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),  # type: ignore[union-attr]
+        source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),
     )
 
 

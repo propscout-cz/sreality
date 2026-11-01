@@ -26,7 +26,6 @@ from typing import Any
 
 import psycopg
 
-from location_data.resolver import bind as step_bind
 from location_data.resolver import core, drain, projection, resolve_db
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
@@ -756,8 +755,8 @@ class _BulkMirror:
         found = {i: self.inner.in_czechia_polygon(*c) for i, c in enumerate(coords)}
         return {i: value for i, value in found.items() if value is not None}
 
-    def doors_near_bulk(self, coords, max_m):
-        found = {i: tuple(self.inner.doors_near(*c, max_m)) for i, c in enumerate(coords)}
+    def doors_near_bulk(self, coords):
+        found = {i: tuple(self.inner.doors_near(*c)) for i, c in enumerate(coords)}
         return {i: doors for i, doors in found.items() if doors}
 
 
@@ -812,7 +811,7 @@ def test_warming_actually_serves_the_coordinate_keyed_questions():
     before = inner.calls
     view.containing_obec(50.10102, 14.34804)
     view.in_czechia_polygon(50.10102, 14.34804)
-    view.doors_near(50.10102, 14.34804, step_bind.PIN_DOOR_M)
+    view.doors_near(50.10102, 14.34804)
     assert inner.calls == before
 
 
@@ -841,7 +840,7 @@ def test_a_null_answer_is_warmed_too():
     calls = _CountingMirror()
     view = resolve_db.CachedRegistryView(calls, cache)
     assert view.containing_obec(0.0, 0.0) is None
-    assert view.doors_near(0.0, 0.0, step_bind.PIN_DOOR_M) == ()
+    assert view.doors_near(0.0, 0.0) == ()
     assert calls.calls == 0
 
 

@@ -15,12 +15,11 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 from location_data import location_steps as ls
 from location_data.claims_common import served_location_predicate
+from location_data.contracts import CLAIM_TYPES
 from location_data.resolver import bind as step_bind
-from location_data.resolver import normalize, resolve_db
+from location_data.resolver import resolve_db
 from scripts.checks import quality as qc
 from scripts.checks.common import NEW_AD_H
 from tests.location_data import mini_mirror as mm
@@ -203,30 +202,38 @@ def test_outside_probes_with_the_one_containing_obec_statement() -> None:
 
 
 def test_the_sample_is_the_pin_truth_fragment_rendered_verbatim() -> None:
-    """W5b: the truth is a door the WORDS named, one fragment, which W6's calibration renders too."""
-    assert _squeeze(ls.pin_truth_sql("= 0")) == _squeeze(_ctes()["smp"][1])
+    """W5b: the truth is a door the WORDS named, one fragment."""
+    assert _squeeze(ls.pin_truth_sql()) == _squeeze(_ctes()["smp"][1])
     assert _squeeze(ls.word_door_sql("l.id")) in _squeeze(_ctes()["smp"][1])
 
 
-@pytest.mark.parametrize("claim_type", ls.WORD_DOOR_CLAIM_TYPES)
-def test_a_word_door_claim_is_a_door_the_resolver_refuses_to_refine(claim_type: str) -> None:
-    """The rail: the view's word-door set is a subset of `names_a_door`, so a door a pin named can never
-    be a truth. A claim type added to one side only fails here."""
-    claim = mm.claim(1, claim_type, value_text="12")
-    assert step_bind.collect_constraints([claim], normalize.normalize_all([claim])).names_a_door
+# Written out, so an addition to either side fails: the view's list, or what the resolver refuses on.
+_WORD_DOOR_TYPES = {"address_point_id", "house_number_cp", "house_number_co"}
+
+
+def test_the_word_doors_are_exactly_the_claims_the_resolver_refuses_a_pin_on() -> None:
+    """The rail: a door a pin named can never be a truth. Every claim type is asked, each holding text that parses as
+    nothing: a type refuses a pin iff the view reads it as a word door. A stated street line is the resolver's alone,
+    so its digit test is a one-way widening (`bind.names_a_door`)."""
+    assert set(step_bind.WORD_DOOR_CLAIM_TYPES) == _WORD_DOOR_TYPES
+    listed = re.search(r"w\.claim_type in \(([^)]*)\)", _squeeze(_ctes()["smp"][1])).group(1)
+    assert {t.strip(" '") for t in listed.split(",")} == _WORD_DOOR_TYPES
+    for claim_type in CLAIM_TYPES:
+        refused = step_bind.names_a_door([mm.claim(1, claim_type, value_text="abc")])
+        assert refused == (claim_type in _WORD_DOOR_TYPES), claim_type
 
 
 def test_a_pin_is_judged_by_the_door_it_would_name_given_the_bind() -> None:
-    """The door probe is resolve_db._DOORS_NEAR_SQL's FROM ... WHERE block, verbatim but for its point and its
-    bind.PIN_DOOR_M; '+door' marks exactly one door; a truth in another obec is no pin's error."""
+    """The door probe is resolve_db._DOORS_NEAR_SQL's FROM ... LIMIT 2 block, verbatim but for its point; '+door' marks
+    exactly one door; a truth in another obec is no pin's error."""
     sql = resolve_db._DOORS_NEAR_SQL
-    block = sql[sql.index("FROM ruian_address_points ap"):sql.index("ORDER BY 2, 1")]
-    rendered = block.replace("%s", str(step_bind.PIN_DOOR_M)).replace(resolve_db._PT, "c.value_geom")
+    block = sql[sql.index("FROM ruian_address_points ap"):sql.index("LIMIT 2") + len("LIMIT 2")]
+    assert str(step_bind.PIN_DOOR_M) in block
     pin = _squeeze(_ctes()["pin"][1])
-    assert _squeeze(rendered) in pin
-    assert "case when count(*) = 1 then (array_agg(n.geom))[1] end as geom" in pin and "limit 2" in pin
-    assert "st_distance(coalesce(d.geom, c.value_geom)::geography, s.truth::geography) as err_m" in pin
-    assert "|| case when d.geom is not null then '+door' else '' end as label" in pin
+    assert _squeeze(block.replace(resolve_db._PT, "coord.value_geom")) in pin
+    assert "case when count(*) = 1 then (array_agg(near.geom))[1] end as geom" in pin
+    assert "st_distance(coalesce(door.geom, coord.value_geom)::geography, s.truth::geography) as err_m" in pin
+    assert "|| case when door.geom is not null then '+door' else '' end as label" in pin
     assert "where s.truth is not null and s.obec_kod = s.truth_obec" in pin
 
 

@@ -410,7 +410,7 @@ def test_every_point_keyed_question_binds_one_array_shape():
         (resolve_db.CONTAINING_OBEC_SQL, 4),       # 3 arrays + a version
         (resolve_db._NEAREST_OBEC_SQL, 6),         # 3 arrays + (version, box, radius)
         (resolve_db._IN_CZ_SQL, 4),                # 3 arrays + a version
-        (resolve_db._DOORS_NEAR_SQL, 5),           # 3 arrays + (box, radius)
+        (resolve_db._DOORS_NEAR_SQL, 3),           # 3 arrays
     ):
         assert sql.count("%s") == expected, _flat(sql)
     assert "limit 2" in _flat(resolve_db._DOORS_NEAR_SQL).lower(), "the rule asks: exactly one?"

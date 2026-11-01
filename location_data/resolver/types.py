@@ -289,9 +289,9 @@ class RegistryView(Protocol):
     def in_czechia_polygon(self, lat: float, lon: float) -> bool | None:
         """Containment in the RÚIAN state polygon. `None` = not loaded, so no signal."""
 
-    def doors_near(self, lat: float, lon: float, max_m: float) -> Sequence[tuple[int, float]]:
-        """(kod_adm, metres) of the valid doors within `max_m`, nearest first, at most TWO: the
-        one asker (`bind.pin_door`) only wants to know whether there is exactly one."""
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        """The kód of the valid doors within `bind.PIN_DOOR_M`, at most TWO: the one asker
+        (`bind.pin_door`) only wants to know whether there is exactly one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +341,10 @@ class Binding:
     relaxations: tuple[str, ...] = ()
     ambiguous: bool = False
     source_claim_ids: tuple[int, ...] = ()
+    # What `bind.pin_door` checks a door against: every část the words named, kept by the binding
+    # or not, and whether they said something no door can be checked against.
+    words_part_ids: tuple[int, ...] = ()
+    words_unchecked: bool = False
 
     @property
     def bound(self) -> bool:

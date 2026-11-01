@@ -7,7 +7,7 @@
 -- today's truths do not move.
 --
 -- WHAT. create or replace of the one view, migration 698's text but for:
---   (i)   smp = location_steps.pin_truth_sql('= 0'): truth = a door the words named (WORD_DOOR_CLAIM_TYPES), the row's own
+--   (i)   smp = location_steps.pin_truth_sql(): truth = a door the words named (bind.WORD_DOOR_CLAIM_TYPES), the row's own
 --         else its live property's location ad's;
 --   (ii)  pin_error_m is GIVEN THE BIND (truth in the row's obec), classed lower(label), plus '+door' when exactly one
 --         valid door lies within 5 m of the pin, its error then the door's. W6's radius key needs that split;
@@ -170,7 +170,7 @@ stock as materialized (
     ) v(metric, class, n, of_n)),
 -- THE SAMPLE (pin accuracy): every tenth listing-cohort ad whose own row, or its live property's location ad (the
 -- served cohort's property filter), stands on a door the WORDS named. A door a pin named is no truth (W5b, ruling Q8:
--- its pin error is at most 5 m by construction). location_steps.pin_truth_sql('= 0'), rendered verbatim.
+-- its pin error is at most 5 m by construction). location_steps.pin_truth_sql(), rendered verbatim.
 smp as materialized (
   select l.id, l.source, ll.geom, ll.uncertainty_radius_m, ll.obec_kod, d.own_door,
          case when d.own_door then ll.geom when d.location_door then tl.geom end as truth,
@@ -180,32 +180,32 @@ smp as materialized (
     left join properties p on p.id = l.property_id and p.status = 'active' and p.is_active
     left join listing_location tl on tl.listing_id = p.location_listing_ref_id
     cross join lateral (
-      select ll.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co') AND w.subject_scoped IS NOT FALSE) as own_door,
-             tl.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = tl.listing_id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co') AND w.subject_scoped IS NOT FALSE) as location_door) d
+      select ll.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co')) as own_door,
+             tl.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = tl.listing_id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co')) as location_door) d
    where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 = 0),
 -- Pin error GIVEN THE BIND (a wrong bind is not hidden in a radius: radius_cover's wrong_town counts it), per way the
 -- point is made: lower(label), plus '+door' when exactly one valid door lies within 5 m of the pin
--- (bind.PIN_DOOR_M, resolve_db._DOORS_NEAR_SQL's FROM ... WHERE block verbatim): the error of the door it names.
+-- (bind.PIN_DOOR_M, resolve_db._DOORS_NEAR_SQL's FROM ... LIMIT 2 block verbatim): the error of the door it names.
 pin as materialized (
   select s.source,
-         st_distance(coalesce(d.geom, c.value_geom)::geography, s.truth::geography) as err_m,
-         lower(coalesce((select d.declared_precision_label from location_claims d
-                          where d.listing_id = s.id and d.claim_type = 'precision_declaration'
-                          order by d.first_observed_at desc, d.id desc limit 1), 'undeclared'))
-           || case when d.geom is not null then '+door' else '' end as label
+         st_distance(coalesce(door.geom, coord.value_geom)::geography, s.truth::geography) as err_m,
+         lower(coalesce((select pd.declared_precision_label from location_claims pd
+                          where pd.listing_id = s.id and pd.claim_type = 'precision_declaration'
+                          order by pd.first_observed_at desc, pd.id desc limit 1), 'undeclared'))
+           || case when door.geom is not null then '+door' else '' end as label
     from smp s
-    cross join lateral (select c.value_geom from location_claims c
-                         where c.listing_id = s.id and c.claim_type = 'coordinate'
-                           and c.value_geom is not null
-                         order by c.first_observed_at desc, c.id desc limit 1) c
+    cross join lateral (select cc.value_geom from location_claims cc
+                         where cc.listing_id = s.id and cc.claim_type = 'coordinate'
+                           and cc.value_geom is not null
+                         order by cc.first_observed_at desc, cc.id desc limit 1) coord
     cross join lateral (
-      select case when count(*) = 1 then (array_agg(n.geom))[1] end as geom
+      select case when count(*) = 1 then (array_agg(near.geom))[1] end as geom
         from (select ap.geom
       FROM ruian_address_points ap
      WHERE ap.valid_to IS NULL
-       AND ap.geom && ST_Expand(c.value_geom, 5.0 / 60000.0)
-       AND ST_DWithin(ap.geom::geography, c.value_geom::geography, 5.0)
-               limit 2) n) d
+       AND ap.geom && ST_Expand(coord.value_geom, 5.0 / 60000.0)
+       AND ST_DWithin(ap.geom::geography, coord.value_geom::geography, 5.0)
+     LIMIT 2) near) door
    where s.truth is not null and s.obec_kod = s.truth_obec)
 select 'listing'::text as cohort, s.source, s.metric, s.class, s.n, s.of_n,
        null::numeric as q50, null::numeric as q90, null::numeric as q95, null::numeric as q100

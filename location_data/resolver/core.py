@@ -84,7 +84,7 @@ def resolve(
     # (v5.11), `place()` lets a pin place the row only there (v5.10), CHECK records that it disagreed.
     pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
     binding = step_bind.pin_door(
-        binding, constraints, pin_claim, declared=declared,
+        binding, constraints, pin_claim, stored=ordered, declared=declared,
         pin_inside_bound_obec=pin_inside_obec, registry=ctx.registry)
     position = step_bind.place(
         binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)

@@ -4651,7 +4651,7 @@ renumber.** Navigate by area:
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
     listing has a town (the `location_town_coverage` gauge, over active ads first written more than
-    24 h ago, reads the W1 scorecard view, migration 698: an ad holding town-bearing evidence and no
+    24 h ago, reads the W1 scorecard view, migrations 698, 717: an ad holding town-bearing evidence and no
     town is red until zero, one whose page names no town is Watch, ruling Q6), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
@@ -5040,7 +5040,7 @@ for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ul
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
 after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 717) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5261,7 +5261,8 @@ portal's payload or its own page, and every other stamp is class E outright.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
 (`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT named by the words > **the door an exact pin names
-inside the words (`bind.pin_door`, v5.11, ruling Q8: ≤ 5 m, exactly one door, same obec, část and street)** >
+inside the words (`bind.pin_door`, v5.11, ruling Q8: ≤ 5 m, exactly one door, same obec, street, claimed část
+and PSČ; words no door can be checked against refuse)** >
 bound STREET point > portal pin *inside the bound town* > FILL's entity point. The 5 m is calibrated against
 the words' doors: the lone door is theirs 97.7 % of the time (96.5 % on sibling truths; two word-bound doors of
 one property agree 97.1 %). Two doors, or a door elsewhere, refine nothing, silently; such a door is never

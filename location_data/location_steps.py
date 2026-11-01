@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from location_data.claims_common import served_location_predicate
+from location_data.resolver.bind import WORD_DOOR_CLAIM_TYPES
 
 
 def obec_rank_floor_sql(alias: str = "gr") -> str:
@@ -115,27 +116,17 @@ def town_evidence_sql(listing_id: str = "b.id", claims: str = "ec") -> str:
     )
 
 
-# The claims a DOOR THE WORDS NAMED rests on. Since W5b a pin names doors too, so address grain is
-# no truth: truth is a door one of these names. Every type here feeds `bind.Constraints.names_a_door`,
-# so a door a pin named can never be a truth (rail: the view's contract test).
-WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
-
-
-def word_door_sql(listing_id: str, claims: str = "w") -> str:
-    """The listing states a door: the words' evidence for its address grain (W5b)."""
+def word_door_sql(listing_id: str) -> str:
+    """The listing states a door (`bind.WORD_DOOR_CLAIM_TYPES`). Since W5b a pin names doors too, so
+    address grain is no truth: truth is a door the words named, and `bind.names_a_door` refuses a
+    pin on any such claim, so a door a pin named can never be one."""
     types = ", ".join(f"'{t}'" for t in WORD_DOOR_CLAIM_TYPES)
-    return (
-        f"EXISTS (SELECT 1 FROM location_claims {claims}"
-        f" WHERE {claims}.listing_id = {listing_id}"
-        f" AND {claims}.claim_type IN ({types})"
-        f" AND {claims}.subject_scoped IS NOT FALSE)"
-    )
+    return f"EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = {listing_id} AND w.claim_type IN ({types}))"
 
 
-def pin_truth_sql(residue: str) -> str:
-    """Pin-accuracy rows for `l.id % 10 {residue}`: each ad older than the listing edge, its truth
-    a door the words named, its own else its live property's location ad's (`own_door` says
-    which). W1's sample is '= 0'; a calibration fits on '<> 0', the same fragment."""
+def pin_truth_sql() -> str:
+    """W1's pin-accuracy rows (id % 10 = 0): each ad older than the listing edge, its truth a door
+    the words named, its own else its live property's location ad's (`own_door` says which)."""
     return f"""select l.id, l.source, ll.geom, ll.uncertainty_radius_m, ll.obec_kod, d.own_door,
          case when d.own_door then ll.geom when d.location_door then tl.geom end as truth,
          case when d.own_door then ll.obec_kod when d.location_door then tl.obec_kod end as truth_obec
@@ -146,7 +137,7 @@ def pin_truth_sql(residue: str) -> str:
     cross join lateral (
       select ll.granularity = 'address_point' and {word_door_sql("l.id")} as own_door,
              tl.granularity = 'address_point' and {word_door_sql("tl.listing_id")} as location_door) d
-   where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 {residue}"""
+   where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 = 0"""
 
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:

@@ -457,17 +457,18 @@ SELECT p.idx, c.*
 """
 
 # THE DOORS AT A PIN (W5b): the `ST_Expand` box is `_NEAREST_OBEC_SQL`'s under-estimate, so the GiST
-# index `ruian_ap_geom_gist` drives the probe. `LIMIT 2`: the rule only asks "exactly one?".
+# index `ruian_ap_geom_gist` drives the probe. `LIMIT 2`: the rule only asks "exactly one?", and its
+# answer does not depend on which two, so nothing orders them (an ORDER BY could only tempt the
+# planner off the probe, as `_katastr_covering` records).
 _DOORS_NEAR_SQL = f"""
-SELECT p.idx, d.kod_adm, d.dist
+SELECT p.idx, d.kod_adm
   FROM {_POINTS}
   CROSS JOIN LATERAL (
-    SELECT ap.kod_adm, ST_Distance(ap.geom::geography, {_PT}::geography) AS dist
+    SELECT ap.kod_adm
       FROM ruian_address_points ap
      WHERE ap.valid_to IS NULL
-       AND ap.geom && ST_Expand({_PT}, %s / 60000.0)
-       AND ST_DWithin(ap.geom::geography, {_PT}::geography, %s)
-     ORDER BY 2, 1
+       AND ap.geom && ST_Expand({_PT}, {PIN_DOOR_M} / 60000.0)
+       AND ST_DWithin(ap.geom::geography, {_PT}::geography, {PIN_DOOR_M})
      LIMIT 2
   ) d
 """
@@ -811,20 +812,17 @@ class SqlRegistryView:
     def in_czechia_polygon(self, lat: float, lon: float) -> bool | None:
         return self.in_czechia_polygon_bulk([(lat, lon)]).get(0)
 
-    def doors_near_bulk(
-        self, points: Sequence[tuple[float, float]], max_m: float
-    ) -> dict[int, tuple[tuple[int, float], ...]]:
+    def doors_near_bulk(self, points: Sequence[tuple[float, float]]) -> dict[int, tuple[int, ...]]:
         if not points:
             return {}
         idx, lats, lons = _point_arrays(points)
-        found: dict[int, tuple[tuple[int, float], ...]] = {}
-        for i, kod_adm, dist in self._rows(
-                "doors_near", _DOORS_NEAR_SQL, (idx, lats, lons, max_m, max_m)):
-            found[int(i)] = (*found.get(int(i), ()), (int(kod_adm), float(dist)))
+        found: dict[int, tuple[int, ...]] = {}
+        for i, kod_adm in self._rows("doors_near", _DOORS_NEAR_SQL, (idx, lats, lons)):
+            found[int(i)] = (*found.get(int(i), ()), int(kod_adm))
         return found
 
-    def doors_near(self, lat: float, lon: float, max_m: float) -> Sequence[tuple[int, float]]:
-        return self.doors_near_bulk([(lat, lon)], max_m).get(0, ())
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        return self.doors_near_bulk([(lat, lon)]).get(0, ())
 
 
 def _point_arrays(
@@ -1043,10 +1041,9 @@ class CachedRegistryView:
             ("in_czechia_polygon", lat, lon), lambda: self._inner.in_czechia_polygon(lat, lon)
         )
 
-    def doors_near(self, lat: float, lon: float, max_m: float) -> Sequence[tuple[int, float]]:
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
         return self._cache.get(
-            ("doors_near", lat, lon, max_m),
-            lambda: tuple(self._inner.doors_near(lat, lon, max_m)),
+            ("doors_near", lat, lon), lambda: tuple(self._inner.doors_near(lat, lon))
         )
 
 
@@ -1072,9 +1069,9 @@ def warm_points(
     in_cz = registry.in_czechia_polygon_bulk(coords)
     for i, (lat, lon) in enumerate(coords):
         cache.put(("in_czechia_polygon", lat, lon), in_cz.get(i))
-    doors = registry.doors_near_bulk(coords, PIN_DOOR_M)
+    doors = registry.doors_near_bulk(coords)
     for i, (lat, lon) in enumerate(coords):
-        cache.put(("doors_near", lat, lon, PIN_DOOR_M), doors.get(i, ()))
+        cache.put(("doors_near", lat, lon), doors.get(i, ()))
 
 
 def upsert_listing_locations_bulk(
