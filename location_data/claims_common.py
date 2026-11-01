@@ -158,18 +158,9 @@ class ArchivedCoordinateRule:
     later per-portal PR from licensing a second, unruled locator by simply declaring
     `claim_type: coordinate`: an unrecognised entry gets no coordinate, and the PR that
     wants one has to add a row here and argue for it.
-
-    `geocoded_licence_class` is realitymix's second branch, and it is the whole of C6:
-    `/build/maps.913b4199.js` falls back to `nominatim.openstreetmap.org` when `data-gps-*`
-    is absent and labels the pin *"Pozice na mapě je pouze orientační"* [live-C §2.3]. ODbL
-    follows the geometry, not the republisher (00 §6.2), so that branch is `'odbl'` — never
-    `'portal'`, and never the retired `portal_osm_derived` spelling. A portal with no such
-    branch leaves it None, and a coordinate recovered without the portal's own pin is
-    refused rather than guessed at.
     """
     entry_id: str
     licence_class: str
-    geocoded_licence_class: str | None = None
 ARCHIVED_COORDINATE_RULES: dict[str, ArchivedCoordinateRule] = {
     # `#printMap[data-gps], #listingMap[data-gps]`, scoped by element id — never "the first
     # data-gps in the document", which is the neighbour carousel [live-B §3.5.1].
@@ -181,8 +172,9 @@ ARCHIVED_COORDINATE_RULES: dict[str, ArchivedCoordinateRule] = {
     # row here, which only ever said "bazos has no coordinate at all".
     # `bzs.det.link_pin` is 02 §2.2.3's reserved id for exactly this act.
     "bazos": ArchivedCoordinateRule("bzs.det.link_pin", "portal"),
-    "realitymix": ArchivedCoordinateRule("rm.det.gps", "portal",
-                                         geocoded_licence_class="odbl"),
+    # The page's pin. Where `div#map` is blank it is the portal server's own geocode, still
+    # the page's publication, and `rm.det.agency_est_flag` declares it 'estimated' (v8).
+    "realitymix": ArchivedCoordinateRule("rm.det.gps", "portal"),
     # A typed {coordinates,address} pair keyed by the listing id, inside the MapTiler blob.
     "idnes": ArchivedCoordinateRule("id.det.subject_feature", "portal"),
     # The same Vue `point{}` W1 reads out of raw_json, re-read from the archived body.
@@ -399,7 +391,6 @@ class CoordinateVerdict:
 def coordinate_verdict(
     source: str, coords_source: str | None, *,
     substrate: str = SUBSTRATE_PAYLOAD, entry_id: str | None = None,
-    portal_pin_present: bool = True,
 ) -> CoordinateVerdict:
     """06 §6.1.2, applied to the INPUT. On the payload substrate it never returns a
     non-`portal` licence class: a class-E coordinate produces no claim at all (§6.6 rule 6).
@@ -410,12 +401,10 @@ def coordinate_verdict(
     `carry_forward` stamp it laundered through refetches license nothing.
 
     `substrate` defaults to the payload one; `SUBSTRATE_ARCHIVED_HTML` asks the same ladder
-    about a body W2 re-mines. `entry_id` / `portal_pin_present` are only consulted on the
-    archived arm.
+    about a body W2 re-mines. `entry_id` is only consulted on the archived arm.
     """
     if substrate == SUBSTRATE_ARCHIVED_HTML:
-        return _archived_coordinate_verdict(
-            source, entry_id=entry_id, portal_pin_present=portal_pin_present)
+        return _archived_coordinate_verdict(source, entry_id=entry_id)
     rule = COORDINATE_RULES.get(source)
     if rule is None:
         return CoordinateVerdict(False, None, "unknown_source")
@@ -431,9 +420,7 @@ def coordinate_verdict(
     return CoordinateVerdict(False, None, "unrecognised_coordinate_provenance")
 
 
-def _archived_coordinate_verdict(
-    source: str, *, entry_id: str | None, portal_pin_present: bool,
-) -> CoordinateVerdict:
+def _archived_coordinate_verdict(source: str, *, entry_id: str | None) -> CoordinateVerdict:
     """The archived-body arm of the ladder: the ONE locator the portal's rule names, and
     nothing else."""
     rule = ARCHIVED_COORDINATE_RULES.get(source)
@@ -441,12 +428,7 @@ def _archived_coordinate_verdict(
         return CoordinateVerdict(False, None, "no_archived_coordinate_locator_on_this_portal")
     if entry_id != rule.entry_id:
         return CoordinateVerdict(False, None, "unrecognised_archived_coordinate_locator")
-    if portal_pin_present:
-        return CoordinateVerdict(True, rule.licence_class, f"archived_{rule.entry_id}")
-    if rule.geocoded_licence_class is None:
-        return CoordinateVerdict(False, None, "coordinate_provenance_unestablished")
-    return CoordinateVerdict(
-        True, rule.geocoded_licence_class, f"archived_{rule.entry_id}_portal_geocoded")
+    return CoordinateVerdict(True, rule.licence_class, f"archived_{rule.entry_id}")
 
 
 # ------------------------------------------------------------------ payload helpers

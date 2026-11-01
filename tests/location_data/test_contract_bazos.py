@@ -310,7 +310,6 @@ def test_the_pin_is_licensable_only_through_the_id_the_ladder_names():
     rule = ARCHIVED_COORDINATE_RULES["bazos"]
     assert (rule.entry_id, rule.licence_class) == ("bzs.det.link_pin", "portal")
     assert rule.entry_id in ENTRY_IDS
-    assert rule.geocoded_licence_class is None      # bazos has no geocoded map branch
 
     coordinate = replace(claim_of(PSC_ENTRY), claim_type="coordinate",
                          value_geom_wkt="POINT(18.210526 49.539246)")
