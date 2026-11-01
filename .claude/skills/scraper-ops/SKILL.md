@@ -285,7 +285,7 @@ cadence is slower, and Health judges the gap a portal keeps, not a declared one:
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
 gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
 in 14 d; `<portal>/walks` is a Problem when no walk finished in 30 d (`THRESHOLDS` in `scripts/verify_pipeline.py`).
-Concurrency: each workflow has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
+Concurrency: each scrape has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
 next tick queues behind it. Per-category nominations are queued immediately after each category's walk, so even a timed-out
 index walk leaves a consistent partial result.
 

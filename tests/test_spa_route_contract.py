@@ -3,12 +3,11 @@
 Two territories build in-app URLs: the SPA itself (which owns them, in
 `frontend/src/lib/routes.ts`) and the Chrome extension's "Otevřít v aplikaci"
 link. Only the SPA's own registry has a rail — its census test lives inside the
-frontend, and `frontend-build.yml` (where the lint ban runs) is path-filtered to
-`frontend/**`, so neither would fire on an extension-only change.
+frontend and never reads the extension's copy.
 
 That is the drift this file closes: renaming a route in the SPA would silently
 break every extension install, with no test failing anywhere. It runs in
-`test.yml`, which fires unfiltered on every push and PR.
+`test.yml`, which fires unfiltered on every PR and push to main.
 
 Deliberately narrow. It pins ONLY the patterns actually emitted across a
 boundary — verified by reading the emitter, not assumed:

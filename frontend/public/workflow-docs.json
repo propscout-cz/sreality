@@ -699,24 +699,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/dinov3_embed_backfill.yml"
     },
     {
-      "filename": "docs-budget.yml",
-      "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a word cap on skill frontmatter descriptions; routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on every PR, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
-      "manual": false,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": true,
-      "paths": null,
-      "inputs": [],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": null,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/docs-budget.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/docs-budget.yml"
-    },
-    {
       "filename": "draw_exam_cohort.yml",
       "name": "Labeling: draw exam cohort",
       "description": "Draws and seals the sealed exam (migration 458) — the images the per-tag probes are GRADED on and must never be trained on. Pure SQL against the embedding store: no GPU, no torch, no R2, no LLM key. The stratified half of the exam is added by the screening lane, which is the one that spends money.",
@@ -890,27 +872,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/export_raw_pages_archive.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
-    },
-    {
-      "filename": "frontend-build.yml",
-      "name": "CI: frontend build",
-      "description": "Builds the frontend/ Vite SPA on every pull request, and on a push to main that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
-      "manual": false,
-      "schedules": [],
-      "onPush": true,
-      "onPullRequest": true,
-      "paths": [
-        ".github/workflows/frontend-build.yml",
-        "frontend/**"
-      ],
-      "inputs": [],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": null,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/frontend-build.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
       "filename": "heal_bazos_floor_zero.yml",
@@ -1581,7 +1542,7 @@
       ],
       "inputs": [],
       "secrets": [],
-      "concurrencyGroup": null,
+      "concurrencyGroup": "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
       "cancelInProgress": null,
       "timeoutMinutes": 15,
       "permissions": "contents: read, pull-requests: read",
@@ -2817,7 +2778,7 @@
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every pull request and on every push to main. Three parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff), a frontend job (TypeScript type-check + vitest pure-function tests) and a secret scan of the new commits. This is the build gate for every branch.",
+      "description": "CI test suite, runs on every pull request and on every push to main. Three parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff), a frontend job (type-check, lint, vitest, the production build and its first-visit JS budget, then the docs budget) and a secret scan of the new commits. This is the build gate for every branch.",
       "manual": false,
       "schedules": [],
       "onPush": true,
@@ -2825,9 +2786,9 @@
       "paths": null,
       "inputs": [],
       "secrets": [],
-      "concurrencyGroup": null,
+      "concurrencyGroup": "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
       "cancelInProgress": null,
-      "timeoutMinutes": 12,
+      "timeoutMinutes": 15,
       "permissions": null,
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/test.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/test.yml"
