@@ -40,7 +40,8 @@ def test_the_census_sees_the_trees_it_claims_to() -> None:
 
 def test_no_other_python_imports_the_module_but_the_tool_and_the_comparison() -> None:
     importers = _naming("photo_assessment", {t: p for t, p in _TREES.items() if p == "*.py"}) - {OWNER}
-    assert importers == {"api/capabilities/visuals.py", "scripts/photo_assessment_compare.py"}
+    # The executor reads only CALLED_FOR, so its daily ceiling counts this spend.
+    assert importers == {"api/capabilities/visuals.py", "scripts/photo_assessment_compare.py", "api/agents/executor.py"}
 
 
 def test_no_python_but_the_tool_the_comparison_and_the_module_names_the_tool() -> None:

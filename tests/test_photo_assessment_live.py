@@ -150,7 +150,7 @@ def _run(conn: Any, *replies: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[run
     monkeypatch.setattr(image_storage, "is_configured", lambda: True)
     monkeypatch.setattr(image_storage.R2Client, "from_env", staticmethod(lambda: _R2()))
     provider = _ScriptedProvider("anthropic", list(replies), prices={MODEL: PRICE})
-    return run_scope.RunScope(llm=LLMClient(conn, providers={"anthropic": provider}), left_usd=lambda: 20.0), provider
+    return run_scope.RunScope(llm=LLMClient(conn, providers={"anthropic": provider}), left_usd=lambda: 20.0, left_s=lambda: 60.0), provider
 
 
 def _call(conn: Any, scope: run_scope.RunScope | None, pid: int) -> dict[str, Any]:

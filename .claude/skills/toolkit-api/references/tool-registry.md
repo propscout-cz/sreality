@@ -151,7 +151,7 @@ row is an ad's public photos and the facet file, never an account's data; the ro
 **A run lends it what it may spend** (`api/capabilities/run_scope.py`): `loop` sets a `RunScope` around each tool call
 (the run's own `LLMClient`, the money left, a tally, a bill) and `registry.call` hands it over as `ctx.run`. It is a
 ContextVar because `call_tool` is a two-argument closure each runner builds: no runner has to know a tool can spend, and
-a runner's own client (with #2070, the one that stamps its run on `llm_calls`) reaches the tool. The bill is `run.charge`d as soon as
+a runner's own client (on the executor's path, the one that stamps `agent_run_id` on `llm_calls`) reaches the tool. The bill is `run.charge`d as soon as
 the provider has billed (should its ledger row fail, the slot stays taken and the worst case is charged); the loop `settle`s it after the call, refused or not, into the run's cost and the tool's journal
 step, so the cost cap sees it.
 
@@ -159,9 +159,11 @@ step, so the cost cap sees it.
 run; a miss while a live ad's photo is still downloading into the set is a `photos_pending` result, since the finished set
 would be paid for again (rare: no live ad of a 1-in-500 sample had one on 2026-11-01); only then `_pay`, which refuses before any money with no run, past `MAX_PAID_PER_RUN` (10) bills in this
 run, or when the worst case (`worst_case_usd`: every prompt token at the dearer rate, a reply at its limit) exceeds what
-is left after keeping enough for one more model call, so a paid tool never leaves a run unable to answer. A cached answer takes no slot (ADR-0007's ten bounds vision cost); a reply refused by the schema is billed,
-takes a slot and is not cached; a provider failure bills nothing and takes none. An interrupted run that starts over
-gets ten again, but what its first start paid for is now cached.
+is left after keeping enough for one more model call, so a paid tool never leaves a run unable to answer. A cached answer takes no slot (operator ruling 2026-11-01: ADR-0007's ten means 10 paid assessments); a reply refused by the schema is billed,
+takes a slot and is not cached; a provider failure bills nothing and takes none. The scope is built per `loop.run`, so per attempt: an
+interrupted run that starts over gets ten again, but what its first start paid for is now cached, and the budget it
+starts with has that spend taken off. The scope is set only round each tool call, so nothing crosses to the next run a
+worker takes (`tests/test_agent_runs_live.py`).
 
 **What it judges.** The facets and prompt are `skills/photo-facets.md`, read each call; the prompt version is the hash of
 what the model is given (the file, the reply rule and the schema generated from its `### key` headings), so any edit is a
@@ -175,7 +177,9 @@ travels as a photo.
 
 **Model and cost.** `app_settings.llm_photo_assessment_model`, else `claude-opus-5-5` until
 `scripts/photo_assessment_compare.py` (paid; writes no cache row) has spoken. Photos go at `COMPARISON_MAX_EDGE`, plans at
-`DOCUMENT_MAX_EDGE`. `tool_choice` cannot be forced (a 400 on Opus and Sonnet 5.5), so a reply that skips the tool, is cut
+`DOCUMENT_MAX_EDGE`. What is left of the run's wall clock is the call's `timeout_s`, measured after the photos are read, on
+every runner since the loop lends it; a timeout is a retryable tool error with no bill and no slot, and the SDK does not
+retry under it. `tool_choice` cannot be forced (a 400 on Opus and Sonnet 5.5), so a reply that skips the tool, is cut
 off at `MAX_REPLY_TOKENS` (8,000, thinking included) or fails the schema is billed and never cached. About $0.10 a property
 on Opus 5.5 (13–20 photos at ~590 tokens each, 2–3k tokens out), half that on Sonnet 5.5, an estimate until the
 comparison measures it; at most about $0.32 on Opus. `llm_calls.called_for = 'assess_property_visuals'`.
@@ -205,8 +209,8 @@ Three entry points; nothing in production calls them until #2071 (routes) and #2
   act-as.
 - **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
   `agent_executor_enabled` is not JSON `true`. Otherwise it re-queues or fails every lapsed lease, then under one
-  transaction lock refuses to claim at or above `agent_daily_ceiling_usd` (`parked`; `llm_calls` with `called_for =
-  'agent_run'` since UTC midnight, the local runner's included) and claims the oldest queued run whose account has fewer
+  transaction lock refuses to claim at or above `agent_daily_ceiling_usd` (`parked`; `llm_calls` with `called_for` in
+  `_RUN_SPEND`, `agent_run` or a paid tool's `assess_property_visuals`, since UTC midnight, the local runner's included) and claims the oldest queued run whose account has fewer
   than `agent_account_running_cap` running (`idle` when none, `FOR UPDATE SKIP LOCKED`). It re-stamps the definition,
   tool-set and commit hashes and the model (the row names what ran), runs the loop with a budget of the run's cap less
   what its earlier attempt spent, and ends `succeeded`, `failed` (with `error`), `cancelled`, `released` or `lost`.

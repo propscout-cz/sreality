@@ -13,8 +13,8 @@ from api.llm_client import ProviderError, provider_for_model
 from toolkit import photo_assessment as pa
 
 NAME = "assess_property_visuals"
-# ADR-0007's ten bounds what a run pays, so it counts bills: a cached answer costs nothing and takes no slot, and a reply
-# refused by the schema took one.
+# Operator ruling 2026-11-01: "10 properties per run" (ADR-0007) means 10 paid assessments, so it counts bills. A cached
+# answer costs nothing and takes no slot; a reply refused by the schema took one. Per loop.run, so per attempt of a run.
 MAX_PAID_PER_RUN = 10
 
 
@@ -52,10 +52,13 @@ def _pay(ctx: Context, photos: pa.PhotoSet, facets: pa.FacetFile) -> pa.Judgemen
                        f"${worst:.2f}; nothing was paid")
     run.counts[NAME] += 1
     try:
-        judged = pa.judge(run.llm, photos, facets, model=model)
+        judged = pa.judge(run.llm, photos, facets, model=model, left_s=run.left_s)
     except pa.PhotosUnreadable as exc:
         run.counts[NAME] -= 1
         raise _unavailable(f"{exc}; nothing was paid") from exc
+    except pa.OutOfTime as exc:
+        run.counts[NAME] -= 1
+        raise _refused(f"{exc}; nothing was paid") from exc
     except ProviderError as exc:
         run.counts[NAME] -= 1
         raise _unavailable(f"the model did not answer: {exc}") from exc

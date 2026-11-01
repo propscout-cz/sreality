@@ -192,7 +192,7 @@ def _run(
         reply_floor = samples * (reply_floor + MIN_REPLY_TOKENS * price.output_per_mtok / 1e6)
         return definition.limits.max_cost_usd - spent - container_reserve - reply_floor
 
-    scope = run_scope.RunScope(llm=llm, left_usd=left_for_tools)
+    scope = run_scope.RunScope(llm=llm, left_usd=left_for_tools, left_s=lambda: deadline - clock())
 
     def journal(kind: Literal["model", "tool", "file"], name: str, given: Any, output: Mapping[str, Any],
                 started: float, cost_usd: float = 0.0, llm_call_id: int | None = None) -> None:

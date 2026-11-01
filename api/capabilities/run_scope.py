@@ -1,4 +1,4 @@
-"""What one agent run lends a paid tool: its model client, the money it has left, its tally and its bill."""
+"""What one agent run lends a paid tool: its model client, the money and time it has left, its tally and its bill."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ _CURRENT: ContextVar["RunScope | None"] = ContextVar("agent_run_scope", default=
 class RunScope:
     llm: LLMClient
     left_usd: Callable[[], float]
+    left_s: Callable[[], float]
     counts: Counter[str] = field(default_factory=Counter)
     _cost_usd: float = 0.0
     _llm_call_id: int | None = None

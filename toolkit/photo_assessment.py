@@ -61,6 +61,10 @@ class PhotosUnreadable(RuntimeError):
     """A stored photo could not be read, so nothing was sent and nothing was paid."""
 
 
+class OutOfTime(RuntimeError):
+    """Reading the photos used what was left of the run's wall clock, so nothing was sent and nothing was paid."""
+
+
 class InvalidReply(RuntimeError):
     """A reply the provider billed that is no assessment: never cached."""
 
@@ -285,13 +289,18 @@ class Judgement:
     llm_call_id: int
 
 
-def judge(llm: "LLMClient", photos: PhotoSet, facets: FacetFile, *, model: str, r2: Any | None = None) -> Judgement:
+def judge(llm: "LLMClient", photos: PhotoSet, facets: FacetFile, *, model: str, r2: Any | None = None,
+          left_s: Callable[[], float] | None = None) -> Judgement:
     """One paid judgement of `photos` on `model`, checked against the schema and cached by no one; InvalidReply if the
     reply is no assessment. The tool cannot be forced (a 400 on Opus and Sonnet 5.5), so a reply that skips it lands
-    there too. File and schema form a stable prefix for the provider's prompt cache; the pictures follow it."""
+    there too. File and schema form a stable prefix for the provider's prompt cache; the pictures follow it. `left_s` is
+    the caller's clock: what is left when the call starts bounds it, with no SDK retry under it."""
     content = _content(photos, r2)
+    timeout_s = None if left_s is None else left_s()
+    if timeout_s is not None and timeout_s <= 0:
+        raise OutOfTime("the run's wall clock ran out while its photos were read")
     response = llm.call(called_for=CALLED_FOR, messages=[{"role": "user", "content": content}], system=facets.system,
-                        tools=[tool_schema(facets)], model=model, max_tokens=MAX_REPLY_TOKENS)
+                        tools=[tool_schema(facets)], model=model, max_tokens=MAX_REPLY_TOKENS, timeout_s=timeout_s)
 
     def refused(reason: str) -> InvalidReply:
         return InvalidReply(reason, cost_usd=response.cost_usd, llm_call_id=response.llm_call_id)

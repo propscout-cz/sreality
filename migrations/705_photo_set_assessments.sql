@@ -16,11 +16,18 @@
 --
 -- SHIP THIS BEFORE AN AGENT LISTS THE TOOL: `LLMClient._record_call` INSERTs after the provider has billed, and a CHECK
 -- violation there loses the completion (527's header). The list is restated whole and was diffed against the CATALOG on
--- 2026-11-01 (pg_get_constraintdef: exactly 690's 26 values). Nothing is removed. Independent of 704, which does not
--- restate this CHECK: the two apply in either order.
+-- 2026-11-01 (pg_get_constraintdef: exactly 690's 26 values; 704 and 706 do not restate it). Nothing is removed.
 --
--- Shape of 690: NOT VALID, then VALIDATE under SHARE UPDATE EXCLUSIVE, so the writers of this hot append table never
--- wait on the scan. Plain SET, never SET LOCAL: the apply path is statement-autocommit.
+-- APPLY THROUGH apply_migration.yml (`psql -f`, statement autocommit), not through an MCP apply: wrapped in one
+-- transaction, the DDL's ACCESS EXCLUSIVE would be held through VALIDATE's scan of this hot append table. Nothing here
+-- needs a separate apply and nothing is CONCURRENTLY. A lock-timeout retry re-runs the file, which is safe: every
+-- statement is idempotent. Locks (llm_calls: 1.57 M rows, 254 MB heap on 2026-11-01):
+--   DROP + ADD ... NOT VALID, one transaction: ACCESS EXCLUSIVE for an instant, no scan; lock_timeout gives up after 5 s
+--     so writers never queue behind a long wait, and the workflow retries; new rows are held to the new list from here.
+--   VALIDATE: SHARE UPDATE EXCLUSIVE for the scan (seconds), which does not block readers or writers; the accepted set
+--     only grows, so no row can fail it. statement_timeout bounds the scan and any wait for autovacuum.
+--   CREATE TABLE and its grants: a new, empty table. The UPDATE: one app_settings row.
+-- Plain SET, never SET LOCAL: the apply path is statement-autocommit.
 
 set lock_timeout = '5s';
 
@@ -62,7 +69,11 @@ commit;
 
 reset lock_timeout;
 
+set statement_timeout = '600s';
+
 alter table llm_calls validate constraint llm_calls_called_for_check;
+
+reset statement_timeout;
 
 create table if not exists public.photo_set_assessments (
   photo_set_hash text          not null,
@@ -81,3 +92,8 @@ comment on table public.photo_set_assessments is
 
 alter table public.photo_set_assessments enable row level security;
 revoke all on public.photo_set_assessments from public, anon, authenticated;
+
+-- The ceiling now counts a run's paid tools too (api/agents/executor.py _RUN_SPEND). A no-op where 704 has not run.
+update app_settings
+   set description = 'Platform-wide agent spend per UTC day (llm_calls called_for agent_run or assess_property_visuals): at or above it no new run is claimed; running runs finish under their own caps. Absent = nothing claims.'
+ where key = 'agent_daily_ceiling_usd';

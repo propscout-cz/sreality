@@ -3,7 +3,8 @@
 Usage:
     python -m scripts.photo_assessment_compare --out comparison.md
 
-Calls the paid models: on the defaults about $4.50, never past --max-usd (it stops and reports what it has). Needs
+Calls the paid models: on the defaults about $4.50, never past --max-usd (it stops and reports what it has), and that
+day's agent ceiling counts this spend, so new runs may park if it is low. Needs
 SUPABASE_DB_URL, the R2_* variables and ANTHROPIC_API_KEY. Reads the database and writes one `llm_calls` row per model
 call; it writes no assessment to the cache, so whichever model is kept starts clean. The thirty are a stable spread:
 live, published properties with a stored photo, in the order of the hash of their id, so a second run sees the same

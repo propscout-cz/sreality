@@ -63,7 +63,7 @@ class World:
     def scope(self, *replies: Any, left: float = 20.0) -> tuple[run_scope.RunScope, _ScriptedProvider]:
         provider = _ScriptedProvider("anthropic", list(replies), prices={MODEL: PRICE})
         llm = LLMClient(_FakeConn(), providers={"anthropic": provider})
-        return run_scope.RunScope(llm=llm, left_usd=lambda: left), provider
+        return run_scope.RunScope(llm=llm, left_usd=lambda: left, left_s=lambda: 60.0), provider
 
     def call(self, scope: run_scope.RunScope | None, pid: int) -> dict[str, Any]:
         with run_scope.running(scope):
@@ -213,7 +213,7 @@ def test_an_unpriced_model_is_refused_because_its_cost_could_not_be_capped(world
         def price_for(self, model: str) -> ModelPrice | None:
             return None
     provider = Unpriced("anthropic", [])
-    scope = run_scope.RunScope(llm=LLMClient(_FakeConn(), providers={"anthropic": provider}), left_usd=lambda: 20.0)
+    scope = run_scope.RunScope(llm=LLMClient(_FakeConn(), providers={"anthropic": provider}), left_usd=lambda: 20.0, left_s=lambda: 60.0)
     with pytest.raises(ToolError) as refused:
         world.call(scope, 7)
     assert refused.value.code is ToolErrorCode.UNAVAILABLE and provider.calls == []
@@ -225,7 +225,7 @@ def test_a_provider_failure_bills_nothing_uses_no_slot_and_may_be_retried(world:
             raise ProviderError("overloaded")
     scope = run_scope.RunScope(
         llm=LLMClient(_FakeConn(), providers={"anthropic": Failing("anthropic", [], prices={MODEL: PRICE})}),
-        left_usd=lambda: 20.0)
+        left_usd=lambda: 20.0, left_s=lambda: 60.0)
     with pytest.raises(ToolError) as refused:
         world.call(scope, 7)
     assert refused.value.code is ToolErrorCode.UNAVAILABLE and refused.value.retryable
@@ -328,6 +328,53 @@ def test_a_hit_adds_nothing_to_the_runs_cost(world: World) -> None:
     outcome, steps, _ = _run(world, [reply((NAME, {"property_id": 7}), model=MODEL), _submit(7)])
     assert next(s for s in steps if s.kind == "tool" and s.name == NAME).cost_usd == 0
     assert outcome.cost_usd == pytest.approx(sum(s.cost_usd for s in steps if s.kind == "model"))
+
+
+def test_the_wall_clock_left_bounds_the_vision_call_on_the_loops_path(world: World) -> None:
+    """No executor here: this is the local runner's path, loop.run with a client of its own."""
+    now = [100.0]
+
+    class Slow(_ScriptedProvider):
+        def complete(self, **kwargs: Any) -> Any:
+            now[0] += 10.0
+            return super().complete(**kwargs)
+
+    provider = Slow("anthropic", [reply((NAME, {"property_id": 7}), model=MODEL), _assessment(), _submit(7)],
+                    prices={MODEL: PRICE})
+    loop.run(_agent(), {}, provider="anthropic", llm=LLMClient(_FakeConn(), providers={"anthropic": provider}),
+             call_tool=lambda name, args: registry.call(Caller(market=world.conn), name, args), record=lambda s: None,
+             clock=lambda: now[0])
+    assert [c["timeout_s"] for c in provider.calls] == [pytest.approx(60.0), pytest.approx(50.0), pytest.approx(40.0)]
+
+
+def test_a_vision_call_that_hangs_to_the_wall_clock_ends_the_run_as_a_timeout_and_keeps_no_slot(world: World) -> None:
+    now = [100.0]
+
+    class Hanging(_ScriptedProvider):
+        def complete(self, **kwargs: Any) -> Any:
+            if len(self.calls) == 1:
+                now[0] += kwargs["timeout_s"]
+                self.calls.append(kwargs)
+                raise ProviderError("timed out")
+            return super().complete(**kwargs)
+
+    provider = Hanging("anthropic", [reply((NAME, {"property_id": 7}), model=MODEL)], prices={MODEL: PRICE})
+    steps: list[loop.Step] = []
+    outcome = loop.run(_agent(), {}, provider="anthropic", llm=LLMClient(_FakeConn(), providers={"anthropic": provider}),
+                       call_tool=lambda name, args: registry.call(Caller(market=world.conn), name, args),
+                       record=steps.append, clock=lambda: now[0])
+    assert outcome.stop_reason == "timeout" and world.cache == {}
+    failed = next(s for s in steps if s.kind == "tool")
+    assert failed.output["error"]["code"] == "unavailable" and failed.cost_usd == 0
+
+
+def test_a_clock_spent_reading_photos_pays_nothing(world: World) -> None:
+    scope, provider = world.scope()
+    scope.left_s = lambda: 0.0
+    with pytest.raises(ToolError) as refused:
+        world.call(scope, 7)
+    assert refused.value.code is ToolErrorCode.REFUSED and "wall clock" in refused.value.message
+    assert provider.calls == [] and scope.counts[NAME] == 0
 
 
 def test_the_scope_is_gone_when_the_tool_call_ends(world: World) -> None:
