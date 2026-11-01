@@ -13,7 +13,7 @@ from typing import Any, Literal
 from api.agents import terminator
 from api.agents.definition import HOSTED_CODE_PROVIDERS, Definition, DefinitionError
 from api.agents.hosted_code import RunFiles, describe
-from api.capabilities import registry
+from api.capabilities import registry, run_scope
 from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import encode
@@ -186,6 +186,14 @@ def _run(
     calls = 0
     spent = 0.0
 
+    def left_for_tools() -> float:
+        """What a paid tool may spend: the run must still afford a model call to hear its result and answer."""
+        reply_floor = prompt_tokens * max(price.input_per_mtok, price.cache_write_per_mtok) / 1e6
+        reply_floor = samples * (reply_floor + MIN_REPLY_TOKENS * price.output_per_mtok / 1e6)
+        return definition.limits.max_cost_usd - spent - container_reserve - reply_floor
+
+    scope = run_scope.RunScope(llm=llm, left_usd=left_for_tools, left_s=lambda: deadline - clock())
+
     def journal(kind: Literal["model", "tool", "file"], name: str, given: Any, output: Mapping[str, Any],
                 started: float, cost_usd: float = 0.0, llm_call_id: int | None = None) -> None:
         nonlocal steps
@@ -267,12 +275,16 @@ def _run(
                 # An answer already paid for is checked even past the deadline; a tool call is not started.
                 if started >= deadline:
                     return outcome("timeout")
-                result = call_tool(call.name, call.input)
+                with run_scope.running(scope):
+                    result = call_tool(call.name, call.input)
                 seen |= terminator.property_ids(result)
                 error = False
             except ToolError as exc:
                 result, error = exc.payload(), True
-            journal("tool", call.name, call.input, result, started)
+            # A paid tool's bill is the run's, refused or not.
+            tool_cost, tool_llm_call = scope.settle()
+            spent += tool_cost
+            journal("tool", call.name, call.input, result, started, tool_cost, tool_llm_call)
             results.append(ToolResultBlock(tool_use_id=call.id, content=encode(result), is_error=error))
         messages.append(Message(role="user", content=list(results)))
         prompt_tokens = next_prompt(completion, results)

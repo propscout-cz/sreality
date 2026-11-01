@@ -218,6 +218,14 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_capabilities_live.py -q
 
+      # The photo assessment (migration 705): its SQL picks the photo set, a repeat is served from the real cache, the
+      # model call lands on the ledger the CHECK admits, and the browser's roles read nothing of the cache.
+      - name: The photo assessment's cache and photo set (migration 705)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_photo_assessment_live.py -q
+
       # The run ledger (migration 704): a queue, a lease and an identity only a real schema can hold.
       - name: Agent runs queue, lease and read under one narrowed identity (#2070)
         env:
