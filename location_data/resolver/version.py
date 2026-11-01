@@ -131,4 +131,14 @@ from __future__ import annotations
 #      (no such row known as of 2026-10-31; the count's SELECT: the W5 design, As built). The
 #      grain is the row's finest key. An address point without coordinates takes its část's KÚ.
 #      The bump re-resolves the corpus through W2's reconcile.
-RESOLVER_VERSION = "resolver:v5.10"
+# v5.11 = location W5b (ruling Q8). THE MAP IS THE SOURCE WHEN IT IS THERE: where the words bound a
+#      town (or a street or část) but named no door, an exact pin (not declared blurred) inside the
+#      bound town names the one RÚIAN door within 5 m of it, when that door agrees with the words'
+#      obec, street, every část they claim and their PSČ. The row becomes that address point (rung
+#      R5) and stands on the door; two doors, a door elsewhere, or words no door can be checked
+#      against (a street line that bound nothing, a digit in it, any door claim, a MOMC or composed
+#      locality line, a part claim that matched no část) refine nothing. Measured on W1's truth
+#      sample: 97.7 % the words' own door (96.5 % against a sibling ad's), where two word-bound doors
+#      of one property agree 97.1 %. About 61k active rows move from street/quarter/obec grain to a
+#      door. The containing-obec probe orders by code.
+RESOLVER_VERSION = "resolver:v5.11"

@@ -38,6 +38,8 @@ On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-
 ### W5b: the pin refines within the words (added 2026-10-31)
 After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
 
+**As built 2026-11-01 (#2338; `resolver:v5.11`, migration 717; design and measurements: `w5b-pin-door.md`).** `bind.pin_door`: the words named no door, the pin is exact and inside the bound town, exactly one RÚIAN door within 5 m agreeing with the words' obec, street, every claimed část and PSČ, and nothing in the words a door cannot be checked against; the row becomes that address point (rung R5, origin `pin_door`). 97.7 % the words' own door (96.5 % on sibling truths; two word-bound doors of one property agree 97.1 %); about 61k rows move (the design's 66.7k before the refusals). The scorecard's truth becomes a door the WORDS named (`location_steps.pin_truth_sql`), `pin_error_m` gains the `+door` class, `radius_cover` becomes `given_bind` + `wrong_town`, and the containment probe orders by code (W5's deferral). CHECK records nothing new. Adds without paying (ruled reversal); W6 pays for the pair. Shadow binds it.
+
 ---
 
 # The plan as reviewed (2026-10-30)
@@ -219,7 +221,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **Grain = `grade.grain_of(keys)`**, the one writer (`grade()`, `Grade`, `Binding.granularity`, `Verdict.granularity` and `coarser_of` deleted).
 - **Quarter = část obce only (Q1):** `MATCH_LEVELS = ("cast_obce", "momc")` and `composite.part_of` (a část itself, a KÚ the část its name spells, a MOMC nothing). MOMC stays a match key: the 1,607 remax "Praha N" rows still bind Praha. Správní obvod and ZSJ are no level. Part claims match like town names; a street keeps the claimed část when it has doors there (Q2).
 - **KÚ fix:** an address point with no coordinates takes its část's door KÚ (19405830).
-- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border).
+- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border). Done by W5b, migration 717.
 - **Shadow:** the `ids` export block is built, so the about 5.4k Praha rows that gain a quarter are judged; dispatch per slice (`wave-shadow.md`).
 - **Consumers:** labels lose "Praha 5, " on about 935 rows and 1,899 gain their část; the location ad can change where an ad's grain changes; the bazos map "±" grows to the town's reach.
 - **Acceptance** (before: 2026-10-31 16Z):
@@ -285,9 +287,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 
 ## Deferred or rejected (headline)
 - **Deferred:** retiring the legacy `admin_boundaries` table (its own track; after W7 both registries agree on Praha).
-- **Deferred:** a precise pin deciding the část through its KÚ (2,188 Praha rows). It reverses a ruling and adds without deleting; ask again after W5.
 - **Deferred:** a radius gate in comparables (an estimation methodology change).
-- **Deferred:** remax house numbers from index cards (a new surface; deletes nothing).
 - **Rejected:** a served MOMC level.
 - **Rejected as patchwork:** MOMC kept as a fallback in the quarter field.
 - **Rejected:** a DB CHECK for grain (a second spelling of the rule).

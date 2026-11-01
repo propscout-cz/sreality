@@ -179,17 +179,29 @@ def test_a_cast_obce_follows_the_door_rule(part, expected):
 # ------------------------------------------------------------------ never a pin (B1)
 
 
-@pytest.mark.parametrize("label", ["no_exact_address", "not_address", "gps"])
-def test_a_pin_on_a_door_never_decides_the_ku(label):
-    """The B1 regression. The pin sits ON a Vokovice door and the portal may even call it
-    precise — but nothing BOUND a door, so the town-level row has no KÚ."""
+@pytest.mark.parametrize("label", ["no_exact_address", "not_address"])
+def test_a_blurred_pin_on_a_door_never_decides_the_ku(label):
+    """The B1 regression, for the pin its portal declares blurred: it sits ON a Vokovice door
+    but nothing BOUND a door, so the town-level row has no KÚ."""
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
-        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label=label),
+        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800),
+        mm.claim(3, "precision_declaration", value_text=label, declared_precision_label=label,
+                 blur_evidence="declared"),
     ])
     assert resolution.obec_kod == 554782
     assert resolution.ruian_adm_kod is None
     assert resolution.katastr_kod is None
+
+
+def test_the_door_an_exact_pin_names_carries_its_ku():
+    """W5b: the door is a bound address point like any other, so FILL reads its KÚ off it."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+    ])
+    assert resolution.ruian_adm_kod == 21690278
+    assert resolution.katastr_kod == VOKOVICE_KU
 
 
 def test_a_pin_alone_gets_its_town_and_no_ku():
@@ -250,8 +262,9 @@ def test_the_katastr_rule_carries_its_own_resolver_version():
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
     W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor one claim per
     type read with no tie rule (v5.9.1, W3), nor a pin placing a row only inside the town the
-    words bound, the quarter a část and the grain the finest key (v5.10, W5)."""
-    assert RESOLVER_VERSION == "resolver:v5.10"
+    words bound, the quarter a část and the grain the finest key (v5.10, W5), nor the door an
+    exact pin names (v5.11, W5b)."""
+    assert RESOLVER_VERSION == "resolver:v5.11"
 
 
 # ------------------------------------------------------------------ the SQL side

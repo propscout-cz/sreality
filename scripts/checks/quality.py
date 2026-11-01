@@ -779,7 +779,7 @@ def check_data_quality(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 
 # --- location_town_coverage (gauge): ONE location scorecard (W1, rulings Q3, Q6, Q7) ----------
 
-# location_quality_by_source (migration 698) defines every location quality number once, in a long
+# location_quality_by_source (migration 717) defines every location quality number once, in a long
 # shape (cohort, source, metric, class, n of of_n, quantiles); this gauge only judges its rows. Two
 # statements: the invariants (cohorts listing, served and queue; 11.7 s warm on 10-31), then the pin
 # sample (0.7 s warm, 13 s on a cold location_claims), whose failure leaves only the accuracy cells
@@ -802,7 +802,7 @@ LOCATION_VIEW_VOCABULARY: tuple[tuple[str, str], ...] = (
     ("disputed", "country_conflict"), ("disputed", "pin_outside_cz"),
     ("grain", "address"), ("grain", "street"), ("grain", "quarter"), ("grain", "obec"),
     ("version", "*"), ("registry_stale", "*"), ("ku_gap", "*"),
-    ("pin_error_m", "*"), ("radius_cover", "below_address"),
+    ("pin_error_m", "*"), ("radius_cover", "given_bind"), ("radius_cover", "wrong_town"),
     ("backlog_s", "evidence"), ("backlog_s", "backfill"),
 )
 _GRAINS = ("address", "street", "quarter", "obec")
@@ -986,24 +986,24 @@ def _accuracy_cell(source: str, sample: _Card, unread: str | None,
     subject = f"{source}/accuracy"
     if unread is not None:
         return _unmeasured(subject, source, f"the pin sample was not read ({unread})", "%")
-    hits, n = _n(sample, "radius_cover", "below_address"), _of(sample, "radius_cover",
-                                                               "below_address")
+    hits, n = _n(sample, "radius_cover", "given_bind"), _of(sample, "radius_cover", "given_bind")
     pins = {label: {"n": int(row[0] or 0), "q50": _metres(row[2]), "q90": _metres(row[3]),
                     "q95": _metres(row[4]), "max": _metres(row[5])}
             for (metric, label), row in sorted(sample.items()) if metric == "pin_error_m"}
-    facts: dict[str, Any] = {"n": n, "pin_error_m": pins}
+    facts: dict[str, Any] = {"n": n, "pin_error_m": pins,
+                             "wrong_town": _n(sample, "radius_cover", "wrong_town"),
+                             "with_truth": _of(sample, "radius_cover", "wrong_town")}
     min_n = int(thresholds["location_accuracy_min_n"])
     if n:
         facts.update(share=round(hits / n, 4), lower_bound=round(wilson_lower(hits, n) or 0.0, 4))
     if n < min_n:
-        return _unmeasured(subject, source, f"{n:,} sampled ads below address grain with a "
-                           f"word-bound address point, under the {min_n} this arm needs", "%",
-                           facts)
+        return _unmeasured(subject, source, f"{n:,} sampled ads not standing on their own "
+                           f"word-bound door, under the {min_n} this arm needs", "%", facts)
     watch = float(thresholds["location_radius_cover_watch"])
     errors = "; ".join(f"{label} q95 {p['q95']:,.0f} m (n {p['n']:,})" for label, p in pins.items()
                        if p["q95"] is not None)
-    said = (f"{hits:,} of {n:,} sampled ads below address grain hold their address point inside "
-            f"their own radius ({hits / n:.1%}; lower bound {facts['lower_bound']:.1%})"
+    said = (f"{hits:,} of {n:,} sampled ads not standing on their own word-bound door hold it "
+            f"inside their own radius ({hits / n:.1%}; lower bound {facts['lower_bound']:.1%})"
             + (f"; pin error {errors}" if errors else ""))
     conditions = ([("warn", f"{said} (Watch under {watch:.0%} until W6 ships the calibrated "
                             "table)")] if facts["lower_bound"] < watch else [])

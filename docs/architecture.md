@@ -4651,7 +4651,7 @@ renumber.** Navigate by area:
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
     listing has a town (the `location_town_coverage` gauge, over active ads first written more than
-    24 h ago, reads the W1 scorecard view, migration 698: an ad holding town-bearing evidence and no
+    24 h ago, reads the W1 scorecard view, migrations 698, 717: an ad holding town-bearing evidence and no
     town is red until zero, one whose page names no town is Watch, ruling Q6), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
@@ -5040,7 +5040,7 @@ for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ul
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
 after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 717) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5260,8 +5260,13 @@ portal's payload or its own page, and every other stamp is class E outright.
   signal is `undetermined`.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
-(`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT > bound STREET point > portal pin *inside the
-bound town* > FILL's entity point. The words bind the town (stated, or derived from finer words through
+(`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT named by the words > **the door an exact pin names
+inside the words (`bind.pin_door`, v5.11, ruling Q8: ≤ 5 m, exactly one door, same obec, street, claimed část
+and PSČ; words no door can be checked against refuse)** >
+bound STREET point > portal pin *inside the bound town* > FILL's entity point. The 5 m is calibrated against
+the words' doors: the lone door is theirs 97.7 % of the time (96.5 % on sibling truths; two word-bound doors of
+one property agree 97.1 %). Two doors, or a door elsewhere, refine nothing, silently; such a door is never
+graded `exact`, since a pin cannot corroborate the door it named. The words bind the town (stated, or derived from finer words through
 RÚIAN). A pin outside it, by the pip polygon and with no tolerance, is never the position, whatever the
 portal declares. A pin inside refines. A pin the portal declares an AREA marker (bazos "Přibližná
 lokalita", a postal-area point) never places a row the words bound. Without words the pin names its
@@ -5347,7 +5352,7 @@ index on `properties (repr_listing_ref_id)` stays — append-only, and every rea
 `SERVED_LOCATION_PREDICATE`, below, and it decides what is *shown*, never what is *worked*. **The red
 line**: the `location_town_coverage` gauge ("Location quality", `scripts/checks/quality.py`, on the
 worker every 6 h since Health dashboard sprint wave 6) reads ONE view since W1,
-`location_quality_by_source` (migration 698, service_role only: every location quality number defined
+`location_quality_by_source` (migrations 698, 717, service_role only: every location quality number defined
 once, its shared fragments rendered verbatim from `location_steps` and pinned by
 `tests/location_data/test_location_quality_view_contract.py`). It reports, per portal and in absolute
 counts, ACTIVE ads first written more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm
@@ -5359,7 +5364,8 @@ Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7
 zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
 the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
 operator rules the floors, W1-b), `{portal}/accuracy`
-(radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
+(radius cover on the `id % 10 = 0` sample given the bind, the truth a door the WORDS named, never one a pin
+named; Watch only until W6), the same town, outside and street cells
 over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
 `freshness/evidence` (the oldest claim or operator edit waiting for its resolve, Problem past 60 min). As

@@ -289,6 +289,10 @@ class RegistryView(Protocol):
     def in_czechia_polygon(self, lat: float, lon: float) -> bool | None:
         """Containment in the RÚIAN state polygon. `None` = not loaded, so no signal."""
 
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        """The kód of the valid doors within `bind.PIN_DOOR_M`, at most TWO: the one asker
+        (`bind.pin_door`) only wants to know whether there is exactly one."""
+
 
 @dataclass(frozen=True, slots=True)
 class ResolverContext:
@@ -337,6 +341,10 @@ class Binding:
     relaxations: tuple[str, ...] = ()
     ambiguous: bool = False
     source_claim_ids: tuple[int, ...] = ()
+    # What `bind.pin_door` checks a door against: every část the words named, kept by the binding
+    # or not, and whether they said something no door can be checked against.
+    words_part_ids: tuple[int, ...] = ()
+    words_unchecked: bool = False
 
     @property
     def bound(self) -> bool:
@@ -364,7 +372,7 @@ class Position:
     # not. `street_point` is W18's: the centroid of a bound street's address points, which
     # outranks a pin that is blurred, absent, or off the street. A row keeps `none` only
     # when nothing Czech bound at all.
-    origin: str  # registry_point | street_point | portal_pin | admin_centroid | none
+    origin: str  # registry_point | pin_door | street_point | portal_pin | admin_centroid | none
     blurred: bool = False
     registry_pin_distance_m: float | None = None
     # The street reaches this far from `lat`/`lon` (W18) — the floor under the published

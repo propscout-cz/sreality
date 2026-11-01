@@ -32,10 +32,10 @@ from having no town at all, which rule 25 does not allow.
 
 The five policy/constant loaders went with the tables they read. What is left is four
 point-free questions the run cache shares corpus-wide (name, code, street, address point),
-two point-keyed ones (`containing_obec`, `in_czechia_polygon`) that `warm_points` asks once
-per SLICE, and the sliver fallback, asked lazily because it is reached on ~1 % of listings.
+three point-keyed ones (`containing_obec`, `in_czechia_polygon`, `doors_near`) that `warm_points`
+asks once per SLICE, and the sliver fallback, asked lazily because it is reached on ~1 % of listings.
 The ~62 % cache plateau was those point-keyed questions; with the rest gone, the surviving
-misses are two per distinct pin.
+misses are three per distinct pin.
 
 The registry view here answers exactly the questions `types.RegistryView` declares, so the
 pure core cannot reach past it into SQL. Containment reads the `ST_Subdivide`d `pip` pieces
@@ -55,6 +55,7 @@ import psycopg
 from location_data.claims_common import Claim as IntakeClaim
 from location_data.claims_common import wkt_point
 from location_data.resolver import composite
+from location_data.resolver.bind import PIN_DOOR_M
 from location_data.resolver.types import (
     AddressPoint,
     AdminUnit,
@@ -400,18 +401,22 @@ _POINTS = "unnest(%s::int[], %s::double precision[], %s::double precision[]) AS 
 # 1,225 buffers when an IN-list forced exactly that). Measured: 0.24 ms/point. The
 # authoritative fallback branch it used to carry (and the copy in `api/maps.py`) is gone: it
 # was reachable only for a version loaded with `--allow-missing-pip`, and pip = authoritative
-# for every unit of every loaded version (checked 2026-09-26).
+# for every unit of every loaded version (checked 2026-09-26). A pin ON a shared border replays to
+# the lowest code; the `OFFSET 0` fence keeps the GiST probe driving, as in `_katastr_covering`.
 CONTAINING_OBEC_SQL = f"""
 SELECT p.idx, c.*
   FROM {_POINTS}
   CROSS JOIN LATERAL (
-    SELECT {_ADMIN_COLUMNS}, NULL::char(5)[]
+    SELECT o.*
+      FROM (SELECT {_ADMIN_COLUMNS}, NULL::char(5)[]
       FROM ruian_admin_unit_geometries g
       JOIN ruian_admin_units u ON u.id = g.unit_id
      WHERE g.registry_version_id = %s
        AND g.purpose = 'pip'
        AND u.level = 'obec'
        AND ST_Covers(g.geom, {_PT})
+    OFFSET 0) o
+     ORDER BY o.code
      LIMIT 1
   ) c
 """
@@ -449,6 +454,23 @@ SELECT p.idx, c.*
      ORDER BY 11
      LIMIT 1
   ) c
+"""
+
+# THE DOORS AT A PIN (W5b): the `ST_Expand` box is `_NEAREST_OBEC_SQL`'s under-estimate, so the GiST
+# index `ruian_ap_geom_gist` drives the probe. `LIMIT 2`: the rule only asks "exactly one?", and its
+# answer does not depend on which two, so nothing orders them (an ORDER BY could only tempt the
+# planner off the probe, as `_katastr_covering` records).
+_DOORS_NEAR_SQL = f"""
+SELECT p.idx, d.kod_adm
+  FROM {_POINTS}
+  CROSS JOIN LATERAL (
+    SELECT ap.kod_adm
+      FROM ruian_address_points ap
+     WHERE ap.valid_to IS NULL
+       AND ap.geom && ST_Expand({_PT}, {PIN_DOOR_M} / 60000.0)
+       AND ST_DWithin(ap.geom::geography, {_PT}::geography, {PIN_DOOR_M})
+     LIMIT 2
+  ) d
 """
 
 _IN_CZ_SQL = f"""
@@ -749,7 +771,7 @@ class SqlRegistryView:
     def obec_codes_for_psc(self, psc: str) -> list[int]:
         return [int(r[0]) for r in self._rows("obec_codes_for_psc", _PSC_OBEC_SQL, (psc,))]
 
-    # ---- the two point-keyed questions: ONE array-shaped statement, called here with one
+    # ---- the three point-keyed questions: ONE array-shaped statement, called here with one
     # point and by `warm_points` with the whole slice. `_bulk` returns {idx: answer}.
 
     def containing_obec_bulk(
@@ -789,6 +811,18 @@ class SqlRegistryView:
 
     def in_czechia_polygon(self, lat: float, lon: float) -> bool | None:
         return self.in_czechia_polygon_bulk([(lat, lon)]).get(0)
+
+    def doors_near_bulk(self, points: Sequence[tuple[float, float]]) -> dict[int, tuple[int, ...]]:
+        if not points:
+            return {}
+        idx, lats, lons = _point_arrays(points)
+        found: dict[int, tuple[int, ...]] = {}
+        for i, kod_adm in self._rows("doors_near", _DOORS_NEAR_SQL, (idx, lats, lons)):
+            found[int(i)] = (*found.get(int(i), ()), int(kod_adm))
+        return found
+
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        return self.doors_near_bulk([(lat, lon)]).get(0, ())
 
 
 def _point_arrays(
@@ -1007,11 +1041,16 @@ class CachedRegistryView:
             ("in_czechia_polygon", lat, lon), lambda: self._inner.in_czechia_polygon(lat, lon)
         )
 
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        return self._cache.get(
+            ("doors_near", lat, lon), lambda: tuple(self._inner.doors_near(lat, lon))
+        )
+
 
 def warm_points(
     registry: SqlRegistryView, cache: RunCache, points: Sequence[tuple[float, float]]
 ) -> None:
-    """Answer the TWO point-keyed questions for a WHOLE SLICE in two round trips.
+    """Answer the THREE point-keyed questions for a WHOLE SLICE in three round trips.
 
     These are the questions the run cache can never share between listings — the key IS the
     listing's coordinate. Asking them ahead of the slice does not change a single answer:
@@ -1030,6 +1069,9 @@ def warm_points(
     in_cz = registry.in_czechia_polygon_bulk(coords)
     for i, (lat, lon) in enumerate(coords):
         cache.put(("in_czechia_polygon", lat, lon), in_cz.get(i))
+    doors = registry.doors_near_bulk(coords)
+    for i, (lat, lon) in enumerate(coords):
+        cache.put(("doors_near", lat, lon), doors.get(i, ()))
 
 
 def upsert_listing_locations_bulk(

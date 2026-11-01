@@ -36,9 +36,7 @@ binds through the register like any claim.
 registry entity, else NULL** — a KÚ on the bound unit's chain; the one KÚ of a one-KÚ obec,
 which every entity inside it lies in; an address point's own KÚ (one with no coordinates has
 none: its část's, W5); a street or část obce whose every RÚIAN door lies in one KÚ (the Q7 door
-rule). A portal pin never decides it, whatever the portal labels it: the labels a contract does not list as blurred read
-as "precise" (`core.pin_is_precise`; idnes `no_exact_address` and sreality `not_address` ARE
-blur-declared by their contracts since W1-c), so a pin-based KÚ would be a guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
+rule). A door an exact pin named (W5b) is a bound address point like any other. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
 `core`, and a disputed row keeps its bound entity's.
 """
 

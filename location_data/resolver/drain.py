@@ -452,7 +452,7 @@ def _prefetch(
 
 
 def _warm(slice_: _Slice, ctx: ResolverContext, cache: resolve_db.RunCache) -> None:
-    """Pre-answer the two coordinate-keyed registry questions for the whole slice.
+    """Pre-answer the three coordinate-keyed registry questions for the whole slice.
 
     They are the ones the run cache can never share between listings. `warm_points` is a
     no-op on a view that is not the SQL one (the mini-mirror tests), and warming a point the

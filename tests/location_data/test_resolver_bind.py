@@ -20,6 +20,7 @@ import pytest
 
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core, normalize
+from location_data.resolver import grade as step_grade
 from location_data.resolver.types import AddressPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
@@ -687,3 +688,243 @@ def test_one_truth_a_pin_abroad_never_places_a_row_the_words_bound():
     assert ask(binding, mm.claim(4, "coordinate", lat=50.09, lon=14.45), mm.default_mirror())
     assert ask(binding, None, mm.default_mirror()) is None
     assert ask(replace(binding, rung="R7"), berlin, mm.default_mirror()) is None
+
+
+# ------------------------------------------- v5.11: the pin names its door (ruling Q8, W5b)
+
+_VOKOVICE_DOOR = 21690278
+_ON_DOOR = (50.10102, 14.34804)                # 3.6 m from that door, 13 m from the next
+_PRAHA = mm.claim(1, "obec_name", value_text="Praha")
+_NAD_BORISLAVKOU = mm.claim(4, "street_name", value_text="Nad Bořislavkou")
+_VOKOVICE = mm.claim(5, "cast_obce_name", value_text="Vokovice")
+_ELSEWHERE = (50.0900, 14.4500)                # in Praha, on no door of the default mirror
+_PRAHA_DOOR = {"obec_unit_id": 13, "obec_kod": 554782, "psc": "16000",
+               "cast_obce_unit_id": 14, "cast_obce_kod": 490067}
+
+
+def _door_mirror(*doors: AddressPoint) -> mm.MiniMirror:
+    mirror = mm.default_mirror()
+    mirror.points.extend(doors)
+    return mirror
+
+
+def _dejvice_mirror() -> mm.MiniMirror:
+    """A second část of Praha with a door of its own; Nad Bořislavkou stays in Vokovice."""
+    mirror = _door_mirror(AddressPoint(
+        kod_adm=994, obec_unit_id=13, obec_kod=554782, psc="16000", lat=50.0900, lon=14.4500,
+        cislo_domovni=9, cast_obce_unit_id=16, cast_obce_kod=490999))
+    mirror.units.append(mm._unit(16, "cast_obce", 490999, "Dejvice", "dejvice",
+                                 "k19.o3100.b554782.c490999", parent=13))
+    return mirror
+
+
+@pytest.mark.parametrize(("words", "kod", "ulice"), [
+    ((_PRAHA, _NAD_BORISLAVKOU), _VOKOVICE_DOOR, 101),
+    ((_PRAHA, _VOKOVICE), _VOKOVICE_DOOR, 101),
+    ((_PRAHA,), _VOKOVICE_DOOR, 101),
+], ids=["street", "quarter", "obec-adopts-the-part"])
+def test_an_exact_pin_names_the_one_door_inside_the_words(words, kod, ulice):
+    row = _resolve(_pinned("gps", _ON_DOOR, *words))
+    door = next(p for p in mm.default_mirror().points if p.kod_adm == kod)
+    assert (row.ruian_adm_kod, row.ulice_kod, row.granularity) == (kod, ulice, "address_point")
+    assert (row.lat, row.lon) == (door.lat, door.lon), "the row stands on the door"
+    assert (row.house_number_cp, row.house_number_co) == ("487", "40")
+    assert (row.cast_obce_name, row.street_name) == ("Vokovice", "Nad Bořislavkou")
+    assert row.uncertainty_radius_m == step_grade.RADIUS_M["address_point"]
+    assert row.disputed is None
+    assert row.match_confidence != "exact", "a pin cannot corroborate the door it named"
+
+
+def test_a_door_with_no_street_is_a_door():
+    """A village č.p.: the row carries the code and no street, and is at address grain."""
+    door = AddressPoint(kod_adm=990, lat=_ELSEWHERE[0], lon=_ELSEWHERE[1], cislo_domovni=7,
+                        **_PRAHA_DOOR)
+    row = _resolve(_pinned("gps", _ELSEWHERE, _PRAHA), _door_mirror(door))
+    assert (row.ruian_adm_kod, row.ulice_kod, row.street_name) == (990, None, None)
+    assert (row.granularity, row.house_number_cp) == ("address_point", "7")
+
+
+def test_the_origin_is_pin_door_and_only_the_refined_rung_has_it():
+    claims = _pinned("gps", _ON_DOOR, _PRAHA)
+    declared = step_bind.read_declared_precision(claims)
+    binding = step_bind.pin_door(
+        _bind(claims), step_bind.Constraints(), claims[1], stored=claims, declared=declared,
+        pin_inside_bound_obec=True, registry=mm.default_mirror())
+    assert (binding.target_kind, binding.rung) == ("address_point", step_bind.PIN_DOOR_RUNG)
+    assert claims[1].id in binding.source_claim_ids
+    position = step_bind.place(binding, claims[1], pin_inside_bound_obec=True, declared=declared)
+    assert position.origin == "pin_door"
+    assert position.registry_pin_distance_m < step_bind.PIN_DOOR_M
+
+
+@pytest.mark.parametrize(("doors", "words", "pin", "grain"), [
+    ((AddressPoint(kod_adm=991, lat=50.10100, lon=14.34800, **_PRAHA_DOOR),),
+     (_PRAHA,), _ON_DOOR, "obec"),
+    ((AddressPoint(kod_adm=992, obec_unit_id=15, obec_kod=567639, psc="41502",
+                   lat=_ELSEWHERE[0], lon=_ELSEWHERE[1]),), (_PRAHA,), _ELSEWHERE, "obec"),
+    ((), (_PRAHA, mm.claim(4, "street_name", value_text="28. října")), _ON_DOOR, "street"),
+], ids=["two-doors-at-equal-distance", "the-door-is-in-another-obec", "another-street"])
+def test_a_tie_or_a_door_elsewhere_refines_nothing_silently(doors, words, pin, grain):
+    row = _resolve(_pinned("gps", pin, *words), _door_mirror(*doors))
+    assert (row.ruian_adm_kod, row.granularity, row.disputed) == (None, grain, None)
+
+
+def test_a_door_in_another_cast_refines_nothing():
+    """The words bound Dejvice (R4 carries the část as `admin_unit_id`); the one door at the pin
+    is in Vokovice. The part the words named stands."""
+    row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(5, "cast_obce_name", value_text="Dejvice")),
+                   _dejvice_mirror())
+    assert (row.ruian_adm_kod, row.cast_obce_name, row.granularity) == (
+        None, "Dejvice", "cast_obce_or_quarter")
+
+
+@pytest.mark.parametrize("label", [
+    "municipality", "ward", "quarter", "street", "regional", "estimated", "approximate_location",
+    "no_exact_address", "not_address", "Circle", "LineString"])
+@pytest.mark.parametrize("words", [(_PRAHA,), (_PRAHA, _NAD_BORISLAVKOU), (_PRAHA, _VOKOVICE)],
+                         ids=["obec", "street", "quarter"])
+def test_a_pin_its_portal_declares_blurred_names_no_door(label, words):
+    claims = [*words, mm.claim(2, "coordinate", lat=_ON_DOOR[0], lon=_ON_DOOR[1]),
+              mm.claim(3, "precision_declaration", value_text=label,
+                       declared_precision_label=label.lower(), blur_evidence="declared")]
+    assert _resolve(claims).ruian_adm_kod is None
+
+
+def test_a_pin_outside_the_bound_town_names_no_door():
+    """Kladno by name, the pin on a Praha door 20 km off: the words stand, CHECK records it."""
+    row = _resolve(_pinned("gps", _ON_DOOR, mm.claim(1, "obec_name", value_text="Kladno")))
+    assert (row.obec_name, row.ruian_adm_kod, row.disputed) == ("Kladno", None, "pin_outside_obec")
+
+
+def test_without_words_a_pin_names_a_town_and_no_door():
+    """R7 (the pin inside a town), R8 (a sliver) and R9 (a region, no town): nothing to refine."""
+    r7 = _resolve([mm.claim(2, "coordinate", lat=_ON_DOOR[0], lon=_ON_DOOR[1],
+                            declared_precision_label="gps")])
+    assert (r7.obec_kod, r7.ruian_adm_kod, r7.granularity) == (554782, None, "obec")
+    at_sliver = (50.5984, 13.92)                                 # just north of Bořislav's circle
+    sliver = AddressPoint(kod_adm=993, obec_unit_id=15, obec_kod=567639, psc="41502",
+                          lat=at_sliver[0], lon=at_sliver[1])
+    r8 = _resolve(_pinned("gps", at_sliver), _door_mirror(sliver))
+    assert (r8.obec_kod, r8.ruian_adm_kod) == (567639, None)
+    in_no_town = (49.5944, 18.0103)
+    region = AddressPoint(kod_adm=995, obec_unit_id=10, obec_kod=599212, psc="74301",
+                          lat=in_no_town[0], lon=in_no_town[1])
+    r9 = _resolve(_pinned("gps", in_no_town, mm.claim(1, "okres_name", value_text="Nový Jičín")),
+                  _door_mirror(region))
+    assert (r9.granularity, r9.ruian_adm_kod) == ("okres", None)
+
+
+@pytest.mark.parametrize("stated", [
+    mm.claim(6, "address_point_id", value_text="99999999"),
+    mm.claim(6, "address_point_id", value_text="abc"),
+    mm.claim(6, "house_number_cp", value_text="9999"),
+    mm.claim(6, "house_number_cp", value_text="abc"),
+    mm.claim(6, "house_number_co", value_text="9999"),
+    mm.claim(6, "house_number_co", value_text="abc"),
+    mm.claim(6, "house_number_cp", value_text="487", subject_scoped=False),
+], ids=["kod-missing-from-the-mirror", "kod-unparsed", "cp-claim", "cp-unparsed", "co-claim",
+        "co-unparsed", "out-of-scope"])
+def test_a_door_the_words_named_stands_unbound_rather_than_contradicted(stated):
+    """ANY stored claim of a door type, parsed or not: the scorecard reads it as a word door."""
+    assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, stated)).ruian_adm_kod is None
+
+
+@pytest.mark.parametrize("line", [
+    "Nad Bořislavkou 9999", "Nad Bořislavkou 9999/9", "Nad Bořislavkou 12a", "Nad Bořislavkou 12A",
+    "Nad Bořislavkou 12 a", "Nad Bořislavkou 12-14", "Nad Bořislavkou 12,"])
+def test_a_digit_in_the_street_line_is_a_door_the_words_named(line):
+    """Parsed or not (A1): R1 binds no door of these, and the pin must not supply one."""
+    row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(4, "street_name", value_text=line)))
+    assert row.ruian_adm_kod is None
+    assert row.granularity != "address_point"
+
+
+def test_a_street_name_with_a_digit_pays_for_it():
+    """The cost of one rule, on the door's own street: 45 of 6,577 lone doors (1 in 10, 2026-11-01)."""
+    mirror = _door_mirror(AddressPoint(kod_adm=996, lat=_ELSEWHERE[0], lon=_ELSEWHERE[1], ulice_kod=102,
+                                       street_name_norm="28 rijna", street_name="28. října", **_PRAHA_DOOR))
+    row = _resolve(_pinned("gps", _ELSEWHERE, _PRAHA, mm.claim(4, "street_name", value_text="28. října")), mirror)
+    assert (row.ulice_kod, row.ruian_adm_kod) == (102, None)
+
+
+def test_a_street_line_that_bound_nothing_refuses():
+    """Praha + a street the register does not hold: the door at the pin is on another street."""
+    line = mm.claim(4, "street_name", value_text="Karlovo náměstí")
+    row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, line))
+    assert (row.ruian_adm_kod, row.ulice_kod, row.granularity) == (None, None, "obec")
+
+
+def test_a_street_line_two_streets_share_refuses():
+    """`ambiguous_streets`: a line reaching two register rows names neither, so it checks nothing."""
+    mirror = mm.default_mirror()
+    twin = replace(next(s for s in mirror.streets if s.code == 101), code=901)
+    mirror.streets.append(twin)
+    line = mm.claim(4, "street_name", value_text="Nad Borislavkou")
+    assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, line), mirror).ruian_adm_kod is None
+
+
+def test_a_street_line_naming_a_part_works_as_that_part():
+    """`street_names_part`: the line is the část it names, and the door is checked against it."""
+    mirror = _dejvice_mirror()
+    named = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(4, "street_name", value_text="Vokovice")), mirror)
+    assert (named.ruian_adm_kod, named.cast_obce_name) == (_VOKOVICE_DOOR, "Vokovice")
+    other = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(4, "street_name", value_text="Dejvice")), mirror)
+    assert (other.ruian_adm_kod, other.cast_obce_name) == (None, "Dejvice")
+
+
+def _momc_mirror() -> mm.MiniMirror:
+    mirror = mm.default_mirror()
+    mirror.units.append(mm._unit(17, "momc", 500119, "Praha 4", "praha 4", "k19.o3100.b554782.m500119", parent=13))
+    return mirror
+
+
+@pytest.mark.parametrize("words", [
+    (mm.claim(1, "obec_name", value_text="Praha 4"),),
+    (mm.claim(1, "obec_name", value_text="Praha 4 - Vokovice"),),
+    (_PRAHA, mm.claim(5, "cast_obce_name", value_text="Praha 4")),
+    (mm.claim(5, "cast_obce_name", value_text="Praha 4"),),
+], ids=["whole-line", "line-with-a-part", "part-claim", "part-claim-anchors-the-town"])
+def test_a_momc_in_the_words_refuses(words):
+    """Vokovice's door is not in Praha 4, and MOMC borders cross části, so nothing can check it."""
+    row = _resolve(_pinned("gps", _ON_DOOR, *words), _momc_mirror())
+    assert (row.obec_name, row.ruian_adm_kod) == ("Praha", None)
+
+
+def test_a_locality_line_the_town_was_composed_from_refuses():
+    """The one rule that closes a MOMC: its cost is the checkable "Praha - Vokovice" line too."""
+    assert _resolve(_pinned("gps", _ON_DOOR, mm.claim(1, "obec_name", value_text="Praha - Vokovice"))
+                    ).ruian_adm_kod is None
+
+
+@pytest.mark.parametrize(("line", "rung"), [("Nad Bořislavkou", "R2"), ("Nad Borislavkov", "R3")])
+def test_a_claimed_part_checks_the_door_at_every_rung(line, rung):
+    """R2 takes the register's část and R3 carries none, so the binding alone would lose "Dejvice"."""
+    claims = _pinned("gps", _ON_DOOR, _PRAHA, mm.claim(4, "street_name", value_text=line),
+                     mm.claim(5, "cast_obce_name", value_text="Dejvice"))
+    assert _bind(claims, mirror=_dejvice_mirror()).rung == rung
+    row = _resolve(claims, _dejvice_mirror())
+    assert (row.ulice_kod, row.ruian_adm_kod) == (101, None)
+
+
+def test_a_claimed_part_that_matched_no_unit_refuses():
+    claims = _pinned("gps", _ON_DOOR, _PRAHA, _NAD_BORISLAVKOU,
+                     mm.claim(5, "cast_obce_name", value_text="Horní Dolní"))
+    row = _resolve(claims)
+    assert (row.ulice_kod, row.ruian_adm_kod) == (101, None)
+
+
+@pytest.mark.parametrize(("psc", "kod"), [("160 00", _VOKOVICE_DOOR), ("110 00", None)], ids=["same", "different"])
+def test_a_stated_psc_checks_the_door(psc, kod):
+    assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(6, "psc", value_text=psc))).ruian_adm_kod == kod
+
+
+@pytest.mark.parametrize(("stated", "rung"), [
+    (mm.claim(6, "address_point_id", value_text="21690279"), "R0"),
+    (mm.claim(4, "street_name", value_text="Nad Bořislavkou 488/41"), "R1"),
+], ids=["R0", "R1"])
+def test_a_door_the_words_bound_beats_the_door_at_the_pin(stated, rung):
+    claims = _pinned("gps", _ON_DOOR, _PRAHA, stated)
+    assert _bind(claims).rung == rung
+    row = _resolve(claims)
+    assert row.ruian_adm_kod == 21690279, "the words' door, 13 m from the pin"
+    assert row.match_confidence == "exact", "the pin corroborates a door the words bound"

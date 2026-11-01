@@ -145,7 +145,8 @@ python3 -m autodedup.harness shadow shadow/w4/base/cohort.jsonl.gz shadow/w4/pos
     shadow/w4/labels --scorer shadow/w4/scorer.json --out shadow/w4/judge
 ```
 W5, W5b, W6: `--claims none` from the wave's branch (W5, #2251: `scope=apply`, slice by slice with the
-ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice). A block costs what its town does (Pardubice:
+ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice; W5b, #2338: the same dispatch with
+`wave=w5b` and the ids_sql of `w5b-pin-door.md` § Rollout). A block costs what its town does (Pardubice:
 7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about
 2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
 
