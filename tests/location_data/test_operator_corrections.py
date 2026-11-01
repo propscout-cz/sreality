@@ -1,48 +1,83 @@
 """Offline contract tests for the W1v operator-correction producer.
 
-No DB. These pin the properties the explorer review flagged as the two silent
-failure modes of an operator write path, plus the vocabulary discipline:
-
-1. The dirty_locations enqueue is UNCONDITIONAL — a restated correction
-   (A -> B -> A) collides on the time-free fingerprint, inserts nothing, and an
-   `ins`-gated enqueue would never fire (dead correction button).
-2. Every ALLOWED claim type has an operator survivorship row in migration 400 —
-   survivorship SKIPS claims with no policy row, so a missing row means the
-   correction wins the pin but silently loses the field.
-3. The SQL calls the named migration functions (location_value_norm,
-   location_claim_fingerprint), never an inline transcription.
+No DB. Since location W3 the operator writes through the lane's own one write
+(`claims_store.write_claims`): one claim per listing and type with licence `operator`,
+which the resolver's read puts ahead of the portal's. The vocabulary discipline stays.
 """
 
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from location_data import operator_corrections as oc
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
 
 
-def test_enqueue_is_not_gated_on_the_insert_cte():
-    enqueue = oc._OPERATOR_CLAIM_SQL.split("enqueued AS")[1]
-    assert "VALUES (%(listing_id)s, 'operator_edit')" in enqueue
-    assert "FROM ins" not in enqueue.split(")")[0]
+class _Conn:
+    """The listing read answers; everything else is recorded and answered with nothing."""
+
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def cursor(self, **_: Any) -> "_Conn":
+        return self
+
+    def transaction(self) -> Any:
+        return nullcontext()
+
+    def __enter__(self) -> "_Conn":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def execute(self, sql: str, params: object = None) -> None:
+        self.executed.append(" ".join(sql.split()))
+
+    def fetchone(self) -> dict[str, Any]:
+        return {"id": 7, "source": "idnes", "source_id_native": "n7"}
 
 
-def test_sql_uses_the_named_migration_functions():
-    assert "location_value_norm(" in oc._OPERATOR_CLAIM_SQL
-    assert "location_claim_fingerprint(" in oc._OPERATOR_CLAIM_SQL
-    # the fingerprint call passes value_norm, not a re-normalized expression
-    assert "lower(" not in oc._OPERATOR_CLAIM_SQL
-    assert "unaccent(" not in oc._OPERATOR_CLAIM_SQL
+def test_the_operator_writes_one_operator_claim_through_the_one_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written: list[tuple[list[Any], str]] = []
+
+    def fake_write(cur: Any, claims: list[Any], reason: str = "claim_insert") -> tuple[int, int]:
+        written.append((list(claims), reason))
+        return 1, 1
+
+    monkeypatch.setattr(oc, "write_claims", fake_write)
+    result = oc.submit_correction(_Conn(), listing_id=7, claim_type="street_name",
+                                  value_text=" Dlouhá ")
+
+    ((claim,), reason), = written
+    assert reason == "operator_edit"
+    assert (claim.listing_id, claim.claim_type, claim.value_text) == (7, "street_name", "Dlouhá")
+    assert (claim.licence_class, claim.surface, claim.extraction_method) == (
+        "operator", "operator_input", "operator_manual")
+    assert (claim.contract_entry_id, claim.claim_confidence, claim.blur_evidence) == (
+        None, "exact", "none")
+    assert not claim.retract
+    assert (result["written"], result["enqueued"]) == (True, True)
+    assert "restatement" not in result
 
 
-def test_operator_vocabulary():
-    for fragment in (
-        "'operator_input'", "'operator_manual'", "'operator'", "'operator_edit'",
-    ):
-        assert fragment in oc._OPERATOR_CLAIM_SQL, fragment
-    assert "'exact'" in oc._OPERATOR_CLAIM_SQL  # claim_confidence
+def test_the_correction_route_never_imports_the_intake_lane() -> None:
+    """The one write lives in `claims_store`, so the API's correction route pays for one small
+    module, not the 2,000-line intake lane and its page readers."""
+    import ast
+
+    tree = ast.parse(Path(oc.__file__).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert "location_data.claims_store" in imported
+    assert "location_data.claims_intake" not in imported
 
 
 def test_every_allowed_claim_type_has_an_operator_policy_row():

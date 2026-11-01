@@ -174,12 +174,11 @@ class _Seed:
         """One portal claim on an ad, observed `seen_s` seconds ago; a coordinate carries its point."""
         self.conn.execute(
             "insert into location_claims (listing_id, source, first_observed_at, claim_type, surface, "
-            "  extraction_method, value_text, value_geom, subject_scoped, declared_precision_label, licence_class, "
-            "  claim_fingerprint) "
+            "  extraction_method, value_text, value_geom, subject_scoped, declared_precision_label, licence_class) "
             "select l.id, l.source, now() - make_interval(secs => %(seen)s::float8), %(type)s::location_claim_type, "
             "       'api_json', 'portal_structured_field', 'w6', "
             "       case when %(type)s = 'coordinate' then ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326) end, "
-            "       %(scoped)s::boolean, %(label)s::text, 'portal', decode(md5(random()::text), 'hex') "
+            "       %(scoped)s::boolean, %(label)s::text, 'portal' "
             "  from listings l where l.id = %(id)s",
             {"seen": seen_s, "type": claim_type, "lng": lng, "lat": lat, "scoped": scoped, "label": label,
              "id": listing_id})
@@ -804,15 +803,15 @@ def test_served_reads_published_properties_at_their_location_ad(seed: _Seed) -> 
 @live
 def test_the_sample_takes_its_truth_from_the_address_point_and_its_pin_from_the_newest_coordinate(seed: _Seed) -> None:
     """Every tenth listing-cohort ad (id % 10 = 0) whose own row, or its property's location ad, is an address point:
-    the pin error is the newest coordinate claim's distance to it, per the newest declared label ('undeclared' when
-    none); radius cover asks, below address grain, whether the truth lies inside the row's own radius."""
+    the pin error is the coordinate claim's distance to it (one per ad since W3's key), per the declared label
+    ('undeclared' when none); radius cover asks, below address grain, whether the truth lies inside the row's own
+    radius."""
     seed.no_registry()
     seed.version("current", age_d=19, current=True)
     street_ad, truth_ad, point_ad, unsampled = (seed.ad_with_id("idnes", tail) for tail in (0, 1, 0, 5))
     seed.located(truth_ad, granularity="address_point", obec=_TOWN)                       # (14.42, 50.08)
     seed.located(street_ad, granularity="street", obec=_TOWN, lat=50.08045, radius=100)   # ~50 m north
     seed.property(truth_ad, canonical=street_ad, members=[street_ad])
-    seed.claim(street_ad, "coordinate", lat=50.09, seen_s=7200)                           # older: not the pin
     seed.claim(street_ad, "coordinate", lat=50.0809, seen_s=60)                           # ~100 m north of truth
     seed.claim(street_ad, "precision_declaration", label="street")
     seed.located(point_ad, granularity="address_point", obec=_TOWN, lng=14.43)

@@ -34,8 +34,8 @@ ONE field may fall back to a claim when the registry has none: `psc`. The street
 house numbers are the REGISTER's or nothing — a house number is published only off a bound
 address point, and only a `č.p.` point publishes one (v5.5, D7: "Praha 8" used to become č.p. 8,
 and a cottage's č.ev. read as a č.p.); a č.ev. bind carries its `ruian_adm_kod` and no number.
-The ONE thing the registry does not get to respell is an OPERATOR correction, which is also the
-only survivorship rule that outlived the policy table: `bind.operator_fields` is the whole of it.
+An OPERATOR correction is no exception since W3: it outranks the portal's claim at the read and
+binds through the register like any claim.
 
 `katastr_kod` (PR-B, v5.4) is ONE rule under the same contract: **the single KÚ of the BOUND
 registry entity, else NULL** — a KÚ (or a ZSJ inside one) on the bound unit's chain; the one
@@ -82,12 +82,10 @@ def fill(
     constraints: Constraints,
     registry: RegistryView,
     *,
-    operator: dict[str, str] | None = None,
     place: bool = True,
 ) -> Fill:
     """-> the fifteen hierarchy/address values of the answer row, and its registry point.
     `place=False` (a pin or a street already placed the row) skips the point's one read."""
-    operator = operator or {}
     values: dict[str, object] = {}
     chain = _chain(binding, registry)
     for unit in chain:
@@ -122,11 +120,10 @@ def fill(
         # část obce or their town. One rule for all nine portals, and the deliberate cost of
         # it is coverage: a real street the mirror does not hold is dropped rather than
         # served as a name nothing can be joined to, filtered on, or de-duplicated by.
-        street_name=(operator.get("street_name") or binding.street_name),
-        house_number_cp=operator.get("house_number_cp") or _cp(point),
-        house_number_co=operator.get("house_number_co") or _co(point),
-        psc=operator.get("psc")
-        or (point.psc if point is not None and point.psc else constraints.psc),
+        street_name=binding.street_name,
+        house_number_cp=_cp(point),
+        house_number_co=_co(point),
+        psc=point.psc if point is not None and point.psc else constraints.psc,
         lat=lat,
         lon=lon,
         extent_m=extent,

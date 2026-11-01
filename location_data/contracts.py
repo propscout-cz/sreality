@@ -288,8 +288,7 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
         optional_keys=frozenset({"labels"})),
     "conflict_signal": ReaderContract(
         substrates=_PAYLOAD_SURFACES, methods=_STRUCTURED,
-        locator_keys=frozenset({"json_pointer"}),
-        optional_keys=frozenset({"legacy_source_column"})),
+        locator_keys=frozenset({"json_pointer"})),
     # --- W2-6: DOM readers. `css` is required on all three, so a selector-less entry fails
     # CI rather than matching nothing forever in production.
     "html_text": ReaderContract(
@@ -362,10 +361,12 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
     # never the portal's own text. `consults_transforms` is FALSE
     # deliberately — normalising a label the contract itself wrote is a no-op with a failure
     # mode, since blur is decided by that label's membership of `precision_cap.blurred_labels`.
+    # `absent: retract` (W3): where the node EXISTS and the marker test fails, the page
+    # states the label's absence and the reader emits a tombstone for the claim.
     "html_marker": ReaderContract(
         substrates=_DOM_SURFACES, methods=_DECLARED_QUALITY,
         locator_keys=frozenset({"css", "value_label"}),
-        optional_keys=frozenset({"attr", "blank_attrs", "contains"}),
+        optional_keys=frozenset({"attr", "blank_attrs", "contains", "absent"}),
         reads_stored_body=True),
     # --- W2 reader canon, embedded-JSON family: ONE acquisition layer (css + optional attr
     # + optional decode + optional subject match) and five extractors over it. `css` is
@@ -859,11 +860,8 @@ _TOP_LEVEL_KEYS = frozenset({
 # `persistence` is ARCHIVE configuration (W2a-3e): `volatile_paths` decides the projection
 # `payload_sha256` is taken over, and `version_cap` is retention. Neither reaches a claim.
 # Hashed, they made an archive edit re-version the extractor, and re-versioning the
-# extractor re-inserts the claims corpus: `location_claim_fingerprint` (migration 386)
-# takes `extractor_version` and `contract_entry_id`, and its UNIQUE index (migration 382)
-# is what dedupes an incremental re-walk. In August 2026 that was 5.1M rows / 2.6 GB of
-# `location_claims`, duplicated for a selector edit, in a subsystem with ~4 GB of
-# allowance left — and once per future tweak. The profiles keep their own identity
+# extractor re-mines the whole corpus (until W3 it also re-inserted it: in August 2026 that
+# was 5.1M rows / 2.6 GB of `location_claims` duplicated for a selector edit). The profiles keep their own identity
 # instead: `payload_norm.profile_digest`, which moves iff the projection moves.
 #
 # A top-level key is never indented, so this anchored filter cannot reach a nested
@@ -1154,8 +1152,14 @@ _RETRACT_ENTRIES_SQL = """
 # listings are queued, and re-running finishes the job (the predicate is the same).
 #
 # `ctid` is the bound: LIMIT inside a DELETE needs a subquery, and the physical row id is the
-# cheapest key that survives one. Safe because nothing UPDATEs `location_claims` — the intake
-# only ever INSERTs — so a row's ctid cannot move under the statement.
+# cheapest key that survives one. The one write UPDATEs a changed value in place (W3), which
+# moves its ctid: a batch skips the moved row, the next deletes it if it still carries one of
+# these entries, and the loop ends only on a batch that matched nothing.
+#
+# W3's provenance is the entry that FIRST stated a value, so retracting version N deletes
+# every value N first stated, later versions' restatements included: those types stay empty
+# until the source is re-mined in full (`claims_intake --mode full --source X`, bodies and
+# readings by their stamps). A retract, like an activation, is followed by that re-mine.
 #
 # One statement per batch, so the delete and its re-resolve enqueue cannot separate.
 # `claim_insert` is reused deliberately: the queue's reason is a diagnostic label and the

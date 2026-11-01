@@ -256,28 +256,23 @@ def test_a_capped_but_unblurred_label_grades_the_same_whichever_pin_the_row_has(
     assert contradicting.disputed == "pin_off_street"
 
 
-def test_mmrealitys_accurate_ranks_the_pin_without_certifying_a_granularity():
-    """`accurate` is the ONE W1-c label that is precise rather than blurred, and what it buys
-    is a RANKING: membership in `PRECISE_DECLARED_LABELS` decides which of two sibling
-    declarations wins the pin (`declared_rank` returns 0). It never certified a granularity —
-    mmreality's one `accurate: true` row in the corpus is wrong and its one correct row is
-    `accurate: false` — and since W18 no label does."""
+def test_mmrealitys_accurate_is_precise_without_certifying_a_granularity():
+    """`accurate` is the ONE W1-c label that is precise rather than blurred. It never
+    certified a granularity — mmreality's one `accurate: true` row in the corpus is wrong and
+    its one correct row is `accurate: false` — and since W18 no label does."""
     assert "accurate" in step_bind.PRECISE_DECLARED_LABELS
     assert "accurate" in step_bind.KNOWN_DECLARED_LABELS
     assert "accurate" not in step_bind.BLURRED_DECLARED_LABELS
 
     precise = mm.claim(2, "coordinate", lat=50.0755, lon=14.4378,
                        declared_precision_label="accurate")
-    blurred = mm.claim(3, "coordinate", lat=50.1, lon=14.5,
-                       declared_precision_label="regional", blur_evidence="declared")
-    assert step_bind.declared_rank(precise) == 0
-    assert step_bind.declared_rank(blurred) == 2
-    assert step_bind.elect_pin([precise, blurred]).id == precise.id
+    declared = step_bind.read_declared_precision([precise])
+    assert (declared.label, declared.blurred) == ("accurate", False)
     resolution = core.resolve(
-        [mm.claim(1, "obec_name", value_text="Praha"), precise, blurred], mm.context(),
+        [mm.claim(1, "obec_name", value_text="Praha"), precise], mm.context(),
         resolver_version=RESOLVER_VERSION, registry_version="ruian:2026-07-31",
     )
-    # Nothing certified either: the granularity is whatever the ADDRESS evidence supports.
+    # Nothing certified: the granularity is whatever the ADDRESS evidence supports.
     assert resolution.granularity == "obec"
     assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
 

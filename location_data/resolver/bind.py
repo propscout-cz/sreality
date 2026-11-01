@@ -183,9 +183,9 @@ class Constraints:
     cast_obce_keys: tuple[str, ...] = ()
     # S1's match key, and the ONE input R3 (the trigram rung) is allowed to run on.
     street_key: str | None = None
-    # EVERY street claim, verbatim: `composite.resolve_street` binds each EXACTLY inside the
+    # THE street claim, verbatim: `composite.resolve_street` binds it EXACTLY inside the
     # anchoring obec — one matcher, one answer.
-    street_lines: tuple[str, ...] = ()
+    street_line: str | None = None
     # The domovní číslo and its RÚIAN `typ_so`, TYPED from claim to SQL (D7): "č.ev. 13" is
     # a cottage's evidence number and may only ever match a `č.ev.` point (None: unmarked).
     cislo_domovni: int | None = None
@@ -197,109 +197,79 @@ class Constraints:
 
 
 def collect_constraints(
-    claims: Sequence[Claim],
-    normalized: dict[int, NormalizedClaim],
-    *,
-    pin_claim_id: int | None = None,
+    claims: Sequence[Claim], normalized: dict[int, NormalizedClaim],
 ) -> Constraints:
-    """`pin_claim_id` names the coordinate `elect_pin` chose. It matters: without it this
-    took the FIRST coordinate by id while the position took the best-DECLARED one, so a
-    listing carrying a blurred pin and a precise one reverse-geocoded its town from one and
-    published `geom` from the other — and R7/R8 are pin-derived, so CHECK skips the
-    containment test and the row ships clean with its town and its pin 300 km apart."""
-    psc: str | None = None
-    buckets: dict[str, list[str]] = {"okres": [], "kraj": [], "obec": [], "cast_obce": []}
-    ids: dict[str, list[int]] = {}
-    obec_lines: list[str] = []
-    street_lines: list[str] = []
-    street_key = None
-    cp = co = kod_adm = typ = None
+    """What the claims say, at most one claim per type (the read, W3): nothing here ranks two
+    claims of one type. A house-number claim outranks the number written in the street line;
+    the pin is THE coordinate."""
+    one = {c.claim_type: c for c in claims}
+    norms = {t: normalized.get(c.id) for t, c in one.items()}
+    ids: dict[str, tuple[int, ...]] = {}
+
+    def read(claim_type: str, kind: str) -> NormalizedClaim | None:
+        """The type's normalized claim, noted as the evidence for `kind`."""
+        ids[kind] = (one[claim_type].id,)
+        return norms[claim_type]
+
+    def slots(norm: NormalizedClaim | None) -> dict[str, Any]:
+        return norm.typed_slots if norm else {}
+
+    kod_adm = psc = street_key = street_line = None
+    cp = co = typ = None
     pin: tuple[float, float] | None = None
-
-    def note(kind: str, claim_id: int) -> None:
-        ids.setdefault(kind, []).append(claim_id)
-
-    for claim in sorted(claims, key=lambda c: c.id):
-        norm = normalized.get(claim.id)
-        key = norm.value_ascii if norm else None
-        slots = norm.typed_slots if norm else {}
-        rejected = bool(norm and norm.rejections)
-        t = claim.claim_type
-        if t == "address_point_id" and claim.value_text:
-            kod_adm = _as_int(claim.value_text)
-            note("kod_adm", claim.id)
-        elif t == "psc":
-            value = slots.get("psc")
-            if isinstance(value, str):
-                psc = psc or value
-                note("psc", claim.id)
-        elif t == "street_name" and not rejected:
-            raw = str(claim.value_text or "")
-            if raw.strip():
-                street_lines.append(raw)
-                note("street", claim.id)
-            if cp is None:
-                cp, typ = house_number(slots)
-            if co is None and slots.get("cislo_orientacni"):
-                co = _as_int(str(slots["cislo_orientacni"]))
-            street_key = street_key or key
-        elif t == "house_number_cp":
-            if cp is None:
-                cp, typ = house_number(slots)
-            note("house_number_cp", claim.id)
-        elif t == "house_number_co":
-            co = co if co is not None else _as_int(
-                str(slots.get("cislo_orientacni") or slots.get("cislo_domovni") or "")
-            )
-            note("house_number_co", claim.id)
-        elif t == "obec_name" and key and not rejected:
-            buckets["obec"].append(key)
-            obec_lines.append(str((norm.value_cf if norm else None) or claim.value_text or ""))
-            note("obec_name", claim.id)
-        elif t in ("cast_obce_name", "okres_name", "kraj_name") and key:
-            buckets[t.removesuffix("_name")].append(key)
-            note(t, claim.id)
-        elif t == "coordinate" and claim.has_position:
-            elected = claim.id == pin_claim_id if pin_claim_id is not None else pin is None
-            if elected:
-                pin = (float(claim.lat), float(claim.lon))  # type: ignore[arg-type]
-                note("coordinate", claim.id)
+    if (claim := one.get("address_point_id")) is not None and claim.value_text:
+        read("address_point_id", "kod_adm")
+        kod_adm = _as_int(claim.value_text)
+    if "psc" in one and isinstance(value := slots(norms["psc"]).get("psc"), str):
+        read("psc", "psc")
+        psc = value
+    if "house_number_cp" in one:
+        cp, typ = house_number(slots(read("house_number_cp", "house_number_cp")))
+    if "house_number_co" in one:
+        numbers = slots(read("house_number_co", "house_number_co"))
+        co = _as_int(str(numbers.get("cislo_orientacni") or numbers.get("cislo_domovni") or ""))
+    street = norms.get("street_name")
+    if "street_name" in one and not (street and street.rejections):
+        line = str(one["street_name"].value_text or "")
+        if line.strip():
+            read("street_name", "street")
+            street_line = line
+        street_key = street.value_ascii if street else None
+        if cp is None:
+            cp, typ = house_number(slots(street))
+        if co is None and slots(street).get("cislo_orientacni"):
+            co = _as_int(str(slots(street)["cislo_orientacni"]))
+    keys: dict[str, tuple[str, ...]] = {}
+    obec_lines: tuple[str, ...] = ()
+    for t in ("obec_name", "cast_obce_name", "okres_name", "kraj_name"):
+        norm = norms.get(t)
+        if not (norm and norm.value_ascii) or (t == "obec_name" and norm.rejections):
+            continue
+        read(t, t)
+        keys[t] = (norm.value_ascii,)
+        if t == "obec_name":
+            line = str(norm.value_cf or one[t].value_text or "")
+            obec_lines = (line,) if line else ()
+    if (claim := one.get("coordinate")) is not None and claim.has_position:
+        read("coordinate", "coordinate")
+        pin = (float(claim.lat), float(claim.lon))  # type: ignore[arg-type]
 
     return Constraints(
         psc=psc,
-        okres_keys=tuple(dict.fromkeys(buckets["okres"])),
-        kraj_keys=tuple(dict.fromkeys(buckets["kraj"])),
-        obec_keys=tuple(dict.fromkeys(buckets["obec"])),
-        obec_lines=tuple(dict.fromkeys(line for line in obec_lines if line)),
-        cast_obce_keys=tuple(dict.fromkeys(buckets["cast_obce"])),
+        okres_keys=keys.get("okres_name", ()),
+        kraj_keys=keys.get("kraj_name", ()),
+        obec_keys=keys.get("obec_name", ()),
+        obec_lines=obec_lines,
+        cast_obce_keys=keys.get("cast_obce_name", ()),
         street_key=street_key,
-        street_lines=tuple(dict.fromkeys(line for line in street_lines if line)),
+        street_line=street_line,
         cislo_domovni=cp,
         typ_so=typ,
         cislo_orientacni=co,
         kod_adm=kod_adm,
         pin=pin,
-        claim_ids={k: tuple(v) for k, v in sorted(ids.items())},
+        claim_ids=dict(sorted(ids.items())),
     )
-
-
-# The four address fields an operator may correct by hand. The survivorship evaluator and
-# its policy table are gone, and with them every ranking rule they expressed — except this
-# one, which has a live producer (`location_data/operator_corrections.py`) and a standing
-# rule behind it: operator curation wins, and the registry does not get to respell it.
-OPERATOR_METHOD = "operator_manual"
-OPERATOR_FIELDS = ("street_name", "house_number_cp", "house_number_co", "psc")
-
-
-def operator_fields(claims: Sequence[Claim]) -> dict[str, str]:
-    """-> {field: value} for the hand-entered claims among these, lowest claim id first."""
-    out: dict[str, str] = {}
-    for claim in sorted(claims, key=lambda c: c.id):
-        if claim.extraction_method != OPERATOR_METHOD or not claim.value_text:
-            continue
-        if claim.claim_type in OPERATOR_FIELDS:
-            out.setdefault(claim.claim_type, claim.value_text)
-    return out
 
 
 def _as_int(value: str | None) -> int | None:
@@ -508,16 +478,16 @@ def constraining_towns(
     by_psc = _dedupe_units([chain[0] for k in (registry.obec_codes_for_psc(constraints.psc)
                                                if constraints.psc else ())
                             if (chain := registry.admin_chain_by_code("obec", k))])
-    if constraints.street_lines and len(by_psc) > 1:
+    line = constraints.street_line
+    if line and len(by_psc) > 1:
         # 1f: a PSČ shared by five towns, and a street the advert names in exactly one of them
         # (19120281: 68601, "Na Splávku" in Uherské Hradiště). The pin is the post office's. A
         # line that is also a PLACE of one of them ("Mařatice") settles nothing — asked only
         # of a line some town holds.
         kods = {t.code for t in by_psc}
-        holding = {t.code: t for line in constraints.street_lines
-                   if (held := [t for t in by_psc if _holds_street(t, line, registry)])
-                   and not places_named(street_match_keys(line)[1], kods, registry)
-                   for t in held}
+        holding = {t.code: t for t in by_psc if _holds_street(t, line, registry)}
+        if holding and places_named(street_match_keys(line)[1], kods, registry):
+            holding = {}
         if len(holding) == 1:
             return Towns(list(holding.values()), ["psc", "street_in_town"], "R6", False,
                          composite, {})
@@ -565,13 +535,12 @@ def bind(
     *,
     pin_is_precise: bool = False,
     pin_blurred: bool = False,
-    pin_claim_id: int | None = None,
-    place_lines: Sequence[str] = (),
+    place_line: str | None = None,
 ) -> tuple[Binding, Constraints]:
-    """BIND. -> (the winner, the constraints FILL still needs). `place_lines` are the street
-    claims S1 refused as a place name (`town_as_street`): 1c asks which part they name."""
+    """BIND. -> (the winner, the constraints FILL still needs). `place_line` is the street
+    claim S1 refused as a place name (`town_as_street`): 1c asks which part it names."""
     registry = ctx.registry
-    constraints = collect_constraints(claims, normalized, pin_claim_id=pin_claim_id)
+    constraints = collect_constraints(claims, normalized)
     out: list[_Candidate] = []
 
     towns = constraining_towns(constraints, registry, pin_is_precise=pin_is_precise)
@@ -589,15 +558,15 @@ def bind(
                 )
             )
 
-    # THE street claims (W18). `composite.resolve_street` matches every street claim EXACTLY
-    # against the register inside the anchoring obec, in two tiers: a full-name match wins
-    # outright, the type-word-tolerant fold is consulted only when nothing matched exactly,
-    # and two distinct streets bind nothing at all. v5.6 deleted the split on separators: its
+    # THE street claim (W18). `composite.resolve_street` matches it EXACTLY against the
+    # register inside the anchoring obec, in two tiers: a full-name match wins outright, the
+    # type-word-tolerant fold is consulted only when nothing matched exactly, and a line that
+    # reaches two distinct streets binds nothing at all. v5.6 deleted the split on separators: its
     # one user was bazos' whole headline, and the text reading names the street itself.
     line = (
-        resolve_street(constraints.street_lines, constraining_obec_kods, registry,
-                       place_lines=place_lines)
-        if constraining_obec_kods and (constraints.street_lines or place_lines)
+        resolve_street(constraints.street_line, constraining_obec_kods, registry,
+                       place_line=place_line)
+        if constraining_obec_kods and (constraints.street_line or place_line)
         else StreetBind()
     )
 
@@ -738,7 +707,7 @@ def bind(
     # within `REGISTRY_PIN_CONFLICT_M` — because `place()` moves the row there unflagged.
     town = obec_of(part, registry) if part is not None else None
     if (town is not None and constraints.cislo_domovni is not None
-            and not constraints.street_lines and not any(
+            and not constraints.street_line and not any(
                 c.target_kind == "address_point" for c in out)):
         points = _typed(registry.address_points_by_number(
             obec_kod=town.code, street_name_norm=None,
@@ -1025,7 +994,7 @@ def _admin_agreed(granularity: str, rung: str, qualifiers: tuple[str, ...]) -> t
     return tuple(dict.fromkeys(agreed))
 
 
-# ------------------------------------------------------------------ the pin election
+# ------------------------------------------------------------------ the pin and its declaration
 
 
 @dataclass(frozen=True, slots=True)
@@ -1035,49 +1004,26 @@ class DeclaredPrecision:
     claim_ids: tuple[int, ...]
 
 
-def declared_rank(claim: Claim) -> int:
-    """0 declared-precise, 1 undeclared, 2 declared-blurred — the pin's own ordering."""
-    raw = (claim.declared_precision_label or "").strip().lower()
-    if raw in PRECISE_DECLARED_LABELS:
-        return 0
-    if raw in BLURRED_DECLARED_LABELS or claim.blur_evidence in ("declared", "both"):
-        return 2
-    return 1
+def the_pin(claims: Sequence[Claim]) -> Claim | None:
+    """THE coordinate claim with a position (the read returns at most one per type, W3)."""
+    return next((c for c in claims if c.claim_type == "coordinate" and c.has_position), None)
 
 
-def read_declared_precision(
-    claims: Sequence[Claim], *, coordinate_claim_id: int | None = None
-) -> DeclaredPrecision:
-    """The listing-wide declaration. `coordinate_claim_id`, once the pin is picked, narrows
-    the coordinate-borne half to THAT pin: a blurred sibling must not blur the winner."""
+def read_declared_precision(claims: Sequence[Claim]) -> DeclaredPrecision:
+    """The listing's declaration: the precision declaration's label, else the label a portal
+    hangs on the coordinate itself. Either one stating blur blurs the pin."""
+    one = {c.claim_type: c for c in claims}
     label: str | None = None
     blurred = False
     ids: list[int] = []
-    for claim in sorted(claims, key=lambda c: c.id):
-        if claim.claim_type not in (
-            "precision_declaration", "blur_hint", "uncertainty_geometry", "map_zoom", "coordinate"
-        ):
-            continue
-        if (
-            claim.claim_type == "coordinate"
-            and coordinate_claim_id is not None
-            and claim.id != coordinate_claim_id
-        ):
-            continue
-        if claim.claim_type == "blur_hint":
-            blurred = True
-            ids.append(claim.id)
+    for claim_type in ("precision_declaration", "coordinate"):
+        claim = one.get(claim_type)
+        if claim is None:
             continue
         labelled = (claim.declared_precision_label or "").strip().lower()
         spoken = (claim.value_text or "").strip().lower()
         raw = labelled or (spoken if spoken in KNOWN_DECLARED_LABELS else "")
-        # Several portals hang the precision flag on the COORDINATE claim itself (sreality
-        # `locality.inaccuracy_type`, mmreality `accurate`), not on a separate row.
-        if claim.claim_type == "coordinate" and claim.declared_precision_label:
-            ids.append(claim.id)
-            label = label or raw
-            blurred = blurred or raw in BLURRED_DECLARED_LABELS
-        if claim.claim_type in ("precision_declaration", "uncertainty_geometry"):
+        if claim_type == "precision_declaration" or claim.declared_precision_label:
             ids.append(claim.id)
             if raw:
                 label = label or raw
@@ -1086,16 +1032,6 @@ def read_declared_precision(
             blurred = True
             ids.append(claim.id)
     return DeclaredPrecision(label=label, blurred=blurred, claim_ids=tuple(sorted(set(ids))))
-
-
-def elect_pin(claims: Sequence[Claim]) -> Claim | None:
-    """WHICH coordinate becomes the pin, ordered by DECLARED QUALITY and only then by claim
-    id. A blurred coordinate that merely arrived first used to become the position."""
-    eligible = sorted(
-        (c for c in claims if c.claim_type == "coordinate" and c.has_position),
-        key=lambda c: (declared_rank(c), c.id),
-    )
-    return eligible[0] if eligible else None
 
 
 def pin_inside_bound_obec(

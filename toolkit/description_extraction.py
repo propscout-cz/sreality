@@ -528,12 +528,17 @@ def scope_from(located: Iterable[str]) -> dict[str, tuple[str, ...]]:
     return {p: cells.get(p, ()) for p in sorted({str(p) for p in located} | set(cells))}
 
 
+def location_sources(conn: Any) -> frozenset[str]:
+    """The portals whose active contract declares `llm_text`: their readings feed location."""
+    with conn.cursor() as cur:
+        cur.execute(LLM_TEXT_SOURCES_SQL)
+        return frozenset(str(r[0]) for r in cur.fetchall())
+
+
 def lane_scope(conn: Any) -> dict[str, tuple[str, ...]]:
     """`portal -> its open attribute fields` for every portal in scope; `()` for a portal in
     scope only because its active contract declares `llm_text` (location block alone)."""
-    with conn.cursor() as cur:
-        cur.execute(LLM_TEXT_SOURCES_SQL)
-        return scope_from(r[0] for r in cur.fetchall())
+    return scope_from(location_sources(conn))
 
 
 def select_eligible(conn: Any, *, version: str,
@@ -623,7 +628,8 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
     """One bounded pass. Returns the dict the worker publishes in its heartbeat."""
     from toolkit import vision_batch
 
-    scope = lane_scope(conn)
+    located = location_sources(conn)
+    scope = scope_from(located)
     if not scope:
         # No open gate and no `llm_text` entry: nothing this lane may read or pay for.
         return {"claimed": 0, "reason": "empty_scope"}
@@ -665,6 +671,10 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
             cost = float(getattr(res, "cost_usd", 0.0) or 0.0)
             if payload is None:
                 error = "the model returned no record_description_facts call"
+            elif str(row["source"]) in located and text_reading.is_empty(payload):
+                # Only where the reading feeds location claims (W3, R2): elsewhere the block is
+                # unread, and failing the call would throw away its attribute facts.
+                error = "empty location block: ad_kind and every slot null"
         if error is not None:
             LOG.warning("TEXT-EXTRACT listing=%s failed: %s", row["id"], error[:200])
             # A fatal error is the PROVIDER's state, not this listing's: the pass is

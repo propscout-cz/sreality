@@ -431,6 +431,36 @@ def test_html_marker_marks_a_map_whose_pin_attributes_are_absent_or_empty():
     assert marks("<p>no map block at all</p>") == []
 
 
+def test_html_marker_with_absent_retract_states_the_absence_where_the_node_exists():
+    """W3: a presence detector alone can never clear a blur once stated. With `absent:
+    retract` a node that EXISTS and fails the test yields a tombstone (no value, `retract`),
+    which the one write turns into a delete; no node, no claim, exactly as before."""
+    marker = _marker_entry(
+        "realitymix", {"css": "div#map", "blank_attrs": ["data-gps-lat", "data-gps-lon"],
+                       "value_label": "estimated", "absent": "retract"}, ["estimated"])
+
+    def marks(markup: str) -> list[archive.PageRead]:
+        return read("html_marker", scoped("realitymix", f"<html><body>{markup}</body></html>"),
+                    marker)
+
+    stated = one(marks('<div id="map" data-gps-lat="" data-gps-lon=""></div>'))
+    assert (stated.retract, stated.value_text, stated.blur_evidence) == (
+        False, "estimated", "declared")
+    tombstone = one(marks('<div id="map" data-gps-lat="50.1" data-gps-lon="14.4"></div>'))
+    assert (tombstone.retract, tombstone.value_text, tombstone.declared_precision_label,
+            tombstone.blur_evidence) == (True, None, None, "none")
+    assert tombstone.to_row()["retract"] is True
+    assert marks("<p>no map block at all</p>") == []
+
+
+def test_html_marker_refuses_any_absent_value_but_retract():
+    with pytest.raises(IntakeRefused, match="locator.absent"):
+        read("html_marker", pinned("bazos"),
+             _marker_entry("bazos", {"css": "a[href*='/place/']", "attr": "title",
+                                     "value_label": "approximate_location",
+                                     "absent": "undeclared"}, ["approximate_location"]))
+
+
 def test_html_marker_refuses_an_entry_with_no_value_label():
     with pytest.raises(IntakeRefused) as excinfo:
         read("html_marker", pinned("bazos"),
@@ -847,7 +877,6 @@ def test_json_geometry_gives_a_linestring_its_midpoint_and_half_its_length():
     assert pin.declared_precision_label == "linestring"
     shape = one(read("json_geometry", document, _geometry_entry("uncertainty_geometry")))
     assert shape.value_text == "LineString"
-    assert shape.value_shape_wkt.startswith("LINESTRING(")
     assert shape.declared_radius_m == pytest.approx(350.0, abs=10.0)
     assert shape.value_jsonb["radius_basis"] == "half_segment_length"
 
@@ -866,7 +895,6 @@ def test_json_geometry_converts_a_circle_radius_and_declares_the_blur(radius, me
     assert pin.blur_evidence == "declared" and pin.declared_precision_label == "circle"
     shape = one(read("json_geometry", document, _geometry_entry("uncertainty_geometry")))
     assert shape.declared_radius_m == pytest.approx(metres, abs=0.1)
-    assert shape.value_shape_wkt.startswith("POINT(")
     assert shape.value_jsonb["radius_basis"] == "radius_deg_times_111000"
     assert shape.blur_evidence == "declared"
 

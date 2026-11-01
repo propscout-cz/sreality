@@ -138,7 +138,7 @@ def test_a_lost_lock_retries_the_same_batch_and_counts_it_once(
     assert conn.scans == [0, 0, 3], "the retry re-reads the SAME window, then the keyset ends"
     assert stats["lock_retries"] == 1
     assert clean["claims"] > 0 and clean["lock_retries"] == 0
-    for counter in ("listings", "claims", "claims_payload", "claims_inserted", "enqueued"):
+    for counter in ("listings", "claims", "claims_payload", "written", "enqueued"):
         assert stats[counter] == clean[counter], counter
     assert stats["outcome"] == "ok"
     assert stats["cursor_after_id"] == 3

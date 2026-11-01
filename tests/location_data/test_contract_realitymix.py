@@ -1,4 +1,4 @@
-"""realitymix@8 — the slim location contract (rule 25 / W1-c), scored against real bodies.
+"""realitymix@9 — the slim location contract (rule 25 / W1-c), scored against real bodies.
 
 Every test runs the SHIPPED entries (no hand-written locators) through the real readers, the
 real scoper and the real licence ladder; the one exception rebuilds the RETIRED v7 marker selector
@@ -134,8 +134,8 @@ def og_title(title: str) -> ScopedDocument:
 
 # ------------------------------------------------------------------ the contract shape
 
-def test_the_version_is_eight():
-    assert CONTRACT.version == 8
+def test_the_version_is_nine():
+    assert CONTRACT.version == 9
 
 
 def test_the_entry_id_set_is_exactly_these_ten():
@@ -496,15 +496,19 @@ def test_v7_read_the_print_node_first_and_missed_the_hidden_geocode():
     assert doc.css_first("div#print-map").attributes["data-gps-lat"] == "49.793666666667"
     assert doc.css_first("div#map").attributes["data-gps-lat"] == ""
     marker = ENTRIES["rm.det.agency_est_flag"]
-    v7 = replace(marker, locator={**marker.locator, "css": "div#print-map, div#map"})
+    v7 = replace(marker, locator={**{k: v for k, v in marker.locator.items() if k != "absent"},
+                                  "css": "div#print-map, div#map"})
     assert read("rm.det.agency_est_flag", doc, entry=v7) == []
     assert value("rm.det.agency_est_flag", doc) == "estimated"
 
 
-def test_the_declaration_is_silent_wherever_the_agency_supplied_a_pin():
-    """The honest pairing with `rm.det.gps`, which claims the agency's pin on these pages."""
+def test_the_declaration_is_retracted_wherever_the_agency_supplied_a_pin():
+    """The honest pairing with `rm.det.gps`, which claims the agency's pin on these pages:
+    since v9 (W3, `absent: retract`) a `div#map` carrying both values states that the pin is
+    NOT estimated, so a stored 'estimated' goes."""
     for body in AGENCY_PINNED:
-        assert read("rm.det.agency_est_flag", document(body)) == []
+        reads = read("rm.det.agency_est_flag", document(body))
+        assert [(r.claim.retract, r.claim.value_text) for r in reads] == [(True, None)]
 
 
 # ------------------------------------------------------------------ the address line
@@ -585,7 +589,9 @@ def test_the_lane_over_the_captured_body_yields_exactly_these_claims():
         ("rm.det.breadcrumb_quarter", "Stráň"),
         ("rm.det.map_okres", "Karlovy Vary"),
         ("rm.det.map_street", "Stráň"),
+        ("rm.det.agency_est_flag", None),      # the agency's pin: 'estimated' retracted (W3)
     }
+    assert [c.extractor_id for c in result.claims if c.retract] == ["rm.det.agency_est_flag"]
     assert not result.refusals
     assert all(c.surface == "archived_html" for c in result.claims)
     assert all(c.licence_class == "portal" for c in result.claims)

@@ -33,8 +33,7 @@ export type CorrectionResult = {
   source: string;
   claim_type: string;
   value_text: string;
-  inserted: boolean;
-  restatement: boolean;
+  written: boolean;
   enqueued: boolean;
   registry_echo: Record<string, unknown> | null;
   resolved: boolean;
