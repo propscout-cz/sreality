@@ -235,17 +235,22 @@ tokens with reuse detection):
   timer, so no `alarms` permission.
 - One refresh at a time: concurrent calls share it (two refreshes on one
   token would trip Supabase's reuse detection and revoke the session).
-- A refresh with no answer, a timeout (15 s), a 5xx or a 429 **keeps** the
-  session; that call fails with "zkuste to znovu" and the next one refreshes.
-- Only a refresh token the auth service refuses (invalid, reused, revoked)
-  signs out, and the panel shows the sign-in card.
+- A refresh with no answer, a timeout (15 s), a 5xx, a 429, another 4xx from
+  something in between (a proxy, a firewall) or a 200 without a token
+  **keeps** the stored session; that call fails with "zkuste to znovu" and the
+  next one refreshes. (If GoTrue rotated the token but its answer was lost,
+  the kept token is already used and the next refresh is refused.)
+- Only GoTrue's refusal (its 400, or a body naming a refresh-token or session
+  error: invalid, reused, revoked) signs out, and the panel shows the sign-in
+  card.
 
 **Permissions:** `storage` (the session and two panel preferences),
 `identity` (the Google sign-in) and `sidePanel`; no host permissions. The
 content script runs on the portal hosts that serve pages (below). The
 sign-in card says what the extension sends once signed in and links
-https://propscout.cz/soukromi (the store requires that disclosure in the
-extension's own UI).
+https://propscout.cz/soukromi: the store allows browsing data only for a
+feature described in both its listing and the extension's own UI (program
+policies, 2026-11-01).
 
 **One-time setup for a NEW deployment** (already done for the operator's
 existing Railway + Supabase project — skip unless standing up a fresh one):
@@ -573,9 +578,10 @@ hosts, so a new page host goes in both (and in `release/allowed.ts`).
 History API, without a new document, and a manifest content script is injected
 only into a new document. The content script watches the Navigation API itself
 (`currententrychange`), which reaches its isolated world, and re-decides what to
-show; no `webNavigation` permission. Live-checked on every supported portal
-(#2277): index → ad and ad → ad, soft on sreality and bezrealitky (.cz and
-.com), full page loads on the rest.
+show; no `webNavigation` permission. Live-checked headless on nine of the ten
+page hosts (#2277): index → ad and ad → ad, soft on sreality and bezrealitky
+(.cz and .com), full page loads on the rest. ceskereality answers a headless
+browser with an error page, so its check is a manual one in Chrome.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the

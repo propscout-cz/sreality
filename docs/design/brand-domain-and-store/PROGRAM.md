@@ -82,7 +82,7 @@ is Unlisted.
 | Claim in the repo | Verdict | How it was checked |
 | --- | --- | --- |
 | Publishing keeps the extension ID pinned by the manifest `key` | **False.** The store refuses a new upload whose manifest has `key` and assigns its own ID. | Two fact-checks; developer reports dated 2026-09-20 and 2026-09-25; Google's own procedure runs store → manifest |
-| `CORS_ALLOW_ORIGINS` contains the extension origin | **False in production** (true since 2026-10-31, #2275). A preflight from the extension origin gets HTTP 400. The extension works only through host permissions. | Live request, 2026-09-26 and 2026-10-03 |
+| `CORS_ALLOW_ORIGINS` contains the extension origin | **False in production then** (true since 2026-10-31, #2275): a preflight from the extension origin got HTTP 400, so the extension worked only through host permissions. | Live request, 2026-09-26 and 2026-10-03 |
 | Both the API and Supabase origins must be host permissions | **False.** Supabase Auth answers any origin. A background worker with empty host permissions calls the API under normal CORS. | Two fact-checks, one with a live Chrome 151 test; Starlette echoes requested headers on preflight |
 | The extension's redirect URL must be registered in the Google OAuth client | **False.** Google only ever sees Supabase's callback. Only Supabase's redirect allowlist needs it. | Code path in `chrome-extension/src/auth.ts` |
 | Railway redeploys when a variable changes | **False.** Edits are staged; someone clicks Deploy. | Railway docs, 2026 |
