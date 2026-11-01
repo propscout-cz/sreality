@@ -26,7 +26,7 @@
 #   (h) rail_h  test_only_the_trigger_writes_the_clock: no DML on curation_clock in api/ toolkit/ scraper/ scripts/
 #       autodedup/ or in any migration after the clock's, which writes it exactly twice (the bump and the seed)
 #   (i) rail_i  test_the_audience_restates_ruling_2_and_never_acts: the policy is one (account_id, family) lookup over
-#       one curation_clock_audience() call (706; the view's join on it, 696's, is the read's other call and maps
+#       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
 #       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
 #       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts
 #   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
@@ -373,7 +373,7 @@ def rail_h(migrations: Migrations, code: list[tuple[str, str]]) -> list[str]:
 
 # --- (i) the audience restates 641's split, and never acts ---------------------------------------------------------
 
-# 706 (F16): one (account, family) lookup over ONE call of the audience, the families per caller kind in a CASE.
+# 708 (F16): one (account, family) lookup over ONE call of the audience, the families per caller kind in a CASE.
 # Only the policy is read here: the view's join on the audience (696) is the read's second call, by ruling.
 _FOLLOWS = re.compile(r"\(account_id, family\) in \( ?select (\w+)\.account_id, (\w+)\.family from "
                       r"(?:public\.)?curation_clock_audience\(\) (\w+) cross join lateral unnest\( ?case (.*) end ?\) "

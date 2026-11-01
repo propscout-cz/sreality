@@ -541,7 +541,7 @@ def test_no_browser_role_writes_the_clock(world: _World) -> None:
             _as(world.a.user, sql, params)
 
 
-# --- 11. one clock read evaluates the audience twice and keeps the primary key (706, F16 #2308) ------------------
+# --- 11. one clock read evaluates the audience twice and keeps the primary key (708, F16 #2308) ------------------
 
 _READ = "SELECT account_id, family, counter, mine, age_ms FROM curation_clock_public"
 
@@ -563,7 +563,7 @@ def _analyzed_read(cur: psycopg.Cursor[Any]) -> tuple[dict[str, Any], list[dict[
 
 def test_one_clock_read_evaluates_the_audience_twice_and_maps_mine(world: _World) -> None:
     """696 evaluated it four times per read (three policy arms and the view's join: 4.9 ms mean in production against
-    gate #2203's 2.5 ms). 706's policy is one pair lookup, so a read evaluates it twice, each once: in the policy and in
+    gate #2203's 2.5 ms). 708's policy is one pair lookup, so a read evaluates it twice, each once: in the policy and in
     the view's join, which maps `mine` (ruling 2026-11-01)."""
     a, c = world.a.acc, world.c.acc
     with scoped(world.c.user) as conn:
@@ -610,25 +610,25 @@ def test_the_clock_read_probes_the_primary_key_at_scale(world: _World) -> None:
     assert accounts == {a, c}, accounts
 
 
-def _post_706() -> str:
-    sql = (MIGRATIONS / "706_curation_clock_read_one_audience.sql").read_text(encoding="utf-8")
+def _post_708() -> str:
+    sql = (MIGRATIONS / "708_curation_clock_read_one_audience.sql").read_text(encoding="utf-8")
     m = re.search(r"^do \$post\$.*?^end \$post\$;", sql, re.DOTALL | re.MULTILINE)
-    assert m, "706 lost its $post$ block"
+    assert m, "708 lost its $post$ block"
     return m.group(0)
 
 
-def test_706s_post_refuses_a_clock_without_row_security_or_without_the_views_join() -> None:
-    """706's $post$ passes on the lane's schema. It refuses the clock with row security off (the view's join keeps the
-    accounts, the policy alone a share's families) and the view rewritten without its join on the audience (706 as
+def test_708s_post_refuses_a_clock_without_row_security_or_without_the_views_join() -> None:
+    """708's $post$ passes on the lane's schema. It refuses the clock with row security off (the view's join keeps the
+    accounts, the policy alone a share's families) and the view rewritten without its join on the audience (708 as
     first built: the join is what keeps curation_clock_pkey at scale)."""
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
-            cur.execute(_post_706())
+            cur.execute(_post_708())
             cur.execute("SAVEPOINT bite")
             cur.execute("ALTER TABLE public.curation_clock DISABLE ROW LEVEL SECURITY")
             with pytest.raises(psycopg.errors.RaiseException, match="row security is off on curation_clock"):
-                cur.execute(_post_706())
+                cur.execute(_post_708())
             cur.execute("ROLLBACK TO SAVEPOINT bite")
             cur.execute("CREATE OR REPLACE VIEW public.curation_clock_public WITH (security_invoker = true) AS "
                         "SELECT c.account_id, c.family, c.counter, "
@@ -636,7 +636,7 @@ def test_706s_post_refuses_a_clock_without_row_security_or_without_the_views_joi
                         "greatest(0, extract(epoch FROM statement_timestamp() - c.changed_at) * 1000)::bigint "
                         "AS age_ms FROM public.curation_clock c")
             with pytest.raises(psycopg.errors.RaiseException, match="joins the audience once"):
-                cur.execute(_post_706())
+                cur.execute(_post_708())
     finally:
         conn.rollback()
         conn.close()

@@ -3388,7 +3388,7 @@ renumber.** Navigate by area:
     never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
     the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
     (invoker) is the browser's one read, its audience read from the JWT and evaluated twice per read, in the
-    policy's one hashed lookup and the view's join that keeps `curation_clock_pkey` (706, F16, ruling 2026-11-01);
+    policy's one hashed lookup and the view's join that keeps `curation_clock_pkey` (708, F16, ruling 2026-11-01);
     the service role reads the table (701) and writes it never. Row triggers never fire on TRUNCATE, so a clocked
     table is never truncated, only deleted from (census e). The event table is not curation and is not clocked
     (rule 16). Its rails:

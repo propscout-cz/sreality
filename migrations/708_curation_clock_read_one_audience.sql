@@ -1,4 +1,4 @@
--- 706: curation sync, the clock read evaluates its audience twice, not four times (docs/design/curation-sync.md
+-- 708: curation sync, the clock read evaluates its audience twice, not four times (docs/design/curation-sync.md
 -- § 3.2 and § 3.8; spec #2197, follow-up F16 #2308).
 --
 -- WHY: production read the clock at 4.9 ms mean over 1,266 calls (~133 shared buffers each, 2026-11-01) against gate
@@ -41,7 +41,7 @@ declare
   v_view text := pg_get_viewdef('public.curation_clock_public'::regclass);
 begin
   if not (select relrowsecurity from pg_class where oid = 'public.curation_clock'::regclass) then
-    raise exception '706: row security is off on curation_clock; its policy alone limits a share to its families';
+    raise exception '708: row security is off on curation_clock; its policy alone limits a share to its families';
   end if;
   select pg_get_expr(p.polqual, p.polrelid) into v_qual
     from pg_policy p
@@ -52,7 +52,7 @@ begin
      or not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'curation_clock'
                      and policyname = 'curation_clock_audience_read' and cmd = 'SELECT'
                      and roles = '{authenticated}'::name[] and with_check is null) then
-    raise exception '706: the clock needs one SELECT policy for authenticated naming the audience once: %', v_qual;
+    raise exception '708: the clock needs one SELECT policy for authenticated naming the audience once: %', v_qual;
   end if;
   if not exists (select 1 from pg_class where oid = 'public.curation_clock_public'::regclass
                   and reloptions @> array['security_invoker=true'])
@@ -61,7 +61,7 @@ begin
         is distinct from array['account_id', 'family', 'counter', 'mine', 'age_ms']
      or length(v_view) - length(replace(v_view, 'curation_clock_audience', '')) <> length('curation_clock_audience')
   then
-    raise exception '706: curation_clock_public is invoker, has its five columns and joins the audience once: %',
+    raise exception '708: curation_clock_public is invoker, has its five columns and joins the audience once: %',
       v_view;
   end if;
   if (select prosecdef from pg_proc where oid = 'public.curation_clock_audience()'::regprocedure)
@@ -76,7 +76,7 @@ begin
      or has_table_privilege('authenticated', 'public.curation_clock', 'INSERT,UPDATE,DELETE,TRUNCATE')
      or has_table_privilege('authenticated', 'public.curation_clock_public', 'INSERT,UPDATE,DELETE,TRUNCATE')
      or has_table_privilege('service_role', 'public.curation_clock', 'INSERT,UPDATE,DELETE,TRUNCATE') then
-    raise exception '706: clock grants drifted from 701: the browser reads both, service_role the table, none write';
+    raise exception '708: clock grants drifted from 701: the browser reads both, service_role the table, none write';
   end if;
 end $post$;
 
