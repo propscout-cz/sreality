@@ -16,7 +16,7 @@ from tests.api._routes import flat_routes  # noqa: E402
 from tests.api.test_admin_route_coverage import _bucket, _reachable_calls  # noqa: E402
 
 ROUTES = frozenset({
-    ("GET", "/runs/options"), ("POST", "/runs"), ("GET", "/runs"), ("GET", "/runs/{run_id}"),
+    ("GET", "/runs/options"), ("PUT", "/runs/limit"), ("POST", "/runs"), ("GET", "/runs"), ("GET", "/runs/{run_id}"),
     ("GET", "/runs/{run_id}/steps"), ("POST", "/runs/{run_id}/cancel"),
 })
 

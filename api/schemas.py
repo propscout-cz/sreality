@@ -570,6 +570,13 @@ class AgentRunIn(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class AgentLimitIn(BaseModel):
+    """An account's daily agent limit (PUT /runs/limit). `Any` because the route judges it: a 422 here would echo a NaN
+    back in its body, which the response's JSON refuses, so the answer would be a 500."""
+    model_config = ConfigDict(extra="forbid")
+    daily_limit_usd: Any = Field()
+
+
 # --- buildings ------------------------------------------------------------
 # Phase B0 of the building-decomposition track. See ROADMAP.md
 # "Building decomposition track" and CLAUDE.md architectural rule #13.

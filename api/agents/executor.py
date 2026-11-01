@@ -1,5 +1,6 @@
 """Runs queue and execute durably: `submit` inserts one, `work_once` claims and runs the oldest it may, `cancel` flags one.
-`start_refusal` is the one gate on starting, `queue_state` says whether a queued run can move, `offered_agents` lists the image's agents.
+`start_refusal` is the one gate on starting, `queue_state` says whether a queued run can move, `account_limit` reads an
+account's daily limit and `set_account_limit` writes it, `offered_agents` lists the image's agents.
 
 The row is the job (ADR-0001). A claim holds a lease that every step and a bounded heartbeat renew, compare-and-set on
 the row's `attempts`, so a worker that lost its run can write nothing more. An interrupted run (a lapsed lease, a SIGTERM) starts
@@ -19,6 +20,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, Literal, NamedTuple
 
 import psycopg
@@ -31,6 +33,7 @@ from api.capabilities import registry
 from api.capabilities.truncate import encode
 from api.llm_client import LLMClient, ProviderError
 from api.providers import CompletionProvider
+from api.routes import billing
 from scraper import db
 from toolkit import photo_assessment
 
@@ -41,7 +44,12 @@ ALLOWLIST = "agent_run_allowlist"
 DAILY_CEILING = "agent_daily_ceiling_usd"
 RUNNING_CAP = "agent_account_running_cap"
 IN_FLIGHT_CAP = "agent_account_in_flight_cap"
-_SETTINGS = (BRAKE, ALLOWLIST, DAILY_CEILING, RUNNING_CAP, IN_FLIGHT_CAP)
+DAILY_LIMIT = "agent_account_daily_limit_usd"
+_SETTINGS = (BRAKE, ALLOWLIST, DAILY_CEILING, RUNNING_CAP, IN_FLIGHT_CAP, DAILY_LIMIT)
+
+AGENDA = "agents"
+ALLOWLIST_REFUSAL = "Agent runs are not open to this account yet."
+PLAN_REFUSAL = "Your plan does not include agent runs."
 
 LEASE_S = 120.0
 # Past every agent's wall clock (600 s at most, definition.limits): a worker still beating now is hung, not working.
@@ -49,9 +57,9 @@ HEARTBEAT_CEILING_S = 900.0
 MAX_ATTEMPTS = 2
 SUMMARY_CHARS = 500
 
-SubmitRefusal = Literal["not_allowlisted", "in_flight_cap"]
+SubmitRefusal = Literal["not_allowlisted", "plan_without_agents", "in_flight_cap"]
 WorkState = Literal["dark", "parked", "idle", "succeeded", "failed", "cancelled", "released", "lost"]
-QueueState = Literal["dark", "parked", "open"]
+QueueState = Literal["dark", "parked", "limited", "open"]
 
 
 class SubmitRefused(Exception):
@@ -73,6 +81,17 @@ class Submitted:
 class Worked:
     state: WorkState
     run_id: int | None = None
+
+
+@dataclass(frozen=True)
+class AccountLimit:
+    """None for a figure this caller cannot read: the default is absent, or the spend is not theirs."""
+    limit_usd: float | None
+    spent_today_usd: float | None
+
+    @property
+    def reached(self) -> bool:
+        return self.limit_usd is not None and self.spent_today_usd is not None and self.spent_today_usd >= self.limit_usd
 
 
 class _Claimed(NamedTuple):
@@ -125,15 +144,30 @@ _RUN_SPEND = (loop.CALLED_FOR, photo_assessment.CALLED_FOR)
 _SPENT_TODAY = """
 SELECT coalesce(sum(cost_usd), 0) FROM llm_calls
  WHERE called_for = ANY(%s) AND called_at >= date_trunc('day', now(), 'UTC')"""
+# One figure per account with a queued run, before the walk: a held account's runs are passed over, not stopped at.
 _CLAIM = f"""
+WITH under_limit AS MATERIALIZED (
+  SELECT q.account_id
+    FROM (SELECT DISTINCT account_id FROM agent_runs WHERE status = 'queued') q
+    LEFT JOIN agent_account_limits l ON l.account_id = q.account_id
+   WHERE agent_account_spent_today(q.account_id, %(called_for)s) < coalesce(l.daily_limit_usd, %(default_limit)s::numeric))
 UPDATE agent_runs SET status = 'running', lease_until = {_LEASE}, started_at = coalesce(started_at, now())
  WHERE id = (SELECT r.id FROM agent_runs r
               WHERE r.status = 'queued'
+                AND r.account_id IN (SELECT account_id FROM under_limit)
                 AND (SELECT count(*) FROM agent_runs x
                       WHERE x.account_id = r.account_id AND x.status = 'running') < %(cap)s
               ORDER BY r.created_at, r.id
               LIMIT 1 FOR UPDATE OF r SKIP LOCKED)
 RETURNING id, account_id, principal_user_id, agent, provider, input, attempts"""
+
+_ACCOUNT_LIMIT = """
+SELECT coalesce((SELECT daily_limit_usd FROM agent_account_limits WHERE account_id = %(account)s),
+                %(default_limit)s::numeric)::float8,
+       agent_account_spent_today(%(account)s, %(called_for)s)::float8"""
+_SET_LIMIT = """
+INSERT INTO agent_account_limits (account_id, daily_limit_usd) VALUES (%s, %s)
+ON CONFLICT (account_id) DO UPDATE SET daily_limit_usd = excluded.daily_limit_usd, updated_at = now()"""
 
 _RENEW = f"UPDATE agent_runs SET lease_until = {_LEASE} WHERE {_HELD}"
 _RENEW_FOR_STEP = f"""
@@ -242,26 +276,44 @@ def _storable(value: Any) -> Any:
 # --- starting ------------------------------------------------------------------------------------------------------
 
 def _refusal(conn: psycopg.Connection, settings: Mapping[str, Any], principal_user_id: uuid.UUID,
-             account_id: uuid.UUID) -> str | None:
+             account_id: uuid.UUID) -> tuple[SubmitRefusal, str] | None:
+    """No role is read here: an admin's plan answers as anyone's, since the gate is the account's and a run carries no admin powers."""
     allowed = settings.get(ALLOWLIST)
     emails = [e.lower() for e in allowed if isinstance(e, str)] if isinstance(allowed, list) else []
     if not conn.execute(_ALLOWED, (principal_user_id, account_id, emails)).fetchone()[0]:
-        return "Agent runs are not open to this account yet."
+        return "not_allowlisted", ALLOWLIST_REFUSAL
+    if not billing.plan_includes(conn, account_id, AGENDA):
+        return "plan_without_agents", PLAN_REFUSAL
     return None
 
 
 def start_refusal(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id: uuid.UUID) -> str | None:
     """The one gate on starting a run, shared by `submit` and every surface that offers it: why this user may not start
-    one on this account, in words for them, or None. A later gate (a plan's agenda, #2319) joins `_refusal`."""
-    return _refusal(conn, _settings(conn), principal_user_id, account_id)
+    one on this account, in words for them, or None."""
+    refusal = _refusal(conn, _settings(conn), principal_user_id, account_id)
+    return refusal[1] if refusal else None
 
 
-def queue_state(conn: psycopg.Connection) -> QueueState:
-    """Whether a queued run can move now: `dark` the brake is off, `parked` the ceiling or a missing number holds it."""
+def account_limit(svc: psycopg.Connection, tenant: psycopg.Connection, *, account_id: uuid.UUID) -> AccountLimit:
+    """An account's limit and its spend today. The figures read on the caller's own connection, under their own access."""
+    row = tenant.execute(_ACCOUNT_LIMIT, {"account": account_id, "default_limit": _number(_settings(svc), DAILY_LIMIT),
+                                          "called_for": list(_RUN_SPEND)}).fetchone()
+    return AccountLimit(limit_usd=row[0], spent_today_usd=row[1])
+
+
+def set_account_limit(conn: psycopg.Connection, *, account_id: uuid.UUID, daily_limit_usd: Decimal | float) -> None:
+    conn.execute(_SET_LIMIT, (account_id, daily_limit_usd))
+
+
+def queue_state(conn: psycopg.Connection, limit: AccountLimit) -> QueueState:
+    """Whether this account's queued run can move now: `dark` the brake is off, `parked` the ceiling or a missing number
+    holds it, `limited` only its own limit does. The platform's words come first: raising the limit would not move those."""
     settings = _settings(conn)
     if settings.get(BRAKE) is not True:
         return "dark"
-    return "parked" if _parked(conn, settings) else "open"
+    if _parked(conn, settings):
+        return "parked"
+    return "limited" if limit.reached else "open"
 
 
 # --- submit --------------------------------------------------------------------------------------------------------
@@ -274,7 +326,7 @@ def submit(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id
     with conn.transaction(), conn.cursor() as cur:
         settings = _settings(conn)
         if (refusal := _refusal(conn, settings, principal_user_id, account_id)) is not None:
-            raise SubmitRefused("not_allowlisted", refusal)
+            raise SubmitRefused(*refusal)
         definition = _definition(agent)
         definition.check_input(value)
         provider = provider or next(iter(definition.models))
@@ -319,8 +371,8 @@ def _reap(conn: psycopg.Connection) -> None:
 def _parked(conn: psycopg.Connection, settings: Mapping[str, Any]) -> str | None:
     """Why nothing may be claimed now, for the log; None when something may."""
     ceiling = _number(settings, DAILY_CEILING)
-    if ceiling is None or _number(settings, RUNNING_CAP) is None:
-        return f"{DAILY_CEILING} and {RUNNING_CAP} must both be numbers"
+    if ceiling is None or _number(settings, RUNNING_CAP) is None or _number(settings, DAILY_LIMIT) is None:
+        return f"{DAILY_CEILING}, {RUNNING_CAP} and {DAILY_LIMIT} must all be numbers"
     spent = float(conn.execute(_SPENT_TODAY, (list(_RUN_SPEND),)).fetchone()[0])
     return f"${spent:.4f} spent today, ceiling ${ceiling:.2f}" if spent >= ceiling else None
 
@@ -331,7 +383,8 @@ def _claim(conn: psycopg.Connection, settings: Mapping[str, Any]) -> _Claimed | 
         if (why := _parked(conn, settings)) is not None:
             LOG.warning("AGENT_RUN parked: %s", why)
             return "parked"
-        cur.execute(_CLAIM, {"lease": LEASE_S, "cap": _number(settings, RUNNING_CAP)})
+        cur.execute(_CLAIM, {"lease": LEASE_S, "cap": _number(settings, RUNNING_CAP),
+                             "default_limit": _number(settings, DAILY_LIMIT), "called_for": list(_RUN_SPEND)})
         row = cur.fetchone()
     return _Claimed(*row) if row else "idle"
 
@@ -453,7 +506,7 @@ def _execute(conn: psycopg.Connection, run: _Claimed, providers: Mapping[str, Co
 
 def work_once(*, stop: threading.Event, providers: Mapping[str, CompletionProvider] | None = None,
               connect: Callable[[], psycopg.Connection] = db.connect) -> Worked:
-    """Claim the oldest queued run whose account is under its cap and run it to its end, its release or a lost lease.
+    """Claim the oldest queued run whose account is under its running cap and its daily limit, and run it to its end, its release or a lost lease.
     The caller's SIGTERM handler sets `stop`; the run stops at its next step and goes back on the queue."""
     with connect() as conn:
         settings = _settings(conn)

@@ -1,8 +1,10 @@
-"""POST + GET /runs, GET /runs/options, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
+"""POST + GET /runs, GET /runs/options, PUT /runs/limit, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -18,8 +20,11 @@ from api.agents.definition import DefinitionError, InputError
 router = APIRouter(prefix="/runs", tags=["agent-runs"], dependencies=[Depends(tenant_pool.require_account_id)])
 
 _NOT_FOUND = "no such run"
-_REFUSED_STATUS = {"not_allowlisted": 403, "in_flight_cap": 429}
+_REFUSED_STATUS = {"not_allowlisted": 403, "plan_without_agents": 403, "in_flight_cap": 429}
 LIST_LIMIT = 50
+# A bound on typing, not a policy: the account's limit is its own to set, and the platform ceiling still holds above it.
+MAX_DAILY_LIMIT_USD = Decimal(1_000_000)
+_CENT = Decimal("0.01")
 
 _LIGHT = ("id, agent, status, attempts, provider, model, cost_usd::float8 AS cost_usd, stop_reason, error, input, "
           "cancel_requested_at, created_at, started_at, finished_at")
@@ -49,8 +54,18 @@ def _rows(conn: psycopg.Connection, sql: str, *params: Any) -> list[dict[str, An
         return cur.fetchall()
 
 
+def _limit_usd(value: Any) -> Decimal:
+    """A JSON number from 0 to the bound, in whole cents. 0 is an amount: no run is claimed."""
+    usd = None if isinstance(value, bool) or not isinstance(value, (int, float)) else Decimal(str(value))
+    if usd is None or not usd.is_finite() or not 0 <= usd <= MAX_DAILY_LIMIT_USD or usd != usd.quantize(_CENT):
+        raise HTTPException(status_code=422, detail=f"The limit must be a number of dollars from 0 to {MAX_DAILY_LIMIT_USD}, "
+                                                     "with at most two decimals.")
+    return usd
+
+
 @router.get("/options")
 def run_options(
+    conn: tenant_pool.TenantConn,
     account: uuid.UUID = Depends(tenant_pool.require_account_id),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
@@ -58,11 +73,30 @@ def run_options(
     with deps.open_background_conn() as svc:
         refusal = executor.start_refusal(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account)
         if refusal is not None:
-            return {"start": {"allowed": False, "reason": refusal}, "queue": None, "agents": []}
-        queue = executor.queue_state(svc)
+            return {"start": {"allowed": False, "reason": refusal}, "queue": None, "agents": [], "limit": None}
+        limit = executor.account_limit(svc, conn, account_id=account)
+        queue = executor.queue_state(svc, limit)
     agents = [{"name": d.name, "description": d.description, "input_schema": d.input_schema}
               for d in executor.offered_agents()]
-    return {"start": {"allowed": True, "reason": None}, "queue": queue, "agents": agents}
+    return {"start": {"allowed": True, "reason": None}, "queue": queue, "agents": agents,
+            "limit": dataclasses.asdict(limit)}
+
+
+@router.put("/limit")
+def set_limit(
+    body: s.AgentLimitIn,
+    conn: tenant_pool.TenantConn,
+    account: uuid.UUID = Depends(tenant_pool.require_account_id),
+    claims: dict = Depends(deps.verify_jwt),
+) -> dict[str, Any]:
+    """This account's daily agent limit, its own to set: no browser grant writes it, so the route is what judges the value."""
+    usd = _limit_usd(body.daily_limit_usd)
+    with deps.open_background_conn() as svc:
+        refusal = executor.start_refusal(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account)
+        if refusal is not None:
+            raise HTTPException(status_code=403, detail=refusal)
+        executor.set_account_limit(svc, account_id=account, daily_limit_usd=usd)
+        return dataclasses.asdict(executor.account_limit(svc, conn, account_id=account))
 
 
 @router.post("", status_code=201)

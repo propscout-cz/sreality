@@ -30,7 +30,7 @@ const AGENT = {
     properties: { town: { type: 'string', description: 'Where to look.' }, budget: { type: 'integer' } },
   },
 };
-const OPEN: AgentRunOptions = { start: { allowed: true, reason: null }, queue: 'open', agents: [AGENT] };
+const OPEN: AgentRunOptions = { start: { allowed: true, reason: null }, queue: 'open', agents: [AGENT], limit: { limit_usd: 10, spent_today_usd: 3.2 } };
 
 const row = (over: Partial<AgentRunRow> = {}): AgentRunRow => ({
   id: 7, agent: 'probe_scout_v1', status: 'succeeded', attempts: 1, provider: 'anthropic', model: 'claude-opus-5-5',
@@ -52,6 +52,30 @@ function mount() {
   );
 }
 
+describe('<Runs> and the account\'s own limit', () => {
+  it('shows today\'s spend beside the limit', async () => {
+    mount();
+    expect(await screen.findByText('$3.20')).toBeInTheDocument();
+    expect(screen.getByText('of your $10.00 daily limit')).toBeInTheDocument();
+  });
+
+  it('says in plain words that only the limit holds a queued run, with the figures', async () => {
+    options.mockResolvedValue({ ...OPEN, queue: 'limited', limit: { limit_usd: 10, spent_today_usd: 10.5 } });
+    mount();
+    expect(await screen.findByText('At limit')).toBeInTheDocument();
+    expect(screen.getByText(/spent \$10\.50 of its \$10\.00 daily limit/)).toHaveTextContent(/midnight UTC/);
+    expect(screen.queryByText(/switched off|paused/i)).toBeNull();
+  });
+
+  it('shows no limit to an account that cannot use agents', async () => {
+    options.mockResolvedValue({ start: { allowed: false, reason: 'Your plan does not include agent runs.' }, queue: null, agents: [], limit: null });
+    mount();
+    expect(await screen.findByText('Your plan does not include agent runs.')).toBeInTheDocument();
+    expect(screen.queryByText('Spent today')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
+  });
+});
+
 beforeEach(() => {
   options.mockReset().mockResolvedValue(OPEN);
   list.mockReset().mockResolvedValue({ data: [], truncated: false });
@@ -60,7 +84,7 @@ beforeEach(() => {
 
 describe('the start form', () => {
   it('shows an account off the allowlist why, in plain words, with no form', async () => {
-    options.mockResolvedValue({ start: { allowed: false, reason: 'Agent runs are not open to this account yet.' }, queue: null, agents: [] });
+    options.mockResolvedValue({ start: { allowed: false, reason: 'Agent runs are not open to this account yet.' }, queue: null, agents: [], limit: null });
     mount();
     expect(await screen.findByText('Agent runs are not open to this account yet.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
@@ -69,7 +93,7 @@ describe('the start form', () => {
   });
 
   it('says truthfully that no agent exists when the skills folder holds none', async () => {
-    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [] });
+    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
     mount();
     expect(await screen.findByText(/No agent is available yet/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();

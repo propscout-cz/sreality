@@ -682,7 +682,7 @@ def put_entitlement(
     conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
     """Manual comp: pin an account to a plan (upsert; Stripe events may later
-    overwrite it — the webhook is the automated writer of the same row)."""
+    overwrite it, except on a comp plan — the webhook is the automated writer of the same row)."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("SELECT 1 FROM plans WHERE key = %s", (body.plan,))
         if cur.fetchone() is None:
