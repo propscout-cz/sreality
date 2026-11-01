@@ -70,20 +70,6 @@ FORBIDDEN_PAGE_KIND = "archive"
 # observed" onto exactly the rows carrying a portal blur flag.
 ARCHIVE_BLUR_EVIDENCE = frozenset({"none", "declared"})
 
-# W1 may emit `'portal'` and nothing else. This substrate adds exactly one class, and only
-# because C6 rules that realitymix's absent-`data-gps` branch is a portal-republished
-# Nominatim position: ODbL follows the geometry, not the republisher. It is a STORABLE
-# lineage (unlike `ephemeral_display_only`, which is the class 06 §6.6 Rule 6 refuses), it
-# is separable by a single predicate for the attribution query, and nothing else widens.
-GEOCODED_LICENCE_CLASS = "odbl"
-ARCHIVE_EMITTABLE_LICENCE_CLASSES = EMITTABLE_LICENCE_CLASSES | {GEOCODED_LICENCE_CLASS}
-
-# Which branch of a portal's detail map a coordinate was read from. The READER states this;
-# it is never inferred from what the reader happened to stamp on the claim. Inferring it
-# (say, from `licence_class != 'odbl'`) has one silent failure mode and it is the expensive
-# one: a Nominatim-fallback reader that simply forgets to say so inherits the entry's
-# `licence_class: portal` default and a republished OSM position is filed as first-party,
-# with nothing anywhere to catch it. A required argument cannot be forgotten quietly.
 # The substrate unescape a reader may be told to apply before it reads: opt-in contract data,
 # named, never inferred — `js_string` is a script property (maxima ships its map config as a JS
 # string literal). A name outside the set is refused rather than ignored: silently not decoding
@@ -91,9 +77,10 @@ ARCHIVE_EMITTABLE_LICENCE_CLASSES = EMITTABLE_LICENCE_CLASSES | {GEOCODED_LICENC
 # bazos' town slug, its one user, in W3.)
 _JSON_DECODERS = frozenset({"none", "js_string"})
 
+# Which branch of a portal's detail map a coordinate was read from: the READER states it
+# (contract data, `locator.position_branch`), never inferred from what it stamped on the claim.
 POSITION_BRANCH_PORTAL_PIN = "portal_pin"
-POSITION_BRANCH_PORTAL_GEOCODED = "portal_geocoded"
-POSITION_BRANCHES = frozenset({POSITION_BRANCH_PORTAL_PIN, POSITION_BRANCH_PORTAL_GEOCODED})
+POSITION_BRANCHES = frozenset({POSITION_BRANCH_PORTAL_PIN})
 
 
 class BodyStore(Protocol):
@@ -125,8 +112,8 @@ class PageRead:
     the portal's map markup produced it (C6), and only the reader knows that — while the
     claim's own `licence_class` arrives pre-filled from the contract entry's default, so a
     reader that says nothing is indistinguishable from one that read the pin. Making it an
-    argument rather than an inference converts "forgot to declare the fallback branch" from
-    a silent mis-licensing into a refusal that names the entry."""
+    argument rather than an inference converts a reader that forgot to say into a refusal
+    that names the entry."""
     claim: Claim
     position_branch: str | None = None
 
@@ -1301,10 +1288,10 @@ def assert_stampable(claim: Claim) -> None:
             f"{claim.extractor_id} produced blur_evidence='{claim.blur_evidence}'; a "
             f"migration writes only {sorted(ARCHIVE_BLUR_EVIDENCE)} (06 §6.6 rule 7 — "
             f"'detected'/'both' are the collision detector's)")
-    if claim.licence_class not in ARCHIVE_EMITTABLE_LICENCE_CLASSES:
+    if claim.licence_class not in EMITTABLE_LICENCE_CLASSES:
         raise IntakeRefused(
             f"{claim.extractor_id} produced licence_class='{claim.licence_class}'; this "
-            f"lane may only emit {sorted(ARCHIVE_EMITTABLE_LICENCE_CLASSES)} "
+            f"lane may only emit {sorted(EMITTABLE_LICENCE_CLASSES)} "
             f"(06 §6.6 rule 6)")
 
 
@@ -1332,8 +1319,7 @@ def _licensed_coordinate(
 
     The READER declares which branch of the page it read (`PageRead.position_branch`)
     and the LADDER stamps the class — never the other way round. Whatever `licence_class`
-    the reader left on the claim is DISCARDED here: a reader that stamps `'portal'` on the
-    Nominatim branch gets `'odbl'` anyway, so C6 is decided once, in
+    the reader left on the claim is DISCARDED here, so C6 is decided once, in
     `ARCHIVED_COORDINATE_RULES`, instead of re-litigated in nine portal readers."""
     if branch not in POSITION_BRANCHES:
         raise IntakeRefused(
@@ -1343,8 +1329,7 @@ def _licensed_coordinate(
             f"the reader knows it — it is never inferred from what the claim was stamped "
             f"with")
     verdict = coordinate_verdict(
-        row.source, None, substrate=SUBSTRATE_ARCHIVED_HTML, entry_id=entry.entry_id,
-        portal_pin_present=branch == POSITION_BRANCH_PORTAL_PIN)
+        row.source, None, substrate=SUBSTRATE_ARCHIVED_HTML, entry_id=entry.entry_id)
     if not verdict.admitted or verdict.licence_class is None:
         return None, verdict.reason
     return replace(claim, licence_class=verdict.licence_class), verdict.reason

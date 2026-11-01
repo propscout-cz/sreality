@@ -119,15 +119,15 @@ const shape = (items: readonly Revalidation[]) =>
 const revalidations = () => vi.mocked(revalidate).mock.calls.map(([, items]) => items as Revalidation[]);
 
 /* What each family re-reads with no Browse cohort cached, by hand (lib/curationSync
- * SYNC_TABLES): every read of its tables, an open collection page at its next mount. */
+ * SYNC_TABLES): every read of its tables, an open collection page among them
+ * (LENS_REREAD.lists, 'now' since ruling Q3(c)). */
 const now = (...keys: QueryKey[]): Revalidation[] => keys.map((queryKey) => ({ queryKey }));
 const BOARD = now(['pipeline', 'board'], ['pipeline', 'members'], ['pipeline', 'stages']);
 const TAGS = now(['curation', 'tags'], ['curation', 'property-tag-members']);
 const NOTES = now(['curation', 'property-notes'], ['curation', 'note-counts']);
 const SHARES = [
   ...now(['pipeline-shares'], ['curation', 'collections'], ['curation', 'property-collection-members']),
-  ...now(['curation', 'property-notes'], ['curation', 'note-counts']),
-  { queryKey: ['curation', 'collection'], mode: 'mount' } satisfies Revalidation,
+  ...now(['curation', 'property-notes'], ['curation', 'note-counts'], ['curation', 'collection']),
 ];
 const ownerBoard = (owner: string) =>
   now(['acting', owner, 'pipeline', 'board'], ['acting', owner, 'pipeline', 'members'],

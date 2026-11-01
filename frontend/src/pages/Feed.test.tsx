@@ -3,7 +3,7 @@
  * "Dnes HH:MM" / "Včera" / dated rules; a preset chip swaps the cohort, a
  * portal chip narrows it, "Skryté" switches to the hidden properties, and the
  * Filtry sheet edits the view, which lives in the URL as Browse's does. */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -11,10 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import * as api from '@/lib/api';
+import { familyTargets } from '@/lib/curationSync';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import { FEED_ALL_FILTERS, FEED_QUERY_KEY, FEED_SCOPE_KEY, feedSearch } from '@/lib/feed';
 import * as queries from '@/lib/queries';
 import type { CardRow, DismissedCardRow, PipelineMembers } from '@/lib/queries';
+import { revalidate } from '@/lib/revalidate';
 import type { FilterPreset } from '@/lib/types';
 
 import Feed from './Feed';
@@ -126,13 +128,14 @@ afterEach(() => {
 
 function renderFeed(path = '/feed') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Feed />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { qc };
 }
 
 const lastFilters = (): ListingFilters => {
@@ -292,6 +295,57 @@ describe('<Feed>', () => {
     expect(screen.queryByRole('dialog', { name: 'Filtry' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Vše (upraveno)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
+  });
+
+  /* Ruling Q3(c) with the pointer hold (2026-11-01): a property hidden on another
+   * device leaves the roll within one clock read, but never under a finger. */
+  it('drops a property hidden elsewhere once the finger lifts, never under it', async () => {
+    const { qc } = renderFeed();
+    const card = await screen.findByText('Místo 2', { exact: false });
+    fireEvent.touchStart(card, { touches: [{ target: card }] });
+    const reads = vi.mocked(queries.fetchListingsForCards).mock.calls.length;
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({
+      rows: [row(1, '2026-10-12T09:00:00Z'), row(3, '2026-10-11T08:00:00Z'), row(4, '2026-10-05T08:00:00Z')],
+      nextCursor: null,
+    });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    await waitFor(() => expect(queries.fetchDismissedCount).toHaveBeenCalledTimes(2)); // the Skryté count at once
+    expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(reads);
+    expect(screen.getByText('Místo 2', { exact: false })).toBeInTheDocument();
+
+    fireEvent.touchEnd(card, { touches: [] });
+    await waitFor(() => expect(screen.queryByText('Místo 2', { exact: false })).toBeNull());
+    expect(screen.getByText('Místo 3', { exact: false })).toBeInTheDocument();
+  });
+
+  /* Review repair (W6): "an open Feed list follows fully" includes Skryté, which
+   * no lens engages (it reads the hidden alone): a dismissal made elsewhere owes
+   * it by name. */
+  it('an open Skryté follows a hide and a restore made elsewhere', async () => {
+    const { qc } = renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await userEvent.click(screen.getByRole('button', { name: /Skryté/ }));
+    expect(await screen.findByText('Místo 9', { exact: false })).toBeInTheDocument();
+    const hidden = (...ids: number[]) => ({
+      rows: ids.map((id) => ({ ...row(id, '2026-09-01T08:00:00Z'), dismissed_at: '2026-10-12T07:00:00Z' }) as DismissedCardRow),
+      nextCursor: null,
+    });
+
+    vi.mocked(queries.fetchDismissedCards).mockResolvedValue(hidden(5, 9));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    expect(await screen.findByText('Místo 5', { exact: false })).toBeInTheDocument();
+
+    vi.mocked(queries.fetchDismissedCards).mockResolvedValue(hidden(5));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    await waitFor(() => expect(screen.queryByText('Místo 9', { exact: false })).toBeNull());
+    expect(screen.getByText('Místo 5', { exact: false })).toBeInTheDocument();
   });
 
   it('offers a retry when the read fails', async () => {
