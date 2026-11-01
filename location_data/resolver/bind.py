@@ -105,6 +105,12 @@ PIP_SLIVER_TOLERANCE_M = 250.0
 # registry point stays the position and GRADE caps the confidence.
 REGISTRY_PIN_CONFLICT_M = 300.0
 
+# THE DOOR A PIN NAMES (W5b, ruling Q8), calibrated 2026-10-31 on W1's truth sample: the lone door
+# within 5 m is the words' own door 97.7 % of the time (96.5 % against a sibling ad's), where two
+# word-bound doors of one property agree 97.1 %; 10 m falls to 93.4 % on sibling truths and buys 2 %.
+PIN_DOOR_M = 5.0
+PIN_DOOR_RUNG = "R5"
+
 
 # Portal-declared labels that mean "this pin is not address-grade". The portal contract maps
 # its own vocabulary onto these; a label we do not know is NOT treated as blurred (cap,
@@ -201,6 +207,13 @@ class Constraints:
     kod_adm: int | None = None
     pin: tuple[float, float] | None = None
     claim_ids: dict[str, tuple[int, ...]] = field(default_factory=dict)
+
+    @property
+    def names_a_door(self) -> bool:
+        """The words name a door (R0/R1's evidence): a kód, a č.p./č.ev. or a č.o., the street
+        line's included. Bound or not, a pin cannot pick another."""
+        return (self.kod_adm is not None or self.cislo_domovni is not None
+                or self.cislo_orientacni is not None)
 
 
 def collect_constraints(
@@ -1047,6 +1060,42 @@ def pin_inside_bound_obec(
     return covering is not None and covering.code == binding.obec_kod
 
 
+def pin_door(
+    binding: Binding,
+    constraints: Constraints,
+    pin_claim: Claim | None,
+    *,
+    declared: DeclaredPrecision,
+    pin_inside_bound_obec: bool | None,
+    registry: RegistryView,
+) -> Binding:
+    """THE MAP IS THE SOURCE WHEN IT IS THERE (W5b, ruling Q8): where the words bound a town, a
+    část or a street and named no door, an exact pin inside the bound town names the ONE RÚIAN
+    door within `PIN_DOOR_M` of it, when that door lies in the words' obec, část and street. Below
+    the words and never across them: two doors, or a door elsewhere, refine nothing, silently."""
+    pin = pin_claim.point if pin_claim is not None else None
+    if (pin is None or declared.blurred or pin_inside_bound_obec is not True
+            or binding.target_kind not in ("street", "admin_unit") or constraints.names_a_door):
+        return binding
+    near = registry.doors_near(*pin, PIN_DOOR_M)
+    door = registry.address_point(near[0][0]) if len(near) == 1 else None
+    # The finest unit the words bound: a street's část, else the bound unit, a část (R4 carries it
+    # as `admin_unit_id`) or the obec itself.
+    words_unit = binding.cast_obce_unit_id or binding.admin_unit_id
+    if (door is None or door.obec_kod != binding.obec_kod
+            or (binding.ulice_kod is not None and door.ulice_kod != binding.ulice_kod)
+            or (words_unit is not None
+                and words_unit not in (door.cast_obce_unit_id, door.obec_unit_id))):
+        return binding
+    return replace(
+        binding, target_kind="address_point", rung=PIN_DOOR_RUNG,
+        ruian_adm_kod=door.kod_adm, ulice_kod=door.ulice_kod, street_name=door.street_name,
+        cast_obce_unit_id=door.cast_obce_unit_id, lat=door.lat, lon=door.lon,
+        street_extent_m=None, street_katastr_kod=None,
+        source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),  # type: ignore[union-attr]
+    )
+
+
 def place(
     binding: Binding,
     pin_claim: Claim | None,
@@ -1054,8 +1103,10 @@ def place(
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None = None,
 ) -> Position:
-    """The ONE precedence rule (W18): registry ADDRESS POINT > bound STREET point > portal pin >
-    FILL's unit point (an unplaced `Position` here). One truth (v5.10, ruling Q3): where the words
+    """The ONE precedence rule (W18): registry ADDRESS POINT (the words' door, else the one a pin
+    names, `pin_door`) > bound STREET point > portal pin > FILL's unit point (an unplaced
+    `Position` here). A named door's origin is `pin_door`: a pin cannot corroborate the door it
+    named. One truth (v5.10, ruling Q3): where the words
     bound the row, a pin may place it only inside the bound town (`pin_inside_bound_obec`, None =
     not asked) and never as an AREA marker; without words (R7/R8) it names its town and stays. A
     pin that may not place the row is still evidence the branches measure and CHECK flags. The
@@ -1068,7 +1119,8 @@ def place(
         not words or (pin_inside_bound_obec is True and not declared.area))
     if binding.target_kind == "address_point" and binding.lat is not None:
         return Position(
-            lat=binding.lat, lon=binding.lon, origin="registry_point",
+            lat=binding.lat, lon=binding.lon,
+            origin="pin_door" if binding.rung == PIN_DOOR_RUNG else "registry_point",
             registry_pin_distance_m=distance_between((binding.lat, binding.lon), pin),
             source_claim_ids=binding.source_claim_ids,
         )

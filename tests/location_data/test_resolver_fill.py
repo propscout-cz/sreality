@@ -481,9 +481,9 @@ def test_a_pin_placed_quarter_keeps_its_pin_and_takes_no_floor_from_the_doors():
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
-        mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
+        mm.claim(3, "coordinate", lat=50.10140, lon=14.34840, declared_precision_label="gps"),
     ], mirror=mirror)
-    assert (resolution.lat, resolution.lon) == (50.10102, 14.34804)
+    assert (resolution.lat, resolution.lon) == (50.10140, 14.34840)
     assert resolution.uncertainty_radius_m < wide.extent_m
 
 

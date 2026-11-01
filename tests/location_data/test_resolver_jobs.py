@@ -26,6 +26,7 @@ from typing import Any
 
 import psycopg
 
+from location_data.resolver import bind as step_bind
 from location_data.resolver import core, drain, projection, resolve_db
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
@@ -607,7 +608,7 @@ def test_the_cached_view_answers_every_question_the_protocol_declares():
     assert not missing, missing
 
 
-def test_the_protocol_is_twelve_questions():
+def test_the_protocol_is_thirteen_questions():
     """Fifteen query kinds became nine: three went with the engines they served, one with an
     unreachable rung, one with the epoch, and two folded into `admin_chain`. A question added
     back is a round trip per listing, and each of the three that were earns its one:
@@ -617,7 +618,8 @@ def test_the_protocol_is_twelve_questions():
     rule, v5.8's position) is the same derivation over a část obce's doors, asked ONLY for a
     row bound to a část that no pin placed or whose obec spans several KÚ, once per část per
     run — every other `katastr_kod` answer rides a read FILL already makes (the address
-    point, the street point, the chain)."""
+    point, the street point, the chain); `doors_near` (W5b) is the door an exact pin names,
+    one trip per slice."""
     from location_data.resolver.types import RegistryView
 
     declared = {
@@ -628,7 +630,7 @@ def test_the_protocol_is_twelve_questions():
         "address_point", "address_points_by_number", "streets_in_obec",
         "admin_units_by_name", "admin_chain", "admin_chain_by_code",
         "obec_codes_for_psc", "containing_obec", "in_czechia_polygon",
-        "nearest_obec_within", "street_point", "part_point",
+        "nearest_obec_within", "street_point", "part_point", "doors_near",
     }
     for gone in ("parcels", "distance_to_admin_boundary_m",
                  "cast_obce_for_point", "cast_obce_extent_m", "admin_unit",
@@ -754,9 +756,13 @@ class _BulkMirror:
         found = {i: self.inner.in_czechia_polygon(*c) for i, c in enumerate(coords)}
         return {i: value for i, value in found.items() if value is not None}
 
+    def doors_near_bulk(self, coords, max_m):
+        found = {i: tuple(self.inner.doors_near(*c, max_m)) for i, c in enumerate(coords)}
+        return {i: doors for i, doors in found.items() if doors}
+
 
 def _warm_claims():
-    """A PIN-positioned listing, which is the shape the warm exists for: the two point-keyed
+    """A PIN-positioned listing, which is the shape the warm exists for: the three point-keyed
     questions are asked of the pin, and the pin is a claim coordinate."""
     return [
         mm.claim(1, "obec_name", value_text="Praha"),
@@ -800,10 +806,13 @@ def test_warming_actually_serves_the_coordinate_keyed_questions():
     _resolve_with(resolve_db.CachedRegistryView(inner, cache))
     assert cache.asked_by_kind.get("in_czechia_polygon", 0) > 0
     assert cache.missed_by_kind.get("in_czechia_polygon", 0) == 0
+    assert cache.asked_by_kind.get("doors_near", 0) > 0
+    assert cache.missed_by_kind.get("doors_near", 0) == 0
     view = resolve_db.CachedRegistryView(inner, cache)
     before = inner.calls
     view.containing_obec(50.10102, 14.34804)
     view.in_czechia_polygon(50.10102, 14.34804)
+    view.doors_near(50.10102, 14.34804, step_bind.PIN_DOOR_M)
     assert inner.calls == before
 
 
@@ -832,6 +841,7 @@ def test_a_null_answer_is_warmed_too():
     calls = _CountingMirror()
     view = resolve_db.CachedRegistryView(calls, cache)
     assert view.containing_obec(0.0, 0.0) is None
+    assert view.doors_near(0.0, 0.0, step_bind.PIN_DOOR_M) == ()
     assert calls.calls == 0
 
 

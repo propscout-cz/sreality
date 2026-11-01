@@ -162,6 +162,12 @@ class MiniMirror:
         clat, clon, radius = self.cz_polygon
         return haversine_m(lat, lon, clat, clon) <= radius
 
+    def doors_near(self, lat: float, lon: float, max_m: float) -> list[tuple[int, float]]:
+        """`_DOORS_NEAR_SQL` in python: nearest first, the code breaks a tie, at most two."""
+        near = ((haversine_m(lat, lon, p.lat, p.lon), p.kod_adm) for p in self.points
+                if p.lat is not None and p.lon is not None)
+        return [(kod, dist) for dist, kod in sorted(n for n in near if n[0] <= max_m)[:2]]
+
     # ---- fixture helper, not part of the protocol
     def _unit_by_id(self, unit_id: int) -> AdminUnit | None:
         return next((u for u in self.units if u.unit_id == unit_id), None)
