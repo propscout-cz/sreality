@@ -1029,6 +1029,13 @@ export interface PresetSpec {
   sort?: string | null;
 }
 
+/* What the pipeline view reads off a stage: its id, and whether it is closed. */
+export type PipelineViewStage = Pick<PipelineStage, 'id' | 'is_terminal'>;
+
+/* A pipeline scope over these stage ids; none = a card at any stage. */
+const stageScope = (ids: number[]): SetScope =>
+  ids.length ? { set: null, in: ids, out: [] } : { set: 'in', in: [], out: [] };
+
 /* The Pipeline lens as a COMPLETE view, not a modifier.
  *
  * The chip lives in the preset row, and every other chip in that row REPLACES
@@ -1045,26 +1052,23 @@ export interface PresetSpec {
  * `status` deliberately stays at its default `any`: a deal whose listing was
  * delisted mid-negotiation must not vanish from the pipeline view.
  *
- * The scope is the board's OPEN stages, picked by id (operator 2026-11-01): a
- * deal closed into a terminal stage is history, so the view leaves it out, and
- * the sidebar adds a closed stage back with one click. Ids, not "any stage
- * minus the closed ones": that would leave the closed stages excluded after the
- * chip is turned off. With no closed stage (or the stages not read yet) the
- * scope is the whole pipeline.
+ * The scope is the board's LIVE stages, by id (operator 2026-11-01): a card in a
+ * closed stage is history, so the view leaves it out, and the sidebar adds a
+ * closed stage back with one click. Ids, not "any stage minus the closed ones":
+ * that would leave the closed stages excluded after the chip is turned off. A
+ * board with no closed stage, or no live one, gets the whole pipeline. `stages`
+ * is the board as READ: the chip never builds the view from a guess.
  *
  * The modifier semantics are still available — the sidebar's Curation → Pipeline
  * control ANDs the scope onto the current filters without resetting anything.
  * Chip = view, sidebar control = modifier, exactly like preset chip vs sidebar. */
-export const pipelineViewFilters = (
-  stages: ReadonlyArray<Pick<PipelineStage, 'id' | 'is_terminal'>> = [],
-): ListingFilters => {
-  const open = stages.filter((s) => !s.is_terminal).map((s) => s.id);
-  const closesSome = open.length > 0 && open.length < stages.length;
+export const pipelineViewFilters = (stages: ReadonlyArray<PipelineViewStage>): ListingFilters => {
+  const live = stages.filter((s) => !s.is_terminal).map((s) => s.id);
   return {
     ...DEFAULT_FILTERS,
     categoryMain: [],
     categoryType: null,
-    pipeline: closesSome ? { set: null, in: open, out: [] } : { set: 'in', in: [], out: [] },
+    pipeline: stageScope(live.length < stages.length ? live : []),
   };
 };
 
@@ -1148,8 +1152,7 @@ function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope 
   const o = v as Record<string, unknown>;
   if (name === 'pipeline' && 'stage_ids' in o) {
     const stages = idList(o.stage_ids);
-    if (!stages) return null;
-    return stages.length ? { set: null, in: stages, out: [] } : { set: 'in', in: [], out: [] };
+    return stages ? stageScope(stages) : null;
   }
   const inc = idList(o.in);
   const exc = idList(o.out);

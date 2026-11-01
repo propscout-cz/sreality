@@ -137,6 +137,10 @@ class LLMClient:
         self._providers: dict[str, CompletionProvider] = providers or {}
         self._agent_run_id = agent_run_id
 
+    @property
+    def agent_run_id(self) -> int | None:
+        return self._agent_run_id
+
     def register_providers(
         self, providers: dict[str, CompletionProvider]
     ) -> None:

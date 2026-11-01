@@ -5,7 +5,7 @@
  * them. A preset never fires a notification, unlike a Watchdog. Presets sort into GROUPS (migration 672), boxes the bar draws after
  * the loose chips. Without the API only the Pipeline chip that leads the row is drawn. */
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -13,14 +13,17 @@ import {
   listFilterPresets, reorderFilterPresets, updateFilterPreset, updateFilterPresetGroup,
 } from '@/lib/api';
 import { filterPresetKeys, DEFAULT_SORT, sortToParam, type SortSpec } from '@/lib/queries';
-import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type ListingFilters } from '@/lib/filters';
+import {
+  filtersEqualForPreset, filtersForPreset, readPresetSpec, type ListingFilters, type PipelineViewStage,
+} from '@/lib/filters';
 import { normalizeScope, scopeIncludes } from '@/lib/setScope';
 import { usePipelineStages } from '@/lib/pipelineReads';
-import type { FilterPreset, PipelineStage } from '@/lib/types';
+import type { FilterPreset } from '@/lib/types';
 import SavedSetBar, {
   chipBase, useSavedSet, type SavedSetCopy, type SavedSetGroupCopy,
 } from '@/components/SavedSetBar';
 import PipelineMark from '@/components/PipelineMark';
+import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 
 export interface FilterPresetBarProps {
   filters: ListingFilters;
@@ -30,9 +33,9 @@ export interface FilterPresetBarProps {
   onActivePresetIdChange: (id: string | null) => void;
   /* The Pipeline chip turning OFF is a plain filter edit… */
   onFiltersChange: (next: ListingFilters) => void;
-  /* …turning ON loads a whole view (neutral cohort + the open stages, preset
+  /* …turning ON loads a whole view (neutral cohort + the live stages, preset
    * deselected) — one atomic write, see browseState.loadPipelineView. */
-  onLoadPipelineView: (stages: ReadonlyArray<Pick<PipelineStage, 'id' | 'is_terminal'>>) => void;
+  onLoadPipelineView: (stages: ReadonlyArray<PipelineViewStage>) => void;
 }
 
 /* Whether the preset chips are unfolded (the bar folds to the active chip). */
@@ -156,19 +159,35 @@ export default function FilterPresetBar({
    * nothing is saved or updated, and loading it deselects the active preset (a
    * preset stores its pipeline scope like any filter, so a preset left active
    * over the view would read as edited). OFF is a filter edit (drop the scope,
-   * keep the cohort since built); Back undoes the load. ON scopes to the OPEN stages
-   * only — a closed deal is history (pipelineViewFilters). Per-stage narrowing,
-   * closed stages included, lives in the sidebar's Curation → Pipeline control. */
+   * keep the cohort since built); Back undoes the load. ON scopes to the live stages
+   * (pipelineViewFilters). Per-stage narrowing, closed stages included, lives in
+   * the sidebar's Curation → Pipeline control. */
   const scope = filters.pipeline;
   const pipelineOn = scopeIncludes(scope);
-  const pipelineChip = (
+  /* The view is built from the stages as READ: still loading, the click waits for
+   * them; a failed read draws a retry in the chip's place (MS16), never a view
+   * that would show the closed stages it promises to leave out. */
+  const waiting = useRef(false);
+  const loadView = async () => {
+    if (waiting.current) return;
+    waiting.current = true;
+    try {
+      const stages = stagesQ.data ?? (await stagesQ.refetch()).data;
+      if (stages) onLoadPipelineView(stages);
+    } finally {
+      waiting.current = false;
+    }
+  };
+  const pipelineChip = !pipelineOn && readFailed(stagesQ) ? (
+    <ReadFailedMark what="Fáze pipeline" variant="header" onRetry={() => void stagesQ.refetch()} />
+  ) : (
     <button
       type="button"
       onClick={() =>
         pipelineOn
           ? // Off clears the in side the chip shows; an excluded stage stays.
             onFiltersChange({ ...filters, pipeline: normalizeScope({ set: null, in: [], out: scope?.out ?? [] }) })
-          : onLoadPipelineView(stagesQ.data ?? [])
+          : void loadView()
       }
       aria-pressed={pipelineOn}
       title={
