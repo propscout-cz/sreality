@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -293,6 +294,94 @@ def test_input_files_need_an_agent_that_allows_code() -> None:
 
 def test_pause_turn_is_its_own_stop_reason() -> None:
     assert _normalise_stop_reason("pause_turn") == "pause_turn"
+
+
+def _overloaded() -> dict[str, Any]:
+    return {"__status": 529, "type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+
+
+def test_a_transient_failure_on_a_continuation_resends_the_paused_reply_in_its_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through the real SDK: the retry is the same request, and only the replies that came back count as calls."""
+    pytest.importorskip("anthropic")
+    monkeypatch.setattr(loop, "RETRY_DELAYS_S", (0.01,))
+    paused = _coded(*_bash("srvtoolu_1"), stop="pause_turn")
+    replies = [paused, _overloaded(), _coded(_tool_use("toolu_1", SUBMIT, {"markdown": "Done."}))]
+    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", replies) as stub:
+        conn = _FakeConn()
+        outcome = loop.run(_agent(), {"town": "Brno"}, provider="anthropic",
+                           llm=LLMClient(conn, providers={"anthropic": AnthropicProvider(api_key="test")}),
+                           call_tool=lambda name, args: {"data": []}, record=lambda step: None)
+    opening, refused, resent = stub.requests
+    assert (outcome.stop_reason, outcome.model_calls) == ("submit_result", 2)
+    assert resent == refused and resent["container"] == "cntr_1" and resent["tools"][0] == CODE_TOOL
+    assert resent["messages"][1]["role"] == "assistant" and len(opening["messages"]) == 1
+    assert len(conn.llm_calls_rows) == 3, "the refused try is on the ledger too, at no cost"
+    assert float(conn.llm_calls_rows[1]["params"][7]) == 0
+
+
+def test_a_code_call_is_bounded_by_the_runs_time_with_no_sdk_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wall clock is checked only between calls, so `timeout_s` is what bounds one that may sample ten times."""
+    pytest.importorskip("anthropic")
+    agent = _agent(limits=Limits(6, 20.0, 1.0))
+    with wire_stub(monkeypatch, "ANTHROPIC_BASE_URL", [{**_coded(_tool_use("toolu_1", SUBMIT, {"markdown": "Late."})),
+                                                        "__delay_s": 3.0}]) as stub:
+        began = time.monotonic()
+        outcome = _wire_run(agent)
+        took = time.monotonic() - began
+    assert (outcome.stop_reason, outcome.model_calls) == ("timeout", 0)
+    assert took < 2.5, "the call was cut at the run's deadline, not left to answer"
+    assert len(stub.requests) == 1 and stub.requests[0]["tools"][0] == CODE_TOOL
+
+
+def test_a_code_calls_deadline_travels_beside_its_container() -> None:
+    run = _Run(code_reply(stop="pause_turn"), code_reply(_submit()))
+    assert all(0 < c["timeout_s"] <= 60 for c in run.provider.calls)
+    assert [h.container for h in run.provider.hosted] == [None, "cntr_1"]
+
+
+def test_a_broken_connection_on_a_code_call_is_not_retried_since_it_may_have_billed() -> None:
+    """Up to ten samples may have run and no usage came back: a retry could spend past the cap unseen."""
+    provider = ScriptedCodeProvider([], prices={OPUS: CHEAP})
+
+    def broken(**kwargs: Any) -> Any:
+        cause = ConnectionResetError("reset")
+        raise ProviderError("anthropic call failed: reset") from cause
+    provider.complete = broken  # type: ignore[method-assign]
+    conn = _FakeConn()
+    with pytest.raises(ProviderError):
+        loop.run(_agent(), {"town": "Brno"}, provider="anthropic", llm=LLMClient(conn, providers={"anthropic": provider}),
+                 call_tool=lambda name, args: {"data": []}, record=lambda step: None)
+    assert len(conn.llm_calls_rows) == 1
+
+
+class _Stop(Exception):
+    pass
+
+
+def test_an_attempt_stopped_midway_deletes_its_files_and_a_retry_uploads_afresh_in_a_new_container() -> None:
+    """The ids live in one attempt's RunFiles and its messages, so a retry cannot name a deleted input."""
+    provider = ScriptedCodeProvider([code_reply(files=("file_out_1",), stop="pause_turn"), code_reply(_submit())],
+                                    files={"file_out_1": REPORT}, prices={OPUS: CHEAP})
+    llm = LLMClient(_FakeConn(), providers={"anthropic": provider})
+    data = HostedFile(name="data.csv", media_type="text/csv", data=b"a,b\n")
+
+    def stops(step: loop.Step) -> None:
+        if step.kind == "file":
+            raise _Stop
+
+    def go(record: Any) -> loop.Outcome:
+        return loop.run(_agent(), {"town": "Brno"}, provider="anthropic", llm=llm, inputs=(data,),
+                        call_tool=lambda name, args: {"data": []}, record=record)
+
+    with pytest.raises(_Stop):
+        go(stops)
+    assert provider.deleted == ["file_up_1", "file_out_1"]
+    outcome = go(lambda step: None)
+    assert outcome.stop_reason == "submit_result"
+    assert provider.deleted[2:] == ["file_up_2"]
+    assert provider.hosted[-1].container is None, "a retry starts its own container"
+    sent = [b.data["file_id"] for b in provider.calls[-1]["messages"][0].content if isinstance(b, OpaqueBlock)]
+    assert sent == ["file_up_2"]
 
 
 def test_a_pause_continues_with_the_same_container_and_counts_as_a_model_call() -> None:
