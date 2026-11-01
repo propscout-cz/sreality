@@ -251,7 +251,7 @@ Arms:
 
 Facts: merges in 24 h and 7 d by autodedup and by operator; newest merge age. Lane exceptions are judged by jobs, not here.
 
-**Data.** app_settings; autodedup.settings, rt_scope_ids, rt_fp (autodedup_rt_fp_decided_idx), rt_lease, verdicts, must_not_link; property_merge_events (source autodedup and operator only); broker_merge_suppressions; worker_heartbeats; the live-stream predicate in autodedup/ui_sql.py. Under 0.5 s.
+**Data.** app_settings; scheduled_jobs (the lease); autodedup.settings, rt_scope_ids, rt_fp (autodedup_rt_fp_decided_idx), verdicts, must_not_link; property_merge_events (source autodedup and operator only); broker_merge_suppressions; worker_heartbeats; the live-stream predicate in autodedup/ui_sql.py. Under 0.5 s.
 
 **Thresholds and their basis.** Rulings:
 - Problem at 1 or more. Live: 0 attributable to autodedup.
@@ -422,7 +422,7 @@ Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, 
 
 **Measures.** Does every committed curation change still move the curation clock? Twelve deferred triggers are the clock's only writer, so a trigger a hygiene migration disabled, or a bump that stopped landing, leaves every open window showing stale curation with no error anywhere.
 - `triggers`: Problem unless exactly `CURATION_CLOCK_TRIGGERS` (12) triggers on `bump_curation_clock()` are enabled (`tgenabled = 'O'`) and initially deferred; the facts name the tables whose trigger is off. A census pins the threshold equal to `CLOCKED_TABLES` (`tests/test_curation_sync_census.py` (j)).
-- `board_bumps`: Problem when a `property_pipeline_events` row of the last 24 h has no `board` clock row of its account changed at or after it. Exact: an event is written only in the transaction of a card change (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`, and the 696 seed stamps every account at the apply. Not measured while the clock is absent.
+- `board_bumps`: Problem when a `property_pipeline_events` row of the last 24 h has no `board` clock row of its account changed at or after it. Exact: an event is written only in the transaction of a card change (`api/pipeline.py`), whose commit bumps `board` at `clock_timestamp()` ≥ the event's `now()`, and the 696 seed stamps every account at the apply. Not measured while the clock is absent; a day with no card event is OK and says "no card events in the last 24 h".
 - `reads` (W4): Watch when the browsers' clock read (a `pg_stat_statements` entry run as `authenticated` naming `curation_clock_public`) has not advanced its calls for `CURATION_CLOCK_QUIET_H` (24 h): no signed-in window follows curation (the reader kill switch, a read the SPA no longer sends, nobody signed in). `quiet_since` rides the cell's facts from one result to the next; fewer calls under the same reset (an evicted entry) is no advance, a statistics reset with calls since is one.
 - `load` (W4): Watch when that read's share of all statement time between this measurement and the previous one is ≥ `CURATION_CLOCK_LOAD_PCT` (5 %), the planned trigger to re-cost the interval (curation-sync § 3.8); a first measurement or a reset takes a baseline (Not measured).
 - `reads` and `load` are Not measured where `pg_stat_statements` cannot be read (CI's replayed schema; allowlisted in the PREPARE sweep), and where the worker sees an `authenticated` entry's text as `<insufficient privilege>` (its role lacks `pg_read_all_stats`, so the pattern could match nothing).
@@ -430,7 +430,7 @@ Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, 
 **Data.** pg_trigger (12 rows); the board ledger's last 24 h (~10 events a day) against `curation_clock`'s primary key; one aggregate over `pg_stat_statements` (+ `pg_stat_statements_info`'s reset time) and the check's own previous result. On the worker, after `notifications`, budget 5 s, no owner page.
 
 **Thresholds and their basis.** - Any departure of `triggers` or `board_bumps` is a Problem: both should never happen. The writer kill switch (§ 3.9 of the curation-sync design) turns `triggers` red by intent while it is in force. `reads` and `load` are Watch at worst, never paged: a quiet day or a heavy read is a question, not an outage.
-- Every worker alarm due at once now owes 7 × 45 + 180 + 5 + 5 = 505 s, past the 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path.
+- Every worker alarm due at once now owes `WORKER_ALARMS_DUE_AT_ONCE_S` (`scripts/verify_pipeline.py`, computed from the registry: 505 s), past the worker's 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path.
 
 **Replaces.** Nothing; new with curation sync.
 

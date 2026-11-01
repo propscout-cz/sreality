@@ -113,6 +113,8 @@ jobs:
           set -o pipefail
           psql -X -q -At -v ON_ERROR_STOP=1 "$DATABASE_URL" > backup_count.txt <<SQL
           begin isolation level repeatable read read only;
+          -- the connection's default statement_timeout cancelled this copy at ~3 min (run 41301778806)
+          set local statement_timeout = 0;
           select count(*) from location_claims;
           \copy (select c.* from location_claims c) to program 'gzip > $BACKUP' csv header
           commit;

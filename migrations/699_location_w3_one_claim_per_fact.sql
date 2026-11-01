@@ -10,7 +10,7 @@
 --   gives the key its index. The ≈ 8.8 M surplus rows go BEFORE it, in the batched purge.
 --
 -- WHAT.
---   1. claim_fingerprint DROP NOT NULL: the new writer does not compute it. Migration 700 (W3 PR-2) drops the column,
+--   1. claim_fingerprint DROP NOT NULL: the new writer does not compute it. Migration 702 (W3 PR-2) drops the column,
 --      its 1.1 GB index and the two functions that computed it.
 --   2. THE GUARD (no lock taken): refuse when more than 50,000 keys still hold several rows. That is a table the purge
 --      has not run on, and its dedup does not belong under the lock below.

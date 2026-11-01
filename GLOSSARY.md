@@ -185,6 +185,66 @@ fixed time (40 minutes for a pass, 5 hours for a seed or a batch run) and releas
 one its holder never released blocks the engine until that time runs out.
 _Avoid_: lock (alone), mutex, claim, latch
 
+### Inside the engine
+
+**Pair** (UI: "pár"):
+Two ads the engine compares; every engine decision is about exactly one pair.
+_Avoid_: candidate, edge, match (for the pair itself)
+
+**Score** (UI: "skóre"):
+The engine's number from 0 to 1 for how much a pair looks like one unit.
+_Avoid_: probability, confidence, similarity
+
+**Grey band** (UI: "šedé pásmo"):
+The score range in which the engine does not decide on its own: a pair there waits for a ruling unless a
+certificate proves the unit.
+_Avoid_: band, zone, grey zone, undecided, residual (for the range)
+
+**Certificate** (UI: "důkaz"):
+One of the few facts that prove two ads are one unit, so the engine may merge a pair out of the grey band:
+an identical photo, one text contained in the other, a shared order code.
+_Avoid_: proof, evidence (alone), demonstrate, warrant
+
+**Blocker** (UI: "blokace"):
+A fact that says "two units" and holds a pair in the grey band even when it has a certificate: a different
+street, two printed areas, floors two apart.
+_Avoid_: gate, distinguishing fact, d43 fact, wall
+
+**Promotion** (UI: "povýšení"):
+The engine's move of a pair from the grey band into a merge, allowed only with a certificate and no blocker.
+_Avoid_: warrant, upgrade, auto-merge
+
+**Disqualifier** (UI: "diskvalifikátor"):
+A check run before scoring that discards a pair outright, so it never gets a score: areas more than 8 % apart,
+floors two apart, a category clash.
+_Avoid_: veto, guard, pre-filter
+
+**Nominator** (UI: "nominátor"):
+A shared trait by which the engine picks which ads to compare at all: the same photo, the same text, the same
+place. Two ads with no shared nominator never form a pair.
+_Avoid_: key, blocking key, block key, probe
+
+**Attribute** (UI: "atribut"):
+A structured fact of an ad: disposition, area, floor, price, category.
+_Avoid_: column, field, feature
+
+**Parameter** (UI: "parametr"):
+Any measurable trait of a pair that research tests as a possible certificate, such as a shared order code.
+_Avoid_: signal, feature, indicator, flag
+
+**Order code** (UI: "kód zakázky"):
+The advertiser's own number for an offer, printed in the ad and the same on every portal.
+_Avoid_: reference, ad reference, ID zakázky, code (alone)
+
+**Truth** (UI: "pravda"):
+The set of the operator's rulings, same and different, against which every engine rule is measured.
+_Avoid_: labels, ground truth, gold set, calibration set
+
+**Engine area** (UI: "oblast enginu"):
+The towns and districts whose ads the engine reads and decides on; the apply scope is the part of it where it
+may also merge.
+_Avoid_: scope, rt scope, coverage
+
 ### What users add
 
 **Curation**:
@@ -308,6 +368,16 @@ _Avoid_: version, tick, revision, change log
 One window's read of the curation clock, on a cadence while the window is visible and at once when it is
 shown again (the cadence: `docs/design/curation-sync.md` § 3.5).
 _Avoid_: probe, tick, poll (alone), heartbeat
+
+**Curation sync owner**:
+The one part of a signed-in window that does its clock reads and, when a counter moved, has that window
+re-read what the change touched. A window signed out has none.
+_Avoid_: poller, sync engine, listener, watcher
+
+**Nudge**:
+A content-free note one browser tab sends its sibling tabs after a write committed, so they take a clock
+read now instead of at their next one. It says only "read the clock", never what changed.
+_Avoid_: ping, push, broadcast (alone), doorbell
 
 **Watchdog**:
 A saved filter that alerts an account when a property newly matches it or drops its price.
@@ -529,6 +599,25 @@ with the failure and shown in that job's cell.
 _Avoid_: signature, error summary, failure reason
 
 ### Where users meet the platform
+
+**Sign-up**:
+Creating an account on the platform. Joining the waitlist is not a sign-up.
+_Avoid_: registration; sign-up for a waitlist entry
+
+**Waitlist entry**:
+One person's place on the waitlist: their email address and the consent they gave. It holds no
+account and grants no access.
+_Avoid_: sign-up, lead, subscriber
+
+**Waitlist invitation**:
+The permission for the person behind a waitlist entry to create an account under that entry's email
+address, and the message that tells them. It decides nothing about plans. Always the full term, so it
+is never taken for a share.
+_Avoid_: invite (alone)
+
+**Introductory price**:
+The price reserved for people with a waitlist entry; "zaváděcí cena" on every Czech surface.
+_Avoid_: founder's price, zakladatelská cena
 
 **Extension**:
 The platform's Chrome extension, which shows a property's data and actions on portal pages.

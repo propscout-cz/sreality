@@ -2,28 +2,74 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CHIPS_MAX, FOLD_BELOW_PX, STEP_BAR_MAX, chartShape, cutChips, factChips, fmtDate, portalNote, stageControl,
-  startsFolded, storedFold, tabMarkList, type FactFormat, type FactRow,
+  CHIPS_MAX, STEP_BAR_MAX, chartShape, createSubjectRouter, cutChips, factChips, fmtDate, portalNote, stageControl,
+  tabMarkList, type FactFormat, type FactRow,
 } from './panel_logic.ts';
+import type { PanelSubject } from './types';
 
-test('the sheet starts folded below 1280 px whatever was stored, else as last left', () => {
-  assert.equal(FOLD_BELOW_PX, 1280);
-  for (const stored of [null, false, true]) assert.equal(startsFolded(stored, 1279), true);
-  assert.equal(startsFolded(null, 1280), false, 'never chose: open');
-  assert.equal(startsFolded(false, 1440), false);
-  assert.equal(startsFolded(true, 1440), true);
+const ad = (sourceId: string, url = `https://www.sreality.cz/detail/${sourceId}`): PanelSubject => (
+  { ref: { source: 'sreality', sourceId }, url }
+);
+function router() {
+  const shown: (string | null)[] = [];
+  const r = createSubjectRouter((s) => { shown.push(s?.ref.sourceId ?? null); });
+  return { r, shown };
+}
+
+test('the panel shows its window\'s active tab\'s subject, and follows the active tab', () => {
+  const { r, shown } = router();
+  r.connecting(1);
+  r.connecting(2);
+  r.start(7, 1);
+  assert.deepEqual(shown, [], 'the active tab is still connecting: nothing flashes');
+  r.tell(2, ad('B'));
+  assert.deepEqual(shown, [], 'a background tab\'s subject waits');
+  r.tell(1, ad('A'));
+  r.activate(2, 7);
+  r.activate(1, 9);
+  assert.deepEqual(shown, ['A', 'B'], 'another window\'s tab is not this panel\'s');
+  r.tell(2, null);
+  assert.deepEqual(shown, ['A', 'B', null], 'a search page with no card opened: none');
 });
 
-test('the stored fold wins; the old panel\'s "minimized" counts only until one is stored', () => {
-  assert.equal(storedFold({}), null, 'never chose');
-  assert.equal(storedFold({ panelFolded: false, panelMinimized: true }), false);
-  assert.equal(storedFold({ panelFolded: true }), true);
-  assert.equal(storedFold({ panelMinimized: true }), true, 'the old choice, read once');
-  assert.equal(storedFold({ panelMinimized: false }), null, 'an old "open" is no choice');
-  assert.equal(storedFold({ panelFolded: 'yes' }), null, 'only a boolean is a choice');
+test('a closed port says none; only a change of ad re-opens, the first answer always shows', () => {
+  const { r, shown } = router();
+  r.start(7, 3);
+  assert.deepEqual(shown, [null], 'a tab we never heard from: the empty state at once');
+  r.connecting(3);
+  r.tell(3, ad('A'));
+  r.tell(3, ad('A', 'https://www.sreality.cz/detail/A?foto=2'));
+  assert.deepEqual(shown, [null, 'A'], 'a gallery rewrite of the same ad is no new subject');
+  r.forget(3);
+  assert.deepEqual(shown, [null, 'A', null], 'the page left for one without our script');
 });
 
-test('the folded tab marks the stage, a price DROP only, and MF, each only when there', () => {
+test('a tab loading its next page holds the panel until that page calls in or loads without one', () => {
+  const { r, shown } = router();
+  r.connecting(3);
+  r.start(7, 3);
+  r.tell(3, ad('A'));
+  r.connecting(3);
+  assert.deepEqual(shown, ['A'], 'the old page went: no empty card flashes between listings');
+  r.tell(3, ad('B'));
+  assert.deepEqual(shown, ['A', 'B']);
+  r.settled(3);
+  assert.deepEqual(shown, ['A', 'B'], 'a page that called in is not settled away');
+  r.connecting(3);
+  r.settled(3);
+  assert.deepEqual(shown, ['A', 'B', null], 'loaded without our script: the empty state');
+});
+
+test('a call is this panel\'s only from a tab of its window, and only once it knows its window', () => {
+  const { r } = router();
+  assert.equal(r.ours({ windowId: 7 }), false, 'before start');
+  r.start(7, null);
+  assert.equal(r.ours({ windowId: 7 }), true);
+  assert.equal(r.ours({ windowId: 8 }), false);
+  assert.equal(r.ours(undefined), false, 'a call from no tab (another extension page)');
+});
+
+test('the edge tab marks the stage, a price DROP only, and MF, each only when there', () => {
   const drop = (pct: number) => `drop ${pct}`;
   assert.deepEqual(tabMarkList('S', -4.3, 'MF', drop), ['S', 'drop -4.3', 'MF']);
   assert.deepEqual(tabMarkList('S', 2.1, 'MF', drop), ['S', 'MF'], 'a rise is no news on a tab');

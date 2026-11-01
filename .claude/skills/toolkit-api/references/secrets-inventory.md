@@ -46,7 +46,6 @@ the worker's autodedup lane calls no provider). Both Railway copies are deleted.
 | `API_TOKEN` | Railway API | the static key was deleted 2026-10-13; the API accepts only a Supabase JWT |
 | `SUPABASE_JWT_SECRET` | Railway API | read by nothing since 2026-10-13 (`verify_jwt` uses the project JWKS) |
 | `EXT_API_TOKEN` | GH | the extension stopped sending a static key 2026-07-21 (Wave 1, #888); the build no longer reads it |
-| `SCRAPE_CHAIN_TOKEN` | GH | no workflow reads it since #2043 (price stats chains on its job's own `GITHUB_TOKEN`) |
 | `RUNPOD_API_KEY` | Railway worker | no worker code reads it (above) |
 
 Also in M0: the Supabase **legacy JWT secret**. If it sits under JWT Keys → Previously used, anyone who
@@ -69,6 +68,15 @@ and worker at once (job-runner, which reads the worker's string by reference, re
 does not, job-runner → Deploy Latest Commit, and check its Health cells too), then re-key `tenant_pool`. A burst of failed connections right after the reset is the pooler's
 cache, not a bad password: do not reset twice.
 
+## Resend
+
+`RESEND_API_KEY` (Railway API; `docs/design/email/PROGRAM.md`): a sending-only key for `novinky.propscout.cz`, read by
+`api/resend_client.py` for the waitlist confirmation (`POST /waitlist`, after the redirect). Unset = no email and no claim;
+the signup still stands. Resend's free plan shares 100 a day with Supabase's password resets, hence
+`waitlist.CONFIRMATION_DAILY_CAP`. Supabase's own key (`propscout-supabase`, `mail.propscout.cz`) lives in its SMTP
+settings. To rotate: create the new key in Resend, paste its value over the old in Railway (the name stays), deploy, delete
+the old key. The account also holds other projects' domains and keys: leave those alone.
+
 ## Not rotated here
 
 - Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,
@@ -79,7 +87,7 @@ cache, not a bad password: do not reset twice.
   regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
   A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
-  `SREALITY_SESSION_COOKIE`. The `GEMINI_API_KEY` Actions secret has no consumer.
+  `SREALITY_SESSION_COOKIE`.
 - Public values: `SUPABASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `EXT_SUPABASE_URL`, `EXT_API_BASE_URL`,
   `EXT_APP_BASE_URL`, every `VITE_*`.
 - `LOCATION_DB_DIRECT_URL` is read by one workflow but is not set as a secret (the job falls back to the pooler).

@@ -35,7 +35,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              what delivers "a new/changed listing reaches properties (and the
              Browse read model) within minutes". Safe beside the daily sweep
              and a hand run: all callers serialize on the maintenance
-             lease row (migration 279 — pooler-proof CAS; a session advisory
+             lease row (scraper.job_lease — pooler-proof CAS; a session advisory
              lock strands over the transaction pooler) — an incremental caller
              skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
@@ -44,7 +44,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              run_incremental_pass, the pass's only scheduled runtime. Attributes
              dirty listings to brokers, recomputes only the affected brokers'
              names, contacts, firm and memberships (their numbers are the broker
-             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
+             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on the broker_resolution lease;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds` (absent = 15 s,
@@ -289,7 +289,7 @@ class _PassLock:
 # run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
 # only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
 # it. Safe beside the daily sweep and a hand run by construction: all serialize
-# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# on the maintenance lease row (scraper.job_lease) inside run_incremental_pass (this
 # lane skips while another writer holds it).
 # 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
 # (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
@@ -527,10 +527,10 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
 # pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
-# under both. Every hosted ALARM due at once owes 7 × 45 s + parsing's 180 s + notifications' 5 s
-# + curation_sync's 5 s = 505 s (curation sync, migration 696): all but the last (parsing) fit, and
+# under both. Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S,
+# past this budget since curation sync (migration 696): all but the last alarm (parsing) fit, and
 # it, like a gauge that does not fit the rest, is deferred to the next 60 s tick, never started
-# short (run_due).
+# short (run_due). The harness stays a lazy import of `_health_sync`, so the figure is read there.
 HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
@@ -579,7 +579,7 @@ _PUSH_PASS_LOCK = _PassLock("push")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
-# groups and RECONCILES under the engine's own lease (`autodedup.rt_lease`): the groups it
+# groups and RECONCILES under the engine's own lease (`rt_lease`): the groups it
 # re-clustered become production merges through toolkit.property_identity.merge_property_set,
 # inside the area app_settings.autodedup_apply_scope names; it never splits. The engine bounds
 # its own time — a pass past its deadline rolls back (nothing written, no cursor moved) and
@@ -613,7 +613,7 @@ _load_library: Callable[[str], Any] = ctypes.CDLL
 _AUTODEDUP_PASS_LOCK = _PassLock("autodedup")
 # SHUTDOWN (E941). Railway SIGTERMs the old deployment once the new one is online and, by
 # default, SIGKILLs it 0 s later (docs.railway.com/deployments/reference): no handler ran, a
-# pass in flight died holding `autodedup.rt_lease`, and the next worker's passes were skipped
+# pass in flight died holding `rt_lease`, and the next worker's passes were skipped
 # "leased" until the lease's 2,400 s TTL — 40 minutes, three times on 2026-10-06/07. Letting
 # the pass FINISH instead would need a drain past its 1,050 s deadline, and the watchdog would
 # end that drain at 300 s anyway: the heartbeat lane stops at SIGTERM like every lane, and the
@@ -645,7 +645,7 @@ _AUTODEDUP_STORE_WARNED = False
 # standing refusal would otherwise write the same line 1,440 times a day.
 _AUTODEDUP_LAST_OUTCOME: str | None = None
 # This process's boot second (E948). One worker process runs per container and a restart in
-# place keeps the hostname and the pid, so a live `autodedup.rt_lease` whose holder names both
+# place keeps the hostname and the pid, so a live `rt_lease` whose holder names both
 # and an earlier second was taken by a predecessor that died holding it (2026-10-10: most likely
 # the OOM killer, which sends no SIGTERM): a pass releases it before its take, and the engine
 # logs it, unless the claim cap is at its floor.
@@ -690,7 +690,7 @@ _R2_WARNED: set[str] = set()
 _PROBE_PASS_LOCK = _PassLock("probe")
 _DRAIN_PASS_LOCK = _PassLock("drain")
 # The broker lane's: an abandoned drain-until-empty pass keeps its thread, and its
-# broker_resolution_lock row goes stale after _LOCK_STALE_MIN, so without this the next
+# broker_resolution lease lapses after _LOCK_STALE_MIN, so without this the next
 # tick would take the lease and run a second pass beside it, a thread per abandoned pass.
 _BROKER_MAINTENANCE_PASS_LOCK = _PassLock("broker_maintenance")
 
@@ -1260,6 +1260,14 @@ def _run_images_sync(max_downloads: int) -> dict[str, Any]:
     return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
+def _run_phash_retry_sync() -> dict[str, int]:
+    # Lazy for the same reason: Pillow stays off the worker's startup path.
+    from scraper.image_phash import retry_unhashed
+
+    with db.connect() as conn:
+        return retry_unhashed(conn)
+
+
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
     slice_ = IMAGES_SLICE_DEFAULT
     try:
@@ -1281,17 +1289,27 @@ async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     if stop_event.is_set():
         return
     agg = await asyncio.to_thread(_run_images_sync, slice_)
+    retry: dict[str, int] = {}
+    if not stop_event.is_set():
+        try:
+            retry = await asyncio.to_thread(_run_phash_retry_sync)
+        except Exception as exc:  # noqa: BLE001 - the retry never costs the pass its download result
+            LOG.warning("images lane: phash retry failed: %s", exc)
     totals = {
         "downloaded": agg.get("images_stored", 0),
-        # Stored without an inline pHash (left for the hourly backstop); 0 in steady state.
+        # Stored without an inline pHash (left for the retry below); 0 in steady state.
         "phash_missed": agg.get("images_phash_missed", 0),
+        "phash_retried": retry.get("phash_retried", 0),
+        "phash_hashed": retry.get("phash_hashed", 0),
+        "phash_given_up": retry.get("phash_given_up", 0),
         "stopped_suspicious": bool(agg.get("stopped_suspicious", False)),
         "cap": slice_,
     }
     LOG.info(
-        "IMAGES lane downloaded=%d phash_missed=%d cap=%d stopped_suspicious=%s",
-        totals["downloaded"], totals["phash_missed"], slice_,
-        totals["stopped_suspicious"],
+        "IMAGES lane downloaded=%d phash_missed=%d phash_retried=%d phash_hashed=%d phash_given_up=%d "
+        "cap=%d stopped_suspicious=%s",
+        totals["downloaded"], totals["phash_missed"], totals["phash_retried"], totals["phash_hashed"],
+        totals["phash_given_up"], slice_, totals["stopped_suspicious"],
     )
     _record_pass(state, "images", totals)
 
@@ -1345,7 +1363,7 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
 
 def _broker_maintenance_sync() -> dict[str, Any]:
     """One drain-until-empty broker pass on the worker's own connection. Reuses
-    THE script implementation (never forks it); broker_resolution_lock inside
+    THE script implementation (never forks it); the broker_resolution lease inside
     run_incremental_pass makes this safe beside the daily full sweep and a
     hand run — a concurrent caller returns skipped. In ONE thread holding the lane's pass
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's
@@ -2317,7 +2335,7 @@ def _return_memory() -> float | None:
 
 
 def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
-    """End `holder`'s `autodedup.rt_lease` row on a FRESH, bounded connection (E941). Best
+    """End `holder`'s `rt_lease` row on a FRESH, bounded connection (E941). Best
     effort and never raises: it runs on the shutdown path, where a raise helps nobody and the
     lease still ends by its TTL. The statement is keyed by holder, so a row another writer has
     taken since is never ended by it. First, the statement the pass may be running on
@@ -2340,10 +2358,10 @@ def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
                 conn.close()
     except Exception as exc:  # noqa: BLE001 — a shutdown path never raises
         LOG.warning(
-            "AUTODEDUP: shutdown could not release autodedup.rt_lease for %s (%s: %s); it "
+            "AUTODEDUP: shutdown could not release rt_lease for %s (%s: %s); it "
             "expires by its TTL", holder, type(exc).__name__, exc)
         return False
-    LOG.info("AUTODEDUP: shutdown released autodedup.rt_lease for %s", holder)
+    LOG.info("AUTODEDUP: shutdown released rt_lease for %s", holder)
     return True
 
 

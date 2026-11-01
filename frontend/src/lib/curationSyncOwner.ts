@@ -1,68 +1,42 @@
-/* THE curation sync owner (docs/design/curation-sync.md § 3.5, Decisions 11-15):
- * one per signed-in window, mounted by lib/auth (AuthProvider). It reads the
- * curation clock (lib/queries `fetchCurationClock`, never acting) and owes,
- * through lib/revalidate, every read a moved family feeds (lib/curationSync
- * `familyTargets`). A plain module: no React state, no query-cache entry, no
- * QueryObserver — every behaviour TanStack would bring is overridden here (R26),
- * and the global focusManager is left alone (R12).
+/* THE curation sync owner: one per signed-in window, mounted by lib/auth
+ * (AuthProvider). It reads the curation clock and owes, through lib/revalidate,
+ * every read a moved family feeds (lib/curationSync `familyTargets`). The what
+ * and when are docs/design/curation-sync.md § 3.5, Decisions 11-15 and 14b; here
+ * is why the loop is shaped as it is.
  *
- * WHEN it reads, only while the document is visible (Decision 12):
- * - every SYNC_INTERVAL_MS[frame] from the last read's start (the phone frame
- *   15 s, ruling Q2), never sooner than SYNC_MIN_GAP_MS after an answer;
- * - at once when the page is shown (visibilitychange → visible, pageshow),
- *   aborting a read in flight from before: one across an iOS suspension could
- *   otherwise hang until PG_DEADLINE_MS. A read in flight that started under
- *   SYNC_MIN_GAP_MS ago is already the shown page's (a bfcache restore fires
- *   both events: one read); with none, a show under that gap after the last
- *   start reads once the gap has passed (the hide before it aborted that read,
- *   or disarmed the next);
- * - on focus, online and the nudge (another tab of this browser committed a
- *   write; coalesced over SYNC_NUDGE_DEBOUNCE_MS). Each asks for a read that
- *   starts after it — focus also takes one that started under SYNC_MIN_GAP_MS
- *   before it (the window was already reading); online and a nudge do not (a
- *   read from before cannot have reached the server, or seen that commit). A
- *   read in flight that cannot answer a trigger gets ONE follow-up, and no two
- *   reads start under SYNC_MIN_GAP_MS apart.
- * Hidden: no timer and no request; a read in flight is aborted, a nudge dropped.
- * A transient failure (network, deadline, 5xx, 408, 429, and a lapsed session's
- * 401, which passes once supabase-js refreshes the session) backs off 5 s × 2ⁿ
- * up to SYNC_BACKOFF_MAX_MS, reset by an answer. A permanent one (any other
- * 4xx: the reader kill switch's 403, a renamed view's 404 or 400) stops the
- * interval: a trigger then reads at most once per SYNC_BACKOFF_MAX_MS, until an
- * answer. Never a toast, never a retry storm; an answer whose processing throws
- * is logged and the loop goes on.
- *
- * WHAT moved (Decision 14b). Before its first read the owner owes every synced
- * read already cached, bar an initial load in flight: that one began in the very
- * commit that mounted the owner (RequireAuth renders no page before the session
- * is read; an account switch has just cleared the cache). Every read left
- * unowed thus started after t0, give or take that commit, and a change it
- * missed committed no earlier than t0 minus the bump-to-visible gap, which the
- * margin covers. So the first answer counts a family as changed iff
- * age_ms <= (now - t0) + SYNC_START_MARGIN_MS (both durations: no clock skew),
- * however late it lands. now - t0 is the larger of the monotonic and the
- * wall-clock time since start: performance.now() stands still while the device
- * sleeps on some platforms (w3c/hr-time#115), and a page opened hidden reads
- * first when it is shown. Every later answer is diffed against the last good
- * one (`clockChanges`; a vanished row, a revoked share, is a change of that
- * family and owner) and owes every moved family's targets in ONE `revalidate`;
- * then `repayOwed` retries a debt whose read failed (at most 3 times,
- * lib/revalidate). The self-echo is kept (Decision 15).
- *
- * The nudge rides ONE MutationCache subscription: every mutation success (the
- * API commits before it answers, W0) posts {v:1} on BroadcastChannel
- * 'curation-sync', where the browser has one. Each read goes through
- * supabase-js, which reads the session (getSession) before every request, so an
- * hourly token refresh needs nothing here. */
+ * - A plain module, no React state, no cache entry, no QueryObserver (Decision
+ *   11, R26): every behaviour TanStack would bring (focus, reconnect, retry) is
+ *   one this loop must override, and a cache entry would need its own root and
+ *   an exemption from `clear()`.
+ * - Every trigger is visibility-gated, and a show aborts a read in flight: a
+ *   hidden tab costs nothing, and a read in flight across an iOS suspension could
+ *   otherwise hang until PG_DEADLINE_MS (Decision 12).
+ * - A trigger asks for a read that starts after it (focus also takes one that
+ *   started just before it), never two under SYNC_MIN_GAP_MS apart: a read from
+ *   before a reconnect or another tab's commit cannot have seen it.
+ * - Failures back off and never toast; a permanent one (the reader kill switch)
+ *   stops the interval, so a switched-off reader sheds its load (§ 3.9).
+ * - The first answer counts a family by its age against the time since start,
+ *   both durations, so no clock skew; the larger of the monotonic and the wall
+ *   duration, because performance.now() stands still in a device sleep on some
+ *   platforms (w3c/hr-time#115). Exact because start owes every synced read
+ *   already cached bar an initial load in flight (Decision 14b says why).
+ * - The baseline moves only once an answer's re-reads are owed, so an answer
+ *   whose processing throws leaves its changes owed to the next answer.
+ * - The nudge rides lib/mutationCache's committed-write signal (W0: success is
+ *   committed), on BroadcastChannel where the browser has one; supabase-js reads
+ *   the session before every request, so a token refresh needs nothing here. */
 
 import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 
+import { ACTING_SEGMENT } from '@/lib/acting';
 import { ApiError } from '@/lib/api';
 import { clockChanges, clockKey, CURATION_FAMILIES, familyTargets, type ClockRow } from '@/lib/curationSync';
+import { onCommittedWrite } from '@/lib/mutationCache';
 import { isPhoneFrame } from '@/lib/phoneShell';
 import { fetchCurationClock } from '@/lib/queries';
-import { repayOwed, revalidate, type Revalidation } from '@/lib/revalidate';
+import { repayOwed, revalidate } from '@/lib/revalidate';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 /** Ruling Q2: a visible window reads every 5 s, 15 s in the phone frame. */
@@ -78,110 +52,107 @@ export const SYNC_START_MARGIN_MS = 10_000;
 const BACKOFF_BASE_MS = 5_000;
 const NUDGE_CHANNEL = 'curation-sync';
 const NUDGE = { v: 1 } as const;
-/* The acting root (lib/acting): an owner's reads, which no family names before an answer does. */
-const ACTING_ROOT = ['acting'] as const;
 
 const isVisible = (): boolean => document.visibilityState === 'visible';
-const clock = (): number => performance.now();
+const monotonicNow = (): number => performance.now();
 
-/* Network, deadline, 5xx, 408, 429 and 401 (a session not yet refreshed) may pass; any other 4xx will not. */
-const isPermanent = (err: unknown): boolean =>
-  err instanceof ApiError && err.kind === 'http' && err.status >= 400 && err.status < 500
-  && err.status !== 401 && err.status !== 408 && err.status !== 429;
-
-/* Every synced read cached before the first read could have read before t0, so
- * it is owed, in the mode its family owes it; an initial load in flight is not
- * (the header says why). */
-function cachedReads(qc: QueryClient): Revalidation[] {
-  const cache = qc.getQueryCache();
-  const items: Revalidation[] = [
-    ...CURATION_FAMILIES.flatMap((family) => familyTargets(qc, family, null)),
-    { queryKey: ACTING_ROOT },
-  ];
-  const out: Revalidation[] = [];
-  for (const item of items) {
-    for (const q of cache.findAll({ queryKey: item.queryKey, exact: item.exact })) {
-      if (q.state.data === undefined && q.state.fetchStatus === 'fetching') continue;
-      out.push({ queryKey: q.queryKey, exact: true, mode: item.mode });
-    }
-  }
-  return out;
-}
+/* Transient: back off and read again. Every failure but a 4xx: a network
+ * failure, a deadline, any 5xx, an error that is no API answer at all; and of
+ * the 4xx, 401 (a session supabase-js has not refreshed yet, which passes by
+ * itself: Risk 4; the reader kill switch answers 403), 408 and 429 (the server
+ * asks to be asked later). Wider than lib/api's isTransientApiError (a network
+ * failure, 502/503/504/520), which asks whether ONE request is worth a second
+ * attempt now; the owner asks whether a read seconds later may pass, so a
+ * deadline and a 500 wait too, and everything that rule retries is transient
+ * here. Permanent, stopping the interval: every other 4xx (the kill switch's
+ * 403, a renamed view's 404 or 400). */
+const WAIT_STATUSES = new Set([401, 408, 429]);
+const isTransient = (err: unknown): boolean =>
+  !(err instanceof ApiError && err.kind === 'http' && err.status >= 400 && err.status < 500)
+  || WAIT_STATUSES.has(err.status);
 
 /** Start following the curation clock for the signed-in user; `stop()` ends it. */
 export function startCurationSync(qc: QueryClient): { stop(): void } {
   if (!isSupabaseConfigured()) return { stop: () => {} };
-  const t0 = clock();
+  const t0 = monotonicNow();
   const t0Wall = Date.now();
   let stopped = false;
+  /* The last good answer: what the next one is diffed against. */
   let last: Map<string, ClockRow> | null = null;
-  let inFlight: AbortController | null = null;
-  let lastStart = -Infinity;
-  let followUp = false;
-  let failures = 0;
-  let broken = false;
-  let due: { at: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /* The loop: the read in flight, when the last one started, whether a trigger it
+   * cannot answer asked for one more, and the one pending read. */
+  const reads = {
+    inFlight: null as AbortController | null,
+    lastStart: -Infinity,
+    followUp: false,
+    due: null as { at: number; timer: ReturnType<typeof setTimeout> } | null,
+  };
+  /* Transient failures in a row, and whether a permanent one stopped the interval. */
+  const errors = { transient: 0, permanentMode: false };
   /* The newest nudge received, and the timer that coalesces it with the ones before. */
-  let nudgedAt = -Infinity;
-  let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  const nudge = { at: -Infinity, timer: null as ReturnType<typeof setTimeout> | null };
 
-  const gap = (): number => (broken ? SYNC_BACKOFF_MAX_MS : SYNC_MIN_GAP_MS);
+  const gap = (): number => (errors.permanentMode ? SYNC_BACKOFF_MAX_MS : SYNC_MIN_GAP_MS);
 
   /* The one pending read: the earliest asked for wins. */
   function arm(at: number): void {
-    if (stopped || !isVisible() || (due && due.at <= at)) return;
-    if (due) clearTimeout(due.timer);
-    due = { at, timer: setTimeout(read, Math.max(0, at - clock())) };
+    if (stopped || !isVisible() || (reads.due && reads.due.at <= at)) return;
+    if (reads.due) clearTimeout(reads.due.timer);
+    reads.due = { at, timer: setTimeout(read, Math.max(0, at - monotonicNow())) };
   }
 
   /* A trigger's read: now if it is due, else at its time. */
   function readAt(at: number): void {
-    if (at <= clock()) read();
+    if (at <= monotonicNow()) read();
     else arm(at);
   }
 
   function disarm(): void {
-    if (due) clearTimeout(due.timer);
-    due = null;
+    if (reads.due) clearTimeout(reads.due.timer);
+    reads.due = null;
   }
 
   function abort(): void {
-    inFlight?.abort();
-    inFlight = null;
+    reads.inFlight?.abort();
+    reads.inFlight = null;
   }
 
   /* A trigger at `at` is answered by a read that started at or after `at - slack`. */
   function request(at: number, slack: number): void {
-    if (stopped || !isVisible() || lastStart >= at - slack) return;
-    if (inFlight) followUp = true;
-    else readAt(lastStart + gap());
+    if (stopped || !isVisible() || reads.lastStart >= at - slack) return;
+    if (reads.inFlight) reads.followUp = true;
+    else readAt(reads.lastStart + gap());
   }
 
-  const onFocus = (): void => request(clock(), SYNC_MIN_GAP_MS);
-  const onOnline = (): void => request(clock(), 0);
+  const onFocus = (): void => request(monotonicNow(), SYNC_MIN_GAP_MS);
+  const onOnline = (): void => request(monotonicNow(), 0);
 
   function onShown(): void {
     if (stopped || !isVisible()) return;
-    if (clock() - lastStart >= SYNC_MIN_GAP_MS) return broken ? request(clock(), SYNC_MIN_GAP_MS) : read();
+    if (monotonicNow() - reads.lastStart >= SYNC_MIN_GAP_MS) {
+      if (errors.permanentMode) request(monotonicNow(), SYNC_MIN_GAP_MS);
+      else read();
+      return;
+    }
     // Under the gap: a read in flight is the shown page's, an armed one stands; with neither, a
     // hide in between aborted that read or disarmed the next, so read again once the gap has passed.
-    if (!inFlight && !due) arm(lastStart + gap());
+    if (!reads.inFlight && !reads.due) arm(reads.lastStart + gap());
   }
 
   function onHidden(): void {
     abort();
     disarm();
-    if (nudgeTimer != null) clearTimeout(nudgeTimer);
-    nudgeTimer = null;
-    followUp = false;
+    if (nudge.timer != null) clearTimeout(nudge.timer);
+    nudge.timer = null;
+    reads.followUp = false;
   }
 
   function onNudge(event: MessageEvent): void {
     if (stopped || !isVisible() || (event.data as { v?: unknown } | null)?.v !== NUDGE.v) return;
-    nudgedAt = clock();
-    nudgeTimer ??= setTimeout(() => {
-      nudgeTimer = null;
-      request(nudgedAt, 0);
+    nudge.at = monotonicNow();
+    nudge.timer ??= setTimeout(() => {
+      nudge.timer = null;
+      request(nudge.at, 0);
     }, SYNC_NUDGE_DEBOUNCE_MS);
   }
 
@@ -190,52 +161,52 @@ export function startCurationSync(qc: QueryClient): { stop(): void } {
     if (stopped || !isVisible()) return;
     abort();
     const ctrl = new AbortController();
-    inFlight = ctrl;
-    lastStart = clock();
-    followUp = false;
+    reads.inFlight = ctrl;
+    reads.lastStart = monotonicNow();
+    reads.followUp = false;
     fetchCurationClock({ signal: ctrl.signal }).then(
-      (rows) => settle(ctrl, () => answered(rows)),
-      (err: unknown) => settle(ctrl, () => failed(err)),
+      (rows) => takeAnswer(ctrl, () => answered(rows)),
+      (err: unknown) => takeAnswer(ctrl, () => failed(err)),
     );
   }
 
   /* An answer to an aborted, superseded or stopped read is dropped; one whose processing throws is logged. */
-  function settle(ctrl: AbortController, then: () => void): void {
-    if (stopped || inFlight !== ctrl) return;
-    inFlight = null;
+  function takeAnswer(ctrl: AbortController, then: () => void): void {
+    if (stopped || reads.inFlight !== ctrl) return;
+    reads.inFlight = null;
     try {
       then();
     } catch (err) {
       console.error('[curation sync] a clock answer could not be processed', err);
     } finally {
-      if (followUp) {
-        followUp = false;
-        readAt(lastStart + gap());
+      if (reads.followUp) {
+        reads.followUp = false;
+        readAt(reads.lastStart + gap());
       }
     }
   }
 
   function answered(rows: ClockRow[]): void {
-    failures = 0;
-    broken = false;
+    errors.transient = 0;
+    errors.permanentMode = false;
     const interval = SYNC_INTERVAL_MS[isPhoneFrame() ? 'phone' : 'desktop'];
-    arm(Math.max(lastStart + interval, clock() + SYNC_MIN_GAP_MS));
-    const elapsed = Math.max(clock() - t0, Date.now() - t0Wall);
+    arm(Math.max(reads.lastStart + interval, monotonicNow() + SYNC_MIN_GAP_MS));
+    const elapsed = Math.max(monotonicNow() - t0, Date.now() - t0Wall);
     const changed = clockChanges(last, rows, elapsed + SYNC_START_MARGIN_MS);
-    last = new Map(rows.map((row) => [clockKey(row), row]));
     const targets = changed.flatMap((row) => familyTargets(qc, row.family, row.mine ? null : row.account_id));
     if (targets.length > 0) void revalidate(qc, targets);
+    last = new Map(rows.map((row) => [clockKey(row), row]));
     repayOwed(qc);
   }
 
   function failed(err: unknown): void {
-    if (isPermanent(err)) {
-      broken = true;
+    if (!isTransient(err)) {
+      errors.permanentMode = true;
       return;
     }
-    if (broken) return;
-    failures += 1;
-    arm(clock() + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), SYNC_BACKOFF_MAX_MS));
+    if (errors.permanentMode) return;
+    errors.transient += 1;
+    arm(monotonicNow() + Math.min(BACKOFF_BASE_MS * 2 ** (errors.transient - 1), SYNC_BACKOFF_MAX_MS));
   }
 
   const onVisibility = (): void => (isVisible() ? onShown() : onHidden());
@@ -248,14 +219,16 @@ export function startCurationSync(qc: QueryClient): { stop(): void } {
   let unsubscribe = (): void => {};
   if (channel) {
     channel.onmessage = onNudge;
-    unsubscribe = qc.getMutationCache().subscribe((event) => {
-      if (event.type === 'updated' && event.action.type === 'success') channel.postMessage(NUDGE);
-    });
+    unsubscribe = onCommittedWrite(qc.getMutationCache(), () => channel.postMessage(NUDGE));
   }
 
-  void revalidate(qc, cachedReads(qc));
+  void revalidate(
+    qc,
+    [...CURATION_FAMILIES.flatMap((family) => familyTargets(qc, family, null)), { queryKey: [ACTING_SEGMENT] }],
+    { skipInitialLoads: true },
+  );
   // The first read a task later: a StrictMode remount's stop() cancels it before it is sent.
-  arm(clock());
+  arm(monotonicNow());
 
   return {
     stop() {

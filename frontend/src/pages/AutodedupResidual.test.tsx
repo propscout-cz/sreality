@@ -470,6 +470,34 @@ describe('<AutodedupResidual>', () => {
     );
   });
 
+  /* ------------------------------------------------ the shared order code */
+
+  it('narrows to pairs printing one order code, composed with the bar and kept in the url', async () => {
+    const user = userEvent.setup();
+    renderPage('/autodedup/residual?view=pairs&zone=band');
+    await screen.findByText(/Proč to engine nesloučil/);
+    /* Off unless asked: the server's crowd check reads every listing. */
+    expect(api.getAutodedupResidual).toHaveBeenLastCalledWith(
+      expect.objectContaining({ shared_code: null }),
+    );
+    const box = screen.getByRole('checkbox', { name: /Sdílený kód zakázky/ });
+    await user.click(box);
+    await waitFor(() =>
+      expect(api.getAutodedupResidual).toHaveBeenLastCalledWith(
+        expect.objectContaining({ shared_code: true, zone: 'band', min_score: 0.2, after: null }),
+      ),
+    );
+    expect(box).toBeChecked();
+    expect(screen.getByTestId('search')).toHaveTextContent('shared_code=1');
+    await user.click(box);
+    await waitFor(() =>
+      expect(api.getAutodedupResidual).toHaveBeenLastCalledWith(
+        expect.objectContaining({ shared_code: null, zone: 'band' }),
+      ),
+    );
+    expect(screen.getByTestId('search')).not.toHaveTextContent('shared_code');
+  });
+
   /* -------------------------------------------------- the URL is the state */
 
   it('reads its filters out of the query string', async () => {

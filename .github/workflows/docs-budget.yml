@@ -12,6 +12,7 @@ name: Docs budget
 
 on:
   pull_request:
+  merge_group:
 
 jobs:
   docs-budget:
@@ -34,4 +35,7 @@ jobs:
         run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Skill-staleness nudge (non-blocking)
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"

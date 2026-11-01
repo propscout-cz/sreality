@@ -17,13 +17,14 @@ import Brokers from './pages/Brokers';
 import Collections from './pages/Collections';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
-import WatchdogEdit from './pages/WatchdogEdit';
 import Notifications from './pages/Notifications';
 
 // Admin-only pages are code-split out of the default bundle — a non-admin
 // session never downloads them.
 const Health = lazyChunk(() => import('./pages/Health'));
 const Costs = lazyChunk(() => import('./pages/Costs'));
+const Signups = lazyChunk(() => import('./pages/Signups'));
+const AgentPlatform = lazyChunk(() => import('./pages/AgentPlatform'));
 const Scrapers = lazyChunk(() => import('./pages/Scrapers'));
 const Settings = lazyChunk(() => import('./pages/Settings'));
 const Datasets = lazyChunk(() => import('./pages/Datasets'));
@@ -70,6 +71,12 @@ const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
 // the section cards' growth off the first-visit budget.
 const EstimationDetail = lazyChunk(() => import('./pages/EstimationDetail'));
 const BrokerDetail = lazyChunk(() => import('./pages/BrokerDetail'));
+// A watchdog's editor opens from the watchdog list, not on a first visit: moved here to pay for the Runs nav read.
+const WatchdogEdit = lazyChunk(() => import('./pages/WatchdogEdit'));
+// Agent runs: an operator tool behind an allowlist, so never part of a first visit. Open to any session: a refused
+// account reads why, and the API decides what each caller may do.
+const Runs = lazyChunk(() => import('./pages/Runs'));
+const RunDetail = lazyChunk(() => import('./pages/RunDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -141,6 +148,26 @@ export const routes: RouteObject[] = [
       { path: ROUTES.listingLegacy.childPath, element: <AdvertRedirect />, handle: { title: 'Property' } },
       { path: ROUTES.health.childPath, element: <AdminPage><Health /></AdminPage>, handle: { title: 'Health' } },
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
+      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
+      { path: ROUTES.agentPlatform.childPath, element: <AdminPage><AgentPlatform /></AdminPage>, handle: { title: 'Agent platform' } },
+      {
+        path: ROUTES.runs.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <Runs />
+          </Suspense>
+        ),
+        handle: { title: 'Runs' },
+      },
+      {
+        path: ROUTES.runDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <RunDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Run' },
+      },
       { path: 'estimate', element: <Navigate to={ROUTES.estimations.build()} replace /> },
       { path: ROUTES.estimations.childPath, element: <EstimationList />, handle: { title: 'Estimations' } },
       {
@@ -183,7 +210,15 @@ export const routes: RouteObject[] = [
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
       { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
+      {
+        path: ROUTES.watchdogEdit.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <WatchdogEdit />
+          </Suspense>
+        ),
+        handle: { title: 'Edit watchdog' },
+      },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
       {
         path: ROUTES.notificationOpen.childPath,

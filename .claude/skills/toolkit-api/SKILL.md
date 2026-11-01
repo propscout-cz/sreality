@@ -38,7 +38,7 @@ it (`api/`). They do not apply to the scraper.
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
    (default 7).** Don't trust `is_active` alone — a listing not seen for 30 days is
    functionally inactive.
-5. **No writes from the toolkit, with nine explicit exceptions.** Read-only by default. The
+5. **No writes from the toolkit, with ten explicit exceptions.** Read-only by default. The
    exceptions are:
    - `verify_listing_freshness` (and `scraper.freshness.freshness_check` that it wraps), so
      an agent can confirm a comparable is still valid before relying on it. Every call logs to
@@ -52,9 +52,9 @@ it (`api/`). They do not apply to the scraper.
      (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `compare_listing_images`, which writes the pairwise visual comparison to
      `listing_image_comparisons` (canonical-ordered pair) on cache miss.
+   - `assess_property_visuals` (`references/tool-registry.md`), one judgement per photo set and prompt version.
    - `extract_building_units`, which writes the structural unit decomposition to
-     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss —
-     the vision extractor behind the building-paste flow.
+     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `read_floor_plan`, which writes a structured Claude-vision analysis of one
      operator-supplied attachment to `building_attachment_analyses` (keyed on
      `(attachment_id, model)`) on cache miss. Only callable inside the building flow; the
@@ -62,7 +62,7 @@ it (`api/`). They do not apply to the scraper.
      `building_run_id`.
    - `discover_condition_markers`, which writes a structured list of Czech "condition
      markers" to `listing_marker_extractions` (keyed on `(sreality_id, snapshot_id)`) on
-     cache miss — feeds the condition-scoring marker dictionary.
+     cache miss.
    - `score_listing_condition` (PARKED, rule #14: dispatch-only; nothing reads its levels), which writes per-listing building/apartment condition levels
      (1..5) + matched marker_ids + per-axis confidence to `listing_condition_scores` (keyed
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`
@@ -71,7 +71,7 @@ it (`api/`). They do not apply to the scraper.
    Every write-allowed exception caches an expensive external/LLM fact locally and
    auto-invalidates (a new snapshot or a model bump yields a fresh key); the LLM/OSM source is the truth, the table is a mirror. No other toolkit
    function may write. The API service should still connect with a read-only role if Postgres
-   permits; these nine paths then need a separately-elevated route. For now we ship with one
+   permits; these ten paths then need a separately-elevated route. For now we ship with one
    role and discipline.
    **Broker merge-review writes are durable decisions, not just status flips** (suppressions the nightly sweep
    honours, lifts, the `*_by` stamps): `references/broker-review-writes.md`.
@@ -89,7 +89,8 @@ it (`api/`). They do not apply to the scraper.
    JWT, no identity (401 without one, `503` with no verifier; `API_AUTH_OPTIONAL=1` opens it for local dev
    ONLY), `verify_jwt` = the claims, `account_scope` = a read scope; every 401 is RFC 6750
    (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
-   healthchecks. `/admin/*` (Settings-page surface) is gated like every write surface.
+   healthchecks, `/waitlist` for the landing form (honeypot, rate limit, 303;
+   `LANDING_ORIGIN`; `api/routes/waitlist.py`). `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
@@ -168,12 +169,13 @@ it (`api/`). They do not apply to the scraper.
 10. **An agent is one folder in repo-root `skills/`** (`skills/README.md`): frontmatter = a priced model per
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
-    journal) and ends it on `submit_result`, checked against the run's own tool results; `scripts/agent_run.py`
-    runs one locally and records a cassette. Only the estimator still reads the `skills` table (Settings,
+    journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
+    runs one locally; `executor.py` queues them, `/runs*` serve them. Only the estimator still reads `skills` (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
-    completion types; `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
+    completion types (a tool loop sends `Completion.reply` back: the provider's own blocks in order, an
+    `OpaqueBlock` read only by its writer; the estimator still sends text + calls); `anthropic`, `gemini`, `openai`, `qwen` (W2-10) and `oss` (`oss:` ids) are wired up
     (default `anthropic`). `provider_for_model` derives the backend from the model id
     prefix, so a lane that only knows its `app_settings` model routes without threading a
     provider argument. Adding a provider is a new file implementing the same Protocol,
@@ -196,7 +198,7 @@ it (`api/`). They do not apply to the scraper.
     `{"type": "tool", "name": ...}`, Gemini's `FunctionCallingConfig mode=ANY`, PR #768) so a
     caller that needs a guaranteed structured response (no prose fallback) can force it; pass
     it through `LLMClient.call(..., tool_choice=...)` — omitted, providers/fakes without the
-    param keep working.
+    param keep working; `hosted_code` too.
 12. **Never spell `price / area`. `toolkit/measures.py` is the only per-m² definition.**
     (Numbered last on purpose — the rules above are cited by code comments; never renumber.)
     `per_m2_sql(alias)` / `per_m2_basis_sql(alias)` render calls to `measure_price_per_m2` /
@@ -301,7 +303,7 @@ restate it here or in a module docstring.** Standing gates: `tests/api/test_admi
 `/brokers/*` + `POST /estimations` are service-role and excluded structurally) and
 `tests/api/test_account_scope_census.py` (no nullable tenant scope anywhere in `api/`).
 
-**Billing skeleton** (`api/routes/billing.py`, migration 298, PR #769 — Phase 1 increment 5) adds a
+**Billing skeleton** (`api/routes/billing.py`, migration 298) adds a
 **fourth** auth class: `POST /billing/webhook` verifies the `Stripe-Signature` HMAC over the raw
 body with the stdlib (no SDK), rejects payloads outside a 300s replay window, and fails closed with
 no `STRIPE_WEBHOOK_SECRET` — never `require_token`/ `verify_jwt`. One DB transaction covers the
@@ -312,7 +314,9 @@ never check-then-act) AND the handler, so a mid-handler crash lets Stripe's retr
 order isn't guaranteed). `GET /billing/me` rides `tenant_conn` (RLS). `require_entitlement(agenda)`
 is a dependency **factory** — `Depends(require_entitlement( "watchdogs"))` 403s unless the plan
 carries that agenda; bypass is `is_admin` alone. Wired to no *router* yet — the first real
-enforcement is inline in `create_estimation_run` (below).
+enforcement is inline in `create_estimation_run` (below). `agents` has no bypass;
+`pilot` is a comp the webhook leaves alone. Money limits, and raising
+`agent_daily_ceiling_usd` as accounts join: `references/tool-registry.md`.
 
 **Agent-estimation metering** (Wave 1, migration 355) is the first metered path. The paid
 `mode:'agent'` submit is gated **inside `api/estimation_runs.py:create_estimation_run`**, at the
@@ -321,9 +325,7 @@ and before the INSERT (`_prepare_metered_submit`), so a rejected submit spends z
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
 `entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
-(ClickUp is named in comments as a `claims is None` bypass — an internal direct-Python path only;
-it has zero historical rows, verified 2026-08-04, any HTTP call 401s, and a real credential waits
-until the integration activates.) Enforcement is **atomic** (A9 — never check-then-act over the tx
+(ClickUp's `claims is None` bypass is an internal direct-Python path: no rows, any HTTP call 401s.) Enforcement is **atomic** (A9 — never check-then-act over the tx
 pooler): `INSERT … SELECT WHERE (monthly non-failed count) < quota AND (in-flight count) < cap ON
 CONFLICT (account_id, idempotency_key) DO NOTHING` — budget + per-account concurrency + idempotency
 in one write, arbiter index `estimation_runs_inflight_idem`. The budget counts `estimation_runs`
@@ -418,9 +420,9 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
   `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
   `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
-- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API only, never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
-  (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for the comparables' photos); production wins, neither = `GET /properties/{id}/valuo` says
-  "Valuo zatím není nastaveno." and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
+- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
+  (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
+  so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.
@@ -429,8 +431,8 @@ API service:
 - `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
   since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
   `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
-- `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
-  `chrome-extension://<id>` origin and the SPA origin.
+- `CORS_ALLOW_ORIGINS` — CSV: the SPA origin + each extension ID's `chrome-extension://<id>` (no host
+  permissions). Kept: the operator edits it in Railway, never an agent.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
   of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
   held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
@@ -439,9 +441,10 @@ API service:
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
 Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
-the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so `RESEND_API_KEY`,
+the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so
 `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
-`OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Push links absolutely from each device's own origin.
+`OUTBOX_DRAIN_DISABLED` are dead (remove from Railway). Push links absolutely from each device's own origin.
+- `RESEND_API_KEY` (API): waitlist email; `references/secrets-inventory.md`.
 - `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
   (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
   the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →
@@ -456,15 +459,13 @@ the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webh
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (fine-grained PAT) — no workflow reads it since #2013 (price stats chains on its job's own
-  `GITHUB_TOKEN`); only the worker's count-probe dispatch falls back to it, until #2015 deletes that lane and the secret.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 - `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
   no Railway service reads it, so a Railway copy is dead and is deleted (M0, #2061). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  Its workflow consumers: `autodedup.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on

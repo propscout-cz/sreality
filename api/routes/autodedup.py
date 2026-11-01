@@ -320,7 +320,7 @@ GROUP_FILTER_KEYS: frozenset[str] = frozenset(
 RESIDUAL_FILTER_KEYS: frozenset[str] = frozenset(
     {
         "generation", "after", "limit", "block", "block_grain", "zone", "min_score",
-        "source_pair", "verdict", "sort", "seed",
+        "source_pair", "verdict", "sort", "seed", "shared_code",
     }
 )
 DETAIL_FILTER_KEYS: frozenset[str] = frozenset({"generation"})
@@ -1361,6 +1361,7 @@ def residual(
     verdict: str | None = Query(None),
     sort: str = Query("score_desc"),
     seed: str | None = Query(None),
+    shared_code: bool = Query(False),
     conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
     """Pairs the engine scored but did NOT join into one cluster, richest first.
@@ -1385,6 +1386,8 @@ def residual(
         "block_grain": block_grain,
         "source_pair": source_pair,
         "verdict": verdict,
+        # Both ads print one advertiser's order code (`ui_sql._SHARED_CODE`); off by default.
+        "shared_code": shared_code,
         "limit": limit + 1,
         "seed": sample_seed,
         # The per-side gallery cap. Unused by `RESIDUAL_COUNT_SQL`, which runs no photo

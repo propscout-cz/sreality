@@ -42,6 +42,9 @@ _REPLAY_TOLERANCE_S = 300
 
 _STATUS_PASSTHROUGH = {"active", "trialing", "past_due"}
 
+# An operator's comp, sold by nobody: a subscription event neither moves an account off it nor cancels it (#2319).
+_COMP_PLANS = {"pilot"}
+
 _SUBSCRIPTION_EVENTS = {
     "customer.subscription.created",
     "customer.subscription.updated",
@@ -208,6 +211,9 @@ def _handle_subscription_event(
         (account_id,),
     )
     existing = cur.fetchone()
+    if existing is not None and existing[0] in _COMP_PLANS:
+        LOG.warning("%s for account %s on the comp plan %r; leaving the plan to the operator", etype, account_id, existing[0])
+        return {"received": True, "ignored": etype}
     if existing is not None and existing[1] is not None and existing[1] >= created:
         return {"received": True, "stale": True}
     plan = _resolve_plan(cur, sub, existing[0] if existing is not None else None)
@@ -296,6 +302,12 @@ def _entitlement_view(conn: Any, account_id: Any) -> dict[str, Any]:
             "current_period_end": None}
 
 
+def plan_includes(conn: Any, account_id: Any, agenda: str) -> bool:
+    """Whether this account's plan turns `agenda` on: an absent key is off, and a cancelled entitlement turns off all."""
+    view = _entitlement_view(conn, account_id)
+    return view["status"] != "canceled" and view["agendas"].get(agenda) is True
+
+
 def _agent_estimation_quota(conn: Any, claims: dict, account_id: Any) -> dict[str, Any]:
     """The caller's agent-estimation allowance, for the extension's '(X left)' UX.
 
@@ -348,8 +360,7 @@ def require_entitlement(agenda: str) -> Callable[..., dict]:
         if deps.is_admin(claims):
             return claims
         account_id = tenant_pool.resolve_account_id(conn, claims)
-        ent = _entitlement_view(conn, account_id)
-        if ent["status"] == "canceled" or ent["agendas"].get(agenda) is not True:
+        if not plan_includes(conn, account_id, agenda):
             raise HTTPException(
                 status_code=403,
                 detail=f"Your plan does not include {agenda!r}",

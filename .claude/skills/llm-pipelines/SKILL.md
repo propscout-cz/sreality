@@ -1,6 +1,6 @@
 ---
 name: llm-pipelines
-description: Use when working on any LLM-backed path — the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
+description: Use when working on any LLM-backed path — the cached analytical vision/text tools (summarize_listing, compare_listing_images, assess_property_visuals, score_listing_condition, extract_building_units, read_floor_plan), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
 ---
 
 # LLM pipelines
@@ -26,6 +26,8 @@ Several analytical toolkit functions reach for Claude. Each caches its result lo
 auto-invalidates, logs to `llm_calls` under a distinct `called_for`, and is a write-allowed
 exception per Toolkit rule #5. System prompts and model IDs are operator-tunable via
 `app_settings` (model defaults `claude-sonnet-4-5`).
+A tool loop's turn goes back as `Completion.reply` (thinking, thought signatures): `toolkit-api` rule 11.
+Hosted code, its files and cost: `skills/README.md` § Code.
 The three the estimation agent can call (`summarize_listing`, `compare_listing_images`,
 `read_floor_plan`) take an optional `estimation_run_id`; the agent's handlers pass the run's id,
 so the nested call's `llm_calls` row counts toward the run's cost, its `max_cost_usd` cap (re-read
@@ -40,15 +42,17 @@ calls an LLM must do the same.
   (`exterior`, `kitchen`, `windows_and_light`, `floor_finish`, `lighting`, `styling`) plus an
   `overall_similarity`. Image bytes pulled from R2 server-side via boto3 and base64-encoded.
   Vision is materially more expensive than text (~$0.05/pair) — the cache matters most here.
+- `assess_property_visuals` (`toolkit/photo_assessment.py`, cache `photo_set_assessments`) — agents only;
+  a score and note per facet of `skills/photo-facets.md`, its hash the prompt version. More: `toolkit-api`'s
+  `references/tool-registry.md`.
 - `extract_building_units` (`toolkit/building_extraction.py`, migration 036, cache
   `building_unit_extractions`) — structural decomposition of a multi-unit building into a unit
   proposal; the vision extractor behind the building-paste flow.
 - `read_floor_plan` (`toolkit/floor_plan.py`, migration 044, cache
   `building_attachment_analyses`, keyed on `(attachment_id, model)`) — vision analysis of one
   operator-supplied attachment (floor plan, drawing, photo).
-- `discover_condition_markers` (`toolkit/condition_markers.py`, migration 064, cache
-  `listing_marker_extractions`) — mines Czech technical-state phrases ("zateplená budova", "po
-  kompletní rekonstrukci") to feed the condition-scoring marker dictionary.
+- `discover_condition_markers` (`toolkit/condition_markers.py`, cache `listing_marker_extractions`) — Czech
+  technical-state phrases for the condition scoring's dictionary. Parked with rule #14; nothing calls it (#2018).
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
   curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact
@@ -63,16 +67,16 @@ calls an LLM must do the same.
   call also returns a `location` block (`location_data/text_reading.py`: ad_kind, town, part, street,
   č.p./č.o./č.ev., each quoted), stored RAW in `listing_description_enrichments.extracted`. **W3/W4**: the
   claim lane (hourly, and the worker right after each pass) mines the CURRENT reading (V1–V4) into bazos@10's
-  claims (a value replaces the stored one, a null slot keeps it: W3), stamped `mined_contract_version` (mig 581); no model call. A
+  claims, stamped `mined_contract_version` (mig 581); no model call. A
   `not_property` advert keeps its town; business premises are an offer (that edit: ≈ 54.7k re-reads, ≈ $25).
   The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
   `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
   a price-only snapshot never re-bills, and **a prompt edit or a gate opening re-reads the corpus**
-  (delisted adverts only once per schema; they are never filled), so batch such edits. Concurrency
+  (delisted adverts once per schema, never filled), so batch such edits. Concurrency
   + the one pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
   NULL-only (`coalesce`), active rows only, with the `dirty_properties` enqueue in the same CTE and
-  no snapshot; a failed call is cached with an attempt count and given up on after 5 (so is an
-  empty location block, `ad_kind` and every slot null, on an `llm_text` portal: W3, `text_reading.is_empty`).
+  no snapshot; a failed call is cached with an attempt count, given up after 5, as is an empty
+  location block on an `llm_text` portal (W3).
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
   convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN
@@ -86,10 +90,10 @@ calls an LLM must do the same.
 tiers.** Every image→LLM call routes R2 bytes through `image_block(r2, key, max_edge)`
 (download → Pillow downscale → base64) rather than hand-rolling base64 per call. Two
 semantic constants pick the tier: `COMPARISON_MAX_EDGE = 768` (also `DEFAULT_MAX_EDGE`) for
-photo comparison — today `compare_listing_images` — where sub-megapixel is ample and,
+photo comparison — `compare_listing_images`, and the photos of `assess_property_visuals` — where sub-megapixel is ample and,
 crucially, *below* Anthropic's ~1.15 MP resize cap, so it actually cuts vision tokens to ~⅓
 (the cost lever); and `DOCUMENT_MAX_EDGE = 1568` for reads where fine text/markers matter
-(condition scoring/markers, building-extraction listing photos) — that *is* Anthropic's own
+(condition scoring/markers, building-extraction listing photos, the assessment's floor plans) — that *is* Anthropic's own
 cap, so the model sees the same pixels it would have anyway (quality-neutral; just less
 upload + no 200k prompt-assembly blowups). Anthropic bills tokens on the post-resize size,
 so anything ≥ the cap costs the *same* tokens — the saving only appears below it. **Operator
@@ -103,9 +107,8 @@ new vision caller in that test rather than picking an edge by hand.
 `compare_listing_site_plans`, `compare_listing_floor_plans` and the `validate_vision_models`
 A/B harness were deleted wholesale with the legacy dedup decision engine (2026-08 cutoff —
 architectural rule #15, `docs/design/new-dedup/CUTOFF.md`), along with their `app_settings`
-prompt/model keys and their `llm_calls.called_for` values. Nothing routes vision at dedup any
-more; `llm_calls_called_for_check` (its newest migration) is the live list. The rebuilt engine's
-vision level (manual batches, model routing, its own prompt contract) is Wave 6 of
+prompt/model keys and their `llm_calls.called_for` values. `llm_calls_called_for_check` (its newest
+migration) is the live list. The rebuilt engine's vision level is Wave 6 of
 `docs/design/new-dedup/PROGRAM.md` — build it there, don't restore the old tools. Their paid
 verdict caches (`listing_visual_matches`, `listing_site_plan_matches`,
 `listing_floor_plan_matches`, `image_room_classifications`) are kept **frozen**: no writes, and

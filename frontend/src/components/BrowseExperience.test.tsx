@@ -6,13 +6,15 @@
  * collapsed (tests never render a live map). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import BrowseExperience, { type BrowseFeatures } from './BrowseExperience';
 import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
+import { familyTargets } from '@/lib/curationSync';
+import { revalidate } from '@/lib/revalidate';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
@@ -151,6 +153,44 @@ describe('<BrowseExperience> one portal\'s "Newest first"', () => {
     renderBrowse(['idnes', 'sreality']);
     expect(await lifespan()).not.toContain(fmtShortDate(IDNES_DAY));
     expect(screen.queryByText(/^(newest|oldest) on /)).toBeNull();
+  });
+});
+
+/* Ruling Q3(c) with the pointer hold (2026-11-01, docs/design/curation-sync.md
+ * Decision 7b): a dismissal on another device moves the count at once and the
+ * cards once the pointer leaves them (lib/useListHold.test.tsx has every case). */
+describe('<BrowseExperience> a change made elsewhere', () => {
+  afterEach(() => vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1));
+
+  it('re-reads the count at once, and the cards only once the pointer leaves them', async () => {
+    const OTHER = { ...ROW, property_id: 43, listing_id: 112, sreality_id: 901, display_label: 'Lipová 3, Praha' };
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [ROW, OTHER], nextCursor: null });
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(2);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <Host filters={DEFAULT_FILTERS} sort={DEFAULT_SORT} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const card = await screen.findByText('Sadová 12, Praha');
+    await waitFor(() => expect(screen.getByText('2 of 2')).toBeInTheDocument());
+    fireEvent.pointerOver(card);
+    const cards = vi.mocked(queries.fetchListingsForCards).mock.calls.length;
+
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [OTHER], nextCursor: null });
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    await waitFor(() => expect(screen.getByText('2 of 1')).toBeInTheDocument());
+    expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(cards);
+    expect(screen.getByText('Sadová 12, Praha')).toBeInTheDocument();
+
+    fireEvent.pointerLeave(card);
+    await waitFor(() => expect(screen.queryByText('Sadová 12, Praha')).toBeNull());
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
   });
 });
 

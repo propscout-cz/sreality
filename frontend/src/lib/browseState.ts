@@ -21,6 +21,7 @@ import {
   fromSearchParams,
   pipelineViewFilters,
   readPresetSpec,
+  type PipelineViewStage,
   toSearchParams,
   type ListingFilters,
   type MapBounds,
@@ -163,8 +164,9 @@ export interface BrowseViewState {
    * writes against the same searchParams snapshot — the second would clobber
    * the first. Deselecting matters beyond tidiness: leaving a preset marked
    * active after replacing its filters would mark it edited, which this chip
-   * must never do. */
-  loadPipelineView: () => void;
+   * must never do. `stages` is the board's stage list: the view picks the
+   * live ones (pipelineViewFilters). */
+  loadPipelineView: (stages: ReadonlyArray<PipelineViewStage>) => void;
   /* Reset: the default filters with any active preset deselected — one write, as
    * loadPipelineView. A reset leaves the preset's view; it never edits it
    * (operator 2026-10-27). The sort, the tab and the map knobs stay. */
@@ -395,11 +397,11 @@ export function useUrlBrowseState(): BrowseViewState {
     [searchParams, setSearchParams],
   );
 
-  const loadPipelineView = useCallback(() => {
+  const loadPipelineView = useCallback((stages: ReadonlyArray<PipelineViewStage>) => {
     // Same shape as loadPreset: one write, filters + preset id together. Pushed
     // (not replaced) so Back returns the operator to the view they came from —
     // that is the undo for "it wiped my filters".
-    const sp = preserveExtras(toSearchParams(pipelineViewFilters()));
+    const sp = preserveExtras(toSearchParams(pipelineViewFilters(stages)));
     sp.delete('preset');
     setSearchParams(sp, { replace: false });
   }, [preserveExtras, setSearchParams]);
@@ -462,8 +464,8 @@ export function useMemoryBrowseState(init: {
         setFiltersState(pf);
         setSortState(parseSort(ps));
       },
-      loadPipelineView: () => {
-        setFiltersState(pipelineViewFilters());
+      loadPipelineView: (stages) => {
+        setFiltersState(pipelineViewFilters(stages));
         setActivePresetId(null);
       },
       resetFilters: () => {

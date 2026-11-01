@@ -40,7 +40,7 @@ const api = (name: string) => project(name, { resources: [service("sreality", {
   env: { EXTRAS: "api", ...kept(
     "ANTHROPIC_API_KEY", "CORS_ALLOW_ORIGINS", "GEMINI_API_KEY", "GH_DISPATCH_TOKEN", "MAPY2_CZ_API_KEY",
     "MAPY_CZ_API_KEY", "OPENAI_API_KEY", "QWEN_API_KEY", "R2_ACCESS_KEY_ID", "R2_ACCOUNT_ID", "R2_BUCKET_NAME",
-    "R2_SECRET_ACCESS_KEY", "RUNPOD_API_KEY", "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "SUPABASE_URL",
+    "R2_SECRET_ACCESS_KEY", "RESEND_API_KEY", "RUNPOD_API_KEY", "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "SUPABASE_URL",
     "TENANT_POOL_DB_URL", "VALUO_API_TOKEN", "VALUO_SANDBOX_API_TOKEN", "VAPID_PRIVATE_KEY") },
 })] });
 
@@ -81,7 +81,7 @@ const vite = (name: string) => project(name, { resources: [service("sreality", {
   replicas: { [REGION]: 1 },
   deploy: { restartPolicyMaxRetries: 3,   // ON_FAILURE is the default: declared, it stores as null and plans forever
             drainingSeconds: VITE_DRAINING_SECONDS, limitOverride: LIMITS },
-  domains: [{ domain: "app.propscout.cz", port: 8080 }],
+  domains: [{ domain: "app.propscout.cz", port: 8080 }, { domain: "propscout.cz", port: 8080 }],   // the bare domain = the landing page (#2248)
   env: kept("VITE_API_BASE_URL", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_URL"),   // frontend/Dockerfile build args
 })] });
 

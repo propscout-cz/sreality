@@ -15,6 +15,7 @@ import { useBuildSkew } from '@/lib/useBuildSkew';
 import { MAIN_ID, useRouteFocus } from '@/lib/useRouteFocus';
 import SkipLink from './SkipLink';
 import { ROUTES } from '@/lib/routes';
+import { useAgentRunOptions } from '@/lib/agentRunOptions';
 import { lastBrowsePath } from '@/lib/lastBrowseView';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhoneFrame from './phone/PhoneShell';
@@ -107,6 +108,10 @@ const adminItems: ReadonlyArray<MenuItem> = [
   // Next: where the operator starts when something is wrong, and the one place
   // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
   { to: ROUTES.health.build(), label: 'Health' },
+  // The propscout.cz waitlist: who signed up from the landing page, and from which ad.
+  { to: ROUTES.signups.build(), label: 'Sign-ups' },
+  // Where the agent platform programme stands; each of its tickets' PRs updates it.
+  { to: ROUTES.agentPlatform.build(), label: 'Agent platform' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —
   // invisible whenever the queue happened to be empty.
@@ -191,14 +196,19 @@ export default function Shell() {
 }
 
 function TopBar() {
-  const { isAdmin, agendas } = useAuth();
+  const { isAdmin, agendas, session } = useAuth();
+  /* Runs is on the bar only for an account that may start one; the API's one gate decides (allowlist, later a plan). */
+  const { data: runOptions } = useAgentRunOptions({ enabled: session != null });
   const location = useLocation();
   /* Shell's one unread observer (lib/unreadCount), gated as the nav item is. */
   const { count: unread } = useUnreadCount();
   // Unconfigured local dev has no session (so no is_admin claim) — show the
   // full nav there, mirroring the guards' allow-through posture.
   const showAdmin = isAdmin || !isSupabaseConfigured();
-  const items = navItems.filter((item) => !item.agenda || agendaVisible(isAdmin, agendas, item.agenda));
+  const items: ReadonlyArray<NavItem> = [
+    ...navItems.filter((item) => !item.agenda || agendaVisible(isAdmin, agendas, item.agenda)),
+    ...(runOptions?.start.allowed ? [{ to: ROUTES.runs.build(), label: 'Runs' }] : []),
+  ];
   const ownerTo = activeNavTo(location.pathname, items.map((i) => i.to));
   /* From any other page, "Browse" is the way back to the view that was left, with
    * its filters; ON Browse the same click is the reset, the bare page. */

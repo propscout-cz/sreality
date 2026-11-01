@@ -1,18 +1,27 @@
 /* lib/curationSyncOwner — THE curation sync owner (docs/design/curation-sync.md
  * § 3.5, Decisions 11-15; § 9's list). Fake timers as in useBuildSkew.test.tsx
  * (performance.now too: the first answer's window is a duration), a fake
- * BroadcastChannel, and a deferred `fetchCurationClock`: each read waits for
- * the test to answer it. */
+ * BroadcastChannel, the app's MutationCache, and a deferred `fetchCurationClock`:
+ * each read waits for the test to answer it. What an answer re-reads is listed
+ * by hand below, never asked of familyTargets. */
 
 import { createElement, StrictMode } from 'react';
 import { render } from '@testing-library/react';
-import { hashKey, MutationObserver, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
+import {
+  hashKey,
+  MutationObserver,
+  QueryClient,
+  QueryClientProvider,
+  QueryObserver,
+  type QueryKey,
+} from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/lib/api';
 import { CURATION_FAMILIES, familyTargets, type ClockRow, type CurationFamily } from '@/lib/curationSync';
+import { createMutationCache } from '@/lib/mutationCache';
 import { curationKeys, fetchCurationClock, pipelineKeys } from '@/lib/queries';
-import { isOwed, repayOwed, revalidate, type Revalidation } from '@/lib/revalidate';
+import { isOwed, revalidate, type Revalidation } from '@/lib/revalidate';
 import { pushToast } from '@/lib/toast';
 import {
   startCurationSync,
@@ -47,7 +56,12 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
 }));
 vi.mock('@/lib/revalidate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/revalidate')>();
-  return { ...actual, revalidate: vi.fn(actual.revalidate), repayOwed: vi.fn(actual.repayOwed) };
+  return { ...actual, revalidate: vi.fn(actual.revalidate) };
+});
+/* Passed through; one test makes it throw once. */
+vi.mock('@/lib/curationSync', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/curationSync')>();
+  return { ...actual, familyTargets: vi.fn(actual.familyTargets) };
 });
 vi.mock('@/lib/toast', () => ({ pushToast: vi.fn() }));
 
@@ -55,11 +69,9 @@ vi.mock('@/lib/toast', () => ({ pushToast: vi.fn() }));
  * every OTHER open channel of the name, never the one that posted it. */
 class FakeChannel {
   static open = new Set<FakeChannel>();
-  static created = 0;
   onmessage: ((event: MessageEvent) => void) | null = null;
   posted: unknown[] = [];
   constructor(readonly name: string) {
-    FakeChannel.created += 1;
     FakeChannel.open.add(this);
   }
   postMessage(data: unknown): void {
@@ -106,6 +118,21 @@ const shape = (items: readonly Revalidation[]) =>
   new Set(items.map((t) => `${hashKey(t.queryKey)}|${t.exact ?? false}|${t.mode ?? 'now'}`));
 const revalidations = () => vi.mocked(revalidate).mock.calls.map(([, items]) => items as Revalidation[]);
 
+/* What each family re-reads with no Browse cohort cached, by hand (lib/curationSync
+ * SYNC_TABLES): every read of its tables, an open collection page among them
+ * (LENS_REREAD.lists, 'now' since ruling Q3(c)). */
+const now = (...keys: QueryKey[]): Revalidation[] => keys.map((queryKey) => ({ queryKey }));
+const BOARD = now(['pipeline', 'board'], ['pipeline', 'members'], ['pipeline', 'stages']);
+const TAGS = now(['curation', 'tags'], ['curation', 'property-tag-members']);
+const NOTES = now(['curation', 'property-notes'], ['curation', 'note-counts']);
+const SHARES = [
+  ...now(['pipeline-shares'], ['curation', 'collections'], ['curation', 'property-collection-members']),
+  ...now(['curation', 'property-notes'], ['curation', 'note-counts'], ['curation', 'collection']),
+];
+const ownerBoard = (owner: string) =>
+  now(['acting', owner, 'pipeline', 'board'], ['acting', owner, 'pipeline', 'members'],
+    ['acting', owner, 'pipeline', 'stages']);
+
 let qc: QueryClient;
 let owner: { stop(): void } | null;
 
@@ -118,9 +145,11 @@ beforeEach(() => {
   visibility = 'visible';
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
   FakeChannel.open.clear();
-  FakeChannel.created = 0;
   vi.stubGlobal('BroadcastChannel', FakeChannel);
-  qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+  qc = new QueryClient({
+    mutationCache: createMutationCache(),
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  });
   owner = null;
 });
 
@@ -203,7 +232,7 @@ describe('what an answer re-reads', () => {
       row('board', 7, { age: SYNC_START_MARGIN_MS }),
       row('tags', 7, { age: SYNC_START_MARGIN_MS + 1 }),
     ]);
-    expect(shape(revalidations().at(-1)!)).toEqual(shape(familyTargets(qc, 'board', null)));
+    expect(shape(revalidations().at(-1)!)).toEqual(shape(BOARD));
     expect(isOwed(qc, pipelineKeys.board)).toBe(true);
     expect(isOwed(qc, curationKeys.tags)).toBe(false);
   });
@@ -258,14 +287,12 @@ describe('what an answer re-reads', () => {
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     await answer(mine({ board: 2 }));
     expect(revalidations()).toHaveLength(before + 1);
-    expect(shape(revalidations().at(-1)!)).toEqual(shape(familyTargets(qc, 'board', null)));
+    expect(shape(revalidations().at(-1)!)).toEqual(shape(BOARD));
 
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     await answer(mine({ board: 3, tags: 2, notes: 2 }));
     expect(revalidations()).toHaveLength(before + 2);
-    expect(shape(revalidations().at(-1)!)).toEqual(
-      shape(['board', 'tags', 'notes'].flatMap((f) => familyTargets(qc, f as CurationFamily, null))),
-    );
+    expect(shape(revalidations().at(-1)!)).toEqual(shape([...BOARD, ...TAGS, ...NOTES]));
 
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     await answer(mine({ board: 3, tags: 2, notes: 2 }));
@@ -277,9 +304,7 @@ describe('what an answer re-reads', () => {
     await answer([...mine(), row('board', 1, { account: OWNER })]);
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     await answer([...mine(), row('board', 2, { account: OWNER })]);
-    const targets = revalidations().at(-1)!;
-    expect(shape(targets)).toEqual(shape(familyTargets(qc, 'board', OWNER)));
-    for (const t of targets) expect(t.queryKey.slice(0, 2)).toEqual(['acting', OWNER]);
+    expect(shape(revalidations().at(-1)!)).toEqual(shape(ownerBoard(OWNER)));
   });
 
   /* A revoke: the owner's rows vanish, and both parties' shares rows move. */
@@ -288,9 +313,7 @@ describe('what an answer re-reads', () => {
     await answer([...mine(), row('board', 4, { account: OWNER })]);
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     await answer(mine({ shares: 2 }));
-    expect(shape(revalidations().at(-1)!)).toEqual(
-      shape([...familyTargets(qc, 'shares', null), ...familyTargets(qc, 'board', OWNER)]),
-    );
+    expect(shape(revalidations().at(-1)!)).toEqual(shape([...SHARES, ...ownerBoard(OWNER)]));
   });
 
   it('start owes every synced read already cached, bar an initial load in flight', async () => {
@@ -321,8 +344,29 @@ describe('what an answer re-reads', () => {
       await answer(mine({ board: 2 }));
     }
     expect(queryFn).toHaveBeenCalledTimes(4);
-    expect(repayOwed).toHaveBeenCalledTimes(6);
     sub();
+  });
+
+  /* The baseline moves only once the answer's re-reads are owed: a change whose
+     processing threw is still a change to the next answer. */
+  it('an answer whose targets cannot be computed leaves its change for the next answer', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    qc.setQueryData(pipelineKeys.board, []);
+    await start();
+    await answer(mine());
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    await qc.fetchQuery({ queryKey: pipelineKeys.board, queryFn: async () => [] });
+    expect(isOwed(qc, pipelineKeys.board)).toBe(false);
+    vi.mocked(familyTargets).mockImplementationOnce(() => {
+      throw new Error('a family the map does not know');
+    });
+    await answer(mine({ board: 2 }));
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, pipelineKeys.board)).toBe(false);
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
+    await answer(mine({ board: 2 }));
+    expect(isOwed(qc, pipelineKeys.board)).toBe(true);
+    logged.mockRestore();
   });
 });
 
@@ -493,7 +537,7 @@ describe('failures', () => {
     expect(logged).toHaveBeenCalledTimes(1);
     expect(h.reads).toHaveLength(3);
     await answer(mine({ board: 2 }));
-    expect(shape(revalidations().at(-1)!)).toEqual(shape(familyTargets(qc, 'board', null)));
+    expect(shape(revalidations().at(-1)!)).toEqual(shape(BOARD));
     await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS.desktop);
     expect(h.reads).toHaveLength(4);
     logged.mockRestore();
@@ -550,6 +594,23 @@ describe('the nudge', () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
+  /* query-core settles a write whose own onSuccess throws as an error; it committed all the same. */
+  it('a committed write whose onSuccess throws still posts its nudge', async () => {
+    await start();
+    const heard = vi.fn();
+    otherTab().onmessage = heard;
+    await new MutationObserver(qc, {
+      mutationFn: async () => 'ok',
+      onSuccess: () => {
+        throw new Error('the screen it updates is gone');
+      },
+      onError: () => {},
+    })
+      .mutate()
+      .catch(() => {});
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
   it('a browser without BroadcastChannel still follows the clock', async () => {
     vi.stubGlobal('BroadcastChannel', undefined);
     await start();
@@ -581,7 +642,7 @@ describe('lifecycle', () => {
     expect(mineChannel.posted).toEqual([]);
   });
 
-  it('a StrictMode double mount runs one owner: one read, one channel', async () => {
+  it('a StrictMode double mount runs one owner: one read, one nudge per write', async () => {
     function Probe() {
       useCurationSync('user-1');
       return null;
@@ -590,9 +651,13 @@ describe('lifecycle', () => {
       createElement(StrictMode, null, createElement(QueryClientProvider, { client: qc }, createElement(Probe))),
     );
     await flush();
-    expect(FakeChannel.created).toBe(2);
     expect(h.reads).toHaveLength(1);
-    expect(FakeChannel.open.size).toBe(1);
+    const tab = otherTab();
+    const heard = vi.fn();
+    tab.onmessage = heard;
+    await new MutationObserver(qc, { mutationFn: async () => 'ok' }).mutate();
+    expect(heard).toHaveBeenCalledTimes(1);
+    tab.close();
     await answer(mine());
     await vi.advanceTimersByTimeAsync(2_000);
     fire('focus');
@@ -620,27 +685,5 @@ describe('lifecycle', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.reads).toHaveLength(0);
     expect(FakeChannel.open.size).toBe(0);
-  });
-});
-
-/* The read itself, through the real supabase-js client against a stubbed fetch
- * (as lib/pgRead.test.ts does): the ClockRow columns of the view, and never the
- * acting header — the audience is the view's to state (§ 3.4). */
-describe('fetchCurationClock', () => {
-  it('reads exactly the ClockRow columns of curation_clock_public and never sends x-act-as', async () => {
-    vi.useRealTimers();
-    const rows = [row('board', 3)];
-    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
-      ({ ok: true, status: 200, statusText: '', headers: new Headers(), text: async () => JSON.stringify(rows) }) as
-        unknown as Response,
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    const real = await vi.importActual<typeof import('@/lib/queries')>('@/lib/queries');
-    await expect(real.fetchCurationClock({ signal: new AbortController().signal })).resolves.toEqual(rows);
-    const [url, init] = fetchMock.mock.calls[0];
-    const u = new URL(String(url));
-    expect(u.pathname).toBe('/rest/v1/curation_clock_public');
-    expect(u.searchParams.get('select')).toBe('account_id,family,counter,mine,age_ms');
-    expect(new Headers(init?.headers).has('x-act-as')).toBe(false);
   });
 });

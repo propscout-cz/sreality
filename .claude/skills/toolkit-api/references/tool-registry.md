@@ -15,9 +15,11 @@ without saying whose data it reads and what it does.
   for a read and `POST` otherwise). Every read is bounded as PostgREST bounds the SPA's signed-in GET
   (`tenant_pool.READ_BOUND`: READ ONLY under `authenticated`'s 8 s `statement_timeout`): a tenant read through its
   GET, a market call in a transaction of its own, so its `SET LOCAL`s end with it and never outlive the call on the
-  shared service connection.
+  shared service connection. A TENANT COSTLY tool holds neither across its paid call (§ A paid tenant tool).
 - **`effect`**: `READ`, `WRITE`, `COSTLY` (money: Valuo, an LLM) or `CODE`. A market tool only reads (census; its
-  transaction is READ ONLY anyway), so a write is only ever to the user's own data.
+  transaction is READ ONLY anyway), so a write is only ever to the user's own data. One named exception
+  (`_PAID_MARKET_FACTS` in the census), below: a market fact that costs money the first time and writes only the cache of
+  what it paid for, with no transaction round the call.
 - **`args`**: a Pydantic model on `api.filter_args.Args` (`extra="forbid"`: an unknown key is an error, never
   dropped). Filter fields are GENERATED from `toolkit/filter_registry.py` by `filter_model(name, ids,
   consumer)`: the registry's type, vocabulary (`Literal`, integer vocabularies too), description (plus its unit
@@ -66,7 +68,7 @@ whose anchor the subject lacks is REFUSED (`subject.unanchored`, shared with the
    property in the dossier, where a property no result can hold whole keeps the heads of its ads (canonical, live,
    ended, newest first) and runs that fit by `truncate.heads`, the same rule, its own `truncated` naming each cut;
    the broker read stopping at the 20th person).
-5. Records nothing: the transport that calls a tool records it. #2065's loop journals each tool step's raw
+5. Records nothing: the transport that calls a tool records it (`agent_run_steps`, below). #2065's loop journals each tool step's raw
    arguments and what the model got back (the fitted envelope, or the ToolError's payload on any refusal), which is
    where ADR-0002's recorded broker read lives; `scripts/capabilities_demo.py` records nothing.
 
@@ -137,10 +139,90 @@ keep out; the dossier, broker, own-context and achieved-price reads, each run on
 any depth and every per-m² figure with its basis. Not covered: `api/curation.py`'s relations (only its `STATE_COLS`
 allowlist is checked) and a fixture run of `search_properties` (only its `SEARCH_COLUMNS`).
 
+## A paid market fact: `assess_property_visuals` (#2066, ADR-0007)
+
+`api/capabilities/visuals.py` over `toolkit/photo_assessment.py`: MARKET, COSTLY, takes one `property_id`. The judgement
+is shared by every agent, so it reads and writes on the service connection, in autocommit: `_connection` gives a
+COSTLY market tool no transaction and no READ ONLY bound, since a model call must not hold one open (so its few indexed
+reads run on the service role's own timeout, not the 8 s). What goes into a
+row is an ad's public photos and the facet file, never an account's data; the row names no account, run, property or ad
+(`tests/test_photo_assessment_census.py`, which also holds that nothing but this tool names the cache).
+
+**A run lends it what it may spend** (`api/capabilities/run_scope.py`): `loop` sets a `RunScope` around each tool call
+(the run's own `LLMClient`, the money left, a tally, a bill) and `registry.call` hands it over as `ctx.run`. It is a
+ContextVar because `call_tool` is a two-argument closure each runner builds: no runner has to know a tool can spend, and
+a runner's own client (on the executor's path, the one that stamps `agent_run_id` on `llm_calls`) reaches the tool. The bill is `run.charge`d as soon as
+the provider has billed (should its ledger row fail, the slot stays taken and the worst case is charged); the loop `settle`s it after the call, refused or not, into the run's cost and the tool's journal
+step, so the cost cap sees it.
+
+**The order:** no usable picture is a `no_photos` result; a cached judgement is served to anyone, free, with or without a
+run; a miss while a live ad's photo is still downloading into the set is a `photos_pending` result, since the finished set
+would be paid for again (rare: no live ad of a 1-in-500 sample had one on 2026-11-01); only then `_pay`, which refuses before any money with no run, past `MAX_PAID_PER_RUN` (10) bills in this
+run, or when the worst case (`worst_case_usd`: every prompt token at the dearer rate, a reply at its limit) exceeds what
+is left after keeping enough for one more model call, so a paid tool never leaves a run unable to answer. A cached answer takes no slot (operator ruling 2026-11-01: ADR-0007's ten means 10 paid assessments); a reply refused by the schema is billed,
+takes a slot and is not cached; a provider failure bills nothing and takes none. The scope is built per `loop.run`, so per attempt: an
+interrupted run that starts over gets ten again, but what its first start paid for is now cached, and the budget it
+starts with has that spend taken off. The scope is set only round each tool call, so nothing crosses to the next run a
+worker takes (`tests/test_agent_runs_live.py`).
+
+**What it judges.** The facets and prompt are `skills/photo-facets.md`, read each call; the prompt version is the hash of
+what the model is given (the file, the reply rule and the schema generated from its `### key` headings), so any edit is a
+new version with no code change, and old rows simply stop being read. The cache key is photo-set hash + version, with no
+model: the first judgement stands for every agent (two runs racing both pay, and both get the first). A photo set is the
+first 30 stored pictures of the canonical ad (else the first of the property's ads with one, live then newest) plus its
+first 2 `floor_plan`-tagged ones. Each picture's identity holds its id, key, rendition, size and role, since the
+re-master lane overwrites bytes under a stable key: a photo arriving, a re-master, a tag or a new canonical ad is a new set,
+judged the next time it is asked about, and a photo past the cap changes nothing the model sees. A plan not yet tagged
+travels as a photo.
+
+**Model and cost.** `app_settings.llm_photo_assessment_model`, else `claude-opus-5-5` until
+`scripts/photo_assessment_compare.py` (paid; writes no cache row) has spoken. Photos go at `COMPARISON_MAX_EDGE`, plans at
+`DOCUMENT_MAX_EDGE`. What is left of the run's wall clock is the call's `timeout_s`, measured after the photos are read, on
+every runner since the loop lends it; a timeout is a retryable tool error with no bill and no slot, and the SDK does not
+retry under it. `tool_choice` cannot be forced (a 400 on Opus and Sonnet 5.5), so a reply that skips the tool, is cut
+off at `MAX_REPLY_TOKENS` (8,000, thinking included) or fails the schema is billed and never cached. About $0.10 a property
+on Opus 5.5 (13–20 photos at ~590 tokens each, 2–3k tokens out), half that on Sonnet 5.5, an estimate until the
+comparison measures it; at most about $0.32 on Opus. `llm_calls.called_for = 'assess_property_visuals'`.
+
+## A paid tenant tool: `valuo_valuation` (#2067, MVP Q18)
+
+`api/capabilities/valuo_tool.py`: TENANT, COSTLY, takes one `property_id` and no overrides, so a model steers neither the
+request nor the dedupe, and every refusal is the website's (`api/valuo.new_valuation`, the one path to Valuo and the one
+writer of its ledger, rule 12). A property with a required value missing, such as its condition, is refused naming it.
+
+**The connection.** `_connection` opens the caller's tenant transaction (`GET`, `act_as=None`) only to read
+`current_account_ids()`, which migration 704 narrows to the run's claim; anything but exactly the claim's account is
+FORBIDDEN. That transaction ends, and the handler gets `ctx.account_id` on the autocommit service connection: the ledger
+is the service role's alone, and no transaction or tenant connection spans the request.
+
+**The order, each before any money and none writing a row:** no run, or a scope with no run row (`scripts/agent_run.py`:
+`LLMClient` without an `agent_run_id`, so a row could name no run), refused; `MAX_CALLS_PER_RUN` (3) reached; no budget for
+the model call that reads the answer (`left_usd() <= 0`); under `MIN_LEFT_S` (25 s, the market-value call at its timeouts);
+`agent_valuo_monthly_cap` absent, null or not a number; no Valuo token (refused, not the route's retryable 503); then `new_valuation`'s own refusals; then the cap, atomically.
+
+**The three per run** is `RunScope.counts`, seeded at the attempt's first call from the rows naming the run, because a
+restart builds a new scope and the limit is per run. A row takes the slot once committed and before the request, so a
+Valuo failure or a crash keeps it. A refusal, a stored answer reused (the same request the same day, `as_of` included) and
+a running twin take none. At three, even a free reuse is refused.
+
+**The monthly cap** (`valuo._write_ahead`) is one transaction: `pg_advisory_xact_lock` per account, the write-ahead INSERT, the
+count; over the cap it rolls back, so no reader sees the row. It commits before the request. Two runs of an account cannot
+both take the last slot (`tests/test_agent_runs_live.py`). A row counts whatever its status: one is written only as its
+request goes out and nothing in it proves Valuo did not bill. It counts the account's rows since the start of the
+Europe/Prague month, the website's and any sandbox row included (nothing says a sandbox row is free). The website is NOT bound and takes no lock:
+it can pass the number, and an agent is then refused; an agent cannot.
+
+**Cost.** Nothing in the code or docs holds Valuo's price, so none is invented. A call is recorded on the ledger row
+(`agent_run_id`) and the journal step (`data.valuation_id`, `metadata.valuo_calls_made`, `metadata.cost_usd` null, the step's
+`cost_usd` 0). It is OUTSIDE the run's dollar cap, `agent_runs.cost_usd` and the daily ceiling (`_RUN_SPEND`, `llm_calls`
+only): only the two call counts bound it. A failure is a REFUSED tool error whose `details` name the row. A run skips the
+second request, `advert/detail` (the comparables' photos): it reads none, so its row's `adverts` stays NULL on the page too.
+
 ## Adding a tool
 
-One `Entry` in `market.py` or `tenant.py`, its effect named at the declaration (`market._read` builds READ
-entries only; a costly or writing tool is its own `Entry`, tenant; a write comes with #2072's inverse). Reuse
+One `Entry` in `market.py` or `tenant.py` (or a module of its own beside them, like `visuals.py`), its effect named at the declaration (`market._read` builds READ
+entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § above; a write comes
+with #2072's inverse). Reuse
 `filter_model` for any registry filter; give every other field a `description`. The census (`tests/api/test_capabilities_census.py`)
 then checks it: a real tenancy and effect, no identity field at any depth (account, user, acting, owner, …), a
 market tool only reading and taking no id but `property_id`/`listing_id` (or their lists `property_ids`/`listing_ids`),
@@ -148,3 +230,110 @@ a portable schema that Gemini's SDK builds, null offered where it is accepted, n
 column no surface may show, no connection opened outside `registry.py`, and every declared filter and point attribute
 changing the SQL the tool runs. The live tenant check is `tests/test_capabilities_live.py`. List or call one by hand:
 `python -m scripts.capabilities_demo list|call`.
+
+## Runs (`api/agents/executor.py`, #2070)
+
+Three entry points; the routes below call two, and nothing claims a run until #2075 (agent-worker).
+
+**Routes (`api/routes/agent_runs.py`, #2071).** `POST`/`GET /runs`, `GET /runs/{id}`, `/steps`, `POST /runs/{id}/cancel`,
+`GET /runs/options`, pinned by `tests/api/test_agent_run_routes.py`; their tenancy: `database/references/tenancy.md`, Fourth
+instance. A step's `summary` stands in for a tool's whole result, so polling stays light. `/runs/options` is what the SPA's
+form and nav follow: `start_refusal` is the ONE gate (`submit` applies it first, so a refused caller learns nothing of the
+agents); a new gate joins `_refusal` and every surface follows. Refused callers read no agents and `queue: null`.
+Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
+
+- **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
+  service connection, for the identity a route stamped from the caller's own token: the allowlist
+  (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
+  `not_allowlisted`), the plan's `agents` agenda (`billing.plan_includes`: absent or not JSON `true` = off, a cancelled
+  entitlement = off, no admin bypass; `SubmitRefused` `plan_without_agents`), the input checked, a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
+  the in-flight cap (`agent_account_in_flight_cap`; `SubmitRefused` `in_flight_cap`), insert as `queued`. It takes no
+  act-as.
+- **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
+  `agent_executor_enabled` is not JSON `true`. Otherwise it re-queues or fails every lapsed lease, then under one
+  transaction lock refuses to claim at or above `agent_daily_ceiling_usd` (`parked`; `llm_calls` with `called_for` in
+  `_RUN_SPEND`, `agent_run` or a paid tool's `assess_property_visuals`, since UTC midnight, the local runner's included) and claims the oldest queued run whose account has fewer
+  than `agent_account_running_cap` running and is under its daily limit (`idle` when none, `FOR UPDATE SKIP LOCKED`). It re-stamps the definition,
+  tool-set and commit hashes and the model (the row names what ran), runs the loop with a budget of the run's cap less
+  what its earlier attempt spent, and ends `succeeded`, `failed` (with `error`), `cancelled`, `released` or `lost`.
+  An absent number parks rather than guesses. The worker's SIGTERM handler sets `stop`.
+- **The money limits, three of them.** A run's own `max_cost_usd` (at most $20, `definition.py`). An account's daily limit:
+  its `agent_account_limits` row, else `agent_account_daily_limit_usd` ($10; changing it touches no account), against
+  `agent_account_spent_today` (`llm_calls` through `agent_runs`, `_RUN_SPEND`, since UTC midnight), the one definition, called
+  by the claim and by `GET /runs/options` under the caller's login. An account at or above it is passed over, so the
+  next account's run claims and its own runs stay queued, failing for nothing; 0 means none claimed; `PUT /runs/limit` is
+  the only writer. The platform's `agent_daily_ceiling_usd` ($25): the whole platform's spend per UTC day, rows with no
+  run included (the comparison script's, a deleted account's), at or above which every claim parks. It is the backstop
+  over a raised account limit, and the sum of the limits passes it as soon as a few accounts are active, so **raise it as
+  accounts join**, or they all wait on it. Valuo counts in calls (`agent_valuo_monthly_cap`), outside all three.
+  **Overshoot, stated:** a limit is read only at claim time and a running run finishes under its own cap, so an account can
+  pass its limit by up to `agent_account_running_cap` × the per-run cap: 2 × $20 at worst today, on the same terms as the ceiling.
+- **`queue_state(conn, limit)`**: `dark` (the brake), `parked` (ceiling or a missing number), `limited` (only this account's
+  limit), `open`. The platform's words come first, since raising a limit would not move those.
+- **`cancel(conn, *, run_id, account_id)`**: a queued run ends now, a running one at its next step; returns its status,
+  or None for no such run on this account.
+
+**The lease.** Two minutes (`LEASE_S`), renewed by every journal write and by a heartbeat thread on its own connection,
+since one model call can outlast it; the heartbeat stops at `HEARTBEAT_CEILING_S` (15 min, past every agent's wall
+clock), so a hung worker lapses too. Every write by a worker is compare-and-set on `id`, `attempts` and `status =
+'running'`, so a worker that lost its run writes nothing more (`lost`). `attempts` is the start the row is on, from 1.
+
+**Interruption.** One transition for a lapsed lease and a SIGTERM: a cancel asked for wins; below `MAX_ATTEMPTS` (2) the
+run goes back on the queue at `attempts + 1` and starts from the beginning; at it, `failed` with its reason (spec
+story 25). Waiting never fails a run. A shutdown spares a reply that only hands in an answer, or the accepted answer
+(a release would pay for it all again); a cancel does not. Any other exception ends the run `failed`; `error` holds a definition's own
+words, a generic line otherwise (the details are in the log and `llm_calls.error`).
+
+**A database error** on the ledger, on a live connection or a dead one, writes no verdict: `work_once` returns `lost` and
+the lease lapses into the interruption above.
+
+**The model call.** `loop.run` retries a provider's refusal (`providers.is_transient`: 429, 503, 529) up to three times
+inside the step, waiting about 2, 8 and 30 s, every wait and try inside the wall clock. The retry is the same request: a
+`pause_turn` continuation's paused reply and its container too. A refusal bills nothing, so the budget check stands. A broken
+connection, a timeout or another 5xx is not retried: it may have billed (a code call up to ten samples) with no usage to
+show, so a retry could pass a cap unseen; it fails the run. Each try gets `timeout_s`, what the wall clock has left,
+beside `hosted_code` and with no SDK retry under it: it is what bounds one code call, since the wall clock is read
+only between calls. A call that outlasts the wall clock ends the run as the loop's `timeout`. A `pause_turn` is its own
+billed call under every cap. A reply ending `refusal`, `model_context_window_exceeded` or `max_tokens` is terminal:
+`failed`, its stop reason on the row.
+
+**Files.** `agent_runs.files` holds names only; a `file` step holds a produced file's facts; the bytes go when the run
+ends until #2073 stores them. Each attempt has its own `RunFiles`, messages and container, and deletes what it put at the
+provider when it ends, a lease lost or a SIGTERM included: a retry uploads its inputs afresh and cannot name a deleted
+one. `work_once` passes no inputs yet (#2073).
+
+**The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger (a DELETE
+passes only once its run is gone, the cascade from an account's deletion): an input
+hash, a summary of at most 500 characters, the full payload, the model call's `llm_calls` id, cost, duration. A NUL is
+stripped from what is stored, since Postgres refuses it. `llm_calls.agent_run_id` is set by a per-run `LLMClient`;
+`agent_runs.cost_usd` is that ledger's sum. No foreign key joins `llm_calls` to the runs: the INSERT follows the provider's
+bill, and a run deleted mid-call must not lose it.
+
+**Identity.** `api/agents/claims.caller_for(market, *, principal_user_id, account_id)` is the one claims builder and it
+hands the registry a `Caller`: no new `tenant_transaction` caller. `scripts/agent_run.py` has no run row, so it calls the
+same builder with the user the operator named and that user's first account, and reads as a run reads.
+
+## The security suite and the recorded runs (#2074)
+
+**What a green run means.** Every model in it is scripted, and scripted to obey the injected text. It does not test whether
+a model resists an injection; it tests that the server's rails hold when one does not. A live model's eval is #2075's script.
+
+**Two lanes, on every pull request.** `tests/api/test_agent_security.py` and `tests/api/test_agent_cassettes.py` in CI's
+pytest job; `tests/test_agent_security_live.py` in its own `schema-and-sql` step. `CONTRACT` at the top of the first states
+the whole contract line by line and names each proving test, wherever it lives; a test renamed away fails it.
+
+**Adding an injected ad.** A row in `tests/api/_adversarial_ads.py` names its attack, a function in
+`tests/test_agent_security_live.py` that scripts what an obedient model does (`Obeyed`: its replies, the denials the diary
+must hold in order, what may be paid). The run itself then asserts the rest for every ad: the text reached the model only as
+a tool result, only the in-scope proposal was kept, no tenant table moved, no cap was passed.
+
+**A new write tool** names a property only as `property_id` or `property_ids` (`terminator.PROPERTY_ARGS`; a census), since
+the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys.
+Open, each a strict xfail: a proposal into a collection the run did not create (#2072 owes it); `markdown` naming a
+property, which no rail reads (the page must draw links only from the cited ids).
+
+**Recorded runs.** Every file under `tests/cassettes/` replays through the current loop and terminator against the agent's
+current folder and must end as it ended (a changed skill body is no failure; a tool removed or an answer now refused is). A
+corrupt or misnamed file fails by name. Each folder in `skills/` owes recordings (`FLOORS` in `tests/api/_agent_replay.py`:
+the scout ten, any other one), so the lane is legitimately empty only until the first agent lands.
+

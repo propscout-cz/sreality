@@ -41,6 +41,7 @@ def _no_vapid_key(monkeypatch):
     """No test can push to Apple: the VAPID key is removed before every test (the push lane's brake), and a
     test that sends sets a throwaway key over a faked `requests.post` (tests/api/test_push.py)."""
     monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
 
 
 @pytest.fixture(autouse=True)

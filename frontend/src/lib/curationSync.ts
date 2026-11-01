@@ -19,7 +19,7 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { hashKey } from '@tanstack/react-query';
 
-import { actingKey } from '@/lib/acting';
+import { ACTING_SEGMENT, actingKey } from '@/lib/acting';
 import { lensTargets, type CurationLens } from '@/lib/curationSettle';
 import { curationKeys, dismissalKeys, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
 import { revalidate, type Hold, type ReadMode, type Revalidation } from '@/lib/revalidate';
@@ -98,18 +98,26 @@ const entry = (table: SyncTable): SyncEntry => SYNC_TABLES[table];
 
 const TABLES = Object.keys(SYNC_TABLES) as SyncTable[];
 
-/** Ruling Q3(a), 2026-10-31: a REMOTE lens change leaves every Browse, Feed and
- * collection list, count, map and stat as it is until the next mount; only the
- * per-card marks (the member reads) follow at once. A local write keeps ruling 9's
- * per-property judge (lib/curationSettle). */
-export const LENS_REREAD = { lists: 'mount', aggregates: 'mount' } as const satisfies Record<string, ReadMode>;
+/** Ruling Q3(c) with the pointer hold, 2026-11-01 (re-ruling Q3(a) of
+ * 2026-10-31): an open Browse, Feed or collection list follows a REMOTE lens
+ * change fully, within one clock read — rows enter and leave, and its counts, map
+ * and stats re-read. A list's re-read waits while the user's hand is on it
+ * (lib/useListHold) and is paid when the hand leaves; aggregates are never held.
+ * A local write keeps ruling 9's per-property judge (lib/curationSettle). */
+export const LENS_REREAD = { lists: 'now', aggregates: 'now' } as const satisfies Record<string, ReadMode>;
 
 /* Own reads that are themselves a list — an open collection page's rows: a
- * change made elsewhere re-reads them as LENS_REREAD.lists says (ruling Q3(a)). */
+ * change made elsewhere re-reads them as LENS_REREAD.lists says. */
 const LIST_READS = new Set([hashKey(curationKeys.anyCollection)]);
 
 /** The roots every synced read sits under; none is lib/hydration's (hydration.test.ts). */
-export const SYNC_ROOTS: readonly QueryKey[] = [['pipeline'], ['curation'], ['dismissals'], ['pipeline-shares'], ['acting']];
+export const SYNC_ROOTS: readonly QueryKey[] = [
+  ['pipeline'],
+  ['curation'],
+  ['dismissals'],
+  ['pipeline-shares'],
+  [ACTING_SEGMENT],
+];
 
 /** No reconnect refetch under SYNC_ROOTS, so a hidden tab stays at zero requests.
  * main.tsx calls it beside the owner (lib/curationSyncOwner), whose clock read on

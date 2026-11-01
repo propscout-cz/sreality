@@ -1,0 +1,120 @@
+/* The copy deck's own chrome (deck.js): a dark toolbar above the page and a changes panel. The page below keeps the
+ * landing stylesheet untouched; these rules only add edit affordances to it. */
+:root {
+  --cd-chrome: #1d2125;
+  --cd-chrome-2: #2a3036;
+  --cd-ink: #f2eee6;
+  --cd-ink-2: #a9adb3;
+  --cd-accent: #7cc4b2;
+  --cd-edit: #e0a321;
+  --cd-panel-w: 400px;
+}
+
+.cd-bar {
+  position: sticky; top: 0; z-index: 1000; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 10px 16px; background: var(--cd-chrome); color: var(--cd-ink); font: 500 13px/1.2 var(--sans);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+}
+.cd-brand { display: flex; align-items: center; gap: 8px; font: 600 15px/1 var(--display); margin-right: 4px; }
+.cd-mark { width: 24px; height: 24px; border-radius: 6px; background: var(--cd-ink); color: var(--cd-chrome); display: grid; place-items: center; font-size: 11px; }
+.cd-tabs, .cd-seg { display: flex; gap: 2px; background: var(--cd-chrome-2); border-radius: 9px; padding: 3px; }
+.cd-seg[hidden] { display: none; }
+.cd-seg-label { align-self: center; padding: 0 8px 0 6px; color: var(--cd-ink-2); font-size: 12px; }
+.cd-tabs button, .cd-seg button {
+  border: 0; background: transparent; color: var(--cd-ink-2); font: inherit; padding: 7px 10px; border-radius: 7px; cursor: pointer;
+}
+.cd-tabs button:hover, .cd-seg button:hover { color: var(--cd-ink); }
+.cd-tabs button[aria-pressed='true'], .cd-seg button[aria-pressed='true'] { background: var(--cd-ink); color: var(--cd-chrome); }
+.cd-check { display: inline-flex; align-items: center; gap: 6px; color: var(--cd-ink-2); cursor: pointer; }
+.cd-check input { accent-color: var(--cd-accent); width: 15px; height: 15px; margin: 0; }
+.cd-status { margin-left: auto; color: var(--cd-ink-2); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.cd-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--cd-accent); }
+.cd-status[data-mode='saving']::before, .cd-status[data-mode='connecting']::before { background: var(--cd-edit); }
+.cd-status[data-mode='error']::before, .cd-status[data-mode='slow']::before { background: #e5675a; }
+.cd-status[data-mode='local']::before { background: var(--cd-ink-2); }
+.cd-changes {
+  border: 0; border-radius: 9px; padding: 8px 12px; background: var(--cd-accent); color: var(--cd-chrome); font: 600 13px/1 var(--sans); cursor: pointer;
+}
+.cd-changes b { display: inline-block; min-width: 18px; margin-left: 4px; padding: 2px 5px; border-radius: 99px; background: var(--cd-chrome); color: var(--cd-ink); font-size: 11px; }
+.cd-apply {
+  border: 1.5px solid var(--cd-accent); border-radius: 9px; padding: 7px 12px; background: transparent; color: var(--cd-ink);
+  font: 600 13px/1 var(--sans); cursor: pointer;
+}
+.cd-apply:hover:not([disabled]) { background: var(--cd-accent); color: var(--cd-chrome); }
+.cd-apply[disabled] { opacity: 0.45; cursor: default; }
+.cd-apply[data-state='requested'], .cd-apply[data-state='applying'] { border-color: var(--cd-edit); color: var(--cd-edit); }
+.cd-apply[data-state='live'] { border-color: transparent; color: var(--cd-accent); }
+.cd-pop {
+  position: absolute; top: calc(100% + 6px); right: 12px; width: min(360px, calc(100vw - 24px)); z-index: 1002;
+  background: #fff; color: #16181d; border-radius: 14px; padding: 16px; box-shadow: 0 24px 48px -16px rgba(0, 0, 0, 0.45);
+  font: 400 14px/1.45 var(--sans);
+}
+.cd-pop[hidden] { display: none; }
+.cd-pop h3 { margin: 0 0 6px; font: 600 16px/1.25 var(--display); color: #16181d; }
+.cd-pop p { margin: 6px 0; color: #41454e; }
+.cd-pop a { color: #1f6b5c; }
+.cd-pop-list { margin: 8px 0; padding-left: 18px; color: #41454e; font-size: 13px; }
+.cd-pop-warn { color: #a3392b !important; font-size: 13px; }
+.cd-pop-tell { font-size: 13px; }
+.cd-pop-sentence { padding: 8px 10px; background: #f2efe7; border-radius: 8px; color: #16181d !important; font: 500 13px/1.4 var(--mono); user-select: all; }
+.cd-pop-msg { padding: 8px 10px; background: #deece7; border-radius: 8px; color: #175246 !important; }
+.cd-pop-last { font-size: 12.5px; }
+.cd-pop-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cd-btn.cd-primary { background: #1f6b5c; border-color: #1f6b5c; color: #fff; }
+.cd-btn.cd-primary:hover { background: #175246; }
+.cd-bar :focus-visible, .cd-panel :focus-visible { outline: 2px solid var(--cd-accent); outline-offset: 2px; }
+
+/* Edit affordances on the page itself. */
+html.cd-edit .cd-page [data-cd-key] { cursor: text; border-radius: 3px; }
+html.cd-edit .cd-page [data-cd-key]:hover { outline: 1.5px dashed rgba(31, 107, 92, 0.65); outline-offset: 3px; }
+.cd-page [data-cd-key].cd-edited { background: rgba(224, 163, 33, 0.24); box-shadow: 0 0 0 2px rgba(224, 163, 33, 0.45); }
+.cd-page [data-cd-key].cd-applied { background: rgba(31, 107, 92, 0.12); }
+.cd-page [data-cd-key][contenteditable='true'] { outline: 2px solid #1f6b5c; outline-offset: 3px; background: #fff; color: #16181d; box-shadow: none; }
+.cd-flash { animation: cd-flash 1.4s ease-out; }
+@keyframes cd-flash { 0%, 30% { box-shadow: 0 0 0 6px rgba(224, 163, 33, 0.7); } 100% { box-shadow: 0 0 0 2px rgba(224, 163, 33, 0); } }
+@media (prefers-reduced-motion: reduce) { .cd-flash { animation: none; } }
+
+/* "Show hidden states": what the live page shows only in some moments. */
+.cd-show-hidden .cd-page .cookie-bar[hidden] { display: block; position: static; margin: 24px auto; }
+.cd-show-hidden .cd-page .done-note { display: block; }
+.cd-page .sticky-cta { display: none !important; }
+.cd-page .cookie-bar { position: static; }
+.cd-page .cookie-bar[hidden] { display: none; }
+
+/* The hidden-texts tab. */
+.cd-hidden-list { display: grid; gap: 12px; margin-top: 28px; }
+.cd-hidden-list .card { margin-top: 0; padding: 16px 18px; }
+.cd-hid-label { margin: 0 0 6px; font: 500 12px/1.3 var(--mono); letter-spacing: 0.04em; color: var(--ink-3); }
+.cd-hid-text { margin: 0; color: var(--ink); }
+
+/* The changes panel. */
+.cd-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 1001; width: min(var(--cd-panel-w), 100vw); overflow-y: auto;
+  background: #fbfaf6; color: #16181d; border-left: 1px solid rgba(22, 24, 29, 0.12); box-shadow: -20px 0 40px -24px rgba(0, 0, 0, 0.35);
+  transform: translateX(105%); transition: transform 0.2s ease; font: 400 14px/1.45 var(--sans);
+}
+html.cd-panel-open .cd-panel { transform: none; }
+@media (prefers-reduced-motion: reduce) { .cd-panel { transition: none; } }
+@media (min-width: 1100px) { html.cd-panel-open body { padding-right: var(--cd-panel-w); } }
+.cd-panel-head { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 14px 16px; background: #fbfaf6; border-bottom: 1px solid rgba(22, 24, 29, 0.1); }
+.cd-panel-head h2 { flex: 1; font: 600 18px/1.2 var(--display); margin: 0; }
+.cd-x { border: 0; background: transparent; font-size: 22px; line-height: 1; padding: 4px 8px; cursor: pointer; color: #41454e; }
+.cd-btn { border: 1.5px solid #16181d; background: #fff; color: #16181d; border-radius: 8px; padding: 6px 10px; font: 600 12.5px/1 var(--sans); cursor: pointer; }
+.cd-btn:hover { background: #16181d; color: #fff; }
+.cd-btn.cd-quiet { border-color: rgba(22, 24, 29, 0.25); }
+.cd-filters { display: flex; gap: 6px; padding: 12px 16px 4px; flex-wrap: wrap; }
+.cd-filters button { border: 1px solid rgba(22, 24, 29, 0.18); background: #fff; border-radius: 99px; padding: 6px 10px; font: 500 12.5px/1 var(--sans); cursor: pointer; color: #41454e; }
+.cd-filters button[aria-pressed='true'] { background: #16181d; border-color: #16181d; color: #fff; }
+.cd-empty { padding: 12px 16px; color: #5d616a; }
+.cd-item { margin: 10px 16px; padding: 12px 14px; background: #fff; border: 1px solid rgba(22, 24, 29, 0.1); border-radius: 12px; display: grid; gap: 8px; }
+.cd-item-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.cd-chip { font: 500 11px/1 var(--mono); padding: 4px 6px; border-radius: 5px; background: #ebe6db; color: #41454e; }
+.cd-chip.cd-legal { background: #f6e2dd; color: #a3392b; }
+.cd-was, .cd-now { margin: 0; display: grid; grid-template-columns: 38px 1fr; gap: 6px; }
+.cd-was span, .cd-now span { font: 600 10.5px/1.6 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; color: #5d616a; }
+.cd-was { color: #5d616a; text-decoration: line-through; text-decoration-color: rgba(163, 57, 43, 0.6); }
+.cd-was span { text-decoration: none; }
+.cd-now { color: #16181d; }
+.cd-note { display: grid; gap: 4px; font: 500 11.5px/1.2 var(--sans); color: #5d616a; }
+.cd-note textarea { font: 400 13px/1.4 var(--sans); padding: 7px 9px; border: 1px solid rgba(22, 24, 29, 0.18); border-radius: 8px; resize: vertical; color: #16181d; }
+.cd-item-actions { display: flex; gap: 6px; }

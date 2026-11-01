@@ -8,6 +8,7 @@ import contextlib
 import logging
 import math
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -196,6 +197,7 @@ REFUSALS: dict[str, str] = {
 }
 ABANDONED = {"code": "abandoned", "http_status": None, "message": "Ocenění se nedokončilo."}
 DUPLICATE = {"code": "duplicate", "http_status": None, "message": "Stejné ocenění už je uložené."}
+CAP_SETTING = "agent_valuo_monthly_cap"
 
 RESULT_KEYS = ("avg_price", "range_price", "avg_price_m2", "range_price_m2", "std_price_m2", "calc_area",
                "distance", "flags")  # range_price = Valuo's confidence band; min/max_price are not it
@@ -209,6 +211,15 @@ PHOTO_URL = "https://pics.valuo.cz/{size}/{path}"  # pt = 450 px, p = 1200 px; p
 
 class OverrideError(ValueError):
     """A user-set parameter Valuo cannot take; the message is one Czech sentence."""
+
+
+@dataclass(frozen=True)
+class RunCall:
+    """What an agent run adds to a paid call: the run its row names, the account's cap, and the slot its row takes."""
+
+    run_id: int
+    monthly_cap: float
+    took_slot: Callable[[], None]
 
 
 # --- the mapping -----------------------------------------------------------------------------------
@@ -392,8 +403,8 @@ update valuo_valuations set status = 'failed', error = %s
 returning id
 """
 _INSERT_SQL = f"""
-insert into valuo_valuations (account_id, listing_id, environment, token_sha, request, provenance)
-values (%s, %s, %s, %s, %s, %s)
+insert into valuo_valuations (account_id, listing_id, environment, token_sha, request, provenance, agent_run_id)
+values (%s, %s, %s, %s, %s, %s, %s)
 on conflict do nothing
 returning {_COLUMNS}
 """
@@ -408,6 +419,18 @@ _FINISH_SQL = f"""
 update valuo_valuations set status = %s, response = %s, error = %s, adverts = %s, environment = %s
  where id = %s and status = 'pending'
 returning {_COLUMNS}
+"""
+
+
+_CAP_SQL = "select value from app_settings where key = %s"
+_RUN_CALLS_SQL = "select count(*) from valuo_valuations where agent_run_id = %s"
+_ACCOUNT_LOCK_SQL = "select pg_advisory_xact_lock(hashtext('valuo_monthly_cap'), hashtext(%s))"
+# Every row: one is written only as its request goes out, and nothing in it proves Valuo did not bill. A row that made no
+# request (the process died between the INSERT and the call) cannot be told from one that died during it, so it counts
+# too. A sandbox row as well: nothing here says Valuo does not bill one, and the cap may only err towards fewer calls.
+_MONTH_CALLS_SQL = f"""
+select count(*) as used from valuo_valuations
+ where account_id = %s and created_at >= date_trunc('month', now(), '{_PRAGUE.key}')
 """
 
 
@@ -509,9 +532,45 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
     return out
 
 
+def monthly_cap(conn: Any) -> float | None:
+    """The operator's cap on what an agent run may take one account to in a month; None (no call) unless it is a number."""
+    with conn.cursor() as cur:
+        cur.execute(_CAP_SQL, (CAP_SETTING,))
+        row = cur.fetchone()
+    value = row[0] if row else None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def calls_on_run(conn: Any, run_id: int) -> int:
+    """The calls this run's ledger rows hold, whichever attempt made them."""
+    with conn.cursor() as cur:
+        cur.execute(_RUN_CALLS_SQL, (run_id,))
+        return int(cur.fetchone()[0])
+
+
+def _write_ahead(conn: Any, run: RunCall | None, insert: tuple[Any, ...]) -> dict[str, Any] | None:
+    """The pending row; None when a twin holds its place. A run's keeps the account within its month: one transaction
+    under the account's lock, so two runs cannot both take the last slot. Over the cap it rolls back, so no reader ever
+    sees the row; a twin pays nothing and is not counted. Either commits before the paid call starts."""
+    if run is None:
+        [row] = _rows(conn, _INSERT_SQL, insert) or [None]
+        return row
+    account_id = insert[0]
+    with conn.transaction():
+        _rows(conn, _ACCOUNT_LOCK_SQL, (str(account_id),))
+        [row] = _rows(conn, _INSERT_SQL, insert) or [None]
+        if row is not None:
+            [month] = _rows(conn, _MONTH_CALLS_SQL, (account_id,))
+            if month["used"] > run.monthly_cap:
+                raise _refuse(429, "monthly_cap", f"this account has used its {run.monthly_cap:g} Valuo valuations for "
+                              f"this calendar month ({_PRAGUE.key}), the website's included; nothing was paid")
+    return row
+
+
 def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: uuid.UUID,
-                  cred: valuo_client.Credential | None) -> dict[str, Any]:
-    """POST /properties/{id}/valuo: refuse (4xx/503, no row), or save the row, pay for one call, record its answer."""
+                  cred: valuo_client.Credential | None, run: RunCall | None = None) -> dict[str, Any]:
+    """POST /properties/{id}/valuo, and the agent tool with `run`: refuse (4xx/503, no row), or save the row, pay for one
+    call, record its answer."""
     if cred is None:
         raise _refuse(503, "unconfigured", REFUSALS["unconfigured"])
     subject, location = _load(conn, property_id)
@@ -529,8 +588,8 @@ def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, acc
 
     # `conn` is autocommit: each statement commits alone, so no transaction stays open across the paid call.
     _rows(conn, _ABANDON_SQL, (Jsonb(ABANDONED), account_id))
-    [row] = _rows(conn, _INSERT_SQL, (account_id, subject["listing_id"], cred.environment, cred.token_sha,
-                                      Jsonb(request), Jsonb(provenance))) or [None]
+    row = _write_ahead(conn, run, (account_id, subject["listing_id"], cred.environment, cred.token_sha, Jsonb(request),
+                                   Jsonb(provenance), run.run_id if run else None))
     if row is None:  # the unique index met this ad's identical pending or successful twin
         [twin] = _rows(conn, _TWIN_SQL, (account_id, cred.environment, subject["listing_id"],
                                          Jsonb(request))) or [None]
@@ -538,6 +597,8 @@ def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, acc
             return {"reused": True, "valuation": present(twin)}
         raise _refuse(409, "in_progress", "Stejný dotaz právě běží.")
 
+    if run:  # before the request, so a failure or a crash after it cannot hand the slot back
+        run.took_slot()
     adverts = None
     try:
         response, error = valuo_client.calculate(cred, request), None
@@ -545,7 +606,9 @@ def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, acc
         response = exc.response
         error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message, "detail": exc.detail}
     ids = [] if error else [r["id"] for r in _records(response["result"], None) if r["id"] is not None][:ADVERT_LIMIT]
-    if ids:  # the photos are a garnish: their failure never fails the valuation it would decorate
+    # The photos are a garnish, so their failure never fails the valuation it would decorate. A run reads none, and the
+    # second request is not one to spend for it: its row stays NULL, "not fetched", on the property page too.
+    if ids and run is None:
         try:
             adverts = valuo_client.advert_details(cred, ids)
         except valuo_client.ValuoError as exc:

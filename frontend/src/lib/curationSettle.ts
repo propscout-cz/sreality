@@ -16,9 +16,10 @@
  * side is stale? The MAP, if one of the member reads the verdict stands on is
  * still owed (lib/revalidate `isOwed`) or was read before the list was: that
  * cohort re-reads, nothing drops. Otherwise the LIST — a change made elsewhere
- * after it was read, which a list follows only at its next mount (ruling
- * Q3(a)): the row is judged like any other, so a click that leaves it out drops
- * it in place and only the aggregates re-read. Read times are the cache's
+ * after it was read, whose re-read (ruling Q3(c): within one clock read) has not
+ * landed yet, or is parked while the user's hand is on the list (lib/useListHold):
+ * the row is judged like any other, so a click that leaves it out drops it in
+ * place and only the aggregates re-read. Read times are the cache's
  * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger).
  *
  * `settlePatches` are CachePatches built BEFORE the member maps move (that is
@@ -30,6 +31,7 @@ import { hashKey, type InfiniteData, type Query, type QueryClient, type QueryKey
 
 import { actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
+import { FEED_HIDDEN_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import {
@@ -200,7 +202,9 @@ export function settleRereads(
 
 /** Where a change made elsewhere moved `lens`: every cached Browse cohort that
  * engages it, its lists and its aggregates owed as `reread` says (curationSync
- * LENS_REREAD). Nothing per property: a remote change names no property. */
+ * LENS_REREAD), and for a dismissal the Feed's Skryté roll, a list of the hidden
+ * alone that no lens engages (lib/feed `FEED_HIDDEN_FILTERS`). Nothing per
+ * property: a remote change names no property. */
 export function lensTargets(
   qc: QueryClient,
   lens: CurationLens,
@@ -211,6 +215,7 @@ export function lensTargets(
     for (const root of LIST_ROOTS) out.push({ queryKey: [root, f], mode: reread.lists });
     for (const root of AGGREGATE_ROOTS) out.push({ queryKey: [root, f], mode: reread.aggregates });
   }
+  if (lens === 'dismissed') out.push({ queryKey: browseKeys.cohortCards(FEED_HIDDEN_FILTERS), mode: reread.lists });
   return out;
 }
 

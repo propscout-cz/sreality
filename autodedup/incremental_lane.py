@@ -2,7 +2,7 @@
 
 W5 made this the ONE production path (E914): the always-on worker's `autodedup` lane
 (`scraper/realtime_worker.py`) is its only caller and its interval (0 = stop) its only switch.
-One pass, under the lane's lease (`autodedup.rt_lease`), claims what moved, decides it with the
+One pass, under the lane's lease (`rt_lease`), claims what moved, decides it with the
 batch engine's own functions (`incremental.run_pass_bounded`), re-clusters under the relation
 and the operator's rulings the batch pass clusters under (F2, E909; E910), commits, and then
 RECONCILES production (`autodedup/reconcile.py`, A9): the groups it re-clustered become merges
@@ -150,7 +150,6 @@ from autodedup.incremental_sql import (
     RT_FRESH_CLUSTERS_SQL,
     RT_FRESH_CURSORS_SQL,
     RT_FRESH_FP_KEY_SQL,
-    RT_FRESH_LEASE_SQL,
     RT_FRESH_SETTINGS_SQL,
     RT_FRESH_PAIRS_SQL,
     RT_FRESH_REJECT_LEDGER_SQL,
@@ -2572,14 +2571,14 @@ RESET_TABLES: tuple[tuple[str, str], ...] = (
 )
 
 
-def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, int]:
+def reset_generation(conn: Any, generation: str) -> dict[str, int]:
     """Empty ONE generation and nothing else (E97), counting what went.
 
     A DELETE of this generation's rows, never a TRUNCATE, run inside the seed's transaction: a
     seed that refuses after this point leaves the store exactly as it found it. The ledger of
     production merges (`autodedup.applied_merges`) is NOT here: a rebuild changes what the lane
-    will decide, never what it has already merged. `holder` is the seed's own lease, which the
-    reset keeps: the seed holds it so no pass can write into the generation while it empties."""
+    will decide, never what it has already merged. The seed holds the lane's lease throughout, so
+    no pass can write into the generation while it empties."""
     deleted: dict[str, int] = {}
     for name, sql in RESET_TABLES:
         rows = _rows(conn, sql, {"generation": generation})
@@ -2591,8 +2590,6 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
                  reconcile.tried_key(generation), reconcile.budget_key(generation),
                  pages_key(generation)]})
     deleted["settings"] = int(rows[0][0] or 0) if rows else 0
-    rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
-    deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
     return deleted
 
 
@@ -2876,7 +2873,7 @@ def seed_memory(scope_listings: int, memory_mb: float = SEED_MEMORY_MB) -> dict[
             f"~{CUT_PEAK_BYTES_PER_LISTING // 1024} kB an advert at its peak, so the "
             f"{int(scope_listings):,} adverts the walk listed would peak at ~{peak_mb:,.0f} MiB, "
             f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the container's memory limit): the "
-            "runner would kill the seed mid-cut and strand autodedup.rt_lease for "
+            "runner would kill the seed mid-cut and strand rt_lease for "
             f"{SEED_LEASE_TTL_S:,} s. Narrow rt_scope. Nothing was written.")
     return report
 
@@ -3179,7 +3176,7 @@ def _release_predecessor(conn: Any, generation: str, cap: dict[str, Any], booted
         if halve:
             cap = halve_claim_cap(before, died, booted_epoch, limit_mb)
             _write_claim_cap(conn, generation, cap, "halved")
-    LOG.warning("AUTODEDUP: a predecessor of this container died holding autodedup.rt_lease: "
+    LOG.warning("AUTODEDUP: a predecessor of this container died holding rt_lease: "
                 "%s; released, and the claim cap %s", died,
                 f"halved from {before['cap']} to {cap['cap']} (E948)" if halve else
                 f"kept at {cap['cap']}: it died inside a re-cut (E944)" if died == re_cutting else
@@ -3412,8 +3409,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 conn, generation, cap, booted_epoch, limit_mb, halve=not grew,
                 re_cutting=(stamped.get("cutting") if isinstance(stamped, Mapping) else None))
         if not take_lease(conn, holder):
-            held_by = ("another writer holds autodedup.rt_lease" if kept is None else
-                       "a dead predecessor of this container holds autodedup.rt_lease, left to "
+            held_by = ("another writer holds rt_lease" if kept is None else
+                       "a dead predecessor of this container holds rt_lease, left to "
                        f"its TTL at the claim cap's floor ({CLAIM_CAP_FLOOR}; E948)")
             return {"skipped": "leased", "reason": f"{held_by}: {rt_lease.describe(conn)}",
                     "predecessor_released": predecessor, "predecessor_kept": kept,
@@ -4009,7 +4006,7 @@ def run_rt_seed(
                     if str(args.get(rt_lease.RELEASE_ARG) or "").strip() else None)
         if not take_lease(conn, holder, ttl=SEED_LEASE_TTL_S):
             raise SystemExit(
-                f"rt_seed refused: autodedup.rt_lease is {rt_lease.describe(conn)}. Set "
+                f"rt_seed refused: rt_lease is {rt_lease.describe(conn)}. Set "
                 "app_settings.realtime_autodedup_interval_seconds to 0, wait for the lease to "
                 "clear, and seed again. Nothing was written.")
         leased = True
@@ -4040,7 +4037,7 @@ def run_rt_seed(
         reset: dict[str, int] = {}
         with _transaction(conn):
             if fresh:
-                reset = reset_generation(conn, generation, holder=holder)
+                reset = reset_generation(conn, generation)
             # E940: EVERY block of the scope, each read to its end (a page a statement) and under
             # no daily cap — the cut, A10's re-cut refusal above RECUT_MAX_LISTINGS and E941's
             # second storage check are all taken over what the walk listed, so a block cut to

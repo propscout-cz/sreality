@@ -1,9 +1,10 @@
-/* The marks every extension surface draws — the listing side sheet and the
+/* The marks every extension surface draws — the side panel, the edge tab and the
  * search-page card controls — as inline SVG copies of the SPA's icon
  * components (React, so not importable), and the save rules the extension adds
  * on top of the app's shared ones (lib/collectionRules). */
 
 import { isMine, sortCollections } from '../../frontend/src/lib/collectionRules';
+import { fmtPct } from '../../frontend/src/lib/format';
 import { stageAccent, stageBadge, type StageLook } from '../../frontend/src/lib/pipelineStage';
 import type { Collection, PipelineStage } from '../../frontend/src/lib/types';
 import { h } from './dom';
@@ -69,8 +70,8 @@ export function stageLook(p: PipelineMembership | null | undefined): StageLook |
   return p?.in_pipeline && p.stage_id != null ? { id: p.stage_id, color: p.stage_color, code: p.stage_code } : null;
 }
 
-/* A stage's code badge in the stage's own colours (the side sheet's close menu
- * and the folded tab); null for a stage the list cannot badge. */
+/* A stage's code badge in the stage's own colours (the side panel's close menu
+ * and the edge tab); null for a stage the list cannot badge. */
 export function codeBadge(stage: StageLook, stages: readonly PipelineStage[] | null): HTMLElement | null {
   const badge = stageBadge(stage, stages ?? []);
   if (badge == null) return null;
@@ -79,6 +80,14 @@ export function codeBadge(stage: StageLook, stages: readonly PipelineStage[] | n
   code.style.color = accent.fg;
   code.style.background = accent.soft;
   return code;
+}
+
+/* This ad's last price move, by magnitude with its arrow (a cut is good news here: sage). */
+export function moveBadge(pct: number): HTMLElement {
+  const down = pct < 0;
+  const pill = h('span', `move ${down ? 'move--down' : 'move--up'}`, `${down ? '↓' : '↑'} ${fmtPct(Math.abs(pct))}`);
+  pill.title = `Poslední změna ceny inzerátu: ${fmtPct(pct, { signed: true })}`;
+  return pill;
 }
 
 /* Whether a held list knows every collection a lookup names. RLS means a fresh
@@ -113,14 +122,14 @@ export function savedCollections(
   return saveTargets(collections).filter((c) => ids.has(c.id));
 }
 
-/* The side sheet's line icons (the approved panel design's set), 16-unit grid,
+/* The side panel's line icons (the approved panel design's set), 16-unit grid,
  * stroked in currentColor; `spark` is the AI agents' filled mark. */
 const LINE = {
   pin: '<path d="M8 14s4.5-4.2 4.5-7.5a4.5 4.5 0 00-9 0C3.5 9.8 8 14 8 14z"/><circle cx="8" cy="6.5" r="1.5"/>',
   out: '<path d="M9.5 3.5h3v3M12.5 3.5L7.5 8.5M11 9.5v3H3.5V5h3"/>',
   more: '<circle cx="3.5" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/>'
     + '<circle cx="12.5" cy="8" r=".9" fill="currentColor"/>',
-  fold: '<path d="M6.5 4.5L10 8l-3.5 3.5"/>',
+  close: '<path d="M6.5 4.5L10 8l-3.5 3.5"/>',
   down: '<path d="M4.5 6.5L8 10l3.5-3.5"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   arrow: '<path d="M3.5 8h9M9 4.5L12.5 8 9 11.5"/>',

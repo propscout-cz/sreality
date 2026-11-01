@@ -875,9 +875,11 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
         together=evaluation.read_run(root / "candidate").co_pairs(),
         recent=shadow.recent_same(rulings, args.recent_since),
         what_if=json.loads(run_file.read_text(encoding="utf-8")) if run_file.is_file() else {},
-        elsewhere=shadow.outside_group(positions.with_name(shadow.MOVERS_FILE), group))
+        elsewhere=shadow.outside_group(positions.with_name(shadow.MOVERS_FILE), group),
+        unjudgeable=set(group.get("unjudgeable") or ()))
     verdict["recent_same"]["since"] = args.recent_since
     verdict["group"] = group.get("group", "1/1")
+    verdict["blocks_skipped_no_ruling"] = group.get("blocks_skipped_no_ruling")
     (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
                                            encoding="utf-8")
     facts, e111 = verdict["run"], verdict["e111"]
@@ -886,7 +888,8 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
           f"  ids {facts.get('requested', '?')} requested, scope {facts.get('scope', '?')}, "
           f"limit {facts.get('limit', '?')}"
           f"  movers in cohort {verdict['movers_in_cohort']} of {verdict['movers_listed']}"
-          f" ({verdict['movers_elsewhere']} in other groups)"
+          f" ({verdict['movers_elsewhere']} in other groups,"
+          f" {verdict['movers_unjudgeable']} unjudgeable: no ruling on either side)"
           f"  E111 base {len(e111['base']['negatives'])} / candidate "
           f"{len(e111['candidate']['negatives'])}, new {len(e111['new_negatives'])}"
           f"  rulings broken {len(verdict['broken_rulings'])}"

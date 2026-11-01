@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace
 from typing import Any
 
 from collections.abc import Iterator
@@ -18,10 +19,14 @@ from collections.abc import Iterator
 from api.providers.base import (
     BatchResultItem,
     BatchStatus,
+    Block,
     Completion,
+    HostedCode,
+    HostedFileInfo,
     ImageBlock,
     Message,
     ModelPrice,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolCall,
@@ -29,6 +34,7 @@ from api.providers.base import (
     ToolSchema,
     ToolUseBlock,
     Usage,
+    written_by,
 )
 
 LOG = logging.getLogger(__name__)
@@ -48,6 +54,17 @@ PRICES: dict[str, ModelPrice] = {
     "claude-opus-5-5":   ModelPrice(4.0, 20.0, 0.20, 5.00),
     "claude-sonnet-5-5": ModelPrice(2.0, 10.0, 0.20, 2.50),
 }
+
+# The hosted code tool (ADR-0005). No beta header; the newest version the docs list, which every priced model accepts.
+CODE_TOOL = {"type": "code_execution_20260521", "name": "code_execution"}
+# Billed by execution time per container, minimum five minutes; the org's first 1,550 hours a month are free, which
+# nothing in a response shows. A response reports no execution time either, so a call's container time is priced as
+# the whole time the request took: an upper bound at list price (docs: pricing, code execution tool).
+CONTAINER_USD_PER_HOUR = 0.05
+CONTAINER_MINIMUM_S = 300.0
+_FILE_TIMEOUT_S = 60.0
+# The two result blocks that carry produced files; a text-editor result's `content` is not a list of them.
+_FILE_RESULTS = ("bash_code_execution_tool_result", "code_execution_tool_result")
 
 # Dated snapshot suffix, e.g. "-20251001" on "claude-haiku-4-5-20251001".
 # Anthropic responses (and batch results) can carry the dated id while
@@ -76,27 +93,88 @@ class AnthropicProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
+        hosted_code: HostedCode | None = None,
     ) -> Completion:
         client = self._sdk_client()
+        if timeout_s is not None:
+            # No retries under a deadline: the SDK's default two would each get the whole timeout.
+            client = client.with_options(timeout=timeout_s, max_retries=0)
+        tool_dicts = [_tool_to_anthropic(t) for t in tools]
+        if hosted_code is not None:
+            # First, so the cache breakpoint stays on the last tool that varies by agent.
+            tool_dicts.insert(0, dict(CODE_TOOL))
         kwargs = self._request_kwargs(
             system=system,
             messages=[_msg_to_anthropic(m) for m in messages],
-            tools=[_tool_to_anthropic(t) for t in tools],
+            tools=tool_dicts,
             model=model,
             max_tokens=max_tokens,
             tool_choice=tool_choice,
         )
+        if hosted_code is not None and hosted_code.container:
+            kwargs["container"] = hosted_code.container
+        started = time.monotonic()
         try:
             raw = client.messages.create(**kwargs)
         except Exception as exc:
             raise ProviderError(f"anthropic call failed: {exc}") from exc
-        return self._completion_from_raw(raw, fallback_model=model)
+        completion = self._completion_from_raw(raw, fallback_model=model)
+        if hosted_code is None:
+            return completion
+        cost = 0.0
+        if completion.container is not None:
+            cost = _container_usd(time.monotonic() - started, new=completion.container != hosted_code.container)
+        return replace(completion, usage=replace(completion.usage, hosted_code_usd=cost))
 
     def price_for(self, model: str) -> ModelPrice | None:
         price = PRICES.get(model)
         if price is None:
             price = PRICES.get(normalise_model(model))
         return price
+
+    # --- hosted code: Files API -------------------------------------------
+
+    def upload_file(self, *, name: str, media_type: str, data: bytes, expires_in_s: int) -> str:
+        """Upload an input; `expires_in_s` is the backstop should the run die before it deletes the file."""
+        try:
+            return str(self._file_client().files.upload(file=(name, data, media_type), expires_in_seconds=expires_in_s).id)
+        except Exception as exc:
+            raise ProviderError(f"anthropic file upload failed: {exc}") from exc
+
+    def input_block(self, file_id: str) -> Block:
+        return OpaqueBlock(provider=self.name, data={"type": "container_upload", "file_id": file_id})
+
+    def file_info(self, file_id: str) -> HostedFileInfo:
+        try:
+            meta = self._file_client().files.retrieve_metadata(file_id)
+        except Exception as exc:
+            raise ProviderError(f"anthropic file metadata failed: {exc}") from exc
+        return HostedFileInfo(name=str(meta.filename), media_type=str(meta.mime_type), size_bytes=int(meta.size_bytes))
+
+    def download_file(self, file_id: str, *, max_bytes: int) -> bytes:
+        """A produced file's bytes, refused whole past `max_bytes`, whatever its metadata said."""
+        try:
+            data = bytearray()
+            with self._file_client().files.with_streaming_response.download(file_id) as response:
+                for chunk in response.iter_bytes():
+                    data += chunk
+                    if len(data) > max_bytes:
+                        raise ProviderError(f"file {file_id} runs over {max_bytes} bytes")
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(f"anthropic file download failed: {exc}") from exc
+        return bytes(data)
+
+    def delete_file(self, file_id: str) -> None:
+        try:
+            self._file_client().files.delete(file_id)
+        except Exception as exc:
+            raise ProviderError(f"anthropic file delete failed: {exc}") from exc
+
+    def container_cost_usd(self, seconds: float) -> float:
+        return _container_usd(seconds, new=True)
 
     # --- Message Batches API ----------------------------------------------
 
@@ -252,7 +330,8 @@ class AnthropicProvider:
         return kwargs
 
     def _completion_from_raw(self, raw: Any, *, fallback_model: str) -> Completion:
-        text_blocks, tool_calls = _split_anthropic_content(raw)
+        text_blocks, tool_calls, blocks = _split_anthropic_content(raw)
+        hosted_calls, hosted_pending, file_ids = _hosted_work(raw)
         usage = _extract_anthropic_usage(raw)
         stop_reason = _normalise_stop_reason(getattr(raw, "stop_reason", None))
         return Completion(
@@ -262,6 +341,11 @@ class AnthropicProvider:
             usage=usage,
             model=getattr(raw, "model", fallback_model) or fallback_model,
             raw=raw,
+            blocks=blocks,
+            hosted_calls=hosted_calls,
+            hosted_pending=hosted_pending,
+            container=_container_id(raw),
+            file_ids=file_ids,
         )
 
     def _sdk_client(self) -> Any:
@@ -274,13 +358,19 @@ class AnthropicProvider:
             self._client = anthropic.Anthropic(api_key=self._api_key)
         return self._client
 
+    def _file_client(self) -> Any:
+        return self._sdk_client().with_options(timeout=_FILE_TIMEOUT_S)
+
 
 # --- block conversions ----------------------------------------------------
 
 def _msg_to_anthropic(msg: Message) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     for block in msg.content:
-        if isinstance(block, TextBlock):
+        own = written_by(block, AnthropicProvider.name)
+        if own is not None:
+            content.append(own)
+        elif isinstance(block, TextBlock):
             content.append({"type": "text", "text": block.text})
         elif isinstance(block, ToolUseBlock):
             content.append({
@@ -318,21 +408,63 @@ def _tool_to_anthropic(tool: ToolSchema) -> dict[str, Any]:
     }
 
 
-def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
-    blocks = getattr(raw, "content", None) or []
+def _split_anthropic_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
+    """The reply's text, its calls and all of it in order, every block as the SDK parsed it (thinking and its signature,
+    #2068's server tools): the API refuses a later request whose earlier turns were edited."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
-    for block in blocks:
+    reply: list[Block] = []
+    for block in getattr(raw, "content", None) or []:
         kind = _attr(block, "type")
+        own = OpaqueBlock(provider=AnthropicProvider.name, data=block)
         if kind == "text":
-            texts.append(_attr(block, "text") or "")
+            text = _attr(block, "text") or ""
+            texts.append(text)
+            if text:
+                reply.append(TextBlock(text=text, opaque=own))
         elif kind == "tool_use":
-            tool_calls.append(ToolCall(
+            call = ToolCall(
                 id=str(_attr(block, "id") or ""),
                 name=str(_attr(block, "name") or ""),
                 input=_attr(block, "input") or {},
-            ))
-    return texts, tool_calls
+            )
+            tool_calls.append(call)
+            reply.append(ToolUseBlock(id=call.id, name=call.name, input=call.input, opaque=own))
+        else:
+            reply.append(own)
+    return texts, tool_calls, reply
+
+
+def _hosted_work(raw: Any) -> tuple[tuple[ToolCall, ...], tuple[str, ...], tuple[str, ...]]:
+    """The commands the API took up in this reply, those with no result yet (a call beside a client call waits for that
+    call's result: docs, server tools), and the ids of the files they left."""
+    calls: list[ToolCall] = []
+    answered: set[str] = set()
+    file_ids: list[str] = []
+    for block in getattr(raw, "content", None) or []:
+        kind = _attr(block, "type")
+        if kind == "server_tool_use":
+            calls.append(ToolCall(id=str(_attr(block, "id") or ""), name=str(_attr(block, "name") or ""),
+                                  input=_attr(block, "input") or {}))
+        elif str(kind).endswith("_tool_result"):
+            answered.add(str(_attr(block, "tool_use_id") or ""))
+        if kind in _FILE_RESULTS:
+            # An error result has no inner `content`.
+            for entry in _attr(_attr(block, "content"), "content") or []:
+                if file_id := _attr(entry, "file_id"):
+                    file_ids.append(str(file_id))
+    return tuple(calls), tuple(c.id for c in calls if c.id not in answered), tuple(file_ids)
+
+
+def _container_id(raw: Any) -> str | None:
+    container_id = _attr(getattr(raw, "container", None), "id")
+    return container_id if isinstance(container_id, str) else None
+
+
+def _container_usd(seconds: float, *, new: bool) -> float:
+    """What `seconds` of a container cost at most, the billing minimum on a new one."""
+    billed = max(seconds, CONTAINER_MINIMUM_S) if new else seconds
+    return round(billed * CONTAINER_USD_PER_HOUR / 3600, 6)
 
 
 def _extract_anthropic_usage(raw: Any) -> Usage:
@@ -343,19 +475,21 @@ def _extract_anthropic_usage(raw: Any) -> Usage:
         if isinstance(usage, dict):
             return int(usage.get(name, 0) or 0)
         return int(getattr(usage, name, 0) or 0)
+    code_requests = _attr(_attr(usage, "server_tool_use"), "code_execution_requests")
     return Usage(
         input_tokens=_g("input_tokens"),
         output_tokens=_g("output_tokens"),
         cache_read_tokens=_g("cache_read_input_tokens"),
         cache_write_tokens=_g("cache_creation_input_tokens"),
+        code_execution_requests=code_requests if isinstance(code_requests, int) else 0,
     )
 
 
 def _normalise_stop_reason(raw: Any) -> str:
-    # Anthropic uses: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
+    # Anthropic also uses "stop_sequence"; "pause_turn" comes only from a request that declared a server tool.
     if raw == "stop_sequence":
         return "stop"
-    if raw in ("end_turn", "tool_use", "max_tokens"):
+    if raw in ("end_turn", "tool_use", "max_tokens", "refusal", "model_context_window_exceeded", "pause_turn"):
         return raw
     return "end_turn"
 

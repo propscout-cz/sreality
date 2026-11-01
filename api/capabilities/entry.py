@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -9,12 +10,19 @@ from typing import Any
 
 import psycopg
 
+from api.capabilities.run_scope import RunScope
 from api.capabilities.schema import portable
 from api.filter_args import Args
 
 
+# Narrows the identity functions (migration 704): one account of the principal's memberships, no admin powers, no acting
+# for another account. It can only remove power. A claim rather than a new setting, so `tenant_transaction` stays as it is.
+RUN_ACCOUNT_CLAIM = "run_account_id"
+
+
 class Tenancy(StrEnum):
-    """Whose data a tool reads: the market's, on the service connection, or the signed-in user's own, under RLS."""
+    """Whose data a tool reads: the market's, on the service connection, or the signed-in user's own, under RLS (a paid
+    tool's account comes from the login, its ledger write from the service role)."""
 
     MARKET = "market"
     TENANT = "tenant"
@@ -39,9 +47,12 @@ class Caller:
 
 @dataclass(frozen=True)
 class Context:
-    """What a handler gets: the one connection its tenancy picked."""
+    """What a handler gets: the one connection its tenancy picked, the run it is called in, if any, and, for a tenant's
+    paid tool, the account that run spends for."""
 
     conn: psycopg.Connection
+    run: RunScope | None = None
+    account_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
