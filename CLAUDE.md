@@ -282,7 +282,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
 - **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
   `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
-  `/health`, `/images/{key}` photos and the landing's `POST /waitlist` are open by design; the Stripe webhook checks its signature.
+  `/health`, `/images/{key}` photos and the landing's `/waitlist` are open by design; the Stripe webhook checks its signature.
 
 ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
 nor is email as a future second push-ledger channel (inactive; rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.

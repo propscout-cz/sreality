@@ -1,11 +1,18 @@
-"""The propscout.cz waitlist routes: POST /waitlist (the landing page's form) and POST /waitlist/answer (its thank-you
-question). Mounted under `/waitlist`; the writes are api/waitlist.py.
+"""The propscout.cz waitlist routes: POST /waitlist (the landing page's form), POST /waitlist/answer (its thank-you
+question) and /waitlist/unsubscribe (every email's link). Mounted under `/waitlist`; the writes are api/waitlist.py.
 
 OPEN BY DESIGN (tests/api/test_admin_route_coverage.py `_PUBLIC_ALLOWLIST`): a visitor from an ad has no account. The
 page posts a plain HTML form cross-origin and every answer is a 303 back to the landing page, so the page needs no CORS
 and no JavaScript. Guards: a honeypot field (`web`, filled only by bots, answered as a success and never stored), a
 rate limit per client and in total, and strict input checks. A known email is answered exactly like a new one, so the
 form cannot tell anyone whether an address is on the list.
+
+THE CONFIRMATION EMAIL goes to a NEW entry only, after the 303 has gone out, so Resend can never slow or fail a signup.
+Dark without RESEND_API_KEY. Over the daily cap or on a failed send the entry stays, with no email and no retry.
+
+UNSUBSCRIBE: the entry's `followup_token` is the only credential, and every answer reads the same, so a link cannot tell
+anyone whether a token exists. GET only asks (mail scanners open links); POST withdraws, and is what a mail client's own
+button sends (RFC 8058).
 
 WHERE IT REDIRECTS: the request's Origin when it is the landing origin (LANDING_ORIGIN, default https://propscout.cz)
 or one of CORS_ALLOW_ORIGINS (the app host serves the same page at /landing/ for previews), else the landing origin;
@@ -14,6 +21,7 @@ the path is one of `_PAGES` only. Nothing the client sends can point the redirec
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import uuid
@@ -21,11 +29,13 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from api import dependencies as deps
-from api import waitlist
+from api import resend_client, waitlist, waitlist_email
+from api.http_json import HttpJsonError
 
 LOG = logging.getLogger(__name__)
 
@@ -43,6 +53,7 @@ _PAGES: dict[str, str] = {"/dekujeme": "/", "/landing/dekujeme.html": "/landing/
 
 _SIGNUP_LIMIT = waitlist.RateLimit(per_client=5, total=300, window_s=600)
 _ANSWER_LIMIT = waitlist.RateLimit(per_client=10, total=600, window_s=600)
+_UNSUBSCRIBE_LIMIT = waitlist.RateLimit(per_client=30, total=600, window_s=600)
 
 
 def _landing_origin() -> str:
@@ -65,6 +76,52 @@ def _go(base: str, path: str, params: dict[str, str], fragment: str = "") -> Red
     query = urlencode({k: v for k, v in params.items() if v})
     url = f"{base}{path}" + (f"?{query}" if query else "") + (f"#{fragment}" if fragment else "")
     return RedirectResponse(url, status_code=303)
+
+
+def _send_confirmation(token: uuid.UUID) -> None:
+    """Runs after the response: nothing here may reach the visitor, so every failure ends in the log."""
+    if not resend_client.is_configured():
+        LOG.info("WAITLIST confirmation skipped reason=unconfigured")
+        return
+    try:
+        with deps.open_background_conn() as conn:
+            email = waitlist.claim_confirmation(conn, token)
+        if email is None:
+            LOG.warning("WAITLIST confirmation skipped reason=cap")
+            return
+        try:
+            resend_client.send(
+                sender=waitlist_email.SENDER, to=email, reply_to=waitlist_email.REPLY_TO, subject=waitlist_email.SUBJECT,
+                html=waitlist_email.confirmation_html(token), text=waitlist_email.confirmation_text(token),
+                headers=waitlist_email.unsubscribe_headers(token),
+            )
+        except HttpJsonError as exc:
+            LOG.warning("WAITLIST confirmation failed %s", exc)
+            with deps.open_background_conn() as conn:
+                waitlist.release_confirmation(conn, token)
+            return
+        LOG.info("WAITLIST confirmation sent")
+    except Exception:
+        LOG.exception("WAITLIST confirmation failed")
+
+
+def _page(title: str, body: str, status_code: int = 200) -> HTMLResponse:
+    return HTMLResponse(
+        '<!doctype html><html lang="cs"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">'
+        f"<title>{html.escape(title)} · PropScout.cz</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#222;"
+        "line-height:1.5}button{font:inherit;padding:.6rem 1.2rem;border:0;background:#222;color:#fff;"
+        f"border-radius:.4rem;cursor:pointer}}</style></head><body><h1>{html.escape(title)}</h1>{body}</body></html>",
+        status_code=status_code,
+    )
+
+
+def _token(raw: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
 
 
 @router.post("")
@@ -105,7 +162,10 @@ async def post_waitlist(request: Request) -> RedirectResponse:
         return fail("server")
     LOG.info("WAITLIST signup new=%d variant=%s utm_source=%s utm_campaign=%s", token is not None, variant,
              utm.get("utm_source"), utm.get("utm_campaign"))
-    return _go(base, thanks, {"t": str(token) if token else ""})
+    answer = _go(base, thanks, {"t": str(token) if token else ""})
+    if token:
+        answer.background = BackgroundTask(_send_confirmation, token)
+    return answer
 
 
 @router.post("/answer")
@@ -134,6 +194,41 @@ async def post_waitlist_answer(request: Request) -> RedirectResponse:
         except Exception:
             LOG.exception("WAITLIST answer failed")
     return _go(base, thanks, {"hotovo": "1"})
+
+
+@router.get("/unsubscribe")
+def get_unsubscribe(t: str = "") -> HTMLResponse:
+    """Ask first: the withdrawal is the POST, so a scanner opening the link changes nothing."""
+    token = _token(t)
+    if token is None:
+        return _page("Neplatný odkaz", "<p>Tento odkaz pro odhlášení není platný.</p>", 400)
+    return _page(
+        "Odhlásit se z čekací listiny",
+        f'<p>Po odhlášení vám už nepošleme pozvánku ani novinky.</p><form method="post" action="?t={token}">'
+        "<button>Odhlásit se</button></form>",
+    )
+
+
+@router.post("/unsubscribe")
+async def post_unsubscribe(request: Request, t: str = "") -> HTMLResponse:
+    """Withdraw consent for the entry behind this token; a repeat or an unknown token reads the same."""
+    token = _token(t)
+    if token is None:
+        return _page("Neplatný odkaz", "<p>Tento odkaz pro odhlášení není platný.</p>", 400)
+    if not _UNSUBSCRIBE_LIMIT.allow(_client(request)):
+        return _page("Zkuste to prosím později", "<p>Odhlášení se teď nepodařilo. Zkuste to za pár minut.</p>", 429)
+
+    def write() -> bool:
+        with deps.open_background_conn() as conn:
+            return waitlist.unsubscribe(conn, token)
+
+    try:
+        withdrawn = await run_in_threadpool(write)
+    except Exception:
+        LOG.exception("WAITLIST unsubscribe failed")
+        return _page("Zkuste to prosím později", "<p>Odhlášení se teď nepodařilo. Zkuste to za pár minut.</p>", 503)
+    LOG.info("WAITLIST unsubscribe new=%d", withdrawn)
+    return _page("Jste odhlášeni", "<p>Už vám nepošleme pozvánku ani novinky.</p>")
 
 
 @admin_router.get("")

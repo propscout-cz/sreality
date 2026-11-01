@@ -40,6 +40,9 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     # no account. Honeypot + rate limit + strict input checks; writes only waitlist_signups (mig 700).
     ("POST", "/waitlist"),
     ("POST", "/waitlist/answer"),
+    # Every waitlist email's link: its reader has no account, the entry's token is the credential.
+    ("GET", "/waitlist/unsubscribe"),
+    ("POST", "/waitlist/unsubscribe"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
