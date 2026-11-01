@@ -17,9 +17,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { filterPresetKeys, DEFAULT_SORT, pipelineKeys, sortToParam } from '@/lib/queries';
-import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
-import type { FilterPreset, FilterPresetGroup } from '@/lib/types';
+import { fetchPipelineStages, filterPresetKeys, DEFAULT_SORT, pipelineKeys, sortToParam } from '@/lib/queries';
+import { DEFAULT_FILTERS, type ListingFilters, type PipelineViewStage } from '@/lib/filters';
+import type { FilterPreset, FilterPresetGroup, PipelineStage } from '@/lib/types';
 
 const preset: FilterPreset = {
   id: 'p1',
@@ -46,6 +46,11 @@ vi.mock('@/lib/api', async (orig) => ({
   deleteFilterPresetGroup: vi.fn(),
 }));
 
+vi.mock('@/lib/queries', async (orig) => ({
+  ...(await orig<typeof import('@/lib/queries')>()),
+  fetchPipelineStages: vi.fn(),
+}));
+
 import {
   createFilterPreset, createFilterPresetGroup, deleteFilterPreset, deleteFilterPresetGroup, layoutFilterPresets,
   updateFilterPreset,
@@ -53,7 +58,10 @@ import {
 import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
-const STAGES = [{ id: 1, is_terminal: false }, { id: 9, is_terminal: true }];
+const stage = (id: number, is_terminal: boolean): PipelineStage => ({
+  id, key: `s${id}`, label: `Stage ${id}`, position: id, color: null, is_terminal, is_entry: id === 1, code: null,
+});
+const STAGES = [stage(1, false), stage(9, true)];
 
 /* The dirty chip's menu: Save changes writes at once (no dialog, operator 2026-10-27). */
 const saveChanges = () => {
@@ -77,12 +85,13 @@ function renderBar({
   groups?: FilterPresetGroup[];
   onActivePresetIdChange?: (id: string | null) => void;
   onLoad?: (p: FilterPreset) => void;
-  onLoadPipelineView?: (stages: ReadonlyArray<{ id: number; is_terminal: boolean }>) => void;
-  stages?: ReadonlyArray<{ id: number; is_terminal: boolean }>;
+  onLoadPipelineView?: (stages: ReadonlyArray<PipelineViewStage>) => void;
+  /* null = not read yet: the bar reads them through fetchPipelineStages. */
+  stages?: ReadonlyArray<PipelineViewStage> | null;
 } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(filterPresetKeys.all, { data: presets, total: presets.length, groups });
-  qc.setQueryData(pipelineKeys.stages, stages);
+  if (stages) qc.setQueryData(pipelineKeys.stages, stages);
   return render(
     <QueryClientProvider client={qc}>
       <FilterPresetBar
@@ -103,6 +112,7 @@ beforeEach(() => {
   vi.mocked(createFilterPreset).mockReset();
   vi.mocked(updateFilterPreset).mockReset();
   vi.mocked(deleteFilterPreset).mockReset();
+  vi.mocked(fetchPipelineStages).mockReset();
 });
 
 describe('<FilterPresetBar> chip names', () => {
@@ -129,6 +139,39 @@ describe('<FilterPresetBar> behaviour', () => {
     fireEvent.click(buttons[0]);
     expect(onLoadPipelineView).toHaveBeenCalledTimes(1);
     expect(onLoadPipelineView).toHaveBeenCalledWith(STAGES);
+  });
+
+  it('waits for the stage read when the chip is clicked before it lands', async () => {
+    vi.mocked(fetchPipelineStages).mockResolvedValue(STAGES);
+    const onLoadPipelineView = vi.fn();
+    renderBar({ onLoadPipelineView, stages: null });
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    await waitFor(() => expect(onLoadPipelineView).toHaveBeenCalledWith(STAGES));
+    expect(onLoadPipelineView).toHaveBeenCalledTimes(1);
+  });
+
+  /* MS16: without the stages the view cannot leave the closed ones out, so a
+   * failed read is a retry, never the whole pipeline under a "bez uzavřených" title. */
+  it('turns into a retry when the stage read fails, and loads no view', async () => {
+    vi.mocked(fetchPipelineStages).mockRejectedValue(new Error('read failed'));
+    const onLoadPipelineView = vi.fn();
+    renderBar({ onLoadPipelineView, stages: null });
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    const retry = await screen.findByRole('button', { name: /Fáze pipeline se nepodařilo načíst/ });
+    expect(onLoadPipelineView).not.toHaveBeenCalled();
+
+    vi.mocked(fetchPipelineStages).mockResolvedValue(STAGES);
+    fireEvent.click(retry);
+    expect(await screen.findByRole('button', { name: 'Pipeline' })).toHaveAttribute('aria-pressed', 'false');
+    expect(onLoadPipelineView).not.toHaveBeenCalled();
+  });
+
+  it('stays the chip while ON, so it can still be turned off with the stage read failed', async () => {
+    vi.mocked(fetchPipelineStages).mockRejectedValue(new Error('read failed'));
+    renderBar({ filters: { ...DEFAULT_FILTERS, pipeline: { set: 'in', in: [], out: [] } }, stages: null });
+    await waitFor(() => expect(fetchPipelineStages).toHaveBeenCalled());
+    expect(screen.getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /se nepodařilo načíst/ })).toBeNull();
   });
 
   it('loads a preset on a chip click', () => {
