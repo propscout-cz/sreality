@@ -22,6 +22,7 @@ import PipelineFunnelButton from '@/components/PipelineFunnelButton';
 import PriceDelta from '@/components/PriceDelta';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { useScrollRestoration } from '@/lib/useScrollRestoration';
+import type { ListHand } from '@/lib/useListHold';
 import { taggedImageUrls, useCardHydration } from '@/lib/hydration';
 import { COVER_OPTIONS, coverIndex, type CoverTag } from '@/lib/imageTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
@@ -158,6 +159,9 @@ interface Props {
   /* What an empty grid says, where "no listings match these filters" would be
    * wrong (a surface with no filters). */
   empty?: ReactNode;
+  /* A hand on the grid holds its re-reads (lib/useListHold): the surface passes
+   * its list's hand, spread on the whole grid, its header included. */
+  hand?: ListHand;
 }
 
 export default function ListingCards({
@@ -191,6 +195,7 @@ export default function ListingCards({
   onEstimate,
   scroll = 'column',
   empty,
+  hand,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
   const isEmpty = !showSkeleton && !isError && rows != null && rows.length === 0;
@@ -220,6 +225,7 @@ export default function ListingCards({
 
   return (
     <div
+      {...hand}
       className={scroll === 'page' ? 'flex flex-col' : 'flex flex-col h-full min-h-0'}
       style={{ '--card-min': CARD_IMAGE_MIN[imageLarge ? 'lg' : 'sm'] } as CSSProperties}
     >
