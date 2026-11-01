@@ -1,5 +1,5 @@
 /* Czech words for what Supabase Auth refuses. Its own messages are English, so a code maps here and anything unknown
- * reads as a plain failure; the invitation refusal is already Czech (migration 714's hook) and passes through. */
+ * reads as a plain failure; the invitation refusal is already Czech (migration 716's hook) and passes through. */
 
 const REFUSED = 'Tato adresa zatím nemá pozvánku. Přidejte se na čekací listinu na propscout.cz.';
 const FAILED = 'Nepovedlo se to. Zkuste to prosím znovu.';

@@ -56,7 +56,7 @@ one-click unsubscribe (RFC 8058) setting `unsubscribed_at`; the privacy page (Re
 `info@` contact, the app section's supplier list too); the price and "zaváděcí" text on the landing page, thank-you page and copy deck. The deck is rebuilt
 per `frontend/scripts/landing-copy-deck/README.md`. Must ship before any email goes out.
 
-**PR 3: invitations.** The hook (`hook_before_user_created`, migration 714); the admin buttons and states; the
+**PR 3: invitations.** The hook (`hook_before_user_created`, migration 716); the admin buttons and states; the
 Sign-ups → Waitlist rename (UI text only; the code keeps its names, as `GLOSSARY.md` allows); the Czech screens, with the
 invitation button opening on account creation. A send stamps `invited_at` only after Resend accepts it, so a failed send
 gives no permission. **Switch-on order, after the merge:** hook on, then email confirmation off, then sign-up on, so

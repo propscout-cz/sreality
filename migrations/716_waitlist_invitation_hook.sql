@@ -1,4 +1,4 @@
--- 714: waitlist invitations (docs/design/email/PROGRAM.md, PR 3): only an invited address may create an account.
+-- 716: waitlist invitations (docs/design/email/PROGRAM.md, PR 3): only an invited address may create an account.
 --
 -- `invited_at` (mig 700): the permission, set at the first invitation sent and never moved. `invitation_sent_at`: the
 --   latest send, invitation or "send again", which the daily cap counts. Written only by api/waitlist.py.
@@ -11,7 +11,7 @@
 alter table public.waitlist_signups add column if not exists invitation_sent_at timestamptz;
 
 comment on column public.waitlist_signups.invitation_sent_at is
-  'The latest invitation email sent (mig 714); the daily cap counts it. invited_at is the first one, the permission.';
+  'The latest invitation email sent (mig 716); the daily cap counts it. invited_at is the first one, the permission.';
 
 create or replace function public.hook_before_user_created(event jsonb)
 returns jsonb
