@@ -47,7 +47,7 @@ pytestmark = pytest.mark.skipif(
 # below pins that, and it must stay out of this list.
 _TENANT_VIEWS: list[str] = [
     "collection_properties_public",
-    # The clock read (migration 696): invoker over curation_clock_audience() and the clock's own policy.
+    # The clock read (migration 696): invoker over the clock's own policy (curation_clock_audience(), 706).
     "curation_clock_public",
     # The kanban's cohort view (migration 417). It is invoker-mode over
     # property_pipeline_public, so its scoping is inherited rather than its

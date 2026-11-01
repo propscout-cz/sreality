@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,6 +27,7 @@ from scripts.verify_pipeline import THRESHOLDS
 from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url, signups
 from tests._tenant_registry import CLOCKED_TABLES
 from tests._tenant_scope import scoped
+from tests.migration_defs import MIGRATIONS
 
 pytestmark = REQUIRED_DB
 
@@ -577,32 +579,81 @@ def test_one_clock_read_evaluates_the_audience_once_and_maps_mine(world: _World)
     assert {f for acc, f in rows if acc == a} == set(EDIT_FAMILIES), rows
 
 
-def test_the_clock_read_evaluates_the_audience_once_at_scale(world: _World) -> None:
+def _clock_size(cur: psycopg.Cursor[Any]) -> tuple[int, int]:
+    """(rows, heap pages) of curation_clock in the caller's transaction, read as the table's owner."""
+    cur.execute("SELECT count(*), pg_relation_size('public.curation_clock') / current_setting('block_size')::int "
+                "FROM curation_clock")
+    rows, pages = cur.fetchone()
+    return int(rows), int(pages)
+
+
+def _read_beyond_the_clock(cur: psycopg.Cursor[Any], user: uuid.UUID) -> tuple[dict[str, Any], int, int]:
+    """The read's warm analyzed plan as `user`, the clock's rows, and the buffers it touched beyond the clock's pages
+    (the audience, `mine`): what one read costs that is not its pass over the clock."""
+    rows, pages = _clock_size(cur)
+    with scoped(user, cur=cur):
+        _analyzed_read(cur)
+        top, _audience = _analyzed_read(cur)
+    return top, rows, top.get("Shared Hit Blocks", 0) + top.get("Shared Read Blocks", 0) - pages
+
+
+def test_the_clock_read_grows_only_by_its_one_pass_over_the_clock(world: _World) -> None:
     """2,000 accounts with a counter each (through the trigger), analyzed inside a transaction rolled back after.
-    Before 706 the view's join probed curation_clock_pkey per followed account (ROWS 4 kept it there); since 706 the
-    read scans the clock under ONE hashed SubPlan, O(clock rows), the trade charter § 3.8 states. The audience must
-    still run once, never per row, at any size."""
+    696's view join probed curation_clock_pkey per followed account; 706 trades that probe for ONE pass over the
+    clock under one hashed SubPlan, O(clock rows) (charter § 3.8; § 12 F16 item 3, the operator's call). That pass is
+    all that may grow with the clock: the scan runs once and probes each row once, the audience runs once, and the
+    buffers the read touches beyond the clock's pages stay what they are at the lane's own size."""
     a, c = world.a.acc, world.c.acc
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
+            _top, _rows, small = _read_beyond_the_clock(cur, world.c.user)
             cur.execute("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-scale-' || g "
                         "FROM generate_series(1, 2000) g RETURNING id) "
                         "INSERT INTO tags (account_id, name, color) SELECT id, 'scale', 'slate' FROM made")
             cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
             cur.execute("ANALYZE curation_clock")
+            top, rows, beyond = _read_beyond_the_clock(cur, world.c.user)
             with scoped(world.c.user, cur=cur):
-                top, audience = _analyzed_read(cur)
                 cur.execute(_READ)
                 accounts = {r[0] for r in cur.fetchall()}
     finally:
         conn.rollback()
         conn.close()
+    audience = [n for n in _plan_nodes(top) if n.get("Function Name") == "curation_clock_audience"]
     scans = [n for n in _plan_nodes(top) if n.get("Relation Name") == "curation_clock"]
-    assert len(audience) == 1 and audience[0]["Actual Loops"] == 1, top
+    assert rows > 2000 and len(audience) == 1 and audience[0]["Actual Loops"] == 1, top
     assert len(scans) == 1 and "hashed SubPlan" in scans[0].get("Filter", ""), (
         f"the policy probes one hash of the followed pairs per row, never a per-row audience: {top}")
+    scan = scans[0]
+    assert scan["Actual Loops"] == 1 and scan["Actual Rows"] + scan.get("Rows Removed by Filter", 0) == rows, (
+        f"one pass, each of the {rows} clock rows probed once: {scan}")
+    assert beyond <= small + 4, (
+        f"beyond its pass over the clock the read touched {small} buffers at the lane's size, {beyond} at 2,000 "
+        f"accounts: something per row: {top}")
     assert accounts == {a, c}, accounts
+
+
+def _post_706() -> str:
+    sql = (MIGRATIONS / "706_curation_clock_read_one_audience.sql").read_text(encoding="utf-8")
+    m = re.search(r"^do \$post\$.*?^end \$post\$;", sql, re.DOTALL | re.MULTILINE)
+    assert m, "706 lost its $post$ block"
+    return m.group(0)
+
+
+def test_706s_post_refuses_a_clock_without_row_security() -> None:
+    """Since 706 the view reads the clock table whole (no join on the audience), so the table's policy is the read's
+    only gate: 706's $post$ passes on the lane's schema and refuses the clock with row security off."""
+    conn = psycopg.connect(db_url())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_post_706())
+            cur.execute("ALTER TABLE public.curation_clock DISABLE ROW LEVEL SECURITY")
+            with pytest.raises(psycopg.errors.RaiseException, match="row security is off on curation_clock"):
+                cur.execute(_post_706())
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 # --- 12-13. the health check's reads and the catalog -------------------------------------------------------------

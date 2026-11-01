@@ -19,7 +19,8 @@
 --   two would answer every clock read empty, and each open window would read all its rows as gone. Each statement
 --   takes a brief ACCESS EXCLUSIVE lock on its relation; lock_timeout bounds the wait, which the workflow retries.
 --   CREATE OR REPLACE VIEW keeps the view's grants (701's: authenticated reads both relations, the service role the
---   table alone); $post$ checks them, the policy's shape and the view's five columns. Independent of 702-705.
+--   table alone); $post$ checks them, row security on the clock (its policy is now the read's only gate), the
+--   policy's shape and the view's five columns. Independent of 702-705.
 -- ROLLBACK: forward only (rule 1): restore 696's policy and view text in a new migration.
 
 set lock_timeout = '5s';
@@ -42,6 +43,9 @@ do $post$
 declare
   v_qual text;
 begin
+  if not (select relrowsecurity from pg_class where oid = 'public.curation_clock'::regclass) then
+    raise exception '706: row security is off on curation_clock; since 706 its policy is the read''s only gate';
+  end if;
   select pg_get_expr(p.polqual, p.polrelid) into v_qual
     from pg_policy p
    where p.polrelid = 'public.curation_clock'::regclass and p.polname = 'curation_clock_audience_read';

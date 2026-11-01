@@ -235,11 +235,12 @@ never reset, never rendered.
   `account_id in (select current_account_ids())`. WHY: 696's three OR arms plus the view's join evaluated the
   audience four times per read. That cost 4.9 ms mean in production against gate #2203's 2.5 ms; each evaluation is
   about five definer `current_account_ids()` calls, whatever the table sizes. Never name the audience twice in the
-  policy or call it from the view; the live lane asserts one audience node per read. THE TRADE: a policy's subquery
-  never becomes a join, so the read scans `curation_clock` under that hashed SubPlan. That is O(clock rows), no
-  longer a `curation_clock_pkey` probe per followed account, and costs about 696's read at ~2,000 accounts
-  (`docs/design/curation-sync.md` § 3.8). The audience is never inlined (its `SET search_path`), so it is one
-  Function Scan wherever it appears.
+  policy or call it from the view; the live lane asserts one audience node per read. With no join in the view, the
+  clock's policy is the read's only gate: never turn its row security off (706's `$post$` refuses it). THE TRADE:
+  a policy's subquery never becomes a join, so the read scans `curation_clock` under that hashed SubPlan. That is
+  O(clock rows), no longer a `curation_clock_pkey` probe per followed account, and costs about 696's read at
+  ~2,000 accounts (`docs/design/curation-sync.md` § 3.8). The audience is never inlined (its `SET search_path`),
+  so it is one Function Scan wherever it appears.
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
@@ -274,8 +275,9 @@ never reset, never rendered.
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
-  commit-time failure, one audience evaluation per read, at 2,000 accounts too); 706's `$post$` (one policy naming
-  the audience once, the view's five columns with no audience call, 701's grants); the health alarm
+  commit-time failure, one audience evaluation per read; at 2,000 accounts one pass over the clock, nothing per
+  row); 706's `$post$` (row security on, one policy naming the audience once, the view's five columns with no
+  audience call, 701's grants); the health alarm
   `curation_sync` (`triggers`, `board_bumps`; W4's `reads` and `load` watch the browsers' read in
   `pg_stat_statements`); the SPA's read-contract test `tests/test_curation_clock_read_contract.py` (the owner's
   select list against the view, never acting).

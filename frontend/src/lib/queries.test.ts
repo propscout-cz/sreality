@@ -1100,7 +1100,7 @@ describe('areaArgs and the stats args', () => {
 
 /* The curation clock read (lib/curationSyncOwner's), through the real supabase-js
  * client against a stubbed fetch: the ClockRow columns of the view, and never the
- * acting header — the audience is the view's to state (docs/design/curation-sync.md
+ * acting header — the audience is the clock policy's to state (docs/design/curation-sync.md
  * § 3.4). */
 describe('fetchCurationClock', () => {
   afterEach(() => vi.unstubAllGlobals());

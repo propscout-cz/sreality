@@ -1891,9 +1891,9 @@ export const pipelineShareKeys = {
  * below: no apostrophes in this comment or the list. */
 const CURATION_CLOCK_COLS = 'account_id,family,counter,mine,age_ms';
 
-/* NEVER acting: who follows whom is stated once, in the view (its audience
- * function), and an x-act-as header would narrow it to the rows of the caller
- * alone (docs/design/curation-sync.md § 3.4). */
+/* NEVER acting: who follows whom is stated once, in the row policy of the clock
+ * (its audience function, migration 706), and an x-act-as header would narrow
+ * it to the rows of the caller alone (docs/design/curation-sync.md § 3.4). */
 export const fetchCurationClock = async ({ signal }: { signal?: AbortSignal } = {}): Promise<ClockRow[]> => {
   const { data } = await pgRead<ClockRow[] | null>(
     supabase.from('curation_clock_public').select(CURATION_CLOCK_COLS),

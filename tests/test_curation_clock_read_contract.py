@@ -41,7 +41,7 @@ def test_the_clock_read_selects_exactly_the_clock_row() -> None:
 
 
 def test_the_clock_read_never_acts() -> None:
-    """§ 3.4: the audience is the view's to state; `x-act-as` would narrow it to the caller's own rows."""
+    """§ 3.4: the audience is the clock policy's to state (706); `x-act-as` would narrow it to the caller's own rows."""
     src = (ROOT / "frontend" / "src" / "lib" / "queries.ts").read_text(encoding="utf-8")
     m = re.search(r"export const fetchCurationClock\b(.*?)\n};\n", src, re.DOTALL)
     assert m, "fetchCurationClock not found in frontend/src/lib/queries.ts"
