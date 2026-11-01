@@ -3,15 +3,12 @@
  * reads (lib/revalidate `useReadHold`), so a card added or moved elsewhere lands
  * once the gesture ends, never under it.
  *
- * FINGERS. A touch event lists every finger on the screen; only those that came
- * down on the pages count, so a second finger on the strip or the header neither
- * holds nor, while the pages' finger lifts, keeps the hold. A finger's touchend
- * and touchcancel go to the node it came down on, even once that node is gone
- * from the page (a stage archived elsewhere, a tag chip re-drawn by its own
- * read), and a removed node's events never bubble to the pager. So each counted
- * finger's own node is listened to, and every lift is read one way: the fingers
- * the event still lists that are on the pages or already counted. A touchcancel
- * that leaves a finger down leaves its hold.
+ * FINGERS (lib/fingers `trackFingers`). Only those that came down on the pages
+ * count, so a second finger on the strip or the header neither holds nor, while
+ * the pages' finger lifts, keeps the hold; a finger's lift is heard on its own
+ * node, even once that node is gone (a stage archived elsewhere, a tag chip
+ * re-drawn by its own read). A touchcancel that leaves a finger down leaves its
+ * hold.
  *
  * SCROLLING lasts until no scroll event came for SCROLL_IDLE_MS (no `scrollend`
  * in React 18, nor in every browser the phone frame meets). The pager's own
@@ -21,6 +18,8 @@
  * by where it landed and passed over. */
 
 import { useCallback, useEffect, useRef, useState, type RefObject, type TouchEvent } from 'react';
+
+import { trackFingers } from '@/lib/fingers';
 
 export const SCROLL_IDLE_MS = 150;
 
@@ -81,43 +80,5 @@ export function usePagerGesture(pager: RefObject<HTMLDivElement | null>): PagerG
     land,
     onScroll,
     touch: { onTouchStart: (e) => fingers.update(e.touches) },
-  };
-}
-
-/* A touch event's finger list, as React's event and the DOM's both carry it. */
-type Touches = ArrayLike<{ target: EventTarget }>;
-
-/* The fingers on the pages, as the nodes they came down on (one entry per
- * finger), each node listened to for its own lift while a finger on it counts. */
-function trackFingers(
-  pager: RefObject<HTMLDivElement | null>,
-  onChange: (touching: boolean) => void,
-): { update(touches: Touches): void; dispose(): void } {
-  let counted: Node[] = [];
-  const listen = (node: Node, on: boolean): void => {
-    for (const type of ['touchend', 'touchcancel']) {
-      if (on) node.addEventListener(type, lift);
-      else node.removeEventListener(type, lift);
-    }
-  };
-  const update = (touches: Touches): void => {
-    const el = pager.current;
-    const next = Array.from(touches, (t) => t.target).filter(
-      (t): t is Node => t instanceof Node && ((el?.contains(t) ?? false) || counted.includes(t)),
-    );
-    for (const node of new Set(counted)) if (!next.includes(node)) listen(node, false);
-    for (const node of new Set(next)) if (!counted.includes(node)) listen(node, true);
-    counted = next;
-    onChange(next.length > 0);
-  };
-  function lift(e: Event): void {
-    update((e as globalThis.TouchEvent).touches);
-  }
-  return {
-    update,
-    dispose: () => {
-      for (const node of new Set(counted)) listen(node, false);
-      counted = [];
-    },
   };
 }

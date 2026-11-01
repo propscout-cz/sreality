@@ -1,8 +1,13 @@
 name: "CI: build Chrome extension"
 
-# Builds the chrome-extension/ bundle and uploads dist/ as a workflow
-# artifact you can download from the Actions tab. Keeps the build off
-# the operator's laptop (no local Node install needed).
+# Builds the chrome-extension/ bundle and uploads two workflow artifacts:
+#   chrome-extension-dist   dist/ as built: keeps the pinned manifest `key`, so a
+#                           "Load unpacked" install has the fixed dev ID
+#   chrome-extension-store  the store package (release/package.ts): no `key`, no
+#                           source maps, checked against release/allowed.ts
+# The store-package step runs on every pull request, so a PR that adds a
+# permission, a portal site or a host permission fails here until
+# chrome-extension/release/allowed.ts says so too.
 #
 # Secrets required on the repository:
 #   EXT_API_BASE_URL       →  same value as the Railway FastAPI URL
@@ -72,10 +77,24 @@ jobs:
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
+      - name: Store package (checked against release/allowed.ts)
+        run: npm run package
+        env:
+          # The build's own hosts, which the manifest must never name.
+          VITE_API_BASE_URL: ${{ secrets.EXT_API_BASE_URL }}
+          VITE_SUPABASE_URL: ${{ secrets.EXT_SUPABASE_URL }}
+          VITE_APP_BASE_URL: ${{ secrets.EXT_APP_BASE_URL }}
       - name: Upload extension artifact
         uses: actions/upload-artifact@v7
         with:
           name: chrome-extension-dist
           path: chrome-extension/dist
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload store package
+        uses: actions/upload-artifact@v7
+        with:
+          name: chrome-extension-store
+          path: chrome-extension/store
           if-no-files-found: error
           retention-days: 30

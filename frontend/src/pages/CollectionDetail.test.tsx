@@ -21,7 +21,8 @@ import * as queries from '@/lib/queries';
 import { CARD_PAGE_SIZE, curationKeys, type CardRow, type PipelineMembers } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { collectionCardFilters } from '@/lib/collectionCards';
-import { revalidateTables } from '@/lib/curationSync';
+import { familyTargets, revalidateTables } from '@/lib/curationSync';
+import { revalidate } from '@/lib/revalidate';
 import { propertyPath } from '@/lib/listingUrl';
 import { cardRow } from '@/test/cardRow';
 import { watchReads } from '@/test/reads';
@@ -626,6 +627,120 @@ describe('<CollectionDetail>', () => {
       } finally {
         vi.unstubAllGlobals();
       }
+    });
+
+    /* Ruling Q3(c) with the pointer hold (2026-11-01): a member removed on another
+     * device leaves the cards and the table within one clock read, but not under
+     * the pointer; the counts (beside the cards, in the header) follow at once:
+     * a count is never held (review repair: the header rides the collection's
+     * own read, so that read is not held, only the rows drawn from it). */
+    const SECOND: CollectionPropertyRow = { ...MEMBER, property_id: 44, sreality_id: 902, display_label: 'Praha 6' };
+    const CARD2 = cardRow(44, { sreality_id: 902, display_label: 'Praha 6' });
+    const TWO: CollectionWithProperties = {
+      collection: { ...DATA.collection, listing_count: 2 },
+      properties: [MEMBER, SECOND],
+    };
+    const ONE: CollectionWithProperties = {
+      collection: { ...DATA.collection, listing_count: 1 },
+      properties: [SECOND],
+    };
+    const headerCount = () => screen.getByText(/· updated/).textContent?.replace(/\s+/g, ' ').match(/^(\d+) propert/)?.[1];
+
+    it('drops a member removed elsewhere once the pointer leaves the members, the counts at once', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(TWO);
+      vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [CARD, CARD2], nextCursor: null });
+      vi.mocked(queries.fetchBrowseCount).mockResolvedValue(2);
+      const { qc } = renderPage();
+      await waitFor(() => expect(cardLink(CARD)).toBeDefined());
+      await waitFor(() => expect(screen.getByText('2 of 2')).toBeInTheDocument());
+      fireEvent.pointerOver(cardLink(CARD)!);
+      const reads = {
+        collection: vi.mocked(api.getCollection).mock.calls.length,
+        cards: vi.mocked(queries.fetchListingsForCards).mock.calls.length,
+      };
+
+      vi.mocked(api.getCollection).mockResolvedValue(ONE);
+      vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [CARD2], nextCursor: null });
+      vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1);
+      vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[44, [1]]]));
+      await act(async () => {
+        void revalidate(qc, familyTargets(qc, 'collections', null));
+      });
+      await waitFor(() => expect(screen.getByText('2 of 1')).toBeInTheDocument());
+      await waitFor(() => expect(headerCount()).toBe('1'));
+      expect(api.getCollection).toHaveBeenCalledTimes(reads.collection + 1);
+      expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(reads.cards);
+      expect(cardLink(CARD)).toBeDefined();
+
+      fireEvent.pointerLeave(cardLink(CARD)!);
+      await waitFor(() => expect(cardLink(CARD)).toBeUndefined());
+      expect(api.getCollection).toHaveBeenCalledTimes(reads.collection + 1);
+      expect(screen.getByText('1 of 1')).toBeInTheDocument();
+    });
+
+    it("holds the table's rows under the pointer, never its counts", async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(TWO);
+      const { qc } = renderPage({ path: '/collections/1?tab=table' });
+      const row = await screen.findByRole('link', { name: 'Praha 5' });
+      fireEvent.pointerOver(row);
+
+      vi.mocked(api.getCollection).mockResolvedValue(ONE);
+      vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[44, [1]]]));
+      await act(async () => {
+        void revalidate(qc, familyTargets(qc, 'collections', null));
+      });
+      await waitFor(() => expect(headerCount()).toBe('1'));
+      const card = screen.getByRole('region', { name: 'Properties' });
+      expect(within(card).getByRole('heading', { level: 2, name: 'Properties' }).nextElementSibling).toHaveTextContent('1');
+      expect(screen.getByRole('link', { name: 'Praha 5' })).toBeInTheDocument();
+
+      fireEvent.pointerLeave(row);
+      await waitFor(() => expect(screen.queryByRole('link', { name: 'Praha 5' })).toBeNull());
+      expect(screen.getByRole('link', { name: 'Praha 6' })).toBeInTheDocument();
+    });
+
+    /* Review repair (W6): my own Remove is not held. The mouse on its way to the
+     * button is a hand on the members, and had parked the very re-read that takes
+     * the row out: it stayed, its button back to "Remove", until the pointer left. */
+    it('drops the row I remove at once, the pointer still over the members', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(TWO);
+      renderPage({ path: '/collections/1?tab=table' });
+      await screen.findByRole('link', { name: 'Praha 5' });
+      const remove = within(screen.getByRole('link', { name: 'Praha 5' }).closest('tr')!).getByRole('button', {
+        name: 'Remove listing from collection',
+      });
+      fireEvent.pointerOver(remove);
+      vi.mocked(api.getCollection).mockResolvedValue(ONE);
+      fireEvent.click(remove);
+
+      await waitFor(() => expect(api.removePropertyFromCollection).toHaveBeenCalledWith(1, 42));
+      await waitFor(() => expect(screen.queryByRole('link', { name: 'Praha 5' })).toBeNull());
+      expect(screen.getByRole('link', { name: 'Praha 6' })).toBeInTheDocument();
+      await waitFor(() => expect(headerCount()).toBe('1'));
+    });
+
+    it('shows a row I removed again once it is re-added elsewhere', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(TWO);
+      const { qc } = renderPage({ path: '/collections/1?tab=table' });
+      await screen.findByRole('link', { name: 'Praha 5' });
+      const remove = within(screen.getByRole('link', { name: 'Praha 5' }).closest('tr')!).getByRole('button', {
+        name: 'Remove listing from collection',
+      });
+      fireEvent.pointerOver(remove);
+      vi.mocked(api.getCollection).mockResolvedValue(ONE);
+      fireEvent.click(remove);
+      await waitFor(() => expect(screen.queryByRole('link', { name: 'Praha 5' })).toBeNull());
+
+      vi.mocked(api.getCollection).mockResolvedValue({
+        ...TWO,
+        properties: [{ ...MEMBER, added_at: '2026-11-01T10:00:00Z' }, SECOND],
+      });
+      await act(async () => {
+        void revalidate(qc, familyTargets(qc, 'collections', null));
+      });
+      await waitFor(() => expect(headerCount()).toBe('2'));
+      fireEvent.pointerLeave(screen.getByRole('table'));
+      expect(await screen.findByRole('link', { name: 'Praha 5' })).toBeInTheDocument();
     });
 
     it('an empty collection shows its sentence and no tabs', async () => {

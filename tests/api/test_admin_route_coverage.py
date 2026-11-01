@@ -444,9 +444,6 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
             f"{_FEEDBACK_POST} depends on {held_too_early.__name__} again — see the "
             "comment above for why it must open its connections in the handler"
         )
-    assert "tenant_pool.tenant_transaction(" in inspect.getsource(post.endpoint), (
-        f"{_FEEDBACK_POST} no longer gates on a tenant transaction"
-    )
 
 
 @pytest.mark.parametrize("key", [

@@ -170,8 +170,8 @@ it (`api/`). They do not apply to the scraper.
 10. **An agent is one folder in repo-root `skills/`** (`skills/README.md`): frontmatter = a priced model per
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
-    journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against the run's own tool results; `scripts/agent_run.py`
-    runs one locally and records a cassette. Only the estimator still reads the `skills` table (Settings,
+    journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
+    runs one locally (a cassette); `executor.py` queues them. Only the estimator still reads the `skills` table (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
@@ -432,8 +432,8 @@ API service:
 - `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
   since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
   `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
-- `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
-  `chrome-extension://<id>` origin and the SPA origin.
+- `CORS_ALLOW_ORIGINS` — CSV: the SPA origin + each extension ID's `chrome-extension://<id>` (no host
+  permissions). Kept: the operator edits it in Railway, never an agent.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
   of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
   held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the

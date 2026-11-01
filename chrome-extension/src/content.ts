@@ -6,7 +6,8 @@
  * tab (edge_tab.ts), the panel's opener; any other page on a portal host gets the
  * search-page overlay (index_overlay.ts: per-card controls and the corner dock).
  * Both draw from this page's store (store.ts), over the one transport (transport.ts):
- * every network call goes to the background worker; this script never fetches. The
+ * every network call goes to the background worker, which calls from the
+ * extension's origin, not the portal page's; this script never fetches. The
  * side panel of this tab's window holds a port to it while open: the subject goes up
  * it, and each side re-reads a property the other wrote. */
 
@@ -18,7 +19,7 @@ import { runIndexOverlay, type IndexOverlayHandle } from './index_overlay';
 import { onAccountChange } from './session';
 import { createStore, sleep } from './store';
 import { send } from './transport';
-import type { PanelCall, PanelSubject, PortMessage, RouteMessage } from './types';
+import type { PanelCall, PanelSubject, PortMessage } from './types';
 
 let subject: PanelSubject | null = null;
 /* The side panel of this tab's window, while it is open. */
@@ -65,7 +66,7 @@ let lastRouteKey: string | null = null;
 let indexOverlay: IndexOverlayHandle | null = null;
 
 /* Re-entrant: several portals are SPAs that navigate through the History API, so
- * the background relays each soft navigation (route_changed) and this re-decides. */
+ * every soft navigation re-decides here (watchNavigation below). */
 function renderForUrl(url: string): void {
   const key = routeKey(url);
   if (key === lastRouteKey) return;
@@ -95,9 +96,16 @@ function renderForUrl(url: string): void {
     .catch((err: unknown) => { console.error('[mf-ext] index overlay failed', err); });
 }
 
-chrome.runtime.onMessage.addListener((message: RouteMessage) => {
-  if (message.type === 'route_changed') renderForUrl(message.url);
-});
+/* Soft navigation: an SPA portal (sreality's Next.js, bezrealitky's) changes the
+ * address through the History API without a new document, and only a new document
+ * re-injects a manifest content script. The Navigation API reports every
+ * same-document change of the current entry (push, replace, back, forward) to this
+ * script too, so the page is watched from here and no `webNavigation` permission is
+ * needed (live-checked per portal in #2277). */
+function watchNavigation(): void {
+  const navigation = (window as Window & { navigation?: EventTarget }).navigation;
+  navigation?.addEventListener('currententrychange', () => renderForUrl(window.location.href));
+}
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== PANEL_PORT) return;
@@ -116,6 +124,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
 // The profile's scheme and theme on every themed shadow host (appearance.ts).
 followAppearance(store);
+watchNavigation();
 renderForUrl(window.location.href);
 callPanel(false);
 /* The back/forward cache closes the panel's port as the page goes in, and the frozen

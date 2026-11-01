@@ -14,9 +14,8 @@ The pool role (migration 293) is LOGIN + NOINHERIT with zero direct grants;
 data access exists only under the explicit `SET LOCAL ROLE authenticated`,
 so a code path that forgets the switch fails closed, never leaks.
 
-`tenant_transaction` is the same scoped transaction as a plain context manager,
-for the route that must not hold it across slow service-role work and for the
-tool registry's tenant tools (api/capabilities/registry.py).
+`tenant_transaction` is the same scoped transaction as a plain context manager; who may
+call it directly is tests/api/test_tenant_caller_census.py, which pins the set.
 
 A GET/HEAD transaction is a bounded read, as PostgREST runs the SPA's own (`bound_read`):
 READ ONLY, so a write there fails loudly, and under `authenticated`'s 8 s statement budget.

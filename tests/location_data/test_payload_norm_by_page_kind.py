@@ -95,9 +95,10 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
     # mandatory town carrier. The PROFILE is untouched, which is the property this table
     # exists to pin — a fixture edit moves the body's digest, never the cohort key. It
     # lands with the fixture and the golden (realitymix@5.json) in one commit, or the
-    # fixture-diff gate and this pin disagree about the same bytes.
+    # fixture-diff gate and this pin disagree about the same bytes. Moved again by @8 (W4):
+    # the model gained the blank interactive `div#map` the hidden-geocode pages serve.
     ("realitymix", "location_w2/realitymix_detail.html"):
-        "53836c6ee03bb83b55f790128edbc7484b74f463ea56f568f8593e4f4960fffa",
+        "7147d42d0931977c215c9ec0c2c9cd474145a28122364d229c6bf868ce7e0a1f",
     # W2-6 re-pinned: the FIXTURE moved, not the normaliser. remax's pinned body carried a
     # hand-written one-line `h2.pd-header__address`, which hid the nested `mapa` jump-link
     # every real remax page carries; the block is now copied verbatim from the archived
@@ -136,6 +137,8 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
         "c16e2fd60643569fd4a22dedeea75efef8c164ecf6956f55c0b22802456aa4c7",
     ("realitymix", "location_w2a_refetch/realitymix_b1.html"):
         "b50fa146f728a98b085ec311f8189af47496bb4171931a2e903c5f7e35720a00",
+    ("realitymix", "location_w2a_refetch/realitymix_c1.html"):
+        "732e5f9cfc1fee86db77ea1c76bb9cb225bf28b28b0193cd5b999bce97956469",
     ("remax", "location_w2a_refetch/remax_a1.html"):
         "c71ae246101eea41aaabbc343804ba528472545a9490ed0a9015f747d534f559",
     ("remax", "location_w2a_refetch/remax_a2.html"):
