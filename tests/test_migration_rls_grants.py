@@ -424,7 +424,8 @@ def test_live_allowlist_is_pinned():
     """What the live sweep waives, pinned offline: a registry edit that changes it updates this list on purpose.
     An 'acl' function (account_email reads emails) never belongs here: the sweep's function arm skips what
     `authenticated` cannot EXECUTE, so waiving it would let a later grant on it pass unseen."""
-    assert sorted(live_allowlist()) == ["images_public", "llm_cost_hour_union", "location_jobs", "sold_coverage"]
+    assert sorted(live_allowlist()) == [
+        "curation_clock_audience", "images_public", "llm_cost_hour_union", "location_jobs", "sold_coverage"]
 
 
 def test_no_write_grants_to_browser_roles():
