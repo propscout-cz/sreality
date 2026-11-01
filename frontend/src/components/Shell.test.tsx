@@ -109,14 +109,14 @@ describe('<Shell> Runs entry', () => {
 
   it('shows for an account that may start a run, without a query for anyone signed out', async () => {
     signedIn(false);
-    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [] });
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
     renderShellWith(<p>page content</p>);
     expect(await screen.findByRole('link', { name: 'Runs' })).toHaveAttribute('href', '/runs');
   });
 
   it('is absent for a refused account, an admin included', async () => {
     signedIn(true);
-    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: false, reason: 'no' }, queue: null, agents: [] });
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: false, reason: 'no' }, queue: null, agents: [], limit: null });
     renderShellWith(<p>page content</p>);
     await waitFor(() => expect(api.fetchAgentRunOptions).toHaveBeenCalled());
     await screen.findByText('page content');

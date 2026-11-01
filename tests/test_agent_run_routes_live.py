@@ -120,12 +120,14 @@ def test_an_act_as_header_is_403_on_every_route_even_with_an_edit_share(svc: psy
     client = as_user(world["b"])
     head = {"X-Act-As": str(world["a_acc"])}
     calls = [("POST", "/runs", BODY), ("GET", "/runs", None), ("GET", "/runs/options", None),
+             ("PUT", "/runs/limit", {"daily_limit_usd": 1}),
              ("GET", f"/runs/{run_id}", None), ("GET", f"/runs/{run_id}/steps", None),
              ("POST", f"/runs/{run_id}/cancel", None)]
     for method, path, body in calls:
         assert client.request(method, path, json=body, headers=head).status_code == 403, f"{method} {path}"
     assert _run(svc, run_id)["cancel_requested_at"] is None
     assert svc.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 1
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
 
 
 def test_another_accounts_run_is_404_on_every_route_and_absent_from_the_list(svc: psycopg.Connection, world: dict[str, Any],
@@ -246,6 +248,7 @@ def test_options_offers_the_form_only_to_who_can_use_it(svc: psycopg.Connection,
     closed = client.get("/runs/options").json()
     assert closed["start"]["allowed"] is False and "not open" in closed["start"]["reason"]
     assert closed["agents"] == [] and closed["queue"] is None, "a refused account reads no definition, no platform state"
+    assert closed["limit"] is None
 
 
 @pytest.mark.parametrize("setting, value, state", [
@@ -254,6 +257,7 @@ def test_options_offers_the_form_only_to_who_can_use_it(svc: psycopg.Connection,
     ("agent_daily_ceiling_usd", None, "parked"),
     ("agent_account_running_cap", None, "parked"),
     ("agent_daily_ceiling_usd", 0, "parked"),
+    ("agent_account_daily_limit_usd", None, "parked"),
 ])
 def test_options_says_truthfully_whether_a_queued_run_can_move(svc: psycopg.Connection, world: dict[str, Any],
                                                                as_user: Callable[[uuid.UUID], TestClient],
@@ -303,3 +307,161 @@ def test_a_run_reads_as_running_while_the_worker_has_it(svc: psycopg.Connection,
                    during=lambda call: live.append(client.get(f"/runs/{run_id}").json()["status"]))
     assert _work_on(model, threading.Event()).state == "succeeded"
     assert live == ["running", "running"] and client.get("/runs").json()["data"][0]["status"] == "succeeded"
+
+
+# --- an account's daily limit and the plan gate (#2319) ----------------------------------------------------------------
+
+def test_a_user_changes_their_own_limit_and_no_one_elses(svc: psycopg.Connection, world: dict[str, Any],
+                                                         as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    ledger._ended_run(svc, world, "a", 3.5)
+    client = as_user(world["a"])
+    assert client.get("/runs/options").json()["limit"] == {"limit_usd": 10, "spent_today_usd": 3.5}
+
+    changed = client.put("/runs/limit", json={"daily_limit_usd": 12.5})
+    assert changed.status_code == 200, changed.text
+    assert changed.json() == {"limit_usd": 12.5, "spent_today_usd": 3.5}
+    assert client.get("/runs/options").json()["limit"]["limit_usd"] == 12.5
+
+    other = as_user(world["b"])
+    assert other.get("/runs/options").json()["limit"] == {"limit_usd": 10, "spent_today_usd": 0}
+    assert other.put("/runs/limit", json={"daily_limit_usd": 1}).json()["limit_usd"] == 1
+    assert as_user(world["a"]).get("/runs/options").json()["limit"]["limit_usd"] == 12.5, "the route takes the caller's account, nothing else"
+
+
+def test_the_body_cannot_name_another_account(svc: psycopg.Connection, world: dict[str, Any],
+                                              as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    answered = as_user(world["b"]).put("/runs/limit", json={"daily_limit_usd": 1, "account_id": str(world["a_acc"])})
+    assert answered.status_code == 422
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"daily_limit_usd": -1}', b'{"daily_limit_usd": -0.01}', b'{"daily_limit_usd": "10"}', b'{"daily_limit_usd": "ten"}',
+    b'{"daily_limit_usd": true}', b'{"daily_limit_usd": null}', b'{"daily_limit_usd": [1]}', b'{"daily_limit_usd": NaN}',
+    b'{"daily_limit_usd": Infinity}', b'{"daily_limit_usd": -Infinity}', b'{"daily_limit_usd": 1e400}',
+    b'{"daily_limit_usd": 1e308}', b'{"daily_limit_usd": 1000000.01}', b'{"daily_limit_usd": 1.234}',
+    b'{"daily_limit_usd": 0.001}', b'{}', b'{"daily_limit_usd": 1, "x": NaN}', b'{"daily_limit_usd": 1, "x": 1}',
+    b'{"x": NaN}', b'NaN', b'10', b'"10"', b'[]', b'null', b'{"daily_limit_usd": 1' + b'0' * 400 + b'}',
+])
+def test_a_limit_that_is_no_amount_is_a_422_and_writes_nothing(svc: psycopg.Connection, world: dict[str, Any],
+                                                               as_user: Callable[[uuid.UUID], TestClient], raw: bytes) -> None:
+    answered = as_user(world["a"]).put("/runs/limit", content=raw, headers={"Content-Type": "application/json"})
+    assert answered.status_code == 422, answered.text
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+def test_a_number_too_long_to_parse_is_refused_and_writes_nothing(svc: psycopg.Connection, world: dict[str, Any],
+                                                                  as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    raw = b'{"daily_limit_usd": 1' + b'0' * 5000 + b'}'
+    answered = as_user(world["a"]).put("/runs/limit", content=raw, headers={"Content-Type": "application/json"})
+    assert answered.status_code == 400, answered.text
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("value", [0, 0.0, 1, 10.5, 0.01, 1000000])
+def test_any_amount_from_zero_up_to_the_bound_is_taken(svc: psycopg.Connection, world: dict[str, Any],
+                                                       as_user: Callable[[uuid.UUID], TestClient], value: float) -> None:
+    answered = as_user(world["a"]).put("/runs/limit", json={"daily_limit_usd": value})
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["limit_usd"] == value
+
+
+def test_zero_set_through_the_route_holds_a_run_and_says_so(svc: psycopg.Connection, world: dict[str, Any],
+                                                            as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    client = as_user(world["a"])
+    run_id = client.post("/runs", json=BODY).json()["id"]
+    assert client.put("/runs/limit", json={"daily_limit_usd": 0}).status_code == 200
+    assert client.get("/runs/options").json()["queue"] == "limited"
+    assert _work_on(_Model()).state == "idle"
+    assert client.put("/runs/limit", json={"daily_limit_usd": 1}).status_code == 200
+    assert client.get("/runs/options").json()["queue"] == "open"
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", run_id)
+
+
+@pytest.mark.parametrize("setting, value, state", [("agent_executor_enabled", False, "dark"), ("agent_daily_ceiling_usd", 0, "parked")])
+def test_a_platform_hold_outranks_the_accounts_own_limit(svc: psycopg.Connection, world: dict[str, Any],
+                                                         as_user: Callable[[uuid.UUID], TestClient],
+                                                         setting: str, value: Any, state: str) -> None:
+    ledger._set_limit(svc, world, "a", 0)
+    _set(svc, setting, value)
+    assert as_user(world["a"]).get("/runs/options").json()["queue"] == state, "raising the limit would not move this queue"
+
+
+def _on_plan(svc: psycopg.Connection, world: dict[str, Any], plan: str, status: str = "active") -> None:
+    svc.execute("UPDATE entitlements SET plan = %s, status = %s WHERE account_id = %s", (plan, status, world["a_acc"]))
+
+
+@pytest.fixture()
+def plan_without_key(svc: psycopg.Connection) -> Iterator[str]:
+    svc.execute("""INSERT INTO plans (key, name, agendas) VALUES ('t2319', 't', '{"browse": true}') ON CONFLICT DO NOTHING""")
+    try:
+        yield "t2319"
+    finally:
+        svc.execute("UPDATE entitlements SET plan = 'free' WHERE plan = 't2319'")
+        svc.execute("DELETE FROM plans WHERE key = 't2319'")
+
+
+def _assert_plan_refused(svc: psycopg.Connection, client: TestClient) -> None:
+    refused = client.post("/runs", json=BODY)
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"] == executor.PLAN_REFUSAL
+    assert svc.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
+    options = client.get("/runs/options").json()
+    assert options == {"start": {"allowed": False, "reason": executor.PLAN_REFUSAL}, "queue": None, "agents": [], "limit": None}
+    assert client.put("/runs/limit", json={"daily_limit_usd": 1}).status_code == 403
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+def test_a_plan_without_agents_is_refused_everywhere_in_its_own_words(svc: psycopg.Connection, world: dict[str, Any],
+                                                                      as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    _on_plan(svc, world, "free")
+    _assert_plan_refused(svc, as_user(world["a"]))
+
+
+def test_an_absent_agents_key_counts_as_off(svc: psycopg.Connection, world: dict[str, Any], plan_without_key: str,
+                                            as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    _on_plan(svc, world, plan_without_key)
+    _assert_plan_refused(svc, as_user(world["a"]))
+
+
+def test_a_non_true_agents_value_counts_as_off(svc: psycopg.Connection, world: dict[str, Any], plan_without_key: str,
+                                               as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    svc.execute("""UPDATE plans SET agendas = '{"agents": "true"}' WHERE key = %s""", (plan_without_key,))
+    _on_plan(svc, world, plan_without_key)
+    _assert_plan_refused(svc, as_user(world["a"]))
+
+
+def test_a_cancelled_entitlement_counts_as_off(svc: psycopg.Connection, world: dict[str, Any],
+                                               as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    _on_plan(svc, world, "pilot", "canceled")
+    _assert_plan_refused(svc, as_user(world["a"]))
+
+
+def test_an_account_with_no_entitlement_row_has_the_default_plan(svc: psycopg.Connection, world: dict[str, Any],
+                                                                 as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    svc.execute("DELETE FROM entitlements WHERE account_id = %s", (world["a_acc"],))
+    _assert_plan_refused(svc, as_user(world["a"]))
+
+
+def test_an_admin_on_a_plan_without_agents_gets_the_same_answer_as_anyone(svc: psycopg.Connection, world: dict[str, Any],
+                                                                          as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    """The gate is the account's, and a run carries no admin powers (the claim's narrowing), so nothing here reads the role."""
+    _on_plan(svc, world, "free")
+    client = as_user(world["a"])
+    api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {
+        "sub": str(world["a"]), "role": "authenticated", "app_metadata": {"is_admin": True}}
+    _assert_plan_refused(svc, client)
+
+
+def test_off_the_allowlist_reads_the_rollouts_words_even_on_a_plan_with_agents(svc: psycopg.Connection, world: dict[str, Any],
+                                                                               as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    _set(svc, "agent_run_allowlist", [])
+    client = as_user(world["a"])
+    assert "not open" in client.post("/runs", json=BODY).json()["detail"]
+    assert client.put("/runs/limit", json={"daily_limit_usd": 1}).status_code == 403
+
+
+def test_a_plan_with_agents_on_the_allowlist_starts_a_run(svc: psycopg.Connection, world: dict[str, Any],
+                                                          as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    _on_plan(svc, world, "pilot", "trialing")
+    assert as_user(world["a"]).post("/runs", json=BODY).status_code == 201

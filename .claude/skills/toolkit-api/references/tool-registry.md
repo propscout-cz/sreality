@@ -245,17 +245,31 @@ Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
 - **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
   service connection, for the identity a route stamped from the caller's own token: the allowlist
   (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
-  `not_allowlisted`), the input checked, a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
+  `not_allowlisted`), the plan's `agents` agenda (`billing.plan_includes`: absent or not JSON `true` = off, a cancelled
+  entitlement = off, no admin bypass; `SubmitRefused` `plan_without_agents`), the input checked, a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
   the in-flight cap (`agent_account_in_flight_cap`; `SubmitRefused` `in_flight_cap`), insert as `queued`. It takes no
   act-as.
 - **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
   `agent_executor_enabled` is not JSON `true`. Otherwise it re-queues or fails every lapsed lease, then under one
   transaction lock refuses to claim at or above `agent_daily_ceiling_usd` (`parked`; `llm_calls` with `called_for` in
   `_RUN_SPEND`, `agent_run` or a paid tool's `assess_property_visuals`, since UTC midnight, the local runner's included) and claims the oldest queued run whose account has fewer
-  than `agent_account_running_cap` running (`idle` when none, `FOR UPDATE SKIP LOCKED`). It re-stamps the definition,
+  than `agent_account_running_cap` running and is under its daily limit (`idle` when none, `FOR UPDATE SKIP LOCKED`). It re-stamps the definition,
   tool-set and commit hashes and the model (the row names what ran), runs the loop with a budget of the run's cap less
   what its earlier attempt spent, and ends `succeeded`, `failed` (with `error`), `cancelled`, `released` or `lost`.
   An absent number parks rather than guesses. The worker's SIGTERM handler sets `stop`.
+- **The money limits, three of them.** A run's own `max_cost_usd` (at most $20, `definition.py`). An account's daily limit:
+  its `agent_account_limits` row, else `agent_account_daily_limit_usd` ($10; changing it touches no account), against
+  `agent_account_spent_today` (`llm_calls` through `agent_runs`, `_RUN_SPEND`, since UTC midnight), the one definition, called
+  by the claim and by `GET /runs/options` under the caller's login. An account at or above it is passed over, so the
+  next account's run claims and its own runs stay queued, failing for nothing; 0 means none claimed; `PUT /runs/limit` is
+  the only writer. The platform's `agent_daily_ceiling_usd` ($25): the whole platform's spend per UTC day, rows with no
+  run included (the comparison script's, a deleted account's), at or above which every claim parks. It is the backstop
+  over a raised account limit, and the sum of the limits passes it as soon as a few accounts are active, so **raise it as
+  accounts join**, or they all wait on it. Valuo counts in calls (`agent_valuo_monthly_cap`), outside all three.
+  **Overshoot, stated:** a limit is read only at claim time and a running run finishes under its own cap, so an account can
+  pass its limit by up to `agent_account_running_cap` × the per-run cap: 2 × $20 at worst today, on the same terms as the ceiling.
+- **`queue_state(conn, limit)`**: `dark` (the brake), `parked` (ceiling or a missing number), `limited` (only this account's
+  limit), `open`. The platform's words come first, since raising a limit would not move those.
 - **`cancel(conn, *, run_id, account_id)`**: a queued run ends now, a running one at its next step; returns its status,
   or None for no such run on this account.
 
