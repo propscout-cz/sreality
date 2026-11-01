@@ -5194,7 +5194,7 @@ portal's payload or its own page, and every other stamp is class E outright.
   INFERRED rather than named (a PSČ lookup, a reverse geocode, the sliver, a bare region) contribute
   no agreeing field, so they cannot grade above `low`. **A COMPOSITE LOCALITY NAME IS BOUND AGAINST
   THE REGISTER** (`composite.py`, W9, operator ruling 2026-09-14): when the line names no obec, the
-  whole string is matched first at obec / část obce / MOMC / správní obvod — so "Frýdek-Místek" stays
+  whole string is matched first at obec / část obce / MOMC — so "Frýdek-Místek" stays
   a town and "Praha-Řeporyje" binds the městská část and resolves up to Praha — and only if nothing
   matches whole is it split on the portals' separators, a token naming an obec (or a uniquely named
   part) anchoring the rest INSIDE that town, which is what makes "Praha 4 - Podolí" publish Praha and
@@ -5540,7 +5540,13 @@ points, streets, parcels, building objects, admin units and a typo-tolerant gaze
 merge → boundaries (the state SHP pack is the vintage's third archived artifact, a resume restores
 all three from R2; three geometries per unit — authoritative, subdivided pip, render — an unchanged
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
-member obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
+member okres, obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
+**Levels loaded = levels bound, served or used as match keys** (W7, `docs/design/location-quality/w7-registry.md`):
+stát, region soudržnosti, kraj, okres, obec, MOMC, část obce, KÚ. Správní obvod, ZSJ, ORP and POU were closed by
+SCD-2 (migration 718), never deleted; the loader never closes a unit it stops staging, so retiring a level is a
+migration. **An obec's okres is the one the state pack publishes on it** (`OBCE_P.OKRES_KOD`, a blocking
+`okres_partition` assertion), never the CSV chain's, which alone omits Praha: Praha's okres is ČÚZK's technical
+okres 9999, "území Hlavního města Prahy", read from the pack with no constant.
 Křovák S-JTSK → WGS84 is ONE audited 1 m PROJ conversion (`location_data/krovak.py`, golden-point
 test); the `location_town_coverage` gauge's `registry` cell reads Problem when the registry stops moving
 (no current version, a current one older than 40 d, or a load staged for more than 24 h:
@@ -5605,7 +5611,7 @@ per-listing statement gets, and cancelling it threw the whole batch away.
   claims and deleted the rows, and 384,500 answer rows with 135 towns had nothing that could
   re-enqueue them. Hence the re-entrant `DO UPDATE` and the `enqueued_at` fence.
 * **A fallback reading a column nobody writes is silent** — BIND's admin-centroid fallback read
-  `ruian_admin_units.definition_point`, which the loader has never written: 29 % of towned rows
+  `ruian_admin_units.definition_point` (dropped by W7), which the loader had never written: 29 % of towned rows
   (8,706 of 29,892) shipped with no position, which the map would have dropped.
 * **A slim of a live table is TWO migrations** — a merge deploys in minutes while a migration is
   applied by hand, so RELAX (drop the CHECKs/NOT NULLs/FKs the new write cannot satisfy) before the

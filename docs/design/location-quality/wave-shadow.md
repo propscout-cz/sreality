@@ -2,7 +2,7 @@
 
 Gate (PROGRAM.md, "Standing gate"): every wave that moves positions or quarter codes runs one shadow
 engine generation before it deploys, judged on the rulings ledger inside the affected blocks (the 413
-post-2026-10-27 `same` pairs must hold). Binds W3, W4, W5, W5b and W6. No production write, no engine
+post-2026-10-27 `same` pairs must hold). Binds W3, W4, W5, W5b, W6 and W7. No production write, no engine
 pause, `DECISION_MODULES` untouched.
 
 ## The seam
@@ -122,7 +122,12 @@ candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
 gh workflow run location_wave_shadow.yml --ref main -f wave=w4-g2 -f group=2/3 \
     -f positions_run_id=<run id of the 1/1 dispatch>
 ``` `--ref` decides the resolver: W4 changes only a contract, so
-`main`; W5, W5b and W6 dispatch from their own branch once it has merged `main`.
+`main`; W5, W5b, W6 and W7 dispatch from their own branch once it has merged `main`.
+W7's `ids_sql` is the rows its resolver change can move: `SELECT ll.listing_id FROM listing_location ll WHERE
+ll.obec_kod = 554782 AND ll.granularity = 'cast_obce_or_quarter' AND ll.cast_obce_kod IS NULL`. Its okres 9999
+is no mover: the shadow reads today's registry, and `COHORT_LOCATION_SQL` carries no okres. Each of these rows' old
+side is a split-city side with no quarter, which is never exported, so expect `blocks_skipped_no_ruling`,
+`movers_unjudgeable` or PARTIAL, not a full judgement.
 
 By hand, with `SUPABASE_DB_URL` and (for `remine`) the `R2_*` variables:
 ```bash

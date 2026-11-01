@@ -1320,6 +1320,12 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
   the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
   The refetch lane ticks hourly, a constant.
+- **W7 — RÚIAN loader, full partitions, read levels only — built 2026-11-01, not rolled out** (#2342; migration 718
+  NOT applied; rulings Q1, Q10, Q13 and three of 2026-11-01; as built + rollout: `docs/design/location-quality/w7-registry.md`).
+  Praha's okres is 9999, read from the pack like every obec's; the loader stages 8 levels (SO, ZSJ, ORP, POU out, 24,225
+  units retired by SCD-2) and 6 of the pack's layers; 3 relations and 6 unread columns go; one Praha tree in CI. **Next:** the
+  shadow, merge, backup, migration, then `location_registry_load.yml` re-enabled and vintage 20261031 dispatched once no
+  full sweep is queued. Acceptance from 49,900 active Praha rows with okres NULL (179,398 all) and a Praha cell in okres pivots.
 - **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
   `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
   address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within

@@ -105,7 +105,7 @@ Each wave below replaces several local rules with one rule.
 | W4 | realitymix + remax contracts | none | issues 5, 6 | contract changes net negative, 1 regex in | S |
 | W5 | Resolver v5.10: one ladder, one matcher, one grain, one containment test | quarter field holds one level | issues 2, 3; cascade points | about 8 special cases out; about 15 lines plus one registry distance read and one match-key list in | M |
 | W6 | Radius v5.11: CE95 for pins, reach for register placements | −declared_radius_m, −match_confidence, −sentinel | issue 4 | hand table and two fields out; generated table, script and one standing recalibration in | M |
-| W7 | RÚIAN loader: full partitions, read levels only | −2 levels, 23,626 units retired, −6 columns | Praha okres, mirror defects | negative | S |
+| W7 | RÚIAN loader: full partitions, read levels only | −4 levels, 24,225 units retired, −6 columns | Praha okres, mirror defects | negative | S |
 
 **Sequencing.**
 - Merge #2194 (v5.9) first, with its hand rollout for the last time.
@@ -113,7 +113,7 @@ Each wave below replaces several local rules with one rule.
 - The RÚIAN vintage is due 11-01 (GH cron '0 10 1 * *', throttled). If it publishes before W2 lands, it also needs today's hand full-resolve.
 - W0 runs beside W1 on the scraper track.
 - W3 and W4 can swap if W3 waits on its destructive gate. W5 depends on W3 only for code overlap in bind.py, so it can go first if W3's gate waits.
-- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
+- **Standing gate for W3, W4, W5, W6 and W7:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
@@ -258,9 +258,10 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 - **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
 
 ### W7: registry
-- **Praha's okres:** obec Praha and ORP 19 take okres 9999 from ČÚZK's own SHP pack. A load assertion guards the value; reading each obec's okres from OBCE_P would remove the constant altogether.
-- **Retired:** the conflated obvod/správní-obvod level (including a Praha unit named "Kutná Hora"), 23,604 ZSJ units that can never bind, 6 unread columns, and the contradictory CI Praha trees.
-- **Rollout:** rides the next vintage load (the 11-01 vintage if W7 is ready, else 12-01 or a dispatch), and W2 sweeps the corpus by itself.
+- **Praha's okres:** obec Praha takes okres 9999 from ČÚZK's own SHP pack, as every obec takes its okres from OBCE_P: no constant, and a blocking load assertion.
+- **Retired:** the conflated obvod/správní-obvod level (including a Praha unit named "Kutná Hora"), 23,604 ZSJ units that can never bind, ORP and POU (ruling 2026-11-01), 3 relations, 6 unread columns, and the contradictory CI Praha trees.
+- **Rollout:** ruling 2026-11-01: the 11-01 load was held, and vintage 2026-10-31 is dispatched after the merge and the migration, once no full sweep is queued; W2 then sweeps the corpus by itself.
+- **As built (2026-11-01, ticket #2342, migration 718; design and rollout: `w7-registry.md`):** the loader staged 12 levels and now stages 8; `pack_okres` + `okres_partition` + the okres completeness gate; ORP_P and POU_P out of the load; the first production SCD-2 close is driven end to end by `test_registry_reparent_live.py`. Destructive under Q13: backup, deploy, then migration, then the load. Shadow `ids_sql`: the Praha rows at quarter grain with no code (463, 199 active). Interaction with W5: `w7-registry.md`.
 - **Acceptance:** 0 active Praha rows with okres NULL (from 50,766), and a Praha cell in okres pivots.
 
 ## Unification

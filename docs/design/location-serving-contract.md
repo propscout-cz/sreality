@@ -57,8 +57,9 @@ containment test evaluate NULL and the row drops out of `certain` AND `possible`
 
 **Registry identity (RÚIAN codes — the official Czech address registry, ČÚZK).** `ruian_adm_kod`
 (address point), `ulice_kod` (street), `obec_kod`, `cast_obce_kod`, `okres_kod`, `kraj_kod`. NULL
-means "not bound to that level". `katastr_kod` (migration 566, MF program) is the single
-katastrální území of the BOUND entity — an address point's own KÚ, a KÚ/ZSJ unit, the one KÚ of a
+means "not bound to that level"; Praha's okres is ČÚZK's technical okres 9999. `katastr_kod`
+(migration 566, MF program) is the single
+katastrální území of the BOUND entity — an address point's own KÚ, a KÚ unit, the one KÚ of a
 one-KÚ obec, a street or část obce whose every RÚIAN door lies in one KÚ — else NULL; never a
 portal pin's. NULL there means "not known at KÚ grain", which is what `mf_reference()` reads as a
 town-level location. The building (`stavebni_objekt_kod`) and parcel (`parcela_id`)
