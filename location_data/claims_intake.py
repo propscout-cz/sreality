@@ -48,8 +48,7 @@ THE LICENCE LADDER RUNS FIRST (§6.1.2, and it is a filter, not an audit)
   * Only the portal's OWN pin licenses a coordinate — the payload path its rule names, or
     the one archived locator. Every other stamp (`geocode`, bazos `street`/`locality`, the
     `carry_forward` a refetch laundered, absent provenance) -> class E, NO coordinate
-    claim, ever. The payload substrate can only ever emit `licence_class = 'portal'`; the
-    page substrate adds `'odbl'` for realitymix's Nominatim-fallback pin and nothing else.
+    claim, ever. Both substrates emit `licence_class = 'portal'` and nothing else.
 
 WHAT IT WRITES, AND ONLY THAT
   `location_claims` (deduped on `claim_fingerprint`; the readings half also DELETEs the

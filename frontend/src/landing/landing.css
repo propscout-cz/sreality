@@ -474,6 +474,7 @@ h3 { font-size: 1.3rem; line-height: 1.25; letter-spacing: -0.01em; }
 .done-note.on { display: block; }
 .legal h1 { font-size: clamp(2rem, 3vw + 1rem, 2.8rem); }
 .legal h2 { font-size: 1.35rem; margin-top: 36px; }
+.legal h3 { font-size: 1.1rem; margin-top: 24px; }
 .legal p, .legal li { color: var(--ink-2); }
 .legal ul { padding-left: 20px; }
 
