@@ -77,7 +77,7 @@ from api.new_dedup_bakeoff import router as new_dedup_bakeoff_router
 from api.new_dedup_labeling import router as new_dedup_labeling_router
 from api.new_dedup_tags import router as new_dedup_tags_router
 from api.routes.autodedup import router as autodedup_router
-from api.routes.location_quality import router as location_quality_router
+from api.routes.location_corrections import router as location_corrections_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
@@ -353,13 +353,11 @@ app.include_router(new_dedup_candidates_router)
 # See autodedup/progress_sql.py, autodedup/ui_sql.py and docs/design/autodedup/PROGRAM.md
 # (Q11, §9, §12).
 app.include_router(autodedup_router)
-# /location/* (location inspector + operator corrections) — the consumer
-# of `listing_location`, the location program's one answer table (mig 501),
-# admin-gated (require_admin). Reads via toolkit/location_quality.py; the
-# corrections POST appends an operator claim and resolves synchronously
-# (05 5.5.5). W2-b deleted the /sample/* and /compare/* families with their
-# tables; W1 deleted /quality/* (the Location Quality page renders the gauge's cells).
-app.include_router(location_quality_router)
+# /location/corrections (the address picker's write, W3b) — admin-gated (require_admin):
+# the property page's pick becomes operator claims on every ad of the property, and the
+# location ad resolves synchronously (05 5.5.5). W3b deleted the /listing/* inspector;
+# W2-b /sample/* and /compare/*; W1 /quality/* (the page renders the gauge's cells).
+app.include_router(location_corrections_router)
 
 
 @app.get("/health")
@@ -412,6 +410,7 @@ def post_maps_resolve(
         type_=body.type,
         name=body.name,
         regional_structure=[e.model_dump() for e in body.regional_structure],
+        address_point=body.address_point,
     )
 
 
