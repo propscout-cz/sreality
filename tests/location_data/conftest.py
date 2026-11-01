@@ -21,7 +21,7 @@ def ob_adr_zip(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def strukt_zip(tmp_path: Path) -> Path:
-    """The strukt_ADR product shape: 7 CSVs under strukturovane-CSV/."""
+    """The strukt_ADR product shape: 6 CSVs under strukturovane-CSV/."""
     path = tmp_path / "20260731_strukt_ADR.csv.zip"
     with zipfile.ZipFile(path, "w") as zf:
         for member in sorted((FIXTURES / "strukturovane-CSV").glob("*.csv")):

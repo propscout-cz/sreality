@@ -52,7 +52,7 @@ from location_data.resolver.normalize import (
 from location_data.resolver.types import AdminUnit, RegistryView, Street
 
 # The levels a locality line may name BELOW the town, finest first.
-PART_LEVELS: tuple[str, ...] = ("cast_obce", "momc", "spravni_obvod")
+PART_LEVELS: tuple[str, ...] = ("cast_obce", "momc")
 # The whole-string ladder. The town is tried first: a name that IS a town is never read as
 # somebody else's quarter.
 WHOLE_LEVELS: tuple[str, ...] = ("obec", *PART_LEVELS)

@@ -17,7 +17,7 @@ Mechanism, in order (04 C1.7):
   6. Merge into the mirror: admin units, streets, address points + change log.
   7. Boundaries for this version (`ruian_boundaries.load_pack`), unchanged units carried.
   8. Rebuild the gazetteer for this version — once, after the pack has named the units.
-  9. The completeness assertion: every member stát, obec and KÚ has pip + authoritative.
+  9. The completeness assertion: every member stát, okres, obec and KÚ has pip + authoritative.
  10. Publish = flip `is_current` in one short transaction; refresh `rent_map_cells`.
 
 What is NOT atomic: steps 6-8 write the mirror in place, so a reader keyed on `valid_to IS
@@ -43,6 +43,7 @@ import os
 import sys
 import tempfile
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,27 +65,24 @@ from location_data.load_assertions import Assertion, PriorLoad, StagingStats
 LOG = logging.getLogger("location_data.ruian_load")
 
 # ltree labels are level-prefixed numeric codes, never names — the alphabet is
-# [A-Za-z0-9_], so 'Brno-střed' is a syntax error at insert (01 §3.2.1). The design fixes
-# k/o/b/c/p/u/m; the remaining five prefixes are chosen here and must stay stable.
+# [A-Za-z0-9_], so 'Brno-střed' is a syntax error at insert (01 §3.2.1). The prefixes must
+# stay stable: closed rows of the retired levels (W7) still carry p, u, s and z.
 LABEL_PREFIX: dict[str, str] = {
     "stat": "t",
     "region_soudrznosti": "g",
     "kraj": "k",
     "okres": "o",
-    "orp": "p",
-    "pou": "u",
     "obec": "b",
-    "spravni_obvod": "s",
     "momc": "m",
     "cast_obce": "c",
     "katastralni_uzemi": "x",
-    "zsj": "z",
 }
 
-# Hierarchy order — parents are upserted before children so parent_id/path always resolve.
+# The levels the platform binds, serves or uses as match keys; nothing else is loaded (W7).
+# Hierarchy order: parents are upserted before children so parent_id/path always resolve.
 LEVEL_ORDER: tuple[str, ...] = (
-    "stat", "region_soudrznosti", "kraj", "okres", "orp", "pou", "obec",
-    "spravni_obvod", "momc", "cast_obce", "katastralni_uzemi", "zsj",
+    "stat", "region_soudrznosti", "kraj", "okres", "obec", "momc", "cast_obce",
+    "katastralni_uzemi",
 )
 
 MAX_DISCREPANCY_ROWS = 1000
@@ -98,25 +96,17 @@ DEFAULT_PUBLISH_TIMEOUT_S = 60
 _STAGE_DDL = """
 CREATE UNLOGGED TABLE IF NOT EXISTS {adr} (
   kod_adm bigint, obec_kod bigint, obec_nazev text, momc_kod bigint, momc_nazev text,
-  op_kod bigint, op_nazev text, cobce_kod bigint, cobce_nazev text, ulice_kod bigint,
+  cobce_kod bigint, cobce_nazev text, ulice_kod bigint,
   ulice_nazev text, typ_so text, cislo_domovni integer, cislo_orientacni integer,
   znak text, psc text, krovak_y double precision, krovak_x double precision,
   plati_od date, lat double precision, lon double precision);
-CREATE UNLOGGED TABLE IF NOT EXISTS {chain} (
-  kod_adm bigint, ulice_kod bigint, cobce_kod bigint, momc_kod bigint, op_kod bigint,
-  spravobv_kod bigint, obec_kod bigint, pou_kod bigint, orp_kod bigint, okres_kod bigint,
-  vusc_kod bigint, vo_kod bigint);
+CREATE UNLOGGED TABLE IF NOT EXISTS {chain} (adm_kod bigint);
 CREATE UNLOGGED TABLE IF NOT EXISTS {cobce} (
-  cobce_kod bigint, obec_kod bigint, pou_kod bigint, orp_kod bigint, okres_kod bigint,
-  vusc_kod bigint, regsoudr_kod bigint, stat_kod bigint);
+  cobce_kod bigint, obec_kod bigint, okres_kod bigint, vusc_kod bigint, regsoudr_kod bigint,
+  stat_kod bigint);
 CREATE UNLOGGED TABLE IF NOT EXISTS {ulice} (ulice_kod bigint, obec_kod bigint);
-CREATE UNLOGGED TABLE IF NOT EXISTS {katuz} (zsj_kod bigint, katuz_kod bigint, obec_kod bigint);
-CREATE UNLOGGED TABLE IF NOT EXISTS {pou} (
-  pou_kod bigint, orp_kod bigint, okres_kod bigint, vusc_kod bigint,
-  regsoudr_kod bigint, stat_kod bigint);
-CREATE UNLOGGED TABLE IF NOT EXISTS {momc} (
-  momc_kod bigint, so_kod bigint, obec_kod bigint, pou_kod bigint, orp_kod bigint,
-  vusc_kod bigint, regsoudr_kod bigint, stat_kod bigint);
+CREATE UNLOGGED TABLE IF NOT EXISTS {katuz} (katuz_kod bigint, obec_kod bigint);
+CREATE UNLOGGED TABLE IF NOT EXISTS {momc} (momc_kod bigint, obec_kod bigint);
 CREATE UNLOGGED TABLE IF NOT EXISTS {units} (
   level text, code bigint, name text, name_norm text,
   parent_level text, parent_code bigint, is_placeholder boolean not null default false);
@@ -126,16 +116,16 @@ CREATE UNLOGGED TABLE IF NOT EXISTS {streets} (
 
 _STAGE_INDEXES = """
 CREATE INDEX IF NOT EXISTS {adr}_pk ON {adr} (kod_adm);
-CREATE INDEX IF NOT EXISTS {chain}_pk ON {chain} (kod_adm);
+CREATE INDEX IF NOT EXISTS {chain}_pk ON {chain} (adm_kod);
 CREATE INDEX IF NOT EXISTS {units}_pk ON {units} (level, code);
 CREATE INDEX IF NOT EXISTS {streets}_pk ON {streets} (code);
 """
 
 # The mirror columns compared to decide "did this address point change?".
 _AP_COLUMNS = (
-    "obec_unit_id", "obec_kod", "momc_unit_id", "praha_obvod_unit_id", "cast_obce_unit_id",
-    "cast_obce_kod", "street_id", "ulice_kod", "typ_so", "cislo_domovni", "cislo_orientacni",
-    "znak_orientacniho", "psc", "krovak_y_positive", "krovak_x_positive", "geom", "plati_od",
+    "obec_unit_id", "obec_kod", "cast_obce_unit_id", "cast_obce_kod", "street_id", "ulice_kod",
+    "typ_so", "cislo_domovni", "cislo_orientacni", "znak_orientacniho", "psc",
+    "krovak_y_positive", "krovak_x_positive", "geom", "plati_od",
 )
 
 
@@ -146,7 +136,6 @@ class Staging:
     cobce: str
     ulice: str
     katuz: str
-    pou: str
     momc: str
     units: str
     streets: str
@@ -158,7 +147,7 @@ class Staging:
         return cls(
             adr=f"ruian_stage_adr{s}", chain=f"ruian_stage_chain{s}",
             cobce=f"ruian_stage_cobce{s}", ulice=f"ruian_stage_ulice{s}",
-            katuz=f"ruian_stage_katuz{s}", pou=f"ruian_stage_pou{s}",
+            katuz=f"ruian_stage_katuz{s}",
             momc=f"ruian_stage_momc{s}", units=f"ruian_stage_units{s}",
             streets=f"ruian_stage_streets{s}", diff=f"ruian_stage_diff{s}",
         )
@@ -166,7 +155,7 @@ class Staging:
     def names(self) -> dict[str, str]:
         return {
             "adr": self.adr, "chain": self.chain, "cobce": self.cobce, "ulice": self.ulice,
-            "katuz": self.katuz, "pou": self.pou, "momc": self.momc, "units": self.units,
+            "katuz": self.katuz, "momc": self.momc, "units": self.units,
             "streets": self.streets, "diff": self.diff,
         }
 
@@ -332,7 +321,7 @@ def create_staging(conn: psycopg.Connection, stage: Staging) -> None:
 def truncate_staging(conn: psycopg.Connection, stage: Staging) -> None:
     with conn.cursor() as cur:
         for table in (stage.adr, stage.chain, stage.cobce, stage.ulice, stage.katuz,
-                      stage.pou, stage.momc, stage.units, stage.streets):
+                      stage.momc, stage.units, stage.streets):
             cur.execute(f"TRUNCATE {table}")
 
 
@@ -358,7 +347,7 @@ def copy_address_points(
     with conn.cursor() as cur:
         with cur.copy(
             f"COPY {stage.adr} (kod_adm, obec_kod, obec_nazev, momc_kod, momc_nazev, "
-            "op_kod, op_nazev, cobce_kod, cobce_nazev, ulice_kod, ulice_nazev, typ_so, "
+            "cobce_kod, cobce_nazev, ulice_kod, ulice_nazev, typ_so, "
             "cislo_domovni, cislo_orientacni, znak, psc, krovak_y, krovak_x, plati_od, "
             "lat, lon) FROM STDIN"
         ) as copy:
@@ -376,7 +365,7 @@ def copy_address_points(
                         bad.append((row.kod_adm, str(row.krovak.y), str(row.krovak.x)))
                 copy.write_row((
                     row.kod_adm, row.obec_kod, row.obec_nazev, row.momc_kod, row.momc_nazev,
-                    row.op_kod, row.op_nazev, row.cast_obce_kod, row.cast_obce_nazev,
+                    row.cast_obce_kod, row.cast_obce_nazev,
                     row.ulice_kod, row.ulice_nazev, row.typ_so, row.cislo_domovni,
                     row.cislo_orientacni, row.znak_orientacniho, row.psc,
                     row.krovak.y if row.krovak else None,
@@ -392,37 +381,35 @@ def copy_address_points(
 
 
 def _copy_strukt_member(
-    conn: psycopg.Connection, table: str, columns: str, zip_path: Path, key: str,
+    conn: psycopg.Connection, table: str, read: tuple[str, ...], zip_path: Path, key: str,
 ) -> int:
+    """COPY the named CSV columns, staged under their lower-cased header: the member's whole
+    header is still checked (`iter_strukt`), staging keeps only what the load reads."""
+    _, header = ruian_csv.STRUKT_MEMBERS[key]
+    picks = [header.index(name) for name in read]
+    columns = ", ".join(name.lower() for name in read)
     rows = 0
     with conn.cursor() as cur:
         with cur.copy(f"COPY {table} ({columns}) FROM STDIN") as copy:
             for row in ruian_csv.iter_strukt(zip_path, key):
-                copy.write_row(tuple(int(v) if v else None for v in row))
+                copy.write_row(tuple(int(row[i]) if row[i] else None for i in picks))
                 rows += 1
     return rows
 
 
 def copy_strukt(conn: psycopg.Connection, stage: Staging, zip_path: Path) -> dict[str, int]:
     counts = {
-        "staged_chain": _copy_strukt_member(
-            conn, stage.chain,
-            "kod_adm, ulice_kod, cobce_kod, momc_kod, op_kod, spravobv_kod, obec_kod, "
-            "pou_kod, orp_kod, okres_kod, vusc_kod, vo_kod",
-            zip_path, "chain"),
+        "staged_chain": _copy_strukt_member(conn, stage.chain, ("ADM_KOD",), zip_path, "chain"),
         "staged_cast_obce": _copy_strukt_member(
             conn, stage.cobce,
-            "cobce_kod, obec_kod, pou_kod, orp_kod, okres_kod, vusc_kod, regsoudr_kod, stat_kod",
+            ("COBCE_KOD", "OBEC_KOD", "OKRES_KOD", "VUSC_KOD", "REGSOUDR_KOD", "STAT_KOD"),
             zip_path, "cast_obce"),
         "staged_ulice": _copy_strukt_member(
-            conn, stage.ulice, "ulice_kod, obec_kod", zip_path, "ulice"),
+            conn, stage.ulice, ("ULICE_KOD", "OBEC_KOD"), zip_path, "ulice"),
         "staged_katastr": _copy_strukt_member(
-            conn, stage.katuz, "zsj_kod, katuz_kod, obec_kod", zip_path, "katastr"),
-        "staged_pou": _copy_strukt_member(
-            conn, stage.pou,
-            "pou_kod, orp_kod, okres_kod, vusc_kod, regsoudr_kod, stat_kod", zip_path, "pou"),
+            conn, stage.katuz, ("KATUZ_KOD", "OBEC_KOD"), zip_path, "katastr"),
     }
-    momc = "momc_kod, so_kod, obec_kod, pou_kod, orp_kod, vusc_kod, regsoudr_kod, stat_kod"
+    momc = ("MOMC_KOD", "OBEC_KOD")
     counts["staged_momc"] = (
         _copy_strukt_member(conn, stage.momc, momc, zip_path, "momc_statutarni")
         + _copy_strukt_member(conn, stage.momc, momc, zip_path, "momc_praha")
@@ -434,7 +421,7 @@ def index_staging(conn: psycopg.Connection, stage: Staging) -> None:
     with conn.cursor() as cur:
         cur.execute(_STAGE_INDEXES.format(**stage.names()))
         for table in (stage.adr, stage.chain, stage.cobce, stage.ulice, stage.katuz,
-                      stage.pou, stage.momc):
+                      stage.momc):
             cur.execute(f"ANALYZE {table}")
 
 
@@ -459,10 +446,10 @@ def gather_stats(conn: psycopg.Connection, stage: Staging) -> StagingStats:
         golden = cur.fetchone()
         cur.execute(
             f"""
-            SELECT count(*) FILTER (WHERE c.kod_adm IS NULL),
+            SELECT count(*) FILTER (WHERE c.adm_kod IS NULL),
                    (SELECT count(*) FROM {stage.chain} c2
-                     WHERE NOT EXISTS (SELECT 1 FROM {stage.adr} a2 WHERE a2.kod_adm = c2.kod_adm))
-              FROM {stage.adr} a LEFT JOIN {stage.chain} c ON c.kod_adm = a.kod_adm
+                     WHERE NOT EXISTS (SELECT 1 FROM {stage.adr} a2 WHERE a2.kod_adm = c2.adm_kod))
+              FROM {stage.adr} a LEFT JOIN {stage.chain} c ON c.adm_kod = a.kod_adm
             """
         )
         only_in_adr, only_in_chain = cur.fetchone()
@@ -512,7 +499,7 @@ def record_product_skew(conn: psycopg.Connection, version_id: int, stage: Stagin
             SELECT %s, 'adresni_misto'::ruian_level, a.kod_adm,
                    'present_in_ob_adr_absent_in_strukt', '{{}}'::jsonb
               FROM {stage.adr} a
-             WHERE NOT EXISTS (SELECT 1 FROM {stage.chain} c WHERE c.kod_adm = a.kod_adm)
+             WHERE NOT EXISTS (SELECT 1 FROM {stage.chain} c WHERE c.adm_kod = a.kod_adm)
              LIMIT %s
             ON CONFLICT DO NOTHING
             """,
@@ -522,10 +509,10 @@ def record_product_skew(conn: psycopg.Connection, version_id: int, stage: Stagin
             f"""
             INSERT INTO registry_load_discrepancies
                    (registry_version_id, entity_kind, entity_code, discrepancy, detail)
-            SELECT %s, 'adresni_misto'::ruian_level, c.kod_adm,
+            SELECT %s, 'adresni_misto'::ruian_level, c.adm_kod,
                    'present_in_strukt_absent_in_ob_adr', '{{}}'::jsonb
               FROM {stage.chain} c
-             WHERE NOT EXISTS (SELECT 1 FROM {stage.adr} a WHERE a.kod_adm = c.kod_adm)
+             WHERE NOT EXISTS (SELECT 1 FROM {stage.adr} a WHERE a.kod_adm = c.adm_kod)
              LIMIT %s
             ON CONFLICT DO NOTHING
             """,
@@ -542,24 +529,32 @@ def _fetch(conn: psycopg.Connection, sql: str) -> list[tuple]:
         return cur.fetchall()
 
 
-def build_unit_rows(conn: psycopg.Connection, stage: Staging) -> int:
+def staged_obec_okres(conn: psycopg.Connection, stage: Staging) -> dict[int, int | None]:
+    """Every staged obec with the okres the CSV chain gives it (NULL for Praha since RÚIAN 3.4.1
+    abolished its okres 3100; the pack alone still publishes 9999)."""
+    return {int(obec): None if okres is None else int(okres) for obec, okres in _fetch(
+        conn, f"SELECT DISTINCT obec_kod, okres_kod FROM {stage.cobce} WHERE obec_kod IS NOT NULL",
+    )}
+
+
+def build_unit_rows(conn: psycopg.Connection, stage: Staging, obec_okres: Mapping[int, int]) -> int:
     """Derive one row per admin unit from staging and COPY it into the unit staging table.
 
     Names are normalized in Python (unaccent is STABLE — 01 §0.4) so `name_norm` has ONE
     definition shared with the gazetteer rebuild. Levels the CSV family carries no name
-    for (stát, region soudržnosti, kraj, okres, ORP, POU, katastrální území, ZSJ) get the
-    code as a placeholder name; the boundary pack (C4) fills them from its DBF, and the
-    gazetteer skips any unit still named after its code.
+    for (stát, region soudržnosti, kraj, okres, katastrální území) get the code as a
+    placeholder name; the boundary pack (C4) fills them from its DBF, and the gazetteer skips
+    any unit still named after its code.
 
-    Praha carries NO okres in RÚIAN's own chain (134,585 address rows, verified against the
-    20260731 vintage), so a unit whose okres is absent hangs off its kraj instead. Paths
-    therefore skip absent levels rather than inventing one.
+    An obec's okres is the one the pack publishes on it (`ruian_boundaries.pack_okres`), never
+    the CSV chain's, so every level above a town is a full partition, Praha's okres 9999
+    included. The `okres_partition` assertion has already refused a staged obec the pack has
+    no okres for.
     """
     names: dict[str, dict[int, str]] = defaultdict(dict)
     for level, column, code_column in (
         ("obec", "obec_nazev", "obec_kod"),
         ("momc", "momc_nazev", "momc_kod"),
-        ("spravni_obvod", "op_nazev", "op_kod"),
         ("cast_obce", "cobce_nazev", "cobce_kod"),
     ):
         for code, name in _fetch(
@@ -579,53 +574,24 @@ def build_unit_rows(conn: psycopg.Connection, stage: Staging) -> int:
             return
         rows[key] = (parent_level or "", parent_code)
 
-    chain = _fetch(
+    for cobce, obec, vusc, region, stat in _fetch(
         conn,
-        f"SELECT DISTINCT cobce_kod, obec_kod, pou_kod, orp_kod, okres_kod, vusc_kod, "
-        f"regsoudr_kod, stat_kod FROM {stage.cobce}",
-    )
-    def add_backbone(stat: int | None, region: int | None, vusc: int | None,
-                     okres: int | None, orp: int | None, pou: int | None) -> None:
+        f"SELECT DISTINCT cobce_kod, obec_kod, vusc_kod, regsoudr_kod, stat_kod "
+        f"FROM {stage.cobce} WHERE obec_kod IS NOT NULL",
+    ):
+        okres = obec_okres[int(obec)]
         add("stat", stat, None, None)
         add("region_soudrznosti", region, "stat", stat)
         add("kraj", vusc, "region_soudrznosti", region)
         add("okres", okres, "kraj", vusc)
-        if okres:
-            add("orp", orp, "okres", okres)
-        else:
-            add("orp", orp, "kraj", vusc)
-        add("pou", pou, "orp", orp)
-
-    for cobce, obec, pou, orp, okres, vusc, region, stat in chain:
-        add_backbone(stat, region, vusc, okres, orp, pou)
-        if okres:
-            add("obec", obec, "okres", okres)
-        else:
-            add("obec", obec, "kraj", vusc)
+        add("obec", obec, "okres", okres)
         add("cast_obce", cobce, "obec", obec)
 
-    for pou, orp, okres, vusc, region, stat in _fetch(
-        conn, f"SELECT DISTINCT pou_kod, orp_kod, okres_kod, vusc_kod, regsoudr_kod, "
-              f"stat_kod FROM {stage.pou}"
-    ):
-        add_backbone(stat, region, vusc, okres, orp, pou)
-
-    for momc, so, obec, *_ in _fetch(
-        conn, f"SELECT DISTINCT momc_kod, so_kod, obec_kod FROM {stage.momc}"
-    ):
-        add("spravni_obvod", so, "obec", obec)
+    for momc, obec in _fetch(conn, f"SELECT DISTINCT momc_kod, obec_kod FROM {stage.momc}"):
         add("momc", momc, "obec", obec)
 
-    for code, obec in _fetch(
-        conn, f"SELECT DISTINCT op_kod, obec_kod FROM {stage.adr} WHERE op_kod IS NOT NULL"
-    ):
-        add("spravni_obvod", code, "obec", obec)
-
-    for zsj, katuz, obec in _fetch(
-        conn, f"SELECT DISTINCT zsj_kod, katuz_kod, obec_kod FROM {stage.katuz}"
-    ):
+    for katuz, obec in _fetch(conn, f"SELECT DISTINCT katuz_kod, obec_kod FROM {stage.katuz}"):
         add("katastralni_uzemi", katuz, "obec", obec)
-        add("zsj", zsj, "katastralni_uzemi", katuz)
 
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE {stage.units}")
@@ -647,8 +613,7 @@ def build_unit_rows(conn: psycopg.Connection, stage: Staging) -> int:
 # what the regression test exercises — CI has no Postgres).
 #
 # `is_placeholder` is the whole point: the CSV family carries no name for stát, region
-# soudržnosti, kraj, okres, ORP, POU, katastrální území or ZSJ, so those rows stage as their
-# own code and the boundary pack (C4) upgrades them to the real name afterwards. Comparing a
+# soudržnosti, kraj, okres or katastrální území, so those rows stage as their own code and the boundary pack (C4) upgrades them to the real name afterwards. Comparing a
 # staged PLACEHOLDER against the upgraded mirror name would close and re-open every one of
 # those units on every monthly baseline, rewriting the tree and reverting the name.
 _UNIT_CHANGED = (
@@ -713,12 +678,11 @@ def upsert_units(conn: psycopg.Connection, stage: Staging, version_id: int,
             cur.execute(
                 f"""
                 INSERT INTO ruian_admin_units
-                       (level, code, name, name_norm, parent_id, path, display_path,
+                       (level, code, name, name_norm, parent_id, path,
                         valid_from, first_version_id, last_version_id)
                 SELECT %(lvl)s::ruian_level, s.code, {_UNIT_NAME}, {_UNIT_NAME_NORM}, p.id,
                        (coalesce(p.path::text || '.', '')
                         || %(prefix)s::text || s.code::text)::ltree,
-                       coalesce(p.display_path || ' / ', '') || {_UNIT_NAME},
                        %(d)s, %(v)s, %(v)s
                   FROM {stage.units} s
              LEFT JOIN ruian_admin_units p
@@ -751,45 +715,23 @@ def upsert_units(conn: psycopg.Connection, stage: Staging, version_id: int,
 
 
 def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) -> None:
-    """The non-tree edges (01 §3.2): ORP/POU do not nest cleanly under okres and a
-    katastrální území can straddle obec boundaries, so those edges are stored explicitly."""
-    statements = (
-        (f"""
-         SELECT o.id, r.id, 'orp_of'
-           FROM {stage.cobce} c
-           JOIN ruian_admin_units o ON o.valid_to IS NULL AND o.level='obec' AND o.code=c.obec_kod
-           JOIN ruian_admin_units r ON r.valid_to IS NULL AND r.level='orp' AND r.code=c.orp_kod
-         """),
-        (f"""
-         SELECT o.id, u.id, 'pou_of'
-           FROM {stage.cobce} c
-           JOIN ruian_admin_units o ON o.valid_to IS NULL AND o.level='obec' AND o.code=c.obec_kod
-           JOIN ruian_admin_units u ON u.valid_to IS NULL AND u.level='pou' AND u.code=c.pou_kod
-         """),
-        (f"""
-         SELECT k.id, o.id, 'katastr_in_obec'
-           FROM {stage.katuz} t
-           JOIN ruian_admin_units k ON k.valid_to IS NULL AND k.level='katastralni_uzemi'
-                                   AND k.code=t.katuz_kod
-           JOIN ruian_admin_units o ON o.valid_to IS NULL AND o.level='obec' AND o.code=t.obec_kod
-         """),
-        (f"""
-         SELECT m.id, s.id, 'momc_in_so'
-           FROM {stage.momc} x
-           JOIN ruian_admin_units m ON m.valid_to IS NULL AND m.level='momc' AND m.code=x.momc_kod
-           JOIN ruian_admin_units s ON s.valid_to IS NULL AND s.level='spravni_obvod'
-                                   AND s.code=x.so_kod
-         """),
-    )
+    """The one non-tree edge (01 §3.2): a katastrální území can straddle obec boundaries, so it
+    is stored explicitly."""
     with conn.cursor() as cur:
-        for select in statements:
-            cur.execute(
-                "INSERT INTO ruian_admin_unit_relations "
-                "(from_id, to_id, relation_type, registry_version_id) "
-                f"SELECT DISTINCT s.*, %s FROM ({select}) s "
-                "ON CONFLICT DO NOTHING",
-                (version_id,),
-            )
+        cur.execute(
+            f"""
+            INSERT INTO ruian_admin_unit_relations
+                   (from_id, to_id, relation_type, registry_version_id)
+            SELECT DISTINCT k.id, o.id, 'katastr_in_obec', %s
+              FROM {stage.katuz} t
+              JOIN ruian_admin_units k ON k.valid_to IS NULL AND k.level='katastralni_uzemi'
+                                      AND k.code=t.katuz_kod
+              JOIN ruian_admin_units o ON o.valid_to IS NULL AND o.level='obec'
+                                      AND o.code=t.obec_kod
+            ON CONFLICT DO NOTHING
+            """,
+            (version_id,),
+        )
 
 
 def upsert_streets(conn: psycopg.Connection, stage: Staging, version_id: int,
@@ -862,7 +804,6 @@ def _resolved_source(stage: Staging) -> str:
     return f"""
         SELECT a.kod_adm,
                ob.id AS obec_unit_id, a.obec_kod,
-               mo.id AS momc_unit_id, po.id AS praha_obvod_unit_id,
                co.id AS cast_obce_unit_id, a.cobce_kod AS cast_obce_kod,
                st.id AS street_id, a.ulice_kod,
                a.typ_so, a.cislo_domovni, a.cislo_orientacni,
@@ -874,10 +815,6 @@ def _resolved_source(stage: Staging) -> str:
           FROM {stage.adr} a
           JOIN ruian_admin_units ob
             ON ob.valid_to IS NULL AND ob.level = 'obec' AND ob.code = a.obec_kod
-     LEFT JOIN ruian_admin_units mo
-            ON mo.valid_to IS NULL AND mo.level = 'momc' AND mo.code = a.momc_kod
-     LEFT JOIN ruian_admin_units po
-            ON po.valid_to IS NULL AND po.level = 'spravni_obvod' AND po.code = a.op_kod
      LEFT JOIN ruian_admin_units co
             ON co.valid_to IS NULL AND co.level = 'cast_obce' AND co.code = a.cobce_kod
      LEFT JOIN ruian_streets st
@@ -1246,10 +1183,21 @@ def run(
             LOG.info("RUIAN staged %s", counts)
 
         stats = gather_stats(conn, stage)
-        assertions = load_assertions.evaluate(stats, prior, proj_pipeline=proj["proj_pipeline"])
+        pack = ruian_boundaries.pack_okres(artifacts["shp_stat"].path)
+        csv_okres = staged_obec_okres(conn, stage)
+        disagreements = load_assertions.okres_csv_disagreements(csv_okres, pack.obec)
+        if disagreements:
+            LOG.warning("RUIAN the pack and the CSV disagree on the okres of %d obce, e.g. %s",
+                        len(disagreements), disagreements[:5])
+        assertions = [
+            *load_assertions.evaluate(stats, prior, proj_pipeline=proj["proj_pipeline"]),
+            load_assertions.okres_partition(csv_okres, pack.obec, pack.okresy),
+        ]
         report(assertions)
-        loader_db.write_progress(conn, version_id, phase="asserted",
-                                 counts=stats_to_counts(stats))
+        loader_db.write_progress(
+            conn, version_id, phase="asserted",
+            counts={**stats_to_counts(stats), "okres_csv_disagreements": len(disagreements)},
+        )
         failures = load_assertions.blocking_failures(assertions)
         if failures:
             loader_db.abort(
@@ -1266,7 +1214,7 @@ def run(
         record_product_skew(conn, version_id, stage)
 
         if not loader_db.phase_done(progress, "units"):
-            units = build_unit_rows(conn, stage)
+            units = build_unit_rows(conn, stage, pack.obec)
             with conn.cursor() as cur:
                 cur.execute(f"ANALYZE {stage.units}")
             upsert_units(conn, stage, version_id, vintage)

@@ -277,20 +277,14 @@ SELECT ST_Y(c.g), ST_X(c.g),
 # The unit column list `_admin_unit` unpacks positionally, over ONE point expression: the
 # unit's own position is the last two columns of the projection, and only where the query
 # can answer it.
-def _admin_columns(point: str) -> str:
-    return f"""
-       u.id, u.level::text, u.code, u.name, u.name_norm, u.path::text, u.parent_id,
-       CASE WHEN {point} IS NULL THEN NULL ELSE ST_Y({point}) END,
-       CASE WHEN {point} IS NULL THEN NULL ELSE ST_X({point}) END"""
+_ADMIN_UNIT_COLUMNS = """
+       u.id, u.level::text, u.code, u.name, u.name_norm, u.path::text, u.parent_id"""
 
-
-_ADMIN_COLUMNS = _admin_columns("u.definition_point")
+_ADMIN_COLUMNS = f"{_ADMIN_UNIT_COLUMNS}, NULL::float8, NULL::float8"
 
 # The CHAIN also answers "where is this unit?" (W2-a3), because FILL places a row with no
 # admissible pin at the finest bound unit's point and the chain is the read it already
-# makes. `definition_point` is RÚIAN's own definiční bod and would be the better answer, but
-# `ruian_load` has never written that column — every unit point in the mirror is the
-# polygon's, so the coalesce is a preference, not a fallback that fires.
+# makes. Every unit point in the mirror is the polygon's.
 #
 # `representative_point` is the boundary loader's stored ST_MaximumInscribedCircle CENTRE:
 # always INSIDE the polygon, which `ST_Centroid` is not for a concave unit (a C-shaped obec
@@ -298,7 +292,7 @@ _ADMIN_COLUMNS = _admin_columns("u.definition_point")
 # of `ST_PointOnSurface`, better centred and — the reason it is read instead of computed —
 # free of the multipolygon detoast that made the containment query 194 ms before it was
 # split.
-_ADMIN_CHAIN_COLUMNS = _admin_columns("coalesce(u.definition_point, gp.pt)")
+_ADMIN_CHAIN_COLUMNS = f"{_ADMIN_UNIT_COLUMNS}, ST_Y(gp.pt), ST_X(gp.pt)"
 
 _ADMIN_BY_NAME_SQL = f"""
 SELECT {_ADMIN_COLUMNS}, n.psc_set
@@ -323,8 +317,7 @@ SELECT {_ADMIN_COLUMNS}, n.psc_set
 #
 # It runs for EVERY chain row rather than for the bound unit alone because the two levels a
 # listing most often binds, `cast_obce` and `momc`, have no polygon in RÚIAN at all — the
-# loader's layer list (`ruian_boundaries.LAYERS`) is stát → kraj → okres → ORP → POU → obec
-# → KÚ — so FILL walks up to the first ancestor that HAS a point, and it can only walk what
+# loader's layer list (`ruian_boundaries.LAYERS`) is stát → kraj → okres → obec → KÚ — so FILL walks up to the first ancestor that HAS a point, and it can only walk what
 # this answer carries.
 #
 # An OBEC row also answers its one KÚ child (PR-B): every entity inside a one-KÚ obec lies in

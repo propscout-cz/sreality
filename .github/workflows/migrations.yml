@@ -194,7 +194,8 @@ jobs:
       # anti-join COMPILES; W10's claim is about which row it RETURNS once a stored
       # gone page is stamped 410, and only a real schema can answer that. The registry
       # publish check joins for the same reason: carry-forward equality and the
-      # completeness read are PostGIS and anti-join answers, not SQL shapes; so W3's readings half, and the location
+      # completeness read are PostGIS and anti-join answers, not SQL shapes; so W7's re-parent (the first
+      # production SCD-2 close, through the loader's own statements); so W3's readings half, and the location
       # W3 one claim write (what it changes, keeps and retracts is an executed answer), and W3b's
       # address pick (the real drain over a two-town mirror the test seeds).
       # test_map_overlays_live joins because migration 600's tile renderer is plpgsql: its
@@ -210,6 +211,7 @@ jobs:
                  tests/location_data/test_claims_one_write_live.py \
                  tests/location_data/test_operator_pick_live.py \
                  tests/location_data/test_registry_publish_live.py \
+                 tests/location_data/test_registry_reparent_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \
                  tests/toolkit/test_dedup_candidates_sql.py -q

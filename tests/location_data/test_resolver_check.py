@@ -289,7 +289,7 @@ def test_a_part_with_no_doors_stands_at_its_towns_point_at_the_quarter_grain():
     carries a reach (v5.8). The 13 MOMC rows among the moved bazos ads are this case."""
     mirror = mm.default_mirror()
     mirror.units.append(mm._unit(99, "momc", 500178, "Praha 6", "praha 6",
-                                 "k19.o3100.b554782.m500178", parent=13))
+                                 "k19.o9999.b554782.m500178", parent=13))
     resolution = _resolve([
         mm.claim(1, "obec_name", source="bazos", value_text="Praha"),
         mm.claim(2, "cast_obce_name", source="bazos", value_text="Praha 6"),

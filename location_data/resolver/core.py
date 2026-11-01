@@ -148,7 +148,7 @@ def _admissible(
 
 def _is_place_name(key: str, ctx: ResolverContext) -> bool:
     return bool(
-        ctx.registry.admin_units_by_name(key, levels=("obec", "cast_obce", "momc", "zsj"))
+        ctx.registry.admin_units_by_name(key, levels=("obec", "cast_obce", "momc"))
     )
 
 

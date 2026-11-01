@@ -33,8 +33,8 @@ _STREET_PREFIX = re.compile(r"^(?:ulice|ul\.?)\s+", re.IGNORECASE)
 # Levels worth searching for. `adresni_misto` is not an admin unit and streets come from
 # their own table; volební okrsek has no name.
 _UNIT_LEVELS = (
-    "stat", "region_soudrznosti", "kraj", "okres", "orp", "pou", "obec",
-    "spravni_obvod", "momc", "cast_obce", "katastralni_uzemi", "zsj",
+    "stat", "region_soudrznosti", "kraj", "okres", "obec", "momc", "cast_obce",
+    "katastralni_uzemi",
 )
 
 

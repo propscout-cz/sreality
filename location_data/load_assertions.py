@@ -11,6 +11,7 @@ location cannot drift with the register.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Set
 from dataclasses import dataclass
 
 from location_data import krovak
@@ -189,6 +190,35 @@ def evaluate(
         ))
 
     return out
+
+
+def okres_csv_disagreements(
+    csv_okres: Mapping[int, int | None], pack_okres: Mapping[int, int],
+) -> list[tuple[int, int, int]]:
+    """(obec, CSV okres, pack okres) wherever both name an okres and differ. The pack wins, so
+    this is counted and logged, never preferred in silence; a blank CSV okres (Praha's) is no
+    disagreement, it is the gap the pack fills."""
+    return sorted(
+        (obec, csv, pack_okres[obec]) for obec, csv in csv_okres.items()
+        if csv is not None and obec in pack_okres and csv != pack_okres[obec]
+    )
+
+
+def okres_partition(
+    csv_okres: Mapping[int, int | None], pack_okres: Mapping[int, int], okresy: Set[int],
+) -> Assertion:
+    """Every staged obec has an okres in OBCE_P and every such code is an OKRESY_P feature: the
+    okres level is a full partition of the towns, or the version does not load."""
+    no_okres = sorted(obec for obec in csv_okres if obec not in pack_okres)
+    unknown = sorted({pack_okres[obec] for obec in csv_okres
+                      if obec in pack_okres and pack_okres[obec] not in okresy})
+    return Assertion(
+        name="okres_partition",
+        ok=not no_okres and not unknown,
+        expected="every staged obec in one OKRESY_P okres",
+        actual=f"{len(no_okres)} obce without an okres (e.g. {no_okres[:5]}); "
+               f"okres codes not in OKRESY_P: {unknown[:5]}",
+    )
 
 
 def boundary_completeness(missing: list[tuple[str, int, list[int]]]) -> Assertion:

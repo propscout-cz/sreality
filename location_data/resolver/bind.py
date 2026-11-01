@@ -580,7 +580,7 @@ def bind(
     said: list[_Part] = []
     if constraints.cast_obce_keys and constraining_obec_kods:
         for key in constraints.cast_obce_keys:
-            for unit in registry.admin_units_by_name(key, levels=(*PART_LEVELS, "zsj")):
+            for unit in registry.admin_units_by_name(key, levels=PART_LEVELS):
                 if unit.obec_kod is None or unit.obec_kod in constraining_obec_kods:
                     said.append(_Part(unit, _ids(constraints, "cast_obce_name"),
                                       ("obec_constrained",)))
@@ -1103,9 +1103,8 @@ def place(
 
     BIND places what the CLAIMS place. A row left unplaced here is placed by `fill.position`
     off the hierarchy chain (W2-a3) — the admin-centroid branch used to live here and read
-    `AdminUnit.lat`, which meant it read `ruian_admin_units.definition_point`, a column the
-    loader has never written: it looked like a fallback and was dead in production on every
-    one of the 8,706 towned rows that shipped `geom NULL`.
+    `AdminUnit.lat` off a by-name read, which carries no point: it looked like a fallback and
+    was dead in production on every one of the 8,706 towned rows that shipped `geom NULL`.
     """
     pin = pin_claim.point if pin_claim is not None else None
     if binding.target_kind == "address_point" and binding.lat is not None:

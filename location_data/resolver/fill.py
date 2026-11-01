@@ -38,7 +38,7 @@ An OPERATOR correction is no exception since W3: it outranks the portal's claim 
 binds through the register like any claim.
 
 `katastr_kod` (PR-B, v5.4) is ONE rule under the same contract: **the single KÚ of the BOUND
-registry entity, else NULL** — a KÚ (or a ZSJ inside one) on the bound unit's chain; the one
+registry entity, else NULL** — a KÚ on the bound unit's chain; the one
 KÚ of a one-KÚ obec, which every entity inside it lies in; an address point's own KÚ; a street
 or část obce whose every RÚIAN door lies in one KÚ (the Q7 door rule). A portal pin never
 decides it, whatever the portal labels it: the labels a contract does not list as blurred read

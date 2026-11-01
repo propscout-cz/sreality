@@ -690,12 +690,12 @@ def test_the_cache_memory_rail_cannot_change_an_answer():
 
 def test_a_name_is_asked_once_however_many_ways_it_is_narrowed():
     """The level tuple used to be part of the key, so `praha` asked for `('obec',)`, then for
-    `('obec','cast_obce','momc','zsj')`, then unnarrowed, was three round trips for one
+    `('obec','cast_obce','momc')`, then unnarrowed, was three round trips for one
     immutable answer. One query, narrowed in Python."""
     inner = _CountingMirror()
     view = resolve_db.CachedRegistryView(inner, resolve_db.RunCache())
     view.admin_units_by_name("praha", levels=("obec",))
-    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc", "zsj"))
+    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc"))
     view.admin_units_by_name("praha")
     view.admin_units_by_name("praha", levels=("katastralni_uzemi",))
     assert inner.calls == 1

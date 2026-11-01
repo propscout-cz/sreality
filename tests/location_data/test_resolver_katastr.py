@@ -1,7 +1,7 @@
 """`katastr_kod` — FILL's one KÚ rule (MF program PR-B, resolver v5.4).
 
 **The single KÚ of the BOUND registry entity, else NULL.** Every case below is one bound
-entity kind: an address point (its own KÚ), a KÚ or ZSJ unit (the KÚ on its chain), an obec
+entity kind: an address point (its own KÚ), a KÚ unit (itself, on its chain), an obec
 (its one KÚ child, else nothing), a street or část obce (the KÚ holding every one of its
 RÚIAN doors — operator Q7, 2026-09-25). What is NOT an entity is a portal pin: 66,165 idnes
 `no_exact_address` and 13,176 sreality `not_address` pins read as "precise"
@@ -35,15 +35,13 @@ def _mirror() -> mm.MiniMirror:
     units = [
         *base.units,
         mm._unit(40, "katastralni_uzemi", VOKOVICE_KU, "Vokovice", "vokovice",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(41, "katastralni_uzemi", VELESLAVIN_KU, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782", parent=13),
-        mm._unit(42, "zsj", 1234501, "Vokovice-střed", "vokovice stred",
-                 "k19.o3100.b554782", parent=40),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(43, "cast_obce", 490211, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782.c490211", parent=13),
+                 "k19.o9999.b554782.c490211", parent=13),
         mm._unit(44, "cast_obce", 490999, "Prázdná", "prazdna",
-                 "k19.o3100.b554782.c490999", parent=13),
+                 "k19.o9999.b554782.c490999", parent=13),
     ]
     points = [
         replace(p, katastr_kod=VOKOVICE_KU) if p.ulice_kod == 101 else p
@@ -88,14 +86,13 @@ def test_a_portal_registry_key_binds_the_same_ku():
     assert resolution.katastr_kod == VOKOVICE_KU
 
 
-@pytest.mark.parametrize(("unit_id", "expected"), [(40, VOKOVICE_KU), (42, VOKOVICE_KU)])
-def test_a_bound_ku_is_itself_and_a_zsj_is_the_ku_it_lies_in(unit_id, expected):
+def test_a_bound_ku_is_itself():
     """BIND does not bind a KÚ by name today; FILL's rule is written for the entity, so a KÚ
-    unit (or a ZSJ, a child of exactly one KÚ) answers off its own chain."""
+    unit answers off its own chain."""
     binding = Binding(target_kind="admin_unit", granularity="cast_obce_or_quarter", rung="R4",
-                      admin_unit_id=unit_id, obec_kod=554782)
+                      admin_unit_id=40, obec_kod=554782)
     filled = step_fill.fill(binding, step_bind.Constraints(), _mirror())
-    assert filled.katastr_kod == expected
+    assert filled.katastr_kod == VOKOVICE_KU
 
 
 def test_a_one_ku_obec_is_in_that_ku():

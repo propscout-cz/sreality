@@ -10,11 +10,12 @@ import datetime
 import hashlib
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from location_data import load_assertions, loader_db, ruian_load
+from location_data import load_assertions, loader_db, name_index, ruian_boundaries, ruian_load
 
 
 class _FakeCursor:
@@ -72,6 +73,33 @@ def test_version_label_is_the_load_event_not_the_product():
     assert ruian_load.version_label(datetime.date(2026, 7, 31)) == "ruian:2026-07-31"
 
 
+def test_the_loader_stages_only_the_levels_the_platform_reads():
+    """W7's rule: levels loaded = levels bound, served or used as match keys. A retired level
+    comes back only by a ruling."""
+    assert ruian_load.LEVEL_ORDER == (
+        "stat", "region_soudrznosti", "kraj", "okres", "obec", "momc", "cast_obce",
+        "katastralni_uzemi",
+    )
+    assert set(name_index._UNIT_LEVELS) == set(ruian_load.LEVEL_ORDER)
+
+
+@pytest.mark.parametrize("gone", [
+    "definition_point", "display_path", "has_polygon", "nuts_lau",
+    "praha_obvod_unit_id", "momc_unit_id",
+])
+def test_no_code_names_a_dropped_mirror_column(gone):
+    """Migration 718 dropped them; a reader or writer left behind breaks at the first call."""
+    root = Path(__file__).resolve().parents[2]
+    hits = [
+        str(path.relative_to(root))
+        for tree in ("location_data", "api", "toolkit", "autodedup")
+        for path in (root / tree).rglob("*.py")
+        if re.search(rf"\b{gone}\b", path.read_text())
+    ]
+    assert hits == []
+    assert gone not in ruian_load._AP_COLUMNS
+
+
 def test_every_level_has_a_label_prefix_and_they_are_unique():
     assert set(ruian_load.LEVEL_ORDER) == set(ruian_load.LABEL_PREFIX)
     assert len(set(ruian_load.LABEL_PREFIX.values())) == len(ruian_load.LABEL_PREFIX)
@@ -83,7 +111,6 @@ def test_parents_are_ordered_before_children():
     order = ruian_load.LEVEL_ORDER
     assert order.index("kraj") < order.index("okres") < order.index("obec")
     assert order.index("obec") < order.index("cast_obce")
-    assert order.index("katastralni_uzemi") < order.index("zsj")
 
 
 def _artifact(name: str) -> object:
@@ -183,7 +210,7 @@ def test_the_staged_placeholder_flag_is_a_column_the_scd2_predicate_reads():
 def test_a_boundary_name_upgrade_survives_the_next_identical_baseline():
     """Regression: baseline -> boundary pack upgrades the name -> the SAME baseline again.
 
-    Levels the CSV family never names (kraj, okres, ORP, POU, KÚ, ZSJ) stage as their own
+    Levels the CSV family never names (kraj, okres, KÚ) stage as their own
     code. Before this rule, round 2 compared 'Benešov' against the staged placeholder
     '3701', closed the row, and re-opened it named '3701' — every monthly baseline reverting
     every name and rewriting the tree. (CI has no Postgres: `unit_needs_new_version` /
@@ -402,6 +429,9 @@ class _Load:
         self.missing: list = []           # what missing_geometry answers
         self.kill_in_boundaries = False
         self.packs_loaded: list[bytes] = []
+        self.okres_packs: list[bytes] = []
+        self.csv_okres: dict[int, int | None] = {554782: None}
+        self.pack = ruian_boundaries.PackOkres(obec={554782: 9999}, okresy=frozenset({9999}))
         self.calls: dict[str, int] = {}
         self.conn = _FakeConn()
         self.conn.close = lambda: None
@@ -412,7 +442,7 @@ class _Load:
                 return result
             return _call
 
-        from location_data import archive, krovak, name_index, ruian_boundaries, ruian_csv
+        from location_data import archive, krovak, ruian_csv
 
         monkeypatch.setattr(ruian_csv, "session", lambda: object())
         monkeypatch.setattr(ruian_csv, "download", self._download)
@@ -435,6 +465,8 @@ class _Load:
         monkeypatch.setattr(ruian_load, "stats_to_counts", lambda stats: {})
         monkeypatch.setattr(load_assertions, "evaluate", lambda *a, **k: [])
         monkeypatch.setattr(ruian_load, "build_unit_rows", hit("build_unit_rows", 0))
+        monkeypatch.setattr(ruian_load, "staged_obec_okres", lambda *a: self.csv_okres)
+        monkeypatch.setattr(ruian_boundaries, "pack_okres", self._pack_okres)
         monkeypatch.setattr(ruian_load, "upsert_streets", hit("upsert_streets", 0))
         monkeypatch.setattr(ruian_load, "unloadable_rows", lambda *a: 0)
         monkeypatch.setattr(ruian_load, "load_address_points", hit("load_address_points", {}))
@@ -490,6 +522,11 @@ class _Load:
         if phase and phase not in done:
             done.append(phase)
 
+    def _pack_okres(self, pack):
+        self._count("pack_okres")
+        self.okres_packs.append(pack.read_bytes())
+        return self.pack
+
     def _load_pack(self, conn, pack, version_id):
         self._count("boundaries")
         self.packs_loaded.append(pack.read_bytes())
@@ -533,6 +570,29 @@ def test_a_run_killed_mid_boundaries_resumes_and_publishes_exactly_once(monkeypa
     assert load.calls["r2_restore"] == 3
     assert load.calls["refresh_rent_map_cells"] == 2
     assert load.calls["drop_staging"] == 2
+
+
+def test_an_obec_the_pack_gives_no_okres_stops_the_load_before_the_mirror_moves(
+    monkeypatch, tmp_path,
+):
+    """R8: ČÚZK dropping Praha's 9999 (or the field) is a ruling, never a silent NULL okres."""
+    load = _Load(monkeypatch, tmp_path)
+    load.pack = ruian_boundaries.PackOkres(obec={}, okresy=frozenset({9999}))
+    with pytest.raises(loader_db.LoadAborted):
+        load.dispatch()
+    assert load.calls.get("build_unit_rows", 0) == 0 and load.calls.get("upsert_units", 0) == 0
+    assert json.loads(load.conn.executed[-1][1][4])["assertion"] == "okres_partition"
+
+
+def test_a_resume_reads_the_okres_from_the_archived_pack(monkeypatch, tmp_path):
+    """The units phase of one version never reads two packs: a resume restores the vintage's."""
+    load = _Load(monkeypatch, tmp_path)
+    load.kill_in_boundaries = True
+    with pytest.raises(RuntimeError):
+        load.dispatch()
+    load.cuzk["shp_stat"], load.kill_in_boundaries = b"pack-b", False
+    assert load.dispatch() == 0
+    assert load.okres_packs == [b"pack-a", b"pack-a"]
 
 
 def test_a_resume_after_the_pack_was_refreshed_loads_the_archived_pack(monkeypatch, tmp_path):
