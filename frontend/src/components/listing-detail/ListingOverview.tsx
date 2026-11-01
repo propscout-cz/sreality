@@ -71,6 +71,7 @@ export function PropertyIdentity({
   priceNote,
   showStatus = true,
   statusHref,
+  addressAction,
 }: {
   listing: ListingPublic;
   /* Rendered under the headline price, or in its place when the listing states
@@ -80,6 +81,8 @@ export function PropertyIdentity({
   /* The status pill opens this advert on its portal (the property page: the
    * latest active advert's stored URL). */
   statusHref?: string | null;
+  /* After the address line: the property page's admin address picker (W3b). */
+  addressAction?: React.ReactNode;
 }) {
   // Identity tokens, most-specific first: subtype ("Ubytování", "Rodinný dům")
   // and/or disposition ("2+kk"). Commercial/houses keep their kind instead of
@@ -144,6 +147,7 @@ export function PropertyIdentity({
       )}
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
         {listing.display_label ?? '—'}
+        {addressAction}
       </p>
       {(hasId || ppm !== '—') && (
         <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mt-2">

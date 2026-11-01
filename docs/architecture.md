@@ -4877,6 +4877,23 @@ by one full re-mine of that source** (`claims_intake --mode full --source X`; bo
 re-mine by their stamps). `--retract` batches because "the contract's claims" is every listing a
 portal has ever had, and one atomic DELETE of that size spends its `statement_timeout` and rolls back.
 
+**THE OPERATOR'S PICK (W3b, ruling Q5)** is the only operator input, and the listing inspector
+(`/location/listing/*`, `toolkit/location_quality.py`) is gone. An admin's pencil on the property page's
+address line opens Browse's place typeahead; `/maps/resolve` with `address_point: true` binds an address
+pick to its ONE door (the resolver's own `address_points_by_number` on the bound street, or a streetless
+village's obec, exactly one door within `REGISTRY_PIN_CONFLICT_M`; nothing scans the mirror), a street
+or an obec pick as the chips do. `POST /location/corrections {property_id, pick}` (admin) →
+`operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
+`obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
+types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
+to their own words. Its transaction holds the property row `FOR SHARE` before it reads the ads (a detach
+or merge waits); it then resolves the location ad and answers `held` (the row binds the code). Per
+ad, because the location ad is re-elected at every recompute. Not curation (rule 18): a merge leaves
+the claims on their ads, a detach clears them on the ads it moved (R1, `detach_listings` →
+`operator_corrections.clear`). Limits: a portal PSČ or kód ADM can defeat a street or obec pick
+(`held: false`; the UI asks for an address); the portal pin stays evidence; část, okres and kraj picks
+wait for W5.
+
 **ONE LANE, THREE HALVES.** `location_data/claims_intake.py` (hourly, `35 * * * *`, and the worker's
 minute lane) is the only portal writer of `location_claims`, and it reads the three substrates we
 hold: `listings.raw_json`; the LATEST stored detail body in `portal_raw_payloads`, joined on
