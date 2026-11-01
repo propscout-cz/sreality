@@ -308,7 +308,8 @@ a tool result, only the in-scope proposal was kept, no tenant table moved, no ca
 
 **A new write tool** names a property only as `property_id` or `property_ids` (`terminator.PROPERTY_ARGS`; a census), since
 the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys.
-Still open, as a strict xfail for #2072: a proposal into a collection the run did not create.
+Open, each a strict xfail: a proposal into a collection the run did not create (#2072 owes it); `markdown` naming a
+property, which no rail reads (the page must draw links only from the cited ids).
 
 **Recorded runs.** Every file under `tests/cassettes/` replays through the current loop and terminator against the agent's
 current folder and must end as it ended (a changed skill body is no failure; a tool removed or an answer now refused is). A

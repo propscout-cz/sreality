@@ -95,13 +95,15 @@ def property_ids(result: Mapping[str, Any]) -> set[int]:
     return found
 
 
-def _named_properties(node: Any, key: str = "") -> set[int]:
-    """Every id a proposal's parsed arguments or a declared output hold under PROPERTY_ARGS, at any depth."""
+def _named_properties(node: Any, key: str = "") -> set[Any]:
+    """Every value a proposal's parsed arguments or a declared output hold under PROPERTY_ARGS, at any depth. Whatever its
+    type: JSON Schema's integer takes 7.0, an output's schema may say string, and only a value equal to an id a tool returned
+    may pass."""
     if isinstance(node, dict):
         return set().union(*(_named_properties(value, name) for name, value in node.items()))
     if isinstance(node, list):
         return set().union(*(_named_properties(value, key) for value in node))
-    return {node} if key in PROPERTY_ARGS and isinstance(node, int) else set()
+    return {node} if key in PROPERTY_ARGS and node is not None else set()
 
 
 def _check_output(definition: Definition, output: Any) -> None:
@@ -129,7 +131,7 @@ def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Mappin
     except ValidationError as exc:
         raise invalid_arguments(exc) from exc
     _check_output(definition, output)
-    if unreturned := sorted(_named_properties(output) - seen):
+    if unreturned := sorted(_named_properties(output) - seen, key=str):
         raise ToolError(ToolErrorCode.REFUSED,
                         f"output: no tool returned property {unreturned} in this run; name only property_ids a tool returned")
     if uncited := [i for i in submission.cited_property_ids if i not in seen]:
@@ -148,7 +150,7 @@ def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Mappin
         except ToolError as exc:
             raise ToolError(exc.code, f"proposed_actions[{i}]: {exc.message}", details=exc.details) from None
         # Read from the parsed arguments: the schema coerces "7" to 7, and Apply will write what it parses.
-        if unreturned := sorted(_named_properties(parsed.model_dump()) - seen):
+        if unreturned := sorted(_named_properties(parsed.model_dump()) - seen, key=str):
             raise ToolError(ToolErrorCode.REFUSED, f"proposed_actions[{i}]: no tool returned property {unreturned} in "
                                                    "this run; propose only property_ids a tool returned")
     return Answer(

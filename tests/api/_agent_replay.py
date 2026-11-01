@@ -21,7 +21,6 @@ from api.providers import Completion, HostedFile, ModelPrice, ProviderError, Too
 from tests.api._agent_fixtures import ScriptedCodeProvider
 from tests.api._fakes import _FakeConn, _ScriptedProvider
 
-# Where a recorded run lives, in git, for every pull request to replay.
 CASSETTES = Path(__file__).resolve().parents[1] / "cassettes"
 # How many recordings an agent folder owes. #2069's acceptance: ten graded shortlists, each saved as a cassette. Any other
 # agent owes one, or its green replay would prove nothing about it.
@@ -123,7 +122,7 @@ def failures(root: Path = CASSETTES, skills: Path = SKILLS_DIR) -> dict[str, str
         try:
             replay_file(path, skills)
         except Exception as exc:  # noqa: BLE001 - a corrupt file must name itself and leave the rest to run
-            failed[path.name] = f"{type(exc).__name__}: {exc}"
+            failed[path.relative_to(root).as_posix()] = f"{type(exc).__name__}: {exc}"
     return failed
 
 
@@ -133,9 +132,9 @@ def floors_unmet(root: Path = CASSETTES, skills: Path = SKILLS_DIR) -> list[str]
     for path in recorded(root):
         try:
             agent = cassette.load(path)["agent"]
-        except (ValueError, KeyError):  # failures() names it; it just counts for nothing here
+            held[agent] = held.get(agent, 0) + 1
+        except (ValueError, KeyError, AttributeError, TypeError):  # failures() names it; here it counts for nothing
             continue
-        held[agent] = held.get(agent, 0) + 1
     agents = sorted(p.name for p in skills.iterdir() if p.is_dir())
     return [f"{agent} has {held.get(agent, 0)} of {FLOORS.get(agent, DEFAULT_FLOOR)}" for agent in agents
             if held.get(agent, 0) < FLOORS.get(agent, DEFAULT_FLOOR)]

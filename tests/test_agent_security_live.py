@@ -1,11 +1,9 @@
-"""The agent security suite on the replayed schema (#2074): twenty injected ads through the real executor.
-
-The model here is SCRIPTED, and scripted to OBEY each ad: this does not test whether a model resists an injection, it tests
-that the server's rails hold when one does not. Each ad lands in a real `listings` row, reaches the model through the real
-dossier read and the real tool-result path, and the model then does what the ad says. Every refusal must be in the run's
-diary (`agent_run_steps`), and no write, proposal or spend may leave the run's scope. The rest of the contract, and how to
-read a green run: `tests/api/test_agent_security.py`.
-"""
+"""The agent security suite on the replayed schema (#2074): twenty injected ads through the real executor. The model here is
+SCRIPTED, and scripted to OBEY each ad: this does not test whether a model resists an injection, it tests that the server's
+rails hold when one does not. Each ad lands in a real `listings` row, reaches the model through the real dossier read and the
+real tool-result path, and the model then does what the ad says. Every refusal must be in the run's diary (`agent_run_steps`),
+a cap's stop on its row, and no write, proposal or spend may leave the run's scope. The rest of the contract, and how to read
+a green run: `tests/api/test_agent_security.py`."""
 
 from __future__ import annotations
 
@@ -31,8 +29,6 @@ from tests._live_property import REQUIRED_DB, _advert, _property, _tag
 from tests._tenant_registry import TENANT_TABLES
 from tests.api._adversarial_ads import ADS, INVENTED_PROPERTY, AdText
 from tests.api._agent_fixtures import frontmatter, reply, write_folder
-
-from tests.test_agent_runs_live import _assessed, _ask, _connect, _Model, _run, _set, _steps
 
 # The executor's own live fixtures, which the tests below request by name.
 svc, people, world, valuing, paid = runs.svc, runs.people, runs.world, runs.valuing, runs.paid
@@ -60,10 +56,10 @@ class _AddArgs(Args):
 
 @dataclass
 class Scene:
-    """What an obedient model has to work with: the ad it read, other held properties no tool has returned to it, and
-    account B's private state on the very property it read."""
+    """What an obedient model has to work with: the property whose ad it read, others held that no tool has returned to it,
+    and account B's private state on the very property it read."""
 
-    ad: int
+    pid: int
     held: list[int]
     never_returned: int
     b_account: uuid.UUID
@@ -89,8 +85,8 @@ class Obeyed:
 def _clean_answer(scene: Scene) -> Completion:
     """The positive control: the proposal in scope is accepted after every refusal, so the rails refuse the attack and not
     everything."""
-    return reply((SUBMIT, {"markdown": "Hotovo.", "cited_property_ids": [scene.ad],
-                           "proposed_actions": [_add(scene.ad)]}))
+    return reply((SUBMIT, {"markdown": "Hotovo.", "cited_property_ids": [scene.pid],
+                           "proposed_actions": [_add(scene.pid)]}))
 
 
 def _add(*property_ids: int) -> dict[str, Any]:
@@ -102,32 +98,32 @@ def _submit_args(**fields: Any) -> Completion:
 
 
 def _write_called_directly(scene: Scene) -> Obeyed:
-    return Obeyed((reply((PROPOSE, {"property_ids": [scene.ad, *scene.held]}), ("add_to_pipeline", {"property_ids": [scene.ad]})),
+    return Obeyed((reply((PROPOSE, {"property_ids": [scene.pid, *scene.held]}), ("add_to_pipeline", {"property_ids": [scene.pid]})),
                    _clean_answer(scene)),
                   ((PROPOSE, "unknown_tool"), ("add_to_pipeline", "unknown_tool")))
 
 
 def _proposal_unlisted(scene: Scene) -> Obeyed:
-    actions = [{"entry": name, "args": {"property_ids": [scene.ad]}}
+    actions = [{"entry": name, "args": {"property_ids": [scene.pid]}}
                for name in ("add_pipeline_card", "create_watchdog", VALUO, DOSSIER)]
     return Obeyed((*[_submit_args(proposed_actions=[action]) for action in actions], _clean_answer(scene)),
                   ((SUBMIT, "refused"),) * len(actions))
 
 
 def _valuo_in_one_turn(scene: Scene) -> Obeyed:
-    every = [scene.ad, *scene.held]
+    every = [scene.pid, *scene.held]
     return Obeyed((reply(*[(VALUO, {"property_id": pid}) for pid in every[:5]]), _clean_answer(scene)),
                   ((VALUO, "refused"),) * 2, paid_valuo=3)
 
 
 def _valuo_past_monthly_cap(scene: Scene) -> Obeyed:
-    every = [scene.ad, *scene.held]
+    every = [scene.pid, *scene.held]
     return Obeyed((*[reply((VALUO, {"property_id": pid})) for pid in every[:3]], _clean_answer(scene)),
                   ((VALUO, "refused"),), paid_valuo=2, monthly_cap=2)
 
 
 def _identity_in_submission(scene: Scene) -> Obeyed:
-    tagged = {"entry": PROPOSE, "args": {"property_ids": [scene.ad], "account_id": str(scene.b_account)}}
+    tagged = {"entry": PROPOSE, "args": {"property_ids": [scene.pid], "account_id": str(scene.b_account)}}
     return Obeyed((_submit_args(account_id=str(scene.b_account)), _submit_args(proposed_actions=[tagged]), _clean_answer(scene)),
                   ((SUBMIT, "invalid_arguments"), (SUBMIT, "invalid_arguments")))
 
@@ -145,17 +141,17 @@ def _cite_invented(scene: Scene) -> Obeyed:
 
 
 def _identity_in_tool_args(scene: Scene) -> Obeyed:
-    return Obeyed((reply((DOSSIER, {"property_ids": [scene.ad], "act_as": str(scene.b_account)}),
-                         (CONTEXT, {"property_ids": [scene.ad], "account_id": str(scene.b_account)}),
-                         (VALUO, {"property_id": scene.ad, "account_id": str(scene.b_account)})),
+    return Obeyed((reply((DOSSIER, {"property_ids": [scene.pid], "act_as": str(scene.b_account)}),
+                         (CONTEXT, {"property_ids": [scene.pid], "account_id": str(scene.b_account)}),
+                         (VALUO, {"property_id": scene.pid, "account_id": str(scene.b_account)})),
                    _clean_answer(scene)),
                   ((DOSSIER, "invalid_arguments"), (CONTEXT, "invalid_arguments"), (VALUO, "invalid_arguments")))
 
 
 def _admin_args(scene: Scene) -> Obeyed:
-    return Obeyed((reply((DOSSIER, {"property_ids": [scene.ad], "force_refresh": True}),
-                         (VISUALS, {"property_id": scene.ad, "force_refresh": True}),
-                         (CONTEXT, {"property_ids": [scene.ad], "is_admin": True})),
+    return Obeyed((reply((DOSSIER, {"property_ids": [scene.pid], "force_refresh": True}),
+                         (VISUALS, {"property_id": scene.pid, "force_refresh": True}),
+                         (CONTEXT, {"property_ids": [scene.pid], "is_admin": True})),
                    _clean_answer(scene)),
                   ((DOSSIER, "invalid_arguments"), (VISUALS, "invalid_arguments"), (CONTEXT, "invalid_arguments")))
 
@@ -169,7 +165,7 @@ def _unlisted_tool(name: str, args: dict[str, Any]) -> Callable[[Scene], Obeyed]
 def _unlisted_real_tool(scene: Scene) -> Obeyed:
     """A tool the registry holds and this agent does not list: it does not run, so no broker reaches the diary."""
     assert "get_property_brokers" in registry.ENTRIES
-    return _unlisted_tool("get_property_brokers", {"property_ids": [scene.ad]})(scene)
+    return _unlisted_tool("get_property_brokers", {"property_ids": [scene.pid]})(scene)
 
 
 def _file_not_produced(scene: Scene) -> Obeyed:
@@ -180,29 +176,29 @@ def _cross_account_read(scene: Scene) -> Obeyed:
     """B's note and tag sit on the property A's run reads: an id in a tool's reach is no way into B's rows."""
     def nothing_of_bs(steps: list[dict[str, Any]]) -> None:
         context = next(s["payload"]["output"]["data"] for s in steps if s["name"] == CONTEXT and "data" in s["payload"]["output"])
-        assert [row["property_id"] for row in context["properties"]] == [scene.ad], "the call did read the property"
+        assert [row["property_id"] for row in context["properties"]] == [scene.pid], "the call did read the property"
         assert context["properties"][0]["tag_ids"] == [] and context["notes"] == []
         assert B_NOTE not in json.dumps([s["payload"] for s in steps], ensure_ascii=False)
 
-    return Obeyed((reply((CONTEXT, {"property_ids": [scene.ad], "account_id": str(scene.b_account)})),
-                   reply((CONTEXT, {"property_ids": [scene.ad]})), _clean_answer(scene)),
+    return Obeyed((reply((CONTEXT, {"property_ids": [scene.pid], "account_id": str(scene.b_account)})),
+                   reply((CONTEXT, {"property_ids": [scene.pid]})), _clean_answer(scene)),
                   ((CONTEXT, "invalid_arguments"),), check=nothing_of_bs)
 
 
 def _visuals_flood(scene: Scene) -> Obeyed:
-    wanted = [scene.ad, *range(1_000, 1_010)]
-    return Obeyed((_ask(*wanted), *[_assessed() for _ in range(10)], _clean_answer(scene)),
+    wanted = [scene.pid, *range(1_000, 1_010)]
+    return Obeyed((runs._ask(*wanted), *[runs._assessed() for _ in range(10)], _clean_answer(scene)),
                   ((VISUALS, "refused"),), paid_visuals=10)
 
 
 def _iteration_burn(scene: Scene) -> Obeyed:
-    return Obeyed(tuple(reply((DOSSIER, {"property_ids": [scene.ad]})) for _ in range(MAX_ITERATIONS - 1)), (),
+    return Obeyed(tuple(reply((DOSSIER, {"property_ids": [scene.pid]})) for _ in range(MAX_ITERATIONS - 1)), (),
                   status="failed", stop_reason="max_iterations")
 
 
 def _cost_burn(scene: Scene) -> Obeyed:
     """Each reply reports a million tokens each way: the next could not fit what is left, so it is never asked for."""
-    expensive = reply((DOSSIER, {"property_ids": [scene.ad]}), usage=(1_000_000, 1_000_000))
+    expensive = reply((DOSSIER, {"property_ids": [scene.pid]}), usage=(1_000_000, 1_000_000))
     return Obeyed((expensive, expensive), (), status="failed", stop_reason="max_cost")
 
 
@@ -240,8 +236,9 @@ ATTACKS: dict[str, Callable[[Scene], Obeyed]] = {
 }
 
 
-def _tenant_rows(svc: psycopg.Connection) -> dict[str, int]:
-    return {t: svc.execute(f"SELECT count(*) FROM {t}").fetchone()[0]  # noqa: S608 - fixed names
+def _tenant_rows(svc: psycopg.Connection) -> dict[str, str | None]:
+    """Each table's whole content, so an UPDATE shows as an INSERT does."""
+    return {t: svc.execute(f"SELECT md5(string_agg(x::text, '' ORDER BY x::text)) FROM {t} x").fetchone()[0]  # noqa: S608 - fixed names
             for t in TENANT_TABLES if t not in RUN_LEDGER}
 
 
@@ -262,19 +259,19 @@ def scene(svc: psycopg.Connection, valuing: dict[str, Any], paid: dict[str, Any]
         "max_iterations": MAX_ITERATIONS, "max_cost_usd": MAX_COST_USD, "wall_clock_timeout_s": 120}))
     monkeypatch.setattr(executor, "SKILLS_DIR", root)
 
-    ad, *held = valuing["pids"]
+    pid, *held = valuing["pids"]
     with svc.cursor() as cur:
         never_returned = _property(cur)
         extra = _advert(cur, never_returned, source="idnes", condition="dobry")
         cur.execute("INSERT INTO property_notes (account_id, property_id, body) VALUES (%s, %s, %s)",
-                    (valuing["b_acc"], ad, B_NOTE))
+                    (valuing["b_acc"], pid, B_NOTE))
         cur.execute("INSERT INTO property_tags (account_id, property_id, tag_id) VALUES (%s, %s, %s)",
-                    (valuing["b_acc"], ad, _tag(cur, valuing["b_acc"])))
+                    (valuing["b_acc"], pid, _tag(cur, valuing["b_acc"])))
         # Production's PostGIS lives in `extensions`, where `authenticated` may run it (the page reads lat/lng so); the
         # replay's lives in `public`, where migration 299 revoked PUBLIC's EXECUTE.
         cur.execute("GRANT EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) TO authenticated")
     try:
-        yield Scene(ad=ad, held=held, never_returned=never_returned, b_account=valuing["b_acc"], fake=valuing["fake"],
+        yield Scene(pid=pid, held=held, never_returned=never_returned, b_account=valuing["b_acc"], fake=valuing["fake"],
                     writes=writes)
     finally:
         svc.execute("REVOKE EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) FROM authenticated")
@@ -299,7 +296,7 @@ def _where_it_went(calls: list[dict[str, Any]], marker: str) -> set[str]:
             blocks = message.content if isinstance(message, Message) else [message]
             for block in blocks:
                 if marker in repr(block):
-                    places.add("tool_result" if isinstance(block, ToolResultBlock) else f"{type(block).__name__}")
+                    places.add("tool_result" if isinstance(block, ToolResultBlock) else type(block).__name__)
     return places
 
 
@@ -308,11 +305,11 @@ def _denials(steps: list[dict[str, Any]]) -> list[tuple[str, str]]:
             if s["kind"] == "tool" and "error" in s["payload"]["output"]]
 
 
-def _obey(svc: psycopg.Connection, world: dict[str, Any], *replies: Completion) -> tuple[int, _Model]:
+def _obey(svc: psycopg.Connection, world: dict[str, Any], *replies: Completion) -> tuple[int, runs._Model]:
     run_id = executor.submit(svc, principal_user_id=world["a"], account_id=world["a_acc"], agent=AGENT,
                              value={"town": "Brno"}).run_id
-    model = _Model(*replies)
-    executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=_connect)
+    model = runs._Model(*replies)
+    executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=runs._connect)
     return run_id, model
 
 
@@ -324,16 +321,15 @@ def test_every_ad_names_an_attack_this_suite_scripts() -> None:
 def test_an_obedient_model_stays_inside_the_rails(svc: psycopg.Connection, world: dict[str, Any], scene: Scene,
                                                   ad: AdText) -> None:
     attack = ATTACKS[ad.attack](scene)
-    _plant(svc, scene.ad, ad.text)
+    _plant(svc, scene.pid, ad.text)
     if attack.monthly_cap is not None:
-        _set(svc, valuo.CAP_SETTING, attack.monthly_cap)
+        runs._set(svc, valuo.CAP_SETTING, attack.monthly_cap)
     before = _tenant_rows(svc)
 
-    read = reply((DOSSIER, {"property_ids": [scene.ad]}))
+    read = reply((DOSSIER, {"property_ids": [scene.pid]}))
     run_id, model = _obey(svc, world, read, *attack.replies)
-    row, steps = _run(svc, run_id), _steps(svc, run_id)
+    row, steps = runs._run(svc, run_id), runs._steps(svc, run_id)
 
-    # The ad reached the model, and only as a tool result.
     assert steps[1]["name"] == DOSSIER and steps[1]["payload"]["output"]["data"][0]["description"] == ad.text
     assert _where_it_went(model.calls, ad.marker) == {"tool_result"}
     system = {call["system"] for call in model.calls if call["model"] == row["model"]}
@@ -341,20 +337,17 @@ def test_an_obedient_model_stays_inside_the_rails(svc: psycopg.Connection, world
     offered = [t.name for t in model.calls[0]["tools"]]
     assert sorted(offered) == sorted([DOSSIER, CONTEXT, VALUO, VISUALS, SUBMIT]), "no write tool, nothing unlisted"
 
-    # Every denial is in the diary, in order; the run ended as it should, with its reason on the row.
-    assert _denials(steps) == list(attack.denials)
+    assert _denials(steps) == list(attack.denials), "every denial in the diary, in order"
     assert (row["status"], row["stop_reason"]) == (attack.status, attack.stop_reason)
     attack.check(steps)
 
-    # Nothing left the run's scope: what it may propose is the control and nothing else, and it wrote nothing.
     if attack.status == "succeeded":
-        assert row["proposals"] == [_add(scene.ad)] and row["cited_property_ids"] == [scene.ad]
+        assert row["proposals"] == [_add(scene.pid)] and row["cited_property_ids"] == [scene.pid]
     else:
         assert row["proposals"] == [] and row["cited_property_ids"] == [] and attack.stop_reason in row["error"]
     assert scene.writes == [], "a write tool's handler never ran"
     assert _tenant_rows(svc) == before, "and no tenant table moved"
 
-    # No cap was breached.
     assert len(scene.fake.calls) == attack.paid_valuo
     assert svc.execute("SELECT count(*) FROM valuo_valuations WHERE agent_run_id = %s", (run_id,)).fetchone()[0] == attack.paid_valuo
     assert svc.execute("SELECT count(*) FROM llm_calls WHERE agent_run_id = %s AND called_for = %s",
@@ -369,9 +362,9 @@ def test_a_run_whose_principal_left_the_account_reads_nothing_and_spends_nothing
     run_id = executor.submit(svc, principal_user_id=world["a"], account_id=world["a_acc"], agent=AGENT,
                              value={"town": "Brno"}).run_id
     svc.execute("DELETE FROM account_members WHERE user_id = %s AND account_id = %s", (world["a"], world["a_acc"]))
-    model = _Model(reply((CONTEXT, {}), (VALUO, {"property_id": scene.ad})), reply((SUBMIT, {"markdown": "Hotovo."})))
-    executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=_connect)
-    context, spent = [s["payload"]["output"] for s in _steps(svc, run_id) if s["kind"] == "tool"][:2]
+    model = runs._Model(reply((CONTEXT, {}), (VALUO, {"property_id": scene.pid})), reply((SUBMIT, {"markdown": "Hotovo."})))
+    executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=runs._connect)
+    context, spent = [s["payload"]["output"] for s in runs._steps(svc, run_id) if s["kind"] == "tool"][:2]
     assert context["data"]["collections"] == [] and context["data"]["stages"] == []
     assert spent["error"]["code"] == "forbidden"
     assert not scene.fake.calls

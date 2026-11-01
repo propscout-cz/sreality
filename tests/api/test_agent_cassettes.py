@@ -1,9 +1,7 @@
-"""Every recorded run replays on every pull request (#2074; PROGRAM § 3.9's E0): the lane over `tests/cassettes/`.
-
-No real cassette exists yet: the scout's graded runs are #2069's. Until they land the lane replays nothing, and everything
-below `test_every_agent_has_its_floor_of_recordings` proves it on synthetic recordings made here by the real loop. The
-floor turns on by itself the moment an agent folder lands in `skills/`.
-"""
+"""Every recorded run replays on every pull request (#2074; PROGRAM § 3.9's E0): the lane over `tests/cassettes/`. No real
+cassette exists yet: the scout's graded runs are #2069's. Until they land the lane replays nothing, and everything below
+`test_every_agent_has_its_floor_of_recordings` proves it on synthetic recordings made here by the real loop. The floor turns
+on by itself the moment an agent folder lands in `skills/`."""
 
 from __future__ import annotations
 
@@ -149,11 +147,13 @@ def test_a_corrupt_recording_fails_by_name_and_the_rest_still_replay(tmp_path: P
     ("broken.json", "{not json", "JSONDecodeError"),
     ("empty.json", "", "JSONDecodeError"),
     ("run.jsonl", "{}", "a cassette is a .json file"),
+    ("list.json", "[]", "AttributeError"),
     ("leak.json", '{"owner_email": "someone@example.test"}', "scrub it"),
 ])
 def test_a_file_that_is_no_recording_fails_loudly(tmp_path: Path, skills: Path, file: str, body: str, says: str) -> None:
     (tmp_path / file).write_text(body, encoding="utf-8")
     assert says in failures(tmp_path, skills)[file]
+    assert floors_unmet(tmp_path, skills) == [f"{AGENT} has 0 of 1"], "and it counts for nothing, without stopping the floor"
 
 
 # --- the floor ---------------------------------------------------------------------------------------------------------------
@@ -174,7 +174,7 @@ def test_an_agent_folder_owes_a_recording_the_moment_it_lands(tmp_path: Path, sk
 
 
 def test_the_scouts_floor_is_its_ten_graded_runs_and_a_corrupt_one_does_not_count(tmp_path: Path, skills: Path) -> None:
-    scout = next(iter(FLOORS))
+    scout = "regional_scout_v1"
     assert FLOORS[scout] == 10
     write_folder(skills, scout, meta=frontmatter(scout))
     root = tmp_path / "cassettes"
