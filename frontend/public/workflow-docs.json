@@ -1336,72 +1336,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_intake.yml"
     },
     {
-      "filename": "location_claims_retire.yml",
-      "name": "Ops: W3 claim purge (last run before migration 699)",
-      "description": "LAST RUN BEFORE MIGRATION 699; DELETED IN W3's PR-2 (#2223). Dispatched with --ref the W3 branch. Keeps ONE `location_claims` row per (listing, claim type, licence class), the row today's resolver reads (newest contract version <= the active one, then the newest observation), and deletes the ≈ 8.8 M others (`scripts.location_claims_retire`). A key whose only rows sit under a retired version keeps one; every batch re-counts the KEYS it left and stops the run (exit 3) if one is missing. Nothing is enqueued: for 99.97 % of keys the keeper is what the resolver reads now, and the RECEIPT names the rest (≈ 2.8 k listings, re-mined by W3's rollout step 5).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "true = walk + count only. false = back up, purge, receipt (needs confirm=PURGE).",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        },
-        {
-          "name": "confirm",
-          "description": "Type PURGE to arm the delete. Ignored when dry_run=true.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "listings_per_batch",
-          "description": "listings per DELETE statement",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "after_listing_id",
-          "description": "resume cursor: the listing id the last run logged (0 = from the start)",
-          "required": false,
-          "type": "string",
-          "default": "0",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; stops between batches, never mid-batch",
-          "required": false,
-          "type": "string",
-          "default": "20000",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "location-batch",
-      "cancelInProgress": false,
-      "timeoutMinutes": 340,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_retire.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_retire.yml"
-    },
-    {
       "filename": "location_registry_load.yml",
       "name": "Location: RÚIAN registry load",
       "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
@@ -1469,14 +1403,13 @@
         },
         {
           "name": "claims",
-          "description": "The wave's claim change: none (W5/W5b/W6), remine (W4), purge (W3)",
+          "description": "The wave's claim change: none (W5/W5b/W6), remine (W4)",
           "required": true,
           "type": "choice",
           "default": "none",
           "options": [
             "none",
-            "remine",
-            "purge"
+            "remine"
           ]
         },
         {
@@ -1516,7 +1449,7 @@
         },
         {
           "name": "ids_r2_key",
-          "description": "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored",
+          "description": "An R2 key of gzipped listing ids, one per line; ids_sql is then ignored",
           "required": false,
           "type": "string",
           "default": "",

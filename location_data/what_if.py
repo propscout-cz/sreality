@@ -4,7 +4,7 @@
         --claims remine --contract shadow/w4/realitymix@8.yaml
 
 Re-resolves an id list with this checkout's resolver over `drain.recompute` on a READ ONLY
-connection, after the wave's claim change (`none` W5/W5b/W6, `purge` W3, `remine` W4); SQL goes
+connection, after the wave's claim change (`none` W5/W5b/W6, `remine` W4); SQL goes
 only through `autodedup.shadow.read_cursor`. A mover's row differs from today's
 `COHORT_LOCATION_SQL` row; `positions.jsonl` holds its new row in that read's columns,
 `movers.jsonl` old beside new, `what_if.json` the run.
@@ -46,9 +46,7 @@ from location_data.claims_common import (
 from location_data.resolver import drain, projection
 from location_data.resolver.resolve_db import (
     ADMISSIBLE_LICENCE_CLASSES,
-    CLAIM_COLUMNS,
     claim_from_intake,
-    claim_from_row,
 )
 from location_data.resolver.types import Claim, Resolution
 from scraper import db
@@ -63,38 +61,6 @@ TOLERANCE = 1e-6
 _RANK_SQL = "SELECT granularity::text, rank, is_address_grain FROM location_granularity_rank"
 
 
-# DELETED IN PR-2 WITH THE PURGE (#2223): `_RAW_CLAIMS_SQL`, `keeper_rank` and `purge` are a second
-# spelling of the purge script's keeper rule, for the shadow gate that runs before it; once the
-# store holds one claim per key they have nothing to derive.
-#
-# Every stored claim of the ids, raw, with what W3's purge ranks it by: its contract version, the
-# portal's active version, and whether the active contract still declares its type. Scalar
-# subqueries keep `location_claims` the only FROM item, so `CLAIM_COLUMNS` reads unqualified.
-_RAW_CLAIMS_SQL = f"""
-SELECT {CLAIM_COLUMNS},
-       (SELECT pc.version FROM portal_contract_entries pce
-          JOIN portal_contracts pc ON pc.id = pce.contract_id
-         WHERE pce.id = location_claims.contract_entry_id),
-       (SELECT act.version FROM portal_contracts act
-         WHERE act.source = location_claims.source AND act.is_active),
-       EXISTS (SELECT 1 FROM portal_contract_entries ace
-                 JOIN portal_contracts act ON act.id = ace.contract_id AND act.is_active
-                WHERE act.source = location_claims.source
-                  AND ace.claim_type = location_claims.claim_type)
-  FROM location_claims
- WHERE listing_id = ANY(%(ids)s::bigint[])
-"""
-
-
-def keeper_rank(claim: Claim, version: int | None, active: int | None) -> tuple[Any, ...]:
-    """The purge's keeper order, best first: (version <= active) DESC NULLS LAST, version DESC
-    NULLS FIRST, first_observed_at DESC, id DESC (`scripts.location_claims_retire._BATCH_SQL`)."""
-    admissible = None if version is None or active is None else version <= active
-    return ({True: 0, False: 1, None: 2}[admissible],
-            (0, 0) if version is None else (1, -version),
-            -claim.observed_at.timestamp(), -claim.id)
-
-
 def one_read(claims: Sequence[Claim], declared: set[str]) -> list[Claim]:
     """`resolve_db._claims_sql` over a listing's stored claims: one per type, the operator's
     first; a portal claim only of a type the active contract declares."""
@@ -107,27 +73,6 @@ def one_read(claims: Sequence[Claim], declared: set[str]) -> list[Claim]:
         if held is None or (claim.licence_class == "operator") > (held.licence_class == "operator"):
             best[claim.claim_type] = claim
     return sorted(best.values(), key=lambda claim: claim.id)
-
-
-def purge(conn: psycopg.Connection, claims: dict[int, list[Claim]]) -> dict[int, list[Claim]]:
-    """W3: every stored claim of the ids read RAW (today's read is already one per type), the
-    purge's keeper per (listing, type, author), then the one read."""
-    _, rows = read(conn, _RAW_CLAIMS_SQL, {"ids": list(claims)})
-    kept: dict[tuple[int, str, str], tuple[tuple[Any, ...], Claim]] = {}
-    declared: dict[int, set[str]] = {listing_id: set() for listing_id in claims}
-    for row in rows:
-        claim, (version, active, in_contract) = claim_from_row(row[:17]), row[17:]
-        if in_contract:
-            declared.setdefault(claim.listing_id, set()).add(claim.claim_type)
-        key, rank = (claim.listing_id, claim.claim_type, claim.licence_class), keeper_rank(
-            claim, version, active)
-        if key not in kept or rank < kept[key][0]:
-            kept[key] = (rank, claim)
-    out: dict[int, list[Claim]] = {listing_id: [] for listing_id in claims}
-    for (listing_id, _, _), (_, claim) in kept.items():
-        out.setdefault(listing_id, []).append(claim)
-    return {listing_id: one_read(rows_, declared.get(listing_id, set()))
-            for listing_id, rows_ in out.items()}
 
 
 def remined_read(today: list[Claim], mined: list[Claim], retracted: set[str],
@@ -219,7 +164,7 @@ def select_ids(conn: psycopg.Connection, sql: str, timeout_s: int = IDS_TIMEOUT_
 
 
 def ids_from_r2(store: page_readers.BodyStore, key: str) -> list[int]:
-    """A gzipped id list, one per line, from R2 (what the W3 purge's dry run writes)."""
+    """A gzipped id list, one per line, from R2."""
     return [int(token) for token in gzip.decompress(store.download_bytes(key)).decode().split()]
 
 
@@ -274,13 +219,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ids-timeout-s", type=int, default=IDS_TIMEOUT_S,
                         help="--ids-sql's statement budget; per-listing reads keep the default")
     parser.add_argument("--out", required=True, help="directory for positions.jsonl, movers.jsonl")
-    parser.add_argument("--claims", choices=("none", "purge", "remine"), default="none")
+    parser.add_argument("--claims", choices=("none", "remine"), default="none")
     parser.add_argument("--contract", default=None, help="remine: the wave's contract file")
     parser.add_argument("--batch-size", type=int, default=drain.DEFAULT_BATCH)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     unmined: set[int] = set()
-    change: drain.ClaimChange | None = purge if args.claims == "purge" else None
+    change: drain.ClaimChange | None = None
     if args.claims == "remine" and not args.contract:
         parser.error("--claims remine needs --contract <the wave's contract file>")
     store = payloads.open_store() if args.claims == "remine" or args.ids_r2_key else None

@@ -4856,8 +4856,7 @@ what a payload asserted, with a surface, an extraction method, a licence class a
 that FIRST stated its value. For each listing, claim type and author (`licence_class`: `portal` or
 `operator`) it holds ONE claim, the value that author stated most recently (`location_claims_key`);
 the operator outranks the portal at the read (ruling Q5). Columns: identity, the contract entry, five
-typed value slots, the declared-precision trio (`claim_fingerprint` is dead, dropped by migration
-700). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
+typed value slots, the declared-precision trio (`claim_fingerprint` was dropped by migration 707). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
 `location_data/operator_corrections.py`): `INSERT … ON CONFLICT (listing_id, claim_type,
 licence_class) DO UPDATE … WHERE` one of the eight value columns `IS DISTINCT FROM` the stored one, so
 an unchanged re-mine or a bump that restates a value writes and enqueues NOTHING, a changed value is an
@@ -5284,8 +5283,8 @@ standing gate, W3/W4/W5/W5b/W6; `docs/design/location-quality/wave-shadow.md`). 
 position field through `COHORT_LOCATION_SQL` and `export.build_location`, in the export and the live lane
 alike, so the seam is the cohort artifact and `DECISION_MODULES` never change for it. Three commands, no
 production write (every statement in a READ ONLY transaction on `db.connect_read_only()`):
-`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W3's
-`purge`, W4's `remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
+`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W4's
+`remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
 writes the movers; `autodedup.shadow` sizes their old and new blocks (capped) and exports them, the rulings
 and the live scorer in-process (no `autodedup.iterations` row); `harness shadow` rewrites the movers'
 blocks, runs base and candidate under the live scorer and the operator's links, and passes only when E111

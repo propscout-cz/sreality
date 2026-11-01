@@ -207,7 +207,6 @@ jobs:
                  tests/location_data/test_location_w10_gone_bodies_live.py \
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_claims_one_write_live.py \
-                 tests/location_data/test_claims_retire.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \
