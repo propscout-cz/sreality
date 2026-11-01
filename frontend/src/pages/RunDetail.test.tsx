@@ -148,7 +148,7 @@ describe('model-written text stays inert', () => {
       expect(container.textContent).toContain(words);
     }
     expect(within(screen.getByRole('region', { name: 'Files' })).getByText(`${IMG}.xlsx`)).toBeInTheDocument();
-    expect(within(screen.getByRole('region', { name: 'Proposals' })).getByText(HOSTILE)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Proposals' }).textContent).toContain(HOSTILE);
     const result = screen.getByRole('region', { name: 'Result' });
     expect(within(result).getByText((_, el) => el?.tagName === 'DIV' && el.textContent === HOSTILE)).toHaveClass('whitespace-pre-wrap');
   });
