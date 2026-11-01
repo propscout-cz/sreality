@@ -697,5 +697,9 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     marks (no AI agents card).
     Admin Sign-ups page (2026-10-31): Admin → Sign-ups lists the waitlist with the answers, the ad each came from, an
     e-mail copy and a CSV download (`GET /admin/waitlist`); test sign-ups are marked and not counted.
-    **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), refreshing
-    the proof numbers.
+    **Later:** refreshing the proof numbers.
+13. **Email — APPROVED 2026-10-31, nothing built:** password reset, waitlist confirmation, waitlist invitation and
+    notification email through Resend; only an invited address may create an account; the introductory price is 599 Kč
+    a month including VAT. Plan, rulings and copy: `docs/design/email/PROGRAM.md`.
+    **Next:** PR 1, the operator's Resend domains and Supabase SMTP. Then PR 2 waitlist email, PR 3 invitations,
+    PR 4 notification email.
