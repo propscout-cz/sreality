@@ -17,8 +17,7 @@
 -- and roles. Read pg_get_functiondef on production before applying, in case one has drifted from those files.
 --
 -- Additive: new tables, a nullable column, four settings, three CREATE OR REPLACE that keep their signatures and
--- grants. The index on llm_calls is CONCURRENTLY at top level (605's shape), so writers of that hot append table never
--- wait on a scan. Plain SET, never SET LOCAL: the apply path is statement-autocommit.
+-- grants. The index on llm_calls.agent_run_id is 706. Plain SET, never SET LOCAL: the apply path is statement-autocommit.
 --
 -- NO FOREIGN KEY between llm_calls and the runs, either way: `_record_call` inserts after the provider has billed, and a
 -- run deleted during a call (an account's deletion) must not cost that row, which the daily ceiling counts.
@@ -213,6 +212,3 @@ $function$;
 commit;
 
 reset lock_timeout;
-
-create index concurrently if not exists llm_calls_agent_run_idx on llm_calls (agent_run_id)
-  where agent_run_id is not null;
