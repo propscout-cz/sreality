@@ -1,7 +1,7 @@
 # Email: password reset, the waitlist, notifications
 
-> **Status: APPROVED 2026-10-31 (operator, in one interview). Nothing is built; PR 1 waits on the operator's Resend
-> domains.** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
+> **Status: APPROVED 2026-10-31 (operator, in one interview). PR 1 done 2026-11-01 (a reset email delivered through
+> Resend); PR 2 in progress.** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
 
 **Terms.** Sign-up, waitlist entry, waitlist invitation and introductory price are defined in `GLOSSARY.md`.
 
@@ -29,7 +29,7 @@
 | Enforcement | Supabase's Before User Created hook refuses an address with no invitation. No special link, so nothing expires. |
 | Sign-in methods | Google and email/password. |
 | Email confirmation | **Off.** Anyone who knows an invited address can register it: an accepted risk, revisited before public sign-up. The confirmation template is not written. |
-| Waitlist confirmation | Sent on joining, no click needed; the lawyer checks that choice. Capped at 80 a day, 500 on Pro. Over the cap the entry is saved without the email. |
+| Waitlist confirmation | Sent on joining, no click needed; the lawyer checks that choice. Capped at 80 a day, 500 on Pro (`CONFIRMATION_DAILY_CAP`, one line, changed when the plan changes). Over the cap the entry is saved without the email. |
 | Sending invitations | Admin only, one by one or in batches, from the page renamed Waitlist. Oldest first by default, but the admin may pick anyone. Unsubscribed entries cannot be invited. |
 | Entry states | Waiting, invited, account created, unsubscribed. An invited entry has "Poslat znovu". No withdrawal for now. Resend's own block list handles bounces. |
 | Signup-order promise | Stays on the pages, with the admin free to pick out of order. Operator ruling; on the lawyer's list. |
@@ -53,7 +53,7 @@ have no Reply-To, so the reset email names `support@propscout.cz` in its text in
 **PR 2: waitlist email.** Declares `RESEND_API_KEY` in `.railway/railway.ts`: it was added in the dashboard, and an
 undeclared name plans as a delete on the next apply. The confirmation from `POST /waitlist`, which never fails the signup when sending fails;
 one-click unsubscribe (RFC 8058) setting `unsubscribed_at`; the privacy page (Resend as a processor, US storage, the
-`info@` contact); the price and "zaváděcí" text on the landing page, thank-you page and copy deck. The deck is rebuilt
+`info@` contact, the app section's supplier list too); the price and "zaváděcí" text on the landing page, thank-you page and copy deck. The deck is rebuilt
 per `frontend/scripts/landing-copy-deck/README.md`. Must ship before any email goes out.
 
 **PR 3: invitations.** The hook; the admin buttons and states setting `invited_at`; the Sign-ups → Waitlist rename; the

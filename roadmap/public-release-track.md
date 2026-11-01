@@ -701,5 +701,6 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
 13. **Email — APPROVED 2026-10-31, nothing built:** password reset, waitlist confirmation, waitlist invitation and
     notification email through Resend; only an invited address may create an account; the introductory price is 599 Kč
     a month including VAT. Plan, rulings and copy: `docs/design/email/PROGRAM.md`.
-    **Next:** PR 1, the operator's Resend domains and Supabase SMTP. Then PR 2 waitlist email, PR 3 invitations,
-    PR 4 notification email.
+    PR 1 done 2026-11-01: both domains verified, Supabase sends through Resend, the Czech reset email delivered.
+    PR 2: the waitlist confirmation (dark until `RESEND_API_KEY`, capped), one-click unsubscribe, privacy page, 599 Kč.
+    **Next:** PR 3 invitations, PR 4 notification email.
