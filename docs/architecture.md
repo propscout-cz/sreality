@@ -1053,20 +1053,21 @@ rules. Identify which one a task belongs to before you start.
   path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
-  `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
+  `closeBundle` hook overwrites it at build time from `PORTALS[].pageHosts` (same pattern already
   used there for `name`), and `portalIds.test.ts` fails when the template
-  and the rules name different hosts, so onboarding a new portal means its rule in
+  and the page hosts differ, so onboarding a new portal means its rule in
   `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
   stays empty: the background worker calls the API and the auth service under ordinary CORS, and the
   store package's guard (`chrome-extension/release/allowed.ts`, a hand-written literal) holds the
   permissions, the portal sites and the empty host list; CI fails a PR whose build differs from it. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
   API) rather than a full page load, which MV3's manifest-declared content script does NOT
-  re-inject for. `background.ts` listens for `chrome.webNavigation.onHistoryStateUpdated`
-  (`webNavigation` permission, filtered to the same `PORTALS` host list) and relays the new URL
-  to the tab's already-injected content script (`route_changed` message), which re-runs its
-  page-type decision (`content.ts`, the entry and router) without needing a real reload — this
-  fixed the "panel only appears after F5" bug. The router keys on the **listing identity**
+  re-inject for. The content script watches the Navigation API itself (`currententrychange`,
+  which reaches its isolated world; live-checked on nine of the ten page hosts, ceskereality by hand, #2277) and re-runs its
+  page-type decision (`content.ts`, the entry and router) without a reload — no webNavigation
+  permission any more, which was the install warning's "read your browsing history" line. This fixed the
+  "panel only appears after F5" bug. The content script runs only on each portal's `pageHosts`
+  (`portalIds.ts`): the redirect-only hosts stay in `hosts` for pasted links. The router keys on the **listing identity**
   (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't
   re-open the side panel and discard the operator's note draft + calculator edits. Every panel
   open is a new **epoch** (`panel.ts`): anything resuming after an `await` (the lookup, the price

@@ -10,27 +10,21 @@ export interface AllowedList {
 }
 
 export const ALLOWED: AllowedList = {
-  permissions: ['storage', 'identity', 'alarms', 'webNavigation', 'sidePanel'],
+  permissions: ['storage', 'identity', 'sidePanel'],
   // Empty: the background worker reaches the API and the auth service under ordinary CORS.
   hostPermissions: [],
+  // The portals' page hosts only (portalIds.ts pageHosts): a redirect-only host never runs the script.
   contentScriptMatches: [
     'https://www.sreality.cz/*',
-    'https://sreality.cz/*',
     'https://reality.bazos.cz/*',
     'https://www.bezrealitky.cz/*',
-    'https://bezrealitky.cz/*',
     'https://www.bezrealitky.com/*',
-    'https://bezrealitky.com/*',
     'https://reality.idnes.cz/*',
     'https://nemovitosti.maxima.cz/*',
     'https://www.remax-czech.cz/*',
-    'https://remax-czech.cz/*',
     'https://www.mmreality.cz/*',
-    'https://mmreality.cz/*',
     'https://www.ceskereality.cz/*',
-    'https://ceskereality.cz/*',
     'https://realitymix.cz/*',
-    'https://www.realitymix.cz/*',
   ],
 };
 

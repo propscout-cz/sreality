@@ -3,6 +3,7 @@
  * static skeleton that stands while the first answer is out. One card each, the
  * old panel's words. */
 
+import { APP_NAME } from '../../frontend/src/lib/brand';
 import { buildCard } from './card';
 import { h, setBusy } from './dom';
 import { INGEST_STEP_CS, type IngestStep } from './ingest_flow';
@@ -36,7 +37,21 @@ export function signedOutCard(busy: boolean, error: string | null, onSignIn: () 
   card.body.appendChild(h('p', '', 'Pro zobrazení dat se prosím přihlaste.'));
   if (error != null) card.body.appendChild(alertLine(error));
   card.body.appendChild(primary(busy ? 'Přihlašuji…' : 'Přihlásit se přes Google', 'sign-in', busy, onSignIn));
+  card.body.appendChild(disclosure());
   return card.section;
+}
+
+/* What the extension sends once signed in, said where the user decides to sign in: the
+ * Chrome Web Store allows browsing data only for a feature the extension's UI describes. */
+function disclosure(): HTMLElement {
+  const p = h('p', 'meta', `Po přihlášení rozšíření posílá na ${APP_NAME} portál a čísla inzerátů, které na `
+    + 'podporovaných portálech otevřete nebo máte ve výsledcích hledání, aby k nim ukázalo vaše údaje. ');
+  const link = h('a', 'link', 'Ochrana osobních údajů');
+  link.href = 'https://propscout.cz/soukromi';
+  link.target = '_blank';
+  link.rel = 'noopener';
+  p.appendChild(link);
+  return p;
 }
 
 /* An ad we do not hold: the offer to add it; while the flow runs its step stands
