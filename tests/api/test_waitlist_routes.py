@@ -1,7 +1,8 @@
-"""The two /waitlist routes, hermetic: every answer is a 303 to an allowed page, every refusal names its reason and
-opens no connection, a bot's honeypot is never stored, a known email looks like a new one, and the landing page shows
-exactly the consent wording the API records (api/waitlist.py CONSENT_TEXTS). The SQL itself runs on the real schema
-in tests/test_waitlist_live.py."""
+"""The /waitlist routes, hermetic: every answer is a 303 to an allowed page, every refusal names its reason and opens
+no connection, a bot's honeypot is never stored, a known email looks like a new one, only a new entry gets a
+confirmation and nothing about it reaches the visitor, an unsubscribe changes nothing until the POST, and the landing
+page shows exactly the consent wording the API records (api/waitlist.py CONSENT_TEXTS). The SQL itself runs on the real
+schema in tests/test_waitlist_live.py."""
 
 from __future__ import annotations
 
@@ -20,7 +21,8 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps  # noqa: E402
 from api import main as api_main  # noqa: E402
-from api import waitlist  # noqa: E402
+from api import resend_client, waitlist, waitlist_email  # noqa: E402
+from api.http_json import HttpJsonError  # noqa: E402
 from api.routes import waitlist as routes  # noqa: E402
 from tests.api._script_conn import ScriptConn  # noqa: E402
 
@@ -158,6 +160,118 @@ def test_an_answer_without_a_valid_token_or_content_opens_nothing(client: Any, f
     for data in ({"t": "nope", "investor_type": "flip"}, {"t": str(TOKEN)}, {"t": str(TOKEN), "note": "   "}):
         assert _where(client.post("/waitlist/answer", data=data))[1] == {"hotovo": ["1"]}
     assert opener.opened == 0
+
+
+def _resend(monkeypatch: pytest.MonkeyPatch, *, fail: bool = False) -> list[dict[str, Any]]:
+    sent: list[dict[str, Any]] = []
+
+    def fake_send(**kwargs: Any) -> str:
+        if fail:
+            raise HttpJsonError("api.resend.com", "status", 429)
+        sent.append(kwargs)
+        return "id-1"
+
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(resend_client, "send", fake_send)
+    return sent
+
+
+def _confirming(monkeypatch: pytest.MonkeyPatch, claimed: list[tuple[Any, ...]]) -> ScriptConn:
+    conn = ScriptConn([(lambda q: q.startswith("INSERT INTO waitlist_signups"), [(TOKEN,)]),
+                       (lambda q: "SET confirmation_sent_at = now()" in q, claimed),
+                       (lambda q: "SET confirmation_sent_at = NULL" in q, [])])
+    _install(monkeypatch, conn)
+    return conn
+
+
+def test_a_new_entry_gets_the_confirmation_with_its_unsubscribe_link(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _resend(monkeypatch)
+    _confirming(monkeypatch, [("investor@example.cz",)])
+    url, query, _ = _where(client.post("/waitlist", data=_form()))
+    assert url == "https://propscout.cz/dekujeme" and query["t"] == [str(TOKEN)]
+    assert len(sent) == 1
+    mail = sent[0]
+    link = f"https://api.propscout.cz/waitlist/unsubscribe?t={TOKEN}"
+    assert mail["to"] == "investor@example.cz" and mail["sender"] == "PropScout <tym@novinky.propscout.cz>"
+    assert mail["reply_to"] == "support@propscout.cz"
+    assert link in mail["html"] and link in mail["text"]
+    assert mail["headers"] == {"List-Unsubscribe": f"<{link}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+    assert "399 Kč měsíčně včetně DPH" in mail["html"] and "399 Kč měsíčně včetně DPH" in mail["text"]
+
+
+def test_a_known_email_gets_no_second_confirmation(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _resend(monkeypatch)
+    _install(monkeypatch, ScriptConn([(lambda q: q.startswith("INSERT INTO waitlist_signups"), [])]))
+    client.post("/waitlist", data=_form())
+    assert sent == []
+
+
+def test_without_a_key_no_claim_and_no_send(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _confirming(monkeypatch, [("investor@example.cz",)])
+    _, query, _ = _where(client.post("/waitlist", data=_form()))
+    assert query["t"] == [str(TOKEN)]
+    assert not any("confirmation_sent_at" in q for q, _ in conn.executed)
+
+
+def test_over_the_cap_the_entry_stands_and_no_email_goes(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _resend(monkeypatch)
+    _confirming(monkeypatch, [])
+    url, _, _ = _where(client.post("/waitlist", data=_form()))
+    assert url == "https://propscout.cz/dekujeme" and sent == []
+
+
+def test_a_failed_send_leaves_the_count_and_never_the_visitor(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _resend(monkeypatch, fail=True)
+    conn = _confirming(monkeypatch, [("investor@example.cz",)])
+    url, _, _ = _where(client.post("/waitlist", data=_form()))
+    assert url == "https://propscout.cz/dekujeme"
+    assert any("SET confirmation_sent_at = NULL" in q for q, _ in conn.executed)
+
+
+def test_a_broken_database_after_the_signup_never_reaches_the_visitor(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _resend(monkeypatch)
+    _confirming(monkeypatch, [("investor@example.cz",)])
+    monkeypatch.setattr(waitlist, "claim_confirmation", lambda *_: 1 / 0)
+    url, _, _ = _where(client.post("/waitlist", data=_form()))
+    assert url == "https://propscout.cz/dekujeme"
+
+
+def test_opening_the_unsubscribe_link_only_asks(client: Any, fresh: Any) -> None:
+    opener, _ = fresh
+    res = client.get(f"/waitlist/unsubscribe?t={TOKEN}")
+    assert res.status_code == 200 and f'action="?t={TOKEN}"' in res.text and 'method="post"' in res.text
+    assert opener.opened == 0
+
+
+def test_the_one_click_post_withdraws_and_a_repeat_reads_the_same(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = ScriptConn([(lambda q: "SET unsubscribed_at = now()" in q, [])])
+    _install(monkeypatch, conn)
+    monkeypatch.setattr(routes, "_UNSUBSCRIBE_LIMIT", waitlist.RateLimit(per_client=30, total=600, window_s=600))
+    first = client.post(f"/waitlist/unsubscribe?t={TOKEN}", data={"List-Unsubscribe": "One-Click"})
+    second = client.post(f"/waitlist/unsubscribe?t={TOKEN}", data={"List-Unsubscribe": "One-Click"})
+    assert first.status_code == second.status_code == 200
+    assert "Jste odhlášeni" in first.text and first.text == second.text
+    assert sum("SET unsubscribed_at = now()" in q for q, _ in conn.executed) == 2
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_a_malformed_unsubscribe_token_opens_nothing(client: Any, fresh: Any, method: str) -> None:
+    opener, _ = fresh
+    res = getattr(client, method)("/waitlist/unsubscribe?t=not-a-token")
+    assert res.status_code == 400 and opener.opened == 0
+
+
+def test_the_email_names_every_promise_the_thank_you_page_makes() -> None:
+    text = waitlist_email.confirmation_text(TOKEN)
+    assert "v pořadí, v jakém se lidé přihlásili" in text and "přidat na plochu telefonu" in text
+    thanks = (LANDING.parent / "dekujeme.html").read_text(encoding="utf-8")
+    assert "Kromě potvrzení vám do té doby nic dalšího nepřijde." in thanks
+
+
+def test_no_page_or_email_still_says_the_old_price_word() -> None:
+    for page in ("index.html", "dekujeme.html", "soukromi.html"):
+        assert "zakladatel" not in (LANDING.parent / page).read_text(encoding="utf-8").lower()
+    assert "zakladatel" not in waitlist_email.confirmation_html(TOKEN).lower()
 
 
 def test_rate_limit_window_slides() -> None:
