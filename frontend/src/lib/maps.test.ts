@@ -45,6 +45,14 @@ describe('resolveSuggestion', () => {
     });
   });
 
+  it('asks for the door only for the address picker (W3b); Browse never sends the flag', async () => {
+    vi.mocked(apiPost).mockResolvedValue({ level: 'adresni_misto', id: 1, name: 'x', context: null });
+    await resolveSuggestion(ADDRESS, { addressPoint: true });
+    expect(vi.mocked(apiPost).mock.calls[0][1]).toMatchObject({ address_point: true });
+    await resolveSuggestion(ADDRESS);
+    expect(vi.mocked(apiPost).mock.calls[1][1]).not.toHaveProperty('address_point');
+  });
+
   /* The request is strict — no null coordinates — so such a pick fails like a
    * failed call, and the typeahead says "Couldn't verify this place". */
   it('never sends a pick without a position', async () => {
