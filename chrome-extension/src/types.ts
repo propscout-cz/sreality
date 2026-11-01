@@ -215,8 +215,8 @@ export interface IngestState {
 }
 
 /* Message protocol between the content script or the side panel and the
- * background worker. The background worker is the only context allowed to make
- * API fetches — host_permissions covers it without CORS getting in the way.
+ * background worker. The background worker is the only context that makes API
+ * fetches, from the extension's origin, which the API's CORS allowlist names.
  * Both post messages and get the typed result back. */
 export type ApiMessage =
   | { type: 'lookup_listings'; items: PortalLookupItem[] }
@@ -256,13 +256,6 @@ export type ApiMessage =
   | { type: 'sign_out' }
   | { type: 'get_auth_state' }
   | { type: 'get_billing' };
-
-/* Background → content, the other direction: webNavigation.onHistoryStateUpdated
- * fires when a portal's SPA soft-navigates (History API, no new document), which
- * static manifest content_scripts never re-inject for. The background worker
- * relays the new URL so the already-running content script can re-decide what
- * to render without needing a real page reload. */
-export type RouteMessage = { type: 'route_changed'; url: string };
 
 /* What a tab shows the side panel: the ad of its detail page, or the search card
  * last opened in the panel; `url` is the ad's page ("Přidat do databáze" sends it). */
