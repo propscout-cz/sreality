@@ -28,7 +28,10 @@
 #   (i) rail_i  test_the_audience_restates_ruling_2_and_never_acts: the policy is one (account_id, family) lookup over
 #       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
 #       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
-#       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts
+#       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts. It reads the audience's
+#       LAST definition (709's): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
+#       DEFINER_AUDIENCE_FILTERS verbatim (the caller's accounts as `me`; a share to one of them as recipient, from none
+#       of them, none while acting: the whole WHERE)
 #   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
 #   (k) rail_k  test_no_family_is_a_suffix_of_another: the dedupe GUC holds `<family>:<account>;` entries and finds
 #       one with strpos, so a family that ends another (`ags` inside `tags`) would read as already bumped
@@ -41,6 +44,10 @@
 #   - (e) sees a TRUNCATE that names a clocked table; a TRUNCATE … CASCADE of a table that clocked tables reference
 #     (accounts) empties them unnamed.
 #   - (e) and (h) read code and migrations; an operator's SQL in the dashboard is outside both.
+#   - (i) holds a definer audience to its `me` and its WHERE, verbatim; what lies outside them (a third UNION arm, a
+#     select list that makes an owner `mine`) is the live lane's audience cases' to catch. An invoker body's filters
+#     are not read: pipeline_shares' row policy backs them, and its `not in` is unchecked (pipeline_shares_not_self
+#     keeps a share off its owner's own account, not off the caller's other accounts).
 
 from __future__ import annotations
 
@@ -407,14 +414,32 @@ def policy_arms(using: str) -> dict[str, frozenset[str]]:
     return {"own": follows({"mine", "edit"}), "edit": follows({"edit"}), "read": follows(set())}
 
 
-def _audience_body(clock_text: str) -> str:
-    m = re.search(r"create (?:or replace )?function (?:public\.)?curation_clock_audience\(\).*?\$\$(.*?)\$\$",
-                  _norm(_strip_comments(clock_text)))
-    assert m, "the clock migration lost curation_clock_audience()"
-    return m.group(1)
+# A definer audience is filtered by its own text alone (709): who the caller is, and its WHERE whole, as _norm leaves
+# them. Whole, so a neutralised filter (`(not public.acting() or true)`) or a dropped `not in` fails, which a
+# substring of either filter would pass; 709's $post$ holds the same two strings.
+DEFINER_AUDIENCE_FILTERS = (
+    "with me as (select t.id from public.current_account_ids() as t(id))",
+    "where s.recipient_account_id in (select me.id from me) and s.account_id not in (select me.id from me) "
+    "and not public.acting() group by s.account_id",
+)
+_DEFINE_AUDIENCE = re.compile(r"create (?:or replace )?function (?:public\.)?curation_clock_audience\(\)(.*?)\$\$(.*?)\$\$")
 
 
-def rail_i(policies: dict[str, tuple[str, str | None, str | None]], clock_text: str,
+def _audience_definition(text: str) -> tuple[str, str]:
+    """(its attributes, its body) of the curation_clock_audience() that the migration `text` defines."""
+    m = _DEFINE_AUDIENCE.search(_norm(_strip_comments(text)))
+    assert m, "the migration lost curation_clock_audience()"
+    return m.group(1), m.group(2)
+
+
+def _audience_migration(migrations: Migrations) -> tuple[str, str]:
+    """The migration whose curation_clock_audience() stands: the last to define it (696, then 709)."""
+    defined = [(n, t) for n, t in migrations if _DEFINE_AUDIENCE.search(_norm(_strip_comments(t)))]
+    assert defined, "no migration defines curation_clock_audience()"
+    return defined[-1]
+
+
+def rail_i(policies: dict[str, tuple[str, str | None, str | None]], audience_text: str,
            clocked: dict[str, str]) -> list[str]:
     on_clock = {n: v for n, v in policies.items() if v[0] == "curation_clock"}
     if set(on_clock) != {"curation_clock_audience_read"} or on_clock["curation_clock_audience_read"][2]:
@@ -439,11 +464,16 @@ def rail_i(policies: dict[str, tuple[str, str | None, str | None]], clock_text: 
                         f"{sorted(board | edit)}")
     if "shares" in arms["read"] | arms["edit"]:
         problems.append("a share recipient follows the owner's shares family")
-    body = _audience_body(clock_text)
+    attributes, body = _audience_definition(audience_text)
     if "acting_account_ids" in body or "current_account_ids()" not in body:
         problems.append("curation_clock_audience() must read current_account_ids(), never acting (follow, never act)")
     if "bool_or(s.mode = 'edit')" not in body:
         problems.append("curation_clock_audience()'s edit flag is no longer `bool_or(s.mode = 'edit')`")
+    missing = [f for f in DEFINER_AUDIENCE_FILTERS if f not in body]
+    if "security definer" in attributes and missing:
+        problems.append("a definer curation_clock_audience() reads pipeline_shares as its owner: it must hold, "
+                        "verbatim, who the caller is and a share to them as recipient, never their own, none while "
+                        f"acting: {missing}")
     return problems
 
 
@@ -509,8 +539,8 @@ def test_only_the_trigger_writes_the_clock() -> None:
 
 
 def test_the_audience_restates_ruling_2_and_never_acts() -> None:
-    _name, clock_text = _clock_migration(_migrations())
-    assert rail_i(_final_policy_expressions(), clock_text, CLOCKED_TABLES) == []
+    _name, audience_text = _audience_migration(_migrations())
+    assert rail_i(_final_policy_expressions(), audience_text, CLOCKED_TABLES) == []
 
 
 def test_one_trigger_count() -> None:
@@ -654,7 +684,7 @@ def test_the_writer_rail_bites_on_a_write_from_code_and_from_a_later_migration()
 
 
 def test_the_audience_rail_bites_when_a_read_share_follows_more_than_the_board_or_anyone_follows_shares() -> None:
-    policies, clock_text = _final_policy_expressions(), _clock_migration(_migrations())[1]
+    policies, clock_text = _final_policy_expressions(), _audience_migration(_migrations())[1]
     read, using, _check = policies["curation_clock_audience_read"]
 
     def _swap(old: str, new: str) -> dict[str, tuple[str, str | None, str | None]]:
@@ -677,6 +707,24 @@ def test_the_audience_rail_bites_when_a_read_share_follows_more_than_the_board_o
     assert rail_i(policies, clock_text.replace("public.current_account_ids()", "public.acting_account_ids(true)"),
                   CLOCKED_TABLES)
     assert rail_i(policies, clock_text.replace("bool_or(s.mode = 'edit')", "true"), CLOCKED_TABLES)
+
+
+def test_the_audience_rail_reads_the_last_definition_and_bites_on_a_bare_definer_body() -> None:
+    migrations, policies = _migrations(), _final_policy_expressions()
+    name, text = _audience_migration(migrations)
+    assert name != _clock_migration(migrations)[0], "709 redefines the audience; the rail reads it, not 696's"
+    assert "security definer" in _audience_definition(text)[0]
+    for old, new in (("\n     and not public.acting()", ""),
+                     ("s.recipient_account_id in (select me.id from me)", "true"),
+                     ("and not public.acting()", "and (not public.acting() or true)"),
+                     ("\n     and s.account_id not in (select me.id from me)", ""),
+                     ("from public.current_account_ids() as t(id)", "from public.accounts as t(id)")):
+        assert old in text, old
+        assert rail_i(policies, text.replace(old, new), CLOCKED_TABLES), old
+    later = text.replace("public.current_account_ids()", "public.acting_account_ids(true)")
+    assert _audience_migration([*migrations, ("999_census_bite.sql", later)])[1] == later
+    invoker = text.replace("stable security definer", "stable").replace("\n     and not public.acting()", "")
+    assert rail_i(policies, invoker, CLOCKED_TABLES) == [], "an invoker body is backed by pipeline_shares' policy"
 
 
 def test_the_count_rail_bites_on_a_threshold_that_drifts() -> None:

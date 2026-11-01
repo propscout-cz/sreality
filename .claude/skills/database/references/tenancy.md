@@ -232,14 +232,15 @@ never reset, never rendered.
   account), signup (definer) and FK cascades all move it. A new curation table gets a trigger line in a forward
   migration, a `CLOCKED_TABLES` entry and a `SYNC_TABLES` row together (census a).
 - **Follow, never act** — the sanctioned union of own and owner accounts, beside § Delegation's "replace, never
-  union". `curation_clock_audience()` (INVOKER, `current_account_ids()`, NEVER `acting_account_ids()`) says once who
+  union". `curation_clock_audience()` (`current_account_ids()`, NEVER `acting_account_ids()`) says once who
   follows whom: the caller's own accounts follow every family (`mine`); an owner who shared their pipeline is
   followed for `board` by a read share and for `board` + the five curation families by an edit share (`edit`);
   nobody follows another account's `shares`. The one policy, `curation_clock_audience_read` (FOR SELECT), restates
   641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its CASE (own / edit share /
   read share → families) to `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker;
-  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows
-  (`pipeline_shares_party … and not acting()`), so it fails closed to the caller's own rows, never an error.
+  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows (the definer audience's
+  own `not public.acting()`; `pipeline_shares_party … and not acting()` until 709), so it fails closed to the
+  caller's own rows, never an error.
 - **Two audience evaluations per read, never more** (migration 708, F16 #2308; ruling 2026-11-01). The policy is
   ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
   … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
@@ -252,6 +253,25 @@ never reset, never rendered.
   the key at 2,000 accounts. The join limits the accounts, not the families, so never turn the clock's row security
   off (708's `$post$` refuses it). The audience is never inlined (its `SET search_path`), so it is one Function Scan
   wherever it appears.
+- **Each evaluation is cheap: planned once per backend, `current_account_ids()` once** (migration 709, F17 #2311). The
+  read pays for two evaluations, so their cost is the read's. The audience is `plpgsql` (RETURN QUERY's plan is
+  prepared once per backend; a SQL body is re-planned at every call), `SECURITY DEFINER` (`pipeline_shares` read as
+  its owner, so its row policy, two more `current_account_ids()` calls and `acting()`, is neither planned nor run) and
+  reads `current_account_ids()` once, in a CTE. WHY: under 708 production read the clock at 2.63 ms mean against
+  gate #2203's 2.5 ms; warm, planning was most of each evaluation. Locally a warm read went from 0.93–1.08 ms and
+  11–18 buffers to 0.27–0.35 ms and 5–10 (`docs/design/curation-sync.md` § 3.8). THE TRADE: no row policy backs the
+  definer body, so it filters itself: the recipient is one of the caller's accounts, and no share row while acting
+  (`not public.acting()`, which `pipeline_shares_party` did for the invoker). Census (i) and 709's `$post$` hold a
+  definer body's `me` CTE and its whole WHERE verbatim (`DEFINER_AUDIENCE_FILTERS`), so a neutralised filter or a
+  dropped `not in` fails; `tests/_admin_gate_registry.py` UNGATED registers it `reachable`
+  (`/rpc/curation_clock_audience`; the live sweep's waiver is incidental, the catalog case checks it reads no
+  admin-only relation); 709's `$post$` requires its owner to bypass `pipeline_shares`' row security and an empty
+  answer without an identity. A backend's FIRST statement pays catalog warm-up (~300 execution + ~330 planning
+  buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
+  the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
+  `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
+  rows each caller reads on one backend after another warmed its plan; ≤ 40 buffers warm at both sizes is a ceiling
+  against a scan of a full clock, not against 708 (~20).
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
@@ -281,14 +301,17 @@ never reset, never rendered.
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
   twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
   (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
-- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience, the grants,
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience until 709, the grants,
   the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
   commit-time failure, two audience evaluations per read and `curation_clock_pkey` at 2,000 accounts); 708's
   `$post$` (row security on, one policy naming the audience once, the view's five columns and its one join on the
-  audience, 701's grants); the health alarm `curation_sync` (`triggers`, `board_bumps`; W4's `reads` and `load`
+  audience, 701's grants); 709's `$pre$` (an owner the share policy would hold is refused before the function
+  changes) and `$post$` (plpgsql definer audience, ROWS 4, `search_path = ''`, the restated
+  filters, the owner's bypass, EXECUTE for `authenticated` only, no rows without an identity); the health alarm
+  `curation_sync` (`triggers`, `board_bumps`; W4's `reads` and `load`
   watch the browsers' read in `pg_stat_statements`); the SPA's read-contract test
   `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
 
