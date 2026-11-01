@@ -699,6 +699,31 @@ describe('<CollectionDetail>', () => {
       expect(screen.getByRole('link', { name: 'Praha 6' })).toBeInTheDocument();
     });
 
+    it("holds the cards' line counting members without a card under the pointer; the header's count follows", async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(TWO);
+      vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [CARD, CARD2], nextCursor: null });
+      vi.mocked(queries.fetchBrowseCount).mockResolvedValue(2);
+      const { qc } = renderPage();
+      await waitFor(() => expect(cardLink(CARD)).toBeDefined());
+      fireEvent.pointerOver(cardLink(CARD)!);
+
+      // A member without a card, added on another device: the collection's own read brings it at once.
+      vi.mocked(api.getCollection).mockResolvedValue({
+        collection: { ...DATA.collection, listing_count: 3 },
+        properties: [MEMBER, SECOND, UNCARDED],
+      });
+      vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [1]], [44, [1]], [43, [1]]]));
+      await act(async () => {
+        void revalidate(qc, familyTargets(qc, 'collections', null));
+      });
+      await waitFor(() => expect(headerCount()).toBe('3'));
+      expect(screen.queryByText(/more without a card/)).toBeNull();
+
+      fireEvent.pointerLeave(cardLink(CARD)!);
+      const line = await screen.findByText(/more without a card/);
+      expect(line.textContent?.replace(/ /g, ' ')).toContain('1 more without a card');
+    });
+
     /* Review repair (W6): my own Remove is not held. The mouse on its way to the
      * button is a hand on the members, and had parked the very re-read that takes
      * the row out: it stayed, its button back to "Remove", until the pointer left. */

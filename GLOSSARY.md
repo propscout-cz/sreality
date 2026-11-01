@@ -379,6 +379,18 @@ A content-free note one browser tab sends its sibling tabs after a write committ
 read now instead of at their next one. It says only "read the clock", never what changed.
 _Avoid_: ping, push, broadcast (alone), doorbell
 
+**Hand** (on a list):
+The pointer resting over a list, or a finger down on it. While a hand is on a list its rows stay as drawn:
+a re-read the list owes is parked until the hand leaves, while the counts, map and stats beside it follow
+at once. Keyboard focus is no hand. (Curation is added "by hand" in the everyday sense; this is the list sense.)
+_Avoid_: hover (alone), focus, interaction lock, freeze
+
+**Park** (of a read):
+What a hand does to a read a list owes: the read waits and is paid the moment the hand leaves. A park
+paints nothing, expires never, and lets the list's own reads through: its first load, a page, and a refresh
+the user asked for; a refetch nobody asked for parks like the owed read it would overwrite.
+_Avoid_: hold (a write's hold paints its patch and expires), pause, suspend, throttle
+
 **Watchdog**:
 A saved filter that alerts an account when a property newly matches it or drops its price.
 _Avoid_: alert (for the saved filter), subscription, notification

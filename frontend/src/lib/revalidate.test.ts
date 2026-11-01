@@ -13,6 +13,7 @@ import {
   useQuery,
   type InfiniteData,
   type QueryKey,
+  type RefetchOptions,
 } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 
@@ -20,6 +21,7 @@ import { REQUEST_DEADLINE_MS } from './api';
 import { createMutationCache } from './mutationCache';
 import { useOptimisticWrite } from './useOptimisticWrite';
 import {
+  ASKED,
   cachePatch,
   HOLD_TTL_MS,
   holdReads,
@@ -52,6 +54,9 @@ function mount(qc: QueryClient, key: QueryKey, fn: () => Promise<unknown>, stale
 
 /* A counting reader answering `value()` at once. */
 const counter = (value: () => unknown = () => 1) => vi.fn(async () => value());
+
+/* The user's own refresh, as lib/useInfiniteList's `refetch` sends it. */
+const asked: RefetchOptions & { meta: typeof ASKED } = { meta: ASKED };
 
 afterEach(() => {
   onlineManager.setOnline(true);
@@ -827,7 +832,7 @@ describe('parkReads', () => {
     expect(isOwed(qc, ['list'])).toBe(false);
   });
 
-  it("lets the list's own reads pass: a page, a refetch it asks for, and a first load", async () => {
+  it("lets the list's own reads pass: a page, a refetch the user asks for, and a first load", async () => {
     const qc = client();
     const { observer, fn } = await list(qc);
     const hand = parkReads(qc, [{ queryKey: ['list'] }, { queryKey: ['other'] }]);
@@ -838,7 +843,7 @@ describe('parkReads', () => {
     await flush();
     expect(isOwed(qc, ['list'])).toBe(true); // a page pays nothing: still parked
 
-    await observer.refetch(); // the user's refresh: two pages from the first
+    await observer.refetch(asked); // the user's refresh: two pages from the first
     expect(fn).toHaveBeenCalledTimes(4);
     expect(isOwed(qc, ['list'])).toBe(false); // and it paid what was owed
 
@@ -896,6 +901,80 @@ describe('parkReads', () => {
     await flush();
     expect(fn).toHaveBeenCalledTimes(2);
     expect(pagesOf(qc)).toEqual(['p0']);
+  });
+});
+
+describe('parkReads and reads nobody asked for', () => {
+  async function list(qc: QueryClient, fn = vi.fn(async ({ pageParam }: { pageParam: number }) => `p${pageParam}`)) {
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: string, all: string[]) => all.length,
+      staleTime: Infinity,
+    });
+    observer.subscribe(() => {});
+    await flush();
+    return { observer, fn };
+  }
+  const pagesOf = (qc: QueryClient) => qc.getQueryData<InfiniteData<string>>(['list'])?.pages;
+
+  it("parks a refetch nobody asked for that starts under the hand (a reconnect's, a remount's): owed, paid at the release", async () => {
+    const qc = client();
+    const { fn } = await list(qc);
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    fn.mockResolvedValueOnce('fresh');
+    void qc.refetchQueries({ queryKey: ['list'] }); // what a reconnect or a remount does
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(2); // it started, and was cancelled
+    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('idle');
+    expect(pagesOf(qc)).toEqual(['p0']); // nothing landed under the hand
+    expect(isOwed(qc, ['list'])).toBe(true);
+
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+
+  it('cancels a refetch nobody asked for in flight when the hand arrives, and pays it at the release', async () => {
+    const qc = client();
+    const late = deferred<string>();
+    const { fn } = await list(qc);
+    fn.mockReturnValueOnce(late.promise);
+    void qc.refetchQueries({ queryKey: ['list'] });
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('idle');
+    late.resolve('stale');
+    await flush();
+    expect(pagesOf(qc)).toEqual(['p0']);
+    expect(isOwed(qc, ['list'])).toBe(true);
+
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+
+  it('cancels no refetch the user asked for, in flight when the hand arrives or started under it', async () => {
+    const qc = client();
+    const late = deferred<string>();
+    const { observer, fn } = await list(qc);
+    fn.mockReturnValueOnce(late.promise);
+    void observer.refetch(asked); // the user's refresh, in flight
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('fetching');
+    late.resolve('fresh');
+    await flush();
+    expect(pagesOf(qc)).toEqual(['fresh']);
+    expect(isOwed(qc, ['list'])).toBe(false);
+
+    fn.mockResolvedValueOnce('fresher');
+    await observer.refetch(asked); // and one started under the hand
+    expect(pagesOf(qc)).toEqual(['fresher']);
+    hand.release();
   });
 });
 

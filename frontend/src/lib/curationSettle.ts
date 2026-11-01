@@ -19,8 +19,10 @@
  * after it was read, whose re-read (ruling Q3(c): within one clock read) has not
  * landed yet, or is parked while the user's hand is on the list (lib/useListHold):
  * the row is judged like any other, so a click that leaves it out drops it in
- * place and only the aggregates re-read. Read times are the cache's
- * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger).
+ * place and only the aggregates re-read. A map's read time is the cache's
+ * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger); a row's is its
+ * page's `readAt` (lib/useInfiniteList): a page read later, under a hand or not,
+ * does not refresh the rows before it, so the query's own time would overstate them.
  *
  * `settlePatches` are CachePatches built BEFORE the member maps move (that is
  * when the before-verdict is taken) and judged when applied, after them;
@@ -113,10 +115,19 @@ const memberKeys = (propertyId: number, f: ListingFilters): QueryKey[] => [
   ...CURATED_SET_NAMES.filter((set) => scopeActive(f[set])).map((set) => MEMBERS[set].key),
 ];
 
-/* A "no" from a map whose read is owed, or older than the list's, is the map's staleness. */
+/* When `q` read the row: the newest `readAt` of the pages holding it, else (a page
+ * from before the stamp) the query's own read time. */
+const rowReadAt = (q: Query, propertyId: number): number =>
+  Math.max(
+    ...((q.state.data as InfiniteData<ListPage> | undefined)?.pages ?? [])
+      .filter((p) => p.rows.some((r) => r.property_id === propertyId))
+      .map((p) => p.readAt ?? q.state.dataUpdatedAt),
+  );
+
+/* A "no" from a map whose read is owed, or older than the row's, is the map's staleness. */
 function staleMap(qc: QueryClient, propertyId: number, f: ListingFilters, lists: readonly Query[]): boolean {
   if (verdict(qc, propertyId, f) !== false) return false;
-  const listReadAt = Math.max(...lists.map((q) => q.state.dataUpdatedAt));
+  const listReadAt = Math.max(...lists.map((q) => rowReadAt(q, propertyId)));
   return memberKeys(propertyId, f).some((key) => {
     const readAt = qc.getQueryState(key)?.dataUpdatedAt;
     return isOwed(qc, key) || (readAt != null && readAt < listReadAt);

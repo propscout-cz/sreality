@@ -366,8 +366,9 @@ export default function BrowseExperience({
     [psSeriesQuery.data, growthMetric],
   );
 
+  const cardsKey = browseKeys.cards(filters, sort);
   const cards = useInfiniteList<CardRow>({
-    queryKey: browseKeys.cards(filters, sort),
+    queryKey: cardsKey,
     queryFn: (cursor, signal) =>
       fetchListingsForCards(filters, sort, cursor as KeysetCursor | null, { signal }),
     pageSize: CARD_PAGE_SIZE,
@@ -377,7 +378,7 @@ export default function BrowseExperience({
   });
   /* A change made elsewhere moves the cards at once, but not under the hand
    * (ruling Q3(c)); the count, map and stats re-read regardless. */
-  const cardsHand = useListHold([browseKeys.cards(filters, sort)]);
+  const cardsHand = useListHold([cardsKey]);
 
   /* W7a: the visible card cohort, for the shared hydration layer. Photos used to
    * be awaited INSIDE the cards queryFn, so no card painted until every card's

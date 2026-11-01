@@ -82,16 +82,19 @@ export default function ArtifactLinkRow({
   });
 
   const showForm = !failed && !linkQ.isLoading && editing;
-  /* What the field holds must be a whole URL, an empty field included; then only
-   * what the user typed is saved, and an untouched field closes, whatever the link is now. */
+  const empty = url.normalized.length === 0;
+  /* An untouched field closes, whatever the link is now; a stored link cleared
+   * from the field saves nothing (its button is off, and the form submits nothing
+   * either: the trash button removes a link); what the user typed must be a whole URL. */
   const submit = () => {
-    if (!safeHttpUrl(url.normalized)) {
-      setError(NOT_A_URL);
-      return;
-    }
     const next = url.edited();
     if (next == null) {
       close();
+      return;
+    }
+    if (empty) return;
+    if (!safeHttpUrl(next)) {
+      setError(NOT_A_URL);
       return;
     }
     setError(null);
@@ -141,7 +144,7 @@ export default function ArtifactLinkRow({
         >
           Zrušit
         </button>
-        <button type="submit" disabled={url.normalized.length === 0 || save.isPending} className={primary}>
+        <button type="submit" disabled={empty || save.isPending} className={primary}>
           {save.isPending ? 'Ukládám…' : 'Uložit odkaz'}
         </button>
       </form>

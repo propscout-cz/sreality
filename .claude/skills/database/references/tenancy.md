@@ -245,8 +245,8 @@ never reset, never rendered.
   ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
   … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
   which maps `mine`. WHY: 696's three OR arms plus the view's join evaluated the audience four times per read. That
-  cost 4.9 ms mean in production against gate #2203's 2.5 ms; each evaluation is about five definer
-  `current_account_ids()` calls, whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
+  cost 4.9 ms mean in production against gate #2203's 2.5 ms, each evaluation then being about five definer
+  `current_account_ids()` calls (one since 709, below), whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
   only the view's join probes `curation_clock_pkey` per followed account; without it the read scans the whole clock,
   O(clock rows), and at 2,000 accounts costs more than 696's read (`docs/design/curation-sync.md` § 3.8). Never name
   the audience twice in the policy, never drop the view's join; the live lane asserts two audience nodes per read and
@@ -270,8 +270,9 @@ never reset, never rendered.
   buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
   the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
   `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
-  rows each caller reads on one backend after another warmed its plan; ≤ 40 buffers warm at both sizes is a ceiling
-  against a scan of a full clock, not against 708 (~20).
+  rows each caller reads on one backend after another warmed its plan, and a caller in several accounts following
+  each as own; ≤ 40 buffers warm at both sizes is a ceiling against a scan of a full clock, not against 708 (~20).
+  Production after 709: 0.973 ms mean and 18.3 buffers over the first 30 reads (2026-11-01).
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table

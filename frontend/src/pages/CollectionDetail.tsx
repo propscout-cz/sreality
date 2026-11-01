@@ -558,7 +558,7 @@ function Members({
         {tab === 'table' ? (
           <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} hand={hand} />
         ) : (
-          <CardsTab collectionId={collection.id} members={properties} onOpenTable={() => setTab('table')} />
+          <CardsTab collectionId={collection.id} members={properties} onOpenTable={() => setTab('table')} hand={hand} />
         )}
       </div>
     </div>
@@ -576,10 +576,14 @@ function CardsTab({
   collectionId,
   members,
   onOpenTable,
+  hand,
 }: {
   collectionId: number;
   members: CollectionPropertyRow[];
   onOpenTable: () => void;
+  /* The members' hand: the cards park under it, and so does the line counting
+   * members without a card, drawn from the collection's own read (never held). */
+  hand: ListHand;
 }) {
   const [params, setParams] = useSearchParams();
   const sort = parseSort(params.get('sort'));
@@ -594,7 +598,8 @@ function CardsTab({
       { replace: true },
     );
 
-  const { filters, list, uncarded } = useCollectionCards({ collectionId, members, sort });
+  const { filters, list, uncarded: current } = useCollectionCards({ collectionId, members, sort });
+  const uncarded = useHeld(hand, current);
   const countQ = useQuery<number, Error>({
     queryKey: browseKeys.count(filters),
     queryFn: ({ signal }) => fetchBrowseCount(filters, { signal }),

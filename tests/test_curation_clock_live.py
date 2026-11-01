@@ -506,6 +506,31 @@ def test_a_clock_read_sent_with_x_act_as_sees_own_rows_only(svc: psycopg.Connect
     assert _audience(who.user, act_as=act_as) == {(who.acc, True, True)}
 
 
+def test_a_caller_in_several_accounts_follows_each_as_own_and_a_share_between_them_as_none(svc: psycopg.Connection,
+                                                                                            world: _World) -> None:
+    """C joins B's account too: C's read holds B's rows as own (mine) beside C's and A's edit share, and a share from
+    B to C is no share row (709's `s.account_id not in me`), so B's families are followed whole, not as a board."""
+    a, b, c = world.a, world.b, world.c
+    with svc.cursor() as cur:
+        cur.execute("INSERT INTO account_members (account_id, user_id, role) VALUES (%s, %s, 'member')",
+                    (b.acc, c.user))
+        cur.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'read')",
+                    (b.acc, c.acc))
+    try:
+        assert _audience(c.user) == {(c.acc, True, True), (b.acc, True, True), (a.acc, False, True)}
+        rows = _view(c.user)
+        assert {acc for acc, _f, _m in rows} == {a.acc, b.acc, c.acc}, rows
+        assert all(mine for acc, _f, mine in rows if acc in (b.acc, c.acc)), rows
+        assert {f for acc, f, _m in rows if acc == b.acc} == _families(svc, b.acc), rows  # whole, not a board
+        assert {"board", "shares"} <= _families(svc, b.acc), "B's signup and the share above bumped these"
+        assert {f for acc, f, _m in rows if acc == a.acc} == set(EDIT_FAMILIES), rows
+        assert _view(c.user, act_as=a.acc) == {(acc, f, True) for acc, f, _m in rows if acc != a.acc}, "follow, never act"
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM pipeline_shares WHERE account_id = %s AND recipient_account_id = %s", (b.acc, c.acc))
+            cur.execute("DELETE FROM account_members WHERE account_id = %s AND user_id = %s", (b.acc, c.user))
+
+
 def test_anon_reads_no_clock(svc: psycopg.Connection) -> None:
     for sql in ("SELECT 1 FROM curation_clock_public", "SELECT 1 FROM curation_clock",
                 "SELECT 1 FROM curation_clock_audience()"):
@@ -554,12 +579,31 @@ def _plan_nodes(plan: dict[str, Any]) -> Iterator[dict[str, Any]]:
         yield from _plan_nodes(child)
 
 
-def _analyzed_read(cur: psycopg.Cursor[Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """The read's analyzed plan in the caller's scope: (its top node, every audience Function Scan in it)."""
+def _explain_json(cur: psycopg.Cursor[Any]) -> dict[str, Any]:
+    """The read's EXPLAIN (ANALYZE, BUFFERS) document in the caller's scope: its `Plan` and `Planning`."""
     cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_READ}")
     out = cur.fetchone()[0]
-    top = (json.loads(out) if isinstance(out, str) else out)[0]["Plan"]
+    return (json.loads(out) if isinstance(out, str) else out)[0]
+
+
+def _analyzed_read(cur: psycopg.Cursor[Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The read's analyzed plan in the caller's scope: (its top node, every audience Function Scan in it)."""
+    top = _explain_json(cur)["Plan"]
     return top, [n for n in _plan_nodes(top) if n.get("Function Name") == "curation_clock_audience"]
+
+
+def _two_thousand_accounts(cur: psycopg.Cursor[Any], families: tuple[str, ...] = ()) -> None:
+    """2,000 accounts inside the caller's transaction, analyzed: each with a tag (its counter bumped through the
+    trigger) or, given `families`, a counter for each of them written straight into the clock."""
+    made = ("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-scale-' || g "
+            "FROM generate_series(1, 2000) g RETURNING id) ")
+    if families:
+        cur.execute(made + "INSERT INTO curation_clock (account_id, family) SELECT m.id, f "
+                    "FROM made m, unnest(%s::text[]) f ON CONFLICT DO NOTHING", (list(families),))
+    else:
+        cur.execute(made + "INSERT INTO tags (account_id, name, color) SELECT id, 'scale', 'slate' FROM made")
+        cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    cur.execute("ANALYZE curation_clock")
 
 
 def test_one_clock_read_evaluates_the_audience_twice_and_maps_mine(world: _World) -> None:
@@ -588,11 +632,7 @@ def test_the_clock_read_probes_the_primary_key_at_scale(world: _World) -> None:
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
-            cur.execute("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-scale-' || g "
-                        "FROM generate_series(1, 2000) g RETURNING id) "
-                        "INSERT INTO tags (account_id, name, color) SELECT id, 'scale', 'slate' FROM made")
-            cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
-            cur.execute("ANALYZE curation_clock")
+            _two_thousand_accounts(cur)
             cur.execute("SELECT count(*) FROM curation_clock")
             rows = cur.fetchone()[0]
             with scoped(world.c.user, cur=cur):
@@ -674,9 +714,7 @@ def _warm_read(cur: psycopg.Cursor[Any]) -> tuple[int, dict[str, int]]:
         cur.fetchall()
     cur.execute(_CALLS)
     before = {name: int(n or 0) for name, n in cur.fetchall()}
-    cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_READ}")
-    out = cur.fetchone()[0]
-    doc = (json.loads(out) if isinstance(out, str) else out)[0]
+    doc = _explain_json(cur)
     cur.execute(_CALLS)
     calls = {name: int(n or 0) - before.get(name, 0) for name, n in cur.fetchall()}
     blocks = sum(part.get(f"Shared {kind} Blocks", 0) for part in (doc["Plan"], doc.get("Planning", {}))
@@ -693,34 +731,18 @@ def _rows_on_this_backend(cur: psycopg.Cursor[Any]) -> tuple[set[tuple[uuid.UUID
     return rows, set(cur.fetchall())
 
 
-def _two_thousand_accounts(cur: psycopg.Cursor[Any], families: tuple[str, ...] = ()) -> None:
-    """2,000 accounts inside the caller's transaction, analyzed: each with a tag (its counter bumped through the
-    trigger) or, given `families`, a counter for each of them written straight into the clock."""
-    made = ("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-warm-' || g "
-            "FROM generate_series(1, 2000) g RETURNING id) ")
-    if families:
-        cur.execute(made + "INSERT INTO curation_clock (account_id, family) SELECT m.id, f "
-                    "FROM made m, unnest(%s::text[]) f ON CONFLICT DO NOTHING", (list(families),))
-    else:
-        cur.execute(made + "INSERT INTO tags (account_id, name, color) SELECT id, 'warm', 'slate' FROM made")
-        cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
-    cur.execute("ANALYZE curation_clock")
-
-
+# 708's SQL audience was planned at every call and ran current_account_ids() five times per evaluation (three in its
+# body, two in pipeline_shares' policy): 2.63 ms mean in production against gate #2203's 2.5 ms. 709's is plpgsql
+# (planned once per backend), definer (no pipeline_shares policy) and calls it once, in a CTE, so a warm read calls it
+# twice, once per evaluation; that count holds the shape (the next test shows 708's breaking it). 40 shared buffers
+# is the ticket's ceiling against a gross regression, not against 708, whose warm read fits it (11-18 in § 3.8, ~20
+# here; 709 ~7): the next test shows it catching a read that scans a full clock. At the lane's size the read scans the
+# clock's few pages, so the dead rows earlier cases rolled back (2,000 at a time) are vacuumed first: on a lane
+# database reused across runs they alone took 709's read to 40. ONE backend serves every caller in turn, so the plan
+# the owner's first read prepared answers the others, each as a fresh connection would (case 10).
 def test_a_warm_clock_read_calls_current_account_ids_once_per_evaluation_within_40_buffers(svc: psycopg.Connection,
                                                                                             world: _World) -> None:
-    """708's SQL audience was planned at every call and ran current_account_ids() five times per evaluation (three in
-    its body, two in pipeline_shares' policy): 2.63 ms mean in production against gate #2203's 2.5 ms. 709's is
-    plpgsql (planned once per backend), definer (no pipeline_shares policy) and calls it once, in a CTE: a read on a
-    warm backend calls it twice, once per evaluation, at the lane's size and at 2,000 accounts, for the owner and the
-    edit share's recipient (charter § 3.8, § 12 F17). The count holds the shape (the next test shows 708's breaking
-    it). 40 shared buffers is the ticket's ceiling against a gross regression, not against 708, whose warm read fits
-    it (11-18 in § 3.8, ~20 here; 709 ~7): the next test shows it catching a read that scans a full clock. At the
-    lane's size the read scans the clock's few pages, so the dead rows earlier cases rolled back (2,000 at a time)
-    are vacuumed first: on a lane database reused across runs they alone took 709's read to 40.
-    ONE backend serves every caller in turn, so the plan the owner's first read prepared answers the others: the edit
-    recipient its own rows and A's five edit families, the read recipient A's board, and the edit recipient sent with
-    x-act-as its own rows only (follow, never act), each as a fresh connection answers it (case 10)."""
+    """Warm, each caller reads its own rows with two audience, two current_account_ids() and two acting() calls, ≤ 40 buffers."""
     a, b, c = world.a, world.b, world.c
     seen: dict[tuple[str, str], tuple[int, dict[str, int]]] = {}
     read: dict[tuple[str, str], tuple[set[tuple[uuid.UUID, str, bool]], set[tuple[uuid.UUID, bool, bool]]]] = {}
