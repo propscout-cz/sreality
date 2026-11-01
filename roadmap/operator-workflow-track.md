@@ -63,6 +63,9 @@ last-writer-wins.
       bell's count, the feed and the Watchdog list re-read on a mark-seen, a new event, a merge's re-point or a retired
       watchdog made anywhere; the feed holds under the hand; the 30 s and 60 s polls are gone. The design's § 6 W7,
       § 8 Q1b and § 12 "W7 (#2327), as built". After the deploy: the trigger count and the bell's reads on gate #2203.
+- [x] **A collection's description clears with `null` (#2208).** `PATCH /collections` tells an absent field from an
+      explicit null, a blank is stored as NULL, and both editors send `null` instead of W2's `''`. The note PATCH needed
+      nothing (`body` and `shared` are NOT NULL; `viewing_at` already tells them apart).
 - [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
       statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
       was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6
