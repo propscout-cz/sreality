@@ -530,11 +530,9 @@ def _fetch(conn: psycopg.Connection, sql: str) -> list[tuple]:
 
 
 def staged_obec_okres(conn: psycopg.Connection, stage: Staging) -> dict[int, int | None]:
-    """Every staged obec with the okres the CSV chain gives it (NULL for Praha since RÚIAN 3.4.1
-    abolished its okres 3100; the pack alone still publishes 9999)."""
-    return {int(obec): None if okres is None else int(okres) for obec, okres in _fetch(
-        conn, f"SELECT DISTINCT obec_kod, okres_kod FROM {stage.cobce} WHERE obec_kod IS NOT NULL",
-    )}
+    """Every staged obec with the CSV chain's okres (NULL for Praha since RÚIAN 3.4.1)."""
+    return dict(_fetch(conn, f"SELECT DISTINCT obec_kod, okres_kod FROM {stage.cobce} "
+                             "WHERE obec_kod IS NOT NULL"))
 
 
 def build_unit_rows(conn: psycopg.Connection, stage: Staging, obec_okres: Mapping[int, int]) -> int:
@@ -546,10 +544,8 @@ def build_unit_rows(conn: psycopg.Connection, stage: Staging, obec_okres: Mappin
     placeholder name; the boundary pack (C4) fills them from its DBF, and the gazetteer skips
     any unit still named after its code.
 
-    An obec's okres is the one the pack publishes on it (`ruian_boundaries.pack_okres`), never
-    the CSV chain's, so every level above a town is a full partition, Praha's okres 9999
-    included. The `okres_partition` assertion has already refused a staged obec the pack has
-    no okres for.
+    An obec's okres is the pack's (`ruian_boundaries.pack_okres`), never the CSV chain's, so okres
+    is a full partition, Praha's 9999 included; `okres_partition` has already refused any gap.
     """
     names: dict[str, dict[int, str]] = defaultdict(dict)
     for level, column, code_column in (

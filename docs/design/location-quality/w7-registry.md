@@ -133,10 +133,10 @@ rows and about 145,000. A versioned unit predicate would not close the gap: addr
 Main keeps working once the units close, with or without W5: every by-name read filters `u.valid_to IS NULL`, so a closed
 level simply answers nothing. W5 names none of the retired levels either.
 
-They conflict textually and only textually: 6 files (`bind.py`, `composite.py`, `core.py`, `fill.py`,
-`test_resolver_check.py`, `test_resolver_katastr.py`), every hunk W7's one-liner against W5's rewrite of the same lines.
-Taking W5's side of all six and rewriting `o3100` to `o9999` in the tests (trial merge of 81d27d84b, 2026-11-01): 345 resolver
-and loader tests pass. Neither wave needs the other's data.
+They conflict textually and only textually: 7 files (`bind.py`, `composite.py`, `core.py`, `fill.py`,
+`test_resolver_check.py`, `test_resolver_katastr.py`, `docs/architecture.md`), every hunk W7's small edit against W5's rewrite of
+the same lines. Taking W5's side of the code and tests and rewriting `o3100` to `o9999` in the tests (trial merge of 81d27d84b,
+2026-11-01): 345 resolver and loader tests pass. Neither wave needs the other's data.
 
 **The order changes the data, not the code.** W5 first: the 463 rows go straight to obec grain, W7's shadow has no movers, and
 the two sweeps can be one if W5's deploy and the publish fall together. W7 first (Q14): those rows carry a MOMC code from the

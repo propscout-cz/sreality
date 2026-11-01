@@ -337,25 +337,6 @@ SELECT g.unit_id, %(version_id)s, g.purpose, g.generalization_tolerance_m,
 """
 
 
-def _attribute_table(pack: Path, token: str) -> shapefile.Reader:
-    """The named layer's attribute table, straight from the zip member: no geometry, no extract."""
-    with zipfile.ZipFile(pack) as zf:
-        members = [i for i in zf.infolist()
-                   if token.lower() in Path(i.filename).name.lower()
-                   and i.filename.lower().endswith(".dbf")]
-        if not members:
-            raise BoundarySchemaError(f"{pack.name}: no {token} attribute table")
-        member = max(members, key=lambda i: i.file_size)
-        return shapefile.Reader(dbf=io.BytesIO(zf.read(member)))
-
-
-def _code(value: object) -> int | None:
-    try:
-        return int(value)  # type: ignore[call-overload]
-    except (TypeError, ValueError):
-        return None
-
-
 @dataclass(frozen=True, slots=True)
 class PackOkres:
     """What ČÚZK's state pack publishes about the okres level: each obec's okres and every okres."""
@@ -364,26 +345,35 @@ class PackOkres:
     okresy: frozenset[int]
 
 
+def _attribute_codes(
+    pack: Path, token: str, *fields: tuple[str, ...],
+) -> list[tuple[int | None, ...]]:
+    """The named code fields of a layer's records, read straight from the zip member (no
+    geometry, no extraction). A missing layer or field stops the load: a ruling, never a NULL."""
+    with zipfile.ZipFile(pack) as zf:
+        member = max((i for i in zf.infolist() if token.lower() in i.filename.lower()
+                      and i.filename.lower().endswith(".dbf")),
+                     key=lambda i: i.file_size, default=None)
+        if member is None:
+            raise BoundarySchemaError(f"{pack.name}: no {token} attribute table")
+        table = io.BytesIO(zf.read(member))
+    with contextlib.closing(shapefile.Reader(dbf=table)) as reader:
+        present = [f[0] for f in reader.fields[1:]]
+        picked = [_pick_field(present, candidates) for candidates in fields]
+        if None in picked:
+            raise BoundarySchemaError(f"{token}: no {fields} in {present}")
+        return [tuple(int(r[f]) if r[f] not in (None, "") else None for f in picked)
+                for r in reader.iterRecords(fields=picked)]
+
+
 def pack_okres(pack: Path) -> PackOkres:
-    """The okres of every obec, as OBCE_P publishes it, and the codes OKRESY_P holds. A pack
-    without either field stops the load: a schema change here is a ruling, never a silent NULL."""
-    with contextlib.closing(_attribute_table(pack, "OBCE_P")) as obce:
-        fields = [f[0] for f in obce.fields[1:]]
-        code_field = _pick_field(fields, _CODE_FIELDS)
-        okres_field = _pick_field(fields, ("OKRES_KOD",))
-        if code_field is None or okres_field is None:
-            raise BoundarySchemaError(f"OBCE_P: no code or OKRES_KOD field in {fields}")
-        pairs = [(_code(r[code_field]), _code(r[okres_field]))
-                 for r in obce.iterRecords(fields=[code_field, okres_field])]
-    with contextlib.closing(_attribute_table(pack, "OKRESY_P")) as okresy:
-        code_field = _pick_field([f[0] for f in okresy.fields[1:]], _CODE_FIELDS)
-        if code_field is None:
-            raise BoundarySchemaError("OKRESY_P: no code field")
-        codes = frozenset(c for r in okresy.iterRecords(fields=[code_field])
-                          if (c := _code(r[code_field])) is not None)
+    """The okres of every obec, as OBCE_P publishes it, and the codes OKRESY_P holds."""
     return PackOkres(
-        obec={o: k for o, k in pairs if o is not None and k is not None},
-        okresy=codes,
+        obec={obec: okres
+              for obec, okres in _attribute_codes(pack, "OBCE_P", _CODE_FIELDS, ("OKRES_KOD",))
+              if obec is not None and okres is not None},
+        okresy=frozenset(code for code, in _attribute_codes(pack, "OKRESY_P", _CODE_FIELDS)
+                         if code is not None),
     )
 
 
