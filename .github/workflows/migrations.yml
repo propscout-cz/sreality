@@ -241,6 +241,14 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_agent_runs_live.py tests/test_agent_run_routes_live.py -q
 
+      # The cross-account read of a run's file, through the real route and row-level security. The store is in memory: the
+      # real bucket's answer is gate #2331, since no Storage server runs here.
+      - name: A run's files stay under the account, whatever the attempt (#2073)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_agent_files_live.py -q
+
       # The security suite's live half (#2074): twenty injected ads through the real executor and the real dossier, the model
       # scripted to obey each. It proves the server's rails hold, not that a model resists; see tests/api/test_agent_security.py.
       - name: Injected ads meet the rails, every denial in the run's diary (#2074)
