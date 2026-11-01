@@ -1286,7 +1286,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
     main declares nothing Railway lacks for longer than the merge takes.
   - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from the `main`
     branch after `git pull --ff-only`, never a detached HEAD, which main's wizard refuses until #2025 merges), then
-    plans all three.
+    plans all three. An agent can run it (`drift </dev/null`, on a machine with the pinned CLI logged in), because no
+    prompt in it decides anything; `window` and `runner-pause` stop at their first question without an operator.
   - `runner-list` and `runner-pause <job> <until> <note>`: `python -m scraper.job_runner list|pause` on job-runner
     over `railway ssh -p <worker project> -e production -s job-runner`; the first use registers an SSH key. If ssh
     cannot reach the service, the agent runs the one-row SQL with the operator's OK. A request is #2026's "Jobs: run
