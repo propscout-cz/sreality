@@ -13,7 +13,7 @@ _PREVIEW = "Zaváděcí cenu máte rezervovanou."
 _OPERATOR = "PropScout.cz · Provozovatel: Limen Ventures s.r.o., IČO 14053179"
 _PARAGRAPHS = (
     "Dobrý den,",
-    "děkujeme, jste na čekací listině. Zaváděcí cenu 599 Kč měsíčně včetně DPH máte rezervovanou.",
+    "děkujeme, jste na čekací listině. Zaváděcí cenu 399 Kč měsíčně včetně DPH máte rezervovanou.",
     "Pozvánky posíláme postupně, v pořadí, v jakém se lidé přihlásili. Ta vaše přijde na tuto adresu, i s krátkým "
     "návodem, jak si PropScout přidat na plochu telefonu. Přidejte si nás do kontaktů, ať vám neunikne.",
     "Hledá investiční byt i někdo z vašich známých? Pošlete mu odkaz: propscout.cz",

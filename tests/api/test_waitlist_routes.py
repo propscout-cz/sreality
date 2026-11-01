@@ -196,7 +196,7 @@ def test_a_new_entry_gets_the_confirmation_with_its_unsubscribe_link(client: Any
     assert mail["reply_to"] == "support@propscout.cz"
     assert link in mail["html"] and link in mail["text"]
     assert mail["headers"] == {"List-Unsubscribe": f"<{link}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
-    assert "599 Kč měsíčně včetně DPH" in mail["html"] and "599 Kč měsíčně včetně DPH" in mail["text"]
+    assert "399 Kč měsíčně včetně DPH" in mail["html"] and "399 Kč měsíčně včetně DPH" in mail["text"]
 
 
 def test_a_known_email_gets_no_second_confirmation(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:

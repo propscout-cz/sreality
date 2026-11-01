@@ -33,11 +33,11 @@
 | Sending invitations | Admin only, one by one or in batches, from the page renamed Waitlist. Oldest first by default, but the admin may pick anyone. Unsubscribed entries cannot be invited. |
 | Entry states | Waiting, invited, account created, unsubscribed. An invited entry has "Poslat znovu". No withdrawal for now. Resend's own block list handles bounces. |
 | Signup-order promise | Stays on the pages, with the admin free to pick out of order. Operator ruling; on the lawyer's list. |
-| Price | **Zaváděcí cena 599 Kč měsíčně včetně DPH.** The company is VAT-registered (ARES). The "nižší než ostatní" comparison goes. The app is untouched: plans, trial and gates stay open, and today's trial on a new account stays. |
+| Price | **Zaváděcí cena 399 Kč měsíčně včetně DPH.** The company is VAT-registered (ARES). The "nižší než ostatní" comparison goes. The app is untouched: plans, trial and gates stay open, and today's trial on a new account stays. |
 | Notification setting | One account-wide choice: Vypnuto, Denní přehled (default, 7:00 Prague) or Okamžitě (at most one email per 15 minutes). It sits under the avatar on desktop and in the phone's account sheet, beside the existing appearance and push controls. The email's off link sets Vypnuto. |
 | Language | Czech, including login, sign-up and password reset. |
 | Resend plan | Free until ads start, invitations capped at 50 a day. Pro ($20 a month, recheck on Resend's pricing page) before the first paid ad. |
-| Lawyer | Blocks the first real invitation, not the waitlist confirmation. Covers consent, privacy, the order promise, the no-click confirmation and the 599 wording. |
+| Lawyer | Blocks the first real invitation, not the waitlist confirmation. Covers consent, privacy, the order promise, the no-click confirmation and the 399 wording. |
 
 **Not building:** launch news, waitlist double opt-in, per-watchdog email choices, withdrawing an invitation, a Resend
 webhook, plans or payment.
@@ -84,7 +84,7 @@ reuse the push wording (`api/notification_render.py`): no per-m² figure, no sen
 rezervovanou.*
 
 > Dobrý den,
-> děkujeme, jste na čekací listině. Zaváděcí cenu 599 Kč měsíčně včetně DPH máte rezervovanou.
+> děkujeme, jste na čekací listině. Zaváděcí cenu 399 Kč měsíčně včetně DPH máte rezervovanou.
 > Pozvánky posíláme postupně, v pořadí, v jakém se lidé přihlásili. Ta vaše přijde na tuto adresu, i s krátkým návodem,
 > jak si PropScout přidat na plochu telefonu. Přidejte si nás do kontaktů, ať vám neunikne.
 > Hledá investiční byt i někdo z vašich známých? Pošlete mu odkaz: propscout.cz
@@ -98,7 +98,7 @@ byty vám přijdou do mobilu.*
 > 6 portálů a každý nový vhodný byt i zlevnění vám pošle do mobilu.
 > Účet si založte s touto adresou: {email}. Přes Google to funguje jen tehdy, když je to stejná adresa.
 > **[Vytvořit účet]**
-> Zaváděcí cenu 599 Kč měsíčně včetně DPH máte rezervovanou. Dnes nic neplatíte.
+> Zaváděcí cenu 399 Kč měsíčně včetně DPH máte rezervovanou. Dnes nic neplatíte.
 > Jak začít:
 > 1. Vytvořte si účet.
 > 2. Přidejte si PropScout na plochu telefonu. Na iPhonu v Safari: Sdílet → Přidat na plochu.
@@ -132,7 +132,7 @@ This reveals whether an address has been invited: accepted for now.
 | --- | --- | --- |
 | Every page and button | zakladatelská cena | zaváděcí cena |
 | Landing button | Chci zakladatelskou cenu | Chci zaváděcí cenu |
-| Offer item | Zvýhodněná cena jen pro lidi z čekací listiny. | 599 Kč měsíčně včetně DPH, jen pro lidi z čekací listiny. |
-| FAQ, Kolik to bude stát? | Cenu zveřejníme před spuštěním. … | Zaváděcí cena pro lidi z čekací listiny je 599 Kč měsíčně včetně DPH. Přihlášení na čekací listinu je zdarma a k ničemu vás nezavazuje. |
-| Thank-you page | Zakladatelskou cenu máte rezervovanou. | Zaváděcí cenu 599 Kč měsíčně včetně DPH máte rezervovanou. |
+| Offer item | Zvýhodněná cena jen pro lidi z čekací listiny. | 399 Kč měsíčně včetně DPH, jen pro lidi z čekací listiny. |
+| FAQ, Kolik to bude stát? | Cenu zveřejníme před spuštěním. … | Zaváděcí cena pro lidi z čekací listiny je 399 Kč měsíčně včetně DPH. Přihlášení na čekací listinu je zdarma a k ničemu vás nezavazuje. |
+| Thank-you page | Zakladatelskou cenu máte rezervovanou. | Zaváděcí cenu 399 Kč měsíčně včetně DPH máte rezervovanou. |
 | Thank-you page | Do té doby vám nic dalšího nepřijde. | Kromě potvrzení vám do té doby nic dalšího nepřijde. |
