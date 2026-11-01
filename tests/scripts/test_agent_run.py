@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from api import dependencies
+from api import dependencies, tenant_pool
 from api.agents import cassette, terminator
 from api.agents.definition import load
 from api.capabilities import registry
@@ -24,13 +24,14 @@ from tests.api._agent_replay import replay
 from tests.api._fakes import _FakeConn, _ScriptedProvider
 
 USER = uuid.UUID("00000000-0000-4000-8000-000000000007")
+ACCOUNT = uuid.UUID("00000000-0000-4000-8000-000000000008")
 
 
 @pytest.fixture()
 def world(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Probe tools, a scripted model and a fake database; `calls` keeps every registry call the runner made."""
     install_probes(monkeypatch)
-    state: dict[str, Any] = {"calls": [], "conn": _FakeConn()}
+    state: dict[str, Any] = {"calls": [], "conn": _FakeConn(), "account": ACCOUNT}
     state["provider"] = _ScriptedProvider("anthropic", [
         reply(("probe_a", {"q": 1}), text="Looking."),
         reply(("probe_b", {}), ("probe_c", {"q": 3})),
@@ -49,6 +50,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(dependencies, "get_providers", lambda: {"anthropic": state["provider"]})
     monkeypatch.setattr(db, "connect", lambda: contextlib.nullcontext(state["conn"]))
     monkeypatch.setattr(registry, "call", call)
+    monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda conn, claims: state["account"])
     return state
 
 
@@ -64,7 +66,8 @@ def test_a_recorded_run_replays_to_the_same_outcome(
     assert json.loads(out.out.split("1. Property 7\n", 1)[1])["cited_property_ids"] == [7]
     assert "submit_result after 3 model calls" in out.err
     caller = world["calls"][0][0]
-    assert caller.claims == {"sub": str(USER), "role": "authenticated"} and caller.market is world["conn"]
+    assert caller.claims == {"sub": str(USER), "role": "authenticated", "run_account_id": str(ACCOUNT)}
+    assert caller.market is world["conn"]
     assert [row["params"][0] for row in world["conn"].llm_calls_rows] == ["agent_run"] * 3
 
     document = cassette.load(recording)
@@ -131,6 +134,14 @@ def test_a_replay_that_leaves_the_recording_fails_loudly(world: dict[str, Any], 
     document["steps"][0]["output"]["tool_calls"][0]["input"] = {"q": 2}
     with pytest.raises(AssertionError, match="left the recording"):
         replay(document, load(folder))
+
+
+def test_a_user_with_no_account_spends_nothing(world: dict[str, Any], tmp_path: Path,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
+    world["account"] = None
+    assert agent_run.main([str(write_folder(tmp_path)), "--user", str(USER), "--input", '{"town": "Brno"}']) == 2
+    assert "no account" in capsys.readouterr().err
+    assert world["provider"].calls == []
 
 
 def test_a_bad_input_spends_nothing(world: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

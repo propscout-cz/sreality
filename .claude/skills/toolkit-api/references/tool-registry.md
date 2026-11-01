@@ -66,7 +66,7 @@ whose anchor the subject lacks is REFUSED (`subject.unanchored`, shared with the
    property in the dossier, where a property no result can hold whole keeps the heads of its ads (canonical, live,
    ended, newest first) and runs that fit by `truncate.heads`, the same rule, its own `truncated` naming each cut;
    the broker read stopping at the 20th person).
-5. Records nothing: the transport that calls a tool records it. #2065's loop journals each tool step's raw
+5. Records nothing: the transport that calls a tool records it (`agent_run_steps`, below). #2065's loop journals each tool step's raw
    arguments and what the model got back (the fitted envelope, or the ToolError's payload on any refusal), which is
    where ADR-0002's recorded broker read lives; `scripts/capabilities_demo.py` records nothing.
 
@@ -148,3 +148,64 @@ a portable schema that Gemini's SDK builds, null offered where it is accepted, n
 column no surface may show, no connection opened outside `registry.py`, and every declared filter and point attribute
 changing the SQL the tool runs. The live tenant check is `tests/test_capabilities_live.py`. List or call one by hand:
 `python -m scripts.capabilities_demo list|call`.
+
+## Runs (`api/agents/executor.py`, #2070)
+
+Three entry points; nothing in production calls them until #2071 (routes) and #2075 (agent-worker).
+
+- **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
+  service connection, for the identity a route stamped from the caller's own token: the input checked, then the
+  allowlist (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
+  `not_allowlisted`), a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
+  the in-flight cap (`agent_account_in_flight_cap`; `SubmitRefused` `in_flight_cap`), insert as `queued`. It takes no
+  act-as.
+- **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
+  `agent_executor_enabled` is not JSON `true`. Otherwise it re-queues or fails every lapsed lease, then under one
+  transaction lock refuses to claim at or above `agent_daily_ceiling_usd` (`parked`; `llm_calls` with `called_for =
+  'agent_run'` since UTC midnight, the local runner's included) and claims the oldest queued run whose account has fewer
+  than `agent_account_running_cap` running (`idle` when none, `FOR UPDATE SKIP LOCKED`). It re-stamps the definition,
+  tool-set and commit hashes and the model (the row names what ran), runs the loop with a budget of the run's cap less
+  what its earlier attempt spent, and ends `succeeded`, `failed` (with `error`), `cancelled`, `released` or `lost`.
+  An absent number parks rather than guesses. The worker's SIGTERM handler sets `stop`.
+- **`cancel(conn, *, run_id, account_id)`**: a queued run ends now, a running one at its next step; returns its status,
+  or None for no such run on this account.
+
+**The lease.** Two minutes (`LEASE_S`), renewed by every journal write and by a heartbeat thread on its own connection,
+since one model call can outlast it; the heartbeat stops at `HEARTBEAT_CEILING_S` (15 min, past every agent's wall
+clock), so a hung worker lapses too. Every write by a worker is compare-and-set on `id`, `attempts` and `status =
+'running'`, so a worker that lost its run writes nothing more (`lost`). `attempts` is the start the row is on, from 1.
+
+**Interruption.** One transition for a lapsed lease and a SIGTERM: a cancel asked for wins; below `MAX_ATTEMPTS` (2) the
+run goes back on the queue at `attempts + 1` and starts from the beginning; at it, `failed` with its reason (spec
+story 25). Waiting never fails a run. A shutdown spares a reply that only hands in an answer, or the accepted answer
+(a release would pay for it all again); a cancel does not. Any other exception ends the run `failed`; `error` holds a definition's own
+words, a generic line otherwise (the details are in the log and `llm_calls.error`).
+
+**A database error** on the ledger, on a live connection or a dead one, writes no verdict: `work_once` returns `lost` and
+the lease lapses into the interruption above.
+
+**The model call.** `loop.run` retries a provider's refusal (`providers.is_transient`: 429, 503, 529) up to three times
+inside the step, waiting about 2, 8 and 30 s, every wait and try inside the wall clock. The retry is the same request: a
+`pause_turn` continuation's paused reply and its container too. A refusal bills nothing, so the budget check stands. A broken
+connection, a timeout or another 5xx is not retried: it may have billed (a code call up to ten samples) with no usage to
+show, so a retry could pass a cap unseen; it fails the run. Each try gets `timeout_s`, what the wall clock has left,
+beside `hosted_code` and with no SDK retry under it: it is what bounds one code call, since the wall clock is read
+only between calls. A call that outlasts the wall clock ends the run as the loop's `timeout`. A `pause_turn` is its own
+billed call under every cap. A reply ending `refusal`, `model_context_window_exceeded` or `max_tokens` is terminal:
+`failed`, its stop reason on the row.
+
+**Files.** `agent_runs.files` holds names only; a `file` step holds a produced file's facts; the bytes go when the run
+ends until #2073 stores them. Each attempt has its own `RunFiles`, messages and container, and deletes what it put at the
+provider when it ends, a lease lost or a SIGTERM included: a retry uploads its inputs afresh and cannot name a deleted
+one. `work_once` passes no inputs yet (#2073).
+
+**The diary.** `agent_run_steps` is keyed `(run_id, attempt, n)`, one row per loop step, append-only by trigger (a DELETE
+passes only once its run is gone, the cascade from an account's deletion): an input
+hash, a summary of at most 500 characters, the full payload, the model call's `llm_calls` id, cost, duration. A NUL is
+stripped from what is stored, since Postgres refuses it. `llm_calls.agent_run_id` is set by a per-run `LLMClient`;
+`agent_runs.cost_usd` is that ledger's sum. No foreign key joins `llm_calls` to the runs: the INSERT follows the provider's
+bill, and a run deleted mid-call must not lose it.
+
+**Identity.** `api/agents/claims.caller_for(market, *, principal_user_id, account_id)` is the one claims builder and it
+hands the registry a `Caller`: no new `tenant_transaction` caller. `scripts/agent_run.py` has no run row, so it calls the
+same builder with the user the operator named and that user's first account, and reads as a run reads.

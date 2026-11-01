@@ -149,6 +149,15 @@ def test_tool_schema_translated_to_openai_function_shape():
     }]
 
 
+def test_a_deadline_replaces_the_default_timeout():
+    session = FakeSession([_tool_call_response("record_x", {}), _tool_call_response("record_x", {})])
+    p = _provider(session)
+    message = [Message(role="user", content=[TextBlock(text="go")])]
+    p.complete(system="", messages=message, tools=[], model="test-model")
+    p.complete(system="", messages=message, tools=[], model="test-model", timeout_s=12.5)
+    assert [c["timeout"] for c in session.calls] == [120, 12.5]
+
+
 def test_tool_choice_forces_named_function():
     session = FakeSession([_tool_call_response("record_x", {})])
     p = _provider(session)
