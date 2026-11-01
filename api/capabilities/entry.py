@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 
+from api.capabilities.run_scope import RunScope
 from api.capabilities.schema import portable
 from api.filter_args import Args
 
@@ -39,9 +40,10 @@ class Caller:
 
 @dataclass(frozen=True)
 class Context:
-    """What a handler gets: the one connection its tenancy picked."""
+    """What a handler gets: the one connection its tenancy picked, and the run it is called in, if any."""
 
     conn: psycopg.Connection
+    run: RunScope | None = None
 
 
 @dataclass(frozen=True)

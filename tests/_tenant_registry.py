@@ -47,6 +47,10 @@ TENANT_TABLES: tuple[str, ...] = (
     "stats_dashboard_shares",
     # Migration 696: the curation clock; browser roles SELECT only (BROWSER_WRITE_COLUMNS), written by its trigger.
     "curation_clock",
+    # Migration 704: the agent run ledger (ADR-0001); browser roles SELECT only (BROWSER_WRITE_COLUMNS).
+    "agent_runs",
+    "agent_run_steps",
+    "agent_artifacts",
 )
 
 # Tenant tables the browser reads but writes only by these column grants (migration 679, rule 12): the API
@@ -57,6 +61,10 @@ BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
     "building_runs": frozenset(),
     # Migration 696: only bump_curation_clock() writes the clock (docs/design/curation-sync.md § 3.2).
     "curation_clock": frozenset(),
+    # Migration 704: the service role writes these, runs and steps in api/agents/executor.py; no code writes an artifact yet.
+    "agent_runs": frozenset(),
+    "agent_run_steps": frozenset(),
+    "agent_artifacts": frozenset(),
 }
 BROWSER_WRITE_COLUMNS_SINCE = 679
 
@@ -106,4 +114,7 @@ NOT_CLOCKED: dict[str, str] = {
     "entitlements": "billing state, written by the Stripe webhook; not curation (follow-up F5)",
     "stats_dashboards": "Stats dashboards are not curation (follow-up F5)",
     "stats_dashboard_shares": "dashboard shares widen dashboard reads, not curation (follow-up F5)",
+    "agent_runs": "a run is not curation: it ends in proposals the user applies, each under its own table's clock",
+    "agent_run_steps": "a run's diary, not curation",
+    "agent_artifacts": "a run's files, not curation",
 }

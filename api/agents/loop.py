@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -12,12 +13,22 @@ from typing import Any, Literal
 from api.agents import terminator
 from api.agents.definition import HOSTED_CODE_PROVIDERS, Definition, DefinitionError
 from api.agents.hosted_code import RunFiles, describe
-from api.capabilities import registry
+from api.capabilities import registry, run_scope
 from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import encode
-from api.llm_client import LLMClient
-from api.providers import Completion, HostedCode, HostedFile, Message, ModelPrice, TextBlock, ToolResultBlock
+from api.llm_client import LLMClient, LLMResponse
+from api.providers import (
+    Completion,
+    HostedCode,
+    HostedFile,
+    Message,
+    ModelPrice,
+    ProviderError,
+    TextBlock,
+    ToolResultBlock,
+    is_transient,
+)
 
 CALLED_FOR = "agent_run"
 # A reply's limit covers the model's thinking too (Opus/Sonnet 5.5 always think): the ceiling is the non-streaming
@@ -25,6 +36,9 @@ CALLED_FOR = "agent_run"
 # likely to be cut off.
 MAX_REPLY_TOKENS = 16_000
 MIN_REPLY_TOKENS = 4_096
+# A rate limit or an overload is retried inside the step, each wait inside the wall clock (PROGRAM § 3.4's numbers). The
+# provider refused those before doing any work, so a retry bills nothing and the call's budget check still holds.
+RETRY_DELAYS_S = (2.0, 8.0, 30.0)
 # With hosted code one request can sample the model this many times on its own before it pauses (docs: stop reasons);
 # whether `max_tokens` spans them the docs do not say, so a code call is budgeted as if each sample paid in full.
 SERVER_LOOP_SAMPLES = 10
@@ -80,6 +94,33 @@ def _reply_tokens(remaining_usd: float, prompt_tokens: int, price: ModelPrice, s
     return min(MAX_REPLY_TOKENS, math.floor(left * 1e6 / price.output_per_mtok))
 
 
+def _callable(definition: Definition) -> set[str]:
+    return {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
+
+
+def tool_schemas(definition: Definition) -> list[dict[str, Any]]:
+    """What this agent's model is offered: its tools it may call, then the terminator."""
+    return [s for s in registry.schemas() if s["name"] in _callable(definition)] + [terminator.schema(definition)]
+
+
+def _call_in_time(call: Callable[[float], LLMResponse], *, deadline: float, clock: Callable[[], float],
+                  sleep: Callable[[float], None]) -> LLMResponse | None:
+    """The model's reply, or None when the wall clock ran out; a failure that is not transient, or the last retry's,
+    raises."""
+    for delay in (*RETRY_DELAYS_S, None):
+        try:
+            return call(deadline - clock())
+        except ProviderError as exc:
+            if clock() >= deadline:
+                return None
+            if delay is None or not is_transient(exc):
+                raise
+        sleep(min(delay * random.uniform(0.75, 1.25), deadline - clock()))
+        if clock() >= deadline:
+            return None
+    raise AssertionError("the last try returns or raises")
+
+
 def run(
     definition: Definition,
     value: Mapping[str, Any],
@@ -89,6 +130,7 @@ def run(
     call_tool: Callable[[str, Any], dict[str, Any]],
     record: Callable[[Step], None],
     clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
     inputs: Sequence[HostedFile] = (),
 ) -> Outcome:
     """Run `definition` on `value`. `call_tool` is the registry call under the run's caller; `record` journals.
@@ -100,7 +142,7 @@ def run(
     files = RunFiles(llm, provider)
     try:
         return _run(definition, value, provider=provider, llm=llm, call_tool=call_tool, record=record, clock=clock,
-                    inputs=inputs, files=files)
+                    sleep=sleep, inputs=inputs, files=files)
     finally:
         files.release()
 
@@ -114,6 +156,7 @@ def _run(
     call_tool: Callable[[str, Any], dict[str, Any]],
     record: Callable[[Step], None],
     clock: Callable[[], float],
+    sleep: Callable[[float], None],
     inputs: Sequence[HostedFile],
     files: RunFiles,
 ) -> Outcome:
@@ -125,8 +168,8 @@ def _run(
     if price is None:
         raise DefinitionError(f"{provider} has no price for {model!r}")
 
-    callable_names = {t for t in definition.tools if registry.ENTRIES[t].effect is not Effect.WRITE}
-    tools = [s for s in registry.schemas() if s["name"] in callable_names] + [terminator.schema(definition)]
+    callable_names = _callable(definition)
+    tools = tool_schemas(definition)
     opening = json.dumps(value, ensure_ascii=False, indent=2)
     messages = [Message(role="user", content=[TextBlock(text=opening), *files.upload(inputs)])]
     prompt_tokens = _bytes([definition.instructions, tools, opening])
@@ -142,6 +185,14 @@ def _run(
     steps = 0
     calls = 0
     spent = 0.0
+
+    def left_for_tools() -> float:
+        """What a paid tool may spend: the run must still afford a model call to hear its result and answer."""
+        reply_floor = prompt_tokens * max(price.input_per_mtok, price.cache_write_per_mtok) / 1e6
+        reply_floor = samples * (reply_floor + MIN_REPLY_TOKENS * price.output_per_mtok / 1e6)
+        return definition.limits.max_cost_usd - spent - container_reserve - reply_floor
+
+    scope = run_scope.RunScope(llm=llm, left_usd=left_for_tools, left_s=lambda: deadline - clock())
 
     def journal(kind: Literal["model", "tool", "file"], name: str, given: Any, output: Mapping[str, Any],
                 started: float, cost_usd: float = 0.0, llm_call_id: int | None = None) -> None:
@@ -171,9 +222,15 @@ def _run(
             return outcome("max_cost")
 
         started = clock()
-        response = llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions, tools=tools,
-                            model=model, provider=provider, max_tokens=max_tokens,
-                            hosted_code=HostedCode(container=container) if definition.code else None)
+        # A retry resends this same request: the paused reply a continuation carries, and the container it resumes.
+        response = _call_in_time(
+            lambda timeout_s: llm.call(called_for=CALLED_FOR, messages=messages, system=definition.instructions,
+                                       tools=tools, model=model, provider=provider, max_tokens=max_tokens,
+                                       timeout_s=timeout_s,
+                                       hosted_code=HostedCode(container=container) if definition.code else None),
+            deadline=deadline, clock=clock, sleep=sleep)
+        if response is None:
+            return outcome("timeout")
         calls += 1
         spent += response.cost_usd
         completion = response.completion
@@ -218,12 +275,16 @@ def _run(
                 # An answer already paid for is checked even past the deadline; a tool call is not started.
                 if started >= deadline:
                     return outcome("timeout")
-                result = call_tool(call.name, call.input)
+                with run_scope.running(scope):
+                    result = call_tool(call.name, call.input)
                 seen |= terminator.property_ids(result)
                 error = False
             except ToolError as exc:
                 result, error = exc.payload(), True
-            journal("tool", call.name, call.input, result, started)
+            # A paid tool's bill is the run's, refused or not.
+            tool_cost, tool_llm_call = scope.settle()
+            spent += tool_cost
+            journal("tool", call.name, call.input, result, started, tool_cost, tool_llm_call)
             results.append(ToolResultBlock(tool_use_id=call.id, content=encode(result), is_error=error))
         messages.append(Message(role="user", content=list(results)))
         prompt_tokens = next_prompt(completion, results)

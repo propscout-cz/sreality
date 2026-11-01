@@ -225,6 +225,21 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_capabilities_live.py -q
 
+      # The photo assessment (migration 705): its SQL picks the photo set, a repeat is served from the real cache, the
+      # model call lands on the ledger the CHECK admits, and the browser's roles read nothing of the cache.
+      - name: The photo assessment's cache and photo set (migration 705)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_photo_assessment_live.py -q
+
+      # The run ledger (migration 704): a queue, a lease and an identity only a real schema can hold.
+      - name: Agent runs queue, lease and read under one narrowed identity (#2070)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_agent_runs_live.py -q
+
       # Collection sharing (migration 610) widens READS only, through four FOR SELECT policies,
       # a party policy and a SECURITY DEFINER label function. Only a real schema under the
       # `authenticated` role can show that a recipient reads but never writes, that a bystander
@@ -763,6 +778,15 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_judgements_live.py -q
+
+      # The residual queue's shared-order-code filter (operator 2026-10-31), EXECUTED: the code's
+      # normalisation, its two gates and the population cap at exactly eight carriers, in the page,
+      # the seeded sample and the count. The fakes run none of it; PREPARE proves it compiles.
+      - name: The residual queue keeps pairs printing one rare order code
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: pytest tests/test_residual_shared_code_live.py -q
 
       # The split by letters (MS18), EXECUTED: two accounts' curation routed per letter on a
       # split into two letters and into three (a note with its ad, the rest back along the carry

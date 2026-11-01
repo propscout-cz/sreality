@@ -3384,12 +3384,16 @@ renumber.** Navigate by area:
     tables bar `property_pipeline_events`, plus both share tables, whose rows bump both parties): once per
     committed transaction, account and family, nothing on a rollback, every writer seen (the API, the carriers,
     signup, cascades). A counter is a signal, never state and never history: windows compare it for inequality
-    and re-read (W4). `curation_clock_audience()` (invoker, `current_account_ids()`, never acting) is "follow,
+    and re-read (W4). `curation_clock_audience()` (`current_account_ids()`, never acting; definer plpgsql since
+    709, F17: planned once per backend and filtering by the caller's accounts itself) is "follow,
     never act": own accounts follow every family, a read share's recipient the owner's board, an edit share's
     the board and the five curation families, nobody another account's `shares`; `curation_clock_public`
-    (invoker) is the browser's one read, its audience read from the JWT; the service role reads the table (701)
-    and writes it never. Row triggers never fire on TRUNCATE, so a clocked table is never truncated, only
-    deleted from (census e). The event table is not curation and is not clocked (rule 16). Its rails:
+    (invoker) is the browser's one read, its audience read from the JWT and evaluated twice per read, in the
+    policy's one hashed lookup and the view's join that keeps `curation_clock_pkey` (708, F16, ruling 2026-11-01),
+    each calling `current_account_ids()` once (709);
+    the service role reads the table (701) and writes it never. Row triggers never fire on TRUNCATE, so a clocked
+    table is never truncated, only deleted from (census e). The event table is not curation and is not clocked
+    (rule 16). Its rails:
     `tests/_tenant_registry.py` (`CLOCKED_TABLES` / `NOT_CLOCKED`), `tests/test_curation_sync_census.py`,
     `tests/test_curation_clock_live.py`, the `curation_sync` health alarm; the kill switches:
     `.claude/skills/database/references/tenancy.md` § Curation clock.
@@ -3962,9 +3966,10 @@ renumber.** Navigate by area:
     `property_ids_filter` (migration 378), which now carries only with-estimates ∩ broker. The
     funnels still render from `fetchPipelineMembers`. It is surfaced as a chip in the preset row
     (lit on the IN side only, `scopeIncludes`), and it behaves like the
-    other chips in that row: clicking it **loads a VIEW** — the board's OPEN stages, by id (a deal closed
-    into a terminal stage is history, operator 2026-11-01; the whole pipeline when no stage is closed or the
-    stages are unread; the sidebar adds a closed stage back), over a NEUTRAL cohort
+    other chips in that row: clicking it **loads a VIEW** — the board's LIVE stages, by id (a card in a
+    closed stage is history, operator 2026-11-01; the whole pipeline when no stage is closed, or none is live;
+    the click waits for the stage read, and a failed read turns the chip into a retry (MS16), never a guessed
+    view; the sidebar adds a closed stage back), over a NEUTRAL cohort
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters

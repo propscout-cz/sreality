@@ -171,7 +171,7 @@ export function createPanel(store: Store) {
 
     const auth = await store.call<AuthState>({ type: 'get_auth_state' });
     if (!auth.ok) {
-      // The background is unreachable (an extension reload orphaned this tab): say so.
+      // The background is unreachable: say so.
       setIf(at, { phase: 'error', error: auth.detail });
       return;
     }

@@ -7,7 +7,7 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
+  'result check, the cached photo assessment, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
 export interface Ticket {
@@ -42,7 +42,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2064, done: true, title: 'Cohort statistics and achieved prices' },
       { n: 2065, done: true, title: 'Agent folders, the generic loop, the result check, a local runner' },
       { n: 2179, done: true, title: 'Models keep their own reply blocks across tool calls' },
-      { n: 2066, done: false, title: 'Structured photo assessment with a cache' },
+      { n: 2066, done: true, title: 'Structured photo assessment with a cache' },
       { n: 2067, done: false, title: 'Valuo as a capped, recorded paid tool' },
       { n: 2068, done: true, title: 'Agent Python on Claude\'s hosted code execution' },
       { n: 2069, done: false, title: 'The scout\'s folder, and your grading of ten shortlists' },
@@ -52,7 +52,7 @@ export const MILESTONES: Milestone[] = [
     key: 'M1b',
     summary: 'Queue, Runs page, Apply and Undo, first production run',
     tickets: [
-      { n: 2070, done: false, title: 'Run queue and diary: submit, execute once, cancel' },
+      { n: 2070, done: true, title: 'Run queue and diary: submit, execute once, cancel' },
       { n: 2071, done: false, title: 'Run routes and the minimal Runs page' },
       { n: 2072, done: false, title: 'Propose, Apply, Undo' },
       { n: 2073, done: false, title: 'Agent files in Supabase Storage' },
@@ -118,7 +118,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
     tools: [
       { name: 'get_property_dossier' },
       { name: 'describe_neighborhood' },
-      { name: 'assess_property_visuals', ticket: 2066 },
+      { name: 'assess_property_visuals' },
     ],
   },
   { label: 'Know the brokers', tools: [{ name: 'get_property_brokers' }, { name: 'rank_brokers' }] },
@@ -211,7 +211,7 @@ export const CANT_DO: { head: string; text: string }[] = [
   { head: 'See another account.', text: 'Your own data is read under your login. A file request across accounts returns nothing.' },
   { head: 'Write its own database queries.', text: 'It calls named tools with checked inputs.' },
   { head: 'Invent a property.', text: 'Every cited property must have come from that run\'s tool results.' },
-  { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, photos on at most 10 properties per run, Valuo at most 3 per run plus a monthly cap.' },
+  { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, at most 10 paid photo assessments per run, Valuo at most 3 per run plus a monthly cap.' },
   { head: 'Start for just anyone.', text: 'Only accounts on the allowlist can start a run.' },
 ];
 

@@ -21,6 +21,7 @@ import {
   fromSearchParams,
   pipelineViewFilters,
   readPresetSpec,
+  type PipelineViewStage,
   toSearchParams,
   type ListingFilters,
   type MapBounds,
@@ -40,7 +41,7 @@ import {
   useRememberedLayers,
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
-import type { FilterPreset, ListingPublic, PipelineStage, SavedDashboard } from '@/lib/types';
+import type { FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
 import { isStatsMarket, type StatsMarket } from '@/lib/statsMarket';
 import {
   BOARD_URL_KEYS,
@@ -164,8 +165,8 @@ export interface BrowseViewState {
    * the first. Deselecting matters beyond tidiness: leaving a preset marked
    * active after replacing its filters would mark it edited, which this chip
    * must never do. `stages` is the board's stage list: the view picks the
-   * open ones (pipelineViewFilters). */
-  loadPipelineView: (stages: ReadonlyArray<Pick<PipelineStage, 'id' | 'is_terminal'>>) => void;
+   * live ones (pipelineViewFilters). */
+  loadPipelineView: (stages: ReadonlyArray<PipelineViewStage>) => void;
   /* Reset: the default filters with any active preset deselected — one write, as
    * loadPipelineView. A reset leaves the preset's view; it never edits it
    * (operator 2026-10-27). The sort, the tab and the map knobs stay. */
@@ -396,7 +397,7 @@ export function useUrlBrowseState(): BrowseViewState {
     [searchParams, setSearchParams],
   );
 
-  const loadPipelineView = useCallback((stages: ReadonlyArray<Pick<PipelineStage, 'id' | 'is_terminal'>>) => {
+  const loadPipelineView = useCallback((stages: ReadonlyArray<PipelineViewStage>) => {
     // Same shape as loadPreset: one write, filters + preset id together. Pushed
     // (not replaced) so Back returns the operator to the view they came from —
     // that is the undo for "it wiped my filters".

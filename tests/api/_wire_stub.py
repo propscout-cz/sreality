@@ -3,9 +3,11 @@ It also plays Anthropic's Files API, the fake file a code turn produces included
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -30,7 +32,8 @@ class WireStub:
 @contextmanager
 def wire_stub(monkeypatch: pytest.MonkeyPatch, base_url_env: str, replies: list[dict[str, Any]],
               files: dict[str, dict[str, Any]] | None = None) -> Iterator[WireStub]:
-    """Serve `replies` in order to the SDK that reads its base URL from `base_url_env`; a request past the script is a 400.
+    """Serve `replies` in order to the SDK that reads its base URL from `base_url_env`; a request past the script is a 400,
+    and a reply's `__status` or `__delay_s` is what the endpoint does instead of answering 200 at once.
     `files` maps a file id to its metadata plus its `bytes`, for the Files API routes."""
     stub = WireStub(replies, files)
 
@@ -57,8 +60,10 @@ def wire_stub(monkeypatch: pytest.MonkeyPatch, base_url_env: str, replies: list[
                 self._send(200, self._metadata(file_id))
                 return
             stub.bodies.append(body)
-            status = 200 if stub.replies else 400
-            self._send(status, json.dumps(stub.replies.pop(0) if stub.replies else {"error": "script exhausted"}).encode())
+            reply = dict(stub.replies.pop(0)) if stub.replies else {"__status": 400, "error": "script exhausted"}
+            time.sleep(reply.pop("__delay_s", 0))
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self._send(reply.pop("__status", 200), json.dumps(reply).encode())
 
         def do_GET(self) -> None:
             match = re.fullmatch(r"/v1/files/([^/?]+)(/content)?(\?.*)?", self.path)

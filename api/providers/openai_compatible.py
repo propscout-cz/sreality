@@ -88,6 +88,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if not self._api_key:
             raise ProviderError(
@@ -106,7 +107,7 @@ class OpenAICompatibleProvider:
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=_TIMEOUT_S,
+                timeout=_TIMEOUT_S if timeout_s is None else timeout_s,
             )
         except requests.RequestException as exc:
             raise ProviderError(f"{self.name} call failed: {exc}") from exc
@@ -117,7 +118,8 @@ class OpenAICompatibleProvider:
             # exhausted quota apart from a real model miss, and they need
             # "429" / "401" / etc. to actually appear here.
             raise ProviderError(
-                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}"
+                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}",
+                status=resp.status_code,
             )
         return _completion_from_raw(resp.json(), model=model)
 

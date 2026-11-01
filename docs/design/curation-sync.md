@@ -312,6 +312,57 @@ end $post$;
 
 **After 696, as built (#2244):** migration `701_curation_clock_service_role_read.sql` grants the service role SELECT on `curation_clock` (the Backend territory's rule that the service role reads anything; 696's `revoke all … from service_role` had taken it with the writes). The service role still holds no INSERT, UPDATE, DELETE or TRUNCATE, and nothing on `curation_clock_public`: the view is the browser's read, its audience reads the caller's accounts from the JWT, and only `authenticated` executes `curation_clock_audience()`, so a service-role SELECT on the view would be refused (and, with EXECUTE, empty). A backend reader reads the table, whole.
 
+**After 696, F16 (#2308): the read evaluates its audience twice, not four times.** The policy and the view above made one read evaluate `curation_clock_audience()` four times: once in each of the policy's three arms (three hashed SubPlans) and once more in the view's join. Production measured that read at 4.9 ms mean over 1,266 calls (~133 shared buffers each, 2026-11-01), against gate #2203's 2.5 ms line. Migration `708_curation_clock_read_one_audience.sql` rewrites the policy alone. The view stays as 696 defined it, its join on the audience included. Who follows whom is unchanged, the grants are 701's, and the audience function is untouched:
+
+```sql
+-- One hashed SubPlan over the (account, family) pairs the audience follows: one evaluation per statement.
+-- ALTER, not drop + create: under statement autocommit the gap would answer every clock read empty.
+alter policy curation_clock_audience_read on public.curation_clock
+  using ((account_id, family) in (
+    select a.account_id, f.family
+      from public.curation_clock_audience() a
+     cross join lateral unnest(case
+       when a.mine then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares']
+       when a.edit then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links']
+       else array['board'] end) as f(family)));
+```
+
+- The CASE goes in order: own rows carry `mine` and `edit`, an edit share only `edit`, a read share neither. So own accounts follow all seven families, an edit share the board and the five curation families, a read share the board. Census (i) reads the families off that CASE.
+- The audience is not inlined (its `SET search_path` rules that out), so it is one Function Scan wherever it is called: one in the policy, one in the view's join. Locally, one evaluation (0.33 ms) is the sum of its SECURITY DEFINER `current_account_ids()` calls, three in its body and two in `pipeline_shares`' policy [V, local].
+- **Two, not one (operator ruling 2026-11-01):** PostgreSQL never pulls a policy's subquery up into a join, so the policy's hashed SubPlan cannot drive an index. The view's join is what probes `curation_clock_pkey` per followed account; without it the read scans the whole clock, O(clock rows), and at 2,000 accounts costs more than 696's read did (§ 3.8). The ruling keeps the join, and the index with it, for the price of the second evaluation.
+- `$post$` asserts row security on the clock (the view's join keeps the followed accounts; only the policy keeps a share to its families), one SELECT policy for `authenticated` whose expression names the audience once, the view invoker with its five columns and its one join on the audience, and 701's grants.
+
+**After 708, F17 (#2311): the audience is planned once per backend and calls `current_account_ids()` once.** After 708, production read the clock at 2.63 ms mean and ~88 shared buffers over 25 reads (2026-11-01), still above gate #2203's 2.5 ms line. Migration `709_curation_clock_audience_plan.sql` replaces the audience function alone. The rows, the policy, the view and the grants stay as they were:
+
+```sql
+-- plpgsql: RETURN QUERY's plan is prepared once per backend. Definer: pipeline_shares is read as its owner, so its row
+-- policy (two current_account_ids() calls and acting()) is neither planned nor run; the body restates what it still
+-- decided. current_account_ids() once, in a CTE.
+create or replace function public.curation_clock_audience()
+returns table (account_id uuid, mine boolean, edit boolean)
+language plpgsql stable security definer rows 4 set search_path = '' as $$
+begin
+  return query
+  with me as (select t.id from public.current_account_ids() as t(id))
+  select me.id, true, true from me
+  union all
+  select s.account_id, false, bool_or(s.mode = 'edit')
+    from public.pipeline_shares s
+   where s.recipient_account_id in (select me.id from me)
+     and s.account_id not in (select me.id from me)
+     and not public.acting()
+   group by s.account_id;
+end $$;
+revoke all on function public.curation_clock_audience() from public, anon, service_role;  -- never from authenticated:
+grant execute on function public.curation_clock_audience() to authenticated;             -- no gap under autocommit
+```
+
+- **Why it cost what it did.** 696's audience is `LANGUAGE sql` and never inlined, so its body is parsed and planned at every call. Each call also ran `current_account_ids()` five times: three in its body and two in `pipeline_shares`' policy, plus `acting()`. Each of those is a SQL function planned again at its call. Warm, planning is most of an evaluation: the body's own plan is ~0.09 ms of ~0.38 ms, and one `current_account_ids()` call is 0.023 ms of planning against 0.011 ms of execution [V, local].
+- **The first read on a backend.** Production's "first audience call ~270 buffers, second 9" is catalog warm-up. Locally, a fresh backend's first clock read pays ~300 execution and ~320–350 planning buffers, 1.7–2.1 ms, in its first audience call, and 5–6 in the second. A warm read pays 11–18 in all under 708, 5–10 under 709. Every shape pays the warm-up alike, once per backend, so whichever statement a new PostgREST backend serves first pays it (§ 3.8) [V, local].
+- **The same rows.** The definer body keeps what `pipeline_shares`' policy still decided: the recipient is one of the caller's accounts (the WHERE always required it), and there are no share rows while acting (`not public.acting()`). Under 696 the policy hid those rows; now the body does. "Follow, never act" is unchanged: it reads `current_account_ids()`, never `acting_account_ids()`. The live lane's own / read share / edit share / no share / `x-act-as` cases are unchanged and green. Each opens a fresh backend, so the warm-read case also reads them on ONE backend after the owner's read prepared its plan: the edit recipient, the read recipient and the edit recipient with `x-act-as` each get exactly their own rows (`current_account_ids()` and `acting()` run at execution, not at planning).
+- **The trade (definer).** `authenticated` may call a SECURITY DEFINER function through PostgREST (`/rpc/curation_clock_audience`, as before, with the same rows). `pipeline_shares`' row policy no longer backs that body, so the body is the only filter. Three rails hold it. Census (i) requires a definer body to hold its `me` CTE and its whole WHERE verbatim (`DEFINER_AUDIENCE_FILTERS`), so a neutralised `(not public.acting() or true)` or a dropped `not in` fails, where a substring of either filter would pass. `tests/_admin_gate_registry.py` UNGATED registers it `reachable` with its reason, as the ticket asked. The registry is the exemption list for objects that read admin-only relations, which this one does not, so the live sweep's waiver that the entry brings is incidental; the clock's catalog case asserts the body names no admin-only relation, so a drift into one still fails (whether to keep the entry is the operator's call). `$post$` requires the owner to bypass `pipeline_shares`' row security (else a recipient would follow nobody) and an empty answer for a caller with no identity. The invoker shapes keep the policy as a backstop, but plpgsql + one call (a+c) leaves the warm read at 0.41–0.62 ms against 0.27–0.35 ms, and makes a backend's first read ~0.2 ms slower than 708's. The definer is what wins that back (§ 3.8).
+- `$pre$` refuses, before the function changes, an owner that `pipeline_shares`' row policy would hold (CREATE OR REPLACE keeps the owner, and the definer runs as it). `$post$` asserts plpgsql, stable, definer, ROWS 4, `search_path = ''` and the TABLE result; a body that never names `acting_account_ids` and holds, whitespace-normalised, census (i)'s two strings: `me` from `current_account_ids()`, and the whole WHERE (the caller's accounts as recipient, never as owner, none while acting); the owner's bypass; EXECUTE for `authenticated` only; no rows for a caller with no identity; 708's policy and 696's view each naming the audience once.
+
 **Decision 3: deferred constraint row triggers.** A no-op UPDATE is skipped, and the bump runs **once per (transaction, account, family)**.
 - Row triggers never fire on 0-row statements. That matters because there are about 21k autodedup steps a day that touch no curation [V·r].
 - Row triggers never fire on TRUNCATE either: a TRUNCATE of a clocked table moves no counter, so every open window keeps the rows it showed. **Never TRUNCATE a clocked table; delete instead.** Census (e) flags one in code or in a migration after 696 [V, #2244].
@@ -319,7 +370,7 @@ end $post$;
 - A transaction-local GUC dedupes the bump. It is correct because windows compare only for inequality. The string grows about 45 B per (family, account) bumped and `strpos` scans it once per row, so a bulk write costs O(rows × accounts it touches): a 10⁴-row heal of one account's curation is O(rows), never O(rows²) on one hot counter row. So there is no sanctioned "disable the trigger" backfill recipe and census (e) stays strict. The entries are `<family>:<account>;`, found by `strpos`, so no family may be a suffix of another (census k).
 - Savepoint rollbacks are safe: deferred events queued in an aborted subtransaction are discarded [A: standard PG].
 
-**Decision 4: the bump is SECURITY DEFINER; the audience function is INVOKER.**
+**Decision 4: the bump is SECURITY DEFINER; the audience function is INVOKER** (until 709, F17: definer too, for its plan cost, filtering by `current_account_ids()` itself; see "After 708, F17" above).
 - `authenticated` has no write on the clock, hence definer.
 - The browser cannot forge `account_id` (curation WITH CHECK) or `recipient_account_id` (no browser INSERT on share tables) [V·r].
 - A trigger function needs EXECUTE only at CREATE [V·r 641].
@@ -641,7 +692,31 @@ def require_acting_account_id(conn: TenantConn, ...) -> uuid.UUID: ...
 ### 3.8 Cost model
 
 Formulas:
-- **Clock reads:** visible windows ÷ T × ~1.8 KB, at ~2.3 ms of DB each (`pipeline_stages_public` mean 2.28 ms over 2,426 calls) [V·r].
+- **Clock reads:** visible windows ÷ T × ~1.8 KB, at ~2.3 ms of DB each (`pipeline_stages_public` mean 2.28 ms over 2,426 calls) [V·r]. **Measured (F16, #2308):**
+  - Production, under 696's read: 4.9 ms mean over 1,266 calls, ~133 shared buffers a call (2026-11-01) [V]. Each read evaluated the audience four times (§ 3.2).
+  - Migration 708 evaluates it twice. Local lane database shaped like production (10 accounts, 1 edit share, 70 clock rows; median of 300 warm reads as `authenticated`, 2026-11-01): the share's recipient went from 1.15 ms and 25 buffers to 0.64 ms and 13 buffers, the owner from 1.04 ms and 21 buffers to 0.57 ms and 11 buffers. At that size both reads seq-scan the clock's one page [V, local].
+  - At 2,000 accounts × 7 families (14,070 clock rows), 708 keeps 696's index path: a bitmap probe of `curation_clock_pkey` per followed account, no seq scan. The recipient went from 1.34 ms and 30 buffers to 0.70 ms and 18 buffers, the owner from 0.59 ms and 13 buffers to 0.61 ms and 13 buffers (696's owner skipped two of its arms) [V, local].
+  - The rejected one-evaluation shape (708 as first built: no join in the view, `mine` from `current_account_ids()`) was the cheapest at the small size (0.51 ms, 8 buffers), but it seq-scans the clock: at 2,000 accounts 1.43 ms and 129 buffers for either caller, more than 696's read [V, local]. Hence the ruling (§ 3.2, § 12 F16).
+  - The production figure after the apply is owed to gate #2203: the same EXPLAIN, and a `pg_stat_statements` re-sample over ≥ 500 calls.
+- **Measured (F17, #2311):**
+  - Production, under 708 (2026-11-01): 2.63 ms mean and ~88 shared buffers over 25 reads [V]. In its EXPLAIN, the first audience call of each statement cost ~270 buffers and 2.7–6.6 ms, the second 9 buffers and ~1 ms [V].
+  - Locally the same pattern is the first read on a fresh backend: catalog warm-up, paid once per backend by whatever statement comes first. A warm backend pays none of it [V, local]. So a fresh-connection EXPLAIN always shows it, and the gate's measure is the PostgREST `pg_stat_statements` mean, a mix of warm reads and backends' first reads.
+  - Each shape of the audience, measured on a copy of the lane database as `authenticated`: a signed-in owner and an edit share's recipient. Each shape had its own copy of the clock (table, policy, view, function) in one database, and reads alternated across the shapes round by round. Warm is the median of 300 reads on one backend. First read is the median of 60, each on a new connection (2026-11-01) [V, local]. Owner / recipient, ms and buffers:
+
+    | shape | warm, 10 accounts | warm, 2,010 accounts | first read on a backend, 10 / 2,010 |
+    |---|---|---|---|
+    | 708 (sql, invoker) | 0.93 / 1.05 ms, 11 / 13 | 0.98 / 1.08 ms, 13 / 18 | 1.84–2.11 / 1.81–1.96 ms, ~310 |
+    | (a) plpgsql | 0.61 / 0.54 ms, 11 / 13 | 0.65 / 0.76 ms, 13 / 18 | 2.03–2.37 / 2.00–2.14 ms |
+    | (b) definer | 0.73 / 0.60 ms, 9 / 9 | 0.77 / 0.76 ms, 11 / 14 | 1.62–1.77 / 1.60–1.63 ms |
+    | (c) one call | 0.78 / 0.90 ms, 7 / 9 | 0.82 / 0.95 ms, 9 / 14 | 1.71–1.95 / 1.66–1.81 ms |
+    | a+c | 0.45 / 0.41 ms, 7 / 9 | 0.49 / 0.62 ms, 9 / 14 | 1.92–2.22 / 1.90–2.04 ms |
+    | b+c | 0.60 / 0.48 ms, 5 / 5 | 0.64 / 0.62 ms, 7 / 10 | 1.48–1.60 / 1.43–1.48 ms |
+    | **a+b+c (709)** | **0.32 / 0.27 ms, 5 / 5** | **0.35 / 0.32 ms, 7 / 10** | 1.72–1.89 / 1.69–1.73 ms |
+
+  - Every shape probes `curation_clock_pkey` at 2,010 accounts, keeps two audience evaluations, and returns the same rows. A first read costs ~300 execution and ~320–350 planning buffers in every shape. A backend that has already served another tenant read (`pipeline_stages_public`) first reads the clock at 35–53 buffers, 0.78–1.62 ms.
+  - 709 takes `current_account_ids()` from 8–10 calls per read to 2, one per evaluation (`pg_stat_get_xact_function_calls`). The live lane pins that count, which is what tells 709's shape from 708's, and shows it failing on 696's function put back. Its ≤ 40-buffer bound is the ticket's ceiling, not a line between the shapes: on the lane's vacuumed clock 709's warm read is ~7 buffers and 708's ~20, both under it. It catches a read that scans a full clock (2,000 accounts × 7 families with index scans off), and on a lane database reused across runs the dead rows of earlier cases' rollbacks alone took 709's lane-size read to 40, so the case vacuums the clock first.
+  - Why a+b+c and not b+c: b+c is the cheapest first read (by ~0.25 ms), and a+b+c the cheapest warm read (by ~0.25 ms). Production's ~88-buffer mean puts about a quarter of reads on a backend's first read [A: (88 − 13) / (310 − 13) ≈ 0.25], so a+b+c has the lower expected mean unless more than half the reads are first reads. Why not the invoker a+c: see § 3.2 F17, the trade.
+  - The production figure after the apply is owed to gate #2203: a `pg_stat_statements` re-sample of the PostgREST read over ≥ 100 calls (ticket: mean ≤ 2.0 ms, ≤ 40 buffers). No function shape moves the first-read share of that mean: if a quarter of reads still land on a backend's first read, ≤ 40 buffers is out of reach of any shape; that part is connection lifetime, not SQL. **So the ticket's ≤ 40-buffer acceptance is predicted to fail in production** [A: 0.75 × ~7 + 0.25 × ~300 ≈ 80]; it needs the operator's ruling (accept the warm-read pin, or open F18) before #2311 is closed on it.
 - **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets, the lens lists and aggregates of every mounted Browse cohort included (ruling Q3(c), W6; under Q3(a), W1–W4, they waited for the next mount). A list under a hand pays once, at the leave. Coalesced per answer per window. The self-echo is included.
 
 | Scenario | Clock reads | Fan-out |
@@ -1039,9 +1114,9 @@ Each wave is one PR, with a draft PR opened early.
     - with `request.headers` `x-act-as` (valid owner, foreign owner, garbage) each caller sees own rows only and no error;
     - `curation_clock_audience()` returns only own accounts and share owners;
     - anon is denied.
-11. `EXPLAIN (format json)` of the read as a tenant uses `curation_clock_pkey`, with no seq scan on the clock.
+11. `EXPLAIN (format json)` of the read as a tenant uses `curation_clock_pkey`, with no seq scan on the clock. **Since 708 (F16):** analyzed, the read shows exactly two `curation_clock_audience` Function Scans, each run once (the policy's and the view's join), at the lane's size and at 2,000 accounts; the small read maps `mine` right for own rows and an edit share's rows. 708's `$post$` refuses the clock with row security off and the view without its join on the audience. **Since 709 (F17):** a read on a warm backend calls `current_account_ids()` twice, once per evaluation, and reads ≤ 40 shared buffers (a ceiling, not a line between 708 and 709), at both sizes, for the owner and an edit share's recipient; on that same backend the edit recipient, the read recipient and the edit recipient with `x-act-as` read exactly their own rows. Bite: 696's function put back makes more calls; a read that scans a full clock (2,000 × 7, index scans off) breaks the ceiling. 709's `$post$` refuses the audience back as invoker, a definer body that follows while acting, neutralises that filter or drops its `not in`, and an owner held by `pipeline_shares`' row policy.
 12. The `board_bumps` SQL returns 0 after scripted card writes.
-13. Catalog: 12 enabled deferred triggers; definer bump; invoker audience; no browser or service-role DML on the clock; view `security_invoker`; seed complete.
+13. Catalog: 12 enabled deferred triggers; definer bump; audience definer plpgsql on `search_path = ''`, ROWS 4 (709; invoker until then), its body naming no admin-only relation; no browser or service-role DML on the clock; view `security_invoker`; seed complete.
 
 **Manual recipe** (operator, production, own data):
 1. Two windows on `/pipeline`; move a card in B → A follows in ≈ 0.5 s.
@@ -1113,6 +1188,9 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 - **F13** A "moved elsewhere" cue.
 - **F14** An open property merged away elsewhere follows its survivor: re-read the open property when an own curation family moves.
 - **F15** The self-echo re-reads no list: each committed local write reports the families it bumped, and the owner skips the lens list targets of a family whose counter moved by no more than this window's own writes since the last answer (§ 3.8). Until then a triage run refetches the list at its echoes (≤ one per clock answer, on the phone about every 15 s).
+- **F16** (built, #2308, migration 708): the clock read evaluates its audience twice, not four times; the view's join keeps `curation_clock_pkey` at scale (ruling 2026-11-01; § 3.2, § 3.8, § 12).
+- **F17** (built, #2311, migration 709): the audience is plpgsql (planned once per backend), definer (no `pipeline_shares` policy per call) and calls `current_account_ids()` once; a warm read 0.27–0.35 ms against 708's 0.93–1.08 locally (§ 3.2, § 3.8, § 12). Its acceptance is half met by construction: the ≤ 2.0 ms mean is expected, the ≤ 40 buffers per read is predicted to fail while about a quarter of reads land on a backend's first read (§ 3.8). Ruling owed.
+- **F18** (candidate, on that ruling): connection lifetime. A backend's first read pays ~300 buffers of catalog warm-up whatever the SQL; fewer fresh backends is the only lever on that share of the mean. To check first: how long production's PostgREST keeps an idle pool connection (`db-pool-max-idletime`; PostgREST's default is 30 s, Supabase's setting is unverified; a short idle close could explain a quarter of reads landing on fresh backends) and what a longer one costs in held connections.
 
 (F6 became W0.)
 
@@ -1311,3 +1389,50 @@ Where a wave built something other than the design, the section concerned now sa
    - The Feed's Skryté roll follows a hide and a restore made elsewhere (item 6's gap closed): `lensTargets` owes `browseKeys.cohortCards(FEED_HIDDEN_FILTERS)` as a list for the dismissed lens; the roll's key moved to `lib/feed` (`feedHiddenKey`).
    - Stated, not changed: the self-echo's list refetch during a triage run (§ 3.8; F15; the operator's call), the page scrollbar as a leave (Decision 7b, the release), parks in risk 14. `useListHold` hashes its keys without a cast.
    - Tests: `lib/useListHold.test.tsx` 12 (the two keyboard cases replaced by two that fail on the code as first built; +2 `useHeld`), `lib/curationSync.test.ts` 53 (the dismissal case also pins the Skryté roll), `pages/CollectionDetail.test.tsx` 41 (+3, the W6 case rewritten), `pages/phone/PhoneCollectionDetail.test.tsx` +1, `pages/Feed.test.tsx` +1; each new or rewritten case fails on the code as first built. Full vitest 4437 [V].
+
+**F16 (#2308), as built** (follow-up found while re-baselining gate #2203 after W6; branch `fix/curation-clock-read-one-audience` off `93cb1358e`):
+1. `migrations/708_curation_clock_read_one_audience.sql`. The number was claimed: 702 and 703 are on main from other sessions, and 704 and 705 sit in open PRs. The policy is as § 3.2 shows; the view is 696's, untouched.
+   - It uses `ALTER POLICY`, not the house's drop + create. Under statement autocommit that gap would answer every clock read empty, and each open window would read all its rows as gone.
+   - It grants nothing and replaces no view, so 701's grants stand (the view `authenticated=r`; the table `authenticated=r`, `service_role=r`). `$post$` checks them.
+   - Applied twice by `psql -f` to a copy of the pre-708 schema: the policy changed once, the view's definition and both ACLs not at all [V, local].
+   - `$post$` requires row security on `curation_clock`: the view's join keeps the read to the followed accounts, and only the policy keeps a share to its families. `test_708s_post_refuses_a_clock_without_row_security_or_without_the_views_join` runs the block on the lane's schema, then with row security off, then with the view rewritten without its join; each must raise [V, local].
+2. The audience function is unchanged. Inlining was never the cause: the ticket read the view's audience as inlined, but `proconfig` (`search_path=""`) keeps the planner from inlining it, and every plan shows a Function Scan on it.
+   - Why the view's evaluation cost 2.7 ms and 275 buffers in the production EXPLAIN, against ~0.8 ms for each policy arm, is not established. Locally all four cost about the same (0.25–0.34 ms, 5–6 buffers each). One evaluation (0.33 ms) is the sum of its parts: three `current_account_ids()` calls in its body (~0.06 ms each) and the `pipeline_shares` read under its policy (0.14 ms, two more calls) [V, local].
+3. **Ruling 2026-11-01 (the operator): two evaluations, the primary key kept.** The ticket asked for one evaluation and for `curation_clock_pkey` to stay in use; both cannot hold. PostgreSQL turns a policy's subquery into a SubPlan and never pulls it up into a join, so one evaluation in the policy cannot drive an index, and the view's join that can is a second evaluation.
+   - As first built, 708 also rewrote the view without its join (`mine` from `current_account_ids()`, one evaluation), and the 2,000-account test pinned one pass over the clock instead of the key. Measured, that shape seq-scans the clock: at 2,000 accounts 1.43 ms and 129 buffers, more than 696's read (§ 3.8).
+   - The operator kept the index at scale: 708 rewrites the policy only, and the 2,000-account test asserts `curation_clock_pkey` again (§ 3.8: 0.70 ms and 18 buffers at that size, against 696's 1.34 ms and 30) [V, local].
+4. `tests/test_curation_sync_census.py` (i): `policy_arms` reads the one pair lookup. It requires a single `curation_clock_audience()` call and no `*_account_ids` in the policy, then reads the families per caller kind off the CASE in order. The checks became: own = every clocked table, read share = 641's board, edit share = board + 641's edit tables, no share follows `shares`. It reads the policy only, so the view's join (the read's second audience call) passes. Its bite cases were rewritten for the new text, plus four new ones: an arm on neither flag, the edit arm ahead of own, a bypass through `current_account_ids()`, and a second audience call. Rail (h) needed no change (DDL is no write).
+5. `tests/test_curation_clock_live.py`: new `test_one_clock_read_evaluates_the_audience_twice_and_maps_mine` (exactly two audience Function Scans in the analyzed plan, `Actual Loops` 1 each; `mine` true on the edit recipient's own rows and false on the owner's six). 696's 2,000-account test is now `test_the_clock_read_probes_the_primary_key_at_scale`: `curation_clock_pkey`, no seq scan on the clock, two audience scans each run once. New `test_708s_post_refuses_a_clock_without_row_security_or_without_the_views_join` (item 1). The audience cases (items 7–10) are unchanged.
+6. Docs: § 3.2 (708's policy, the view kept, the ruling), § 3.8 (measured before and after at both sizes, and the rejected shape), § 9 item 11, § 11 F16; `references/tenancy.md` § Curation clock (two evaluations, why not one); `docs/architecture.md` rule 18's clock paragraph.
+7. Owed: apply 708 through `apply_migration.yml` before the merge. After the apply, run the same EXPLAIN in production and re-sample `pg_stat_statements` about an hour later (gate #2203's line: ≤ 2.5 ms over ≥ 500 calls). The before and after numbers go on gate #2203.
+
+**F17 (#2311), as built** (follow-up to F16; branch `fix/curation-clock-audience-plan` off F16's `1c0cd39f3`, which holds 708):
+1. Measured first (§ 3.8). Seven shapes of the audience on copies of the lane database at 10 and 2,010 accounts: 708's, (a) plpgsql, (b) definer, (c) one `current_account_ids()` call, and each combination. Each was read as a signed-in owner and as an edit share's recipient, interleaved, warm (300 reads per backend) and as a backend's first read (60 new connections). Three findings:
+   - F16 item 2's open question is answered. The "first audience call ~270 buffers, second 9" pattern of production's EXPLAIN is catalog warm-up on a backend's first read. A fresh connection reproduces it locally (~295 buffers, then 5), and every shape pays it.
+   - Warm, planning dominates an evaluation: the SQL body is planned at every call, and so is each of its five `current_account_ids()` calls.
+   - a+b+c is the cheapest warm read at both sizes (0.27–0.35 ms against 708's 0.93–1.08), and its first read is no worse than 708's.
+2. `migrations/709_curation_clock_audience_plan.sql`. The number was claimed: main ends at 706, 705 and 708 sit in open PRs, and 707 is claimed elsewhere.
+   - One CREATE OR REPLACE of the audience, as § 3.2 shows. It keeps the OID, owner and ACL, so 708's policy and 696's view stand untouched.
+   - The grants are re-asserted without a gap: revoked from public, anon and service_role, granted to `authenticated`, never revoked from it.
+   - `$post$` asserts as § 3.2 lists. Applied twice by `psql -f` to a copy of the 708 schema: idempotent, `$post$` green both times [V, local].
+3. The trade, by the ticket's rule (least privilege unless the definer carries the win): the invoker a+c halves the warm read but makes a backend's first read ~0.2 ms slower than 708's. The definer takes a further ~0.1–0.25 ms off every read and is what wins the first read back. So 709 is definer, its rows proven equal by the live lane's audience cases. The rails are census (i)'s definer clause, the UNGATED `reachable` entry (`tests/_admin_gate_registry.py`, the pinned live allowlist in `tests/test_migration_rls_grants.py`) and `$post$`'s owner-bypass and no-identity checks.
+4. `tests/test_curation_sync_census.py` (i) reads the audience's LAST definition (`_audience_migration`: 709's, no longer 696's). A definer body must keep `s.recipient_account_id in (select …)` and `not public.acting()`. A new bite case covers that: either filter dropped fires, and the invoker form passes. Rails (e) and (h) needed no change: (e) matches only a redefinition of `bump_curation_clock()`, and (h) reads DML, not DDL.
+5. `tests/test_curation_clock_live.py`:
+   - New `test_a_warm_clock_read_calls_current_account_ids_once_per_evaluation_within_40_buffers`. At the lane's size and at 2,000 accounts, for the owner and the edit recipient, a read on a backend that has served three reads calls the audience, `current_account_ids()` and `acting()` twice each (`pg_stat_get_xact_function_calls` under `track_functions = 'all'`; 708's read made 8–10 `current_account_ids()` calls) and reads ≤ 40 shared buffers, planning included.
+   - New `test_709s_post_refuses_an_invoker_audience_one_following_while_acting_and_a_policy_bound_owner`: `$pre$` and `$post$` pass on the lane, `$post$` refuses the two broken bodies, and both refuse an owner moved to `anon`.
+   - `test_708s_post_…` now runs 708's `$post$` on the schema as 708 left it: 696's invoker audience is restored inside its rolled-back transaction, because 709's definer is what 708's `$post$` refuses.
+   - The catalog test asserts the audience definer, plpgsql, `search_path = ''`, ROWS 4.
+   - The two-evaluation, primary-key and audience-semantics cases are unchanged.
+6. Docs: § 3.2 (the function as built, why it cost what it did, the trade; Decision 4's note), § 3.8 (production under 708; every shape at both sizes), § 9 items 11 and 13, § 11 F17. Outside the charter: `references/tenancy.md` § Curation clock (the cost rule) and `docs/architecture.md` rule 18's clock paragraph.
+7. Owed:
+   - Apply 709 through `apply_migration.yml` before the merge.
+   - After the apply, re-sample the PostgREST read in `pg_stat_statements` over ≥ 100 calls (the ticket's acceptance: mean ≤ 2.0 ms, ≤ 40 buffers) and comment the before and after on gate #2203.
+   - A fresh-connection EXPLAIN will still show the first call's warm-up. Read the gate on the pooled mean, not on that EXPLAIN.
+   - The operator's ruling on the ≤ 40-buffer half of the acceptance, predicted to fail on first reads (§ 3.8, § 11 F17/F18). It goes in the PR body and on gate #2203.
+8. Adversarial review repairs (fix-first, six findings, each repaired here):
+   - The ≤ 40-buffer bound passed on 708's shape (~20 on the lane, 11–18 in § 3.8). Kept as the ticket's ceiling and called that; the call count is the shape's pin. New `test_the_warm_read_rail_bites_on_708s_audience_and_on_a_read_that_scans_a_full_clock`: 696's function put back under a savepoint makes more than two `current_account_ids()` calls; a read that scans 2,000 × 7 clock rows (index scans off) reads more than 40. Found while measuring: on a lane database reused across runs, the dead rows of earlier cases' rollbacks alone took 709's lane-size read to exactly 40 (7 once vacuumed), so the warm case vacuums the clock first and the bite vacuums its 14,000 rows after.
+   - No case read rows on a backend whose cached plan another identity prepared. The warm case now does, on one backend: owner, edit recipient, read recipient, edit recipient with `x-act-as` (own rows only), at both sizes. Shown to bite on a body without `not public.acting()` (the `x-act-as` caller then followed the owner).
+   - `references/tenancy.md` still credited `pipeline_shares_party` with hiding share rows from an `x-act-as` read; the definer body's own `not public.acting()` does it since 709.
+   - The registry entry stays (the ticket asked for it); its reason now says its live-sweep waiver is incidental, and the catalog case asserts the body names no admin-only relation, the sweep's own test. Whether to keep the entry at all is raised with the operator.
+   - Census (i) and `$post$` matched substrings, so `(not public.acting() or true)` or a dropped `s.account_id not in (…)` passed both. Both now hold the `me` CTE and the whole WHERE verbatim (`DEFINER_AUDIENCE_FILTERS`; `$post$` on the whitespace-normalised source); bite cases for both forms in the census and the live `$post$` test; the census header names what lies outside those strings as its blind spot.
+   - The ≤ 40-buffer acceptance is out of reach while a quarter of reads are first reads: § 3.8 and § 11 now say so, with candidate F18 (connection lifetime); the ruling is owed (item 7).
