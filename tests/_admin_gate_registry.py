@@ -181,6 +181,13 @@ UNGATED: dict[str, Ungated] = {
         "The operator's listing page says when we last looked there. SECURITY DEFINER and narrow: a point in, four "
         "facts about the one municipality containing it out; never a cell list, a bbox, `error` or `pages`, so it "
         "cannot be walked to enumerate which towns are being worked."),
+    "curation_clock_audience": Ungated(
+        "function", "reachable", ("709_curation_clock_audience_plan.sql",),
+        "Reads no admin-only relation: registered as a SECURITY DEFINER function the browser may call "
+        "(/rpc/curation_clock_audience). Definer only so a clock read skips pipeline_shares' row policy (F17, #2311). "
+        "It filters by current_account_ids() itself: own accounts, the owners whose share names one of them as "
+        "recipient, none while acting; so it returns the invoker body's rows (tests/test_curation_clock_live.py, "
+        "census i in tests/test_curation_sync_census.py)."),
     "images_public": Ungated(
         "view", "reachable", ("591_images_public_tag_head_scores.sql", "686_drop_render_score.sql"),
         "Every signed-in Browse card's cover is chosen by the active tag model's scores (operator ruling "

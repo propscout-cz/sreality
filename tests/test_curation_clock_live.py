@@ -610,20 +610,35 @@ def test_the_clock_read_probes_the_primary_key_at_scale(world: _World) -> None:
     assert accounts == {a, c}, accounts
 
 
+def _post(migration: str, tag: str = "post") -> str:
+    sql = (MIGRATIONS / migration).read_text(encoding="utf-8")
+    m = re.search(rf"^do \${tag}\$.*?^end \${tag}\$;", sql, re.DOTALL | re.MULTILINE)
+    assert m, f"{migration} lost its ${tag}$ block"
+    return m.group(0)
+
+
 def _post_708() -> str:
-    sql = (MIGRATIONS / "708_curation_clock_read_one_audience.sql").read_text(encoding="utf-8")
-    m = re.search(r"^do \$post\$.*?^end \$post\$;", sql, re.DOTALL | re.MULTILINE)
-    assert m, "708 lost its $post$ block"
+    return _post("708_curation_clock_read_one_audience.sql")
+
+
+def _audience_of(migration: str) -> str:
+    """The CREATE OR REPLACE of curation_clock_audience() in `migration`, as written there."""
+    sql = (MIGRATIONS / migration).read_text(encoding="utf-8")
+    m = re.search(r"^create or replace function public\.curation_clock_audience\(\).*?\$\$;", sql,
+                  re.DOTALL | re.MULTILINE)
+    assert m, f"{migration} lost its audience"
     return m.group(0)
 
 
 def test_708s_post_refuses_a_clock_without_row_security_or_without_the_views_join() -> None:
-    """708's $post$ passes on the lane's schema. It refuses the clock with row security off (the view's join keeps the
-    accounts, the policy alone a share's families) and the view rewritten without its join on the audience (708 as
+    """708's $post$ passes on the schema as 708 left it: the lane's, with 696's invoker audience back (709 made it
+    definer, which 708's $post$ refuses by design). It refuses the clock with row security off (the view's join keeps
+    the accounts, the policy alone a share's families) and the view rewritten without its join on the audience (708 as
     first built: the join is what keeps curation_clock_pkey at scale)."""
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
+            cur.execute(_audience_of("696_curation_clock.sql"))
             cur.execute(_post_708())
             cur.execute("SAVEPOINT bite")
             cur.execute("ALTER TABLE public.curation_clock DISABLE ROW LEVEL SECURITY")
@@ -637,6 +652,93 @@ def test_708s_post_refuses_a_clock_without_row_security_or_without_the_views_joi
                         "AS age_ms FROM public.curation_clock c")
             with pytest.raises(psycopg.errors.RaiseException, match="joins the audience once"):
                 cur.execute(_post_708())
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+# --- 11b. the audience is planned once per backend and calls current_account_ids() once (709, F17 #2311) ---------
+
+_AUDIENCE_709 = "709_curation_clock_audience_plan.sql"
+_CALLS = ("SELECT p.proname, pg_stat_get_xact_function_calls(p.oid) FROM pg_proc p "
+          "WHERE p.pronamespace = 'public'::regnamespace "
+          "AND p.proname IN ('curation_clock_audience', 'current_account_ids', 'acting')")
+
+
+def _warm_read(cur: psycopg.Cursor[Any]) -> tuple[int, dict[str, int]]:
+    """One read on a backend that has served three before it, under track_functions = 'all': (its shared buffers,
+    planning included; how often it called the audience, current_account_ids() and acting())."""
+    for _ in range(3):
+        cur.execute(_READ)
+        cur.fetchall()
+    cur.execute(_CALLS)
+    before = {name: int(n or 0) for name, n in cur.fetchall()}
+    cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_READ}")
+    out = cur.fetchone()[0]
+    doc = (json.loads(out) if isinstance(out, str) else out)[0]
+    cur.execute(_CALLS)
+    calls = {name: int(n or 0) - before.get(name, 0) for name, n in cur.fetchall()}
+    blocks = sum(part.get(f"Shared {kind} Blocks", 0) for part in (doc["Plan"], doc.get("Planning", {}))
+                 for kind in ("Hit", "Read"))
+    return blocks, calls
+
+
+def test_a_warm_clock_read_calls_current_account_ids_once_per_evaluation_within_40_buffers(world: _World) -> None:
+    """708's SQL audience was planned at every call and ran current_account_ids() five times per evaluation (three in
+    its body, two in pipeline_shares' policy): 2.63 ms mean in production against gate #2203's 2.5 ms. 709's is
+    plpgsql (planned once per backend), definer (no pipeline_shares policy) and calls it once, in a CTE: a read on a
+    warm backend calls it twice, once per evaluation, and reads at most 40 shared buffers, at the lane's size and at
+    2,000 accounts, for the owner and the edit share's recipient (charter § 3.8, § 12 F17)."""
+    seen: dict[tuple[str, str], tuple[int, dict[str, int]]] = {}
+    conn = psycopg.connect(db_url())
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL track_functions = 'all'")
+            for size in ("lane", "2,000 accounts"):
+                if size != "lane":
+                    cur.execute("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-warm-' || g "
+                                "FROM generate_series(1, 2000) g RETURNING id) "
+                                "INSERT INTO tags (account_id, name, color) SELECT id, 'warm', 'slate' FROM made")
+                    cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                    cur.execute("ANALYZE curation_clock")
+                for who, caller in (("owner", world.a), ("edit recipient", world.c)):
+                    with scoped(caller.user, cur=cur):
+                        seen[(size, who)] = _warm_read(cur)
+    finally:
+        conn.rollback()
+        conn.close()
+    assert len(seen) == 4, seen
+    for key, (blocks, calls) in seen.items():
+        assert blocks <= 40, f"{key}: a warm read read {blocks} shared buffers"
+        assert calls == {"curation_clock_audience": 2, "current_account_ids": 2, "acting": 2}, (key, calls)
+
+
+def test_709s_post_refuses_an_invoker_audience_one_following_while_acting_and_a_policy_bound_owner() -> None:
+    """709's $pre$ and $post$ pass on the lane's schema. $post$ refuses the audience back as invoker and a definer body
+    that no longer hides share rows while acting (pipeline_shares' policy did that for the invoker); both refuse an
+    owner that neither owns pipeline_shares nor bypasses row security, under whom a recipient would follow nobody."""
+    fn = _audience_of(_AUDIENCE_709)
+    conn = psycopg.connect(db_url())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_post(_AUDIENCE_709, "pre"))
+            cur.execute(_post(_AUDIENCE_709))
+            for broken, match in (
+                (fn.replace("stable security definer", "stable"), "is plpgsql, stable, definer"),
+                (fn.replace("\n     and not public.acting()", ""), "hides share rows while acting"),
+            ):
+                assert broken != fn, match
+                cur.execute("SAVEPOINT bite")
+                cur.execute(broken)
+                with pytest.raises(psycopg.errors.RaiseException, match=match):
+                    cur.execute(_post(_AUDIENCE_709))
+                cur.execute("ROLLBACK TO SAVEPOINT bite")
+            cur.execute("ALTER FUNCTION public.curation_clock_audience() OWNER TO anon")
+            for tag in ("pre", "post"):
+                cur.execute("SAVEPOINT bite")
+                with pytest.raises(psycopg.errors.RaiseException, match="held by pipeline_shares"):
+                    cur.execute(_post(_AUDIENCE_709, tag))
+                cur.execute("ROLLBACK TO SAVEPOINT bite")
     finally:
         conn.rollback()
         conn.close()
@@ -682,6 +784,9 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
         cur.execute("SELECT p.proname, p.prosecdef, p.proconfig FROM pg_proc p WHERE p.pronamespace = 'public'::"
                     "regnamespace AND p.proname IN ('bump_curation_clock', 'curation_clock_audience')")
         procs = {name: (definer, config) for name, definer, config in cur.fetchall()}
+        cur.execute("SELECT l.lanname, p.prorows FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang "
+                    "WHERE p.oid = 'public.curation_clock_audience()'::regprocedure")
+        audience = cur.fetchone()
         cur.execute("SELECT rel, r, p, has_table_privilege(r, 'public.' || rel, p) "
                     "FROM unnest(array['curation_clock', 'curation_clock_public']) rel, "
                     "unnest(array['anon', 'authenticated', 'service_role']) r, "
@@ -698,7 +803,8 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
     assert {(rel, name) for rel, name, _ in triggers} == {(t, f"{t}_curation_clock") for t in CLOCKED_TABLES}
     assert {rel: d.split("bump_curation_clock('")[1].split("'")[0] for rel, _n, d in triggers} == CLOCKED_TABLES
     assert procs["bump_curation_clock"] == (True, ['search_path=""']), "the bump is definer on a fixed path"
-    assert procs["curation_clock_audience"][0] is False, "the audience is invoker"
+    assert procs["curation_clock_audience"] == (True, ['search_path=""']), "the audience is definer on a fixed path"
+    assert audience == ("plpgsql", 4), "the audience is plpgsql, planned once per backend, ROWS 4 (709)"
     assert {(rel, r, p) for rel, r, p in held if p != "SELECT"} == set(), (
         "nobody but bump_curation_clock() writes the clock or its view")
     assert {(rel, r) for rel, r, p in held if p == "SELECT"} == {
