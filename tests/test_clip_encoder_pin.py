@@ -23,18 +23,7 @@ from tests._railway_iac import iac_entry, iac_text
 _ROOT = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 
-# Loaders that legitimately do NOT pin, with the reason. Kept as an explicit map so
-# adding a file here is a deliberate, reviewed act rather than a silent exemption.
-_UNPINNED_ALLOWED = {
-    # Secondary proposal tagger. Its checkpoint is operator-chosen at runtime
-    # (`labeling_secondary_model`, toolkit/dedup_sim_settings.py), so there is no
-    # file to pin it in — and it writes label PROPOSALS, never a row of
-    # image_clip_embeddings, so it cannot contaminate the vector corpus.
-    "scraper/label_proposal_tagger.py",
-}
-
-_TAGGING_WORKFLOWS = ("label_proposal_backfill.yml",)
-# The runner image is the other installer: built by Railway and by its CI check, never by a pip step (#2032).
+# The runner image is the one installer: built by Railway and by its CI check, never by a pip step (#2032).
 _IMAGE_WORKFLOWS = ("runner_image.yml",)
 _PIP_CLIP = re.compile(r"\.\[[\w,]*\bclip\b[\w,]*\]")
 _EXTRAS_CLIP = re.compile(r"EXTRAS=[\w,]*\bclip\b")
@@ -57,27 +46,20 @@ def test_every_embedding_loader_pins_a_revision():
         tree = ast.parse(path.read_text())
         for call in _from_pretrained_calls(tree):
             pinned = any(kw.arg == "revision" for kw in call.keywords)
-            if pinned or rel in _UNPINNED_ALLOWED:
+            if pinned:
                 continue
             offenders.append(f"{rel}:{call.lineno}")
     assert not offenders, (
         "from_pretrained() without revision= at "
         + ", ".join(offenders)
         + " — an unpinned checkpoint silently changes every vector it writes. "
-          "Pin it, or add the file to _UNPINNED_ALLOWED with the reason it writes "
-          "no rows to image_clip_embeddings."
+          "Pin it."
     )
-
-
-def test_allowlisted_files_still_exist():
-    # An allowlist entry for a deleted/renamed file is a hole that looks like a rule.
-    for rel in _UNPINNED_ALLOWED:
-        assert (_ROOT / rel).exists(), f"_UNPINNED_ALLOWED names a missing file: {rel}"
 
 
 def test_clip_extra_bounds_transformers():
     # The revision pin fixes the WEIGHTS; this bounds the LIBRARY, so a major release
-    # cannot change the from_pretrained/CLIPModel API under the tagging workflows.
+    # cannot change the from_pretrained/CLIPModel API under the tagging job.
     spec = tomllib.loads((_ROOT / "pyproject.toml").read_text())
     deps = spec["project"]["optional-dependencies"]["clip"]
     transformers = [d for d in deps if d.startswith("transformers")]
@@ -105,10 +87,10 @@ def test_the_clip_extra_has_exactly_its_known_installers():
     # Each installer resolves the clip stack on its own: a new one widens the pin's blast radius, so this file's
     # assumptions need re-checking before it lands.
     workflows = {p.name: p.read_text() for p in sorted(_WORKFLOWS.glob("*.yml"))}
-    assert clip_installers(workflows) == (set(_TAGGING_WORKFLOWS), set(_IMAGE_WORKFLOWS))
+    assert clip_installers(workflows) == (set(), set(_IMAGE_WORKFLOWS))
     assert iac_text().count(_RUNNER_EXTRAS) == 1 and _RUNNER_EXTRAS in iac_entry("jobRunner")
     stray = {**workflows, "stray.yml": 'steps:\n  - run: pip install -e ".[api,clip]"\n'}
-    assert clip_installers(stray)[0] == {*_TAGGING_WORKFLOWS, "stray.yml"}
+    assert clip_installers(stray)[0] == {"stray.yml"}
 
 
 def _calls_in_order(function: ast.FunctionDef) -> list[str]:

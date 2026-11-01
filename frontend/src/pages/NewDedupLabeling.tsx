@@ -1073,9 +1073,9 @@ export default function NewDedupLabeling() {
 
         {mode === 'proposals' ? (
           <>
-            {/* The pool the secondary-CLIP scores to make the suggestions below
-              * — a different pool from the per-tag candidate queues above, and
-              * it lives here because this is the only mode it feeds. */}
+            {/* The pool the retired secondary-CLIP scored to make the suggestions
+              * below — a different pool from the per-tag candidate queues above,
+              * and it lives here because this is the only mode it fed. */}
             <section className="mt-4 border border-[var(--color-rule)] rounded-[var(--radius-sm)] p-4">
               <span className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] mb-3">
                 Proposal pool
@@ -1118,15 +1118,14 @@ export default function NewDedupLabeling() {
               {lastGrow && (
                 <p className="mt-2.5 text-xs text-[var(--color-sage)]">
                   {lastGrow.added > 0
-                    ? `Added ${lastGrow.added} image${lastGrow.added === 1 ? '' : 's'} — dispatch the relabel workflow below to generate proposals for them.`
+                    ? `Added ${lastGrow.added} image${lastGrow.added === 1 ? '' : 's'}. Nothing scores them now, so they gain no proposals.`
                     : `No new images matched (requested ${lastGrow.requested}) — everything eligible is already in the sample.`}
                 </p>
               )}
 
               <p className="mt-2 text-xs text-[var(--color-ink-4)] leading-relaxed">
-                Adds newest not-yet-sampled images to the pool. Scoring runs separately via the
-                "NEW DEDUP — Labeling secondary-CLIP proposals" GitHub Actions workflow (model:{' '}
-                {secondaryModel ?? '…'}).
+                Adds newest not-yet-sampled images to the pool. The secondary-CLIP scorer (model:{' '}
+                {secondaryModel ?? '…'}) is retired; the proposals it wrote stay reviewable here.
               </p>
             </section>
 

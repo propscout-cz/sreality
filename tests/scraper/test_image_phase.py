@@ -607,7 +607,7 @@ def test_phash_or_none_swallows_dhash_failure(monkeypatch):
 
 def test_phash_failure_never_fails_the_store(monkeypatch):
     """Undecodable bytes store with phash NULL — the fetch still returns the
-    key with no error, and the hourly backfill remains the backstop."""
+    key with no error, and the images lane's retry remains the backstop."""
     import sys
 
     def compute(data):

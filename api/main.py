@@ -59,6 +59,7 @@ from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
+from api.routes.agent_runs import router as agent_runs_router
 from api.routes.billing import router as billing_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
@@ -81,6 +82,8 @@ from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
+from api.routes.waitlist import admin_router as waitlist_admin_router
+from api.routes.waitlist import router as waitlist_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -286,6 +289,10 @@ app.include_router(stats_dashboards_router)
 # /health) — an <img> tag can't send a bearer header and these are public
 # photos; the key regex keeps it scoped to listing images only.
 app.include_router(images_router)
+# /waitlist (+ /answer) — the propscout.cz landing page's signup form. Public by design: a visitor
+# from an ad has no account; honeypot + rate limit + strict checks, 303 back to the page (api/routes/waitlist.py).
+app.include_router(waitlist_router)
+app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sign-ups page
 # /properties/{id}/download.zip — the property page's download: a PDF of the ad plus the
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.
@@ -299,6 +306,9 @@ app.include_router(property_location_router)
 app.include_router(property_price_history_router)
 # /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
+# /runs* — start, list, read, read the steps of and cancel an agent run: the caller's own account, never acted for; reads
+# under RLS, writes through api/agents/executor.py on the service role (#2071).
+app.include_router(agent_runs_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and
 # cached a year (the URL carries the section version). JWT-gated; the overlay store is service-role only.

@@ -1,21 +1,32 @@
 /* The "Sign in" affordance is a destination, and the component's own comment
  * always called it a link — it was a <button> calling navigate('/login'). */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import AccountMenu from './AccountMenu';
+import { fetchAgentRunOptions } from '@/lib/api';
 import * as auth from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
 import { setScheme, setTheme } from '@/lib/theme';
 import { ThemeToggle } from '@/pages/Settings';
+
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
+  fetchAgentRunOptions: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
   useAuth: vi.fn(),
 }));
 
-function renderAs(user: unknown) {
+const REFUSED = { start: { allowed: false, reason: 'no' }, queue: null, agents: [], limit: null };
+const ALLOWED = { start: { allowed: true, reason: null }, queue: 'open' as const, agents: [], limit: { limit_usd: 10, spent_today_usd: 1 } };
+
+function renderAs(user: unknown, options: Awaited<ReturnType<typeof fetchAgentRunOptions>> = REFUSED) {
+  vi.mocked(fetchAgentRunOptions).mockResolvedValue(options);
   vi.mocked(auth.useAuth).mockReturnValue({
     user,
     loading: false,
@@ -24,9 +35,11 @@ function renderAs(user: unknown) {
     signOut: vi.fn(),
   } as unknown as ReturnType<typeof auth.useAuth>);
   return render(
-    <MemoryRouter>
-      <AccountMenu />
-    </MemoryRouter>,
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter>
+        <AccountMenu />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -40,6 +53,33 @@ describe('<AccountMenu>', () => {
   it('does not render Sign in as a button', () => {
     renderAs(null);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+  });
+});
+
+describe('<AccountMenu> agent limit', () => {
+  const openMenu = () => fireEvent.click(screen.getByRole('button', { name: 'a@example.cz' }));
+
+  it('offers no agent control to an account that cannot use agents', async () => {
+    renderAs({ email: 'a@example.cz' });
+    await waitFor(() => expect(fetchAgentRunOptions).toHaveBeenCalled());
+    openMenu();
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('menuitem', { name: 'Agent spending limit' })).toBeNull();
+  });
+
+  it('offers none while the answer is unknown', () => {
+    renderAs({ email: 'a@example.cz' }, ALLOWED);
+    openMenu();
+    expect(screen.queryByRole('menuitem', { name: 'Agent spending limit' })).toBeNull();
+  });
+
+  it('opens the limit from the menu for an account that may run agents', async () => {
+    renderAs({ email: 'a@example.cz' }, ALLOWED);
+    openMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Agent spending limit' }));
+    expect(await screen.findByRole('dialog', { name: 'Agent spending limit' })).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(await screen.findByRole('textbox', { name: /USD per day/ })).toHaveValue('10');
   });
 });
 

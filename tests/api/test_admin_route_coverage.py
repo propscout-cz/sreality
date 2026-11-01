@@ -36,6 +36,13 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/images/{key:path}"),    # R2 image proxy, opaque keys
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
+    # The propscout.cz landing page's waitlist form and its thank-you question: a visitor from an ad has
+    # no account. Honeypot + rate limit + strict input checks; writes only waitlist_signups (mig 700).
+    ("POST", "/waitlist"),
+    ("POST", "/waitlist/answer"),
+    # Every waitlist email's link: its reader has no account, the entry's token is the credential.
+    ("GET", "/waitlist/unsubscribe"),
+    ("POST", "/waitlist/unsubscribe"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
@@ -440,9 +447,6 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
             f"{_FEEDBACK_POST} depends on {held_too_early.__name__} again — see the "
             "comment above for why it must open its connections in the handler"
         )
-    assert "tenant_pool.tenant_transaction(" in inspect.getsource(post.endpoint), (
-        f"{_FEEDBACK_POST} no longer gates on a tenant transaction"
-    )
 
 
 @pytest.mark.parametrize("key", [

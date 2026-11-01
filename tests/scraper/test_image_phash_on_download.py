@@ -1,14 +1,14 @@
 """The photo fingerprint is taken at download time, from the bytes in hand.
 
 End-to-end over the REAL pieces (real Pillow, real `_phash_or_none`, real
-`_fetch_one_image`, the real `mark_image_stored` SQL and the real backstop
+`_fetch_one_image`, the real `mark_image_stored` SQL and the real retry
 selection), with only the network, R2 and Postgres faked:
 
-  1. the download-time hash is bit-identical to what the hourly backstop
-     (`scripts/compute_image_phash.py`) would compute for the same bytes;
+  1. the download-time hash is bit-identical to what the images lane's retry
+     (`scraper/image_phash.py`) would compute for the same bytes;
   2. it lands in the SAME `UPDATE images` that records `storage_path`;
   3. undecodable bytes still store — phash NULL, counted, warned once;
-  4. the backstop's selection skips a row hashed at download and picks up a miss.
+  4. the retry's selection skips a row hashed at download and picks up a miss.
 
 Only `images` is written; nothing here touches `listings` (rule #2).
 """
@@ -27,8 +27,12 @@ PIL_Image = pytest.importorskip("PIL.Image")
 
 from scraper import db as scraper_db  # noqa: E402
 from scraper import main as scraper_main  # noqa: E402
-from scraper.image_phash import compute_dhash, to_signed64  # noqa: E402
-from scripts.compute_image_phash import _SELECT_SQL, _hash_one  # noqa: E402
+from scraper.image_phash import (  # noqa: E402
+    _SELECT_UNHASHED_SQL,
+    _hash_one,
+    compute_dhash,
+    to_signed64,
+)
 
 URL = "https://www.bazos.cz/img/1/1/1.jpg"
 # Passes the magic-number gate as a JPEG but no decoder can open it.
@@ -45,7 +49,7 @@ def _jpeg_bytes(shade: int = 0) -> bytes:
 
 
 class _R2:
-    """Upload records the bytes; download serves them back (the backstop's read)."""
+    """Upload records the bytes; download serves them back (the retry's read)."""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -116,9 +120,9 @@ def _stores(conn: _RecordingConn) -> list[tuple[str, Any]]:
     return [(sql, p) for sql, p in conn.executed if sql.startswith("UPDATE images SET storage_path")]
 
 
-def test_download_time_hash_is_the_backstop_hash(monkeypatch) -> None:
+def test_download_time_hash_is_the_retry_hash(monkeypatch) -> None:
     """Same function, same bytes, same number: a row hashed at download is
-    indistinguishable from one the hourly job would have hashed."""
+    indistinguishable from one the retry would have hashed."""
     data = _jpeg_bytes()
     r2 = _R2()
     monkeypatch.setattr(scraper_main.image_storage, "download_image", lambda u, **kw: data)
@@ -127,10 +131,10 @@ def test_download_time_hash_is_the_backstop_hash(monkeypatch) -> None:
 
     assert err is None and dims == (48, 36)
     assert r2.objects[key] == data
-    backstop_id, backstop_hash, backstop_err = _hash_one(r2, 99, key)
-    assert (backstop_id, backstop_err) == (99, None)
+    retry_id, retry_hash, retry_err = _hash_one(r2, 99, key)
+    assert (retry_id, retry_err) == (99, None)
     assert phash is not None
-    assert phash == backstop_hash == to_signed64(compute_dhash(data))
+    assert phash == retry_hash == to_signed64(compute_dhash(data))
 
 
 def test_download_writes_the_hash_in_the_storage_path_update(monkeypatch) -> None:
@@ -179,21 +183,22 @@ def test_each_run_names_the_failure_again(monkeypatch, caplog) -> None:
     assert len(warned) == 2
 
 
-# ---- the backstop treats a download-time hash as done ----------------------
+# ---- the retry treats a download-time hash as done -------------------------
 
 
 def _sqlite_images() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.create_function("now", 0, lambda: "2026-09-24T12:00:00Z")
-    conn.execute("CREATE TABLE listings (sreality_id INTEGER PRIMARY KEY, is_active BOOLEAN)")
+    conn.execute("CREATE TABLE listings (id INTEGER PRIMARY KEY, is_active BOOLEAN)")
     conn.execute(
-        "CREATE TABLE images (id INTEGER PRIMARY KEY, sreality_id INTEGER, "
+        "CREATE TABLE images (id INTEGER PRIMARY KEY, listing_id INTEGER, "
         "storage_path TEXT, phash INTEGER, last_download_attempt_at TEXT, "
-        "download_attempts INTEGER NOT NULL DEFAULT 0)"
+        "download_attempts INTEGER NOT NULL DEFAULT 0, "
+        "phash_attempts INTEGER NOT NULL DEFAULT 0)"
     )
     conn.execute("INSERT INTO listings VALUES (1, TRUE)")
     conn.execute(
-        "INSERT INTO images (id, sreality_id) VALUES (10, 1), (11, 1), (12, 1)"
+        "INSERT INTO images (id, listing_id) VALUES (10, 1), (11, 1), (12, 1)"
     )
     return conn
 
@@ -204,17 +209,17 @@ def _store(conn: sqlite3.Connection, image_id: int, key: str, phash: int | None)
     conn.execute(sql, (key, phash, image_id))
 
 
-def _backstop_pending(conn: sqlite3.Connection) -> list[int]:
-    sql = _SELECT_SQL.replace("%(limit)s", ":limit")
+def _retry_pending(conn: sqlite3.Connection) -> list[int]:
+    sql = _SELECT_UNHASHED_SQL.replace("%(limit)s", ":limit")
     return [row[0] for row in conn.execute(sql, {"limit": 100})]
 
 
-def test_backstop_skips_rows_hashed_at_download() -> None:
+def test_retry_skips_rows_hashed_at_download() -> None:
     conn = _sqlite_images()
     _store(conn, 10, "500/0000.jpg", to_signed64(compute_dhash(_jpeg_bytes())))
-    _store(conn, 11, "501/0000.jpg", None)  # inline miss -> the backstop's work
-    # 12 is not downloaded yet: nothing to hash, not the backstop's either.
-    assert _backstop_pending(conn) == [11]
+    _store(conn, 11, "501/0000.jpg", None)  # inline miss -> the retry's work
+    # 12 is not downloaded yet: nothing to hash, not the retry's either.
+    assert _retry_pending(conn) == [11]
 
 
 def test_a_null_inline_hash_never_erases_an_existing_one() -> None:
@@ -222,4 +227,4 @@ def test_a_null_inline_hash_never_erases_an_existing_one() -> None:
     conn.execute("UPDATE images SET phash = -7 WHERE id = 10")
     _store(conn, 10, "500/0000.jpg", None)
     assert conn.execute("SELECT phash, download_attempts FROM images WHERE id = 10").fetchone() == (-7, 1)
-    assert 10 not in _backstop_pending(conn)
+    assert 10 not in _retry_pending(conn)

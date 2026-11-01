@@ -1,28 +1,28 @@
-/* The listing panel: what the side sheet shows for one portal ad and the flows
+/* The listing panel: what the side panel shows for one portal ad and the flows
  * behind it — the session check, the lookup, the price history, sign-in/out and
- * the add-to-database flow. The sheet's frame is sheet.ts; the header, the three
- * cards and the other states are their own modules, drawn from the one store
- * (curation, lists, writes) and this controller's state.
+ * the add-to-database flow. The page's frame is frame.ts; the header, the three
+ * cards and the other states are their own modules, drawn from the side panel's
+ * store (curation, lists, writes) and this controller's state.
  *
  * Guards: every panel open is a new epoch, and anything resuming after an `await`
  * applies only while its epoch is current — so listing A's lookup or history never
- * paints into listing B's sheet; the cards guard their own reads by property. */
+ * paints into listing B's panel; the cards guard their own reads by property. */
 
 import type { PortalRef } from '../../frontend/src/lib/portalIds';
-import { APP_BASE_URL, NOT_SIGNED_IN_DETAIL, friendlyDetail } from './config';
-import { failureKind } from './index_overlay';
+import { APP_BASE_URL, NOT_SIGNED_IN_DETAIL, failureKind, friendlyDetail } from './config';
+import { mountFrame } from './frame';
 import { isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
 import { POLL_INTERVAL_MS, POLL_MAX_ATTEMPTS, createAgents } from './panel_agents';
-import { header, tabMarks } from './panel_header';
+import { header } from './panel_header';
 import { createMine } from './panel_mine';
 import { adMove, priceCard, priceSeries, type HistoryView } from './panel_price';
-import { errorCard, notFoundCard, signedOutCard, skeleton } from './panel_states';
-import { mountSheet, type Sheet } from './sheet';
+import { emptyCard, errorCard, notFoundCard, signedOutCard, skeleton } from './panel_states';
 import { sleep, type Store } from './store';
 import type { AuthState, IngestState, PortalListing, PriceHistory } from './types';
 import type { PriceSeries } from '../../frontend/src/lib/priceHistory';
 
-type Phase = 'loading' | 'signed_out' | 'not_found' | 'active' | 'error';
+/* `empty`: the active tab shows no ad (not a listing, or no page of ours). */
+type Phase = 'loading' | 'empty' | 'signed_out' | 'not_found' | 'active' | 'error';
 
 interface PanelState {
   phase: Phase;
@@ -44,7 +44,7 @@ const initial = (): PanelState => ({
 });
 
 export function createPanel(store: Store) {
-  let sheet: Sheet | null = null;
+  const paintFrame = mountFrame();
   let state = initial();
   let epoch = 0;
   let ref: PortalRef | null = null;
@@ -56,13 +56,13 @@ export function createPanel(store: Store) {
   /* Derived once per history answer: the tracks and this ad's last move. */
   let series: PriceSeries[] | null = null;
 
-  const repaint = (): void => { if (sheet != null) paint(sheet); };
-  /* Only after the operator's own action in the sheet: focus is already inside it. */
+  const repaint = (): void => paint();
+  /* Only after the operator's own action in the panel. */
   const focus = (key: string): void => {
-    sheet?.shadow.querySelector<HTMLElement>(`[data-key="${key}"]`)?.focus();
+    document.querySelector<HTMLElement>(`[data-key="${key}"]`)?.focus();
   };
   const mine = createMine({ store, repaint, focus });
-  const agents = createAgents({ store, repaint, shadow: () => sheet?.shadow ?? null });
+  const agents = createAgents({ store, repaint, root: document });
 
   const set = (patch: Partial<PanelState>): void => {
     state = { ...state, ...patch };
@@ -70,7 +70,7 @@ export function createPanel(store: Store) {
   };
   const setIf = (at: number, patch: Partial<PanelState>): void => { if (at === epoch) set(patch); };
 
-  /* The property the sheet shows, if one we hold. */
+  /* The property the panel shows, if one we hold. */
   const shown = (): number | null => (state.listing?.found ? state.listing.property_id : null);
 
   /* The lookup row with its live curation from the store. */
@@ -90,6 +90,8 @@ export function createPanel(store: Store) {
     switch (state.phase) {
       case 'loading':
         return skeleton();
+      case 'empty':
+        return [emptyCard()];
       case 'signed_out':
         return [signedOutCard(state.signingIn, state.error, () => { void signIn(); })];
       case 'error': {
@@ -113,9 +115,9 @@ export function createPanel(store: Store) {
     }
   }
 
-  function paint(s: Sheet): void {
+  function paint(): void {
     const l = view();
-    s.paint({
+    paintFrame({
       appHref: l?.found && APP_BASE_URL
         // The app's natural-key route: lands on the property page with this ad open.
         ? `${APP_BASE_URL}/listing/${encodeURIComponent(l.source)}/${encodeURIComponent(l.source_id)}`
@@ -129,8 +131,6 @@ export function createPanel(store: Store) {
       },
       onSignOut: () => { void signOut(); },
       body,
-      tab: () => tabMarks(state.phase === 'active' ? l : null, l ? adMove(series, l.listing_id) : null,
-        store.list('stages').data),
     });
   }
 
@@ -160,31 +160,18 @@ export function createPanel(store: Store) {
     if (held?.property_id != null) void loadHistory(at);
   }
 
-  /* Opens (or re-opens) the sheet for one ad: the detail page's own, or a search
-   * card's (whose lookup row is handed over, and whose click unfolds the sheet). */
-  async function open(next: PortalRef, href: string, prefetched?: PortalListing | null): Promise<void> {
+  /* Shows (or re-reads) one ad: a detail page's own, or the search card last opened. */
+  async function open(next: PortalRef, href: string): Promise<void> {
     const at = ++epoch;
     ref = next;
     url = href;
     state = { ...initial(), email: state.email };
     series = null;
-    if (sheet == null || !sheet.connected()) {
-      // A portal that dropped the host leaves the old sheet's page listener behind: take it off.
-      sheet?.remove();
-      sheet = null;
-      const mounted = await mountSheet(repaint);
-      if (at !== epoch) {
-        mounted.remove();
-        return;
-      }
-      sheet = mounted;
-    }
-    if (prefetched !== undefined && sheet.folded()) sheet.setFolded(false);
     repaint();
 
     const auth = await store.call<AuthState>({ type: 'get_auth_state' });
     if (!auth.ok) {
-      // The background is unreachable (an extension reload orphaned this tab): say so.
+      // The background is unreachable: say so.
       setIf(at, { phase: 'error', error: auth.detail });
       return;
     }
@@ -194,26 +181,29 @@ export function createPanel(store: Store) {
     }
     setIf(at, { email: auth.data.email });
 
-    let listing: PortalListing | null;
-    if (prefetched !== undefined) {
-      listing = prefetched;
-    } else {
-      const res = await store.lookup([{ source: next.source, source_id: next.sourceId }]);
-      if (!res.ok) {
-        if (res.detail === NOT_SIGNED_IN_DETAIL) setIf(at, { phase: 'signed_out', email: null });
-        else setIf(at, { phase: 'error', error: res.detail });
-        return;
-      }
-      listing = res.data[0] ?? null;
+    const res = await store.lookup([{ source: next.source, source_id: next.sourceId }]);
+    if (!res.ok) {
+      if (res.detail === NOT_SIGNED_IN_DETAIL) setIf(at, { phase: 'signed_out', email: null });
+      else setIf(at, { phase: 'error', error: res.detail });
+      return;
     }
-    show(at, listing);
+    show(at, res.data[0] ?? null);
   }
 
-  /* The page left for one with no panel. */
-  function close(): void {
-    epoch++;
-    sheet?.remove();
-    sheet = null;
+  /* The active tab shows no ad: the empty card under the account menu, or the sign-in
+   * card — the panel opened from the toolbar is where a first sign-in happens. */
+  async function clear(): Promise<void> {
+    const at = ++epoch;
+    ref = null;
+    series = null;
+    mine.reset(null);
+    agents.reset(null);
+    // Known signed in: the empty card at once; else the session read decides.
+    set({ ...initial(), phase: state.email != null ? 'empty' : 'loading', email: state.email });
+    const auth = await store.call<AuthState>({ type: 'get_auth_state' });
+    if (!auth.ok) setIf(at, { phase: 'error', error: auth.detail });
+    else if (!auth.data.signedIn) setIf(at, { phase: 'signed_out', email: null });
+    else setIf(at, { phase: 'empty', email: auth.data.email });
   }
 
   async function ingest(): Promise<void> {
@@ -253,11 +243,15 @@ export function createPanel(store: Store) {
     if (!res.ok) set({ phase: 'error', error: friendlyDetail(res.detail) });
   }
 
-  /* The sheet belongs to the account that read it: after the store dropped what that
+  /* The panel belongs to the account that read it: after the store dropped what that
    * account read, it re-reads for the new one or prompts. */
   store.onAccountChange((user) => {
     ingestForbidden = false;
-    if (ref == null || sheet == null || !sheet.connected()) return;
+    if (ref == null) {
+      state = { ...state, email: null };
+      void clear();
+      return;
+    }
     if (user != null) {
       void open(ref, url);
       return;
@@ -267,5 +261,6 @@ export function createPanel(store: Store) {
     set({ ...initial(), phase: 'signed_out' });
   });
 
-  return { open, close };
+  repaint();
+  return { open, clear };
 }

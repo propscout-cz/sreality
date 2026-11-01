@@ -23,6 +23,7 @@ import {
   applyPrefilters,
   buildBrowseStatsArgs,
   fetchBrowseCount,
+  fetchCurationClock,
   fetchIsDismissed,
   fetchNoteCounts,
   fetchPropertySourcesByPropertyIds,
@@ -1094,5 +1095,28 @@ describe('areaArgs and the stats args', () => {
     const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, circle }, none);
     expect(args).toMatchObject({ circle_lat: 50.08, circle_lng: 14.42, circle_radius_m: 1500 });
     expect([args.bbox_west, args.bbox_south, args.bbox_east, args.bbox_north]).toEqual([null, null, null, null]);
+  });
+});
+
+/* The curation clock read (lib/curationSyncOwner's), through the real supabase-js
+ * client against a stubbed fetch: the ClockRow columns of the view, and never the
+ * acting header — the audience is the view's to state (docs/design/curation-sync.md
+ * § 3.4). */
+describe('fetchCurationClock', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reads exactly the ClockRow columns of curation_clock_public and never sends x-act-as', async () => {
+    const rows = [{ account_id: 'acct-me', family: 'board', counter: 3, mine: true, age_ms: 3_600_000 }];
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      ({ ok: true, status: 200, statusText: '', headers: new Headers(), text: async () => JSON.stringify(rows) }) as
+        unknown as Response,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchCurationClock({ signal: new AbortController().signal })).resolves.toEqual(rows);
+    const [url, init] = fetchMock.mock.calls[0];
+    const u = new URL(String(url));
+    expect(u.pathname).toBe('/rest/v1/curation_clock_public');
+    expect(u.searchParams.get('select')).toBe('account_id,family,counter,mine,age_ms');
+    expect(new Headers(init?.headers).has('x-act-as')).toBe(false);
   });
 });

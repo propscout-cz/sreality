@@ -27,7 +27,7 @@ export interface PriceSeries {
 }
 
 /* The property's adverts in chart order: the canonical advert first (it owns the
- * accent), the rest as given. The property page and the extension's side sheet. */
+ * accent), the rest as given. The property page and the extension's side panel. */
 export function canonicalFirst<T extends { id: number }>(adverts: readonly T[], canonicalId: number | null): T[] {
   const canonical = adverts.find((a) => a.id === canonicalId);
   return canonical == null ? [...adverts] : [canonical, ...adverts.filter((a) => a !== canonical)];

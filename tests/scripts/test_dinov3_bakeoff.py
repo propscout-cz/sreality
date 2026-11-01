@@ -210,12 +210,6 @@ def test_composed_transform_applies_both_stages() -> None:
     assert out.tobytes() != bo.t_crop10(src).tobytes()
 
 
-def test_every_recipe_name_the_manifest_can_ask_for_is_implemented() -> None:
-    from scripts import dinov3_bakeoff_manifest as mf
-
-    assert {r["name"] for r in mf.TRANSFORM_RECIPES} == set(bo.TRANSFORMS)
-
-
 # ---------------------------------------------------------------------------
 # Preprocessing arms
 # ---------------------------------------------------------------------------

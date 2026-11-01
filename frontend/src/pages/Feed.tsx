@@ -42,6 +42,7 @@ import {
   FEED_ALL_SCOPE,
   dayRuleLabel,
   feedFiltersForPreset,
+  feedHiddenKey,
   feedSearch,
   feedTimestamp,
   feedViewOf,
@@ -77,14 +78,10 @@ import {
   type DismissedCardRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useListHold } from '@/lib/useListHold';
 
 /* Browse's whole filter set is large; the sheet loads on its first open. */
 const FilterSheet = lazyChunk(() => import('@/components/phone/FilterSheet'));
-
-/* The hidden roll is keyed under Browse's `cards` root so a restore — which
- * re-reads every Browse list — re-reads it too; `showDismissed: true` keeps a
- * dismissal from patching rows out of it. */
-const HIDDEN_KEY_FILTERS = { ...FEED_ALL_FILTERS, showDismissed: true };
 
 /* Resume after this long away and the roll re-reads (#1763: refetch on foreground). */
 const STALE_ON_RESUME_MS = 60_000;
@@ -153,7 +150,7 @@ export default function Feed() {
   const orderPortal = orderPortalOf(filters, sort);
 
   const feedKey = browseKeys.cards(filters, sort);
-  const hiddenKey = useMemo(() => [...browseKeys.cards(HIDDEN_KEY_FILTERS, sort), 'dismissed'], [sort]);
+  const hiddenKey = useMemo(() => feedHiddenKey(sort), [sort]);
 
   const feed = useInfiniteList<CardRow>({
     queryKey: feedKey,
@@ -176,6 +173,9 @@ export default function Feed() {
   const list = hidden ? hiddenRoll : feed;
   const activeKey = hidden ? hiddenKey : feedKey;
   const rows: CardRow[] = list.rows;
+  /* A change made elsewhere moves the roll at once, but never under a finger
+   * (ruling Q3(c)); the count in the header re-reads regardless. */
+  const hand = useListHold([activeKey]);
 
   const hiddenCountQ = useQuery({
     queryKey: dismissalKeys.count,
@@ -384,31 +384,33 @@ export default function Feed() {
       </div>
 
       <CardHydrationProvider listingIds={listingIds} renders={{ photos: PHOTOS_PER_CARD }}>
-        <Roll
-          hidden={hidden}
-          loading={list.isLoading || waitingForPreset}
-          error={list.isError}
-          onRetry={() => list.refetch()}
-          rows={rows}
-          groups={groups}
-          todayKey={todayKey}
-          clock={pragueClock(updatedAt)}
-          order={newestFirst ? null : sortLabel(sort)}
-          refresh={refresh}
-          coverTag={coverTag}
-          onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
-        />
-        {rows.length > 0 && (
-          <InfiniteSentinel
-            onReach={list.fetchNextPage}
-            hasNextPage={list.hasNextPage}
-            isFetchingNextPage={list.isFetchingNextPage}
-            loadedCount={rows.length}
-            total={null}
-            loadingLabel="Načítám…"
-            endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+        <div {...hand}>
+          <Roll
+            hidden={hidden}
+            loading={list.isLoading || waitingForPreset}
+            error={list.isError}
+            onRetry={() => list.refetch()}
+            rows={rows}
+            groups={groups}
+            todayKey={todayKey}
+            clock={pragueClock(updatedAt)}
+            order={newestFirst ? null : sortLabel(sort)}
+            refresh={refresh}
+            coverTag={coverTag}
+            onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
           />
-        )}
+          {rows.length > 0 && (
+            <InfiniteSentinel
+              onReach={list.fetchNextPage}
+              hasNextPage={list.hasNextPage}
+              isFetchingNextPage={list.isFetchingNextPage}
+              loadedCount={rows.length}
+              total={null}
+              loadingLabel="Načítám…"
+              endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+            />
+          )}
+        </div>
       </CardHydrationProvider>
 
       {sheetOpen && (

@@ -92,6 +92,19 @@ def test_a_card_event_with_no_board_bump_after_it_is_a_problem() -> None:
                               "board clock bump at or after them")
 
 
+def test_a_day_with_no_card_event_says_so_and_stays_ok() -> None:
+    out = plat.check_curation_sync(_Conn(_answers(bumps=(0, 0, None, 0))), T)
+    board = _cell(out, "board_bumps")
+    assert (board["status"], board["value"]) == ("ok", 0) and out["status"] == "ok"
+    assert board["message"] == "no card events in the last 24 h: nothing to check against the board clock"
+
+
+def test_the_armed_predicate_is_one_clause_counted_and_negated() -> None:
+    assert plat._CURATION_TRIGGERS_SQL.count(plat._CLOCK_TRIGGER_ARMED) == 2
+    assert f"filter (where not ({plat._CLOCK_TRIGGER_ARMED}))" in plat._CURATION_TRIGGERS_SQL
+    assert "'{}'" in plat._CURATION_TRIGGERS_SQL
+
+
 def test_an_absent_clock_leaves_board_bumps_not_measured_and_the_triggers_judged() -> None:
     out = plat.check_curation_sync(_Conn(_answers(armed=0, found=0, bumps=pg_errors.UndefinedTable(
         'relation "curation_clock" does not exist'))), T)

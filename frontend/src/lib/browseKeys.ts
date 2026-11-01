@@ -22,6 +22,8 @@ const root = {
 
 export const browseKeys = {
   cards: (f: ListingFilters, s: SortSpec) => [root.cards, f, s] as const,
+  /** One cohort's cards in every order (by prefix): a page whose sort lives below it. */
+  cohortCards: (f: ListingFilters) => [root.cards, f] as const,
   /* The pin limit is the server's point budget, so it decides the answer's SHAPE
    * (points or counts) and must be in the key. */
   map: (f: ListingFilters, pinLimit: number) => [root.map, f, pinLimit] as const,

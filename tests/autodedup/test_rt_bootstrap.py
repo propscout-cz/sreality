@@ -111,25 +111,26 @@ def test_the_reset_empties_this_generation_and_nothing_else() -> None:
     # E960: the engine's since and the reconcile's hand-on list go with the generation.
     db.settings.update({f"rt_engine:{GEN}": {"digest": "e", "since": "x"},
                         f"rt_redecide:{GEN}": [[1, 2]], "rt_engine:other": {"digest": "o"}})
-    deleted = reset_generation(db, GEN, holder=SEED_HOLDER)
+    deleted = reset_generation(db, GEN)
 
     assert deleted == {"pairs": 1, "cluster_members": 2, "cluster_conflicts": 1,
                        "clusters": 1, "rt_fp": 2, "fp_key": 1, "rt_block_cell": 1,
                        "rt_scope_ids": 1, "rt_scope_scan": 1, "rt_retire_event": 1,
                        "rt_reject_ledger": 1, "scan_cursor": len(RESET_CURSORS),
-                       "settings": 2, "rt_lease": 1}
+                       "settings": 2}
     assert set(db.settings) >= {"rt_engine:other"} and f"rt_redecide:{GEN}" not in db.settings
     assert not [key for key in db.pairs if key[0] == GEN]
     assert not [key for key in db.rt_fp if key[0] == GEN]
     assert not [key for key in db.reject_ledger if key[0] == GEN], "E943: a seed empties it"
-    assert not db.cursors and not db.lease
+    assert not db.cursors
+    assert db.lease[LANE_NAME]["holder"] == "someone", "the lease is no store of a generation"
 
 
 def test_another_generations_rows_survive_the_reset() -> None:
     """The defect this exists to make impossible is the mirror of the one it fixes: a reset
     that took `g6` with it would destroy the evidence a published number rests on (M47)."""
     db = _populated(FakePg())
-    reset_generation(db, GEN, holder=SEED_HOLDER)
+    reset_generation(db, GEN)
 
     assert [key for key in db.pairs if key[0] == OTHER] == [(OTHER, 11, 12)]
     assert sorted(key for key in db.rt_fp if key[0] == OTHER) == [(OTHER, 11), (OTHER, 12)]
@@ -150,7 +151,7 @@ def test_the_generation_free_tables_survive_the_reset() -> None:
     """Operator verdicts, must-not-links and the frozen population are generation-free — E95
     says a re-seed preserves them and a reset is a re-seed with the rows removed."""
     db = _populated(FakePg())
-    reset_generation(db, GEN, holder=SEED_HOLDER)
+    reset_generation(db, GEN)
 
     assert db.mnl == {(11, 12)}
     assert db.phash_pop == {999: 4}
@@ -406,9 +407,8 @@ def test_the_reset_keeps_the_seeds_own_lease() -> None:
     db = _populated(FakePg())
     db.lease[LANE_NAME] = {"holder": SEED_HOLDER, "expires_at": db.now + timedelta(hours=1)}
 
-    deleted = reset_generation(db, GEN, holder=SEED_HOLDER)
+    reset_generation(db, GEN)
 
-    assert deleted["rt_lease"] == 0
     assert db.lease[LANE_NAME]["holder"] == SEED_HOLDER
 
 
@@ -461,9 +461,8 @@ def test_a_fresh_seed_holds_the_lease_through_its_transaction(tmp_path, monkeypa
         return original(conn, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane, "cut_calibration", spy)
-    out = run_rt_seed(lambda: db, {"fresh": "true", **SCORER}, tmp_path)
+    run_rt_seed(lambda: db, {"fresh": "true", **SCORER}, tmp_path)
 
-    assert out["reset"]["rt_lease"] == 0, "the reset kept the seed's own lease"
     assert inside and inside[0]["holder"].startswith("rt_seed:")
     assert inside[0]["expires_at"] >= db.now + timedelta(seconds=SEED_LEASE_TTL_S)
     assert db.lease[LANE_NAME]["expires_at"] <= db.now, "and freed it on the way out"

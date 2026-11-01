@@ -1,7 +1,7 @@
 /* Background-worker-side fetch wrapper. Only this file talks to the
  * FastAPI service directly; the content script proxies via runtime
- * messages so the network call runs in a context with host_permissions
- * and isn't subject to sreality.cz's CORS posture. */
+ * messages, so the call leaves from the extension's own origin, which the
+ * API's CORS allowlist names (the manifest grants no host permission). */
 
 import { getAccessToken } from './auth';
 import { API_BASE_URL, API_NOT_CONFIGURED_DETAIL, NOT_SIGNED_IN_DETAIL } from './config';
@@ -44,10 +44,13 @@ async function request<T>(
   if (!API_BASE_URL) {
     return { ok: false, status: 0, detail: API_NOT_CONFIGURED_DETAIL };
   }
-  const token = await getAccessToken();
-  if (!token) {
+  const access = await getAccessToken();
+  if (access.kind === 'signed_out') {
     return { ok: false, status: 401, detail: NOT_SIGNED_IN_DETAIL };
   }
+  // The refresh got no answer: still signed in, so a plain retryable failure, never "sign in".
+  if (access.kind === 'retry') return { ok: false, status: 0, detail: access.detail };
+  const token = access.token;
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...((init.headers as Record<string, string> | undefined) ?? {}),

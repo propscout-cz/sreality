@@ -1,7 +1,8 @@
 /* Background service worker. The single context that talks to the
- * FastAPI service — host_permissions covers the API origin and the
- * call doesn't have to go through sreality.cz's CORS. Content scripts
- * post messages here; we route them to the api helpers. */
+ * FastAPI service: its calls leave from the extension's origin, which the
+ * API's CORS allowlist names, never through a portal page's CORS. Content
+ * scripts and the side panel post messages here; we route them to the api
+ * helpers. It also opens Chrome's side panel (sidepanel.ts). */
 
 import {
   addNote,
@@ -29,51 +30,31 @@ import {
   undismissProperty,
   updateNote,
 } from './api';
-import { getAuthState, refreshIfSignedIn, signInWithGoogle, signOut } from './auth';
-import { PORTALS } from '../../frontend/src/lib/portalIds';
-import type { ApiMessage, ApiResult, RouteMessage } from './types';
+import { getAuthState, signInWithGoogle, signOut } from './auth';
+import type { ApiMessage, ApiResult, PanelCall } from './types';
 
-/* MV3 service-worker eviction kills any in-memory auto-refresh timer, so the
- * lazy per-request refresh (api.ts's getAccessToken) is backstopped by this
- * periodic tick — a fresh SW instance still catches a session that's about
- * to expire even with no extension UI open. ~30 min per the Wave 1 design
- * (the access token TTL is on the order of an hour). */
-const REFRESH_ALARM = 'session-refresh';
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(REFRESH_ALARM, { periodInMinutes: 30 });
+/* The toolbar icon opens and closes the side panel — one global panel per window,
+ * so it stays open across the window's tabs. */
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err: unknown) => {
+  console.error('[mf-ext] side panel behaviour', err);
 });
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create(REFRESH_ALARM, { periodInMinutes: 30 });
-});
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === REFRESH_ALARM) void refreshIfSignedIn();
-});
-
-/* Several portals (sreality's Next.js app confirmed live; others are React/Vue
- * SPAs too) navigate between listings via the History API, not a fresh document
- * load — the only thing MV3's static content_scripts re-inject on. Without this,
- * the panel/overlay only ever reflects whatever URL was current when the script
- * first loaded, until the operator forces a real reload. webNavigation fires
- * uniformly for any router a portal uses, so no per-portal handling is needed;
- * the host filter is the same PORTALS registry the content script uses, so a
- * new portal picks this up automatically. */
-const ROUTE_FILTER = { url: PORTALS.flatMap((p) => p.hosts).map((host) => ({ hostEquals: host })) };
-
-chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
-  if (details.frameId !== 0) return;
-  const message: RouteMessage = { type: 'route_changed', url: details.url };
-  chrome.tabs.sendMessage(details.tabId, message).catch(() => {
-    /* Tab navigated away again / no listener yet — nothing to recover. */
-  });
-}, ROUTE_FILTER);
 
 chrome.runtime.onMessage.addListener(
   (
-    message: ApiMessage,
-    _sender,
+    message: ApiMessage | PanelCall,
+    sender,
     sendResponse: (response: ApiResult<unknown>) => void,
   ) => {
+    /* A tab's call to the side panel, answered by nobody. open() before any await:
+     * Chrome opens a side panel only while the click's user gesture is live. */
+    if (message.type === 'panel') {
+      if (message.open && sender.tab != null) {
+        chrome.sidePanel.open({ windowId: sender.tab.windowId }).catch((err: unknown) => {
+          console.error('[mf-ext] side panel open', err);
+        });
+      }
+      return false;
+    }
     handleMessage(message)
       .then(sendResponse)
       .catch((err: unknown) => {

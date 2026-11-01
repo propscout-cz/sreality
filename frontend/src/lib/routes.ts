@@ -103,6 +103,13 @@ export const ROUTES = {
   listingLegacy: def('/listing/:sreality_id'),
   health: def('/health'),
   costs: def('/costs'),
+  // The propscout.cz waitlist (admin): who signed up from the landing page.
+  signups: def('/signups'),
+  // Where the agent platform programme stands (admin), in plain words.
+  agentPlatform: def('/agent-platform'),
+  // Start, follow and cancel agent runs: shown to accounts that may start one (GET /runs/options).
+  runs: def('/runs'),
+  runDetail: def('/runs/:id'),
   estimations: def('/estimations'),
   estimationDetail: def('/estimation/:id'),
   brokers: def('/brokers'),

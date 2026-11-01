@@ -111,6 +111,37 @@ describe('isPhoneFrame', () => {
     expect(isPhoneFrame()).toBe(false);
   });
 
+  it('is what usePhoneShell renders, across the breakpoint and the override', () => {
+    width = mockWidth(false);
+    for (const [narrow, desktopView] of [[false, false], [true, false], [true, true], [false, true]]) {
+      width.resize(narrow);
+      writeDesktopView(desktopView);
+      const { result, unmount } = renderHook(() => usePhoneShell());
+      expect(result.current).toBe(isPhoneFrame());
+      expect(result.current).toBe(narrow && !desktopView);
+      unmount();
+    }
+  });
+
+  /* Another tab flips the override (only that tab reloads): every reader here
+     switches on the storage event, together, never one at its next render. */
+  it('switches every reader at once when another tab flips the override', () => {
+    width = mockWidth(true);
+    const shell = renderHook(() => usePhoneShell());
+    const page = renderHook(() => usePhoneShell());
+    expect([shell.result.current, page.result.current]).toEqual([true, true]);
+    const fromAnotherTab = (key: string | null, newValue: string | null) =>
+      act(() => {
+        if (key === DESKTOP_VIEW_KEY && newValue) localStorage.setItem(key, newValue);
+        if (key === null) localStorage.clear();
+        window.dispatchEvent(new StorageEvent('storage', { key, newValue }));
+      });
+    fromAnotherTab(DESKTOP_VIEW_KEY, '1');
+    expect([shell.result.current, page.result.current, isPhoneFrame()]).toEqual([false, false, false]);
+    fromAnotherTab(null, null);
+    expect([shell.result.current, page.result.current, isPhoneFrame()]).toEqual([true, true, true]);
+  });
+
   it('is the desktop frame where the page has no matchMedia', () => {
     expect(typeof window.matchMedia).not.toBe('function');
     expect(isPhoneFrame()).toBe(false);

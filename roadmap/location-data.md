@@ -1250,9 +1250,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
   `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. With W3 (#2223) `what_if.restate` is
   deleted (a re-mine replaces each mined key, a tombstone removes it, under the one read) and
-  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed before W5's shadow: an id-grain export block for movers that sit in no
-  block today (Praha rows gaining a quarter).
-- **Owed — one copy the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
+  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed
+  before W5's shadow: an id-grain export block for movers that sit in no block today (Praha rows
+  gaining a quarter; W5 builds it). Only the blocks a ruling is inside are now exported (a ruling-free
+  block cannot fail; `--all-blocks` opts out): W4's 515 blocks needed 14 groups, 116 kept need 6.
+- **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
@@ -1272,7 +1274,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Acceptance (gate #2222): realitymix outside cell ≤ 110 (from 712), 0 declared pins outside, 0 off-grid
   declared; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
   (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
-- **W3 — one current claim per fact — built 2026-10-31** (#2223; PR-1 migration 699, PR-2 migration 700;
+- **W3 — one current claim per fact — built 2026-10-31** (#2223; PR-1 migration 699, PR-2 migration 702;
   `resolver:v5.9.1`; merges after W4's #2220). `location_claims` holds ONE claim per listing, claim type and
   author (`location_claims_key`): ONE keyed upsert, `claims_store.write_claims`, writes it for the lane and
   the operator (whose hand copy goes), only when a value changes (in place; A → B → A ends on A; the enqueue
@@ -1285,7 +1287,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   blur, which a presence detector could never clear. A payload body that becomes latest again is re-mined;
   the text lane retries an empty location block (1,915 stored ones re-marked). Rollout (design § 5): the
   autodedup shadow gate, then the R2 backup + batched purge (≈ 8.8 M rows, `location_claims_retire.yml`'s
-  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (700:
+  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (702:
   the fingerprint column, its index, both functions; the purge script) after one green intake tick. A
   retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
   keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve

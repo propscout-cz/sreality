@@ -249,7 +249,8 @@ drawing render from a structured spec through git templates (tier 1), so AI-writ
 **Rails (censuses, F72).**
 1. Every entry declares all three classes.
 2. No handler opens a connection except through ctx.
-3. Only the API's dependencies and the agent-worker's one claims builder call `tenant_transaction`.
+3. Who calls `tenant_transaction` directly, and who builds a caller with claims: pinned by
+   `tests/api/test_tenant_caller_census.py`, not restated here.
 4. No input schema carries `account_id`, an act-as field, a user id or any principal field: identity comes only from
    the run.
 5. The market_cache class is allowed only for six agent cache writers, by name: `verify_listing_freshness`,
@@ -506,7 +507,8 @@ budget. No chat table; a lazy-loaded panel that the Phone app frames for free (F
   user out (RESEARCH §6.3).
 - In agent-worker, **one claims builder** turns the stamped columns into {"sub": principal, "role": "authenticated",
   "run_id": id} for each tenant transaction, READ ONLY for reads, as every GET/HEAD tenant read is today (F20,
-  F21), and sets two settings (GUCs): request.agent_run = true and request.account_id = the run's account.
+  F21), and sets two settings (GUCs): request.agent_run = true and request.account_id = the run's account. *As built
+  (#2070, migration 704): one top-level claim, `run_account_id`, does the work of both settings, with no run id in the claims.*
 - **Two narrowing-only changes to the identity functions ship in W2.** `is_platform_admin()` returns false whenever
   request.agent_run is set, so a run started by an admin never carries admin powers (no SYSTEM or NULL arms, no
   shared-table writes such as `manual_rental_estimates`, no admin-gated DEFINER functions). `current_account_ids()`
@@ -771,7 +773,7 @@ data runs on the schema-replay Postgres with the frozen cohort.
 | D5 | Queue | own SKIP LOCKED · pgmq · DBOS · Temporal | our own, copied from the push ledger, with priorities | proven, race-tested, pooler-safe, no dependency | high | none |
 | D6 | Quota race | advisory transaction lock · counter row with CAS | the lock, inside one admission function with dollar reservations | no extra state to drift; the counter row if contention ever shows | high | none |
 | D7 | Code execution | renderers + gated run_python · Sandbox first · provider-hosted · E2B/Modal · defer | renderers now; run_python only with proven network denial; the Sandbox as second rung | most outputs need no AI code; no lethal trifecta | medium | AR4 |
-| D8 | Run identity | forward the JWT · mint JWTs · a claims builder · a database binding | the claims builder with narrowing settings now; the database binding in W8 | no token custody; no admin in runs; one account per run | medium | AR17 |
+| D8 | Run identity | forward the JWT · mint JWTs · a claims builder · a database binding | the claims builder with narrowing settings now (as built: one narrowing claim, migration 704); the database binding in W8 | no token custody; no admin in runs; one account per run | medium | AR17 |
 | D9 | Writes without approval | none · all user-started writes · the run's own collection only | own collection only | reversible, private, undoable; every other write asks | high | AR9 |
 | D10 | Skill source of truth | database · git + lock | git + lock + image | ends drift; changes are reviewed | medium | AR5 |
 | D11 | Artifacts | the main bucket · a new EU R2 bucket · Supabase Storage | a new EU R2 bucket | residency, scoped tokens, one authorization doctrine | low once filled | AR16 |
@@ -865,7 +867,7 @@ separate tenant role first; the `pgrst.db_pre_request` gate covers the MCP risk)
 
 | Risk | Mitigation |
 |---|---|
-| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns; a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
+| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns (as built: the dev-only `scripts/agent_run.py`, with no run row, names it on its command line, MVP § 8); a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
 | agent-worker is deployed with a forbidden secret | the boot assertion's allowlist; no service DSN at all (D19); a Health cell that fails on any refusal |
 | A resume replays a side effect | (run, step) keys; stored arguments run verbatim; the outbox compare-and-set; the Valuo write-ahead row; the approval consumed by one function in the claim transaction |
 | A resume runs on different code | the tool-set sha compared on every resume; pending approvals re-validated or voided; "definition changed, re-run" |
@@ -1055,8 +1057,9 @@ AR3 confirms both. *Entry condition:* the W0 probe result is recorded (it settle
    that crashes twice at one step fails with its reason.
 4. **Tenancy:** on the replay database, account A's run cannot read B's collections or pipeline; a two-membership
    user's run sees one account; an admin principal's run cannot write `manual_rental_estimates` or read SYSTEM or NULL
-   rows; a model-supplied account id is refused by the schema census; the claims builder is the only
-   `tenant_transaction` caller outside `api/`; the grant census of the three logins is green.
+   rows (as built, #2070: 639 dropped that table, the admin arm on account-less rows is what is tested, and the SYSTEM
+   arm stays every account's); a model-supplied account id is refused by the schema census; `tests/api/test_tenant_caller_census.py`
+   holds the `tenant_transaction` callers; the grant census of the three logins is green.
 5. **Approvals:** Valuo parks the run; a double approve makes exactly one call; the stored arguments run; edited
    arguments and an expired approval are refused; only the principal can approve, and an act-as run cannot reach the
    costly step; the approval is consumed in the same transaction as the Valuo write-ahead row.

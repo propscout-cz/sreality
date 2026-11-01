@@ -1,35 +1,62 @@
-/* The listing panel's rules, apart from its DOM: when the sheet starts folded, which
- * facts a property type shows, what the folded tab marks, where a chip row cuts to
- * "+N", when the stage step bar gives way to the dropdown, the chart's geometry and
- * the price card's note counts. No runtime import and no `document`, so
+/* The listing panel's rules, apart from its DOM: which subject the side panel shows,
+ * which facts a property type shows, what the edge tab marks, where a chip row cuts
+ * to "+N", when the stage step bar gives way to the dropdown, the chart's geometry
+ * and the price card's note counts. No runtime import and no `document`, so
  * panel_logic.test.ts runs it under node; formatters are handed in. */
 
 import type { PriceSeries } from '../../frontend/src/lib/priceHistory';
-import type { PortalListing } from './types';
+import type { PanelSubject, PortalListing } from './types';
 
-/* Below this viewport width the sheet would cover most of the page: it starts folded. */
-export const FOLD_BELOW_PX = 1280;
 /* A pipeline of at most this many open stages draws them as a step bar. */
 export const STEP_BAR_MAX = 4;
 /* Chips shown before the rest fold into "+N". */
 export const CHIPS_MAX = 3;
 
-/* Where the fold is kept (chrome.storage.local), and the old floating panel's
- * "minimized" choice, read once as the first fold state and then removed. */
-export const FOLDED_KEY = 'panelFolded';
-export const LEGACY_FOLD_KEY = 'panelMinimized';
+/* The side panel's subject: its window's ACTIVE tab's, as that tab's content script
+ * last said over its port; a tab whose port closed (no script of ours) says none. A
+ * tab still connecting holds what is shown, so a panel opening on a listing never
+ * flashes the empty state. `show` hears only a change of AD — a URL rewrite of the
+ * same ad (a gallery, tracking params) must not re-open the panel and lose a
+ * half-typed note — and always the first answer. */
+export function createSubjectRouter(show: (subject: PanelSubject | null) => void) {
+  const said = new Map<number, PanelSubject | null | 'connecting'>();
+  let windowId: number | null = null;
+  let active: number | null = null;
+  let shown: string | null | undefined;
 
-/* The fold the operator last chose, from what storage holds; null: never chose. */
-export function storedFold(r: Record<string, unknown>): boolean | null {
-  const folded = r[FOLDED_KEY];
-  if (typeof folded === 'boolean') return folded;
-  return r[LEGACY_FOLD_KEY] === true ? true : null;
-}
+  function decide(): void {
+    const subject = active == null ? null : said.get(active) ?? null;
+    if (subject === 'connecting') return;
+    const key = subject == null ? null : `${subject.ref.source}:${subject.ref.sourceId}`;
+    if (key === shown) return;
+    shown = key;
+    show(subject);
+  }
+  const heard = (tabId: number): void => { if (tabId === active) decide(); };
 
-/* `stored`: the folded state the operator last chose (null: never chose). A narrow
- * viewport starts folded whatever was stored; the sheet then remembers what they do. */
-export function startsFolded(stored: boolean | null, viewportWidth: number): boolean {
-  return viewportWidth < FOLD_BELOW_PX || stored === true;
+  return {
+    /* A tab of this panel's window: every panel hears every tab's call. */
+    ours: (tab: { windowId: number } | undefined): boolean => windowId != null && tab?.windowId === windowId,
+    start(window: number, activeTab: number | null): void {
+      windowId = window;
+      active = activeTab;
+      decide();
+    },
+    activate(tabId: number, window: number): void {
+      if (window !== windowId) return;
+      active = tabId;
+      decide();
+    },
+    connecting(tabId: number): void { said.set(tabId, 'connecting'); },
+    tell(tabId: number, subject: PanelSubject | null): void { said.set(tabId, subject); heard(tabId); },
+    forget(tabId: number): void { said.delete(tabId); heard(tabId); },
+    /* The tab finished loading and no page of it called in: nothing of ours is there. */
+    settled(tabId: number): void {
+      if (said.get(tabId) !== 'connecting') return;
+      said.delete(tabId);
+      heard(tabId);
+    },
+  };
 }
 
 export type FactKey = 'floor' | 'condition' | 'ownership' | 'plot' | 'subtype';
@@ -83,7 +110,7 @@ export function fmtDate(at: string | number | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
 }
 
-/* The folded tab's marks after the PS mark, each only when there: the deal's stage,
+/* The edge tab's marks after the PS mark, each only when there: the deal's stage,
  * this ad's price DROP (a rise is no news on a tab), MF. */
 export function tabMarkList<N>(stage: N | null, move: number | null, mf: N | null, drop: (pct: number) => N): N[] {
   return [stage, move != null && move < 0 ? drop(move) : null, mf].filter((n): n is N => n != null);

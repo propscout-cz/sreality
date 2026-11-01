@@ -21,12 +21,17 @@ from __future__ import annotations
 import json
 import re
 import zlib
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator, Mapping, Sequence
+from types import SimpleNamespace
+from typing import Any, ContextManager, Iterator, Mapping, Sequence
+
+from psycopg import pq
 
 from autodedup import export_sql as E
 from autodedup import incremental_sql as S
 from autodedup import apply_sql as A
+from scraper import job_lease
 from autodedup.calibration_cut import decode_payload
 from autodedup.decide import CERTIFICATES
 from autodedup.indistinguishable import FEATURE_SLOTS
@@ -140,6 +145,14 @@ class FakePg:
     def transaction(self) -> "_Tx":
         return _Tx(self)
 
+    @property
+    def info(self) -> SimpleNamespace:
+        """The one psycopg fact `job_lease` reads before it opens a transaction of its own."""
+        return SimpleNamespace(transaction_status=(pq.TransactionStatus.INTRANS if self.in_transaction
+                                                   else pq.TransactionStatus.IDLE))
+
+    autocommit = True
+
     def close(self) -> None:
         return None
 
@@ -202,14 +215,14 @@ class _Tx:
 
     def __enter__(self) -> "_Tx":
         self.conn.transactions += 1
+        self.outer = (self.conn.in_transaction, self.conn.tx_state)
         self.conn.in_transaction = True
         self.state = self.conn.snapshot()
         self.conn.tx_state = self.state
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        self.conn.in_transaction = False
-        self.conn.tx_state = None
+        self.conn.in_transaction, self.conn.tx_state = self.outer
         if exc_type is not None and self.state is not None:
             self.conn.restore(self.state)
             self.conn.rolled_back += 1
@@ -229,6 +242,9 @@ class _Cursor:
 
     def fetchall(self) -> list[tuple]:
         return list(self.rows)
+
+    def fetchone(self) -> tuple | None:
+        return self.rows[0] if self.rows else None
 
     def __iter__(self) -> Iterator[tuple]:
         return iter(list(self.rows))
@@ -255,6 +271,12 @@ class _OtherSession:
     def cursor(self) -> "_OtherCursor":
         return _OtherCursor(self.db)
 
+    def transaction(self) -> ContextManager[None]:
+        return nullcontext()
+
+    info = SimpleNamespace(transaction_status=pq.TransactionStatus.IDLE)
+    autocommit = True
+
     def close(self) -> None:
         self.closed = True
 
@@ -270,26 +292,26 @@ class _OtherCursor(_Cursor):
             super().execute(sql, params)
         finally:
             self.conn.in_transaction = in_transaction
-        if self.conn.tx_state is not None and sql in (S.RT_LEASE_RELEASE_SQL,
-                                                      S.RT_LEASE_TAKE_SQL):
+        if self.conn.tx_state is not None and sql in (job_lease._END_LANE_SQL,
+                                                      job_lease._ACQUIRE_LANE_SQL):
             self.conn.tx_state["lease"] = {k: dict(v) for k, v in self.conn.lease.items()}
 
 
 def _names_holder(sql: str) -> bool:
-    """Whether a lease statement's WHERE keys the row by `holder = %(holder)s`."""
+    """Whether a lease statement's WHERE keys the row by `lease_holder = %(holder)s`."""
     where = sql.lower().split("where", 1)[-1]
-    return re.search(r"\bholder\s*=\s*%\(holder\)s", where) is not None
+    return re.search(r"\blease_holder\s*=\s*%\(holder\)s", where) is not None
 
 
 # E948's limbs as the predecessor statements spell them (one WHERE, two statements), each READ
 # from the statement as `_names_holder` reads the release's: a statement that dropped or bent
 # one matches here what it would match in Postgres, so the tests that pin "never that holder"
 # see it.
-_PREDECESSOR_SHAPE = "holder ~ '^[^:]+:[0-9]+:[0-9]{1,18}$'"
-_PREDECESSOR_LIVE = "expires_at > now()"
-_PREDECESSOR_HOST = "split_part(holder, ':', 1) = %(host)s::text"
-_PREDECESSOR_PID = "split_part(holder, ':', 2) = %(pid)s::text"
-_PREDECESSOR_OLDER = "split_part(holder, ':', 3)::bigint < %(booted)s::bigint"
+_PREDECESSOR_SHAPE = "lease_holder ~ '^[^:]+:[0-9]+:[0-9]{1,18}$'"
+_PREDECESSOR_LIVE = "lease_expires_at > now()"
+_PREDECESSOR_HOST = "split_part(lease_holder, ':', 1) = %(host)s::text"
+_PREDECESSOR_PID = "split_part(lease_holder, ':', 2) = %(pid)s::text"
+_PREDECESSOR_OLDER = "split_part(lease_holder, ':', 3)::bigint < %(booted)s::bigint"
 
 
 def _a_predecessor(sql: str, held: Mapping[str, Any], p: Mapping[str, Any],
@@ -396,18 +418,20 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return [("set",)]
 
     # ---------------------------------------------------------------- lease
-    if sql == S.RT_LEASE_TAKE_SQL:
-        held = db.lease.get(p["name"])
+    if sql in (job_lease._BOUND_SQL, job_lease._UPSERT_LANE_SQL):
+        return []
+    if sql == job_lease._ACQUIRE_LANE_SQL:
+        held = db.lease.get(p["job"])
         if held and held["expires_at"] > db.now:
             return []
-        db.lease[p["name"]] = {"holder": p["holder"],
-                               "expires_at": db.now + timedelta(seconds=int(p["ttl"]))}
-        return [(p["holder"],)]
-    if sql == S.RT_LEASE_RELEASE_SQL:
+        db.lease[p["job"]] = {"holder": p["holder"],
+                              "expires_at": db.now + timedelta(seconds=int(p["ttl"]))}
+        return [(p["job"],)]
+    if sql == job_lease._END_LANE_SQL:
         # The holder predicate is READ from the statement, never assumed (E941): a release that
         # stopped naming its holder would end another writer's lease here as it would in
         # Postgres, and the tests that pin "never another writer's row" would see it.
-        held = db.lease.get(p["name"])
+        held = db.lease.get(p["job"])
         if held and (held["holder"] == p["holder"] or not _names_holder(sql)):
             held["expires_at"] = db.now
         return []
@@ -415,17 +439,17 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         held = db.lease.get(p["name"])
         return ([(held["holder"], held.get("taken_at"), held["expires_at"],
                   held["expires_at"] > db.now)] if held else [])
-    if sql in (S.RT_LEASE_RELEASE_PREDECESSOR_SQL, S.RT_LEASE_PREDECESSOR_SQL):
-        held = db.lease.get(p["name"])
+    if sql in (job_lease._END_PREDECESSOR_SQL, job_lease._PREDECESSOR_SQL):
+        held = db.lease.get(p["job"])
         if not held or not _a_predecessor(sql, held, p, db.now):
             return []
-        if sql == S.RT_LEASE_RELEASE_PREDECESSOR_SQL:
+        if sql == job_lease._END_PREDECESSOR_SQL:
             held["expires_at"] = db.now
         return [(held["holder"],)]
-    if sql == S.RT_LEASE_HOLD_SQL:
+    if sql == job_lease._FENCE_SQL:
         # The fake has one clock, so `now()` against `clock_timestamp()` is the live test's to
         # pin (tests/test_rt_lease_fence_live.py); the holder predicate is read from the text.
-        held = db.lease.get(p["name"])
+        held = db.lease.get(p["job"])
         return ([(held["holder"],)] if held and (held["holder"] == p["holder"]
                                                  or not _names_holder(sql))
                 and held["expires_at"] > db.now else [])
@@ -893,12 +917,6 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         for name in gone:
             db.cursors.pop(name)
         return [(len(gone),)]
-    if sql == S.RT_FRESH_LEASE_SQL:
-        held = db.lease.get(str(p["name"]))
-        if held is None or held["holder"] == p["holder"]:
-            return [(0,)]
-        db.lease.pop(str(p["name"]))
-        return [(1,)]
 
     # ---------------------------------------------------------------- live equivalence (E99)
     if sql == S.RT_EQUIV_PAIRS_SQL:

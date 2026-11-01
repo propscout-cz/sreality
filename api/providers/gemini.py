@@ -24,10 +24,12 @@ import os
 from typing import Any
 
 from api.providers.base import (
+    Block,
     Completion,
     ImageBlock,
     Message,
     ModelPrice,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolCall,
@@ -35,6 +37,7 @@ from api.providers.base import (
     ToolSchema,
     ToolUseBlock,
     Usage,
+    written_by,
 )
 
 LOG = logging.getLogger(__name__)
@@ -78,6 +81,7 @@ class GeminiProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if not self._api_key:
             raise ProviderError(
@@ -95,6 +99,8 @@ class GeminiProvider:
         }
         if system:
             cfg_kwargs["system_instruction"] = system
+        if timeout_s is not None:
+            cfg_kwargs["http_options"] = types.HttpOptions(timeout=int(timeout_s * 1000))
         if tools:
             cfg_kwargs["tools"] = [
                 types.Tool(
@@ -120,7 +126,7 @@ class GeminiProvider:
         except Exception as exc:
             raise ProviderError(f"gemini call failed: {exc}") from exc
 
-        text_blocks, tool_calls = _split_gemini_content(raw)
+        text_blocks, tool_calls, blocks = _split_gemini_content(raw)
         usage = _extract_gemini_usage(raw)
         stop_reason = _normalise_gemini_finish(raw, tool_calls)
         return Completion(
@@ -130,6 +136,7 @@ class GeminiProvider:
             usage=usage,
             model=model,
             raw=raw,
+            blocks=blocks,
         )
 
     def price_for(self, model: str) -> ModelPrice | None:
@@ -153,7 +160,10 @@ class GeminiProvider:
 def _msg_to_gemini(msg: Message, types: Any) -> Any:
     parts: list[Any] = []
     for block in msg.content:
-        if isinstance(block, TextBlock):
+        own = written_by(block, GeminiProvider.name)
+        if own is not None:
+            parts.append(own)
+        elif isinstance(block, TextBlock):
             parts.append(types.Part.from_text(text=block.text))
         elif isinstance(block, ToolUseBlock):
             parts.append(types.Part(
@@ -223,19 +233,28 @@ def _tool_to_gemini(tool: ToolSchema) -> Any:
     )
 
 
-def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
+def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall], list[Block]]:
+    """The reply's text, its calls and all of it in order, every part whole: Gemini 3 validates the thought_signature
+    on the function calls in history, and a part with no text can carry one too."""
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
+    reply: list[Block] = []
     candidates = getattr(raw, "candidates", None) or []
     if not candidates:
-        return texts, tool_calls
+        return texts, tool_calls, reply
     parts = getattr(candidates[0].content, "parts", None) or []
     for part in parts:
         text = getattr(part, "text", None)
         if text:
             texts.append(text)
         fcall = getattr(part, "function_call", None)
-        if fcall is not None:
+        own = OpaqueBlock(provider=GeminiProvider.name, data=part)
+        if fcall is None:
+            if text:
+                reply.append(TextBlock(text=text, opaque=own))
+            elif getattr(part, "thought_signature", None):
+                reply.append(own)
+        else:
             name = getattr(fcall, "name", "") or ""
             args = getattr(fcall, "args", None) or {}
             # SDK returns args as a dict-like; coerce to plain dict.
@@ -249,7 +268,8 @@ def _split_gemini_content(raw: Any) -> tuple[list[str], list[ToolCall]]:
                 name=name,
                 input=args,
             ))
-    return texts, tool_calls
+            reply.append(ToolUseBlock(id=name, name=name, input=args, opaque=own))
+    return texts, tool_calls, reply
 
 
 def _extract_gemini_usage(raw: Any) -> Usage:

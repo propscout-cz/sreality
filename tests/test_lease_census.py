@@ -1,5 +1,5 @@
 """One singleton-lease module: lease compare-and-set text lives in scraper/job_lease.py and in no new file.
-Three hand-written leases (LEGACY's S1-S3) each re-solve take, renew, fence and release their own way; this census
+The hand-written leases left (LEGACY) each re-solve take, renew, fence and release their own way; this census
 fails CI on a fourth. It matches write shapes: SQL that sets or compares a holder, the bare `expires_at` /
 `heartbeat_at` staleness tests, a session advisory lock in Python. A work-queue claim (`FOR UPDATE SKIP LOCKED`), a
 transaction advisory lock, and a reader, view, COMMENT or log line naming job_lease's columns do not match.
@@ -38,14 +38,11 @@ class Ledgered(NamedTuple):
 
 LEGACY: dict[str, Ledgered] = {
     "scripts/recompute_property_stats.py": Ledgered(
-        "S1 property_maintenance_lease (mig 279): the maintenance lane and the daily sweep (rule 20)",
-        "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),
+        "S1 property_maintenance_lease (mig 279): the cutover row beside the job_lease row (rule 20)",
+        "#2267 drops it once gate #2110 passes"),
     "scripts/resolve_brokers.py": Ledgered(
-        "S2 broker_resolution_lock (mig 192): the broker lane and the daily full resolve",
-        "#2027 runs the sweep and keeps this lease; moving it onto job_lease is an operator ruling"),
-    "autodedup/incremental_sql.py": Ledgered(
-        "S3 autodedup.rt_lease (mig 539): the SQL behind autodedup/rt_lease.py (lane pass, rt_seed, live apply)",
-        "the merge coordinator (it owns autodedup); it moves only on its and the operator's go"),
+        "S2 broker_resolution_lock (mig 192): the cutover row beside the job_lease row",
+        "#2273 drops it once gate #2111 passes"),
 }
 
 
@@ -83,7 +80,7 @@ def test_no_singleton_lease_outside_job_lease():
         "singleton-lease text outside scraper/job_lease.py. A one-holder-at-a-time lease goes through "
         "job_lease (`held` for a lane, `claim`/`renew`/`release` for a scheduled job); a work queue claims "
         "rows with FOR UPDATE SKIP LOCKED and a one-transaction guard takes pg_advisory_xact_lock, and neither "
-        "matches here. LEGACY holds the three older copies and only shrinks; a match that is no lease narrows "
+        "matches here. LEGACY holds the older copies and only shrinks; a match that is no lease narrows "
         "_LEASE_TEXT instead: "
         f"{found}"
     )

@@ -15,6 +15,7 @@ on:
       - 'frontend/**'
       - '.github/workflows/frontend-build.yml'
   pull_request:
+  merge_group:
 
 jobs:
   build:
