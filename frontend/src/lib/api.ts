@@ -653,6 +653,8 @@ export const fetchAgentRuns = (): Promise<{ data: AgentRunRow[]; truncated: bool
 export const fetchAgentRun = (id: number): Promise<AgentRun> => request<AgentRun>(`/runs/${id}`);
 export const fetchAgentRunSteps = (id: number): Promise<{ data: AgentRunStep[] }> =>
   request<{ data: AgentRunStep[] }>(`/runs/${id}/steps`);
+export const fetchAgentRunFile = (runId: number, fileId: number): Promise<Blob> =>
+  requestBlob(`/runs/${runId}/files/${fileId}`);
 export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status: AgentRunStatus; created: boolean }> =>
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>

@@ -1,4 +1,4 @@
-"""POST + GET /runs, GET /runs/options, PUT /runs/limit, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
+"""POST + GET /runs, GET /runs/options, PUT /runs/limit, GET /runs/{id}[/steps], GET /runs/{id}/files/{file}, POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
 
 from __future__ import annotations
 
@@ -14,12 +14,13 @@ from psycopg.rows import dict_row
 from api import dependencies as deps
 from api import schemas as s
 from api import tenant_pool
-from api.agents import executor
+from api.agents import agent_files, executor
 from api.agents.definition import DefinitionError, InputError
 
 router = APIRouter(prefix="/runs", tags=["agent-runs"], dependencies=[Depends(tenant_pool.require_account_id)])
 
 _NOT_FOUND = "no such run"
+_NO_FILE = "no such file"
 _REFUSED_STATUS = {"not_allowlisted": 403, "plan_without_agents": 403, "in_flight_cap": 429}
 LIST_LIMIT = 50
 # A bound on typing, not a policy: the account's limit is its own to set, and the platform ceiling still holds above it.
@@ -29,8 +30,13 @@ _CENT = Decimal("0.01")
 _LIGHT = ("id, agent, status, attempts, provider, model, cost_usd::float8 AS cost_usd, stop_reason, error, input, "
           "cancel_requested_at, created_at, started_at, finished_at")
 _LIST = f"SELECT {_LIGHT} FROM agent_runs ORDER BY created_at DESC, id DESC LIMIT %s"
-_RUN = (f"SELECT {_LIGHT}, result_markdown, cited_property_ids, files, proposals, output, definition_sha, tool_set_sha, "
+_FILES = """(SELECT coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'name', a.name, 'media_type', a.kind,
+                                                       'size_bytes', a.size_bytes, 'stored', a.storage_key IS NOT NULL)
+                                    ORDER BY a.id), '[]')
+              FROM agent_artifacts a WHERE a.run_id = agent_runs.id) AS files"""
+_RUN = (f"SELECT {_LIGHT}, result_markdown, cited_property_ids, {_FILES}, proposals, output, definition_sha, tool_set_sha, "
         "commit_sha FROM agent_runs WHERE id = %s")
+_FILE = "SELECT name, kind, storage_key FROM agent_artifacts WHERE id = %s AND run_id = %s"
 # Light enough to poll: a step's question and the model's words, with `summary` standing in for a tool's whole result.
 _STEPS = """
 SELECT attempt, n, kind, name, summary, payload -> 'input' AS input,
@@ -139,6 +145,28 @@ def read_run(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
 def read_run_steps(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
     _account_of_run(conn, run_id)
     return {"data": _rows(conn, _STEPS, run_id)}
+
+
+@router.get("/{run_id}/files/{file_id}")
+def read_run_file(run_id: int, file_id: int, conn: tenant_pool.TenantConn) -> Response:
+    """A file as a download. The row, read under RLS, is the one gate: a foreign id and a missing one are the same 404, and
+    the object's key comes only from that row, so no path a caller could guess is an input."""
+    row = conn.execute(_FILE, (file_id, run_id)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=_NO_FILE)
+    name, media_type, key = row
+    if key is None:
+        raise HTTPException(status_code=404, detail="This file was not stored when its run ended.")
+    store = agent_files.store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="File storage is not configured.")
+    try:
+        data = store.get(key)
+    except agent_files.StoreError as exc:
+        raise HTTPException(status_code=503, detail="File storage is not answering; try again shortly.") from exc
+    if data is None:
+        raise HTTPException(status_code=404, detail="This file is gone from storage.")
+    return agent_files.file_response(data, media_type, name)
 
 
 @router.post("/{run_id}/cancel")

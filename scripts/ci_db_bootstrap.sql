@@ -48,3 +48,23 @@ create table if not exists auth.users (
   email              text,
   email_confirmed_at timestamptz
 );
+
+-- Supabase provides the `storage` schema in production: the bucket row a migration inserts (714) and the objects
+-- agent_files.sweep reads. Only the columns those two name; RLS on and no grant, as a project's default leaves them to
+-- a browser role with no policy.
+create schema if not exists storage;
+create table if not exists storage.buckets (
+  id                 text primary key,
+  name               text not null,
+  public             boolean default false,
+  file_size_limit    bigint,
+  allowed_mime_types text[]
+);
+create table if not exists storage.objects (
+  id         uuid primary key default gen_random_uuid(),
+  bucket_id  text references storage.buckets (id),
+  name       text,
+  created_at timestamptz default now()
+);
+alter table storage.buckets enable row level security;
+alter table storage.objects enable row level security;

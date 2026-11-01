@@ -76,7 +76,11 @@ any provider. `run_python` is the name the design and the admin page give it; th
   name is cut down to one harmless path segment and the type to a plain media type. At most 20 MiB a file and 10 files a
   run; one refused or failed is a journal line, and the model hears of it when it names the file. A later file of the
   same name replaces the earlier one even when it cannot be fetched, so an answer never carries older bytes than the
-  model thinks; when a failure leaves no name to go on, every file held goes. Storing the file is #2073's.
+  model thinks; when a failure leaves no name to go on, every file held goes.
+- **Files stay.** Each file of an accepted answer goes to the private `agent-files` bucket and gets an `agent_artifacts`
+  row, in the transaction of the verdict, so a run shows only the attempt that finished (`api/agents/agent_files.py`). A
+  file that cannot be stored is marked `Not stored` and the run still succeeds. The Runs page offers a download, through
+  the API and never as active content. Input files have no caller: `work_once` passes none and the spec asks for none.
 - **Files leave.** When the run ends, however it ends, every file it uploaded or got is deleted from Anthropic. A
   failed delete is a warning naming the file id. Ids are known only from a reply that came back, so a process killed
   mid-run, or a model call that failed after its code ran (a timeout, a 5xx), leaves produced files there until someone

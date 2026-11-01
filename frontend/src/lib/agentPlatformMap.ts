@@ -7,7 +7,7 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, a security test suite on every pull request, the run queue, the Runs page with its routes, and a daily spending limit per account. ' +
+  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, a security test suite on every pull request, the run queue, the Runs page with its routes, a daily spending limit per account, and storage for the files an agent produces, ready but not yet used. ' +
   'The page stays out of the menu until an account is on the allowlist, which is still absent, and on a plan with agents, and a started run would only wait: the scout and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
@@ -56,7 +56,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2070, done: true, title: 'Run queue and diary: submit, execute once, cancel' },
       { n: 2071, done: true, title: 'Run routes and the minimal Runs page' },
       { n: 2072, done: false, title: 'Propose, Apply, Undo' },
-      { n: 2073, done: false, title: 'Agent files in Supabase Storage' },
+      { n: 2073, done: true, title: 'Agent files in Supabase Storage' },
       { n: 2074, done: true, title: 'Recorded-run regression and security tests in CI' },
       { n: 2319, done: true, title: 'A daily spending limit per account, and a plan without agents' },
       { n: 2075, done: false, title: 'agent-worker in production and your first scout run' },
@@ -199,8 +199,8 @@ export const SERVICES: ServiceRow[] = [
     change: 'New Railway service, same image as the API.',
     builtBy: [2075],
   },
-  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes and run routes done. Gains Apply and Undo.' },
-  { name: 'Website', job: 'The app you use.', change: 'Has the Runs page: a form, the step timeline, the result, file names, proposals to read, and your daily limit under the avatar. Gains Apply and Undo, and the files themselves.' },
+  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes, run routes and file downloads done. Gains Apply and Undo.' },
+  { name: 'Website', job: 'The app you use.', change: 'Has the Runs page: a form, the step timeline, the result, files to download, proposals to read, and your daily limit under the avatar. Gains Apply and Undo.' },
   { name: 'realtime-worker', job: 'Always-on scraping, maintenance and alerts.', change: 'Loses its estimation lane in M2.' },
   { name: 'job-runner', job: 'Scheduled jobs moved off GitHub Actions.', change: 'Separate programme (Actions exit). Shares the Railway config file.' },
 ];
@@ -223,6 +223,7 @@ export const TRADE_OFF =
 export const NEEDS_YOU: { head: string; text: string; ticket?: number }[] = [
   { head: 'Rotate the GitHub tokens.', text: 'The last credentials pending.', ticket: 2061 },
   { head: 'Set the allowlist and plan.', text: 'Put the accounts on the allowlist and on the Pilot plan (Settings, Tiers). Until both are done, nobody can start a run.', ticket: 2075 },
+  { head: 'Give the API and agent-worker the Supabase secret key.', text: 'Variable SUPABASE_SERVICE_ROLE_KEY on both, and SUPABASE_URL on agent-worker. Without it a run still answers, but its files are marked not stored and nothing can be downloaded.', ticket: 2075 },
   { head: 'Pick the Valuo monthly cap.', text: 'One number, the same for every account. No agent can call Valuo until it is set, and your own clicks on the property page count towards it.' },
   { head: 'Edit the photo facet list.', text: 'Claude drafts version 1.', ticket: 2066 },
   { head: 'Grade 10 scout shortlists.', text: 'This happens before the production path is finished.', ticket: 2069 },

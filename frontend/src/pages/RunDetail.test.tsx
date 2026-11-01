@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { AgentRun, AgentRunStep } from '@/lib/agentRuns';
+import type { AgentRun, AgentRunFile, AgentRunStep } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 vi.mock('@/lib/api', async (orig) => ({
@@ -12,16 +12,25 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchAgentRunOptions: vi.fn(),
   fetchAgentRun: vi.fn(),
   fetchAgentRunSteps: vi.fn(),
+  fetchAgentRunFile: vi.fn(),
   cancelAgentRun: vi.fn(),
 }));
 
-import { ApiError, cancelAgentRun, fetchAgentRun, fetchAgentRunOptions, fetchAgentRunSteps } from '@/lib/api';
+vi.mock('@/lib/shareFiles', () => ({ saveBlob: vi.fn() }));
+
+import { ApiError, cancelAgentRun, fetchAgentRun, fetchAgentRunFile, fetchAgentRunOptions, fetchAgentRunSteps } from '@/lib/api';
+import { saveBlob } from '@/lib/shareFiles';
 import RunDetail from './RunDetail';
 
 const options = vi.mocked(fetchAgentRunOptions);
 const fetchRun = vi.mocked(fetchAgentRun);
 const fetchSteps = vi.mocked(fetchAgentRunSteps);
 const cancel = vi.mocked(cancelAgentRun);
+const fetchFile = vi.mocked(fetchAgentRunFile);
+const save = vi.mocked(saveBlob);
+
+const file = (over: Partial<AgentRunFile> = {}): AgentRunFile =>
+  ({ id: 5, name: 'model.xlsx', media_type: 'text/csv', size_bytes: 2048, stored: true, ...over });
 
 const IMG = '<img src="https://evil.example/x.png" onerror="alert(1)">';
 const JS = '[click me](javascript:alert(1))';
@@ -73,6 +82,8 @@ beforeEach(() => {
   options.mockReset().mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'open', agents: [], limit: null });
   fetchRun.mockReset().mockResolvedValue(run());
   fetchSteps.mockReset().mockResolvedValue({ data: [] });
+  fetchFile.mockReset();
+  save.mockReset();
   cancel.mockReset();
 });
 
@@ -84,7 +95,7 @@ describe('model-written text stays inert', () => {
       error: HOSTILE,
       stop_reason: IMG,
       input: { town: HOSTILE },
-      files: [`${IMG}.xlsx`, 'javascript:alert(1)'],
+      files: [file({ id: 1, name: `${IMG}.xlsx` }), file({ id: 2, name: 'javascript:alert(1)', stored: false })],
       proposals: [{ entry: IMG, args: { title: JS, html: IMG } }],
       output: { note: HOSTILE, href: 'javascript:alert(1)' },
       cited_property_ids: [12, 'javascript:alert(1)', -1, 34] as unknown as number[],
@@ -165,7 +176,7 @@ describe('a run read honestly', () => {
     expect(await screen.findByText(/switched off/)).toBeInTheDocument();
     expect(screen.getByText('No result yet.')).toBeInTheDocument();
     expect(screen.getByText('No steps yet.')).toBeInTheDocument();
-    expect(screen.getByText('No files.')).toBeInTheDocument();
+    expect(screen.getByText('Files appear when the run ends.')).toBeInTheDocument();
     expect(screen.getByText('No proposals.')).toBeInTheDocument();
   });
 
@@ -187,13 +198,51 @@ describe('a run read honestly', () => {
     expect(screen.getByText('c0mm1t')).toBeInTheDocument();
   });
 
-  it('shows files and proposals as plain data: no link, no Apply, no Undo', async () => {
-    fetchRun.mockResolvedValue(run({ files: ['model.xlsx'], proposals: [{ entry: 'create_collection', args: { name: 'Shortlist' } }] }));
+  it('lists a file by name and size and saves it as a download, under its own run and id', async () => {
+    const bytes = new Blob(['x']);
+    fetchFile.mockResolvedValue(bytes);
+    fetchRun.mockResolvedValue(run({ id: 7, files: [file()] }));
     mount();
     const files = await screen.findByRole('region', { name: 'Files' });
     expect(within(files).getByText('model.xlsx')).toBeInTheDocument();
+    expect(within(files).getByText('2 KB')).toBeInTheDocument();
     expect(within(files).queryByRole('link')).toBeNull();
-    const proposals = screen.getByRole('region', { name: 'Proposals' });
+    fireEvent.click(within(files).getByRole('button', { name: 'Download' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(bytes, 'model.xlsx'));
+    expect(fetchFile).toHaveBeenCalledWith(7, 5);
+  });
+
+  it('says a failed download failed, and leaves the file there to try again', async () => {
+    fetchFile.mockRejectedValue(new Error('File storage is not answering; try again shortly.'));
+    fetchRun.mockResolvedValue(run({ files: [file()] }));
+    mount();
+    const files = await screen.findByRole('region', { name: 'Files' });
+    fireEvent.click(within(files).getByRole('button', { name: 'Download' }));
+    expect(await within(files).findByRole('alert')).toHaveTextContent('not answering');
+    expect(within(files).getByRole('button', { name: 'Download' })).toBeEnabled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('says a file was not stored and offers nothing to download', async () => {
+    fetchRun.mockResolvedValue(run({ files: [file({ stored: false })] }));
+    mount();
+    const files = await screen.findByRole('region', { name: 'Files' });
+    expect(within(files).getByText('Not stored')).toBeInTheDocument();
+    expect(within(files).getByText(/couldn’t be stored/)).toBeInTheDocument();
+    expect(within(files).queryByRole('button')).toBeNull();
+  });
+
+  it('says an ended run with no files has none', async () => {
+    fetchRun.mockResolvedValue(run({ files: [] }));
+    mount();
+    const files = await screen.findByRole('region', { name: 'Files' });
+    expect(within(files).getByText('No files.')).toBeInTheDocument();
+  });
+
+  it('shows proposals as plain data: no link, no Apply, no Undo', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: [{ entry: 'create_collection', args: { name: 'Shortlist' } }] }));
+    mount();
+    const proposals = await screen.findByRole('region', { name: 'Proposals' });
     expect(within(proposals).getByText('create_collection')).toBeInTheDocument();
     expect(within(proposals).getByText(/"Shortlist"/)).toBeInTheDocument();
     expect(within(proposals).queryByRole('button')).toBeNull();
