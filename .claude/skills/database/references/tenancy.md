@@ -227,8 +227,9 @@ never reset, never rendered.
   nobody follows another account's `shares`. The one policy, `curation_clock_audience_read` (FOR SELECT), restates
   641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its CASE (own / edit share /
   read share → families) to `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker;
-  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows
-  (`pipeline_shares_party … and not acting()`), so it fails closed to the caller's own rows, never an error.
+  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows (the definer audience's
+  own `not public.acting()`; `pipeline_shares_party … and not acting()` until 709), so it fails closed to the
+  caller's own rows, never an error.
 - **Two audience evaluations per read, never more** (migration 708, F16 #2308; ruling 2026-11-01). The policy is
   ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
   … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
@@ -249,13 +250,17 @@ never reset, never rendered.
   gate #2203's 2.5 ms; warm, planning was most of each evaluation. Locally a warm read went from 0.93–1.08 ms and
   11–18 buffers to 0.27–0.35 ms and 5–10 (`docs/design/curation-sync.md` § 3.8). THE TRADE: no row policy backs the
   definer body, so it filters itself: the recipient is one of the caller's accounts, and no share row while acting
-  (`not public.acting()`, which `pipeline_shares_party` did for the invoker). Census (i) requires both of a definer
-  body; `tests/_admin_gate_registry.py` UNGATED registers it `reachable` (`/rpc/curation_clock_audience`); 709's
-  `$post$` requires its owner to bypass `pipeline_shares`' row security and an empty answer without an identity. A
-  backend's FIRST statement pays catalog warm-up (~300 execution + ~330 planning buffers, the "first audience call
-  ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on the pooled
-  `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
-  `current_account_ids()` call to it; the live lane pins two calls per read and ≤ 40 buffers warm at both sizes.
+  (`not public.acting()`, which `pipeline_shares_party` did for the invoker). Census (i) and 709's `$post$` hold a
+  definer body's `me` CTE and its whole WHERE verbatim (`DEFINER_AUDIENCE_FILTERS`), so a neutralised filter or a
+  dropped `not in` fails; `tests/_admin_gate_registry.py` UNGATED registers it `reachable`
+  (`/rpc/curation_clock_audience`; the live sweep's waiver is incidental, the catalog case checks it reads no
+  admin-only relation); 709's `$post$` requires its owner to bypass `pipeline_shares`' row security and an empty
+  answer without an identity. A backend's FIRST statement pays catalog warm-up (~300 execution + ~330 planning
+  buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
+  the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
+  `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
+  rows each caller reads on one backend after another warmed its plan; ≤ 40 buffers warm at both sizes is a ceiling
+  against a scan of a full clock, not against 708 (~20).
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table

@@ -29,8 +29,9 @@
 #       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
 #       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
 #       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts. It reads the audience's
-#       LAST definition (709's): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must filter by
-#       the caller's accounts as recipient and hide share rows while acting itself
+#       LAST definition (709's): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
+#       DEFINER_AUDIENCE_FILTERS verbatim (the caller's accounts as `me`; a share to one of them as recipient, from none
+#       of them, none while acting: the whole WHERE)
 #   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
 #   (k) rail_k  test_no_family_is_a_suffix_of_another: the dedupe GUC holds `<family>:<account>;` entries and finds
 #       one with strpos, so a family that ends another (`ags` inside `tags`) would read as already bumped
@@ -43,6 +44,10 @@
 #   - (e) sees a TRUNCATE that names a clocked table; a TRUNCATE … CASCADE of a table that clocked tables reference
 #     (accounts) empties them unnamed.
 #   - (e) and (h) read code and migrations; an operator's SQL in the dashboard is outside both.
+#   - (i) holds a definer audience to its `me` and its WHERE, verbatim; what lies outside them (a third UNION arm, a
+#     select list that makes an owner `mine`) is the live lane's audience cases' to catch. An invoker body's filters
+#     are not read: pipeline_shares' row policy backs them, and its `not in` is unchecked (pipeline_shares_not_self
+#     keeps a share off its owner's own account, not off the caller's other accounts).
 
 from __future__ import annotations
 
@@ -409,6 +414,14 @@ def policy_arms(using: str) -> dict[str, frozenset[str]]:
     return {"own": follows({"mine", "edit"}), "edit": follows({"edit"}), "read": follows(set())}
 
 
+# A definer audience is filtered by its own text alone (709): who the caller is, and its WHERE whole, as _norm leaves
+# them. Whole, so a neutralised filter (`(not public.acting() or true)`) or a dropped `not in` fails, which a
+# substring of either filter would pass; 709's $post$ holds the same two strings.
+DEFINER_AUDIENCE_FILTERS = (
+    "with me as (select t.id from public.current_account_ids() as t(id))",
+    "where s.recipient_account_id in (select me.id from me) and s.account_id not in (select me.id from me) "
+    "and not public.acting() group by s.account_id",
+)
 _DEFINE_AUDIENCE = re.compile(r"create (?:or replace )?function (?:public\.)?curation_clock_audience\(\)(.*?)\$\$(.*?)\$\$")
 
 
@@ -456,10 +469,11 @@ def rail_i(policies: dict[str, tuple[str, str | None, str | None]], audience_tex
         problems.append("curation_clock_audience() must read current_account_ids(), never acting (follow, never act)")
     if "bool_or(s.mode = 'edit')" not in body:
         problems.append("curation_clock_audience()'s edit flag is no longer `bool_or(s.mode = 'edit')`")
-    if "security definer" in attributes and not ("s.recipient_account_id in (select" in body
-                                                 and "not public.acting()" in body):
-        problems.append("a definer curation_clock_audience() reads pipeline_shares as its owner: it must keep a share "
-                        "to the caller's accounts as recipient and hide share rows while acting itself")
+    missing = [f for f in DEFINER_AUDIENCE_FILTERS if f not in body]
+    if "security definer" in attributes and missing:
+        problems.append("a definer curation_clock_audience() reads pipeline_shares as its owner: it must hold, "
+                        "verbatim, who the caller is and a share to them as recipient, never their own, none while "
+                        f"acting: {missing}")
     return problems
 
 
@@ -701,7 +715,10 @@ def test_the_audience_rail_reads_the_last_definition_and_bites_on_a_bare_definer
     assert name != _clock_migration(migrations)[0], "709 redefines the audience; the rail reads it, not 696's"
     assert "security definer" in _audience_definition(text)[0]
     for old, new in (("\n     and not public.acting()", ""),
-                     ("s.recipient_account_id in (select me.id from me)", "true")):
+                     ("s.recipient_account_id in (select me.id from me)", "true"),
+                     ("and not public.acting()", "and (not public.acting() or true)"),
+                     ("\n     and s.account_id not in (select me.id from me)", ""),
+                     ("from public.current_account_ids() as t(id)", "from public.accounts as t(id)")):
         assert old in text, old
         assert rail_i(policies, text.replace(old, new), CLOCKED_TABLES), old
     later = text.replace("public.current_account_ids()", "public.acting_account_ids(true)")

@@ -184,10 +184,12 @@ UNGATED: dict[str, Ungated] = {
     "curation_clock_audience": Ungated(
         "function", "reachable", ("709_curation_clock_audience_plan.sql",),
         "Reads no admin-only relation: registered as a SECURITY DEFINER function the browser may call "
-        "(/rpc/curation_clock_audience). Definer only so a clock read skips pipeline_shares' row policy (F17, #2311). "
-        "It filters by current_account_ids() itself: own accounts, the owners whose share names one of them as "
-        "recipient, none while acting; so it returns the invoker body's rows (tests/test_curation_clock_live.py, "
-        "census i in tests/test_curation_sync_census.py)."),
+        "(/rpc/curation_clock_audience), as ticket #2311 asked. Definer only so a clock read skips pipeline_shares' "
+        "row policy (F17). It filters by current_account_ids() itself: own accounts, the owners whose share names one "
+        "of them as recipient, none while acting; so it returns the invoker body's rows "
+        "(tests/test_curation_clock_live.py, census i in tests/test_curation_sync_census.py, 709's $post$). The live "
+        "sweep's waiver this entry brings is incidental, not needed: the clock's catalog case asserts its body names no "
+        "ADMIN_ONLY_RELATIONS entry, so a drift into one still fails."),
     "images_public": Ungated(
         "view", "reachable", ("591_images_public_tag_head_scores.sql", "686_drop_render_score.sql"),
         "Every signed-in Browse card's cover is chosen by the active tag model's scores (operator ruling "

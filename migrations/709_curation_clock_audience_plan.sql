@@ -25,7 +25,7 @@
 --   (/rpc/curation_clock_audience). Its rows are the invoker body's: own accounts, and the owners whose share names
 --   one of the caller's accounts as recipient, none while acting. The live lane proves that for own, read share, edit
 --   share, no share and x-act-as. The cost: pipeline_shares' row policy no longer backs this body, so this body is
---   the only filter. Hence the rails: census (i) requires the recipient filter and NOT acting() in the definer body,
+--   the only filter. Hence the rails: census (i) and $post$ hold the definer body's `me` and its WHERE verbatim,
 --   tests/_admin_gate_registry.py UNGATED registers it 'reachable', and $post$ requires the owner to bypass
 --   pipeline_shares' row security (else a recipient follows nobody). The invoker shapes keep that backstop but leave
 --   the warm read at 0.41-0.62 ms (a+c), and plpgsql alone makes a backend's first read slower; the definer carries
@@ -85,16 +85,19 @@ declare
   v_qual text;
   v_view text := pg_get_viewdef('public.curation_clock_public'::regclass);
 begin
-  select p.prosrc into v_src from pg_proc p where p.oid = v_fn;
+  -- No policy backs a definer body, so its filters are held whole (census i holds the same two strings): a substring
+  -- of either would pass `(not public.acting() or true)` or a dropped `not in`.
+  select lower(regexp_replace(p.prosrc, '\s+', ' ', 'g')) into v_src from pg_proc p where p.oid = v_fn;
   if not exists (select 1 from pg_proc p join pg_language l on l.oid = p.prolang
                   where p.oid = v_fn and l.lanname = 'plpgsql' and p.prosecdef and p.provolatile = 's'
                     and p.prorows = 4 and p.proretset and p.proconfig = array['search_path=""']
                     and pg_get_function_result(p.oid) = 'TABLE(account_id uuid, mine boolean, edit boolean)')
-     or strpos(v_src, 'public.current_account_ids()') = 0 or strpos(v_src, 'acting_account_ids') > 0
-     or strpos(v_src, 's.recipient_account_id in (select me.id from me)') = 0
-     or strpos(v_src, 'not public.acting()') = 0 then
+     or strpos(v_src, 'acting_account_ids') > 0
+     or strpos(v_src, 'with me as (select t.id from public.current_account_ids() as t(id))') = 0
+     or strpos(v_src, 'where s.recipient_account_id in (select me.id from me) and s.account_id not in '
+                      '(select me.id from me) and not public.acting() group by s.account_id') = 0 then
     raise exception '709: curation_clock_audience() is plpgsql, stable, definer, rows 4, search_path '''', and its '
-      'body reads current_account_ids() for the recipient and hides share rows while acting';
+      'body reads current_account_ids() for the recipient, never their own accounts, and hides share rows while acting';
   end if;
   if not exists (select 1 from pg_proc p, pg_class c, pg_roles r
                   where p.oid = v_fn and c.oid = 'public.pipeline_shares'::regclass and r.oid = p.proowner
