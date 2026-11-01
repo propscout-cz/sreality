@@ -26,6 +26,11 @@ class RunScope:
     _cost_usd: float = 0.0
     _llm_call_id: int | None = None
 
+    @property
+    def agent_run_id(self) -> int | None:
+        """The row this run is on the ledger as; the local runner has none."""
+        return self.llm.agent_run_id
+
     def charge(self, cost_usd: float, llm_call_id: int | None) -> None:
         """Called as soon as the provider has billed, so a bill survives whatever the tool does next."""
         self._cost_usd += cost_usd

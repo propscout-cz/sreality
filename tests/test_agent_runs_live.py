@@ -4,6 +4,7 @@ real row-level security and the real identity functions. Runs in CI's migrations
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import threading
 import time
@@ -16,14 +17,17 @@ from typing import Any
 import psycopg
 import pytest
 
-from api import tenant_pool
+from api import tenant_pool, valuo, valuo_client
 from api.agents import claims, executor, loop, terminator
 from api.agents.definition import load
 from api.capabilities import registry, run_scope
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
+from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
+from api.llm_client import LLMClient
 from api.providers import Completion, HostedFile, ModelPrice
-from tests._live_property import REQUIRED_DB, db_url, signups
+from scripts import agent_run
+from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url, signups
 from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
 from tests.api._agent_fixtures import ScriptedCodeProvider, code_reply, frontmatter, reply, write_folder
@@ -1229,3 +1233,231 @@ def test_an_interrupted_run_is_not_paid_for_twice_when_it_starts_over(svc: psyco
     ledger = _ledger(svc, run_id)
     assert [c for _, c, _ in ledger].count(VISUALS) == 1, "the first attempt's judgement is the cache's now"
     assert float(row["cost_usd"]) == pytest.approx(sum(cost for _, _, cost in ledger))
+
+
+# --- a paid tenant tool: Valuo, through a worker, with a stand-in for Valuo (#2067) -----------------------------------
+
+VALUO = "valuo_valuation"
+VALUED = {"success": True, "result": {"avg_price": 6_000_000, "avg_price_m2": 85_700, "records": []}}
+
+
+class _FakeValuo:
+    """Never the network: every paid request lands here, and says whether it could have been made at all."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.answer: Any = VALUED
+        self.during: Callable[[], None] | None = None
+
+    def calculate(self, cred: valuo_client.Credential, request: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(request)
+        if self.during:
+            self.during()
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def _ledger_rows(svc: psycopg.Connection, account: uuid.UUID) -> list[tuple[Any, ...]]:
+    return svc.execute("SELECT id, status, agent_run_id FROM valuo_valuations WHERE account_id = %s ORDER BY id",
+                       (account,)).fetchall()
+
+
+@pytest.fixture()
+def valuing(svc: psycopg.Connection, world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+    """An agent that lists the tool, six located flats committed for connections of their own to see, a cap of ten."""
+    root = world["folder"].parent / "valuing"
+    write_folder(root, meta=frontmatter(AGENT, allowed_tools=[VALUO], limits={
+        "max_iterations": 30, "max_cost_usd": 5.0, "wall_clock_timeout_s": 120}))
+    monkeypatch.setattr(executor, "SKILLS_DIR", root)
+    fake = _FakeValuo()
+    monkeypatch.setattr(valuo_client, "credential", lambda: valuo_client.Credential("sandbox", "live-test-token"))
+    monkeypatch.setattr(valuo_client, "calculate", fake.calculate)
+    monkeypatch.setattr(valuo_client, "advert_details", lambda cred, ids: [])
+    before = svc.execute("SELECT value, description FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,)).fetchone()
+    _set(svc, valuo.CAP_SETTING, 10)
+    pids, lids = [], []
+    with svc.cursor() as cur:
+        for _ in range(6):
+            pid = _property(cur)
+            lid = _advert(cur, pid, source="idnes", condition="dobry")
+            cur.execute("INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, "
+                        "  uncertainty_radius_m, country_status, resolver_version, claim_set_hash, registry_version) "
+                        "VALUES (%s, ST_SetSRID(ST_MakePoint(14.42, 50.08), 4326), 'exact', 'building', 5, 'cz', 'test', "
+                        "  '\\x00'::bytea, 'test')", (lid,))
+            _recompute(cur, pid)
+            pids.append(pid)
+            lids.append(lid)
+    try:
+        yield {**world, "pids": pids, "fake": fake}
+    finally:
+        svc.execute("DELETE FROM valuo_valuations WHERE listing_id = ANY(%s)", (lids,))
+        # The lanes after this one count their own seeds on the one replay: an ad or property left here fails them.
+        svc.execute("DELETE FROM listing_location WHERE listing_id = ANY(%s)", (lids,))
+        svc.execute("DELETE FROM listings WHERE id = ANY(%s)", (lids,))
+        svc.execute("DELETE FROM properties WHERE id = ANY(%s)", (pids,))
+        svc.execute("DELETE FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,))
+        if before is not None:
+            svc.execute("INSERT INTO app_settings (key, value, description) VALUES (%s, %s::jsonb, %s)",
+                        (valuo.CAP_SETTING, json.dumps(before[0]), before[1]))
+
+
+def _value_of(*property_ids: int) -> Completion:
+    return reply(*[(VALUO, {"property_id": pid}) for pid in property_ids])
+
+
+def test_a_fourth_valuo_call_is_refused_and_each_of_three_is_on_the_run_and_the_ledger(
+        svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    pids, fake = valuing["pids"], valuing["fake"]
+    run_id = _submit(svc, valuing, "a")
+    model = _Model(_value_of(*pids[:4]), reply((SUBMIT, {"markdown": "Hotovo.", "cited_property_ids": pids[:3]})))
+    assert _work_on(model) == executor.Worked("succeeded", run_id)
+
+    assert len(fake.calls) == 3, "the fourth made no paid request"
+    rows = _ledger_rows(svc, valuing["a_acc"])
+    assert [(status, run) for _, status, run in rows] == [("success", run_id)] * 3, "and wrote no row"
+    steps = [s for s in _steps(svc, run_id) if s["name"] == VALUO]
+    assert [s["payload"]["output"]["data"]["valuation_id"] for s in steps[:3]] == [r[0] for r in rows]
+    assert [s["payload"]["output"]["metadata"]["run_calls_used"] for s in steps[:3]] == [1, 2, 3]
+    assert steps[3]["payload"]["output"]["error"]["code"] == "refused" and "3" in steps[3]["payload"]["output"]["error"]["message"]
+    assert all(s["payload"]["output"].get("metadata", {}).get("cost_usd") is None for s in steps)
+    assert [float(s["cost_usd"]) for s in steps] == [0.0] * 4, "no price is known, so no dollars are invented"
+    llm_only = _ledger(svc, run_id)
+    assert [c for _, c, _ in llm_only] == ["agent_run", "agent_run"]
+    assert float(_run(svc, run_id)["cost_usd"]) == pytest.approx(sum(cost for _, _, cost in llm_only))
+
+
+def test_the_next_run_on_the_same_worker_gets_its_own_three(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    pids, fake = valuing["pids"], valuing["fake"]
+    answer = reply((SUBMIT, {"markdown": "Hotovo."}))
+    first = _submit(svc, valuing, "a")
+    assert _work_on(_Model(_value_of(*pids[:4]), answer)) == executor.Worked("succeeded", first)
+    assert run_scope.current() is None
+    second = _submit(svc, valuing, "a")
+    assert _work_on(_Model(_value_of(*pids[3:6]), answer)) == executor.Worked("succeeded", second)
+    assert len(fake.calls) == 6
+    assert Counter(run for _, _, run in _ledger_rows(svc, valuing["a_acc"])) == {first: 3, second: 3}
+
+
+def test_a_failed_valuo_call_is_on_the_ledger_and_takes_a_slot(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    pids, fake = valuing["pids"], valuing["fake"]
+    fake.answer = valuo_client.ValuoError("unavailable", 503)
+    run_id = _submit(svc, valuing, "a")
+    assert _work_on(_Model(_value_of(*pids[:4]), reply((SUBMIT, {"markdown": "Hotovo."})))).state == "succeeded"
+    assert len(fake.calls) == 3, "every failure was attempted: the fourth is refused all the same"
+    rows = _ledger_rows(svc, valuing["a_acc"])
+    assert [(status, run) for _, status, run in rows] == [("failed", run_id)] * 3
+    outputs = [s["payload"]["output"]["error"] for s in _steps(svc, run_id) if s["name"] == VALUO]
+    assert outputs[0]["details"][0]["valuation_id"] == rows[0][0] and outputs[0]["details"][0]["code"] == "unavailable"
+    assert "details" not in outputs[3]
+
+
+def test_a_restarted_run_keeps_counting_what_it_paid_for(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    pids, fake = valuing["pids"], valuing["fake"]
+    run_id = _submit(svc, valuing, "a")
+    stop = threading.Event()
+    interrupted = _Model(_value_of(*pids[:2]), _value_of(pids[2]), during=lambda n: stop.set() if n == 2 else None)
+    assert _work_on(interrupted, stop).state == "released"
+    assert len(fake.calls) == 2
+
+    again = _Model(_value_of(pids[3], pids[4]), reply((SUBMIT, {"markdown": "Hotovo."})))
+    assert _work_on(again) == executor.Worked("succeeded", run_id)
+    assert _run(svc, run_id)["attempts"] == 2
+    assert len(fake.calls) == 3, "three per run, not three per attempt"
+    assert len(_ledger_rows(svc, valuing["a_acc"])) == 3
+
+
+def _racing_call(valuing: dict[str, Any], run_id: int, pid: int) -> dict[str, Any] | ToolError:
+    """One run's call on connections of its own, as a second worker would make it."""
+    with _connect() as conn:
+        scope = run_scope.RunScope(llm=LLMClient(conn, providers={}, agent_run_id=run_id), left_usd=lambda: 1.0,
+                                   left_s=lambda: 300.0)
+        try:
+            with run_scope.running(scope):
+                return registry.call(_caller(conn, valuing["a"], valuing["a_acc"]), VALUO, {"property_id": pid})
+        except ToolError as exc:
+            return exc
+
+
+@pytest.mark.parametrize("attempt", range(3))
+def test_two_runs_of_one_account_cannot_both_take_the_last_slot(svc: psycopg.Connection, valuing: dict[str, Any],
+                                                               attempt: int) -> None:
+    pids, fake = valuing["pids"], valuing["fake"]
+    _set(svc, valuo.CAP_SETTING, 3)
+    results: list[Any] = []
+    gate = threading.Barrier(6)
+
+    def one(run_id: int, pid: int) -> None:
+        gate.wait()
+        results.append(_racing_call(valuing, run_id, pid))
+    threads = [threading.Thread(target=one, args=(9_000 + n, pid)) for n, pid in enumerate(pids)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    refused = [r for r in results if isinstance(r, ToolError)]
+    assert len(fake.calls) == 3 and len(refused) == 3, "six runs, three slots"
+    assert all(r.code is ToolErrorCode.REFUSED and "nothing was paid" in r.message for r in refused)
+    assert len(_ledger_rows(svc, valuing["a_acc"])) == 3
+
+
+def test_the_cap_check_waits_for_a_concurrent_runs_uncommitted_row(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    """Deterministic: without the account's lock, this call would read the count before the other's row commits."""
+    pids, fake = valuing["pids"], valuing["fake"]
+    _set(svc, valuo.CAP_SETTING, 1)
+    results: list[Any] = []
+    with _connect() as other, other.transaction():
+        other.execute(valuo._ACCOUNT_LOCK_SQL, (str(valuing["a_acc"]),))
+        lid = other.execute("SELECT id FROM listings WHERE property_id = %s", (pids[0],)).fetchone()[0]
+        other.execute("INSERT INTO valuo_valuations (account_id, listing_id, environment, token_sha, request, provenance) "
+                      "VALUES (%s, %s, 'sandbox', 'x', '{}', '{}')", (valuing["a_acc"], lid))
+        thread = threading.Thread(target=lambda: results.append(_racing_call(valuing, 9_100, pids[1])))
+        thread.start()
+        thread.join(timeout=1.0)
+        assert thread.is_alive() and not fake.calls, "held at the lock, before any count and any money"
+    thread.join()
+    assert isinstance(results[0], ToolError) and results[0].code is ToolErrorCode.REFUSED and not fake.calls
+
+
+def test_another_accounts_share_cannot_spend_its_cap_or_reach_its_ledger(svc: psycopg.Connection,
+                                                                        valuing: dict[str, Any]) -> None:
+    """Act-as is the only way a user reaches another account, and a run has no way to ask for it."""
+    pids, fake = valuing["pids"], valuing["fake"]
+    svc.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'edit')",
+                (valuing["b_acc"], valuing["a_acc"]))
+    for builder in (executor.submit, claims.caller_for, executor.work_once, loop.run):
+        assert not [p for p in inspect.signature(builder).parameters if "act" in p.split("_")], builder.__name__
+    scope = run_scope.RunScope(llm=LLMClient(svc, providers={}, agent_run_id=9_200), left_usd=lambda: 1.0,
+                               left_s=lambda: 300.0)
+    with pytest.raises(ToolError) as named, run_scope.running(scope):
+        registry.call(_caller(svc, valuing["a"], valuing["b_acc"]), VALUO, {"property_id": pids[0]})
+    assert named.value.code is ToolErrorCode.FORBIDDEN, "a claim naming the sharer's account reads as no account"
+    with pytest.raises(ToolError) as asked, run_scope.running(scope):
+        registry.call(_caller(svc, valuing["a"], valuing["a_acc"]), VALUO,
+                      {"property_id": pids[0], "act_as": str(valuing["b_acc"])})
+    assert asked.value.code is ToolErrorCode.INVALID_ARGUMENTS
+    assert not fake.calls and not _ledger_rows(svc, valuing["b_acc"]) and not _ledger_rows(svc, valuing["a_acc"])
+
+
+def test_the_local_runner_reaches_the_tool_and_is_refused_before_any_money(
+        svc: psycopg.Connection, valuing: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """scripts/agent_run.py itself: a real loop and a real claim, no run row, so no ledger row could name it."""
+    model = _Model(_value_of(valuing["pids"][0]), reply((SUBMIT, {"markdown": "Hotovo."})))
+    monkeypatch.setattr(agent_run.db, "connect", _connect)
+    monkeypatch.setattr(agent_run.dependencies, "get_providers", lambda: {"anthropic": model})
+    folder = executor.SKILLS_DIR / AGENT
+    assert agent_run.main([str(folder), "--user", str(valuing["a"]), "--input", '{"town": "Brno"}']) == 0
+    assert "Hotovo." in capsys.readouterr().out
+    told = json.dumps(model.calls[1]["messages"][-1].content[0].content)
+    assert "refused" in told and "agent run" in told
+    assert not valuing["fake"].calls and not _ledger_rows(svc, valuing["a_acc"])
+
+
+def test_a_refused_first_call_on_no_cap_leaves_nothing(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
+    _set(svc, valuo.CAP_SETTING, None)
+    run_id = _submit(svc, valuing, "a")
+    assert _work_on(_Model(_value_of(valuing["pids"][0]), reply((SUBMIT, {"markdown": "Hotovo."})))).state == "succeeded"
+    [step] = [s for s in _steps(svc, run_id) if s["name"] == VALUO]
+    assert valuo.CAP_SETTING in step["payload"]["output"]["error"]["message"]
+    assert not valuing["fake"].calls and not _ledger_rows(svc, valuing["a_acc"])
