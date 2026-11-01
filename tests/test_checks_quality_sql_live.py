@@ -848,6 +848,7 @@ def test_a_door_a_pin_named_is_no_truth_and_is_judged_as_a_door_given_the_bind(s
         "insert into ruian_address_points (kod_adm, obec_unit_id, obec_kod, psc, geom, plati_od, first_version_id, "
         "  last_version_id) values (99991, %s, %s, '16000', ST_SetSRID(ST_MakePoint(14.42, 50.0802), 4326), "
         "  current_date, %s, %s)", (seed.unit("obec", _TOWN, version), _TOWN, version, version))
+    assert resolve_db.SqlRegistryView(seed.conn, version).doors_near(50.0802, 14.42) == (99991,)
     seed.located(alone, granularity="address_point", obec=_TOWN, lat=50.09)               # no truth at all
     seed.claim(alone, "coordinate", lat=50.09)
     seed.located(far_truth, granularity="address_point", obec=_TOWN + 1)

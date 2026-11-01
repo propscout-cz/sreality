@@ -63,9 +63,9 @@ Once pins name doors, address grain is no truth: a pin-named door's error is at 
   | PSČ stated / differs from the door | 119 / 0 |
   | Part claim stated / not the door's část by name (MOMC lines included) | 4,791 / 86 |
   | Locality line that is not the row's town by name (upper bound for composed lines; 35 hold a digit) | 212 |
-  | Any of the refusals above | 420 |
+  | Any of those but the another-street row | 420 |
 
-  So about 6,157 of 6,577 survive: **≈ 61.5k rows move, not 66.7k**, 6.4 % fewer. The MOMC rule costs at most 2,120 rows, of which about 350 hold a digit. Rejected door claims cost nothing here, the cohort already holds none. Per-grain splits after the refusals are not measured; the shadow's mover count is the real figure.
+  So about 6,150 of 6,577 survive: **≈ 61.5k rows move, not 66.7k**, about 6.5 % fewer. The MOMC rule costs at most 2,120 rows, of which about 350 hold a digit. Rejected door claims cost nothing here, the cohort already holds none. Per-grain splits after the refusals are not measured; the shadow's mover count is the real figure.
 - **No ordering in `doors_near`.** The rule does not read which door, so `ORDER BY` went with the metres, rather than ordering by `kod_adm`.
 - **`pin_error_m` n is not "unchanged".** Dropping wrong-town rows lowers it: read on production 2026-11-01, 10,593 → 10,584 pins and `below_address` 5,072 = `given_bind` 5,059 + `wrong_town` 13. Cover on that reading: 4,917 of 5,059 (97.2 %). Compare the sum of a portal's classes plus its wrong-town rows, not the old n alone.
 - **The rail's home.** The EXPLAIN and `+door` live tests live in `tests/test_checks_quality_sql_live.py`, already in the schema lane, so `migrations.yml` is unchanged.
