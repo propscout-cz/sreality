@@ -59,6 +59,7 @@ from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
+from api.routes.agent_runs import router as agent_runs_router
 from api.routes.billing import router as billing_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
@@ -305,6 +306,9 @@ app.include_router(property_location_router)
 app.include_router(property_price_history_router)
 # /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
+# /runs* — start, list, read, read the steps of and cancel an agent run: the caller's own account, never acted for; reads
+# under RLS, writes through api/agents/executor.py on the service role (#2071).
+app.include_router(agent_runs_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and
 # cached a year (the URL carries the section version). JWT-gated; the overlay store is service-role only.

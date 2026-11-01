@@ -231,7 +231,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_agent_runs_live.py -q
+        run: pytest tests/test_agent_runs_live.py tests/test_agent_run_routes_live.py -q
 
       # Collection sharing (migration 610) widens READS only, through four FOR SELECT policies,
       # a party policy and a SECURITY DEFINER label function. Only a real schema under the

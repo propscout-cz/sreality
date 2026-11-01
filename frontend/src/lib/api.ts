@@ -14,6 +14,7 @@
  */
 
 import type { WaitlistResponse } from './waitlist';
+import type { AgentRun, AgentRunOptions, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,
@@ -643,6 +644,18 @@ export const listSkills = (
 
 /* The propscout.cz waitlist, newest first, for the admin Sign-ups page (GET /admin/waitlist, admin-only). */
 export const fetchWaitlistSignups = (): Promise<WaitlistResponse> => request<WaitlistResponse>('/admin/waitlist');
+
+/* Agent runs (api/routes/agent_runs.py): every one the caller's own account, never acted for. */
+export const fetchAgentRunOptions = (): Promise<AgentRunOptions> => request<AgentRunOptions>('/runs/options');
+export const fetchAgentRuns = (): Promise<{ data: AgentRunRow[]; truncated: boolean }> =>
+  request<{ data: AgentRunRow[]; truncated: boolean }>('/runs');
+export const fetchAgentRun = (id: number): Promise<AgentRun> => request<AgentRun>(`/runs/${id}`);
+export const fetchAgentRunSteps = (id: number): Promise<{ data: AgentRunStep[] }> =>
+  request<{ data: AgentRunStep[] }>(`/runs/${id}/steps`);
+export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status: AgentRunStatus; created: boolean }> =>
+  request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
+export const cancelAgentRun = (id: number): Promise<{ id: number; status: AgentRunStatus }> =>
+  request<{ id: number; status: AgentRunStatus }>(`/runs/${id}/cancel`, { method: 'POST' });
 
 export const getSkill = (name: string): Promise<Skill> =>
   request<Skill>(`/admin/skills/${encodeURIComponent(name)}`);

@@ -72,6 +72,10 @@ const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
 // the section cards' growth off the first-visit budget.
 const EstimationDetail = lazyChunk(() => import('./pages/EstimationDetail'));
 const BrokerDetail = lazyChunk(() => import('./pages/BrokerDetail'));
+// Agent runs: an operator tool behind an allowlist, so never part of a first visit. Open to any session: a refused
+// account reads why, and the API decides what each caller may do.
+const Runs = lazyChunk(() => import('./pages/Runs'));
+const RunDetail = lazyChunk(() => import('./pages/RunDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -145,6 +149,24 @@ export const routes: RouteObject[] = [
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
       { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
       { path: ROUTES.agentPlatform.childPath, element: <AdminPage><AgentPlatform /></AdminPage>, handle: { title: 'Agent platform' } },
+      {
+        path: ROUTES.runs.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <Runs />
+          </Suspense>
+        ),
+        handle: { title: 'Runs' },
+      },
+      {
+        path: ROUTES.runDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <RunDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Run' },
+      },
       { path: 'estimate', element: <Navigate to={ROUTES.estimations.build()} replace /> },
       { path: ROUTES.estimations.childPath, element: <EstimationList />, handle: { title: 'Estimations' } },
       {

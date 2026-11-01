@@ -1,4 +1,5 @@
 """Runs queue and execute durably: `submit` inserts one, `work_once` claims and runs the oldest it may, `cancel` flags one.
+`start_refusal` is the one gate on starting, `queue_state` says whether a queued run can move, `offered_agents` lists the image's agents.
 
 The row is the job (ADR-0001). A claim holds a lease that every step and a bounded heartbeat renew, compare-and-set on
 the row's `attempts`, so a worker that lost its run can write nothing more. An interrupted run (a lapsed lease, a SIGTERM) starts
@@ -50,6 +51,7 @@ SUMMARY_CHARS = 500
 
 SubmitRefusal = Literal["not_allowlisted", "in_flight_cap"]
 WorkState = Literal["dark", "parked", "idle", "succeeded", "failed", "cancelled", "released", "lost"]
+QueueState = Literal["dark", "parked", "open"]
 
 
 class SubmitRefused(Exception):
@@ -186,11 +188,27 @@ def _number(settings: Mapping[str, Any], key: str) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _folders() -> list[str]:
+    return sorted(p.name for p in SKILLS_DIR.iterdir() if p.is_dir())
+
+
 def _definition(agent: str) -> Definition:
     """The agent by name; a name that is no folder is refused here, so an input can never walk out of `skills/`."""
-    if agent not in {p.name for p in SKILLS_DIR.iterdir() if p.is_dir()}:
+    if agent not in _folders():
         raise DefinitionError(f"there is no agent named {agent!r}")
     return load(SKILLS_DIR / agent)
+
+
+def offered_agents() -> list[Definition]:
+    """Every agent a run can start on: the image's `skills/` folders, read now. A folder that does not load is logged and
+    left out, so one bad folder cannot take the others away (CI's definition tests refuse it before it ships)."""
+    offered = []
+    for name in _folders():
+        try:
+            offered.append(_definition(name))
+        except DefinitionError:
+            LOG.exception("AGENT_RUN agent folder does not load: %s", name)
+    return offered
 
 
 def tool_set_sha(definition: Definition) -> str:
@@ -221,24 +239,46 @@ def _storable(value: Any) -> Any:
     return _no_nul(cassette.plain(value))
 
 
+# --- starting ------------------------------------------------------------------------------------------------------
+
+def _refusal(conn: psycopg.Connection, settings: Mapping[str, Any], principal_user_id: uuid.UUID,
+             account_id: uuid.UUID) -> str | None:
+    allowed = settings.get(ALLOWLIST)
+    emails = [e.lower() for e in allowed if isinstance(e, str)] if isinstance(allowed, list) else []
+    if not conn.execute(_ALLOWED, (principal_user_id, account_id, emails)).fetchone()[0]:
+        return "Agent runs are not open to this account yet."
+    return None
+
+
+def start_refusal(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id: uuid.UUID) -> str | None:
+    """The one gate on starting a run, shared by `submit` and every surface that offers it: why this user may not start
+    one on this account, in words for them, or None. A later gate (a plan's agenda, #2319) joins `_refusal`."""
+    return _refusal(conn, _settings(conn), principal_user_id, account_id)
+
+
+def queue_state(conn: psycopg.Connection) -> QueueState:
+    """Whether a queued run can move now: `dark` the brake is off, `parked` the ceiling or a missing number holds it."""
+    settings = _settings(conn)
+    if settings.get(BRAKE) is not True:
+        return "dark"
+    return "parked" if _parked(conn, settings) else "open"
+
+
 # --- submit --------------------------------------------------------------------------------------------------------
 
 def submit(conn: psycopg.Connection, *, principal_user_id: uuid.UUID, account_id: uuid.UUID, agent: str,
            value: Mapping[str, Any], provider: str | None = None, idempotency_key: str | None = None) -> Submitted:
     """Queue one run on the service connection, for the identity the route stamped from the caller's own token; a
-    repeated idempotency key returns the run it made. Raises DefinitionError, InputError or SubmitRefused."""
+    repeated idempotency key returns the run it made. Raises SubmitRefused first, then DefinitionError or InputError."""
     # No act-as parameter: a run acts for its own user only (spec #2055 story 34).
-    definition = _definition(agent)
-    definition.check_input(value)
-    provider = provider or next(iter(definition.models))
-    pinned = _pin(definition, provider)
     with conn.transaction(), conn.cursor() as cur:
         settings = _settings(conn)
-        allowed = settings.get(ALLOWLIST)
-        emails = [e.lower() for e in allowed if isinstance(e, str)] if isinstance(allowed, list) else []
-        cur.execute(_ALLOWED, (principal_user_id, account_id, emails))
-        if not cur.fetchone()[0]:
-            raise SubmitRefused("not_allowlisted", "Agent runs are not open to this account yet.")
+        if (refusal := _refusal(conn, settings, principal_user_id, account_id)) is not None:
+            raise SubmitRefused("not_allowlisted", refusal)
+        definition = _definition(agent)
+        definition.check_input(value)
+        provider = provider or next(iter(definition.models))
+        pinned = _pin(definition, provider)
         cur.execute(_SUBMIT_LOCK, (str(account_id),))
         if idempotency_key is not None:
             cur.execute(_EXISTING, (account_id, idempotency_key))
@@ -276,20 +316,22 @@ def _reap(conn: psycopg.Connection) -> None:
         LOG.warning("AGENT_RUN lease expired run=%s now=%s attempts=%s", run_id, status, attempts)
 
 
-def _claim(conn: psycopg.Connection, settings: Mapping[str, Any]) -> _Claimed | Literal["parked", "idle"]:
+def _parked(conn: psycopg.Connection, settings: Mapping[str, Any]) -> str | None:
+    """Why nothing may be claimed now, for the log; None when something may."""
     ceiling = _number(settings, DAILY_CEILING)
-    cap = _number(settings, RUNNING_CAP)
-    if ceiling is None or cap is None:
-        LOG.warning("AGENT_RUN parked: %s and %s must both be numbers", DAILY_CEILING, RUNNING_CAP)
-        return "parked"
+    if ceiling is None or _number(settings, RUNNING_CAP) is None:
+        return f"{DAILY_CEILING} and {RUNNING_CAP} must both be numbers"
+    spent = float(conn.execute(_SPENT_TODAY, (list(_RUN_SPEND),)).fetchone()[0])
+    return f"${spent:.4f} spent today, ceiling ${ceiling:.2f}" if spent >= ceiling else None
+
+
+def _claim(conn: psycopg.Connection, settings: Mapping[str, Any]) -> _Claimed | Literal["parked", "idle"]:
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_CLAIM_LOCK)
-        cur.execute(_SPENT_TODAY, (list(_RUN_SPEND),))
-        spent = float(cur.fetchone()[0])
-        if spent >= ceiling:
-            LOG.warning("AGENT_RUN parked: $%.4f spent today, ceiling $%.2f", spent, ceiling)
+        if (why := _parked(conn, settings)) is not None:
+            LOG.warning("AGENT_RUN parked: %s", why)
             return "parked"
-        cur.execute(_CLAIM, {"lease": LEASE_S, "cap": cap})
+        cur.execute(_CLAIM, {"lease": LEASE_S, "cap": _number(settings, RUNNING_CAP)})
         row = cur.fetchone()
     return _Claimed(*row) if row else "idle"
 
