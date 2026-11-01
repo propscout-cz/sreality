@@ -170,7 +170,7 @@ it (`api/`). They do not apply to the scraper.
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
     journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
-    runs one locally (a cassette); `executor.py` queues them. Only the estimator still reads the `skills` table (Settings,
+    runs one locally; `executor.py` queues them, `/runs*` serve them. Only the estimator still reads `skills` (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
@@ -303,7 +303,7 @@ restate it here or in a module docstring.** Standing gates: `tests/api/test_admi
 `/brokers/*` + `POST /estimations` are service-role and excluded structurally) and
 `tests/api/test_account_scope_census.py` (no nullable tenant scope anywhere in `api/`).
 
-**Billing skeleton** (`api/routes/billing.py`, migration 298, PR #769 — Phase 1 increment 5) adds a
+**Billing skeleton** (`api/routes/billing.py`, migration 298) adds a
 **fourth** auth class: `POST /billing/webhook` verifies the `Stripe-Signature` HMAC over the raw
 body with the stdlib (no SDK), rejects payloads outside a 300s replay window, and fails closed with
 no `STRIPE_WEBHOOK_SECRET` — never `require_token`/ `verify_jwt`. One DB transaction covers the
@@ -314,7 +314,9 @@ never check-then-act) AND the handler, so a mid-handler crash lets Stripe's retr
 order isn't guaranteed). `GET /billing/me` rides `tenant_conn` (RLS). `require_entitlement(agenda)`
 is a dependency **factory** — `Depends(require_entitlement( "watchdogs"))` 403s unless the plan
 carries that agenda; bypass is `is_admin` alone. Wired to no *router* yet — the first real
-enforcement is inline in `create_estimation_run` (below).
+enforcement is inline in `create_estimation_run` (below). `agents` has no bypass;
+`pilot` is a comp the webhook leaves alone. Money limits, and raising
+`agent_daily_ceiling_usd` as accounts join: `references/tool-registry.md`.
 
 **Agent-estimation metering** (Wave 1, migration 355) is the first metered path. The paid
 `mode:'agent'` submit is gated **inside `api/estimation_runs.py:create_estimation_run`**, at the
@@ -323,9 +325,7 @@ and before the INSERT (`_prepare_metered_submit`), so a rejected submit spends z
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
 `entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
-(ClickUp is named in comments as a `claims is None` bypass — an internal direct-Python path only;
-it has zero historical rows, verified 2026-08-04, any HTTP call 401s, and a real credential waits
-until the integration activates.) Enforcement is **atomic** (A9 — never check-then-act over the tx
+(ClickUp's `claims is None` bypass is an internal direct-Python path: no rows, any HTTP call 401s.) Enforcement is **atomic** (A9 — never check-then-act over the tx
 pooler): `INSERT … SELECT WHERE (monthly non-failed count) < quota AND (in-flight count) < cap ON
 CONFLICT (account_id, idempotency_key) DO NOTHING` — budget + per-account concurrency + idempotency
 in one write, arbiter index `estimation_runs_inflight_idem`. The budget counts `estimation_runs`

@@ -16,9 +16,13 @@
 # GPS, the server fills `div#print-map` with its own geocode of `data-address` (it drops
 # 'okres X': Beroun -> Moravský Beroun) and leaves `div#map` blank, so v7's first-match
 # read of the print node never fired on those ~31 % of pinned pages.
+#
+# v9 (location W3): the marker states its ABSENCE (`absent: retract`): a `div#map` that
+# carries both `data-gps-*` values retracts a stored 'estimated'. Until W3 a blur, once
+# stated, was never cleared.
 
 portal: realitymix
-contract_version: 8
+contract_version: 9
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -119,7 +123,8 @@ extractions:
     extraction_method: portal_declared_quality
     page_kind: detail
     locator: {reader: html_marker, css: "div#map",
-              blank_attrs: [data-gps-lat, data-gps-lon], value_label: estimated}
+              blank_attrs: [data-gps-lat, data-gps-lon], value_label: estimated,
+              absent: retract}
     claim_type: precision_declaration
     blur_evidence: declared
     licence_class: portal
@@ -128,8 +133,8 @@ extractions:
       position_source_max: derived_geocode
       blurred_labels: [estimated]
     notes: "The interactive map's own predicate (`if (lat && lon)`): an absent or EMPTY
-      `data-gps-*` on `div#map` is the page saying 'Pozice na mapě je pouze orientační'. A
-      page with no `div#map` declares nothing."
+      `data-gps-*` on `div#map` is the page saying 'Pozice na mapě je pouze orientační'; both
+      values present retract it (W3). A page with no `div#map` declares nothing."
 
   - id: rm.det.breadcrumb_kraj
     locator_kind: jsonld

@@ -4631,8 +4631,8 @@ renumber.** Navigate by area:
     never flipped a consumer, so nothing exercised it end to end and nothing was ever deleted; 733
     verified findings came out of that shape, not out of any one bug. The corrective, and the
     as-built state: ONE answer table (`listing_location`, 27 columns) written by ONE four-step
-    resolver (bind → fill → grade → check); ONE claim shape in `location_claims`, written by TWO
-    producers, both fingerprinted in SQL — the hourly `claims_intake` lane (over the stored payload,
+    resolver (bind → fill → grade → check); ONE claim shape in `location_claims`, ONE claim per listing, claim type and author, written by
+    TWO producers through ONE keyed upsert (W3) — the hourly `claims_intake` lane (over the stored payload,
     the stored page body and the text lane's stored reading) and `operator_corrections`; TWELVE claim types, at most one contract entry per
     type, the town entry mandatory and naming a reader; ONE label function and ONE five-level code
     predicate for every place display and filter; no serving flags, no granularity floors, no
@@ -4855,26 +4855,30 @@ where `listings.geom` was `geography`, so every metre-based `ST_DWithin` / `ST_D
 `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it compiles and silently
 measures DEGREES — `tests/test_one_place_predicate.py` pins both halves.
 
-**ONE EVIDENCE TABLE.** `location_claims` is the evidence — what a payload asserted, with a
-surface, an extraction method, a licence class and a `claim_fingerprint` (migration 386's IMMUTABLE
-`location_claim_fingerprint()`, computed in SQL so no second transcription of the definition can
-drift; it still takes all 23 inputs, of which 12 are stored columns — the other 11, e.g. `page_kind`,
-`extractor_id`, `value_norm`, `legacy_source_column`, are computed per claim, hashed and not kept).
-**19 columns**: identity, the contract entry, five typed value slots, the declared-precision trio,
-the fingerprint. A claim carries nothing else: the page lane's evidence quote, span, payload hash and
-scope version, and the anchor and history markers, followed their columns (migration 498) out of
-`Claim`. TWO producers insert claims, both `ON CONFLICT (claim_fingerprint) DO NOTHING`: the intake lane
-below and `location_data/operator_corrections.py` (an operator claim carries no contract entry, so no
-DELETE below ever reaches one). A claim is never UPDATEd, but the table is not append-only: three
-paths DELETE contract claims. A wrong VALUE is superseded — the readings half deletes the listing's
-older same-source claims of the types a new reading carries; a wrong CONTRACT is retracted:
-`python -m location_data.contracts --retract <portal>@<version> [--extractor-id X]` resolves the
-target first (no matching entry is an ERROR, not `deleted=0`), DELETEs the claims in bounded batches
-each atomic with its own `dirty_locations` enqueue, then stands the header down; and a RETIRED
-version's claims, which the resolver already ignores, are deleted with no enqueue by
-`location_claims_retire.yml` (a `\copy` backup first, then `scripts/location_claims_retire.py`). `--retract` batches
-because "the contract's claims" is every listing a portal has ever had (~5 M on sreality), and one atomic
-DELETE of that size spends its `statement_timeout` and rolls back, making no progress ever.
+**ONE EVIDENCE TABLE, ONE CLAIM PER FACT (W3, migration 699).** `location_claims` is the evidence —
+what a payload asserted, with a surface, an extraction method, a licence class and the contract entry
+that FIRST stated its value. For each listing, claim type and author (`licence_class`: `portal` or
+`operator`) it holds ONE claim, the value that author stated most recently (`location_claims_key`);
+the operator outranks the portal at the read (ruling Q5). Columns: identity, the contract entry, five
+typed value slots, the declared-precision trio (`claim_fingerprint` is dead, dropped by migration
+700). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
+`location_data/operator_corrections.py`): `INSERT … ON CONFLICT (listing_id, claim_type,
+licence_class) DO UPDATE … WHERE` one of the eight value columns `IS DISTINCT FROM` the stored one, so
+an unchanged re-mine or a bump that restates a value writes and enqueues NOTHING, a changed value is an
+UPDATE in place (same id; `claim_set_hash` hashes value + `first_observed_at`, so the listing
+re-resolves), A → B → A ends on A, and `dirty_locations` is enqueued only for a listing whose claims
+changed. Silence keeps a value (ruling Q4 = A): a reader that emits nothing — a page that stopped
+stating a fact, a reading with a null slot — writes nothing. A value goes only when its author states
+another, by a TOMBSTONE (`Claim.retract`: an `html_marker` entry with `absent: retract` whose node
+exists and fails the test deletes its key's claim — bazos@10, idnes@7, realitymix@9; a presence
+detector alone could never clear a blur), or by a RETRACT: `python -m location_data.contracts
+--retract <portal>@<version> [--extractor-id X]` resolves the target first (no matching entry is an
+ERROR, not `deleted=0`), DELETEs the claims in bounded `ctid` batches each atomic with its own
+`dirty_locations` enqueue, then stands the header down. Provenance is the FIRST stater, so a retract
+also takes the values a later version restated unchanged: **a retract, like an activation, is followed
+by one full re-mine of that source** (`claims_intake --mode full --source X`; bodies and readings
+re-mine by their stamps). `--retract` batches because "the contract's claims" is every listing a
+portal has ever had, and one atomic DELETE of that size spends its `statement_timeout` and rolls back.
 
 **ONE LANE, THREE HALVES.** `location_data/claims_intake.py` (hourly, `35 * * * *`, and the worker's
 minute lane) is the only portal writer of `location_claims`, and it reads the three substrates we
@@ -4926,11 +4930,10 @@ writes is not evidence a portal published.
   CURRENT reading — the successful reading of its CURRENT advert text (hashed by the text lane's SQL),
   at the lane's `extractor_version` if one exists, else the newest — unless its stamp
   (`mined_contract_version`) is the active `<source>@<version>`; readings of another text get it with
-  `~`, so an unread text is checked once per contract, not hashed every pass. ONE statement per batch
-  inserts the claims, DELETES the listing's other same-source, non-operator claims of those types
-  (SUPERSESSION: a headline edit, a model rolled back, A→B→A), moves the stamps and enqueues. Pages are
-  never superseded, and a listing with no reading keeps its older claims — so
-  `location_claims_retire.yml` must wait while text-less delisted bazos rows hold `bazos@7` towns.
+  `~`, so an unread text is checked once per contract, not hashed every pass. Per batch, the one write
+  (a headline edit, a model rolled back, A→B→A each replace the value) and the stamps, in one
+  transaction. A null slot keeps the stored value (ruling Q4 = A); an EMPTY block (`ad_kind` and every
+  slot null) is a failed reading the text lane retries, never mined (`text_reading.is_empty`, W3).
 
 **A GONE PAGE IS NOT A BODY (W10).** "Latest body" means the latest body that is an AD. Four portals
 answer HTTP 200 for a listing they have removed — bazos serves the CATEGORY INDEX page, which carries
@@ -4978,7 +4981,7 @@ budget over 2 000-row batches, and a **2-minute** lag instead of 15. Its knobs a
 bigserial race above, so at 2 minutes the fast schedule will occasionally skip a late-committing id —
 and `location_claim_batches` resumes on `(lane, source, scan_mode)`, so the hourly run, still 15
 minutes back on its own `location_claims_intake` cursor, re-reads exactly that slice within the hour.
-Mining a listing twice costs nothing: claim fingerprints are `ON CONFLICT DO NOTHING` and the resolve
+Mining a listing twice costs nothing: the one write changes only what changed (W3) and the resolve
 enqueue is a bump. **It mines new page BODIES too (W7-a2)** — six of the nine portals put a listing's
 location only in the stored body, so a JSON-only fast lane left their listings waiting the hour out:
 the tick runs the JSON half first and gives the bodies pass the remainder of its budget, capped at
@@ -5121,58 +5124,24 @@ of them — 3,263 active foreign listings sat `undetermined` with a Croatian tow
 The new `foreign_country_code` transform drops the `CZ` that field carries on every domestic row:
 foreign is a determination, never a default.
 
-**A contract BUMP does not supersede the old version's rows** — `location_claims` rows are never UPDATEd and
-its fingerprint hashes `extractor_version`, so a bump inserts new rows beside the old ones, and the
-superseded row has the LOWER id, which wins every "first admissible claim of this type" tie. So the
-resolver's claim projection (`_claims_sql`) admits a claim only when its `contract_entry_id`
-belongs to a contract version that is a listing's NEWEST EVIDENCE **for that claim type**, plus
-operator claims, which carry
-no entry by construction (`contract_entry_id IS NULL` + `licence_class = 'operator'` — named explicitly, so a
-portal claim that lost its entry id is NOT let through). Filtering at READ is what made deleting the
-superseded rows a cleanup rather than a correctness step, and **W6-a took it**: a claim under a
-retired contract version is now DELETED — 9.5 M of 13.2 M rows, the large majority of the table —
-by `.github/workflows/location_claims_retire.yml`, which `\copy`s the doomed rows to a gzipped CSV
-artifact (rule 1's backup, 90-day retention) and then runs `scripts/location_claims_retire.py` in
-20,000-row id-keyset batches, bounded, paused and resumable. It enqueues NOTHING: the resolver never
-read these rows, so no verdict can move — which is the whole difference from `contracts.py
---retract`, the mechanism that withdraws a version's evidence BECAUSE it was wrong and must
-re-resolve every listing it touched. Re-dispatch the workflow after any future retirement.
-
-**A CONTRACT BUMP NEVER BLACKS OUT (W11, 2026-09-14), AND A PARTIAL RE-MINE NEVER BLANKS A LISTING
-(W18-b, 2026-09-17).** W1-c spelled that rail `pc.is_active`, and the resolver then read the ACTIVE
-version's claims or nothing — so in the 6–8 h a re-mine takes, a bumped portal's listings were judged
-with NO evidence at all. On 2026-09-14 a W9 bump of eight contracts at 05:58Z met a full-resolve
-sweep at 06:42Z and 595,816 rows came out `unknown/undetermined/low`; under W5 Browse fell from
-~350,000 active rows to 45,810. W11 made the rail read **a listing's newest evidence** — the highest
-contract version present that is `<= the active version` — but partitioned per (listing, PORTAL), and
-**a portal's entries are not re-mined in one hop**. W18 bumped bazos 6 → 7 for ONE payload entry
-(`street_name` off `raw_json` /title): the payload lane mined it across all 147k listings in a single
-hop while the same run's BODIES pass (the four PAGE entries — `obec_name`, `psc`,
-`precision_declaration`, `coordinate`) is bounded and reached 56,905 of ~155k pages before the chain
-yielded. For ~90k listings the newest version present was therefore 7 and carried the street ALONE:
-the town, the PSČ and the pin sat unread at version 6, and 29,545 of 50,598 live bazos listings went
-`undetermined` with no geom (61,396 rows at granularity `unknown`).
-
-So the rail is **PER CLAIM TYPE**: for each claim type the portal's ACTIVE contract declares an entry
-for, a listing's claims come from the newest version `<= active` that carries a claim OF THAT TYPE —
-`max(pc.version) OVER (PARTITION BY listing_id, source, claim_type)`, so each type keeps its best
-evidence and a re-mine upgrades them one at a time, while the supersession the rail exists for is
-unchanged (a re-mined type never reads the old version's answer beside the new one). A claim type the
-active contract **no longer declares is not read at all** (an `EXISTS` over the active contract's
-entries — not a join, because the same type may be declared on several surfaces), so a deliberately
-dropped entry stops being evidence when it is dropped rather than lingering forever at its last
-version, and `location_claims_retire.py` stays the only thing that DELETES those rows. Measured on
-prod over a 250-listing slice the W11 shape was 11 ms / 1.2k buffers, index-driven; the per-type
-partition adds a semi-join against one contract's entries. `claim_set_hash` fingerprints the CONSUMED
-set including claim ids, so the re-mine's new rows change the hash and the listing re-resolves
-normally. **Retirement waits for the re-mine**: those older rows are live data until the
-page has been re-mined, so `location_claims_retire.py` refuses (exit 3) while any portal still has a
-SERVED listing carrying no claim under its ACTIVE contract, and names the number. There is no
-`--force` — the answer is to wait for the intake lanes. **Licence
+**THE ONE READ (W3).** `resolve_db._claims_sql` is one `DISTINCT ON (listing_id, claim_type)`, the
+operator's claim first: the resolver sees at most ONE claim per type, so BIND has no tie rule left
+(no pin election by declared rank and id, no first-PSČ / first-street / last-address-point idiom, no
+blur OR'd across a type's claims, no two-street pooling, no operator bypass of the register; a
+house-number claim outranks the number written in the street line). A portal claim of a type its
+ACTIVE contract no longer declares is not read (an `EXISTS`, not a join: one type may be declared on
+several surfaces). There is **no version filter**, and that is the lesson of two incidents kept in
+one paragraph: in 2026-09 the claims were a per-version append, and a read that admitted only the
+ACTIVE version blacked out 595,816 listings in the hours between a bump and its re-mine (W11,
+Browse 350k → 45.8k), then a per-portal "newest version" read blanked 29,545 bazos listings whose
+re-mine had reached one entry of five (W18-b). Under W3 a bump writes nothing until a value changes,
+so a partial re-mine can never blank a type, and an older version's claim stays readable until a
+re-mine changes it. `claim_set_hash` hashes the consumed claims' value and `first_observed_at`, so a
+changed value re-resolves its listing. **Licence
 enforcement rides the same predicate**: `licence_class` is the program's single licence vocabulary
 and `ephemeral_display_only` (Mapy.cz-class) its poison value; `listing_location` carries no
-`position_licence_class` column because `licence_class IN ('portal','operator')` is part of
-`_CLAIMS_SELECT` — such a coordinate is not refused at the winner, it is never READ (a partial index
+`position_licence_class` column because the read admits `portal` and `operator` claims only
+(`_claims_sql`) — such a coordinate is not refused at the winner, it is never READ (a partial index
 keeps the remediation set one indexed predicate away). Nothing mints one any more: the Mapy geocoder
 and the `mapy_affected` inventory that policed it are gone, so a coordinate claim comes only from a
 portal's payload or its own page, and every other stamp is class E outright.
@@ -5353,7 +5322,12 @@ through `drain.reconcile` whenever its (resolver version, registry label) pair c
 listings first — and the drain claims evidence rows (`claim_insert`, `operator_edit`) ahead of the
 sweep's; the GitHub `location_resolve.yml` lane, the lane's flag and every hand dispatch are gone,
 and so is the nightly red-line arm (13,224 townless rows re-resolved a day, 99.8 % inactive, 0 towns
-gained): a row changes only when evidence, code or the register changes. Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
+gained): a row changes only when evidence, code or the register changes. Since W3 (ruling R4) the
+reconcile key also carries each active contract's DECLARED claim types (`_DECLARED_TYPES_SQL`), the
+one contract fact the claim read asks: a portal whose set moved has every listing re-resolved
+(`_PORTAL_SWEEP_SQL`); a bump declaring the same types moves nothing (its re-mine enqueues what it
+changes), and a portal a retract left with no active contract is not swept until one returns
+(sweeping it would blank it). Every evidence-producing enqueue (`claim_insert`, a retraction batch, an
 operator edit) is `ON CONFLICT (listing_id) DO UPDATE SET enqueued_at = now(), attempts = 0,
 next_eligible_at = now()`, and every statement that FINISHES a queue row (both deletes and the
 failure stamp) is bounded by the `enqueued_at` the slice claimed, so evidence arriving mid-slice
@@ -5598,14 +5572,10 @@ per-listing statement gets, and cancelling it threw the whole batch away.
   in (runs 34817669095, 34824922631) because a queue-row bump waited behind a drain slice; a batch
   that lost a lock must RETRY ITSELF (idempotent, cursor unmoved) rather than skip its rows, and of
   two schedules writing the same rows one has to yield.
-* **A contract bump must never outrun its re-mine** (W11, 2026-09-14) — reading only the ACTIVE
-  version's claims meant the 6–8 h between a bump and the re-mine judged 595,816 listings with no
-  evidence and emptied Browse to 45,810 rows; the resolver reads a listing's NEWEST evidence instead.
-* **…and "newest evidence" is PER CLAIM TYPE** (W18-b, 2026-09-17) — a bump's entries are not
-  re-mined in one hop (bazos 6 → 7 mined the one payload entry across 147k listings while the bounded
-  bodies pass reached 56,905 of ~155k pages), so a per-PORTAL partition served the new version's
-  street alone and hid the town, PSČ and pin still sitting at the old one: 29,545 of 50,598 live
-  bazos listings `undetermined` with no geom. Per type, a partial re-mine costs a listing nothing.
+* **A contract bump must never outrun its re-mine** (W11, 2026-09-14; W18-b, 2026-09-17) — a read
+  filtered by contract version blacked out 595,816 listings, then blanked 29,545 bazos ones a partial
+  re-mine had reached for one entry of five. W3 ended the class: one claim per fact, written only on a
+  value change, read with no version filter (§ Location data, THE ONE READ).
 * **An enqueue that no-ops loses the listing** — the 07:13Z contract bump re-mined ~60k listings
   already queued from a ~540k sweep; every enqueue no-opped, the drain resolved them from the OLD
   claims and deleted the rows, and 384,500 answer rows with 135 towns had nothing that could
@@ -5647,7 +5617,7 @@ columns (the Mapy-era pin, the legacy PSČ/locality fields W1-b dropped), plus `
 "no live evidence" was never read as "nothing was ever there" — `legacy` 4.6k, `archived` 32.2k,
 `none` 172. **W6-a deleted the rows behind it and migration 515 dropped the column**: a column that
 can only say "žádná" reads as a finding. `claims_now` survives as one EXISTS instead of a
-three-aggregate lateral — 75 % off the hourly refresh's planned cost.) `sibling_has_pin` is the cheap recovery the operator can take without any resolver
+three-aggregate lateral — 75 % off the hourly refresh's planned cost. Under W3's first-stater provenance it drifts false once a bump restates values unchanged; no surface reads it, and W6 deletes the matview.) `sibling_has_pin` is the cheap recovery the operator can take without any resolver
 change: **1,163 rows (~3 %)** where another listing of the same property already has a `geom`.
 **W7-b (migration 518) puts a `state` above all of it**: `pending` — no `listing_location` row yet,
 or the listing sits in `dirty_locations`, or its newest `listing_snapshots.scraped_at` is past the

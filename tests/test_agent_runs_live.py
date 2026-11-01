@@ -11,6 +11,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,7 @@ OWN_CONTEXT = "get_my_property_context"
 SUBMIT = terminator.NAME
 ANSWER = reply((SUBMIT, {"markdown": "Done."}))
 SETTINGS = ("agent_executor_enabled", "agent_daily_ceiling_usd", "agent_account_running_cap",
-            "agent_account_in_flight_cap", "agent_run_allowlist")
+            "agent_account_in_flight_cap", "agent_run_allowlist", "agent_account_daily_limit_usd")
 
 
 # Every value the daily ceiling counts: a leftover row of either parks the next test's claims.
@@ -82,8 +83,8 @@ def _set(svc: psycopg.Connection, key: str, value: Any) -> None:
 
 @pytest.fixture()
 def world(svc: psycopg.Connection, people: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
-    """The executor switched on for this test: an agent folder of its own, the three signups allowlisted, the ledger
-    empty, spend reset; every setting and the queue put back on exit."""
+    """The executor switched on for this test: an agent folder of its own, the three signups allowlisted on a plan with
+    agents, the ledger empty, spend reset; every setting and the queue put back on exit."""
     before = dict(svc.execute("SELECT key, value FROM app_settings WHERE key = ANY(%s)", (list(SETTINGS),)).fetchall())
     meta = frontmatter(AGENT, allowed_tools=[OWN_CONTEXT], limits={"max_iterations": 6, "max_cost_usd": 1.0,
                                                                   "wall_clock_timeout_s": 60})
@@ -95,8 +96,10 @@ def world(svc: psycopg.Connection, people: dict[str, Any], tmp_path: Path, monke
                                         ([people["a"], people["b"], people["c"]],)).fetchall()]
     for key, value in (("agent_executor_enabled", True), ("agent_daily_ceiling_usd", 1000),
                        ("agent_account_running_cap", 2), ("agent_account_in_flight_cap", 20),
-                       ("agent_run_allowlist", emails)):
+                       ("agent_run_allowlist", emails), ("agent_account_daily_limit_usd", 10)):
         _set(svc, key, value)
+    svc.execute("UPDATE entitlements SET plan = 'pilot' WHERE account_id = ANY(%s)",
+                ([people["a_acc"], people["b_acc"], people["c_acc"]],))
     svc.execute(_DELETE_RUN_SPEND)
     try:
         yield {**people, "folder": tmp_path / AGENT, "emails": emails}
@@ -842,7 +845,7 @@ def test_photo_assessment_spend_alone_parks_new_claims_at_the_ceiling(svc: psyco
     assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", queued)
 
 
-@pytest.mark.parametrize("key", ["agent_daily_ceiling_usd", "agent_account_running_cap"])
+@pytest.mark.parametrize("key", ["agent_daily_ceiling_usd", "agent_account_running_cap", "agent_account_daily_limit_usd"])
 def test_an_absent_number_parks_rather_than_guesses(svc: psycopg.Connection, world: dict[str, Any], key: str) -> None:
     run_id = _submit(svc, world, "a")
     _set(svc, key, None)
@@ -893,6 +896,7 @@ def test_twenty_accounts_fifty_runs_a_cap_of_two_and_nobody_fails_for_waiting(sv
         svc.execute("UPDATE auth.users SET email_confirmed_at = now() WHERE id = ANY(%s)", (users,))
         emails = [r[0] for r in svc.execute("SELECT email FROM auth.users WHERE id = ANY(%s)", (users,)).fetchall()]
         _set(svc, "agent_run_allowlist", emails)
+        svc.execute("UPDATE entitlements SET plan = 'pilot' WHERE account_id = ANY(%s)", ([load[f"{k}_acc"] for k in keys],))
         shares = [12, 8] + [2] * 15 + [0, 0, 0]
         assert sum(shares) == 50
         run_ids = [executor.submit(svc, principal_user_id=load[k], account_id=load[f"{k}_acc"], agent=AGENT,
@@ -1461,3 +1465,161 @@ def test_a_refused_first_call_on_no_cap_leaves_nothing(svc: psycopg.Connection, 
     [step] = [s for s in _steps(svc, run_id) if s["name"] == VALUO]
     assert valuo.CAP_SETTING in step["payload"]["output"]["error"]["message"]
     assert not valuing["fake"].calls and not _ledger_rows(svc, valuing["a_acc"])
+
+
+# --- an account's daily limit (#2319) ----------------------------------------------------------------------------------
+
+def _ended_run(svc: psycopg.Connection, world: dict[str, Any], key: str, usd: float, *, called_for: str = "agent_run",
+               called_at: str = "now()", finished_at: str = "now()") -> int:
+    """A run of this account that already ended, with one spend row in the ledger."""
+    run_id = _submit(svc, world, key)
+    svc.execute(f"UPDATE agent_runs SET status = 'succeeded', finished_at = {finished_at} WHERE id = %s", (run_id,))
+    svc.execute("INSERT INTO llm_calls (called_for, provider, model, input_tokens, output_tokens, cost_usd, duration_ms, "
+                f"agent_run_id, called_at) VALUES (%s, 'anthropic', %s, 0, 0, %s, 0, %s, {called_at})",
+                (called_for, MODEL, usd, run_id))
+    return run_id
+
+
+def _set_limit(svc: psycopg.Connection, world: dict[str, Any], key: str, usd: float) -> None:
+    executor.set_account_limit(svc, account_id=world[f"{key}_acc"], daily_limit_usd=Decimal(str(usd)))
+
+
+def test_an_account_at_its_limit_waits_and_the_account_behind_it_claims(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _ended_run(svc, world, "a", 10)
+    held = _submit(svc, world, "a")
+    newer = _submit(svc, world, "b")
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", newer), "the older run of an account at its limit is passed over"
+    row = _run(svc, held)
+    assert (row["status"], row["attempts"], row["error"], row["started_at"]) == ("queued", 1, None, None), "waiting never fails it"
+    assert _work_on(_Model()) == executor.Worked("idle"), "held runs are no work, and nothing failed"
+
+    _set_limit(svc, world, "a", 10.01)
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", held), "a raised limit frees it"
+
+
+def test_a_new_account_has_the_default_with_no_row_and_the_default_moves_without_one(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _ended_run(svc, world, "a", 9.99)
+    queued = _submit(svc, world, "a")
+    assert svc.execute("SELECT count(*) FROM agent_account_limits WHERE account_id = %s", (world["a_acc"],)).fetchone()[0] == 0
+    _set(svc, "agent_account_daily_limit_usd", 5)
+    assert _work_on(_Model()) == executor.Worked("idle")
+    _set(svc, "agent_account_daily_limit_usd", 10)
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", queued)
+
+
+def test_the_migrations_default_is_ten_dollars_and_free_carries_no_agents(svc: psycopg.Connection) -> None:
+    """Off the replayed files: `world` sets its own values, and this one reads what 713 landed under a fresh key's absence."""
+    sql = (Path(__file__).parents[1] / "migrations" / "713_agent_account_limits.sql").read_text(encoding="utf-8")
+    assert "('agent_account_daily_limit_usd', '10'," in sql
+    rows = dict(svc.execute("SELECT key, agendas FROM plans WHERE key IN ('free', 'pilot')").fetchall())
+    assert "agents" not in rows["free"], "absent = off"
+    assert rows["pilot"] == {**rows["free"], "agents": True}
+    assert svc.execute("SELECT key FROM plans WHERE is_default").fetchone()[0] == "free"
+
+
+def test_zero_means_no_run_is_claimed(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    queued = _submit(svc, world, "a")
+    _set_limit(svc, world, "a", 0)
+    assert _work_on(_Model()) == executor.Worked("idle")
+    assert _run(svc, queued)["status"] == "queued"
+
+
+def test_a_row_of_its_own_beats_the_default_in_both_directions(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _ended_run(svc, world, "a", 15)
+    _set_limit(svc, world, "a", 20)
+    raised = _submit(svc, world, "a")
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", raised)
+    _set_limit(svc, world, "b", 1)
+    _ended_run(svc, world, "b", 2)
+    lowered = _submit(svc, world, "b")
+    assert _work_on(_Model()) == executor.Worked("idle")
+    assert _run(svc, lowered)["status"] == "queued"
+
+
+def test_only_todays_agent_spend_of_this_account_counts(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    spent = lambda: float(svc.execute("SELECT agent_account_spent_today(%s, %s)",  # noqa: E731
+                                      (world["a_acc"], list(executor._RUN_SPEND))).fetchone()[0])
+    assert spent() == 0
+    _ended_run(svc, world, "a", 1, called_for="assess_property_visuals")
+    assert spent() == 1, "a paid tool's call counts"
+    _ended_run(svc, world, "a", 2, called_at="date_trunc('day', now(), 'UTC') - interval '1 second'")
+    assert spent() == 1, "yesterday's does not"
+    _ended_run(svc, world, "a", 4, called_for="summarize_listing")
+    assert spent() == 1, "a value outside the run's spend does not"
+    _ended_run(svc, world, "b", 8)
+    assert spent() == 1, "another account's does not"
+    _ended_run(svc, world, "a", 16, finished_at="date_trunc('day', now(), 'UTC') - interval '1 minute'")
+    assert spent() == 17, "a call that lands just after its run ended still counts"
+    interrupted = _submit(svc, world, "a")
+    svc.execute("INSERT INTO llm_calls (called_for, provider, model, input_tokens, output_tokens, cost_usd, duration_ms, "
+                "agent_run_id) VALUES ('agent_run', 'anthropic', %s, 0, 0, 32, 0, %s)", (MODEL, interrupted))
+    assert spent() == 49, "a run still queued for its retry has spent what it spent"
+
+
+def test_a_call_with_no_run_counts_only_towards_the_platform_ceiling(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    svc.execute("INSERT INTO llm_calls (called_for, provider, model, input_tokens, output_tokens, cost_usd, duration_ms) "
+                "VALUES ('agent_run', 'anthropic', %s, 0, 0, 500, 0)", (MODEL,))
+    queued = _submit(svc, world, "a")
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", queued), "$500 with no run is nobody's limit"
+    _set(svc, "agent_daily_ceiling_usd", 500)
+    _submit(svc, world, "a")
+    assert _work_on(_Model()) == executor.Worked("parked")
+
+
+def test_a_running_run_finishes_under_its_own_cap_when_the_limit_drops(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    run_id = _submit(svc, world, "a")
+    model = _Model(reply((OWN_CONTEXT, {})), ANSWER, during=lambda call: _set_limit(svc, world, "a", 0))
+    assert _work_on(model) == executor.Worked("succeeded", run_id)
+
+
+def test_the_platform_ceiling_still_stops_an_account_that_raised_its_limit(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _set(svc, "agent_daily_ceiling_usd", 25)
+    _set_limit(svc, world, "a", 100)
+    _ended_run(svc, world, "a", 25)
+    _submit(svc, world, "a")
+    assert _work_on(_Model()) == executor.Worked("parked")
+
+
+def test_deleting_an_account_takes_its_limit_and_leaves_its_spend_to_the_ceiling(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _set(svc, "agent_daily_ceiling_usd", 25)
+    with signups(svc, "gone", "x") as made:
+        svc.execute("UPDATE auth.users SET email_confirmed_at = now() WHERE id = %s", (made["x"],))
+        _set(svc, "agent_run_allowlist", [*world["emails"], *[r[0] for r in svc.execute(
+            "SELECT email FROM auth.users WHERE id = %s", (made["x"],)).fetchall()]])
+        svc.execute("UPDATE entitlements SET plan = 'pilot' WHERE account_id = %s", (made["x_acc"],))
+        executor.set_account_limit(svc, account_id=made["x_acc"], daily_limit_usd=Decimal(30))
+        gone = _ended_run(svc, made, "x", 25)
+    assert svc.execute("SELECT count(*) FROM agent_account_limits WHERE account_id = %s", (made["x_acc"],)).fetchone()[0] == 0
+    assert svc.execute("SELECT agent_run_id FROM llm_calls WHERE agent_run_id = %s", (gone,)).fetchone()[0] == gone
+    _submit(svc, world, "a")
+    assert _work_on(_Model()) == executor.Worked("parked"), "the paid row outlives its account and the ceiling counts it"
+
+
+def test_a_member_reads_their_own_spend_and_limit_and_no_one_elses(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _ended_run(svc, world, "a", 3)
+    _set_limit(svc, world, "a", 7)
+    args = (world["a_acc"], list(executor._RUN_SPEND))
+    with scoped(world["a"]) as conn:
+        assert float(conn.execute("SELECT agent_account_spent_today(%s, %s)", args).fetchone()[0]) == 3
+        assert [float(r[0]) for r in conn.execute("SELECT daily_limit_usd FROM agent_account_limits").fetchall()] == [7]
+    with scoped(world["b"]) as conn:
+        assert conn.execute("SELECT agent_account_spent_today(%s, %s)", args).fetchone()[0] is None, (
+            "another account's spend is NULL, which the claim's `<` never passes")
+        assert conn.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("statement", [
+    "INSERT INTO agent_account_limits (account_id, daily_limit_usd) VALUES (%(account)s, 1000)",
+    "UPDATE agent_account_limits SET daily_limit_usd = 1000 WHERE account_id = %(account)s",
+    "DELETE FROM agent_account_limits WHERE account_id = %(account)s",
+])
+def test_the_browser_cannot_write_a_limit_even_its_own(svc: psycopg.Connection, world: dict[str, Any], statement: str) -> None:
+    _set_limit(svc, world, "a", 7)
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), scoped(world["a"], method="POST") as conn:
+        conn.execute(statement, {"account": world["a_acc"]})
+
+
+def test_anon_cannot_read_a_spend(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    with _connect() as conn, pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+        conn.execute("SET LOCAL ROLE anon")
+        conn.execute("SELECT agent_account_spent_today(%s, %s)", (world["a_acc"], ["agent_run"]))

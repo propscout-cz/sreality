@@ -241,8 +241,9 @@ def test_the_katastr_rule_carries_its_own_resolver_version():
     """A rule that changes an output moves `RESOLVER_VERSION`, or the sweep never re-queues
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
     W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor a declared
-    blurred pin outside its town yielding the position to the words (v5.9)."""
-    assert RESOLVER_VERSION == "resolver:v5.9"
+    blurred pin outside its town yielding the position to the words (v5.9), nor one claim per
+    type read with no tie rule (v5.9.1, W3)."""
+    assert RESOLVER_VERSION == "resolver:v5.9.1"
 
 
 # ------------------------------------------------------------------ the SQL side

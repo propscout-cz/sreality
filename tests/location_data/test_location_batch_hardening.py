@@ -259,8 +259,10 @@ def test_every_statement_the_drain_runs_outside_a_batch_is_bounded_too():
     """The batch transaction already had a ceiling on 2026-08-10 — what did NOT was
     everything the loop runs between batches on the autocommit connection, where
     `SET LOCAL` from the previous transaction is long gone."""
-    for fn in (drain._queue_health, drain.enqueue_full_sweep):
+    for fn in (drain._queue_health, drain._walk):
         assert "_bounded(" in inspect.getsource(fn), f"{fn.__name__} runs unbounded"
+    for sweep in (drain.enqueue_full_sweep, drain.enqueue_portal_sweep):
+        assert "_walk(" in inspect.getsource(sweep), sweep.__name__
     start = inspect.getsource(drain.run)
     # ONE run-start read survives W2-a (which registry version is current); the five policy
     # loads and the epoch probe went with their tables. It still has to be bounded — a run
@@ -277,7 +279,7 @@ def test_the_sweep_gets_its_own_budget_inside_the_workers_lease():
     outlive."""
     assert drain.DEFAULT_SWEEP_TIMEOUT_S > drain.DEFAULT_BATCH_TIMEOUT_S * 5
     assert drain.DEFAULT_SWEEP_TIMEOUT_S <= 600
-    assert "SWEEP_TIMEOUT_ENV" in inspect.getsource(drain.enqueue_full_sweep)
+    assert "SWEEP_TIMEOUT_ENV" in inspect.getsource(drain._walk)
 
 
 def test_bounded_opens_a_transaction_so_set_local_is_not_a_no_op():

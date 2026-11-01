@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
+  fetchAgentRunOptions: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -95,6 +96,46 @@ describe('<Shell> notifications badge', () => {
     await waitFor(() =>
       expect(link).toHaveAccessibleName('Notifications 5 unread notifications'),
     );
+  });
+});
+
+/* Runs is on the bar for an account the API says may start one, and for nobody else: an admin off the allowlist is no
+ * exception, and a read that failed shows no entry it cannot vouch for. */
+describe('<Shell> Runs entry', () => {
+  const signedIn = (isAdmin: boolean) =>
+    vi.mocked(auth.useAuth).mockReturnValue({
+      isAdmin, session: { user: {} }, user: null, loading: false, agendas: {},
+    } as unknown as ReturnType<typeof auth.useAuth>);
+
+  it('shows for an account that may start a run, without a query for anyone signed out', async () => {
+    signedIn(false);
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
+    renderShellWith(<p>page content</p>);
+    expect(await screen.findByRole('link', { name: 'Runs' })).toHaveAttribute('href', '/runs');
+  });
+
+  it('is absent for a refused account, an admin included', async () => {
+    signedIn(true);
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: false, reason: 'no' }, queue: null, agents: [], limit: null });
+    renderShellWith(<p>page content</p>);
+    await waitFor(() => expect(api.fetchAgentRunOptions).toHaveBeenCalled());
+    await screen.findByText('page content');
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
+  });
+
+  it('is absent when the read fails', async () => {
+    signedIn(false);
+    vi.mocked(api.fetchAgentRunOptions).mockRejectedValue(new Error('down'));
+    renderShellWith(<p>page content</p>);
+    await waitFor(() => expect(api.fetchAgentRunOptions).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
+  });
+
+  it('asks nothing before a session exists', () => {
+    vi.mocked(api.fetchAgentRunOptions).mockClear();
+    renderShellWith(<p>page content</p>);
+    expect(api.fetchAgentRunOptions).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
   });
 });
 

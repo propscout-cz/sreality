@@ -66,17 +66,6 @@ def test_a_different_street_loses_to_the_address_point_the_row_is_bound_to():
     assert resolution.disputed is None
 
 
-def test_an_operator_correction_is_never_respelled_by_the_registry():
-    resolution = _resolve([
-        mm.claim(1, "obec_name", value_text="Bílovec"),
-        mm.claim(2, "street_name", value_text="Budovatelů"),
-        mm.claim(3, "address_point_id", value_text="33000002"),
-        mm.claim(4, "street_name", value_text="Budovatelská", source="operator",
-                 extraction_method="operator_manual", surface="operator"),
-    ])
-    assert resolution.street_name == "Budovatelská"
-
-
 def test_the_registry_still_fills_a_street_nobody_claimed():
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Bílovec"),

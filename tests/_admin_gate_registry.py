@@ -181,6 +181,11 @@ UNGATED: dict[str, Ungated] = {
         "The operator's listing page says when we last looked there. SECURITY DEFINER and narrow: a point in, four "
         "facts about the one municipality containing it out; never a cell list, a bbox, `error` or `pages`, so it "
         "cannot be walked to enumerate which towns are being worked."),
+    "agent_account_spent_today": Ungated(
+        "function", "reachable", ("713_agent_account_limits.sql",),
+        "An account's own agent spend today, the one number GET /runs/options shows under the caller's login and the "
+        "claim compares with its limit. SECURITY DEFINER and narrow: a member reads their account, the service role "
+        "or a platform admin any, anyone else NULL; one sum out, never a call, a model or a run (tests/test_agent_runs_live.py)."),
     "curation_clock_audience": Ungated(
         "function", "reachable", ("709_curation_clock_audience_plan.sql",),
         "SECURITY DEFINER so a clock read skips pipeline_shares' row policy (migration 709). The body filters by "
