@@ -605,14 +605,20 @@ function OwnNoteRow({
   /* The text, the day and the time follow the note while untouched, each on its
    * own, and only what the user changed is saved: an edit made elsewhere while this
    * editor is open is never written back (D3, lib/useServerDraft). A time-only edit
-   * saves the instant on the day the note holds by then. '' and '' is no viewing. */
+   * saves the instant on the day the note holds by then. Only the toggle drops a
+   * viewing's date (`dropped`): both pickers cleared by hand is an incomplete slot,
+   * which blocks Save, as it did before the two drafts. */
   const body = useServerDraft(note.body, trimDraft);
   const stored = note.viewing_at ? viewingSlot(note.viewing_at) : null;
   const day = useServerDraft(stored?.day ?? '');
   const time = useServerDraft(stored?.time ?? '');
+  const [dropped, setDropped] = useState(false);
   const draftSlot: ViewingSlot | null =
-    day.value === '' && time.value === '' ? null : { day: day.value, time: time.value };
+    dropped || (stored == null && day.value === '' && time.value === '')
+      ? null
+      : { day: day.value, time: time.value };
   const setDraftSlot = (slot: ViewingSlot | null) => {
+    setDropped(slot == null);
     day.onChange(slot?.day ?? '');
     time.onChange(slot?.time ?? '');
   };
@@ -649,17 +655,20 @@ function OwnNoteRow({
   const drop = useFileDrop((files) => void attach(files));
 
   const trimmed = body.normalized;
-  const openEditor = () => {
+  /* The three drafts and the toggle's drop, back to the note. */
+  const resetDrafts = () => {
     body.reset();
     day.reset();
     time.reset();
+    setDropped(false);
+  };
+  const openEditor = () => {
+    resetDrafts();
     setEditing(true);
   };
   const closeEditor = () => {
     setEditing(false);
-    body.reset();
-    day.reset();
-    time.reset();
+    resetDrafts();
     setError(null);
   };
   /* Only what the user changed; a viewing may lose its text, a plain note never. */

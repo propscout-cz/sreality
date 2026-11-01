@@ -13,7 +13,10 @@ import {
   useInfiniteQuery,
   keepPreviousData,
   type QueryKey,
+  type RefetchOptions,
 } from '@tanstack/react-query';
+
+import { ASKED } from '@/lib/revalidate';
 
 export interface InfiniteListPage<TRow> {
   rows: TRow[];
@@ -23,7 +26,15 @@ export interface InfiniteListPage<TRow> {
   /* The row count the read returned, kept when a row is dropped from the page
    * in place (lib/curationSettle) so the page still counts as full. */
   fetched?: number;
+  /* When this page was read (Date.now()), stamped here: a later page does not
+   * refresh the rows before it, so a row's read time is its page's, not the
+   * query's `dataUpdatedAt` (lib/curationSettle judges the stale side by it). */
+  readAt?: number;
 }
+
+/* `refetch` is a read the user asked for: a hand on the list (lib/useListHold)
+ * never parks it, where a reconnect's or a remount's refetch would wait. */
+const asked: RefetchOptions & { meta: typeof ASKED } = { meta: ASKED };
 
 /* Caller-facing poll decider: receives the flattened loaded rows so a feed
  * can keep polling while any row is still pending/running, across ALL loaded
@@ -104,7 +115,10 @@ export function useInfiniteList<
 
   const query = useInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam, signal }) => queryFn((pageParam as unknown) ?? null, signal),
+    queryFn: async ({ pageParam, signal }) => ({
+      ...(await queryFn((pageParam as unknown) ?? null, signal)),
+      readAt: Date.now(),
+    }),
     initialPageParam: null as unknown,
     getNextPageParam: (lastPage: TPage) =>
       (lastPage.fetched ?? lastPage.rows.length) < pageSize
@@ -154,6 +168,6 @@ export function useInfiniteList<
     isFetchNextPageError: query.isFetchNextPageError,
     error: (query.error as Error) ?? null,
     fetchNextPage,
-    refetch: () => void query.refetch(),
+    refetch: () => void query.refetch(asked),
   };
 }

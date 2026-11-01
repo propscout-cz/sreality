@@ -374,12 +374,15 @@ function SharingCard({ collection, id }: { collection: Collection; id: string })
 
 function Members({ collection, members }: { collection: Collection; members: CollectionPropertyRow[] }) {
   const navigate = useNavigate();
-  const { list, uncarded: current } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
+  const { list, complete, uncarded: current } = useCollectionCards({
+    collectionId: collection.id, members, sort: DEFAULT_SORT,
+  });
   /* A change made elsewhere moves the roll at once, but never under a finger
    * (ruling Q3(c)): the cards park, the "Bez karty" lines (drawn from the
-   * collection's own read, which the header's count rides) wait in the view. */
+   * collection's own read, which the header's count rides) wait in the view once
+   * the roll is in; its own first load under a finger draws them. */
   const hand = useListHold(collectionListKeys(collection.id));
-  const uncarded = useHeld(hand, current);
+  const uncarded = useHeld(complete ? hand : undefined, current);
 
   return (
     <div>
