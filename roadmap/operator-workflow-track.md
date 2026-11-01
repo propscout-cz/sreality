@@ -13,7 +13,8 @@ Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock 
 by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
 while visible, and re-reads only what it holds through one table→read map and one read scheduler that its own writes
 use too. Rulings 2026-10-31: Q1 all curation plus the pipeline and collection shares (notifications, ad status and
-price, estimation runs out); Q2 ≤ 5 s desktop, ≤ 15 s phone, no Realtime doorbell (F7, only on a future ≈ 1 s
+price, estimation runs out; Q1b re-ruled 2026-11-01: the notification bell and feed follow, W7); Q2 ≤ 5 s desktop,
+≤ 15 s phone, no Realtime doorbell (F7, only on a future ≈ 1 s
 ruling); Q3 (a), an open list keeps its rows, counts, map and stats until navigation and only the per-card marks
 follow, re-ruled (c) 2026-11-01: the list follows fully within one clock read, its rows held while the pointer is
 over it or a finger on it, its counts, map and stats never held (W6); Q4 the extension stays a sender; Q5
@@ -56,6 +57,12 @@ last-writer-wins.
       every refetch nobody asked for and spares the user's own; the artifact link's empty field and the viewing
       pickers' cleared-both path; census (i) sees `ALTER FUNCTION`; a several-accounts live case; the GLOSSARY's
       Hand and Park; the stale charter, tenancy and database-skill lines. The design's § 12 entry "Review 3 repairs".
+- [ ] **W7: the notification bell follows the clock (#2327, DB + SPA, migration 715).** Ruling Q1b re-ruled
+      2026-11-01 ("if I resolve a notification in another window or the app, I want the count to update everywhere"):
+      an eighth family `notifications` on `notification_dispatches` and `notification_subscriptions` (own-only); the
+      bell's count, the feed and the Watchdog list re-read on a mark-seen, a new event, a merge's re-point or a retired
+      watchdog made anywhere; the feed holds under the hand; the 30 s and 60 s polls are gone. The design's § 6 W7,
+      § 8 Q1b and § 12 "W7 (#2327), as built". After the deploy: the trigger count and the bell's reads on gate #2203.
 - [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
       statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
       was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6

@@ -25,7 +25,9 @@ import {
 } from './curationSync';
 import { FEED_HIDDEN_FILTERS, feedHiddenKey } from './feed';
 import { DEFAULT_FILTERS } from './filters';
-import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, pipelineShareKeys } from './queries';
+import {
+  curationKeys, DEFAULT_SORT, dismissalKeys, notificationKeys, pipelineKeys, pipelineShareKeys, watchdogKeys,
+} from './queries';
 import { isOwed, revalidate } from './revalidate';
 
 const TABLES = Object.keys(SYNC_TABLES) as SyncTable[];
@@ -241,7 +243,7 @@ describe('clockChanges', () => {
  * feeds, or is listed in NOT_SYNCED with its reason: a new read cannot be added
  * outside the map without this failing. */
 describe('the key census', () => {
-  const factories = { curationKeys, pipelineKeys, dismissalKeys, pipelineShareKeys };
+  const factories = { curationKeys, pipelineKeys, dismissalKeys, pipelineShareKeys, notificationKeys, watchdogKeys };
   const members = Object.entries(factories).flatMap(([factory, keys]) =>
     Object.entries(keys).map(([name, k]) => ({
       name: `${factory}.${name}`,

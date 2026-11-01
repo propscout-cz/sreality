@@ -91,6 +91,8 @@ CLOCKED_TABLES: dict[str, str] = {
     "property_artifact_links": "links",
     "pipeline_shares": "shares",
     "collection_shares": "shares",
+    "notification_dispatches": "notifications",
+    "notification_subscriptions": "notifications",
 }
 
 # Every tenant table (and the per-account tables beside them) the clock deliberately does not count, with why. A new
@@ -101,10 +103,8 @@ NOT_CLOCKED: dict[str, str] = {
                        "bumps that row's family",
     "property_pipeline_events": "the board ledger, written only in the transaction of a property_pipeline change, "
                                 "which bumps board (the health check's board_bumps cell leans on exactly this)",
-    "notification_dispatches": "the rule-16 event table, not curation; the bell keeps its own polls (ruling Q1b)",
     "filter_presets": "presets are not curation (follow-up F5)",
     "filter_preset_groups": "preset groups are not curation (follow-up F5)",
-    "notification_subscriptions": "watchdogs are not curation (ruling Q1b, follow-up F5)",
     "estimation_runs": "estimation runs started elsewhere are out of scope (ruling Q1d, follow-up F5)",
     "estimation_cohort_entries": "a run's cohort, immutable with its run (rule 12; follow-up F5)",
     "estimation_trace_payloads": "a run's trace, immutable with its run (rule 12; follow-up F5)",

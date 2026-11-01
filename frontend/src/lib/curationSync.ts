@@ -22,10 +22,14 @@ import { hashKey } from '@tanstack/react-query';
 import { ACTING_SEGMENT, actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
 import { lensTargets, type CurationLens } from '@/lib/curationSettle';
-import { curationKeys, dismissalKeys, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import {
+  curationKeys, dismissalKeys, notificationKeys, pipelineKeys, pipelineShareKeys, watchdogKeys,
+} from '@/lib/queries';
 import { revalidate, type Hold, type ReadMode, type Revalidation } from '@/lib/revalidate';
 
-export const CURATION_FAMILIES = ['board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares'] as const;
+export const CURATION_FAMILIES = [
+  'board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares', 'notifications',
+] as const;
 export type CurationFamily = (typeof CURATION_FAMILIES)[number];
 
 interface SyncEntry {
@@ -67,6 +71,15 @@ export const SYNC_TABLES = {
   property_attachments: { family: 'notes', reads: [curationKeys.allPropertyNotes] },
   property_artifact_links: { family: 'links', reads: [curationKeys.artifactLinks] },
   pipeline_shares: { family: 'shares', reads: [], ownReads: [pipelineShareKeys.all] },
+  /* W7 (#2327, migration 715; ruling Q1b re-ruled 2026-11-01): the bell's number and the
+   * feed follow a mark-seen, a new event, a merge's re-point and a retired watchdog made
+   * anywhere. Own-only (never a share's family), so own reads: never read while acting. */
+  notification_dispatches: { family: 'notifications', reads: [], ownReads: [notificationKeys.all] },
+  notification_subscriptions: {
+    family: 'notifications',
+    reads: [],
+    ownReads: [notificationKeys.all, watchdogKeys.all],
+  },
   collection_shares: {
     family: 'shares',
     reads: [],
@@ -117,6 +130,8 @@ export const SYNC_ROOTS: readonly QueryKey[] = [
   ['curation'],
   ['dismissals'],
   ['pipeline-shares'],
+  ['notifications'],
+  ['watchdog'],
   [ACTING_SEGMENT],
 ];
 

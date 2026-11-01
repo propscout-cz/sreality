@@ -32,7 +32,8 @@ from tests.migration_defs import MIGRATIONS
 
 pytestmark = REQUIRED_DB
 
-FAMILIES = ("board", "dismissals", "collections", "tags", "notes", "links", "shares")
+SEEDED_FAMILIES = ("board", "dismissals", "collections", "tags", "notes", "links", "shares")   # 696's seed
+FAMILIES = (*SEEDED_FAMILIES, "notifications")                                                 # + 715, unseeded
 EDIT_FAMILIES = ("board", "dismissals", "collections", "tags", "notes", "links")
 Moved = dict[tuple[uuid.UUID, str], int]
 
@@ -54,6 +55,8 @@ class _World(NamedTuple):
     tag: int           # A's tag
     note: int          # A's note on props[0], carrying a file
     card: int          # the property of A's card
+    watchdog: uuid.UUID   # A's watchdog (715: notifications)
+    event: uuid.UUID      # A's unseen event on it
 
 
 @pytest.fixture(scope="module")
@@ -73,9 +76,9 @@ def _one(svc: psycopg.Connection, sql: str, params: tuple[Any, ...] = ()) -> Any
 
 @pytest.fixture(scope="module")
 def world(svc: psycopg.Connection) -> Iterator[_World]:
-    """A's curation reaches every family (so A holds all seven clock rows), committed, as the owner login."""
+    """A's curation reaches every family (so A holds all eight clock rows), committed, as the owner login."""
     with svc.cursor() as cur:
-        cur.execute("INSERT INTO properties (settled_at) SELECT now() FROM generate_series(1, 18) RETURNING id")
+        cur.execute("INSERT INTO properties (settled_at) SELECT now() FROM generate_series(1, 20) RETURNING id")
         props = [int(r[0]) for r in cur.fetchall()]
     try:
         with signups(svc, "clock", "a", "b", "c", "d", "e") as made:
@@ -97,7 +100,11 @@ def world(svc: psycopg.Connection) -> Iterator[_World]:
                             "VALUES (%s, %s, 'https://example.test/clock')", (a, props[3]))
                 cur.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) "
                             "VALUES (%s, %s, 'read'), (%s, %s, 'edit')", (a, t["b"].acc, a, t["c"].acc))
-            yield _World(t["a"], t["b"], t["c"], t["d"], t["e"], props[4:], entry, coll, tag, note, props[1])
+            watchdog = _one(svc, "INSERT INTO notification_subscriptions (account_id, name, filter_spec) "
+                                 "VALUES (%s, %s, '{}') RETURNING id", (a, f"clock-{uuid.uuid4().hex[:10]}"))
+            event = _one(svc, _EVENT + " RETURNING id", (watchdog, a, "new", props[18], None))
+            yield _World(t["a"], t["b"], t["c"], t["d"], t["e"], props[4:18], entry, coll, tag, note, props[1],
+                         watchdog, event)
     finally:
         with svc.cursor() as cur:
             cur.execute("DELETE FROM properties WHERE id = ANY(%s)", (props,))
@@ -106,6 +113,10 @@ def world(svc: psycopg.Connection) -> Iterator[_World]:
 _ATTACH = ("INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, filename, mime_type, "
            "byte_size, sha256_hex) VALUES (%s, %s, %s, 'k', 'a.pdf', 'application/pdf', 1, "
            "md5(random()::text) || md5(random()::text))")
+# A watchdog's event, as the producer writes it (rule 16; 610's trigger fills account_id from the watchdog too):
+# (watchdog, account, kind, property, event_ref).
+_EVENT = ("INSERT INTO notification_dispatches (subscription_id, account_id, source_kind, change_kind, property_id, "
+          "event_ref) VALUES (%s, %s, 'watchdog', %s, %s, %s)")
 
 
 def _accounts(w: _World) -> list[uuid.UUID]:
@@ -144,8 +155,11 @@ def _as(sub: uuid.UUID, sql: str, params: tuple[Any, ...] = (), *, act_as: uuid.
 # --- 1. a tenant-shaped write on each clocked table bumps exactly its (account, family), once --------------------
 
 def _write(w: _World, svc: psycopg.Connection, table: str) -> tuple[uuid.UUID, str, tuple[Any, ...]]:
-    """(the writer, its statement, the parameters) for `table`; the share tables are left by their recipient E."""
+    """(the writer, its statement, the parameters) for `table`; the share tables are left by their recipient E, and
+    an event is marked seen (the one write a tenant has on it; the producers insert as service_role)."""
     a, nonce = w.a.acc, f"clock-{uuid.uuid4().hex[:10]}"
+    if table == "notification_dispatches":
+        return w.a.user, "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s AND seen_at IS NULL", (w.event,)
     if table == "pipeline_shares":
         with svc.cursor() as cur:
             cur.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'read')",
@@ -173,6 +187,8 @@ def _write(w: _World, svc: psycopg.Connection, table: str) -> tuple[uuid.UUID, s
         "property_attachments": (_ATTACH, (w.note, a, _note_property(svc, w.note))),
         "property_artifact_links": ("INSERT INTO property_artifact_links (account_id, property_id, url) "
                                     "VALUES (%s, %s, 'https://example.test/x')", (a, p[5])),
+        "notification_subscriptions": ("INSERT INTO notification_subscriptions (account_id, name, filter_spec) "
+                                       "VALUES (%s, %s, '{}')", (a, nonce)),
     }[table]
 
 
@@ -189,6 +205,34 @@ def test_a_write_on_each_clocked_table_bumps_its_family_once(svc: psycopg.Connec
         assert _as(sub, sql, params) == 1
     parties = [world.a.acc, world.e.acc] if family == "shares" else [world.a.acc]
     assert moved == {(acc, family): 1 for acc in parties}
+
+
+def test_a_seen_event_a_new_event_and_a_retired_watchdog_each_bump_notifications_once_and_no_share_follows_it(
+        svc: psycopg.Connection, world: _World) -> None:
+    """The operator's ask (Q1b re-ruled 2026-11-01): marking an event seen anywhere, an event a producer writes, and a
+    watchdog retired (its events leave VISIBLE_SQL) each move the account's notifications counter once; a read or
+    edit share follows none of it (own-only), and a service-role bulk insert bumps the account once."""
+    a = world.a
+    with _watch(svc, _accounts(world)) as moved:
+        _one(svc, _EVENT + " RETURNING id", (world.watchdog, a.acc, "price_drop", world.props[13], "snap-1"))
+    assert moved == {(a.acc, "notifications"): 1}, "a producer's event"
+    with _watch(svc, _accounts(world)) as moved:
+        assert _as(a.user, "UPDATE notification_dispatches SET seen_at = now() WHERE subscription_id = %s "
+                           "AND seen_at IS NULL AND change_kind = 'price_drop'", (world.watchdog,)) == 1
+    assert moved == {(a.acc, "notifications"): 1}, "marked seen"
+    with _watch(svc, _accounts(world)) as moved:
+        with svc.cursor() as cur:
+            cur.execute("INSERT INTO notification_dispatches (subscription_id, account_id, source_kind, change_kind, "
+                        "property_id, event_ref) SELECT %s, %s, 'watchdog', 'price_rise', %s, 'snap-' || (100 + g) "
+                        "FROM generate_series(1, 50) g", (world.watchdog, a.acc, world.props[13]))
+    assert moved == {(a.acc, "notifications"): 1}, "a bulk insert bumps the account once"
+    with _watch(svc, _accounts(world)) as moved:
+        assert _as(a.user, "UPDATE notification_subscriptions SET retired_at = now() WHERE id = %s",
+                   (world.watchdog,)) == 1
+    assert moved == {(a.acc, "notifications"): 1}, "retired: its events leave the bell"
+    assert "notifications" in {f for acc, f, _m in _view(a.user) if acc == a.acc}
+    for who in (world.b, world.c):
+        assert not any(f == "notifications" for acc, f, _m in _view(who.user) if acc == a.acc), "own-only"
 
 
 def test_another_connection_sees_no_bump_before_the_commit(svc: psycopg.Connection, world: _World) -> None:
@@ -866,7 +910,7 @@ def test_the_board_bumps_read_finds_every_card_change_bumped_and_bites_on_an_unb
                         "VALUES (%s, %s, %s, 'operator')", (a, world.props[10], world.entry))
     out = plat.check_curation_sync(svc, THRESHOLDS)
     cells = {c["subject"]: c for c in out["details"]["cells"]}
-    assert (out["status"], cells["triggers"]["value"], cells["board_bumps"]["value"]) == ("ok", 12, 0), out
+    assert (out["status"], cells["triggers"]["value"], cells["board_bumps"]["value"]) == ("ok", 14, 0), out
     assert cells["board_bumps"]["facts"]["events_24h"] >= 1
     conn = psycopg.connect(db_url())
     try:
@@ -927,5 +971,5 @@ def test_the_catalog_holds_the_clock_as_built(svc: psycopg.Connection) -> None:
         ("curation_clock_public", "authenticated"),
     }, "the browser reads through its policy, the service role reads the table (701), anon reads nothing"
     assert "security_invoker=true" in options
-    assert seeded and all(families == sorted(FAMILIES) for _acc, families in seeded), (
-        f"every account that predates the clock was seeded with all seven families: {seeded}")
+    assert seeded and all(families == sorted(SEEDED_FAMILIES) for _acc, families in seeded), (
+        f"every account that predates the clock was seeded with 696's seven families (715's is unseeded): {seeded}")

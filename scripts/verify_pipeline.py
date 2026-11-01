@@ -434,7 +434,7 @@ THRESHOLDS: dict[str, Any] = {
     # --- curation_sync (platform alarm, on the worker): does every curation change move the clock --
     # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
     # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
-    "CURATION_CLOCK_TRIGGERS": 12,
+    "CURATION_CLOCK_TRIGGERS": 14,
     # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
     # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
     # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
