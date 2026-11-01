@@ -369,3 +369,23 @@ def test_require_entitlement_default_plan_fallback_passes():
     gate = billing.require_entitlement("browse")
     claims = {"sub": str(uuid.uuid4())}
     assert gate(claims=claims, conn=conn) is claims
+
+
+@pytest.mark.parametrize("etype, status", [
+    ("customer.subscription.updated", "active"),
+    ("customer.subscription.deleted", "canceled"),
+])
+def test_a_comp_plan_is_left_alone_by_a_subscription_event_and_says_so(etype, status, caplog):
+    """`pilot` is an operator's comp: a later event neither moves its plan nor cancels it (#2319)."""
+    conn = _FakeConn([
+        (_EVENTS_INSERT, [("evt_1",)]),
+        (lambda q: "SELECT id FROM accounts WHERE stripe_customer_id" in q, [(uuid.uuid4(),)]),
+        (lambda q: "SELECT plan, last_event_created FROM entitlements" in q, [("pilot", None)]),
+    ])
+    payload = _event(etype, {"customer": "cus_1", "status": status, "items": {"data": [{"price": {"lookup_key": "free"}}]}})
+    with caplog.at_level("WARNING"):
+        res = _post(_client(conn), payload, _sign(payload))
+    assert res.status_code == 200
+    assert res.json() == {"received": True, "ignored": etype}
+    assert not [q for q, _ in conn.executed if "INSERT INTO entitlements" in q]
+    assert "pilot" in caplog.text

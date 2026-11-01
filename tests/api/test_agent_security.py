@@ -388,7 +388,8 @@ def _sql_targets(tree: ast.AST) -> set[str]:
 def test_nothing_under_api_agents_names_a_tenant_table_for_a_write_but_the_run_ledger() -> None:
     from tests._tenant_registry import TENANT_TABLES
 
-    ledger = {"agent_runs", "agent_run_steps", "agent_artifacts", "valuo_valuations"}
+    # The ledger, plus the spending limit PUT /runs/limit sets through the executor (#2319): what a run's owner asks for, no curation.
+    ledger = {"agent_runs", "agent_run_steps", "agent_artifacts", "valuo_valuations", "agent_account_limits"}
     seen: set[str] = set()
     for path in (ROOT / "api" / "agents").glob("*.py"):
         targets = _sql_targets(ast.parse(path.read_text(encoding="utf-8")))

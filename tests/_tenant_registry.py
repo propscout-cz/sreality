@@ -53,6 +53,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "agent_artifacts",
     # Migration 712: what became of a run's proposals; browser roles SELECT only (BROWSER_WRITE_COLUMNS).
     "agent_proposal_applies",
+    # Migration 713: an account's own daily agent limit; browser roles SELECT only (BROWSER_WRITE_COLUMNS).
+    "agent_account_limits",
 )
 
 # Tenant tables the browser reads but writes only by these column grants (migration 679, rule 12): the API
@@ -69,6 +71,8 @@ BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
     "agent_artifacts": frozenset(),
     # Migration 712: only its definer functions write it, each refusing any login but the tenant pool's.
     "agent_proposal_applies": frozenset(),
+    # Migration 713: the service role writes it, PUT /runs/limit in api/routes/agent_runs.py, after the route's validation.
+    "agent_account_limits": frozenset(),
 }
 BROWSER_WRITE_COLUMNS_SINCE = 679
 
@@ -122,4 +126,5 @@ NOT_CLOCKED: dict[str, str] = {
     "agent_run_steps": "a run's diary, not curation",
     "agent_artifacts": "a run's files, not curation",
     "agent_proposal_applies": "a run's marker, not curation: the write it records moves that table's clock",
+    "agent_account_limits": "a spending setting read at claim time, not curation",
 }

@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAgentRunOptions } from '@/lib/agentRunOptions';
 import { useAuth } from '@/lib/auth';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
 import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
+
+const AgentLimitDialog = lazyChunk(() => import('./runs/AgentLimitDialog'));
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
@@ -19,6 +23,9 @@ export default function AccountMenu() {
   const [desktopView] = useState(readDesktopView);
   const [scheme, setScheme] = useScheme();
   const [mode, setMode] = useTheme();
+  /* The API's one gate decides, the answer the nav's Runs link reads: no agents, no limit to set. */
+  const { data: runOptions } = useAgentRunOptions({ enabled: user != null });
+  const [limitOpen, setLimitOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -108,6 +115,19 @@ export default function AccountMenu() {
             />
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
+          {runOptions?.start.allowed && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setLimitOpen(true);
+              }}
+              className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)]"
+            >
+              Agent spending limit
+            </button>
+          )}
           {desktopView && (
             <button
               type="button"
@@ -131,6 +151,11 @@ export default function AccountMenu() {
           </button>
         </div>
       ) : null}
+      {limitOpen && (
+        <Suspense fallback={null}>
+          <AgentLimitDialog onClose={() => setLimitOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

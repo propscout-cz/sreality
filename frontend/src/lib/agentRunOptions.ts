@@ -4,8 +4,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchAgentRunOptions } from './api';
 
-/* Whether a queued run can move now: `dark` the brake is off, `parked` the daily ceiling or a missing setting holds it. */
-export type QueueState = 'dark' | 'parked' | 'open';
+/* Whether this account's queued run can move now: `dark` the brake is off, `parked` the daily ceiling or a missing setting
+ * holds it, `limited` only the account's own daily limit does. */
+export type QueueState = 'dark' | 'parked' | 'limited' | 'open';
+
+/* A null figure is one the API could not name; the page shows a gap, not a number. */
+export interface AccountLimit {
+  limit_usd: number | null;
+  spent_today_usd: number | null;
+}
 
 export interface AgentOption {
   name: string;
@@ -13,12 +20,14 @@ export interface AgentOption {
   input_schema: JsonSchema;
 }
 
-/* The one answer to "may this caller start a run": allowlist today, a plan's agenda with #2319; the server decides. */
+/* The one answer to "may this caller start a run": the allowlist and the plan's `agents` agenda; the server decides. */
 export interface AgentRunOptions {
   start: { allowed: boolean; reason: string | null };
   /* null for a refused account, which reads no platform state. */
   queue: QueueState | null;
   agents: AgentOption[];
+  /* null for a refused account, which has no agent controls. */
+  limit: AccountLimit | null;
 }
 
 export interface JsonSchema {
@@ -39,7 +48,7 @@ export const agentRunKeys = {
   proposals: (id: number) => ['agent-runs', 'proposals', id] as const,
 };
 
-/* A run the queue cannot move can wait for days: nothing will change until the brake or the ceiling does. */
+/* A run the queue cannot move can wait for days: nothing will change until the brake, the ceiling or the limit does. */
 export const WAITING_POLL_MS = 30_000;
 
 /* The Shell's nav and the pages share this one read. `enabled` is false before a session exists. */

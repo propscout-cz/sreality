@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import ErrorBanner from '@/components/ErrorBanner';
 import { Field } from '@/components/controls';
 import { startAgentRun } from '@/lib/api';
-import { agentRunKeys, type AgentOption, type QueueState } from '@/lib/agentRunOptions';
-import { buildInput, fieldsOf, QUEUE_HOLD, type FormField, type FormValues } from '@/lib/agentRuns';
+import { agentRunKeys, type AccountLimit, type AgentOption, type QueueState } from '@/lib/agentRunOptions';
+import { buildInput, fieldsOf, queueHold, type FormField, type FormValues } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 const BOX = 'w-full min-w-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-2 py-1.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] aria-[invalid=true]:border-[var(--color-brick)]';
@@ -70,7 +70,7 @@ function FormFieldBlock({ field, value, error, onChange }: {
 
 /* Start a run of one of the agents the API offered. One idempotency key per input: a double click or a retry after a lost
  * answer is the same run, and a changed input is a new one. */
-export default function StartRunForm({ agents, queue }: { agents: AgentOption[]; queue: QueueState | null }) {
+export default function StartRunForm({ agents, queue, limit }: { agents: AgentOption[]; queue: QueueState | null; limit: AccountLimit | null }) {
   const [agentName, setAgentName] = useState(agents[0].name);
   const agent = agents.find((a) => a.name === agentName) ?? agents[0];
   const fields = useMemo(() => fieldsOf(agent.input_schema), [agent]);
@@ -79,6 +79,7 @@ export default function StartRunForm({ agents, queue }: { agents: AgentOption[];
   const key = useRef(crypto.randomUUID());
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const hold = queueHold(queue, limit);
 
   const start = useMutation({
     mutationFn: startAgentRun,
@@ -132,7 +133,7 @@ export default function StartRunForm({ agents, queue }: { agents: AgentOption[];
           Start run
         </button>
         {start.isPending && <span className="text-sm text-[var(--color-ink-3)]">Starting…</span>}
-        {queue && QUEUE_HOLD[queue] && <span className="text-[0.78rem] text-[var(--color-ink-3)]">{QUEUE_HOLD[queue]}</span>}
+        {hold && <span className="text-[0.78rem] text-[var(--color-ink-3)]">{hold}</span>}
       </div>
     </form>
   );
