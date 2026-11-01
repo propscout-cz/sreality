@@ -282,6 +282,26 @@ def resolve_active_property_id(
     return resolve_active_property_ids(conn, [property_id]).get(property_id)
 
 
+# merged_at is its merge transaction's start, so a merge begun just before `since` can still have carried a row written after it.
+# The margin outlasts any merge transaction: the cost of a false hit is only that a caller holds back.
+_MERGED_SINCE_SQL = (
+    "SELECT p.id FROM properties p WHERE p.id = ANY(%(ids)s) AND p.merged_at >= %(since)s::timestamptz - interval '1 hour' "
+    "UNION SELECT p.merged_into FROM properties p WHERE p.merged_into = ANY(%(ids)s) "
+    "AND p.merged_at >= %(since)s::timestamptz - interval '1 hour'"
+)
+
+
+def merged_since(conn: "psycopg.Connection", ids: Iterable[int], since: datetime) -> set[int]:
+    """Those of `ids` a merge has touched since `since`, retired or surviving: what the operator state on them says about whose
+    it was may have changed. Read-only; safe inside a caller txn."""
+    ids = list(ids)
+    if not ids:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(_MERGED_SINCE_SQL, {"ids": ids, "since": since})
+        return {int(r[0]) for r in cur.fetchall()}
+
+
 def canonical_advert(conn: "psycopg.Connection", property_id: int) -> int | None:
     """The canonical ad of the property's live survivor (a merged-away id follows its survivor), or None."""
     survivor = resolve_active_property_id(conn, property_id)

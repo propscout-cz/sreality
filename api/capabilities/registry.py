@@ -1,4 +1,5 @@
-"""Every tool, declared once, and the one path to it: `call` validates, picks the connection, runs, maps, fits."""
+"""Every tool, declared once, and the one path to it: `call` validates, picks the connection, runs, maps, fits. A write has
+no path here: `validate` hands it to the Apply route's `api/agents/proposals.py`."""
 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import psycopg
 from pydantic import ValidationError
 
 from api import tenant_pool
-from api.capabilities import market, run_scope, tenant, valuo_tool, visuals
+from api.capabilities import market, run_scope, tenant, valuo_tool, visuals, writes
 from api.capabilities.entry import RUN_ACCOUNT_CLAIM, Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode, busy, invalid_arguments, to_tool_error
 from api.capabilities.truncate import fit
@@ -30,7 +31,7 @@ def _index(entries: Iterable[Entry]) -> Mapping[str, Entry]:
 
 _ACCOUNTS_UNDER_LOGIN = "SELECT current_account_ids()"
 
-ENTRIES: Mapping[str, Entry] = _index((*market.ENTRIES, *tenant.ENTRIES, *visuals.ENTRIES, *valuo_tool.ENTRIES))
+ENTRIES: Mapping[str, Entry] = _index((*market.ENTRIES, *tenant.ENTRIES, *visuals.ENTRIES, *valuo_tool.ENTRIES, *writes.ENTRIES))
 
 
 def validate(name: str, raw_args: object) -> tuple[Entry, Args]:
@@ -84,6 +85,9 @@ def _connection(caller: Caller, entry: Entry) -> Iterator[Context]:
 def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
     """Run one tool; its result envelope, or a ToolError."""
     entry, args = validate(name, raw_args)
+    # ADR-0004: a write runs only in `api/agents/proposals.py`, in the transaction that marks it applied, on the user's click.
+    if entry.effect is Effect.WRITE:
+        raise ToolError(ToolErrorCode.FORBIDDEN, f"{name} changes the user's data: only they can apply it")
     try:
         # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
         with _connection(caller, entry) as ctx:
