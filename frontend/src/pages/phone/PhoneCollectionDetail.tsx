@@ -42,7 +42,7 @@ import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
 import { collectionListKeys, useCollectionCards } from '@/lib/collectionCards';
-import { useListHold } from '@/lib/useListHold';
+import { useHeld, useListHold } from '@/lib/useListHold';
 import { listingKindLabel } from '@/lib/enums';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';
 import { propertyPath } from '@/lib/listingUrl';
@@ -374,9 +374,12 @@ function SharingCard({ collection, id }: { collection: Collection; id: string })
 
 function Members({ collection, members }: { collection: Collection; members: CollectionPropertyRow[] }) {
   const navigate = useNavigate();
-  const { list, uncarded } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
-  /* A change made elsewhere moves the roll at once, but never under a finger (ruling Q3(c)). */
+  const { list, uncarded: current } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
+  /* A change made elsewhere moves the roll at once, but never under a finger
+   * (ruling Q3(c)): the cards park, the "Bez karty" lines (drawn from the
+   * collection's own read, which the header's count rides) wait in the view. */
   const hand = useListHold(collectionListKeys(collection.id));
+  const uncarded = useHeld(hand, current);
 
   return (
     <div>

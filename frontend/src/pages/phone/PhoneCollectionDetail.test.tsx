@@ -181,6 +181,32 @@ describe('<CollectionDetail> on the phone', () => {
     expect(screen.getByRole('link', { name: /Místo 1/ })).toBeInTheDocument();
   });
 
+  /* Review repair (W6): the header's count rides the collection's own read, and a
+   * count is never held, so that read lands under the finger; the "Bez karty"
+   * lines drawn from it wait in the view until the finger lifts. */
+  it('holds the "Bez karty" lines under a finger, never the count in the header', async () => {
+    const { qc } = renderPage();
+    const section = await screen.findByRole('region', { name: 'Bez karty' });
+    const line = within(section).getByRole('link', { name: /Bez polohy/ });
+    fireEvent.touchStart(line, { touches: [{ target: line }] });
+    memberMap.delete(3);
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, listing_count: 2 },
+      properties: [member(1), member(2)],
+    });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'collections', null));
+    });
+    const header = screen.getByRole('heading', { name: 'K prohlídce' }).closest('header')!;
+    await waitFor(() => expect(header.textContent?.replace(/\u00a0/g, ' ')).toContain('2 nemovitosti'));
+    expect(screen.getByRole('link', { name: /Bez polohy/ })).toBeInTheDocument();
+
+    fireEvent.touchEnd(line, { touches: [] });
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Bez polohy/ })).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Bez karty' })).toBeNull();
+  });
+
   it('keeps a member Browse cannot serve reachable as a plain line', async () => {
     renderPage();
     const section = await screen.findByRole('region', { name: 'Bez karty' });

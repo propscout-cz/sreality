@@ -15,7 +15,7 @@ import { useCollectionMembers } from '@/lib/collectionCache';
 import { FEED_ALL_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import type { KeysetCursor } from '@/lib/keyset';
-import { CARD_PAGE_SIZE, curationKeys, fetchListingsForCards, type CardRow, type SortSpec } from '@/lib/queries';
+import { CARD_PAGE_SIZE, fetchListingsForCards, type CardRow, type SortSpec } from '@/lib/queries';
 import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import type { CollectionPropertyRow } from '@/lib/types';
 import { useInfiniteList } from '@/lib/useInfiniteList';
@@ -31,11 +31,12 @@ export function collectionCardFilters(id: number): ListingFilters {
   };
 }
 
-/** What the collection page lists, for a hand on it (lib/useListHold): the
- * collection's own read (its table, the cards' "without a card" rows) and its
- * cards in every order. */
+/** What a hand on the collection page holds (lib/useListHold): its cards in
+ * every order. Never the collection's own read, which also carries the header's
+ * name and member count (a count is never held): the rows drawn from it, the
+ * table and the phone's "Bez karty" lines, are held in the view (`useHeld`). */
 export function collectionListKeys(id: number): QueryKey[] {
-  return [curationKeys.collection(id), browseKeys.cohortCards(collectionCardFilters(id))];
+  return [browseKeys.cohortCards(collectionCardFilters(id))];
 }
 
 export function useCollectionCards({

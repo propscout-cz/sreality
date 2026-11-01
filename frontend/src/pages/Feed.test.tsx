@@ -321,6 +321,33 @@ describe('<Feed>', () => {
     expect(screen.getByText('Místo 3', { exact: false })).toBeInTheDocument();
   });
 
+  /* Review repair (W6): "an open Feed list follows fully" includes Skryté, which
+   * no lens engages (it reads the hidden alone): a dismissal made elsewhere owes
+   * it by name. */
+  it('an open Skryté follows a hide and a restore made elsewhere', async () => {
+    const { qc } = renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await userEvent.click(screen.getByRole('button', { name: /Skryté/ }));
+    expect(await screen.findByText('Místo 9', { exact: false })).toBeInTheDocument();
+    const hidden = (...ids: number[]) => ({
+      rows: ids.map((id) => ({ ...row(id, '2026-09-01T08:00:00Z'), dismissed_at: '2026-10-12T07:00:00Z' }) as DismissedCardRow),
+      nextCursor: null,
+    });
+
+    vi.mocked(queries.fetchDismissedCards).mockResolvedValue(hidden(5, 9));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    expect(await screen.findByText('Místo 5', { exact: false })).toBeInTheDocument();
+
+    vi.mocked(queries.fetchDismissedCards).mockResolvedValue(hidden(5));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    await waitFor(() => expect(screen.queryByText('Místo 9', { exact: false })).toBeNull());
+    expect(screen.getByText('Místo 5', { exact: false })).toBeInTheDocument();
+  });
+
   it('offers a retry when the read fails', async () => {
     vi.mocked(queries.fetchListingsForCards).mockRejectedValue(new Error('57014'));
     renderFeed();

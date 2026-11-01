@@ -21,7 +21,7 @@ import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
 import { collectionListKeys, useCollectionCards } from '@/lib/collectionCards';
-import { useListHold } from '@/lib/useListHold';
+import { useHeld, useListHold, type ListHand } from '@/lib/useListHold';
 import {
   DEFAULT_SORT,
   curationKeys,
@@ -544,7 +544,7 @@ function Members({
     );
 
   /* A change made elsewhere moves the cards and the table at once, but not
-   * under the hand (ruling Q3(c)). */
+   * under the hand (ruling Q3(c)); the header's count follows regardless. */
   const hand = useListHold(collectionListKeys(collection.id));
 
   /* An empty collection has nothing to draw as cards: its sentence alone. */
@@ -556,7 +556,7 @@ function Members({
       <Tabs tabs={MEMBER_TABS} active={tab} onChange={setTab} ariaLabel="Zobrazení nemovitostí" idPrefix={ids} />
       <div role="tabpanel" id={`${ids}panel-${tab}`} aria-labelledby={`${ids}tab-${tab}`} className="mt-5">
         {tab === 'table' ? (
-          <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />
+          <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} hand={hand} />
         ) : (
           <CardsTab collectionId={collection.id} members={properties} onOpenTable={() => setTab('table')} />
         )}
@@ -693,12 +693,16 @@ function PropertiesBlock({
   collectionId,
   properties,
   editable,
+  hand,
 }: {
   collectionId: number;
   properties: CollectionPropertyRow[];
   /* The owner's view: the per-row Remove column and the invitation to add. */
   editable: boolean;
+  /* The members' hand: the rows wait under it (its count does not). */
+  hand?: ListHand;
 }) {
+  const rows = useHeld(hand, properties);
   return (
     <Panel title="Properties" count={properties.length}>
       {properties.length === 0 ? (
@@ -726,9 +730,10 @@ function PropertiesBlock({
                 </tr>
               </thead>
               <tbody>
-                {properties.map((row) => (
+                {rows.map((row) => (
                   <PropertyRowView
-                    key={row.property_id}
+                    /* One membership: a re-add elsewhere is a new row, never the one I removed. */
+                    key={`${row.property_id}:${row.added_at}`}
                     row={row}
                     collectionId={collectionId}
                     editable={editable}
@@ -761,6 +766,8 @@ function PropertyRowView({
     onSuccess: () => settleCollectionWrite(qc, row.property_id, collectionId, false),
   });
 
+  /* My own removal leaves at once, a hand on the table or not (Decision 7b). */
+  if (remove.isSuccess) return null;
   return (
     <tr className="border-b border-[var(--color-rule-soft)] last:border-b-0 hover:bg-[var(--color-copper-soft)]/40 transition-colors">
       <td className="px-3 py-2.5 align-middle font-mono tabular-nums text-[var(--color-ink-3)]">

@@ -1,13 +1,13 @@
 /* A hand on a list. An open Browse, Feed or collection list follows a change
  * made elsewhere within one clock read (ruling Q3(c), 2026-11-01;
  * docs/design/curation-sync.md Decision 7b), except while the user's hand is on
- * it: the pointer over it, a finger down on it, or keyboard focus inside it.
- * Then its re-reads PARK (lib/revalidate `parkReads`) and are paid the moment
- * the hand leaves, so no row moves under it. Only the list's own keys are held:
- * counts, map and stats re-read at once, never held. The list's own reads pass
- * (a first load after a filter or sort change, a page, a refresh it asks for),
- * and so do the user's own writes: each holds for itself, and the ledger
- * composes the two.
+ * it: the pointer over it, or a finger down on it (the ruling's two; keyboard
+ * focus is not a hand). Then its re-reads PARK (lib/revalidate `parkReads`) and
+ * are paid the moment the hand leaves, so no row moves under it. Only the list's
+ * own keys are held: counts, map and stats re-read at once, never held. The
+ * list's own reads pass (a first load after a filter or sort change, a page, a
+ * refresh it asks for), and so do the user's own writes: each holds for itself,
+ * and the ledger composes the two.
  *
  * POINTER. Over: React's pointerover reaches the container from its whole React
  * subtree, a popover portalled out of a row included, so a stage menu opened from
@@ -20,12 +20,12 @@
  * TOUCH. From touchstart until the last finger that came down on the list lifts
  * (lib/fingers): a touch pointer's own events end at the scroll's pointercancel.
  *
- * KEYBOARD. Focus inside that the browser shows (`:focus-visible`), so a click
- * that leaves focus on a card's button does not keep the hand there once the
- * pointer goes. A focus move inside the list is no leave (its focusout waits one
- * task for the focusin); a focusin anywhere outside ends it at once. */
+ * HELD IN THE VIEW. A list whose rows share a read with what is never held (the
+ * collection page: its header's name and member count ride its own read) holds
+ * those rows in the view instead (`useHeld`): the read lands at once, the rows
+ * stay as drawn until the hand leaves. */
 
-import { useEffect, useMemo, type FocusEvent, type PointerEvent, type TouchEvent } from 'react';
+import { useEffect, useMemo, useReducer, useRef, type PointerEvent, type TouchEvent } from 'react';
 import { hashKey, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
 
 import { trackFingers } from '@/lib/fingers';
@@ -38,39 +38,42 @@ export interface ListHand {
   onPointerDown: (e: PointerEvent) => void;
   onPointerLeave: () => void;
   onTouchStart: (e: TouchEvent) => void;
-  onFocus: (e: FocusEvent) => void;
-  onBlur: () => void;
 }
 
-/* Focus the browser shows; a browser that cannot say counts every focus. */
-const shown = (target: EventTarget): boolean => {
-  try {
-    return target instanceof Element && target.matches(':focus-visible');
-  } catch {
-    return true;
-  }
-};
+interface Hand {
+  props: ListHand;
+  aim(next: readonly QueryKey[]): void;
+  listen(): () => void;
+  isOn(): boolean;
+  /* Told each time the hand arrives or leaves. */
+  watch(listener: (on: boolean) => void): () => void;
+}
 
-function hand(qc: QueryClient) {
+/* Each hand by the props it handed out, for `useHeld`. */
+const hands = new WeakMap<ListHand, Hand>();
+
+function hand(qc: QueryClient): Hand {
   const el: { current: Element | null } = { current: null };
   let keys: readonly QueryKey[] = [];
   let pointer = false;
   let touching = false;
-  let keyboard = false;
-  /* The last pointerover and focusin that passed through the container. */
+  let on = false;
+  /* The last pointerover that passed through the container. */
   let over: Event | null = null;
-  let focused: Event | null = null;
-  let blur: ReturnType<typeof setTimeout> | undefined;
   let hold: Hold | null = null;
+  const watchers = new Set<(on: boolean) => void>();
 
   const sync = (): void => {
-    const on = pointer || touching || keyboard;
-    if (on && !hold && keys.length > 0) hold = parkReads(qc, keys.map((queryKey) => ({ queryKey })));
-    if (!on && hold) {
+    const now = pointer || touching;
+    if (now && !hold && keys.length > 0) hold = parkReads(qc, keys.map((queryKey) => ({ queryKey })));
+    if (!now && hold) {
       const parked = hold;
       hold = null;
       parked.release();
     }
+    if (now === on) return;
+    on = now;
+    for (const watcher of watchers) watcher(on);
   };
   const fingers = trackFingers(el, (down) => {
     touching = down;
@@ -86,11 +89,6 @@ function hand(qc: QueryClient) {
     pointer = false;
     sync();
   };
-  const focusElsewhere = (e: Event): void => {
-    if (!keyboard || e === focused) return;
-    keyboard = false;
-    sync();
-  };
 
   const props: ListHand = {
     ref: (node) => {
@@ -103,43 +101,33 @@ function hand(qc: QueryClient) {
       sync();
     },
     onTouchStart: (e) => fingers.update(e.touches),
-    onFocus: (e) => {
-      focused = e.nativeEvent;
-      clearTimeout(blur);
-      keyboard = shown(e.target);
-      sync();
-    },
-    onBlur: () => {
-      clearTimeout(blur);
-      blur = setTimeout(() => {
-        keyboard = false;
-        sync();
-      }, 0);
-    },
   };
 
   return {
     props,
     /* The list's keys now: a hand already down moves onto them before it lets the old ones go. */
-    aim(next: readonly QueryKey[]): void {
+    aim(next) {
       keys = next;
       const old = hold;
       hold = null;
       sync();
       old?.release();
     },
-    listen(): () => void {
+    listen() {
       document.addEventListener('pointerover', overElsewhere);
-      document.addEventListener('focusin', focusElsewhere);
       return () => {
         document.removeEventListener('pointerover', overElsewhere);
-        document.removeEventListener('focusin', focusElsewhere);
-        clearTimeout(blur);
         fingers.dispose();
         pointer = false;
         touching = false;
-        keyboard = false;
         sync();
+      };
+    },
+    isOn: () => on,
+    watch(listener) {
+      watchers.add(listener);
+      return () => {
+        watchers.delete(listener);
       };
     },
   };
@@ -148,8 +136,12 @@ function hand(qc: QueryClient) {
 /** Hold the re-reads of `keys` (by prefix: the list's own queries only) while a hand is on the element the returned props are spread on. */
 export function useListHold(keys: readonly QueryKey[]): ListHand {
   const qc = useQueryClient();
-  const h = useMemo(() => hand(qc), [qc]);
-  const hash = hashKey(keys as unknown as QueryKey);
+  const h = useMemo(() => {
+    const made = hand(qc);
+    hands.set(made.props, made);
+    return made;
+  }, [qc]);
+  const hash = hashKey(keys);
   useEffect(() => h.listen(), [h]);
   useEffect(
     () => h.aim(keys),
@@ -157,4 +149,24 @@ export function useListHold(keys: readonly QueryKey[]): ListHand {
     [h, hash],
   );
   return h.props;
+}
+
+/** `value` as the list under `hand` shows it: the current one while no hand is
+ * on the list, else the one drawn when the hand arrived (a component that mounts
+ * under the hand draws the current one), until the hand leaves. No `hand`: the
+ * current value. A row the user removes here is the caller's to drop at once. */
+export function useHeld<T>(hand: ListHand | undefined, value: T): T {
+  const h = hand ? hands.get(hand) : undefined;
+  const shown = useRef(value);
+  const latest = useRef(value);
+  const [, repaint] = useReducer((n: number) => n + 1, 0);
+  latest.current = value;
+  if (!h?.isOn()) shown.current = value;
+  useEffect(
+    () => h?.watch((on) => {
+      if (!on && shown.current !== latest.current) repaint();
+    }),
+    [h],
+  );
+  return shown.current;
 }

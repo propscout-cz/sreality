@@ -43,9 +43,10 @@ last-writer-wins.
       (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
 - [ ] **W6: an open list follows fully, held under the hand (#2303, SPA, built 2026-11-01, PR pending).** Ruling
       Q3(c): `LENS_REREAD` `'now'` for lists and aggregates; `lib/useListHold.ts` over `parkReads` holds a list's
-      re-reads while the pointer, a finger or shown keyboard focus is on it (Browse cards, the Feed roll, the
-      collection page, the phone broker roll); counts, map and stats never held. The design's Decision 7b and § 12
-      "W6 (#2303), as built". Owed: the Feed's Skryté roll still follows only at its toggle (follow-up).
+      re-reads while the pointer or a finger is on it (Browse cards, the Feed roll with Skryté, the collection page,
+      the phone broker roll); counts, map and stats never held (the collection header's count included: its table's
+      rows hold in the view). The design's Decision 7b and § 12 "W6 (#2303), as built", item 9 the review repairs.
+      Owed: the operator's call on the self-echo's list refetch during a triage run (design § 3.8, follow-up F15).
 - [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
       statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
       was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6

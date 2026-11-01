@@ -23,6 +23,7 @@ import {
   type ClockRow,
   type SyncTable,
 } from './curationSync';
+import { FEED_HIDDEN_FILTERS, feedHiddenKey } from './feed';
 import { DEFAULT_FILTERS } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, pipelineShareKeys } from './queries';
 import { isOwed, revalidate } from './revalidate';
@@ -133,13 +134,20 @@ describe('familyTargets', () => {
     expect(browse.some((t) => t.queryKey[1] !== f)).toBe(false);
   });
 
-  it('a dismissal elsewhere reaches the cohorts that hide dismissed properties', () => {
+  /* The Skryté roll reads the hidden alone, so `showDismissed` keeps every lens
+   * off it; a dismissal moves it all the same (review repair, W6). */
+  it("a dismissal elsewhere reaches the cohorts that hide dismissed properties, and the Feed's Skryté roll", () => {
     const qc = new QueryClient();
     qc.setQueryData(browseKeys.count(unscoped), 1);
     qc.setQueryData(browseKeys.count({ ...unscoped, showDismissed: true }), 1);
     const browse = familyTargets(qc, 'dismissals', null).filter((t) => t.mode != null);
-    expect(browse.length).toBeGreaterThan(0);
-    expect(browse.every((t) => t.queryKey[1] === unscoped)).toBe(true);
+    const skryte = browse.filter((t) => t.queryKey[1] === FEED_HIDDEN_FILTERS);
+    expect(skryte).toEqual([{ queryKey: browseKeys.cohortCards(FEED_HIDDEN_FILTERS), mode: LENS_REREAD.lists }]);
+    expect(feedHiddenKey(DEFAULT_SORT).slice(0, 2)).toEqual(skryte[0].queryKey);
+    const cohorts = browse.filter((t) => !skryte.includes(t));
+    expect(cohorts.length).toBeGreaterThan(0);
+    expect(cohorts.every((t) => t.queryKey[1] === unscoped)).toBe(true);
+    expect(familyTargets(qc, 'dismissals', 'owner-a').some((t) => t.queryKey[1] === FEED_HIDDEN_FILTERS)).toBe(false);
   });
 
   it('a collections change elsewhere re-reads an open collection page at once, with the marks', () => {

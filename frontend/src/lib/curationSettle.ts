@@ -31,6 +31,7 @@ import { hashKey, type InfiniteData, type Query, type QueryClient, type QueryKey
 
 import { actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
+import { FEED_HIDDEN_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import {
@@ -201,7 +202,9 @@ export function settleRereads(
 
 /** Where a change made elsewhere moved `lens`: every cached Browse cohort that
  * engages it, its lists and its aggregates owed as `reread` says (curationSync
- * LENS_REREAD). Nothing per property: a remote change names no property. */
+ * LENS_REREAD), and for a dismissal the Feed's Skryté roll, a list of the hidden
+ * alone that no lens engages (lib/feed `FEED_HIDDEN_FILTERS`). Nothing per
+ * property: a remote change names no property. */
 export function lensTargets(
   qc: QueryClient,
   lens: CurationLens,
@@ -212,6 +215,7 @@ export function lensTargets(
     for (const root of LIST_ROOTS) out.push({ queryKey: [root, f], mode: reread.lists });
     for (const root of AGGREGATE_ROOTS) out.push({ queryKey: [root, f], mode: reread.aggregates });
   }
+  if (lens === 'dismissed') out.push({ queryKey: browseKeys.cohortCards(FEED_HIDDEN_FILTERS), mode: reread.lists });
   return out;
 }
 

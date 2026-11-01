@@ -1012,11 +1012,14 @@ rules. Identify which one a task belongs to before you start.
 - **An open Browse, Feed or collection list follows a change made elsewhere at once, but not
   under the hand** (ruling Q3(c), 2026-11-01; `LENS_REREAD` `'now'`). Within one clock read its
   rows leave and enter (every loaded page re-read from the first) and its count, map and stats
-  re-read. While the pointer is over the list, a finger is down on it or focus the browser shows
-  is in it, `lib/useListHold` holds the list's own keys through `parkReads`: the scheduler's
+  re-read. While the pointer is over the list or a finger is down on it (keyboard focus is no
+  hand), `lib/useListHold` holds the list's own keys through `parkReads`: the scheduler's
   re-reads park and are paid when the hand leaves; the list's first load, its pages and its own
   refetch pass, the count, map and stats are never held, and a click of the user's own composes
-  through its own hold. A new list surface spreads `useListHold(keys)` on its container.
+  through its own hold. A new list surface spreads `useListHold(keys)` on its container; rows
+  drawn from a read that also carries a count (the collection page's table) are held in the view
+  with `useHeld`, never by holding that read. The Feed's Skryté roll, which no lens engages, is
+  owed by name on every dismissal change (`lensTargets`).
 - **A field over server state uses `lib/useServerDraft`**: untouched, it follows the server; once
   the user types it keeps their draft; `edited()` answers only what they changed, else null, so a
   change made elsewhere is never written back (D3: the stage, tag, collection, note and

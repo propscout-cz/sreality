@@ -1,7 +1,7 @@
 /* lib/useListHold — ruling Q3(c) with the pointer hold (2026-11-01): a change
  * made elsewhere moves an open Browse list at once — rows leave and enter, and
  * its count, map and stats re-read — but a list re-read waits while a hand is on
- * the list (pointer, finger, keyboard focus) and lands when it leaves. The
+ * the list (the pointer over it, a finger on it) and lands when it leaves. The
  * aggregates are never held; the list's own pages and the user's own clicks
  * pass. Every change made elsewhere arrives as W4's owner delivers it:
  * `revalidate(qc, familyTargets(qc, family, null))`. */
@@ -21,7 +21,7 @@ import type { SetScope } from '@/lib/setScope';
 import { useDismissal } from '@/lib/useDismissal';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 
-import { useListHold } from './useListHold';
+import { useHeld, useListHold } from './useListHold';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -289,33 +289,103 @@ describe('a finger on the list', () => {
   });
 });
 
-describe('keyboard focus in the list', () => {
-  it('holds while the browser shows the focus inside, and lets go when it moves out', async () => {
-    const qc = renderCohorts({ f: DEFAULT_FILTERS, label: 'A' });
-    await waitFor(() => expect(rows('A')).toEqual([1, 2]));
-    act(() => within(list('A')).getByText('A 1').focus());
-    act(() => within(list('A')).getByText('A 2').focus()); // a move inside is no leave
-    server.dismissed.add(2);
-    await elsewhere(qc, 'dismissals');
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-    expect(rows('A')).toEqual([1, 2]);
-
-    act(() => screen.getByRole('button', { name: 'outside' }).focus());
-    await waitFor(() => expect(rows('A')).toEqual([1, 3]));
-  });
-
-  it("does not hold for a focus the browser does not show (a mouse click's)", async () => {
-    const matches = Element.prototype.matches;
-    vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string) {
-      return selector === ':focus-visible' ? false : matches.call(this, selector);
-    });
+/* Review repair (W6): the ruling names the pointer and a touch. Keyboard focus
+ * had been a third hand, and one that could stick: a focused row the click
+ * removed fires no focusout, so the list stopped following for good. */
+describe('keyboard focus is no hand', () => {
+  it('a focus inside the list holds nothing', async () => {
     const qc = renderCohorts({ f: DEFAULT_FILTERS, label: 'A' });
     await waitFor(() => expect(rows('A')).toEqual([1, 2]));
     act(() => within(list('A')).getByText('A 2').focus());
     server.dismissed.add(2);
     await elsewhere(qc, 'dismissals');
     await waitFor(() => expect(rows('A')).toEqual([1, 3]));
+  });
+
+  it('a focused row my click removed holds nothing once the pointer leaves', async () => {
+    vi.mocked(dismissProperty).mockImplementation(async () => {
+      server.dismissed.add(2);
+      return undefined as never;
+    });
+    const qc = renderCohorts({ f: DEFAULT_FILTERS, label: 'A' });
+    await waitFor(() => expect(rows('A')).toEqual([1, 2]));
+    await act(async () => {}); // the rows' dismissal reads settle
+    const hide = screen.getByRole('button', { name: 'hide 2' });
+    fireEvent.pointerOver(hide);
+    act(() => hide.focus());
+    fireEvent.click(hide);
+    await waitFor(() => expect(rows('A')).toEqual([1]));
+    fireEvent.pointerLeave(list('A'));
+
+    server.dismissed.add(1);
+    await elsewhere(qc, 'dismissals');
+    await waitFor(() => expect(rows('A')).toEqual([3, 4]));
+  });
+});
+
+/* A value drawn from a read the hand does not hold (the collection page: the
+ * header's count rides the read its table is drawn from). */
+function Members({ label }: { label: string }) {
+  const members = useQuery({ queryKey: ['members'], queryFn: async () => cohort(DEFAULT_FILTERS) });
+  const hand = useListHold([['nothing-held']]);
+  const shown = useHeld(hand, members.data ?? []);
+  return (
+    <section>
+      <output aria-label={`${label} count`}>{members.data?.length ?? ''}</output>
+      <ul aria-label={label} {...hand}>
+        {shown.map((id) => (
+          <li key={id}>
+            <button type="button">{`${label} ${id}`}</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+describe('useHeld: rows held in the view', () => {
+  function renderMembers() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <Members label="M" />
+        <button type="button">outside</button>
+      </QueryClientProvider>,
+    );
+    return qc;
+  }
+  const reread = (qc: QueryClient) =>
+    act(async () => {
+      void revalidate(qc, [['members']]);
+    });
+
+  it('the read lands at once (its count with it); the rows stay as drawn until the pointer leaves', async () => {
+    const qc = renderMembers();
+    await waitFor(() => expect(rows('M')).toEqual([1, 2, 3, 4]));
+    fireEvent.pointerOver(within(list('M')).getByText('M 2'));
+    server.dismissed.add(2);
+    await reread(qc);
+    await waitFor(() => expect(screen.getByLabelText('M count')).toHaveTextContent('3'));
+    expect(rows('M')).toEqual([1, 2, 3, 4]);
+
+    fireEvent.pointerLeave(list('M'));
+    await waitFor(() => expect(rows('M')).toEqual([1, 3, 4]));
+  });
+
+  it('a finger holds them too, until it lifts; with no hand they follow at once', async () => {
+    const qc = renderMembers();
+    await waitFor(() => expect(rows('M')).toEqual([1, 2, 3, 4]));
+    server.dismissed.add(4);
+    await reread(qc);
+    await waitFor(() => expect(rows('M')).toEqual([1, 2, 3]));
+
+    const row = within(list('M')).getByText('M 1');
+    fireEvent.touchStart(row, { touches: [{ target: row }] });
+    server.dismissed.add(1);
+    await reread(qc);
+    await waitFor(() => expect(screen.getByLabelText('M count')).toHaveTextContent('2'));
+    expect(rows('M')).toEqual([1, 2, 3]);
+    fireEvent.touchEnd(row, { touches: [] });
+    await waitFor(() => expect(rows('M')).toEqual([2, 3]));
   });
 });
