@@ -4,7 +4,8 @@
  * stage badge, this ad's price drop and the MF yield, read through the page's
  * store; hidden while the side panel is open in this window (the drop's price
  * history is read only while the tab shows). Under an extension update it offers
- * the page reload that reconnects it. */
+ * the page reload that reconnects it. Depth is its border, bar the one shadow that
+ * lifts it off the portal page, as the sheet's folded tab had. */
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { APP_NAME, APP_SHORT } from '../../frontend/src/lib/brand';
