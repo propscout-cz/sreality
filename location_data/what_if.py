@@ -44,7 +44,12 @@ from location_data.claims_common import (
     env_positive_int,
 )
 from location_data.resolver import drain, projection
-from location_data.resolver.resolve_db import ADMISSIBLE_LICENCE_CLASSES, claim_from_intake
+from location_data.resolver.resolve_db import (
+    ADMISSIBLE_LICENCE_CLASSES,
+    CLAIM_COLUMNS,
+    claim_from_intake,
+    claim_from_row,
+)
 from location_data.resolver.types import Claim, Resolution
 from scraper import db
 
@@ -58,29 +63,84 @@ TOLERANCE = 1e-6
 _RANK_SQL = "SELECT granularity::text, rank, is_address_grain FROM location_granularity_rank"
 
 
+# DELETED IN PR-2 WITH THE PURGE (#2223): `_RAW_CLAIMS_SQL`, `keeper_rank` and `purge` are a second
+# spelling of the purge script's keeper rule, for the shadow gate that runs before it; once the
+# store holds one claim per key they have nothing to derive.
+#
+# Every stored claim of the ids, raw, with what W3's purge ranks it by: its contract version, the
+# portal's active version, and whether the active contract still declares its type. Scalar
+# subqueries keep `location_claims` the only FROM item, so `CLAIM_COLUMNS` reads unqualified.
+_RAW_CLAIMS_SQL = f"""
+SELECT {CLAIM_COLUMNS},
+       (SELECT pc.version FROM portal_contract_entries pce
+          JOIN portal_contracts pc ON pc.id = pce.contract_id
+         WHERE pce.id = location_claims.contract_entry_id),
+       (SELECT act.version FROM portal_contracts act
+         WHERE act.source = location_claims.source AND act.is_active),
+       EXISTS (SELECT 1 FROM portal_contract_entries ace
+                 JOIN portal_contracts act ON act.id = ace.contract_id AND act.is_active
+                WHERE act.source = location_claims.source
+                  AND ace.claim_type = location_claims.claim_type)
+  FROM location_claims
+ WHERE listing_id = ANY(%(ids)s::bigint[])
+"""
+
+
+def keeper_rank(claim: Claim, version: int | None, active: int | None) -> tuple[Any, ...]:
+    """The purge's keeper order, best first: (version <= active) DESC NULLS LAST, version DESC
+    NULLS FIRST, first_observed_at DESC, id DESC (`scripts.location_claims_retire._BATCH_SQL`)."""
+    admissible = None if version is None or active is None else version <= active
+    return ({True: 0, False: 1, None: 2}[admissible],
+            (0, 0) if version is None else (1, -version),
+            -claim.observed_at.timestamp(), -claim.id)
+
+
+def one_read(claims: Sequence[Claim], declared: set[str]) -> list[Claim]:
+    """`resolve_db._claims_sql` over a listing's stored claims: one per type, the operator's
+    first; a portal claim only of a type the active contract declares."""
+    best: dict[str, Claim] = {}
+    for claim in claims:
+        if claim.licence_class not in ADMISSIBLE_LICENCE_CLASSES or (
+                claim.licence_class == "portal" and claim.claim_type not in declared):
+            continue
+        held = best.get(claim.claim_type)
+        if held is None or (claim.licence_class == "operator") > (held.licence_class == "operator"):
+            best[claim.claim_type] = claim
+    return sorted(best.values(), key=lambda claim: claim.id)
+
+
 def purge(conn: psycopg.Connection, claims: dict[int, list[Claim]]) -> dict[int, list[Claim]]:
-    """W3: one claim per (listing, type, author class), the newest observation of today's read."""
-    out: dict[int, list[Claim]] = {}
-    for listing_id, rows in claims.items():
-        keep: dict[tuple[str, str], Claim] = {}
-        for claim in rows:
-            key = (claim.claim_type, claim.licence_class)
-            if key not in keep or (claim.observed_at, claim.id) > (keep[key].observed_at,
-                                                                   keep[key].id):
-                keep[key] = claim
-        out[listing_id] = sorted(keep.values(), key=lambda claim: claim.id)
-    return out
+    """W3: every stored claim of the ids read RAW (today's read is already one per type), the
+    purge's keeper per (listing, type, author), then the one read."""
+    _, rows = read(conn, _RAW_CLAIMS_SQL, {"ids": list(claims)})
+    kept: dict[tuple[int, str, str], tuple[tuple[Any, ...], Claim]] = {}
+    declared: dict[int, set[str]] = {listing_id: set() for listing_id in claims}
+    for row in rows:
+        claim, (version, active, in_contract) = claim_from_row(row[:17]), row[17:]
+        if in_contract:
+            declared.setdefault(claim.listing_id, set()).add(claim.claim_type)
+        key, rank = (claim.listing_id, claim.claim_type, claim.licence_class), keeper_rank(
+            claim, version, active)
+        if key not in kept or rank < kept[key][0]:
+            kept[key] = (rank, claim)
+    out: dict[int, list[Claim]] = {listing_id: [] for listing_id in claims}
+    for (listing_id, _, _), (_, claim) in kept.items():
+        out.setdefault(listing_id, []).append(claim)
+    return {listing_id: one_read(rows_, declared.get(listing_id, set()))
+            for listing_id, rows_ in out.items()}
 
 
-def restate(today: list[Claim], mined: list[Claim], source: str,
-            declared: frozenset[str]) -> list[Claim]:
-    """`_claims_sql` after `source`'s bump mined `mined`: per declared type, newest admissible."""
-    mined = [claim for claim in mined if claim.licence_class in ADMISSIBLE_LICENCE_CLASSES]
-    stated = {claim.claim_type for claim in mined}
-    kept = [claim for claim in today
-            if claim.licence_class == "operator" or claim.source != source
-            or (claim.claim_type in declared and claim.claim_type not in stated)]
-    return kept + mined
+def remined_read(today: list[Claim], mined: list[Claim], retracted: set[str],
+                 declared: frozenset[str]) -> list[Claim]:
+    """W3's one write then its read, for one listing re-mined under `declared`: a mined portal
+    claim replaces its type's portal claim, a tombstone removes it, silence keeps it; the
+    operator's claim of a type still outranks."""
+    stored = {(c.claim_type, c.licence_class): c for c in today}
+    for claim in mined:
+        stored[(claim.claim_type, claim.licence_class)] = claim
+    for claim_type in retracted:
+        stored.pop((claim_type, "portal"), None)
+    return one_read(list(stored.values()), set(declared))
 
 
 def remine(contract: contracts.PortalContract, store: page_readers.BodyStore,
@@ -114,9 +174,11 @@ def remine(contract: contracts.PortalContract, store: page_readers.BodyStore,
                 unmined.add(scan.row.listing_id)
                 LOG.warning("WHAT-IF page not re-mined listing_id=%d: %s", scan.row.listing_id,
                             outcome if outcome is not None else "body not fetched")
-            new = [claim_from_intake(claim, NEW_CLAIM_ID + n) for n, claim in enumerate(mined)]
-            out[scan.row.listing_id] = restate(claims[scan.row.listing_id], new,
-                                               contract.source, declared)
+            new = [claim_from_intake(claim, NEW_CLAIM_ID + n)
+                   for n, claim in enumerate(c for c in mined if not c.retract)]
+            out[scan.row.listing_id] = remined_read(
+                claims[scan.row.listing_id], new, {c.claim_type for c in mined if c.retract},
+                declared)
         LOG.info("WHAT-IF re-mined %d listings, %d with a stored page", len(scans), len(pages))
         return out
 

@@ -108,6 +108,14 @@ def read_location(payload: Mapping[str, Any] | None,
     return out
 
 
+def is_empty(payload: Mapping[str, Any] | None) -> bool:
+    """A location block whose `ad_kind` (schema: always set) and every slot are null: a FAILED
+    reading (W3, ruling R2), retried by the text lane, never a judgement the claim lane mines."""
+    block = (payload or {}).get("location")
+    return isinstance(block, Mapping) and not any(
+        _cell(block.get(slot))[0] not in (None, "") for slot in ("ad_kind", "country", *SLOTS))
+
+
 def _stands_in(value: str, advert_text: str) -> bool:
     from toolkit.description_extraction import _flat
 

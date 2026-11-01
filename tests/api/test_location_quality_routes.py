@@ -103,7 +103,7 @@ def test_correction_maps_errors_and_resolves(admin_client, monkeypatch):
 
     def fake_submit(conn, **kw):
         submitted.update(kw)
-        return {"listing_id": kw["listing_id"], "inserted": True, "restatement": False,
+        return {"listing_id": kw["listing_id"], "written": True,
                 "enqueued": True, "registry_echo": None, "resolved": False,
                 "projection": None, "claim_type": kw["claim_type"],
                 "value_text": kw["value_text"], "source": "bezrealitky"}

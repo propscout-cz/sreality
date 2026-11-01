@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import HTTPException
 from pydantic import (
-    AfterValidator, AwareDatetime, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator,
+    AfterValidator, AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, field_validator,
     model_validator,
 )
 
@@ -560,6 +560,14 @@ ShareDashboardIn = ShareIn
 class ValuoValuationIn(BaseModel):
     """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
     overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunIn(BaseModel):
+    """Start a run (api/routes/agent_runs.py). It names no account, user or provider: the route stamps who is asking."""
+    model_config = ConfigDict(extra="forbid")
+    agent: str = Field(min_length=1, max_length=64)
+    input: dict[str, Any]
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 # --- buildings ------------------------------------------------------------

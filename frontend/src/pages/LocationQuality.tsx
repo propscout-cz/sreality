@@ -333,7 +333,7 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
       {mut.error ? <ErrorBanner message={mut.error.message} /> : null}
       {result ? (
         <div className="mt-2 text-[0.75rem] text-[var(--color-ink-2)]">
-          {result.restatement ? 'Restated an existing claim' : 'Claim appended'} ·{' '}
+          {result.written ? 'Claim written' : 'Unchanged: already the current claim'} ·{' '}
           {result.resolved ? 'resolved synchronously' : 'queued for the next drain (≤15 min)'}
           {result.registry_echo ? (
             <span> · registry: {String(result.registry_echo.street ?? '')} {String(result.registry_echo.cislo_domovni ?? '')}

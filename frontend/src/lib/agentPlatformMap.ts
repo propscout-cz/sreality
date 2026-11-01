@@ -7,7 +7,8 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
+  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, a security test suite on every pull request, the run queue, the Runs page with its routes, and a daily spending limit per account. ' +
+  'The page stays out of the menu until an account is on the allowlist, which is still absent, and on a plan with agents, and a started run would only wait: the scout and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
 export interface Ticket {
@@ -53,10 +54,11 @@ export const MILESTONES: Milestone[] = [
     summary: 'Queue, Runs page, Apply and Undo, first production run',
     tickets: [
       { n: 2070, done: true, title: 'Run queue and diary: submit, execute once, cancel' },
-      { n: 2071, done: false, title: 'Run routes and the minimal Runs page' },
+      { n: 2071, done: true, title: 'Run routes and the minimal Runs page' },
       { n: 2072, done: false, title: 'Propose, Apply, Undo' },
       { n: 2073, done: false, title: 'Agent files in Supabase Storage' },
-      { n: 2074, done: false, title: 'Recorded-run regression and security tests in CI' },
+      { n: 2074, done: true, title: 'Recorded-run regression and security tests in CI' },
+      { n: 2319, done: true, title: 'A daily spending limit per account, and a plan without agents' },
       { n: 2075, done: false, title: 'agent-worker in production and your first scout run' },
     ],
   },
@@ -193,12 +195,12 @@ export interface ServiceRow {
 export const SERVICES: ServiceRow[] = [
   {
     name: 'agent-worker',
-    job: 'Runs queued agent runs: 2 slots, one account can\'t take every slot, daily spending ceiling, off until a setting turns it on.',
+    job: 'Runs queued agent runs: 2 slots, 2 at once per account, a daily spending limit per account, a daily ceiling for the platform, off until a setting turns it on.',
     change: 'New Railway service, same image as the API.',
     builtBy: [2075],
   },
-  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes done. Gains run routes, Apply and Undo.' },
-  { name: 'Website', job: 'The app you use.', change: 'Gains the Runs page: a form, the step timeline, result, files, proposals.' },
+  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes and run routes done. Gains Apply and Undo.' },
+  { name: 'Website', job: 'The app you use.', change: 'Has the Runs page: a form, the step timeline, the result, file names, proposals to read, and your daily limit under the avatar. Gains Apply and Undo, and the files themselves.' },
   { name: 'realtime-worker', job: 'Always-on scraping, maintenance and alerts.', change: 'Loses its estimation lane in M2.' },
   { name: 'job-runner', job: 'Scheduled jobs moved off GitHub Actions.', change: 'Separate programme (Actions exit). Shares the Railway config file.' },
 ];
@@ -210,9 +212,9 @@ export const CANT_DO: { head: string; text: string }[] = [
   { head: 'Change your data.', text: 'Every write is a proposal. Apply works once, and Undo reverses it.' },
   { head: 'See another account.', text: 'Your own data is read under your login. A file request across accounts returns nothing.' },
   { head: 'Write its own database queries.', text: 'It calls named tools with checked inputs.' },
-  { head: 'Invent a property.', text: 'Every cited property must have come from that run\'s tool results.' },
-  { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, at most 10 paid photo assessments per run, Valuo at most 3 per run plus a monthly cap.' },
-  { head: 'Start for just anyone.', text: 'Only accounts on the allowlist can start a run.' },
+  { head: 'Invent a property.', text: 'Every property it cites, lists or proposes must have come from that run\'s tool results. Its written text is free, so a name there is only its claim.' },
+  { head: 'Overspend.', text: 'Cost cap per run, a daily limit per account ($10 unless you change it under your avatar; a running run finishes under its own cap, so a day can pass it by up to two runs\' caps), a daily ceiling for the platform, at most 10 paid photo assessments per run, Valuo at most 3 per run plus a monthly cap.' },
+  { head: 'Start for just anyone.', text: 'Only accounts on the allowlist, on a plan that includes agents, can start a run.' },
 ];
 
 export const TRADE_OFF =
@@ -220,6 +222,7 @@ export const TRADE_OFF =
 
 export const NEEDS_YOU: { head: string; text: string; ticket?: number }[] = [
   { head: 'Rotate the GitHub tokens.', text: 'The last credentials pending.', ticket: 2061 },
+  { head: 'Set the allowlist and plan.', text: 'Put the accounts on the allowlist and on the Pilot plan (Settings, Tiers). Until both are done, nobody can start a run.', ticket: 2075 },
   { head: 'Pick the Valuo monthly cap.', text: 'One number, the same for every account. No agent can call Valuo until it is set, and your own clicks on the property page count towards it.' },
   { head: 'Edit the photo facet list.', text: 'Claude drafts version 1.', ticket: 2066 },
   { head: 'Grade 10 scout shortlists.', text: 'This happens before the production path is finished.', ticket: 2069 },
@@ -230,7 +233,7 @@ export const KNOWN_GAPS =
   'The spec promises map counts and overlays as tools, and "a screen capability an agent lacks is a bug". No tool exists, and no ticket builds them yet. Search also lacks Browse\'s broker-scope and market-growth filters (#2172, untriaged). The usage gate has no gate ticket.';
 
 export const LEFT_FOR_LATER =
-  'Deliberately left for later: asking you questions mid-run, connecting outside AI clients (MCP), sending or receiving mail, chat, resuming a long run from its last step, and opening agents beyond the allowlist.';
+  'Deliberately left for later: asking you questions mid-run, connecting outside AI clients (MCP), sending or receiving mail, chat, resuming a long run from its last step, more runs at once than 2 per account, and opening agents beyond the allowlist.';
 
 export interface RunNode {
   x: number;

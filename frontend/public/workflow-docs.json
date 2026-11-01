@@ -1337,8 +1337,8 @@
     },
     {
       "filename": "location_claims_retire.yml",
-      "name": "Ops: retire claims under old contract versions",
-      "description": "Deletes every `location_claims` row written under a RETIRED contract version (`portal_contracts.is_active = false`) — W6-a of the location simplification sprint, ~9.5 M of ~13.2 M rows measured 2026-09-13. NOT invisible to the resolver: since v5.3 it reads, PER CLAIM TYPE, the newest version <= the active one a listing carries (`resolve_db._claims_sql`), and the rail below is per LISTING. Location reader W3: do NOT dispatch while text-less delisted bazos rows hold their bazos@7 town — they never get a reading, so until the rail is per type that is permanent. Nothing is enqueued — unlike `contracts.py --retract`, which withdraws evidence that was wrong.",
+      "name": "Ops: W3 claim purge (last run before migration 699)",
+      "description": "LAST RUN BEFORE MIGRATION 699; DELETED IN W3's PR-2 (#2223). Dispatched with --ref the W3 branch. Keeps ONE `location_claims` row per (listing, claim type, licence class), the row today's resolver reads (newest contract version <= the active one, then the newest observation), and deletes the ≈ 8.8 M others (`scripts.location_claims_retire`). A key whose only rows sit under a retired version keeps one; every batch re-counts the KEYS it left and stops the run (exit 3) if one is missing. Nothing is enqueued: for 99.97 % of keys the keeper is what the resolver reads now, and the RECEIPT names the rest (≈ 2.8 k listings, re-mined by W3's rollout step 5).",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1347,7 +1347,7 @@
       "inputs": [
         {
           "name": "dry_run",
-          "description": "true = back up + count only. false = delete (needs confirm=RETIRE).",
+          "description": "true = walk + count only. false = back up, purge, receipt (needs confirm=PURGE).",
           "required": false,
           "type": "boolean",
           "default": "true",
@@ -1355,18 +1355,26 @@
         },
         {
           "name": "confirm",
-          "description": "Type RETIRE to arm the delete. Ignored when dry_run=true.",
+          "description": "Type PURGE to arm the delete. Ignored when dry_run=true.",
           "required": false,
           "type": "string",
           "default": "",
           "options": null
         },
         {
-          "name": "batch_size",
-          "description": "rows per DELETE statement",
+          "name": "listings_per_batch",
+          "description": "listings per DELETE statement",
           "required": false,
           "type": "string",
-          "default": "20000",
+          "default": "2000",
+          "options": null
+        },
+        {
+          "name": "after_listing_id",
+          "description": "resume cursor: the listing id the last run logged (0 = from the start)",
+          "required": false,
+          "type": "string",
+          "default": "0",
           "options": null
         },
         {

@@ -53,12 +53,11 @@ def resolve(
     # so the pin and its declared precision are read off the first.
     first_pass = step_normalize.normalize_all(ordered)
     first = _admissible(ordered, first_pass)
-    pin_claim = step_bind.elect_pin(first)
-    pin_claim_id = pin_claim.id if pin_claim else None
-    declared = step_bind.read_declared_precision(first, coordinate_claim_id=pin_claim_id)
+    pin_claim = step_bind.the_pin(first)
+    declared = step_bind.read_declared_precision(first)
     pin_is_precise = bool(declared.label) and not declared.blurred
     towns = step_bind.constraining_towns(
-        step_bind.collect_constraints(first, first_pass, pin_claim_id=pin_claim_id),
+        step_bind.collect_constraints(first, first_pass),
         ctx.registry, pin_is_precise=pin_is_precise)[0]
     obec_kods = tuple(sorted({u.code for u in towns}))
     normalized = step_normalize.normalize_all(
@@ -74,11 +73,11 @@ def resolve(
     # ---- 1. BIND. A street claim S1 refused as a place name may still name the PART (1c).
     binding, constraints = step_bind.bind(
         admissible, normalized, ctx, pin_is_precise=pin_is_precise,
-        pin_blurred=declared.blurred, pin_claim_id=pin_claim_id,
-        place_lines=tuple(
+        pin_blurred=declared.blurred,
+        place_line=next((
             str(c.value_text) for c in ordered
             if c.claim_type == "street_name" and step_bind.admissible(c, None) is None
-            and normalized[c.id].rejections == ("town_as_street",)),
+            and normalized[c.id].rejections == ("town_as_street",)), None),
     )
     # ONE containment read, two readers (v5.9): `place()` sets a declared-blurred pin outside
     # the bound obec aside, CHECK records that the pin disagreed.
@@ -91,11 +90,7 @@ def resolve(
     # a listing that knows its town always has one (W2-a3). It cannot move a grade or a
     # verdict — GRADE reads a position only to ask whether a PIN corroborates an address
     # point, CHECK only to ask where a PIN is.
-    filled = step_fill.fill(
-        binding, constraints, ctx.registry,
-        operator=step_bind.operator_fields(admissible),
-        place=not position.has_position,
-    )
+    filled = step_fill.fill(binding, constraints, ctx.registry, place=not position.has_position)
     if not position.has_position:
         position = step_fill.position(filled, binding)
 

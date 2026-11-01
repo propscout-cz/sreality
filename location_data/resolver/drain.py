@@ -339,6 +339,36 @@ ON CONFLICT (listing_id) DO NOTHING
 # The window walk's upper bound: max() over `listings`' primary key is an index probe.
 _SWEEP_UPPER_BOUND_SQL = "SELECT coalesce(max(id), 0) FROM listings"
 
+# THE READ'S ONE CONTRACT INPUT (location W3, ruling R4). Since W3 the claim read has no
+# version filter: of the contracts it asks only which claim types each portal's ACTIVE
+# contract declares. An activation or a retract that changes that set changes answers no claim
+# write enqueued (a dropped type stops being read), so it is part of what `reconcile` compares,
+# and a portal whose set moved has every listing re-resolved (`_PORTAL_SWEEP_SQL`). A bump that
+# declares the same types moves nothing here: its re-mine enqueues what it changes. A portal
+# with NO active contract (a retract stood its header down) reads nothing, so it is not swept
+# until a contract is active again — sweeping it would blank the portal (W11's lesson).
+_DECLARED_TYPES_SQL = """
+SELECT pc.source,
+       string_agg(DISTINCT pce.claim_type::text, ',' ORDER BY pce.claim_type::text)
+  FROM portal_contracts pc
+  JOIN portal_contract_entries pce ON pce.contract_id = pc.id
+ WHERE pc.is_active
+ GROUP BY pc.source
+"""
+
+# The sweep's twin for named portals: every listing of theirs, versions current or not. The
+# same windows, the same NOT EXISTS + DO NOTHING, the same backfill reason.
+_PORTAL_SWEEP_SQL = """
+INSERT INTO dirty_locations (listing_id, reason)
+SELECT l.id, 'full_sweep'
+  FROM listings l
+ WHERE l.source = ANY(%s::text[])
+   AND l.is_active = %s
+   AND l.id > %s AND l.id <= %s
+   AND NOT EXISTS (SELECT 1 FROM dirty_locations d WHERE d.listing_id = l.id)
+ON CONFLICT (listing_id) DO NOTHING
+"""
+
 
 @dataclass(slots=True)
 class DrainStats:
@@ -1024,11 +1054,25 @@ def enqueue_full_sweep(
     `stop` is the lease fence: asked between windows, and a sweep it cuts returns None so the
     caller records nothing and the next pass re-sweeps (idempotent: queued rows are skipped by
     the NOT EXISTS, drained ones are stamped current)."""
+    if registry_label is None:
+        _, registry_label = resolve_db.current_registry_version(conn)
+    return _walk(conn, _SWEEP_SQL, (RESOLVER_VERSION, registry_label), window=window, stop=stop)
+
+
+def enqueue_portal_sweep(
+    conn: psycopg.Connection, sources: Sequence[str], *, window: int = DEFAULT_SWEEP_WINDOW,
+    stop: Callable[[], bool] | None = None,
+) -> int | None:
+    """Every listing of `sources` as backfill (W3, R4: their declared claim types moved)."""
+    return _walk(conn, _PORTAL_SWEEP_SQL, (list(sources),), window=window, stop=stop)
+
+
+def _walk(conn: psycopg.Connection, sql: str, lead: tuple[Any, ...], *, window: int,
+          stop: Callable[[], bool] | None) -> int | None:
+    """A sweep statement over listing-id windows, active listings first; None when cut."""
     if window <= 0:
         raise ValueError("sweep window must be positive")
     seconds = loader_db.env_timeout_s(SWEEP_TIMEOUT_ENV, DEFAULT_SWEEP_TIMEOUT_S)
-    if registry_label is None:
-        _, registry_label = resolve_db.current_registry_version(conn)
     with _bounded(conn, seconds) as cur:
         cur.execute(_SWEEP_UPPER_BOUND_SQL)
         row = cur.fetchone()
@@ -1042,10 +1086,7 @@ def enqueue_full_sweep(
                             windows)
                 return None
             hi = min(after + window, upper)
-            n = _execute_window(
-                conn, seconds, _SWEEP_SQL,
-                (RESOLVER_VERSION, registry_label, active, after, hi),
-            )
+            n = _execute_window(conn, seconds, sql, (*lead, active, after, hi))
             enqueued += n
             windows += 1
             LOG.info("SWEEP active=%s window=(%d,%d] enqueued=%d", active, after, hi, n)
@@ -1054,26 +1095,40 @@ def enqueue_full_sweep(
     return enqueued
 
 
-# The pair this PROCESS last swept. Process-local on purpose: a durable record would be one more
-# row to buy back a minute of bounded reads per boot, and every boot sweeping once is the rule
-# — it enqueues 0 rows when neither the code nor the register moved.
+# What this PROCESS last swept: the (resolver version, registry label) pair and the declared
+# claim types per active contract (W3). Process-local on purpose: a durable record would be one
+# more row to buy back a minute of bounded reads per boot, and every boot sweeping once is the
+# rule — it enqueues 0 rows when neither the code nor the register moved. A contract change
+# made while no worker runs is the one this cannot see; the intake loads contracts while the
+# worker runs, so in practice it sees them.
 _SWEPT_PAIR: tuple[str, str] | None = None
+_SWEPT_DECLARED: dict[str, str] | None = None
 
 
 def reconcile(conn: psycopg.Connection, *, stop: Callable[[], bool]) -> dict[str, Any] | None:
     """Sweep when this process's (resolver version, registry label) pair is not the one it
-    last swept (W2, ruling Q9). None when nothing changed; otherwise what the pass spent itself
-    on — the drain waits for the next pass, so a sweep never shares a lease with a drain."""
-    global _SWEPT_PAIR
-    with _bounded(conn, _batch_timeout_s()):
+    last swept (W2, ruling Q9), or re-resolve the portals whose active contract now declares
+    another set of claim types (W3, R4). None when nothing changed; otherwise what the pass spent
+    itself on — the drain waits for the next pass, so a sweep never shares a lease with a drain."""
+    global _SWEPT_PAIR, _SWEPT_DECLARED
+    with _bounded(conn, _batch_timeout_s()) as cur:
         _, label = resolve_db.current_registry_version(conn)
+        cur.execute(_DECLARED_TYPES_SQL)
+        declared = {str(source): str(types) for source, types in cur.fetchall()}
     pair = (RESOLVER_VERSION, label)
-    if pair == _SWEPT_PAIR:
+    if pair != _SWEPT_PAIR:
+        rows = enqueue_full_sweep(conn, registry_label=label, stop=stop)
+        if rows is not None:
+            _SWEPT_PAIR, _SWEPT_DECLARED = pair, declared
+        return {"pair": list(pair), "rows": rows, "complete": rows is not None}
+    if declared == _SWEPT_DECLARED:
         return None
-    rows = enqueue_full_sweep(conn, registry_label=label, stop=stop)
+    moved = sorted(source for source, types in declared.items()
+                   if (_SWEPT_DECLARED or {}).get(source) != types)
+    rows = enqueue_portal_sweep(conn, moved, stop=stop) if moved else 0
     if rows is not None:
-        _SWEPT_PAIR = pair
-    return {"pair": list(pair), "rows": rows, "complete": rows is not None}
+        _SWEPT_DECLARED = declared
+    return {"pair": list(pair), "contracts": moved, "rows": rows, "complete": rows is not None}
 
 
 def open_connection() -> psycopg.Connection:

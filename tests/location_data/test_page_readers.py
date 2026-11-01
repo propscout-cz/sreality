@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from location_data import claims_intake, page_readers, payloads
+from location_data import claims_intake, claims_store, page_readers, payloads
 from location_data.claims_common import (
     ARCHIVED_COORDINATE_RULES,
     SUBSTRATE_ARCHIVED_HTML,
@@ -33,7 +33,7 @@ from location_data.claims_common import (
     _base,
     coordinate_verdict,
 )
-from location_data.claims_intake import (
+from location_data.claims_store import (
     DEFAULT_WRITE_CHUNK_BYTES,
     DEFAULT_WRITE_CHUNK_ROWS,
     chunk_rows,
@@ -314,10 +314,10 @@ def test_a_branch_declared_on_a_non_coordinate_read_is_refused():
 # ------------------------------------------------------------------ write-path lockstep
 
 def test_to_row_and_the_recordset_column_list_stay_in_lockstep():
-    """`Claim.to_row()` feeds `jsonb_to_recordset(...) AS x(...)` positionally by NAME; a
+    """`Claim.to_row()` feeds `jsonb_to_record(...) AS x(...)` by NAME; a
     field added to one and not the other silently writes NULL forever."""
-    columns = re.search(r"jsonb_to_recordset\(%\(rows\)s::jsonb\) AS x\((.*?)\)\n",
-                        claims_intake._CLAIM_WRITE_SQL, re.S)
+    columns = re.search(r"jsonb_to_record\(e\.row\) AS x\((.*?)\)\n",
+                        claims_store._WRITE_CLAIMS_SQL, re.S)
     assert columns
     declared = re.findall(r"(\w+)\s+(?:bigint|text|timestamptz|numeric|jsonb|integer|boolean)",
                           columns.group(1))
@@ -342,21 +342,17 @@ def test_the_insert_column_list_and_its_select_have_the_same_arity():
     """The two halves of one INSERT … SELECT must stay the same length. A one-column skew
     would not be a syntax error at import time — it is a runtime `INSERT has more target
     columns than expressions`, discovered by the first batch that ever ran. W1-b narrowed
-    both halves from 42 columns to 18 in one edit, which is exactly the shape this pins."""
-    insert = re.search(r"INSERT INTO location_claims \((.*?)\)\s*SELECT (.*?)\s*FROM deduped",
-                       claims_intake._CLAIM_WRITE_SQL, re.S)
+    both halves from 42 columns to 18 in one edit, which is exactly the shape this pins; W3
+    took the fingerprint out (17)."""
+    insert = re.search(r"INSERT INTO location_claims AS c \((.*?)\)\s*SELECT (.*?)\s*FROM one o",
+                       claims_store._WRITE_CLAIMS_SQL, re.S)
     assert insert
     assert len(_top_level_items(insert.group(1))) == len(_top_level_items(insert.group(2)))
 
-    assert len(_top_level_items(insert.group(1))) == 18
+    assert len(_top_level_items(insert.group(1))) == 17
 
     # The re-sight observation CTE went with its table (rule 25): 263 M rows nobody read.
-    assert "location_claim_observations" not in claims_intake._CLAIM_WRITE_SQL
-
-
-def test_the_fingerprint_stays_time_free():
-    """01 §4.2.1: values dedupe, occurrences are their own series."""
-    assert "first_observed_at" not in claims_intake._CLAIM_FINGERPRINT_SQL
+    assert "location_claim_observations" not in claims_store._WRITE_CLAIMS_SQL
 
 
 # ------------------------------------------------------------------ chunking bounds
@@ -374,9 +370,8 @@ def test_the_chunk_bounds_are_the_ones_w1_shipped():
 
 
 def test_a_listing_is_never_split_across_two_chunks():
-    """`claim_fingerprint`'s tuple begins with (listing_id, source, source_id_native), so
-    two fingerprint-equal claims are the same listing's. Split them across statements and
-    the second copy joins the `resighted` cohort and appends a spurious observation."""
+    """The claim key begins with `listing_id`: a listing kept whole keeps every key inside
+    one statement, where the write's `DISTINCT ON` arbitrates it."""
     rows = [_archive_row(1), _archive_row(1), _archive_row(1), _archive_row(2)]
     chunks = list(chunk_rows(rows, max_rows=2, max_bytes=DEFAULT_WRITE_CHUNK_BYTES))
     assert [len(c) for c in chunks] == [3, 1]
