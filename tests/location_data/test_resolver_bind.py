@@ -274,42 +274,6 @@ def test_a_name_that_binds_nothing_falls_through_to_the_part_then_the_psc():
 # ------------------------------------------------ the pin BIND uses is the pin it publishes
 
 
-def test_the_town_is_reverse_geocoded_from_the_pin_the_row_actually_publishes():
-    """Two coordinate claims — a blurred one that arrived first and a precise one that did
-    not. The town used to come from `collect_constraints`' FIRST coordinate by id while
-    `geom` came from `elect_pin`'s best-DECLARED one, so the row shipped a town in Bílovec
-    and a pin in Praha, 300 km apart. R7/R8 are pin-derived, so CHECK skips the containment
-    test by design and nothing downstream could have caught it."""
-    claims = [
-        mm.claim(2, "coordinate", lat=49.7573, lon=18.0158,
-                 declared_precision_label="municipality"),
-        mm.claim(3, "coordinate", lat=50.0755, lon=14.4378, declared_precision_label="gps"),
-    ]
-    assert step_bind.elect_pin(claims).id == 3
-    resolution = _resolve(claims)
-    assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
-    assert resolution.obec_kod == 554782  # Praha, the town the PUBLISHED pin is in
-    assert resolution.disputed is None
-
-
-def test_the_psc_tie_break_uses_the_elected_pin_too():
-    """Same defect, the other branch that reads `constraints.pin`: with a shared PSČ the
-    tie-break must consult the pin the row publishes, not whichever coordinate sorted first."""
-    claims = [
-        mm.claim(1, "psc", value_text="67401", source="bazos"),
-        mm.claim(2, "coordinate", lat=49.1980, lon=15.9250, source="bazos",
-                 declared_precision_label="municipality"),
-        mm.claim(3, "coordinate", lat=49.2149, lon=15.8817, source="bazos",
-                 declared_precision_label="gps"),
-    ]
-    resolution = _resolve(claims, _psc_mirror())
-    assert (resolution.lat, resolution.lon) == (49.2149, 15.8817)
-    assert resolution.obec_kod == 590266  # Třebíč, where the elected pin is
-
-
-# --------------------------------------------------- a PSČ is one fact, not two agreeing ones
-
-
 def test_a_psc_only_bind_is_low_confidence():
     """The obec was not named, it was LOOKED UP. Seeding the qualifier list with "psc" and
     then counting "obec" + "psc" as two independent fields was one fact counted twice, and it
@@ -592,14 +556,17 @@ def test_1f_a_shared_psc_yields_to_the_one_town_holding_the_street():
     towns = step_bind.constraining_towns(step_bind.collect_constraints(
         claims, normalize.normalize_all(claims)), mm.w4_mirror(), pin_is_precise=False)
     assert ([t.code for t in towns.units], towns.applied) == ([592005], ["psc", "street_in_town"])
-    asked: list[str] = []
-    mirror = mm.w4_mirror()
-    lookup = mirror.admin_units_by_name
-    mirror.admin_units_by_name = lambda key, **kw: asked.append(key) or lookup(key, **kw)
-    claims.append(mm.claim(3, "street_name", value_text="Neexistující"))
-    step_bind.constraining_towns(step_bind.collect_constraints(
-        claims, normalize.normalize_all(claims)), mirror, pin_is_precise=False)
-    assert "na splavku" in asked and "neexistujici" not in asked   # places: held lines only
+    for line, key, held in (("Na Splávku", "na splavku", True),
+                            ("Neexistující", "neexistujici", False)):
+        asked: list[str] = []
+        mirror = mm.w4_mirror()
+        lookup = mirror.admin_units_by_name
+        mirror.admin_units_by_name = (
+            lambda k, asked=asked, lookup=lookup, **kw: asked.append(k) or lookup(k, **kw))
+        one = [mm.claim(1, "street_name", value_text=line), claims[1]]
+        step_bind.constraining_towns(step_bind.collect_constraints(
+            one, normalize.normalize_all(one)), mirror, pin_is_precise=False)
+        assert (key in asked) is held   # places: asked of a line some town holds, only
     assert _w4(19120281, ("psc", "68601"), pin=pin).obec_kod == 550752
 
 

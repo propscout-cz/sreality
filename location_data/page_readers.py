@@ -162,7 +162,7 @@ def _entry_css(entry: Entry) -> str:
     return css
 
 
-def _page_claim(entry: Entry, row: ListingRow, *, value: str, **overrides: Any) -> Claim:
+def _page_claim(entry: Entry, row: ListingRow, *, value: str | None, **overrides: Any) -> Claim:
     """A page claim. `subject_scoped` comes from the CONTRACT (`subject_scope.subject_scoped`),
     never from the reader: whether a node is the subject's own is a per-portal fact the entry
     declares and the scoper enforces, and a reader that decided it for itself would be
@@ -377,7 +377,12 @@ def _read_html_marker(
     explicitly, never defaulted).
 
     No transform: normalising a label the contract itself wrote would break the membership
-    test that decides the blur axis."""
+    test that decides the blur axis.
+
+    `absent: retract` (W3): a presence detector alone can never clear a blur once stated.
+    With the key, a page whose node EXISTS but fails the test states the label's absence, and
+    the reader emits a tombstone (`Claim.retract`) that deletes the claim. A page with no
+    such node (no map, a layout change) emits nothing either way."""
     label = entry.locator.get("value_label")
     if not label or not isinstance(label, str):
         raise IntakeRefused(
@@ -404,22 +409,33 @@ def _read_html_marker(
             f"{entry.source}:{entry.entry_id} declares locator.blank_attrs={blank!r}; it "
             f"must be a non-empty list of attribute names, one of which must be absent or "
             f"empty to mark")
+    absent = entry.locator.get("absent")
+    if absent is not None and absent != "retract":
+        raise IntakeRefused(
+            f"{entry.source}:{entry.entry_id} declares locator.absent={absent!r}; the one "
+            f"value is `retract`")
     node = document.css_first(_entry_css(entry))
     if node is None:
         return []
+    if _marks(node, names=names, blank=blank, contains=contains, label=str(label)):
+        return [PageRead(_page_claim(
+            entry, row, value=str(label), declared_precision_label=str(label)))]
+    return [PageRead(_page_claim(entry, row, value=None, retract=True))] if absent else []
+
+
+def _marks(node: Any, *, names: list[str] | None, blank: list[str] | None,
+           contains: str | None, label: str) -> bool:
+    """Whether the marker test passes on the node `html_marker` found."""
     if blank and all(_text(node.attributes.get(name)) is not None for name in blank):
-        return []
+        return False
     if names:
         values = [_text(node.attributes.get(name)) for name in names]
         if any(value is None for value in values):
-            return []
+            return False
         haystack = " ".join(str(v) for v in values)
     else:
-        haystack = _text(node.text()) or node.html or str(label)
-    if contains is not None and collapse_ws(contains) not in collapse_ws(haystack):
-        return []
-    return [PageRead(_page_claim(
-        entry, row, value=str(label), declared_precision_label=str(label)))]
+        haystack = _text(node.text()) or node.html or label
+    return contains is None or collapse_ws(contains) in collapse_ws(haystack)
 
 
 @page_reader("html_point_dms")
@@ -1135,7 +1151,6 @@ def _read_json_geometry(
         return []
     claim = _page_claim(
         entry, row, value=geometry.kind,
-        value_shape_wkt=geometry.shape_wkt,
         declared_radius_m=(None if geometry.radius_m is None
                            else round(geometry.radius_m, 1)),
         declared_precision_label=geometry.kind.lower(), blur_evidence=blur,
