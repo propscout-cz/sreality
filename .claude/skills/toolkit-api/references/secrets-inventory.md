@@ -68,6 +68,15 @@ and worker at once (job-runner, which reads the worker's string by reference, re
 does not, job-runner → Deploy Latest Commit, and check its Health cells too), then re-key `tenant_pool`. A burst of failed connections right after the reset is the pooler's
 cache, not a bad password: do not reset twice.
 
+## Resend
+
+`RESEND_API_KEY` (Railway API; `docs/design/email/PROGRAM.md`): a sending-only key for `novinky.propscout.cz`, read by
+`api/resend_client.py` for the waitlist confirmation (`POST /waitlist`, after the redirect). Unset = no email and no claim;
+the signup still stands. Resend's free plan shares 100 a day with Supabase's password resets, hence
+`waitlist.CONFIRMATION_DAILY_CAP`. Supabase's own key (`propscout-supabase`, `mail.propscout.cz`) lives in its SMTP
+settings. To rotate: create the new key in Resend, paste its value over the old in Railway (the name stays), deploy, delete
+the old key. The account also holds other projects' domains and keys: leave those alone.
+
 ## Not rotated here
 
 - Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,

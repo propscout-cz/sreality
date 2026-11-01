@@ -89,7 +89,7 @@ it (`api/`). They do not apply to the scraper.
    JWT, no identity (401 without one, `503` with no verifier; `API_AUTH_OPTIONAL=1` opens it for local dev
    ONLY), `verify_jwt` = the claims, `account_scope` = a read scope; every 401 is RFC 6750
    (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
-   healthchecks, `POST /waitlist` (+ `/answer`) for the propscout.cz landing form (honeypot, rate limit, 303;
+   healthchecks, `/waitlist` for the landing form (honeypot, rate limit, 303;
    `LANDING_ORIGIN`; `api/routes/waitlist.py`). `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
@@ -441,9 +441,10 @@ API service:
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
 Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
-the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so `RESEND_API_KEY`,
+the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so
 `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
-`OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Push links absolutely from each device's own origin.
+`OUTBOX_DRAIN_DISABLED` are dead (remove from Railway). Push links absolutely from each device's own origin.
+- `RESEND_API_KEY` (API): waitlist email; `references/secrets-inventory.md`.
 - `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
   (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
   the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →
