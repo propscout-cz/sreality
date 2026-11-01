@@ -243,15 +243,13 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     a green run) and `FilterDef.basis`. Full rationale: `docs/architecture.md` § rule 23.
 24. **Folded into 25** (kept so the citations don't break — rules are never renumbered).
 25. **Location: one store, one claim shape, one label, one code predicate; a location PR that adds more than it
-    deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY place a listing's location is stored (`listings` /
-    `properties` carry no location value, a property one pointer, rule 15; no serving flag, no granularity floor): a place read joins `ll on ll.listing_id =
+    deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY store of a listing's location (`listings`/
+    `properties` hold none, a property one pointer, rule 15; no serving flag or granularity floor): a place read joins `ll on ll.listing_id =
     l.id`, casting `ll.geom::geography` for metres (uncast = DEGREES). Only `claims_intake` and `operator_corrections` write `location_claims`, both
-    fingerprinted in SQL; ONE resolver writes `listing_location`; TWELVE claim types (a ceiling), ≤ 1 contract entry each, the `obec_name` entry mandatory;
-    every display is `location_display_label`, every place filter `<level>_id = any(codes)`. Consumers (browse/map/watchdog/dedup) serve a listing only
-    when resolved or determined foreign, by ONE predicate (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every
-    served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a
-    default); a field is added only by operator ruling or after a measured slowdown, only to `browse_list` (§ rule 25 and § Location data in
-    `docs/architecture.md`).
+    via one keyed upsert (one claim per listing, type, author; the operator outranks the portal); ONE resolver writes `listing_location`; ≤ TWELVE claim types, ≤ 1 contract entry each, `obec_name` mandatory;
+    every display is `location_display_label`, every place filter `<level>_id = any(codes)`. Browse/map/watchdog/dedup serve a listing only
+    if resolved or determined foreign, by ONE predicate (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every
+    served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a default); a field is added only by operator ruling or a measured slowdown, only to `browse_list` (architecture.md § rule 25, § Location data).
 ## Coding conventions
 
 - Type hints on every signature (CI's ruff ANN check enforces it outside tests and `autodedup.incremental.DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
@@ -282,7 +280,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
 - **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
   `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
-  `/health`, `/images/{key}` photos and the landing's `POST /waitlist` are open by design; the Stripe webhook checks its signature.
+  `/health`, `/images/{key}` photos and the landing's `/waitlist` are open by design; the Stripe webhook checks its signature.
 
 ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
 nor is email as a future second push-ledger channel (inactive; rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.

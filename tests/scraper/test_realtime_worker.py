@@ -1811,7 +1811,7 @@ def test_location_resolve_pass_returns_early_when_stopping(monkeypatch):
 # ------------------------------------- location_intake_fast (W7-a): one lane, two schedules
 
 _FAST_STATS = {
-    "listings": 12, "claims_inserted": 34, "enqueued": 7,
+    "listings": 12, "written": 34, "enqueued": 7,
     "payload_seconds": 1.234, "cursor_after_id": 987654,
     "bodies_mined": 5, "bodies_seconds": 2.0, "bodies_pass_complete": True,
     "bodies_cursor_after_id": 4242,
@@ -1958,7 +1958,7 @@ def test_location_intake_fast_sync_runs_the_shared_scan_on_its_own_lane(
     assert schedule.pool is rw._intake_fast_pool()
     # The heartbeat's `last`: what the tick achieved and where it left BOTH keysets.
     assert out == {
-        "ran": True, "listings": 12, "claims_inserted": 34, "enqueued": 7,
+        "ran": True, "listings": 12, "written": 34, "enqueued": 7,
         "bodies_mined": 5, "bodies_complete": True, "seconds": 3.2,
         "cursor": 987654, "bodies_cursor": 4242,
     }
@@ -2566,7 +2566,8 @@ def test_text_extract_is_free_while_its_scope_is_empty(
     from toolkit import description_extraction
 
     monkeypatch.setattr(rw.db, "connect", lambda: _FakeConn())
-    monkeypatch.setattr(description_extraction, "lane_scope", lambda conn: {})
+    monkeypatch.setattr(description_extraction, "location_sources", lambda conn: frozenset())
+    monkeypatch.setattr(description_extraction, "scope_from", lambda located: {})
     assert rw._text_extract_sync() == {"claimed": 0, "reason": "empty_scope"}
 
 
@@ -2582,8 +2583,7 @@ def _text_pass_that_read(monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> lis
 
     def mine(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
         handed.append((list(listing_ids), kwargs))
-        return {"readings_mined": len(listing_ids), "claims_inserted": 3,
-                "claims_superseded": 1}
+        return {"readings_mined": len(listing_ids), "written": 3}
 
     monkeypatch.setattr(claims_intake, "mine_readings", mine)
     return handed
@@ -2599,8 +2599,8 @@ def test_a_text_pass_that_read_listings_mines_those_readings_at_once(
     assert handed == [([11, 12], {"max_seconds": rw.LOCATION_READINGS_FAST_BUDGET_S,
                                   "statement_timeout": 60})]
     assert "listing_ids" not in last
-    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["superseded"] == 1
-    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 superseded=1")
+    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["written"] == 3
+    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 written=3")
                for r in caplog.records)
 
 

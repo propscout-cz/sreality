@@ -422,24 +422,41 @@ describe('<CurationBlock> artifact link', () => {
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
-  /* Enter submits even with the button off: an empty field says what it needs, as
-     before the draft rule, and never closes as if nothing were typed. */
-  it('an empty field, untouched or typed then cleared, asks for an address and stays open', async () => {
+  /* An empty field saves nothing: its button is off, and Enter submits no form
+     whose default button is off (what a browser does, which user-event follows).
+     The field stays open, says nothing, and calls nothing; the trash button is what
+     removes a stored link. */
+  it('an empty field, typed then cleared or a stored link cleared, saves nothing on Enter and stays open', async () => {
     const user = userEvent.setup();
     mockReads();
     renderWithReads();
 
     await user.click(await screen.findByRole('button', { name: /Odkaz na artefakt/ }));
     const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
-    fireEvent.submit(field.closest('form')!);
-    expect(await screen.findByText(/začínající http/)).toBeInTheDocument();
-    expect(field).toBeInTheDocument();
-
+    expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeDisabled();
     await user.type(field, 'https://exa');
+    expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeEnabled();
     await user.clear(field);
-    fireEvent.submit(field.closest('form')!);
-    expect(await screen.findByText(/začínající http/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeDisabled();
+    await user.type(field, '{Enter}');
     expect(screen.getByRole('textbox', { name: 'Odkaz na artefakt' })).toBe(field);
+    expect(screen.queryByText(/začínající http/)).toBeNull();
+    expect(setPropertyArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it('a stored link cleared from its field saves nothing on Enter and stays open', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
+    renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    await user.clear(field);
+    expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeDisabled();
+    await user.type(field, '{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Odkaz na artefakt' })).toBe(field);
+    expect(screen.queryByText(/začínající http/)).toBeNull();
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
@@ -924,6 +941,25 @@ describe('<CurationBlock> editors follow the server while untouched', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
     await waitFor(() =>
       expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-15T14:00:00.000Z' }));
+  });
+
+  /* Only the toggle drops a viewing's date: both pickers cleared by hand is an
+     incomplete slot, and Save waits for a day and a time (as before the two drafts). */
+  it('clearing both pickers by hand blocks Save; Odebrat termín drops the date', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    renderWithReads();
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Den prohlídky'), { target: { value: '' } });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '' } });
+    expect(screen.getByRole('group', { name: 'Termín prohlídky' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Uložit' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Odebrat termín' }));
+    expect(screen.queryByRole('group', { name: 'Termín prohlídky' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: null }));
   });
 
   it('a date moved elsewhere is followed, and a body edit sends the body alone', async () => {

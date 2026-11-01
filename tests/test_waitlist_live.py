@@ -97,3 +97,40 @@ def test_the_admin_list_reads_every_column_newest_first(tx: _Tx) -> None:
     assert [r["email"] for r in rows][:2] == ["second@example.cz", "first@example.cz"]
     assert rows[0]["utm"] == {"utm_source": "fb"} and rows[0]["investor_type"] == "both" and rows[0]["note"] == "Plzeň"
     assert set(rows[0]) == set(waitlist.SIGNUP_COLUMNS)
+
+
+def _entry(tx: _Tx, email: str) -> uuid.UUID:
+    token = waitlist.record_signup(tx, email, waitlist.CONSENT_VERSION, None, {})
+    assert token is not None
+    return token
+
+
+def test_a_confirmation_is_claimed_once_and_a_release_gives_it_back(tx: _Tx) -> None:
+    token = _entry(tx, "claim@example.cz")
+    assert waitlist.claim_confirmation(tx, token) == "claim@example.cz"
+    assert waitlist.claim_confirmation(tx, token) is None
+    waitlist.release_confirmation(tx, token)
+    assert waitlist.claim_confirmation(tx, token) == "claim@example.cz"
+
+
+def test_the_cap_counts_todays_sends_only(tx: _Tx) -> None:
+    with tx.cursor() as cur:
+        cur.execute("UPDATE waitlist_signups SET confirmation_sent_at = NULL")
+    first, second, third = (_entry(tx, f"cap{n}@example.cz") for n in range(3))
+    assert waitlist.claim_confirmation(tx, first, cap=1) == "cap0@example.cz"
+    assert waitlist.claim_confirmation(tx, second, cap=1) is None
+    with tx.cursor() as cur:
+        cur.execute("UPDATE waitlist_signups SET confirmation_sent_at = now() - interval '2 days' WHERE followup_token = %s",
+                    (first,))
+    assert waitlist.claim_confirmation(tx, third, cap=1) == "cap2@example.cz"
+
+
+def test_unsubscribing_keeps_the_first_time_and_stops_the_confirmation(tx: _Tx) -> None:
+    token = _entry(tx, "out@example.cz")
+    assert waitlist.unsubscribe(tx, token) is True
+    assert waitlist.unsubscribe(tx, token) is False
+    assert waitlist.unsubscribe(tx, uuid.uuid4()) is False
+    assert waitlist.claim_confirmation(tx, token) is None
+    with tx.cursor() as cur:
+        cur.execute("SELECT email, unsubscribed_at IS NOT NULL FROM waitlist_signups WHERE followup_token = %s", (token,))
+        assert cur.fetchone() == ("out@example.cz", True)

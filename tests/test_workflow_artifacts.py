@@ -25,14 +25,15 @@ def test_every_artifact_upload_expires_within_90_days() -> None:
     assert not unbounded, unbounded
 
 
-def test_the_retired_claims_backup_goes_to_r2_never_to_an_artifact() -> None:
+def test_the_claim_purge_backup_goes_to_r2_never_to_an_artifact() -> None:
     doc = yaml.safe_load((WORKFLOWS / "location_claims_retire.yml").read_text())
     (job,) = doc["jobs"].values()
     assert not any(str(s.get("uses", "")).startswith("actions/upload-artifact") for s in job["steps"])
-    (store,) = [s for s in job["steps"] if "scripts.backup_before_drop" in s.get("run", "")]
-    assert "retired-claims --file" in store["run"]
-    assert {"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"} <= set(store["env"])
-    # One object an attempt: a re-run after a partial delete must not overwrite the first attempt's rows.
+    stores = [s for s in job["steps"] if "scripts.backup_before_drop" in s.get("run", "")]
+    assert [s["run"].split("--file")[0].split()[-1] for s in stores] == ["w3-claims", "w3-claims"]
+    for store in stores:
+        assert {"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"} <= set(store["env"])
+    # One object an attempt: a re-run after a partial purge must not overwrite the first attempt's rows.
     dump = next(s for s in job["steps"] if "\\copy" in s.get("run", ""))
-    name = "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
-    assert name in dump["run"] and name in store["run"]
+    assert "$BACKUP" in dump["run"] and '"$BACKUP"' in stores[0]["run"]
+    assert job["env"]["BACKUP"] == "w3_claims_${{ github.run_id }}_${{ github.run_attempt }}.csv.gz"

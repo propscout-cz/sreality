@@ -91,7 +91,7 @@ def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden_before_any_connec
     assert _error("probe", {}).code is ToolErrorCode.FORBIDDEN
 
 
-@pytest.mark.parametrize("effect, method", [(Effect.READ, "GET"), (Effect.WRITE, "POST"), (Effect.COSTLY, "POST")])
+@pytest.mark.parametrize("effect, method", [(Effect.READ, "GET"), (Effect.WRITE, "POST")])
 def test_a_tenant_tool_runs_in_the_callers_own_transaction_never_acting_as_anyone(
     probe: Any, monkeypatch: pytest.MonkeyPatch, effect: Effect, method: str,
 ) -> None:

@@ -21,7 +21,6 @@ from location_data.claims_intake import (
     _BATCH_INSERT_SQL,
     _BODIES_RESUME_SQL,
     _BODY_JOIN,
-    _CLAIM_WRITE_SQL,
     _FROM_LISTINGS,
     _LISTINGS_FULL_SQL,
     _LISTINGS_INCREMENTAL_SQL,
@@ -39,8 +38,8 @@ from location_data.claims_intake import (
     MIN_BATCH_SIZE,
     _row_from_record,
     extract_listing,
-    write_result,
 )
+from location_data.claims_store import _WRITE_CLAIMS_SQL, write_claims
 from tests.location_data.claim_intake_fixtures import (
     SREALITY_POST_CUTOVER,
     SREALITY_TRUNCATED,
@@ -93,14 +92,14 @@ def test_claim_and_dirty_enqueue_are_one_statement():
         listing("sreality", SREALITY_POST_CUTOVER),
         entries_for("sreality"))
     with conn.cursor() as cur:
-        inserted, enqueued = write_result(cur, result)
+        changed, enqueued = write_claims(cur, result.claims)
 
-    claim_statements = [s for s, _ in conn.executed if "INSERT INTO location_claims" in s]
+    claim_statements = [(s, p) for s, p in conn.executed if "INSERT INTO location_claims" in s]
     assert len(claim_statements) == 1
-    one = claim_statements[0]
+    one, params = claim_statements[0]
     assert "INSERT INTO dirty_locations" in one
-    assert "'claim_insert'" in one
-    assert (inserted, enqueued) == (1, 1)
+    assert params["reason"] == "claim_insert"
+    assert (changed, enqueued) == (1, 1)
 
 
 def test_the_enqueue_bumps_a_row_that_is_already_queued():
@@ -114,7 +113,7 @@ def test_the_enqueue_bumps_a_row_that_is_already_queued():
         listing("sreality", SREALITY_POST_CUTOVER),
         entries_for("sreality"))
     with conn.cursor() as cur:
-        write_result(cur, result)
+        write_claims(cur, result.claims)
 
     one = next(s for s, _ in conn.executed if "INSERT INTO dirty_locations" in s)
     enqueue = " ".join(one.split()).lower().split("insert into dirty_locations")[1]
@@ -141,10 +140,10 @@ def test_the_lane_writes_claims_and_nothing_else():
             assert table not in sql, table
 
 
-def test_the_claim_write_dedupes_within_the_batch():
-    """Two listings can legitimately produce the same fingerprint (the tuple is time-free);
-    `ON CONFLICT` cannot arbitrate two rows inside ONE statement, so the batch dedupes."""
-    assert "DISTINCT ON (claim_fingerprint)" in _CLAIM_WRITE_SQL
+def test_the_claim_write_keeps_one_claim_per_key_within_the_batch():
+    """`ON CONFLICT DO UPDATE` cannot touch one row twice in ONE statement, so two claims of
+    one key in a batch arrive as one (the later observation)."""
+    assert "DISTINCT ON (listing_id, claim_type, licence_class)" in _WRITE_CLAIMS_SQL
 
 
 def test_a_refusal_is_counted_not_recorded():
@@ -156,7 +155,7 @@ def test_a_refusal_is_counted_not_recorded():
     assert dict(result.refusals) == {"sreality_payload_shape:absent": 1}
     conn = _Conn()
     with conn.cursor() as cur:
-        write_result(cur, result)
+        write_claims(cur, result.claims)
     assert [s for s, _ in conn.executed] == []
 
 
@@ -372,8 +371,8 @@ def test_the_version_set_is_a_canonical_projection_of_the_active_contracts():
 def test_no_write_statement_touches_an_existing_production_table():
     """The lane reads `listings` and writes only location_* / dirty_locations — plus the
     one mined-at stamp on `portal_raw_payloads`, which is the body store it just read."""
-    for sql in (_CLAIM_WRITE_SQL, _BATCH_INSERT_SQL, _STAMP_MINED_SQL):
-        lowered = sql.lower()
+    for sql in (_WRITE_CLAIMS_SQL, _BATCH_INSERT_SQL, _STAMP_MINED_SQL):
+        lowered = sql.lower().replace("do update", "do_upsert")
         for verb in ("insert into", "update ", "delete from"):
             for fragment in lowered.split(verb)[1:]:
                 target = fragment.strip().split()[0].strip("(")
@@ -611,7 +610,7 @@ def test_mine_readings_scopes_the_drain_to_the_ids_under_a_batch_of_its_own_lane
 
     def drain(c, **kwargs):
         seen.update(kwargs)
-        kwargs["stats"].update(readings_mined=2, claims_inserted=5)
+        kwargs["stats"].update(readings_mined=2, written=5)
 
     monkeypatch.setattr(claims_intake, "drain_readings", drain)
     stats = claims_intake.mine_readings(conn, [7, 3], max_seconds=30, statement_timeout=60)

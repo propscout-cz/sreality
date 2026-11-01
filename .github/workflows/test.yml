@@ -13,6 +13,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue's run on the PR merged onto main; the queue merges only on these checks.
+  merge_group:
 
 # A new push to a PR cancels its superseded run. A push to main gets a group of its own: a shared
 # group would drop a queued run even with cancel-in-progress off, and every main run must finish.
@@ -156,9 +158,9 @@ jobs:
       # The always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on
       # CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a
       # word cap on skill descriptions; routing completeness). HEAD^1 is the base this PR's merge
-      # commit was built on; origin/<base> moves under a re-run.
+      # commit (or the merge queue's) was built on; origin/<base> moves under a re-run.
       - name: Enforce context budgets (blocking)
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name != 'push' }}
         working-directory: .
         run: .github/scripts/docs-budget-check.sh . HEAD^1
 
@@ -199,7 +201,7 @@ jobs:
 
       - name: Scan the new commits
         env:
-          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || github.event_name == 'merge_group' && format('{0}..{1}', github.event.merge_group.base_sha, github.event.merge_group.head_sha) || format('{0}..{1}', github.event.before, github.sha) }}
         run: scripts/gitleaks.sh git --log-opts="--remerge-diff $RANGE"
 
       # The commit scan never re-reads a fixture line a scrub left alone, and the fixture census judges the scrub by

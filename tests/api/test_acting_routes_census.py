@@ -74,6 +74,15 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "PUT /push/subscription",
     "DELETE /push/subscription",
     "POST /push/opened",
+    # A run acts for its own user only (spec #2055 story 34), and the routes that read one refuse the header too (#2071).
+    "POST /runs",
+    "GET /runs",
+    "GET /runs/options",
+    "GET /runs/{run_id}",
+    "GET /runs/{run_id}/steps",
+    "POST /runs/{run_id}/cancel",
+    # An account's own spending limit: sharing a board never hands it over (#2319).
+    "PUT /runs/limit",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)

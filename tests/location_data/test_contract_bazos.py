@@ -1,4 +1,4 @@
-"""bazos@9 — the slim contract, driven through the shipped readers over real bodies.
+"""bazos@10 — the slim contract, driven through the shipped readers over real bodies.
 
 Every assertion runs `contracts.load_all()`'s own entries (never a test-built one) against
 bodies this repo already holds: the genuine capture
@@ -112,8 +112,8 @@ def claim_of(entry_id: str, doc: ScopedDocument | None = None) -> Any:
 
 # ------------------------------------------------------------------ the contract shape
 
-def test_the_contract_is_bazos_at_version_8():
-    assert (CONTRACT.source, CONTRACT.version) == ("bazos", 9)
+def test_the_contract_is_bazos_at_version_10():
+    assert (CONTRACT.source, CONTRACT.version) == ("bazos", 10)
 
 
 def test_the_entry_ids_are_exactly_the_eight_this_version_ships():
@@ -227,8 +227,11 @@ def test_the_two_cell_layouts_carry_no_town_and_the_name_entries_stay_silent(bod
     pin = run(ENTRIES["bzs.det.link_pin"], doc)
     assert bool(pin) is has_map_link
     # The blur hint needs the portal's own "Přibližná lokalita" title, which neither
-    # hand-authored constant carries — a marker entry states the label or says nothing.
-    assert run(ENTRIES["bzs.det.blur_hint"], doc) == []
+    # hand-authored constant carries: a maps link without it RETRACTS the declaration (W3,
+    # `absent: retract`), and a layout with no maps link says nothing.
+    blur = run(ENTRIES["bzs.det.blur_hint"], doc)
+    assert [(r.claim.retract, r.claim.value_text) for r in blur] == (
+        [(True, None)] if has_map_link else [])
 
 
 def test_a_slug_without_the_five_digit_tail_is_not_an_obec():
@@ -265,14 +268,17 @@ def test_blur_hint_caps_the_pin_at_town_tier():
     assert ENTRIES["bzs.det.blur_hint"].precision_map["blurred_labels"] == [CONTRACT_LABEL]
 
 
-def test_a_reworded_marker_stops_asserting_instead_of_restating():
+def test_a_reworded_marker_retracts_instead_of_restating():
+    """The link is there and its title no longer says "Přibližná lokalita": the page states
+    the absence of the blur (W3), so the stored declaration goes."""
     body = ('<html><body><table><tr><td>Lokalita:</td><td>'
             '<a href="https://www.google.com/maps/place/49.5,18.2/@49.5,18.2,12z/data=x" '
             'title="Orientační poloha" rel="nofollow">744 01</a> '
             '<a href="https://reality.bazos.cz/inzeraty/kop%C5%99ivnice/74221/">'
             "Nový Jičín</a></td></tr></table></body></html>")
     doc = scoped(body)
-    assert run(ENTRIES["bzs.det.blur_hint"], doc) == []
+    (tombstone,) = run(ENTRIES["bzs.det.blur_hint"], doc)
+    assert (tombstone.claim.retract, tombstone.claim.value_text) == (True, None)
     # ... while the PSČ entry, which asks a different question of the same row, still reads.
     assert claim_of(PSC_ENTRY, doc).value_text == "74221"
 

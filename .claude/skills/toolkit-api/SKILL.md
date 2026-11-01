@@ -89,7 +89,7 @@ it (`api/`). They do not apply to the scraper.
    JWT, no identity (401 without one, `503` with no verifier; `API_AUTH_OPTIONAL=1` opens it for local dev
    ONLY), `verify_jwt` = the claims, `account_scope` = a read scope; every 401 is RFC 6750
    (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
-   healthchecks, `POST /waitlist` (+ `/answer`) for the propscout.cz landing form (honeypot, rate limit, 303;
+   healthchecks, `/waitlist` for the landing form (honeypot, rate limit, 303;
    `LANDING_ORIGIN`; `api/routes/waitlist.py`). `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
@@ -170,7 +170,7 @@ it (`api/`). They do not apply to the scraper.
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
     journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
-    runs one locally (a cassette); `executor.py` queues them. Only the estimator still reads the `skills` table (Settings,
+    runs one locally; `executor.py` queues them, `/runs*` serve them. Only the estimator still reads `skills` (Settings,
     `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
@@ -303,7 +303,7 @@ restate it here or in a module docstring.** Standing gates: `tests/api/test_admi
 `/brokers/*` + `POST /estimations` are service-role and excluded structurally) and
 `tests/api/test_account_scope_census.py` (no nullable tenant scope anywhere in `api/`).
 
-**Billing skeleton** (`api/routes/billing.py`, migration 298, PR #769 — Phase 1 increment 5) adds a
+**Billing skeleton** (`api/routes/billing.py`, migration 298) adds a
 **fourth** auth class: `POST /billing/webhook` verifies the `Stripe-Signature` HMAC over the raw
 body with the stdlib (no SDK), rejects payloads outside a 300s replay window, and fails closed with
 no `STRIPE_WEBHOOK_SECRET` — never `require_token`/ `verify_jwt`. One DB transaction covers the
@@ -314,7 +314,9 @@ never check-then-act) AND the handler, so a mid-handler crash lets Stripe's retr
 order isn't guaranteed). `GET /billing/me` rides `tenant_conn` (RLS). `require_entitlement(agenda)`
 is a dependency **factory** — `Depends(require_entitlement( "watchdogs"))` 403s unless the plan
 carries that agenda; bypass is `is_admin` alone. Wired to no *router* yet — the first real
-enforcement is inline in `create_estimation_run` (below).
+enforcement is inline in `create_estimation_run` (below). `agents` has no bypass;
+`pilot` is a comp the webhook leaves alone. Money limits, and raising
+`agent_daily_ceiling_usd` as accounts join: `references/tool-registry.md`.
 
 **Agent-estimation metering** (Wave 1, migration 355) is the first metered path. The paid
 `mode:'agent'` submit is gated **inside `api/estimation_runs.py:create_estimation_run`**, at the
@@ -323,9 +325,7 @@ and before the INSERT (`_prepare_metered_submit`), so a rejected submit spends z
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
 `entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
-(ClickUp is named in comments as a `claims is None` bypass — an internal direct-Python path only;
-it has zero historical rows, verified 2026-08-04, any HTTP call 401s, and a real credential waits
-until the integration activates.) Enforcement is **atomic** (A9 — never check-then-act over the tx
+(ClickUp's `claims is None` bypass is an internal direct-Python path: no rows, any HTTP call 401s.) Enforcement is **atomic** (A9 — never check-then-act over the tx
 pooler): `INSERT … SELECT WHERE (monthly non-failed count) < quota AND (in-flight count) < cap ON
 CONFLICT (account_id, idempotency_key) DO NOTHING` — budget + per-account concurrency + idempotency
 in one write, arbiter index `estimation_runs_inflight_idem`. The budget counts `estimation_runs`
@@ -420,9 +420,9 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
   `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
   `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
-- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API only, never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
-  (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for the comparables' photos); production wins, neither = `GET /properties/{id}/valuo` says
-  "Valuo zatím není nastaveno." and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
+- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
+  (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
+  so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.
@@ -441,9 +441,10 @@ API service:
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
 Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
-the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so `RESEND_API_KEY`,
+the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so
 `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
-`OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Push links absolutely from each device's own origin.
+`OUTBOX_DRAIN_DISABLED` are dead (remove from Railway). Push links absolutely from each device's own origin.
+- `RESEND_API_KEY` (API): waitlist email; `references/secrets-inventory.md`.
 - `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
   (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
   the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →

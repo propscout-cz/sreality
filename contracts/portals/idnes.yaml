@@ -23,9 +23,15 @@
 # sat on their town's centre point; 2,540 of them name a street ("Mahulenina", "Boženy
 # Němcové", "17. listopadu") the word-ending test refused, and the map named the same street
 # on 25 of 25 sampled pages.
+#
+# v7 (location W3): the no-exact-address sentence states its ABSENCE (`absent: retract`): a
+# page whose detail map (`section#map-container`, the node that carries the sentence in its
+# overlay) no longer says it retracts the stored declaration. The marker reads that node, not
+# `body`: a 2xx page with no detail map (an interstitial, a soft-gone page, a foreign ad drawn
+# with no map) says nothing either way. Until W3 a blur, once stated, was never cleared.
 
 portal: idnes
-contract_version: 6
+contract_version: 7
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -102,15 +108,18 @@ extractions:
     page_kind: detail
     locator:
       reader: html_marker
-      css: "body"
+      css: "section#map-container"
       contains: "Nemovitost nemá přesnou adresu, nachází se ve vyznačené oblasti."
       value_label: no_exact_address
+      absent: retract
     claim_type: precision_declaration
     blur_evidence: declared
     precision_cap: {granularity_max: cast_obce_or_quarter,
                     blurred_labels: ["no_exact_address"]}
     subject_scope: {subject_scoped: true}
-    notes: "The portal's own blur sentence; a rewording stops matching instead of relabelling."
+    notes: "The portal's own blur sentence, in the detail map's overlay; a rewording stops
+      matching instead of relabelling, a detail map without it retracts the declaration (W3),
+      and a page with no detail map says nothing."
 
   - id: id.det.country
     locator_kind: embedded_json

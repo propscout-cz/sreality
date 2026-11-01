@@ -285,7 +285,7 @@ cadence is slower, and Health judges the gap a portal keeps, not a declared one:
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
 gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
 in 14 d; `<portal>/walks` is a Problem when no walk finished in 30 d (`THRESHOLDS` in `scripts/verify_pipeline.py`).
-Concurrency: each scrape workflow has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
+Concurrency: each scrape has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
 next tick queues behind it. Per-category nominations are queued immediately after each category's walk, so even a timed-out
 index walk leaves a consistent partial result.
 
@@ -332,7 +332,7 @@ Per-lane notes:
   `POST /estimations` route rows to the lane instead of an in-process BackgroundTask, so the
   cutover (and rollback) is one setting, no deploy.
 - **Location-resolve lane** (the ONLY resolver runtime since 2026-10-31, Q9; GH lane and flag
-  gone). A pass sweeps when (resolver version, registry label) changed (`drain.reconcile`;
+  gone). A pass sweeps when (resolver version, registry label, declared types) moved (`drain.reconcile`;
   heartbeat `lanes.location_resolve.swept`), else drains, evidence first. One control:
   `realtime_location_resolve_interval_seconds` (absent 15 s, 0 idles). Live tuning:
   `realtime_location_resolve_{interval_seconds,max_seconds,batch_size}` (15/240/250), interval `0`
@@ -351,7 +351,7 @@ Per-lane notes:
   `LOCATION_INTAKE_FAST_{ENABLED,INTERVAL_S,LAG_S,BUDGET_S}` (`1`/60/120/45), `ENABLED=0` idles.
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
-  claims_inserted, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
+  written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
 - **Location-refetch lane** (W8) — once a day (`LOCATION_REFETCH_INTERVAL_S` 86400, first tick 5 min
   after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)

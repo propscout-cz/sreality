@@ -31,6 +31,8 @@ CONSENT_VERSION = "2026-10-31"
 INVESTOR_TYPES = frozenset({"flip", "rent", "both", "starting"})
 UTM_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term")
 NOTE_MAX = 2000
+# Resend's free plan sends 100 a day across everything, password resets included. 500 once the account is on Pro.
+CONFIRMATION_DAILY_CAP = 80
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _VARIANT_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -113,6 +115,36 @@ def record_answer(conn: Any, token: uuid.UUID, investor_type: str | None, note: 
             "UPDATE waitlist_signups SET investor_type = %s, note = %s, answered_at = now() "
             "WHERE followup_token = %s AND answered_at IS NULL",
             (investor_type, note, token),
+        )
+        return cur.rowcount == 1
+
+
+def claim_confirmation(conn: Any, token: uuid.UUID, cap: int = CONFIRMATION_DAILY_CAP) -> str | None:
+    """Stamp the entry's confirmation as sent, if today (UTC, Resend's day) is under the cap; the address, else None."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE waitlist_signups SET confirmation_sent_at = now() "
+            "WHERE followup_token = %s AND confirmation_sent_at IS NULL AND unsubscribed_at IS NULL AND ("
+            "  SELECT count(*) FROM waitlist_signups WHERE confirmation_sent_at >= date_trunc('day', now(), 'UTC')"
+            ") < %s RETURNING email",
+            (token, cap),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def release_confirmation(conn: Any, token: uuid.UUID) -> None:
+    """A failed send was never sent: it leaves the stamp and today's count."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute("UPDATE waitlist_signups SET confirmation_sent_at = NULL WHERE followup_token = %s", (token,))
+
+
+def unsubscribe(conn: Any, token: uuid.UUID) -> bool:
+    """Withdraw the entry's consent once; the first withdrawal's time stands, and the entry stays as its record."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE waitlist_signups SET unsubscribed_at = now() WHERE followup_token = %s AND unsubscribed_at IS NULL",
+            (token,),
         )
         return cur.rowcount == 1
 

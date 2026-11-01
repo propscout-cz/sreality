@@ -245,8 +245,8 @@ never reset, never rendered.
   ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
   … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
   which maps `mine`. WHY: 696's three OR arms plus the view's join evaluated the audience four times per read. That
-  cost 4.9 ms mean in production against gate #2203's 2.5 ms; each evaluation is about five definer
-  `current_account_ids()` calls, whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
+  cost 4.9 ms mean in production against gate #2203's 2.5 ms, each evaluation then being about five definer
+  `current_account_ids()` calls (one since 709, below), whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
   only the view's join probes `curation_clock_pkey` per followed account; without it the read scans the whole clock,
   O(clock rows), and at 2,000 accounts costs more than 696's read (`docs/design/curation-sync.md` § 3.8). Never name
   the audience twice in the policy, never drop the view's join; the live lane asserts two audience nodes per read and
@@ -270,8 +270,13 @@ never reset, never rendered.
   buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
   the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
   `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
-  rows each caller reads on one backend after another warmed its plan; ≤ 40 buffers warm at both sizes is a ceiling
-  against a scan of a full clock, not against 708 (~20).
+  rows each caller reads on one backend after another warmed its plan, and a caller in several accounts following
+  each as own; ≤ 40 buffers warm at both sizes is a ceiling against a scan of a full clock, not against 708 (~20).
+  Production after 709: 0.973 ms mean and 18.3 buffers over the first 30 reads (2026-11-01).
+  GRANTS ON A HOT FUNCTION (the skill's recipe, its one exception): 709's `CREATE OR REPLACE` keeps the ACL, so it
+  revokes from `public`, `anon` and `service_role` and grants `authenticated` without ever revoking from it. Under
+  statement autocommit a revoke-then-grant pair on a function every open window calls each 5 s would refuse every
+  clock read in between; the same holds for any function its callers reach that often.
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
@@ -466,7 +471,9 @@ builder), never acting
 as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
 every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
 back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection
-the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`).
+the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`). A TENANT
+COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
+service connection, as the Valuo routes do: no tenant transaction across a paid call.
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
@@ -517,6 +524,17 @@ handler (pinned beside the share routes by `test_the_share_routes_open_the_servi
 statement names that account (shape 3), and `opened` reaches the account through the delivery's event. `GET /push/key` is
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
+
+**Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
+`_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account
+(shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
+(`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
+(shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
+another account's id is a 404 before the service role opens. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
+browser write) follows: `PUT /runs/limit` takes the gate's account (the body names none) and writes on the service role after the
+route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
+definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row
+cascades with the account; the account's `llm_calls` rows stay (704: no foreign key) and count only towards the platform ceiling.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's

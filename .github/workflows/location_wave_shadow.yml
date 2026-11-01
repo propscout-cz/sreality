@@ -81,8 +81,8 @@ on:
         type: string
 
 concurrency:
-  # One shadow at a time: two would hold two long read-only sessions and two harness runs.
-  group: location-wave-shadow
+  # One shadow per wave label: the database step (~20 min, READ ONLY) is short, the harness (~85 min) reads no database.
+  group: location-wave-shadow-${{ inputs.wave }}
   cancel-in-progress: false
 
 jobs:
