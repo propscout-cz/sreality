@@ -320,7 +320,8 @@ Building:
 The same run also uploads **chrome-extension-store**, the store package (see
 "The store package and its permission guard" below). Don't load that one
 unpacked: it has no `key`, so Chrome would give it a different ID and sign-in
-would fail.
+would fail. **extension-e2e-shots** holds the side panel harness's screenshots
+("End-to-end harness" below).
 
 ## Build option B — Local
 
@@ -365,6 +366,35 @@ instead of landing in every portal page. The search-page controls take the
 user's colour scheme and light/dark side from their profile (the same choice
 as in the app, read from the session at its next refresh; Měď light when
 signed out).
+
+## End-to-end harness
+
+`e2e/sidepanel.mjs` drives the **built** extension in headless Chromium with
+`chrome.*` stubbed: the side panel page (`dist/sidepanel.html` at 400 px, a mock
+background answering its messages, mock content scripts answering its
+`tabs.connect` ports) and `dist/content.js` on routed fake sreality pages. It
+checks that the panel follows its window's active tab, the signed-out and
+no-ad states, what a tab switch keeps (a note draft, a debounced scenario edit,
+a run in flight), the menus' focus and the in-place yield editor; on the page,
+the edge tab's marks, opening the panel, hiding while it is open (bfcache
+included), the reload offer of an orphaned script and a search card's badge;
+and that no page threw.
+
+```sh
+npm run build && npm run e2e        # or: npm run e2e -- <dist-dir> <out-dir>
+```
+
+It prints one PASS/FAIL line per check, writes screenshots and `checks.txt` to
+`e2e-shots/` (gitignored) and exits 1 on any FAIL. Fixture dates count back
+from today. CI runs it after every build and uploads that folder as the
+**extension-e2e-shots** artifact, pass or fail.
+
+The browser is Playwright's headless shell for the pinned `playwright-core`:
+`npx playwright-core install chromium-headless-shell` once, plus its system
+libraries (`npx playwright-core install-deps chromium-headless-shell`, which
+needs `sudo`). On a machine without those libraries and without `sudo`, unpack
+them somewhere and set `LD_LIBRARY_PATH=<that>/usr/lib/x86_64-linux-gnu`;
+`CHROME_PATH=<binary>` runs any other Chromium instead of the cached one.
 
 ## Install in Chrome (unpacked)
 
