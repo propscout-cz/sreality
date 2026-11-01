@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "PropScout.cz — výnos & pipeline",
+  "name": "PropScout.cz",
   "version": "0.12.0",
   "description": "Panel PropScout u nabídek z realitních portálů: vývoj ceny napříč portály, výnos MF, vaše pipeline, kolekce, poznámky a AI agenti.",
   "minimum_chrome_version": "116",

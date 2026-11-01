@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CHIPS_MAX, STEP_BAR_MAX, chartShape, createSubjectRouter, cutChips, factChips, fmtDate, portalNote, stageControl,
-  tabMarkList, type FactFormat, type FactRow,
+  clampTabTop, tabMarkList, type FactFormat, type FactRow,
 } from './panel_logic.ts';
 import type { PanelSubject } from './types';
 
@@ -67,6 +67,13 @@ test('a call is this panel\'s only from a tab of its window, and only once it kn
   assert.equal(r.ours({ windowId: 7 }), true);
   assert.equal(r.ours({ windowId: 8 }), false);
   assert.equal(r.ours(undefined), false, 'a call from no tab (another extension page)');
+});
+
+test('the edge tab stays on the window, its top in reach when the window is too short', () => {
+  assert.equal(clampTabTop(300, 100, 800), 300);
+  assert.equal(clampTabTop(-50, 100, 800), 8);
+  assert.equal(clampTabTop(790, 100, 800), 692);
+  assert.equal(clampTabTop(300, 100, 90), 8);
 });
 
 test('the edge tab marks the stage, a price DROP only, and MF, each only when there', () => {

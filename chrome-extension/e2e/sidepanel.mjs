@@ -158,11 +158,14 @@ function panelInit({ replies, tabs, active, delay }) {
 
 /* A portal page under content.js. Shadow roots are forced open (the extension's are closed,
  * and selectors pierce only open ones). `window.__newPort()` makes the side panel's port. */
-function pageInit({ replies }) {
+function pageInit({ replies, stored, delay }) {
   Element.prototype.attachShadow = ((orig) => function (init) { return orig.call(this, { ...init, mode: 'open' }); })(Element.prototype.attachShadow);
   window.__log = [];
   window.__calls = [];
   window.__connect = [];
+  window.__stored = stored;
+  window.__storageListeners = [];
+  window.__fireStorage = (changes) => { for (const f of window.__storageListeners) f(changes, 'local'); };
   window.__newPort = () => {
     const port = { name: 'side_panel', sent: [], postMessage(m) { this.sent.push(m); }, onMessage: { fns: [], addListener(f) { this.fns.push(f); } }, onDisconnect: { fns: [], addListener(f) { this.fns.push(f); } } };
     window.__lastPort = port;
@@ -180,14 +183,21 @@ function pageInit({ replies }) {
         if (window.__orphaned) throw new Error('Extension context invalidated.');
         window.__log.push(msg.type);
         if (msg.type === 'panel') { window.__calls.push(msg); return Promise.resolve(); }
-        setTimeout(() => cb(msg.type in replies ? { ok: true, data: answer(msg) } : { ok: false, status: 0, detail: `unmocked ${msg.type}` }), 20);
+        setTimeout(() => cb(msg.type in replies ? { ok: true, data: answer(msg) } : { ok: false, status: 0, detail: `unmocked ${msg.type}` }), delay);
       },
       onMessage: { addListener() {} },
       onConnect: { addListener: (f) => window.__connect.push(f) },
     },
     storage: {
-      local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
-      onChanged: { addListener() {}, removeListener() {} },
+      local: {
+        get: async () => ({ ...window.__stored }),
+        set: async (items) => {
+          Object.assign(window.__stored, items);
+          window.__fireStorage(Object.fromEntries(Object.entries(items).map(([k, newValue]) => [k, { newValue }])));
+        },
+        remove: async () => {},
+      },
+      onChanged: { addListener: (f) => window.__storageListeners.push(f), removeListener() {} },
     },
   };
 }
@@ -231,10 +241,10 @@ async function panel({ replies = {}, tabs = { 10: SUBJECT, 11: SUBJECT_B }, acti
 }
 
 /* A portal page with dist/content.js injected, as the manifest would. */
-async function portalPage(url, body, replies) {
+async function portalPage(url, body, replies, { stored = {}, delay = 20 } = {}) {
   const p = await newPage(1280, 800);
   await p.route('https://www.sreality.cz/**', (r) => r.fulfill({ contentType: 'text/html', body }));
-  await p.addInitScript(pageInit, { replies });
+  await p.addInitScript(pageInit, { replies, stored, delay });
   await p.goto(url);
   await p.addScriptTag({ content: contentJs });
   return p;
@@ -418,8 +428,72 @@ scenario('the edge tab on a detail page', async () => {
   await shot(p, 'edge-tab-reload');
 });
 
+scenario('dragging the edge tab', async () => {
+  const body = '<!doctype html><html><body style="height:3000px"><h1>Byt</h1></body></html>';
+  const p = await portalPage(DETAIL, body, BASE);
+  await p.waitForTimeout(500);
+  const tabBox = () => p.locator(edgeTab).boundingBox();
+  const opens = () => p.evaluate(() => window.__calls.filter((c) => c.open === true).length);
+  const grab = async () => {
+    const b = await tabBox();
+    await p.mouse.move(b.x + b.width / 2, b.y + 10);
+    await p.mouse.down();
+    return { x: b.x + b.width / 2, y: b.y + 10 };
+  };
+  check('the tab starts at its default place', (await tabBox()).y === 96, String((await tabBox()).y));
+
+  let at = await grab();
+  await p.mouse.move(at.x, at.y + 2);
+  await p.mouse.up();
+  check('a press that barely moves is still a click: the panel opens', (await opens()) === 1 && (await tabBox()).y === 96, `${await opens()} at ${(await tabBox()).y}`);
+
+  at = await grab();
+  await p.mouse.move(at.x, at.y + 100, { steps: 4 });
+  // A repaint under the press (the account changed): the tab is a new element, the drag goes on.
+  await p.locator(edgeTab).evaluate((t) => { t.dataset.old = '1'; });
+  await p.evaluate(() => window.__fireStorage({ authSession: { newValue: { access_token: `a.${btoa('{"sub":"other"}')}.c` } } }));
+  await p.waitForTimeout(150);
+  const replaced = await p.locator(edgeTab).evaluate((t) => t.dataset.old !== '1');
+  await p.mouse.move(at.x, at.y + 200, { steps: 4 });
+  await p.mouse.up();
+  await p.waitForTimeout(50);
+  check('a drag moves the tab, through a repaint under the press', replaced && (await tabBox()).y === 296, `replaced=${replaced} y=${(await tabBox()).y}`);
+  check('a drag does not open the panel', (await opens()) === 1, String(await opens()));
+  check('the place is stored', (await p.evaluate(() => window.__stored.edgeTabTop)) === 296, String(await p.evaluate(() => window.__stored.edgeTabTop)));
+  await shot(p, 'edge-tab-dragged');
+
+  await p.locator(edgeTab).click();
+  check('the next plain click opens the panel again', (await opens()) === 2, String(await opens()));
+
+  // A fast flick: the first move already lands off the tab.
+  at = await grab();
+  await p.mouse.move(at.x, 799);
+  await p.mouse.up();
+  let b = await tabBox();
+  check('dragged past the bottom it stays on the window', b.y + b.height === 792, `${b.y}+${b.height}`);
+  at = await grab();
+  await p.mouse.move(at.x, 1);
+  await p.mouse.up();
+  check('dragged past the top it stays on the window', (await tabBox()).y === 8, String((await tabBox()).y));
+
+  await p.evaluate(() => window.__fireStorage({ edgeTabTop: { newValue: 500 } }));
+  check('moved in another tab: this one follows', (await tabBox()).y === 500, String((await tabBox()).y));
+  await p.setViewportSize({ width: 1280, height: 400 });
+  await p.waitForTimeout(50);
+  b = await tabBox();
+  check('a shorter window keeps it in view', b.y + b.height === 392, `${b.y}+${b.height}`);
+  await p.setViewportSize({ width: 1280, height: 800 });
+  await p.waitForTimeout(50);
+  check('…and a taller one returns it', (await tabBox()).y === 500, String((await tabBox()).y));
+
+  const next = await portalPage(DETAIL, body, BASE, { stored: { edgeTabTop: 300 } });
+  await next.waitForTimeout(500);
+  check('the next page shows it where it was left', (await next.locator(edgeTab).boundingBox()).y === 300);
+});
+
 scenario('the panel already open as a detail page loads', async () => {
-  const p = await portalPage(DETAIL, '<!doctype html><html><body><h1>Byt</h1></body></html>', BASE);
+  // The lookup answers after the port is up, as `already open` means.
+  const p = await portalPage(DETAIL, '<!doctype html><html><body><h1>Byt</h1></body></html>', BASE, { delay: 200 });
   await connectPanel(p);
   await p.waitForTimeout(500);
   const asked = await count(p, 'get_price_history');

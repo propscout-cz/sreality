@@ -1130,7 +1130,8 @@ rules. Identify which one a task belongs to before you start.
   detail page's **edge tab** (`edge_tab.ts`, a closed shadow root on the right edge: PS mark, stage
   badge, this ad's price drop, MF, read through the page's store) or a search card's badge sends
   `{type:'panel', open:true}`, on which the background calls `sidePanel.open({windowId})` before any
-  await (the gesture must still be live). The edge tab hides while the port is up (reading the
+  await (the gesture must still be live). The edge tab drags up and down the edge (`edge_drag.ts`, its
+  place one chrome.storage.local value for every tab and portal). It hides while the port is up (reading the
   drop's price history only while it shows); the panel's unload closes the port and brings it back,
   and so does `pagehide` into the back/forward cache, which closes ports without an onDisconnect in
   the frozen page (`pageshow` calls the panel again; a load-time call replaces any port still held).
