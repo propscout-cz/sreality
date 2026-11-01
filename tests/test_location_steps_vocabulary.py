@@ -1,4 +1,4 @@
-"""W16: ONE step vocabulary for the audit waterfall and the candidates funnel.
+"""W16: ONE step vocabulary for the candidates funnel and the audit list's states.
 
 The operator, 2026-09-14: the candidates page's funnel and the location audit page's
 waterfall "must use ONE terminology and, where possible, ONE waterfall". They did not.
@@ -19,16 +19,16 @@ exactly as tests/test_location_w5_serve_resolved.py holds the consumer rule's.
 
 Four properties, each one a way the vocabulary could quietly fork again:
 
-1.  Every shared flag and every shared count the module renders appears VERBATIM in the
-    migration that last replaced `refresh_location_audit_waterfall()` AND in FUNNEL_SQL.
+1.  Every shared flag and every shared count the module renders appears VERBATIM in FUNNEL_SQL.
 2.  Every step key either producer can stamp is WORDED in the frontend module, in both
     languages, with a non-empty label and a non-empty note — the KEYS are pinned, never
     the strings, because a label that cannot change without a migration is the thing
     dropping `label_cs` was for.
 3.  No surface hardcodes a step's name. A step renamed in the module is renamed
     everywhere, in both languages, at once.
-4.  The candidates funnel does no arithmetic — the rule the audit page has always had,
-    now applied to both readouts, because the client sums are what let the two drift.
+4.  The candidates funnel does no arithmetic, because the client sums are what let the two drift.
+
+W1 (migration 719, ruling W1-c) dropped the audit waterfall, its second producer.
 """
 
 from __future__ import annotations
@@ -54,42 +54,27 @@ def _squeeze(t: str) -> str:
     return " ".join(t.split()).lower()
 
 
-def _producer_sql() -> str:
-    """The migration that LAST replaced the chain's producer, with its prose stripped so a
-    match is CODE and never a comment. Found the way the W14 rail finds it."""
-    written = sorted(
-        f for f in MIGRATIONS.glob("[0-9][0-9][0-9]_*.sql")
-        if "create or replace function refresh_location_audit_waterfall()"
-        in f.read_text(encoding="utf-8")
-    )
-    assert written, "no migration writes refresh_location_audit_waterfall()"
-    return _LINE_COMMENT.sub("", written[-1].read_text(encoding="utf-8"))
-
-
 # --------------------------------------------------------------- 1. one definition
 
 
-def test_every_shared_flag_is_spelled_the_same_in_both_producers() -> None:
-    """The four booleans the chain is cut from. RED by: the audit page asking
-    `ll.obec_kod is not null` while dedup additionally asks for the obec rank floor — which
-    is exactly the fork W16 closed, and which made the same word mean two sets."""
+def test_every_shared_flag_is_spelled_the_same_in_the_funnel() -> None:
+    """The four booleans the chain is cut from. RED by: FUNNEL_SQL asking
+    `ll.obec_kod is not null` without the obec rank floor — which is exactly the fork W16 closed,
+    and which made the same word mean two sets."""
     from toolkit.dedup_candidates_sql import FUNNEL_SQL
 
-    producer, funnel = _squeeze(_producer_sql()), _squeeze(FUNNEL_SQL)
+    funnel = _squeeze(FUNNEL_SQL)
     for name, expr in ls.step_flags_sql().items():
-        assert _squeeze(expr) in producer, f"the migration does not carry {name} verbatim"
         assert _squeeze(expr) in funnel, f"FUNNEL_SQL does not carry {name} verbatim"
 
 
-def test_every_shared_count_is_spelled_the_same_in_both_producers() -> None:
-    """And the counts on top of them, so `located_town` cannot come to mean one thing per
-    page. `located_no_town` is the PLAIN COMPLEMENT, which is what keeps the three splits
-    partitioning `located` by construction whatever the data does."""
+def test_every_shared_count_is_spelled_the_same_in_the_funnel() -> None:
+    """And the counts on top of them. `located_no_town` is the PLAIN COMPLEMENT, which is what
+    keeps the three splits partitioning `located` by construction whatever the data does."""
     from toolkit.dedup_candidates_sql import FUNNEL_SQL
 
-    producer, funnel = _squeeze(_producer_sql()), _squeeze(FUNNEL_SQL)
+    funnel = _squeeze(FUNNEL_SQL)
     for name, expr in ls.shared_count_filters().items():
-        assert f"count(*) filter (where {_squeeze(expr)})" in producer, name
         assert _squeeze(expr) in funnel, name
 
 
@@ -122,12 +107,13 @@ def test_the_consumer_rule_is_imported_and_never_retyped() -> None:
 
 
 def test_the_town_floor_is_applied_by_rank_never_by_enum_order() -> None:
-    """tests/toolkit/test_dedup_candidates_sql.py forbids `granularity >=` on the dedup
-    side; the same must hold now that the audit page adopted the floor."""
+    """tests/toolkit/test_dedup_candidates_sql.py forbids `granularity >=` on the dedup side."""
+    from toolkit.dedup_candidates_sql import FUNNEL_SQL
+
     floor = ls.obec_rank_floor_sql("gr")
     assert "location_granularity_rank" in floor
     assert "granularity >=" not in floor and "granularity > " not in floor
-    assert _squeeze(floor) in _squeeze(_producer_sql())
+    assert _squeeze(floor) in _squeeze(FUNNEL_SQL)
 
 
 def test_the_backend_module_carries_no_label_of_its_own() -> None:
@@ -157,7 +143,7 @@ def _ts_steps() -> dict[str, dict[str, str]]:
     }
 
 
-def test_every_step_key_either_producer_stamps_is_worded_in_both_languages() -> None:
+def test_every_step_key_the_funnel_stamps_is_worded_in_both_languages() -> None:
     """RED by: a new step landing in the backend with no label — the page would then print
     the raw key, or worse, a blank cell where a count belongs."""
     ts = _ts_steps()
@@ -170,19 +156,6 @@ def test_every_step_key_either_producer_stamps_is_worded_in_both_languages() -> 
 def test_the_frontend_words_nothing_the_backend_does_not_stamp() -> None:
     """The other direction: a label with no step behind it is wording nobody can read."""
     assert set(_ts_steps()) == set(ls.STEP_KEYS)
-
-
-def test_every_step_the_producer_inserts_is_worded_and_nothing_else_is() -> None:
-    """The KEYS are the contract between the producer and the page — deliberately NOT the
-    strings. Pinning the Czech to migration 524 (an immutable file) would have re-imposed
-    exactly what dropping `label_cs` bought: a label nobody can improve without a migration.
-    So the rail checks that the nine keys the producer INSERTS are the nine `AUDIT_STEPS`
-    the module words, and no more. RED by: a step key in the SQL that no page can name."""
-    # the step key is the third field of every VALUES row: (step_no, sub_no, step_key, …)
-    inserted = set(re.findall(r"\d+::smallint, \d+::smallint, '(\w+)'",
-                              _squeeze(_producer_sql())))
-    assert inserted == set(ls.AUDIT_STEPS), inserted ^ set(ls.AUDIT_STEPS)
-    assert set(ls.AUDIT_STEPS) <= set(_ts_steps())
 
 
 def test_abroad_is_worded_as_an_answer_and_never_as_a_loss() -> None:
@@ -223,10 +196,9 @@ _JS_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 
 
 def test_the_two_hidden_states_have_one_czech_name_on_the_audit_page() -> None:
-    """The hidden set's two states name the listing list's filter pill, as they named the
-    waterfall's split rows until W1 deleted the page's waterfall. They were briefly reading
-    two different Czech names ("nevyřešeno" in the split, "zpracováno, nerozhodnuto" in the
-    list), which is the same fault as two names for one step, one level down. RED by: a
+    """The hidden set's two states name the listing list's filter pill. They were briefly
+    reading two different Czech names ("nevyřešeno" in the split, "zpracováno, nerozhodnuto" in
+    the list), which is the same fault as two names for one step, one level down. RED by: a
     state name typed back into the page instead of read from the module."""
     code = _JS_COMMENT.sub("", AUDIT_PAGE.read_text(encoding="utf-8"))
     ts = _ts_steps()
@@ -239,9 +211,9 @@ def test_the_two_hidden_states_have_one_czech_name_on_the_audit_page() -> None:
 
 
 def test_the_candidates_funnel_computes_no_step_of_its_own() -> None:
-    """The audit page's rule, now the funnel's too: it renders what the lane wrote. The
-    client sums and the client-side `previous - this` subtraction are what let the two
-    readouts' steps drift apart in the first place, and they are gone."""
+    """It renders what the lane wrote. The client sums and the client-side `previous - this`
+    subtraction are what let two readouts' steps drift apart in the first place, and they are
+    gone."""
     text = FUNNEL.read_text(encoding="utf-8")
     body = text.split("*/", 1)[1]          # the header comment explains the rule
     for bad in (".n -", "reduce(", "* 100"):
@@ -252,33 +224,26 @@ def test_the_candidates_funnel_computes_no_step_of_its_own() -> None:
 # ---------------------------------------------------------------- the step shapes
 
 
-def test_the_two_chains_agree_on_every_shared_key() -> None:
-    """Same key, same predicate, same wording — only the ROLE differs: `located_town` is a
-    split of `located` on the audit page (whose subject is the hidden set) and a chain step
-    on a candidate run (whose subject is pairing)."""
+def test_the_run_chain_carries_every_shared_key() -> None:
+    """On a candidate run the town is a chain step (the subject is pairing), and abroad and the
+    townless are splits of `located`."""
     for key in ls.SHARED_STEP_KEYS:
-        assert key in ls.AUDIT_STEPS and key in ls.RUN_STEPS
-    assert ls.AUDIT_STEPS["located_town"].kind == "split"
+        assert key in ls.RUN_STEPS
     assert ls.RUN_STEPS["located_town"].kind == "chain"
     for key in ("located_foreign", "located_no_town"):
-        assert ls.AUDIT_STEPS[key].kind == "split" and ls.AUDIT_STEPS[key].parent_key == "located"
         assert ls.RUN_STEPS[key].kind == "split" and ls.RUN_STEPS[key].parent_key == "located"
 
 
 def test_a_chain_step_never_hangs_off_a_parent_and_a_split_always_does() -> None:
-    for chain in (ls.AUDIT_STEPS, ls.RUN_STEPS):
-        for key, shape in chain.items():
-            assert shape.kind in ("chain", "split", "deduction"), key
-            if shape.kind == "chain":
-                assert shape.parent_key is None, key
-            else:
-                assert shape.parent_key in chain, key
+    for key, shape in ls.RUN_STEPS.items():
+        assert shape.kind in ("chain", "split"), key
+        if shape.kind == "chain":
+            assert shape.parent_key is None, key
+        else:
+            assert shape.parent_key in ls.RUN_STEPS, key
 
 
-def test_the_shared_prefix_narrows_in_the_same_order_on_both_sides() -> None:
-    """A reader comparing the two pages walks them top to bottom; the shared steps must
-    narrow in the same sequence or the comparison is not one."""
+def test_the_shared_prefix_narrows_in_order() -> None:
     prefix = ["all_listings", "with_verdict", "located"]
-    assert [k for k in ls.AUDIT_STEPS if k in ls.SHARED_STEP_KEYS][:3] == prefix
     assert [k for k in ls.RUN_STEPS if k in ls.SHARED_STEP_KEYS][:3] == prefix
     assert ls.SHARED_STEP_KEYS[:3] == tuple(prefix)

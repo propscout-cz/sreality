@@ -847,10 +847,9 @@ export interface NewDedupCandidateStats {
   top_towns: NewDedupCandidateTownRow[];
   distribution: NewDedupCandidateDistributionRow[];
   funnel: NewDedupCandidateFunnelRow[];
-  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys, the same
-   * shape `location_audit_waterfall` writes hourly for the audit page. One row
-   * type for both readouts; the browser sums and subtracts nothing. Optional
-   * because a run generated before W16 has none. */
+  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys; the browser
+   * sums and subtracts nothing. Optional because a run generated before W16 has
+   * none. */
   waterfall?: WaterfallRow[];
   /* When the lane COUNTED those rows — the funnel re-reads `listings` live at the
    * end of a run, so this, and not the generation row's completed_at, is what the

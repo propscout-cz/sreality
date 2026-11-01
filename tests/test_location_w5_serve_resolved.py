@@ -191,8 +191,6 @@ def test_514_recreates_the_audit_surface_513_retired() -> None:
     for obj in (
         "create materialized view location_pin_audit_mv as",
         "create unique index if not exists location_pin_audit_mv_pk",
-        "create function location_pin_audit_summary()",
-        "create or replace function refresh_location_pin_audit_mv()",
         "'refresh-location-pin-audit'",
         "insert into public.derived_artifacts",
     ):

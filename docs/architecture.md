@@ -5384,8 +5384,8 @@ and `{portal}/town` is RED until zero; one holding none is PAGE-WITHHELD, `{port
 Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7): `{portal}/ku` (below),
 `{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
 zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
-the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
-operator rules the floors, W1-b), `{portal}/accuracy`
+the rank table, Problem when its Wilson upper bound is under the portal's fixed floor, ruling W1-b),
+`{portal}/accuracy`
 (radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
 over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
@@ -5650,59 +5650,29 @@ exists, nothing queued, no newer evidence, still no location) is the issue, and 
 buckets refine that half alone. The page toggles between the two and defaults to `unresolved`.
 Measured at the split: 11 pending, 44,370 unresolved. (W1, ruling Q7, deleted the nav badge that
 counted `unresolved`: 99 % of its 12,272 were delisted ads with no claims.)
-**W14 (migration 523) made the page read against the whole database, and W15 (migration 524)
-simplified the chain to the one rule; W1 (ruling Q7) deleted the page's waterfall panel, and the table
-and its producer leave with a separate drop migration (ruling W1-c).** The operator's complaint was that the audit set was a number
-with nothing to measure it by. `location_audit_waterfall` is the chain — **9 rows** since W15,
-rewritten hourly by the SAME `refresh_location_pin_audit_mv()` run, after the matview so the last
-step's split reads the relation the page lists: every listing in the database (841,428) → **judged**
-(the lane has a stored verdict for it; the loss is the listings it has never reached) → **located**
-(a point, or the determination that it is abroad — split into with-an-obec / foreign / a Czech point
-with no obec) → **hidden**, the complement of `located` over the WHOLE database, split into
-`unresolved` and `pending`, which is the set this page lists and is read as a share of 841 k rather
-than 100 % of itself. W14 shipped it as 14 rows with a served / not-served fork; retiring the served
-set removed the fork, and the hidden set grew from 12,068 to ~80 k because the ~68 k delisted rows it
-used to exclude are now findings. The one cut is `SERVED_LOCATION_PREDICATE`, rendered verbatim
-(pinned by `tests/test_location_w14_audit_waterfall.py`, the W5 rail's shape) — one statement, one
-snapshot, no new column on `listings`, and the client renders `n` / `lost` / `share_pct` without
-recomputing any of them. Rows are `chain` (the funnel, `lost` = the previous step's count minus its
-own), `deduction` (a set carved out: the hidden set) or `split` (sub-rows that partition their
-parent); the migration proves the arithmetic laws at apply time. Cost: 19.3 s on top of the hourly
-refresh's 900 s budget.
-**W16 (migration 526) makes it ONE vocabulary with the NEW DEDUP candidates funnel.** The two
-readouts asked the same first questions in different words, and at one step with genuinely different
-rules: the funnel's "Known to the location engine" read as *answered* while it was byte-for-byte this
-chain's `with_verdict` (*judged*), and its town step was cut with NO consumer rule — so its single
-"lost 99,889" silently added three unlike things together (≈53,374 judged-but-not-located, 45,619
-**abroad — an ANSWER, which this chain has always booked as a split INSIDE `located`**, and ≈895 a
-Czech point with no town). The four booleans are now rendered from
-`location_data/location_steps.py`, which also declares the step keys, their order and each key's
-shape for BOTH chains: `located_town` is a **split** of `located` here (this page's subject is the
-hidden set) and a **chain step** on a candidate run (that page's subject is pairing) — same key, same
-predicate, same wording, the role declared in one place. Two consequences. `has_town` gained dedup's
-obec RANK floor, so this page's town number IS the number dedup can block on (measured 2026-09-14: 0
-rows of movement), and `located_no_town` stays the plain complement so the three splits keep
-partitioning `located` by construction. And `label_cs` was **dropped**: wording moved to
-`frontend/src/lib/locationSteps.ts`, one file holding Czech and English for every key, so a better
-sentence costs no migration and a step cannot be renamed on one page only — and, one level down,
-the hidden set's two states carried ONE Czech name across the waterfall split, the filter pill,
-the header total and the note (since W1 only the filter pill: `STATE_LABEL` in `LocationPinAudit.tsx`). Two operational constraints ride with the drop, both in 526's header:
-the column is made NULLABLE **before** the producer is replaced and dropped only **after**, so the
-:25 cron cannot land between two statements and fail; and the migration is applied only once the
-merge commit's Railway `vite` rollout is green, because the bundle on `main` still selects
-`label_cs` and PostgREST answers 400 for a column the table no longer publishes. A candidate run stamps the
-same keys into `candidate_generations.stats.waterfall` with the losses and shares already computed by
-the lane, so the two readouts can now differ only by SCOPE (a run may be narrowed to active listings)
-and by TIME (a run is frozen; this relation refreshes hourly) — and the candidates page prints both
-next to its chain. The cross-surface rail is `tests/test_location_steps_vocabulary.py`.
+**The audit waterfall is gone (W14, W15 and W16 built it; W1 dropped it).** `location_audit_waterfall`
+(migrations 523/524/526) was the chain behind this page: every listing → judged → located → hidden.
+W1 (ruling Q7) folded its numbers into the `{portal}/town` facts and deleted the panel; migration 719
+(ruling W1-c) dropped the table, its producer, `location_pin_audit_summary()` and
+`refresh_location_pin_audit_mv()`. **W16's ONE vocabulary outlives it.** The NEW DEDUP candidates funnel
+once called *judged* "Known to the location engine", and cut its town step with no consumer rule, so
+its single "lost 99,889" silently added three unlike things together (≈53,374
+judged-but-not-located, 45,619 **abroad, an ANSWER**, ≈895 a Czech point with no town). The four
+booleans are rendered from `location_data/location_steps.py`, which also declares a run's step keys,
+their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
+the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
+English for every key, so a better sentence costs no migration and a step cannot be renamed on one
+page only; the hidden set's two states carry ONE Czech name (`STATE_LABEL` in `LocationPinAudit.tsx`).
+A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
+shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
 `quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
 the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
 `location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
 sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
-row (~80 k) and not once per listing. Refreshed hourly by pg_cron
-(`refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
+row (~80 k) and not once per listing. Refreshed hourly by pg_cron through `refresh_matview` (since
+719; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
 the cron command** — migration 371's rule, or the refresh would silently die at the 120 s database
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,

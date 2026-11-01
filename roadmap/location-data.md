@@ -1300,16 +1300,17 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `location_town_coverage` gauge, relabelled "Location quality", reads it in two statements and emits
   67 cells with fixed lines: `{p}/town` unresolved red until zero, `{p}/town_withheld` page-withheld
   Watch, `{p}/ku`, `{p}/outside` (strict pip containment), `{p}/street` (Wilson upper bound under a
-  fixed per-portal floor: WATCH ONLY until the operator rules the 0.9x floors, W1-b, unruled),
+  fixed per-portal floor: Watch at first, Problem since ruling W1-b),
   `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
   `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
   fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
   Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. **PR 2 built 2026-10-31**
   (no migration): the Location Quality page renders the stored row through Health's `HEALTH_QUERY`;
   its two routes, the toolkit aggregates, its thresholds, the audit waterfall's reader, the pin-audit
-  summary reader and the `!AUDIT POLOH` badge are deleted (product −884/+251, tests −449/+224). Owed:
-  migration B (the audit waterfall and pin-audit counters dropped: destructive, after W1-c, awaits the
-  operator's ruling; apply after PR 2 is deployed).
+  summary reader and the `!AUDIT POLOH` badge are deleted (product −884/+251, tests −449/+224).
+  **W1 finished 2026-11-01** (rulings W1-b, W1-c, W1-d): street floors red; migration 719 drops the
+  audit waterfall, its producer and the pin-audit counters (destructive: applied only on the
+  operator's yes), the cron through `refresh_matview`; the archive-denominator script deleted.
 - **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
   2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
   The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
@@ -1750,7 +1751,7 @@ all closed, several proven against a throwaway PostgreSQL 18 built from `.deb` f
   `listings_without_a_fixture_body`, so coverage arriving with a portal PR is itself a reviewed diff.
 - **W2-1 / W2-0** (#1045, #1048): per-reader substrate legality (a contract entry can no longer
   declare a transform or guard its reader will never consult) and the archive denominator every
-  W2 gate is a share of.
+  W2 gate is a share of (a one-off script, deleted 2026-11-01, location quality W1).
 - **W2-2 evidence-bearing claims + the archived-HTML re-mine lane** (no migration — 382 already
   carries every evidence column and CHECK): `Claim` gains the D7 evidence set (`payload_id`,
   `payload_sha256`, `evidence_quote`, `span_start`, `span_end`, `payload_scope_version`) plus

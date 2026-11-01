@@ -48,9 +48,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
  * these rows are the assertion: 800 listings → 700 judged → 630 with a location,
  * of which 600 are in a named town, 23 are ABROAD (an answer, printed as a split
  * and never as a loss) and 7 are a Czech point with no town. The town step's loss
- * is exactly 23 + 7 = 30. `located_town` is a CHAIN step here and a split on the
- * audit page — same key, same predicate, different role, declared in
- * location_data/location_steps.py. */
+ * is exactly 23 + 7 = 30, declared in location_data/location_steps.py. */
 const WATERFALL: waterfall.WaterfallRow[] = [
   { step_key: 'all_listings', step_no: 1, sub_no: 0, kind: 'chain', parent_key: null, n: 800, lost: 0, share_pct: 100 },
   { step_key: 'with_verdict', step_no: 2, sub_no: 0, kind: 'chain', parent_key: null, n: 700, lost: 100, share_pct: 87.5 },
@@ -160,7 +158,7 @@ describe('<NewDedupDashboard>', () => {
     await screen.findByText(LOCATION_STEPS.all_listings.en);
 
     /* Every label is read from the ONE wording module — a step renamed there is
-     * renamed on the audit page and here at once, and this test cannot pass with
+     * renamed everywhere at once, and this test cannot pass with
      * a name only one page uses. The counts are the lane's, not a sum. */
     const step = (key: keyof typeof LOCATION_STEPS) =>
       screen.getByText(LOCATION_STEPS[key].en).closest('li')!;
@@ -192,12 +190,9 @@ describe('<NewDedupDashboard>', () => {
 
   it('says which listings the run looked at and when it counted them', async () => {
     renderPage();
-    /* The two honest differences from the hourly audit page, printed rather than
-     * left for the operator to discover as a contradiction. */
     const asOf = await screen.findByText(/frozen with the run/);
     expect(asOf).toHaveTextContent('every listing ever collected, active or delisted');
-    /* And the moment it was counted, so "819,770 here vs 821,193 there" reads as
-     * two clocks rather than as a contradiction. */
+    /* And the moment it was counted. */
     expect(asOf).toHaveTextContent('2026');
   });
 

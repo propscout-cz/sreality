@@ -951,9 +951,8 @@ def _outside_cell(subject: str, portal: str | None, card: _Card, cohort: str,
 def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | None,
                  min_n: int, cohort: str,
                  by_portal: Mapping[str, _Card] | None = None) -> dict[str, Any]:
-    """The one street share, (address + street) / Czech ads with a town by the rank table: Watch
-    when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression); never
-    Problem until the operator rules the floors (W1-b)."""
+    """The one street share, (address + street) / Czech ads with a town by the rank table: Problem
+    when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression)."""
     grains = {g: _n(card, "grain", g) for g in _GRAINS}
     hits, n = grains["address"] + grains["street"], _of(card, "grain", "address")
     facts: dict[str, Any] = {"n": n, "floor": floor, "grains": grains}
@@ -971,9 +970,8 @@ def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | N
                            f"{min_n} this arm needs", "%", facts)
     said = (f"{hits:,} of {n:,} Czech {cohort} with a town are placed at street grain or finer "
             f"({hits / n:.1%}; upper bound {facts['upper_bound']:.1%})")
-    conditions = ([("warn", f"{said}, under the fixed floor {floor:.0%} (Watch until the floors are "
-                            "ruled, W1-b): a parser or contract regression — check the portal's "
-                            "street and address claims")]
+    conditions = ([("fail", f"{said}, under the fixed floor {floor:.0%}: a parser or contract "
+                            "regression — check the portal's street and address claims")]
                   if facts["upper_bound"] < floor else [])
     return judged(subject, conditions, f"{said}; floor {floor:.0%}",
                   value=round(100 * hits / n, 2), unit="%", portal=portal, facts=facts)

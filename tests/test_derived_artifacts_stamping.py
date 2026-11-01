@@ -142,9 +142,15 @@ def function_bodies(conn) -> dict[str, str]:
 # refresh_health_matviews' body, and migration 643 (Health W9) dropped that function,
 # its six matviews and their registry rows. The helper 441 defines stays, and a
 # definition is not a call.
+#
+# 514 and 523 are the case again: their literal stamps sit in refresh_location_pin_audit_mv's
+# bodies, and migration 719 dropped that function and the location_audit_waterfall row. The
+# matview's evidence is now 719's own `refresh_matview` cron command.
 _RETIRED_MIGRATIONS = {
     "migrations/510_location_pin_audit.sql",
     "migrations/441_stamp_derived_artifact.sql",
+    "migrations/514_location_w5_serve_resolved.sql",
+    "migrations/523_location_w14_audit_waterfall.sql",
 }
 
 
@@ -201,14 +207,14 @@ def _repo_call_sites() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
 
 
 def _catalog_call_names(bodies: dict[str, str]) -> dict[str, set[str]]:
-    """{proname: literal artifact names it stamps through the helper}."""
+    """{proname: literal artifact names it stamps, through the helper or an inline UPDATE}."""
     out: dict[str, set[str]] = {}
     for name, body in bodies.items():
         found = {
             m.group("arg").strip("'")
             for m in _SQL_CALL.finditer(body)
             if m.group("arg").startswith("'")
-        }
+        } | {m.group("name") for m in _INLINE_STAMP.finditer(body)}
         if found:
             out[name] = found
     return out
@@ -257,16 +263,16 @@ def test_every_stamp_call_in_the_repo_names_a_registered_artifact(registry):
 def test_every_stamp_call_inside_the_catalog_names_a_registered_artifact(
     registry, function_bodies
 ):
-    """RED by: mistyping one of the two names inside `refresh_location_pin_audit_mv`'s body.
+    """RED by: mistyping the name in `refresh_llm_cost_rollups`' inline UPDATE.
 
     The repo scan above cannot see a function body that was replaced directly against the
     database outside any migration file; this reads `pg_proc.prosrc`, so it can.
     """
     per_function = _catalog_call_names(function_bodies)
     assert per_function, (
-        "no function in the catalog stamps the registry through stamp_derived_artifact "
-        "with a literal name — refresh_location_pin_audit_mv (migration 523) lost its two "
-        "stamps, and this arm would check nothing"
+        "no function in the catalog stamps the registry with a literal name — "
+        "refresh_llm_cost_rollups and rebuild_browse_list lost their inline stamps, and this "
+        "arm would check nothing"
     )
     unknown = sorted(
         (fn, name)
@@ -301,8 +307,8 @@ def test_every_registry_row_is_stamped_by_something(registry, function_bodies):
     """Corollary E, whole: a declared artifact whose freshness nothing writes is exactly
     the permanently-red row this wave exists to delete.
 
-    RED by: deleting any producer's stamp — the helper call in a Python producer, one of
-    the two inside `refresh_location_pin_audit_mv`, or one of the pre-441 inline
+    RED by: deleting any producer's stamp — the helper call in a Python producer, a pg_cron
+    command's `refresh_matview`, or one of the pre-441 inline
     `update derived_artifacts ... where name = '...'` blocks.
 
     Four stamp shapes count, because four genuinely exist: a literal-name call of the
@@ -320,8 +326,6 @@ def test_every_registry_row_is_stamped_by_something(registry, function_bodies):
         stamped |= names
     for names in _catalog_call_names(function_bodies).values():
         stamped |= names
-    for body in function_bodies.values():
-        stamped |= {m.group("name") for m in _INLINE_STAMP.finditer(body)}
 
     unobserved = sorted(set(registry) - stamped)
     assert not unobserved, (
