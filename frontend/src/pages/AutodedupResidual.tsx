@@ -60,6 +60,7 @@ import {
 } from '@/components/autodedup/GenerationSelect';
 import ValidationStrip, { BlindToggle } from '@/components/autodedup/ValidationStrip';
 import {
+  FILTER_LABEL,
   FilterBar,
   FilterNumber,
   FilterSelect,
@@ -109,6 +110,9 @@ export interface ResidualExtras {
   zone: '' | AutodedupZone;
   source_a: string;
   source_b: string;
+  /* '1' = only pairs whose two ads print one order code (operator 2026-10-31). A
+   * PAIR question, like the portal pair, so the grouped view neither shows nor sends it. */
+  shared_code: '' | '1';
   /* WHICH VIEW of the same cohort. In the URL, so a link restores the view the
    * operator was in — '' is the default (groups), 'pairs' the original queue. */
   view: '' | 'pairs';
@@ -151,6 +155,7 @@ export function toResidualQuery(
     min_score: f.min_score.trim() === '' ? 0 : num(f.min_score),
     source_pair: sourcePair(f.source_a, f.source_b),
     verdict: f.verdict || null,
+    shared_code: f.shared_code === '1' ? true : null,
     /* Two orders: the working one (expected yield) and the seeded sample the D6
      * agreement number is measured on. The shared `GroupFilterState.sort` also
      * carries the groups queue's three, which this view does not serve — the
@@ -166,6 +171,7 @@ export const EMPTY_RESIDUAL_FILTERS: ResidualFilterState = {
   zone: '',
   source_a: '',
   source_b: '',
+  shared_code: '',
   /* PO SKUPINÁCH BY DEFAULT: one card rules many pairs, and the pairs of one
    * generation are not independent questions. The pair view stays one click
    * away, unchanged. */
@@ -470,6 +476,22 @@ export default function AutodedupResidual() {
             options={PORTALS}
           />
         ))}
+        {!grouped && (
+          <label className="block">
+            <span className={FILTER_LABEL}>Sdílený kód zakázky</span>
+            <span className="mt-0.5 flex items-center gap-1.5 py-1 text-[0.75rem] text-[var(--color-ink-2)]">
+              <input
+                type="checkbox"
+                checked={filters.shared_code === '1'}
+                onChange={(e) =>
+                  setFilters({ ...filters, shared_code: e.target.checked ? '1' : '' })
+                }
+                className="accent-[var(--color-copper-2)]"
+              />
+              jen stejný kód u obou inzerátů
+            </span>
+          </label>
+        )}
         <FilterSelect
           label="Řazení"
           value={filters.sort}
