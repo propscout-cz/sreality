@@ -68,7 +68,9 @@ from autodedup.features import (
 from autodedup.features import _attr_map as _feature_attr_map
 from autodedup.fingerprint import Fingerprint, build_fingerprint
 from autodedup.d43 import relation_for
-from autodedup.guards import UNIT_DESIGNATOR_VETO, GuardSide, pair_veto
+from autodedup.guards import (
+    UNIT_DESIGNATOR_VETO, GuardSide, gallery_window_quota, in_gallery_window, pair_veto,
+)
 from autodedup.hazard_context import BlockCell, ContextIndex, ContextStamp, rail_plan
 from autodedup.hazard_context import address_block_key, category_group
 from autodedup.model import LogisticModel
@@ -671,7 +673,8 @@ def retrieve(
 
     Fill order is `PROBE_PRIORITY` then the listing's own `probe_keys` order then ascending
     listing id, exactly as the cohort pass fills it, so the cap can only ever discard the
-    weakest evidence class (E17). `tests/autodedup/test_incremental.py` asserts this against
+    weakest evidence class (E17); a C4b window candidate is seated after every base candidate,
+    in a slot none took (C4c). `tests/autodedup/test_incremental.py` asserts this against
     `BlockIndex.candidates` over the whole cohort rather than trusting the restatement."""
     return _fill(fp.listing_id, fp, keyer.probe_keys(fp), keyer, store, guards, settings,
                  vetoed) or {}
@@ -689,7 +692,8 @@ def retrieve_posted(
     """`retrieve` for a listing whose facts the pass does not read (E960): its keys as the store
     posts them and its guard columns as its row keeps them. None when its `phash` bands came
     from two anchors or more and the fan-out cap refused, inside that probe, a candidate the
-    rule floor would have let in — the one case the lost order of its bands can reach — and the
+    rule floor would have let in — the one case the lost order of its bands can reach — or the
+    C4b window's seats (C4c) cut through the candidates first met inside that probe, and the
     caller then reads its facts and `retrieve`s."""
     keys = keyer.probe_keys_of(posted)
     bands = [band_of(token) for probe, token in keys if probe == "phash"]
@@ -721,11 +725,19 @@ def _fill(
     # in `PROBE_PRIORITY` order below, so batching the fetch cannot move the fill order.
     postings = store.lookup_many(wanted)
     out: dict[int, set[str]] = {}
+    # C4c: the candidates only the C4b window admits, in fill order, seated after the fill.
+    window: dict[int, set[str]] = {}
     cap = settings.max_candidates_per_listing
+    quota = gallery_window_quota(cap)
+    # The loose probe's window candidates: the count before it, after it, and whether the quota
+    # turned one away inside it.
+    loose_span: tuple[int, int, bool] | None = None
     for probe in probes:
         # A probe whose tokens are out of order fills the same set in any order unless the cap
-        # turns away a candidate the floor would admit while it is read.
+        # turns away a base candidate the floor would admit while it is read, or the window's
+        # seats end among the candidates it met first.
         ordered = probe != loose or len(out) >= cap
+        start, overflow = len(window), False
         for token in by_probe[probe]:
             if keyer.is_exploded(probe, token):
                 continue
@@ -733,6 +745,8 @@ def _fill(
                 if other == listing_id:
                     continue
                 hit = out.get(other)
+                if hit is None:
+                    hit = window.get(other)
                 if hit is not None:
                     hit.add(probe)
                     continue
@@ -740,7 +754,8 @@ def _fill(
                 if len(out) >= cap:
                     if not ordered and pair not in vetoed:
                         row = guards.get(other)
-                        if row is not None and pair_veto(side, row, settings) is None:
+                        if (row is not None and pair_veto(side, row, settings) is None
+                                and not in_gallery_window(side, row, settings)):
                             return None
                     continue
                 if pair in vetoed:
@@ -752,7 +767,21 @@ def _fill(
                 if veto is not None:
                     vetoed[pair] = veto
                     continue
-                out[other] = {probe}
+                if not in_gallery_window(side, row, settings):
+                    out[other] = {probe}
+                elif len(window) < quota:
+                    window[other] = {probe}
+                else:
+                    overflow = True
+        if not ordered:
+            loose_span = (start, len(window), overflow)
+    seats = min(cap - len(out), quota)
+    if loose_span is not None:
+        start, end, overflow = loose_span
+        if start < seats and (seats < end or overflow):
+            return None
+    for other in list(window)[:seats]:
+        out[other] = window[other]
     return out
 
 

@@ -50,6 +50,11 @@ GALLERY_EXEMPT_MIN_AREA_M2: float = 20.0
 GALLERY_EXEMPT_MIN_PHOTOS: int = 3
 GALLERY_EXEMPT_MIN_COVERAGE: float = 0.80
 GALLERY_EXEMPT_PRICE_TOL: float = 0.02
+# C4c (2026-11-01): the share of the fan-out cap a candidate only the C4b window admits may take
+# (`gallery_window_quota`). It is seated after every base candidate and only in a slot none
+# took, so it can never displace one: on the 11-01 replay of eight towns the window, filling
+# slots in posting order, pushed 147 merge-zone pairs out of repost series (146 read SAME).
+GALLERY_WINDOW_CAP_SHARE: float = 0.5
 
 
 def area_rel_diff(a: float | None, b: float | None) -> float | None:
@@ -84,6 +89,23 @@ def area_gallery_bar(a: GuardSide, b: GuardSide, cfg: Settings) -> float | None:
             or min(a.area_m2, b.area_m2) < GALLERY_EXEMPT_MIN_AREA_M2):
         return None
     return bar
+
+
+def in_gallery_window(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
+    """C4c: whether only the C4b window lets the pair's area gap through the veto: past
+    `area_reject_pct`, not basis-exempt, within `area_gallery_bar`. Read of a pair
+    `pair_veto` passed, to seat it after the base candidates."""
+    bar = area_gallery_bar(a, b, cfg)
+    if bar is None:
+        return False
+    gap = area_rel_diff(a.area_m2, b.area_m2)
+    return (gap is not None and cfg.area_reject_pct < gap <= bar
+            and not area_basis_exempt(a, b, gap, cfg))
+
+
+def gallery_window_quota(cap: int) -> int:
+    """C4c: the most C4b window candidates one listing's retrieval seats."""
+    return int(cap * GALLERY_WINDOW_CAP_SHARE)
 
 
 def gallery_coverage(a: set[int], b: set[int], tight: int) -> float:
