@@ -241,7 +241,7 @@ name: "AUTODEDUP: engine lane"
 #             at hundreds of thousands of adverts) each in a short transaction of its own - and
 #             writes last, in one transaction. `recut=true` re-cuts the same scope that way (the
 #             lane never re-cuts above 50,000 adverts). A narrower or reshaped scope, the same
-#             scope without `recut=true` and another scorer are refused: those are rebuilds. The seed takes the lane's lease (`autodedup.rt_lease`) and refuses,
+#             scope without `recut=true` and another scorer are refused: those are rebuilds. The seed takes the lane's lease (`rt_lease`) and refuses,
 #             writing nothing, while a pass holds it: set
 #             app_settings.realtime_autodedup_interval_seconds to 0 first. A first or fresh
 #             seed writes rt_seed_version:rt (the lane reconciles - through a build too, block
@@ -426,7 +426,7 @@ name: "AUTODEDUP: engine lane"
 # separate args, not one JSON `scope=`, because this workflow's charset check refuses braces
 # and quotes; unapply accepts dry_run and at least one of generation (with cluster_key), run
 # and since / until (ISO times, e.g. `since=2026-09-25T08:00Z`). rt_seed, apply and unapply
-# also accept release_lease=<holder>: a refusal over autodedup.rt_lease names its holder, and
+# also accept release_lease=<holder>: a refusal over rt_lease names its holder, and
 # when that writer is dead (its job ended, its worker restarted) this ends ITS lease first -
 # only that holder's; any other is refused.
 #

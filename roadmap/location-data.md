@@ -1250,9 +1250,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
   `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. With W3 (#2223) `what_if.restate` is
   deleted (a re-mine replaces each mined key, a tombstone removes it, under the one read) and
-  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed before W5's shadow: an id-grain export block for movers that sit in no
-  block today (Praha rows gaining a quarter).
-- **Owed — one copy the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
+  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. Owed
+  before W5's shadow: an id-grain export block for movers that sit in no block today (Praha rows
+  gaining a quarter; W5 builds it). Only the blocks a ruling is inside are now exported (a ruling-free
+  block cannot fail; `--all-blocks` opts out): W4's 515 blocks needed 14 groups, 116 kept need 6.
+- **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL

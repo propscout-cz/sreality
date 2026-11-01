@@ -28,8 +28,8 @@ import type { PipelineShare, PipelineShareMode } from './types';
 export const ACTIVE_BOARD_KEY = 'sreality.pipeline.activeBoard';
 export const EDIT_AS_OWNER_KEY = 'sreality.pipeline.editAsOwner';
 
-/* The first segment of every acting key; never the first segment of an own key. */
-const ACTING_SEGMENT = 'acting';
+/** The first segment of every acting key; never the first segment of an own key. */
+export const ACTING_SEGMENT = 'acting';
 
 export type ActiveBoard = PipelineShare | null;
 

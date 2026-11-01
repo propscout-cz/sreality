@@ -535,19 +535,21 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
 def test_every_worker_alarm_due_at_once_fits_the_pass_but_the_last_and_gauges_defer() -> None:
     """Wave 6 (D2): the fourteen worker budgets sum 685 s, past what one pass may take inside the
     watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker pins the
-    constant). Every ALARM due at once owes 7 x 45 s + parsing's 180 s + notifications' 5 s +
-    curation_sync's 5 s = 505 s (curation sync § 3.9, migration 696): alarms run first, in
-    registry order, so all but the last fit even when each spends its whole budget, and the last
-    (parsing) is deferred one 60 s tick, the tested capped-pass path; a gauge that no longer fits
-    is deferred likewise. GitHub's two checks owe 165 s."""
+    constant). Every ALARM due at once owes vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9,
+    migration 696): alarms run first, in registry order, so all but the last fit even when each
+    spends its whole budget, and the last (parsing) is deferred one 60 s tick, the tested
+    capped-pass path; a gauge that no longer fits is deferred likewise. GitHub's two checks owe
+    165 s. The literal 505 s is what pipeline-verification.md and health-dashboard.md state."""
     from scripts import verify_pipeline as vp
 
     worker = [c for c in CHECKS if c.host == "realtime-worker"]
     alarms = [c for c in worker if c.cls == "alarm"]
-    assert (vp.lane_budget_for(alarms), vp.lane_budget_for(worker)) == (505.0, 685.0)
+    assert vp.WORKER_ALARMS_DUE_AT_ONCE_S == vp.lane_budget_for(alarms)
+    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (505.0, 685.0), (
+        "the docs state 505 s: restate them")
     assert alarms[-1].key == "parsing"
-    assert vp.lane_budget_for(alarms[:-1]) <= 500.0 < vp.lane_budget_for(alarms)
-    assert vp.lane_budget_for(alarms) - 500.0 <= alarms[-1].budget_s, "only the last alarm can defer"
+    assert vp.lane_budget_for(alarms[:-1]) <= 500.0 < vp.WORKER_ALARMS_DUE_AT_ONCE_S
+    assert vp.WORKER_ALARMS_DUE_AT_ONCE_S - 500.0 <= alarms[-1].budget_s, "only the last alarm can defer"
     assert vp.lane_budget_for([c for c in CHECKS if c.host == "github-actions"]) == 165.0
 
 

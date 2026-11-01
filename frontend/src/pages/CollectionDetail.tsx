@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -18,9 +18,10 @@ import {
 } from '@/lib/api';
 import { settleCollectionWrite } from '@/lib/collectionCache';
 import { deletedTables, revalidateTables } from '@/lib/curationSync';
-import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
+import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
-import { useCollectionCards } from '@/lib/collectionCards';
+import { collectionListKeys, useCollectionCards } from '@/lib/collectionCards';
+import { useHeld, useListHold, type ListHand } from '@/lib/useListHold';
 import {
   DEFAULT_SORT,
   curationKeys,
@@ -348,39 +349,9 @@ function HeaderEditor({
   /* Saved or cancelled: the header flips back. */
   onDone: () => void;
 }) {
-  const qc = useQueryClient();
-  /* Both fields follow the collection while untouched, and only what the user
-   * changed is saved: a rename made elsewhere is never written back (D3,
-   * lib/useServerDraft). */
-  const name = useServerDraft(collection.name, trimDraft);
-  const description = useServerDraft(collection.description ?? '', trimDraft);
-  const [error, setError] = useState<string | null>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
-  const descriptionRef = useRef<HTMLInputElement>(null);
-
-  /* The default collection's name is locked, so its first field is the description. */
-  useEffect(() => {
-    (collection.is_system ? descriptionRef : nameRef).current?.focus();
-  }, [collection.is_system]);
-
-  const nextName = name.edited();
-  const nextDescription = description.edited();
-  const dirty = nextName != null || nextDescription != null;
-
-  const save = useMutation({
-    mutationFn: () =>
-      updateCollection(collection.id, {
-        ...(nextName != null && { name: nextName }),
-        /* A cleared description goes as '': PATCH /collections reads null as "not
-         * given" (coalesce), so null alone is refused and never clears it. */
-        ...(nextDescription != null && { description: nextDescription }),
-      }),
-    onSuccess: () => {
-      setError(null);
-      void revalidateTables(qc, ['collections']);
-      onDone();
-    },
-    onError: (err: Error) => setError(err.message || 'Failed to save'),
+  const { name, description, nameRef, descriptionRef, save, canSave, error } = useCollectionEditor(collection, {
+    onDone,
+    failed: 'Failed to save',
   });
 
   return (
@@ -397,10 +368,7 @@ function HeaderEditor({
         <input
           ref={nameRef}
           type="text"
-          value={name.value}
-          onChange={(e) => name.onChange(e.target.value)}
-          onFocus={name.onFocus}
-          onBlur={name.onBlur}
+          {...name.bind}
           maxLength={200}
           placeholder="Name"
           disabled={collection.is_system}
@@ -412,10 +380,7 @@ function HeaderEditor({
         <input
           ref={descriptionRef}
           type="text"
-          value={description.value}
-          onChange={(e) => description.onChange(e.target.value)}
-          onFocus={description.onFocus}
-          onBlur={description.onBlur}
+          {...description.bind}
           placeholder="Description (optional)"
           className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
         />
@@ -423,7 +388,7 @@ function HeaderEditor({
       <div className="flex items-center gap-3">
         <button
           type="button"
-          disabled={!dirty || save.isPending || name.value.trim().length === 0}
+          disabled={!canSave}
           onClick={() => save.mutate()}
           className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
@@ -578,16 +543,20 @@ function Members({
       { replace: true },
     );
 
+  /* A change made elsewhere moves the cards and the table at once, but not
+   * under the hand (ruling Q3(c)); the header's count follows regardless. */
+  const hand = useListHold(collectionListKeys(collection.id));
+
   /* An empty collection has nothing to draw as cards: its sentence alone. */
   if (properties.length === 0) {
     return <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />;
   }
   return (
-    <div>
+    <div {...hand}>
       <Tabs tabs={MEMBER_TABS} active={tab} onChange={setTab} ariaLabel="Zobrazení nemovitostí" idPrefix={ids} />
       <div role="tabpanel" id={`${ids}panel-${tab}`} aria-labelledby={`${ids}tab-${tab}`} className="mt-5">
         {tab === 'table' ? (
-          <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />
+          <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} hand={hand} />
         ) : (
           <CardsTab collectionId={collection.id} members={properties} onOpenTable={() => setTab('table')} />
         )}
@@ -724,12 +693,16 @@ function PropertiesBlock({
   collectionId,
   properties,
   editable,
+  hand,
 }: {
   collectionId: number;
   properties: CollectionPropertyRow[];
   /* The owner's view: the per-row Remove column and the invitation to add. */
   editable: boolean;
+  /* The members' hand: the rows wait under it (its count does not). */
+  hand?: ListHand;
 }) {
+  const rows = useHeld(hand, properties);
   return (
     <Panel title="Properties" count={properties.length}>
       {properties.length === 0 ? (
@@ -757,9 +730,10 @@ function PropertiesBlock({
                 </tr>
               </thead>
               <tbody>
-                {properties.map((row) => (
+                {rows.map((row) => (
                   <PropertyRowView
-                    key={row.property_id}
+                    /* One membership: a re-add elsewhere is a new row, never the one I removed. */
+                    key={`${row.property_id}:${row.added_at}`}
                     row={row}
                     collectionId={collectionId}
                     editable={editable}
@@ -792,6 +766,8 @@ function PropertyRowView({
     onSuccess: () => settleCollectionWrite(qc, row.property_id, collectionId, false),
   });
 
+  /* My own removal leaves at once, a hand on the table or not (Decision 7b). */
+  if (remove.isSuccess) return null;
   return (
     <tr className="border-b border-[var(--color-rule-soft)] last:border-b-0 hover:bg-[var(--color-copper-soft)]/40 transition-colors">
       <td className="px-3 py-2.5 align-middle font-mono tabular-nums text-[var(--color-ink-3)]">

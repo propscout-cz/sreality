@@ -1873,6 +1873,12 @@ export const pipelineKeys = {
   members: ['pipeline', 'members'] as const,
 };
 
+/* What a gesture over the board's cards holds while it lasts (lib/revalidate
+ * holdReads): the cards and the per-card marks. The kanban drag adds the stages,
+ * its droppable columns (pages/Pipeline); the phone pager does not, so it follows
+ * a stage archived elsewhere (components/phone/PhonePipeline). */
+export const BOARD_GESTURE_HELD = [pipelineKeys.board, pipelineKeys.members] as const;
+
 /* Both of the caller's pipeline-share lists (GET /pipeline/shares). Never
  * acting-prefixed: sharing is always the caller's own (lib/acting). */
 export const pipelineShareKeys = {

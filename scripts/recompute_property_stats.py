@@ -76,7 +76,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from scraper import db
+from scraper import db, job_lease
 from toolkit.browse_read_model import sync_browse_list
 from toolkit.filter_registry import PORTAL_OPTIONS
 from toolkit.publication import CAP_SQL
@@ -476,7 +476,7 @@ def _bounded(conn: Any) -> Iterator[None]:
         yield
 
 
-def _recompute_batch(conn: Any, lo: int, hi: int) -> int:
+def _recompute_batch(conn: Any, lo: int, hi: int, hold: job_lease.Hold | None = None) -> int:
     """One sweep batch, [lo, hi), in its own `_bounded` transaction, so each batch still commits
     independently (a killed sweep keeps every finished batch): the rollup, then the broker book
     under `_BOOK_STATEMENT_TIMEOUT`; returns the properties the rollup wrote."""
@@ -486,6 +486,7 @@ def _recompute_batch(conn: Any, lo: int, hi: int) -> int:
         recomputed = cur.rowcount or 0
         cur.execute(f"SET LOCAL statement_timeout = '{_BOOK_STATEMENT_TIMEOUT}'")
         cur.execute(_BROKER_BOOK_BATCH_SQL, params)
+        _fence(conn, hold)
         return recomputed
 
 
@@ -503,7 +504,7 @@ def _batch_ranges(max_id: int, batch_size: int, start: int = 1) -> Iterator[tupl
         yield lo, lo + batch_size
 
 
-def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH) -> int:
+def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.Hold | None = None) -> int:
     """Give up to `limit` property_id-NULL listings their own singleton, brought current at birth
     by `properties_changed`. No cross-listing matching happens here, ever (CLAUDE.md rule 15)."""
     # Birth, link and after-step in ONE transaction: a replay after a failure (db.
@@ -518,6 +519,7 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH) -> int:
         if born:
             with _bounded(conn):
                 properties_changed(conn, born)
+            _fence(conn, hold)
     return len(born)
 
 
@@ -533,7 +535,7 @@ _DRAIN_LOCK_TIMEOUT = "5s"
 
 def _drain_dirty(
     conn: Any, batch_size: int, cutoff: Any,
-    renew: Any = None,
+    hold: job_lease.Hold | None = None,
 ) -> int:
     """Bring every property queued at/before `cutoff` current, one claimed slice at a time.
 
@@ -543,15 +545,15 @@ def _drain_dirty(
     row re-dirtied mid-run survives. Always terminates -- only rows with marked_at <= cutoff are
     claimable, and only a transaction begun before the cutoff can stamp one (`_CLAIM_DIRTY_SQL`).
 
-    `renew` (a zero-arg callable) is invoked once per claimed slice so a long
-    drain — e.g. the backlog after a maintenance freeze, or the nine-portal
-    enqueue volume post-#971 — heartbeats its 15-min lease instead of silently
-    outliving it.
+    `hold` is renewed once per claimed slice so a long drain — e.g. the backlog
+    after a maintenance freeze, or the nine-portal enqueue volume post-#971 —
+    heartbeats its 15-min lease instead of silently outliving it, and fences
+    each slice's commit.
     """
     total = 0
     while True:
-        if renew is not None:
-            renew()
+        if hold is not None:
+            _renew_lease(conn, hold)
         with conn.cursor() as cur:
             cur.execute(_CLAIM_DIRTY_SQL, {"cutoff": cutoff, "limit": batch_size})
             claimed = cur.fetchall()
@@ -562,6 +564,7 @@ def _drain_dirty(
             with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
             properties_changed(conn, ids)
+            _fence(conn, hold)
         with conn.cursor() as cur:
             cur.execute(_DELETE_DIRTY_SQL, {"ids": ids, "marks": [r[1] for r in claimed]})
         total += len(ids)
@@ -620,7 +623,7 @@ _SETTLE_SQL = f"""
 """
 
 
-def _settle_fresh(conn: Any, *, renew: Callable[[], Any]) -> int:
+def _settle_fresh(conn: Any, hold: job_lease.Hold | None = None) -> int:
     """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
     rows in; returns how many it stamped. The stamp commits ALONE: it row-locks what it stamps, and
     the engine's reconcile merges under a 5 s lock_timeout, so a merge waits behind one statement at
@@ -632,13 +635,15 @@ def _settle_fresh(conn: Any, *, renew: Callable[[], Any]) -> int:
 
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
 
-    renew()
+    if hold is not None:
+        _renew_lease(conn, hold)
     try:
         with _bounded(conn):
             with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
                 cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON})
                 ids = [int(r[0]) for r in cur.fetchall()]
+            _fence(conn, hold)
     except psycopg.Error as exc:
         LOG.warning("MAINTENANCE settle failed, the next pass retries: %s", exc)
         return 0
@@ -679,32 +684,37 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
     return int(next_lo), int(runs or 0), cycle_started_at
 
 
-# A single-row LEASE serializes EVERY property-maintenance writer: the realtime
-# worker's maintenance lane, the daily full sweep, AND a hand --incremental run
-# (property_maintenance_lease, migration 279). Claimed by ONE atomic
-# UPDATE ... RETURNING, so it is sound over the transaction-mode pooler —
-# unlike a session advisory lock, whose lock/unlock statements can land on
-# DIFFERENT pooled backends (the #716 defect: the unlock silently no-ops and
-# the lock strands, skipping every future pass). Expiry self-heals a crashed
-# holder. Incremental callers TRY the lease and skip when held (the next tick
-# is seconds away); the daily full sweep RETRIES (bounded) until it holds it —
-# the backstop must not be skipped.
+# ONE LEASE serializes EVERY property-maintenance writer: the realtime worker's
+# maintenance lane, the daily full sweep, AND a hand --incremental run. It is the
+# `property_maintenance` row of scheduled_jobs, held through scraper/job_lease.py,
+# its holder prefixed with the mode (`incremental:` / `full:`). Incremental callers
+# TRY the lease and skip when held (the next tick is seconds away); the daily full
+# sweep WAITS (bounded) until it holds it — the backstop must not be skipped.
 #
-# ONE short TTL, HEARTBEAT-renewed between statements. The full sweep used to
+# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to
 # take a single 3-hour grant sized to its whole runtime and release it in a
 # `finally` — but a GH Actions timeout kill escalates SIGINT→SIGTERM→SIGKILL
 # faster than the release round-trip, so every timeout stranded the lease and
 # froze ALL property maintenance (worker lane + both crons) for hours
 # (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze). Cleanup-
 # on-death cannot be relied on; cheap-death can: every writer takes the same
-# 15-minute TTL and re-grants it (the `holder = %(holder)s` arm below, the
-# notification matcher's sticky-holder pattern from migration 366) between
-# batches, so a kill at ANY point strands the row for at most 15 minutes.
-# Renewal only runs between transactions on this autocommit connection, so the
-# TTL must comfortably exceed one batch's worst case — a sweep batch is the
-# rollup under the explicit _BATCH_STATEMENT_TIMEOUT (10 min) ceiling plus the
-# broker book under _BOOK_STATEMENT_TIMEOUT (2 min) — 15 min is that margin,
-# not a renewal cadence.
+# 15-minute TTL and renews it between batches, so a kill at ANY point strands the
+# row for at most 15 minutes. A renewal refuses a lapsed lease, so the TTL less
+# job_lease.FENCE_MARGIN_S must comfortably exceed one batch's worst case — a sweep
+# batch is the rollup under the explicit _BATCH_STATEMENT_TIMEOUT (10 min) ceiling
+# plus the broker book under _BOOK_STATEMENT_TIMEOUT (2 min) — 15 min is that
+# margin, not a renewal cadence. Every write transaction ends with job_lease.fence,
+# so none commits under a lease that lapsed mid-batch; the dirty queue's claim and
+# dequeue are single keyed statements a replay repeats.
+MAINTENANCE_LEASE = "property_maintenance"
+_LEASE_TTL_S = 900
+# Both describe the row only, for whichever writer creates it first.
+_LEASE_CADENCE = "30 seconds"
+_LEASE_RUNNER = "railway-realtime-worker"
+# The cutover (#2107): code from before this lease moved takes only the row of migration 279, so this code takes
+# that row FIRST and then the new one, each waiting up to its own bound, and gives them back in reverse, so the two
+# cannot deadlock. `_TRY_LEASE_SQL`,
+# `_RELEASE_LEASE_SQL`, `_LEASE_TTL`, `_try_lease`, `_wait_lease` and `_release_lease*` go in #2267, once gate #2110 passes.
 _LEASE_TTL = "15 minutes"
 _LEASE_RETRY_SECONDS = 10.0
 # A dispatched sweep that cannot get the lease within this budget fails RED
@@ -736,7 +746,7 @@ _MAX_BUDGET_SECONDS = 6000.0
 # proved too tight for the post-#971 batch SQL on deep-history batches: the
 # 2026-08-06 10:09Z run's FIRST batch (ids 1-2001, the oldest sreality
 # listings) was killed at ~3.5 min while later-id batches run in seconds.
-# Together with _BOOK_STATEMENT_TIMEOUT it MUST stay comfortably under _LEASE_TTL
+# Together with _BOOK_STATEMENT_TIMEOUT it MUST stay comfortably under _LEASE_TTL_S
 # (15 min): renewal fires as the first statement of each batch attempt, so ONE
 # batch's worst case (its two statements, `_recompute_batch`) is the longest
 # possible renewal gap. (Per ATTEMPT, deliberately — see
@@ -757,9 +767,8 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
 # _BOOK_STATEMENT_TIMEOUT), which is what the workflow's timeout-minutes is sized
 # for. A range that times out twice is the poisoned range the error log names,
-# not a blip. 24 min also exceeds _LEASE_TTL, which is why the lease renewal runs
-# INSIDE the retried op (main()'s _renew_and_recompute) rather than once per loop
-# iteration.
+# not a blip. 24 min also exceeds _LEASE_TTL_S, which is why the lease renewal runs
+# INSIDE the retried op (main()'s `renewed`) rather than once per loop iteration.
 _BATCH_RESILIENT_ATTEMPTS = 2
 
 _TRY_LEASE_SQL = """
@@ -778,9 +787,7 @@ _RELEASE_LEASE_SQL = """
 
 
 def _new_holder(kind: str) -> str:
-    import uuid
-
-    return f"{kind}:{uuid.uuid4()}"
+    return f"{kind}:{job_lease.holder_id()}"
 
 
 def _try_lease(conn: Any, holder: str, lease: str) -> bool:
@@ -789,23 +796,19 @@ def _try_lease(conn: Any, holder: str, lease: str) -> bool:
         return cur.fetchone() is not None
 
 
-class _LeaseLost(RuntimeError):
-    """Another writer holds the maintenance lease now: nothing may continue under it."""
-
-
-def _renew_lease(conn: Any, holder: str) -> None:
-    """Heartbeat: re-grant our own lease, pushing expiry out one TTL.
-
-    Raises if the re-grant misses — that means the lease expired mid-work and
-    ANOTHER writer took it, so continuing would run two recomputes concurrently.
-    That is idempotent-safe but wasteful, and it means this process stalled for
-    >15 min on a single statement, which is itself worth a red run.
-    """
-    if not _try_lease(conn, holder, _LEASE_TTL):
-        raise _LeaseLost(
-            "maintenance lease lost mid-work (expired and re-claimed by another "
-            "writer) — aborting rather than recomputing concurrently"
+def _renew_lease(conn: Any, hold: job_lease.Hold) -> None:
+    """Heartbeat between transactions; raises if it misses: the lease lapsed mid-work, this process stalled >15 min."""
+    if not (job_lease.renew(conn, hold) and _try_lease(conn, hold.holder, _LEASE_TTL)):
+        raise job_lease.LeaseLost(
+            "maintenance lease lost mid-work (it lapsed or another writer took "
+            "it) — aborting rather than recomputing concurrently"
         )
+
+
+def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
+    """The last statement of a transaction under the lease; a caller with no lease (a test) has nothing to fence."""
+    if hold is not None:
+        job_lease.fence(conn, hold)
 
 
 def _wait_lease(
@@ -873,6 +876,27 @@ def _release_lease(conn: Any, holder: str,
                 "the %s TTL expires", holder, _LEASE_TTL, exc_info=exc)
 
 
+@contextmanager
+def _maintenance_lease(
+    conn: Any, kind: str, *, wait_s: float = 0.0,
+    reconnect: Callable[[], Any] | None = None,
+) -> Iterator[job_lease.Hold | None]:
+    """Yields this writer's hold on the maintenance lease, or None when another
+    writer holds it (past `wait_s`) or it is paused. The cutover row comes first and goes last."""
+    holder = _new_holder(kind)
+    if not wait_s and not _try_lease(conn, holder, _LEASE_TTL):
+        yield None
+        return
+    try:
+        if wait_s:
+            _wait_lease(conn, holder, _LEASE_TTL, wait_s)
+        with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
+                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s) as hold:
+            yield hold
+    finally:
+        _release_lease(conn, holder, reconnect)
+
+
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
@@ -886,24 +910,17 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     runs seconds; the 15-minute lease is a wide margin, and its expiry
     self-heals a crashed holder.
     """
-    holder = _new_holder("incremental")
-    if not _try_lease(conn, holder, _LEASE_TTL):
-        return {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
-
-    def renew() -> None:
-        _renew_lease(conn, holder)
-
-    try:
+    with _maintenance_lease(conn, "incremental") as hold:
+        if hold is None:
+            return {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]
-        attached = _attach_stragglers(conn)
-        recomputed = _drain_dirty(conn, batch_size, cutoff, renew=renew)
-        settled = _settle_fresh(conn, renew=renew)
+        attached = _attach_stragglers(conn, hold=hold)
+        recomputed = _drain_dirty(conn, batch_size, cutoff, hold)
+        settled = _settle_fresh(conn, hold)
         return {"skipped": False, "attached": attached, "recomputed": recomputed,
                 "settled": settled}
-    finally:
-        _release_lease(conn, holder)
 
 
 def main() -> int:
@@ -1028,24 +1045,41 @@ def main() -> int:
             )
             return 0
 
-        # The full sweep RETRIES for the lease (it is the daily backstop and
-        # must not be skipped) — but boundedly, failing RED rather than burning
-        # the whole job against a stuck holder. Acquisition happens INSIDE the
-        # try: a kill between grant and try-entry used to strand a fresh lease
-        # with zero work done; the holder-guarded release no-ops when the wait
-        # never succeeded, so this ordering is safe.
-        holder = _new_holder("full")
+        # The full sweep WAITS for the lease (it is the daily backstop and must
+        # not be skipped) — but boundedly, failing RED rather than burning the
+        # whole job against a stuck holder.
         incomplete_at: int | None = None
 
-        try:
-            # Lease ACQUISITION stays unwrapped: its CAS/backoff semantics are its
-            # own, and nothing has been done yet when it fails.
-            _wait_lease(conn, holder, _LEASE_TTL)
+        with _maintenance_lease(conn, "full", wait_s=_MAX_LEASE_WAIT_SECONDS,
+                                reconnect=reconnect) as hold:
+            if hold is None:
+                raise RuntimeError(
+                    f"maintenance lease still held or paused after {_MAX_LEASE_WAIT_SECONDS:.0f}s "
+                    "of waiting — failing RED instead of burning the job budget; every "
+                    "holder renews a 15-min TTL, so this indicates a real fault"
+                )
+
+            # Renewal is the FIRST statement of a retried op, not a separate step before it.
+            # _BATCH_RESILIENT_ATTEMPTS lets one batch occupy two attempts (24 min with the book's
+            # ceiling), which would blow past the 15-min TTL and break this module's invariant that
+            # one attempt's worst case is the longest possible renewal gap. Re-asserting per attempt
+            # also works on the FRESH connection after a pooler drop; a genuinely lost lease raises
+            # LeaseLost, which run_resilient re-raises immediately (not an OperationalError -> not
+            # transient).
+            def renewed(op: Callable[[Any], Any]) -> Callable[[Any], Any]:
+                def run(c: Any) -> Any:
+                    _renew_lease(c, hold)
+                    return op(c)
+                return run
+
+            def attach(c: Any) -> int:
+                return _attach_stragglers(c, hold=hold)
+
             # attempts=2, like sweep.batch: a doomed attach reds in ~4 min instead of ~8.
             # Bounded batches until one comes back short: each is its own transaction.
             attached = 0
             while True:
-                batch = step(_attach_stragglers, "sweep.attach", attempts=2)
+                batch = step(renewed(attach), "sweep.attach", attempts=2)
                 attached += batch
                 if batch < STRAGGLER_BATCH:
                     break
@@ -1082,11 +1116,6 @@ def main() -> int:
             total_batches = len(ranges)
             batches = recomputed = 0
 
-            # Renews first, like _renew_and_recompute below, so a birth never widens the renewal gap.
-            def _renew_and_attach(c: Any) -> int:
-                _renew_lease(c, holder)
-                return _attach_stragglers(c)
-
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
@@ -1095,23 +1124,11 @@ def main() -> int:
                 if batch_started >= deadline:
                     incomplete_at = lo
                     break
-                # Renewal is the FIRST statement of the retried op, not a
-                # separate step before it. _BATCH_RESILIENT_ATTEMPTS lets one
-                # batch occupy two attempts (24 min with the book's ceiling),
-                # which would blow past the 15-min _LEASE_TTL and break this
-                # module's invariant that one attempt's worst case is the
-                # longest possible renewal gap — another writer would take the
-                # lease mid-batch and the next renewal would red the sweep.
-                # Re-asserting per attempt also re-takes the lease on the FRESH
-                # connection after a pooler drop. Idempotent (sticky-holder CAS);
-                # a genuinely lost lease raises RuntimeError, which run_resilient
-                # re-raises immediately (not an OperationalError -> not transient).
-                def _renew_and_recompute(c: Any, lo: int = lo, hi: int = hi) -> int:
-                    _renew_lease(c, holder)
-                    return _recompute_batch(c, lo, hi)
+                def recompute(c: Any, lo: int = lo, hi: int = hi) -> int:
+                    return _recompute_batch(c, lo, hi, hold)
 
                 try:
-                    recomputed += step(_renew_and_recompute, "sweep.batch",
+                    recomputed += step(renewed(recompute), "sweep.batch",
                                        attempts=_BATCH_RESILIENT_ATTEMPTS)
                 except Exception:
                     # Name the poisoned range before dying — the 10:09Z run's
@@ -1135,8 +1152,8 @@ def main() -> int:
                 # A failed birth costs only latency (the worker's lane births once the lease is
                 # free), so it never stops the backstop sweep; a lost lease still does.
                 try:
-                    attached += step(_renew_and_attach, "sweep.attach", attempts=2)
-                except _LeaseLost:
+                    attached += step(renewed(attach), "sweep.attach", attempts=2)
+                except job_lease.LeaseLost:
                     raise
                 except Exception as exc:  # noqa: BLE001 - see above
                     LOG.warning("RECOMPUTE sweep.attach failed after batch=%d-%d: %s", lo, hi, exc)
@@ -1144,7 +1161,13 @@ def main() -> int:
             # The finalize block is wrapped too: a drop here would throw away an
             # otherwise-complete sweep's completion stamp and red the health check.
             if incomplete_at is None:
-                reconciled = step(_reconcile_childless, "sweep.reconcile")
+                def reconcile(c: Any) -> int:
+                    with c.transaction():
+                        childless = _reconcile_childless(c)
+                        job_lease.fence(c, hold)
+                    return childless
+
+                reconciled = step(renewed(reconcile), "sweep.reconcile")
                 if reconciled:
                     LOG.info(
                         "RECOMPUTE reconciled childless=%d (reset to no ads)",
@@ -1166,8 +1189,9 @@ def main() -> int:
                         db.stamp_derived_artifact(conn, "property_sweep", rows=recomputed,
                                                   duration_ms=duration_ms)
                         cur.execute(_DELETE_SWEEP_CURSOR_SQL)
+                        job_lease.fence(conn, hold)
 
-                step(_finalize, "sweep.finalize")
+                step(renewed(_finalize), "sweep.finalize")
             else:
                 # Only [start_lo, incomplete_at) was recomputed: clear its dirt only, save
                 # where the next run resumes, and leave _reconcile_childless to the run
@@ -1179,17 +1203,12 @@ def main() -> int:
                         cur.execute(_SAVE_SWEEP_CURSOR_SQL, {
                             "next_lo": incomplete_at,
                             "cycle_started_at": cycle_started_at, "runs": runs + 1})
+                        job_lease.fence(c, hold)
 
                 # A fresh run stopped before batch 1 swept nothing to clear, and a cursor at
                 # id 1 is never resumed (_resume_point needs 1 < next_lo): save nothing.
                 if incomplete_at > 1:
-                    step(_stop, "sweep.stop")
-        finally:
-            # `nonlocal conn` keeps this pointing at the last SUCCESSFULLY returned
-            # connection, but run_resilient closes both the original and its
-            # replacement when it exhausts its budget on a dropped socket — so the
-            # release still needs a way to open one of its own.
-            _release_lease(conn, holder, reconnect)
+                    step(renewed(_stop), "sweep.stop")
 
     elapsed = time.monotonic() - started_at
     if incomplete_at == 1:

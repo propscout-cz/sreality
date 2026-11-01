@@ -81,7 +81,7 @@ const vite = (name: string) => project(name, { resources: [service("sreality", {
   replicas: { [REGION]: 1 },
   deploy: { restartPolicyMaxRetries: 3,   // ON_FAILURE is the default: declared, it stores as null and plans forever
             drainingSeconds: VITE_DRAINING_SECONDS, limitOverride: LIMITS },
-  domains: [{ domain: "app.propscout.cz", port: 8080 }],
+  domains: [{ domain: "app.propscout.cz", port: 8080 }, { domain: "propscout.cz", port: 8080 }],   // the bare domain = the landing page (#2248)
   env: kept("VITE_API_BASE_URL", "VITE_SUPABASE_ANON_KEY", "VITE_SUPABASE_URL"),   // frontend/Dockerfile build args
 })] });
 

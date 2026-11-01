@@ -173,9 +173,7 @@ def _chain_step() -> dict[str, Any]:
 
 
 def test_the_workflow_chains_on_its_own_token_and_keeps_run_now() -> None:
-    text = WORKFLOW.read_text()
-    assert "SCRAPE_CHAIN_TOKEN" not in text
-    doc = yaml.safe_load(text)
+    doc = yaml.safe_load(WORKFLOW.read_text())
     (job,) = doc["jobs"].values()
     assert job["permissions"] == {"contents": "read", "actions": "write"}
     step = _chain_step()

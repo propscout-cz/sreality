@@ -2,7 +2,7 @@
  * the collection, and the card's bookmark opens the shared collection sheet,
  * where unchecking this collection is the removal — the desktop row's own
  * `removePropertyFromCollection` — and the card leaves the roll. */
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -10,9 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
 import { collectionCardFilters } from '@/lib/collectionCards';
-import { revalidateTables } from '@/lib/curationSync';
+import { familyTargets, revalidateTables } from '@/lib/curationSync';
 import * as queries from '@/lib/queries';
 import type { PipelineMembers } from '@/lib/queries';
+import { revalidate } from '@/lib/revalidate';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
 import { cardRow } from '@/test/cardRow';
 
@@ -155,6 +156,55 @@ describe('<CollectionDetail> on the phone', () => {
     await waitFor(() => expect(api.removePropertyFromCollection).toHaveBeenCalledWith(7, 1));
     await waitFor(() => expect(screen.queryByRole('link', { name: /Místo 1/ })).toBeNull());
     expect(screen.getByRole('link', { name: /Místo 2/ })).toBeInTheDocument();
+  });
+
+  /* Ruling Q3(c) with the pointer hold (2026-11-01): a member removed on the
+   * desktop leaves the roll within one clock read, but never under a finger. */
+  it('drops a member removed elsewhere once the finger lifts, never under it', async () => {
+    const { qc } = renderPage();
+    const card = await screen.findByRole('link', { name: /Místo 2/ });
+    fireEvent.touchStart(card, { touches: [{ target: card }] });
+    const reads = vi.mocked(queries.fetchListingsForCards).mock.calls.length;
+    memberMap.delete(2);
+    vi.mocked(api.getCollection).mockResolvedValue({ collection: COLLECTION, properties: [member(1)] });
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [cardRow(1)], nextCursor: null });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'collections', null));
+    });
+    await waitFor(() => expect(queries.fetchPropertyCollectionMemberSet).toHaveBeenCalledTimes(2)); // the marks at once
+    expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(reads);
+    expect(screen.getByRole('link', { name: /Místo 2/ })).toBeInTheDocument();
+
+    fireEvent.touchEnd(card, { touches: [] });
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Místo 2/ })).toBeNull());
+    expect(screen.getByRole('link', { name: /Místo 1/ })).toBeInTheDocument();
+  });
+
+  /* Review repair (W6): the header's count rides the collection's own read, and a
+   * count is never held, so that read lands under the finger; the "Bez karty"
+   * lines drawn from it wait in the view until the finger lifts. */
+  it('holds the "Bez karty" lines under a finger, never the count in the header', async () => {
+    const { qc } = renderPage();
+    const section = await screen.findByRole('region', { name: 'Bez karty' });
+    const line = within(section).getByRole('link', { name: /Bez polohy/ });
+    fireEvent.touchStart(line, { touches: [{ target: line }] });
+    memberMap.delete(3);
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, listing_count: 2 },
+      properties: [member(1), member(2)],
+    });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'collections', null));
+    });
+    const header = screen.getByRole('heading', { name: 'K prohlídce' }).closest('header')!;
+    await waitFor(() => expect(header.textContent?.replace(/\u00a0/g, ' ')).toContain('2 nemovitosti'));
+    expect(screen.getByRole('link', { name: /Bez polohy/ })).toBeInTheDocument();
+
+    fireEvent.touchEnd(line, { touches: [] });
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Bez polohy/ })).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Bez karty' })).toBeNull();
   });
 
   it('keeps a member Browse cannot serve reachable as a plain line', async () => {

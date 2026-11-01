@@ -422,6 +422,27 @@ describe('<CurationBlock> artifact link', () => {
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
+  /* Enter submits even with the button off: an empty field says what it needs, as
+     before the draft rule, and never closes as if nothing were typed. */
+  it('an empty field, untouched or typed then cleared, asks for an address and stays open', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: /Odkaz na artefakt/ }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
+    fireEvent.submit(field.closest('form')!);
+    expect(await screen.findByText(/začínající http/)).toBeInTheDocument();
+    expect(field).toBeInTheDocument();
+
+    await user.type(field, 'https://exa');
+    await user.clear(field);
+    fireEvent.submit(field.closest('form')!);
+    expect(await screen.findByText(/začínající http/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Odkaz na artefakt' })).toBe(field);
+    expect(setPropertyArtifactLink).not.toHaveBeenCalled();
+  });
+
   it('shows a saved link as a clickable anchor, and replaces it', async () => {
     const user = userEvent.setup();
     mockReads();
@@ -878,6 +899,31 @@ describe('<CurationBlock> editors follow the server while untouched', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
     await waitFor(() =>
       expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-14T14:00:00.000Z' }));
+  });
+
+  /* The day and the time are two drafts: a time-only edit never writes back the
+     day the editor opened on. */
+  it('a time-only edit saves the new time on the day moved elsewhere meanwhile', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [VIEWING] } as never);
+    const { qc } = renderWithReads();
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    const time = within(fields).getByLabelText('Čas prohlídky');
+    fireEvent.focus(time);
+    fireEvent.change(time, { target: { value: '16:00' } });
+    fireEvent.blur(time);
+
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [{ ...VIEWING, viewing_at: '2030-05-15T12:30:00+00:00' }],
+    } as never);
+    await changedElsewhere(qc, 'property_notes');
+    await waitFor(() => expect(within(fields).getByLabelText('Den prohlídky')).toHaveValue('2030-05-15'));
+    expect(time).toHaveValue('16:00');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() =>
+      expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-15T14:00:00.000Z' }));
   });
 
   it('a date moved elsewhere is followed, and a body edit sends the body alone', async () => {

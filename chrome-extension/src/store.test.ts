@@ -15,10 +15,12 @@ function harness() {
   const out: Out[] = [];
   const sent: ApiMessage['type'][] = [];
   let switchAccount: (user: string | null) => void = () => {};
+  const told: number[] = [];
   const store = createStore({
     send: (message) => new Promise((resolve) => { sent.push(message.type); out.push({ message, resolve }); }),
     sleep: async () => {},
     onAccountChange: (fn) => { switchAccount = fn; },
+    written: (propertyId) => { told.push(propertyId); },
   });
   const notified: (readonly number[] | null)[] = [];
   store.subscribe((propertyIds) => { notified.push(propertyIds); });
@@ -36,7 +38,8 @@ function harness() {
     reply('lookup_listings', ok(rows));
     await answer;
   };
-  return { store, out, sent, notified, reply, flush, seed, switchAccount: (u: string | null) => switchAccount(u) };
+  const switchTo = (u: string | null): void => switchAccount(u);
+  return { store, out, sent, told, notified, reply, flush, seed, switchAccount: switchTo };
 }
 
 const ok = (data: unknown): ApiResult<unknown> => ({ ok: true, data });
@@ -236,6 +239,37 @@ test('7. one live-deal rule', () => {
   assert.equal(isLiveDeal({ ...IN, stage_id: 3 }, STAGES), false);
   // Until the stage list has loaded, an in-pipeline card counts as live.
   assert.equal(isLiveDeal({ ...IN, stage_id: 3 }, null), true);
+});
+
+test('9. two contexts stay true: a landed write is told, the other side re-reads through an ad it holds', async () => {
+  const h = harness();
+  await h.seed([row(1), row(2, { source: 'idnes', source_id: 'x2' })]);
+  const added = h.store.addToPipeline(1);
+  const failed = h.store.toggleDismiss(2);
+  h.reply('add_pipeline_card', ok({ stage_id: 1 }));
+  h.reply('dismiss_property', fail());
+  await added;
+  await failed;
+  assert.deepEqual(h.told, [1], 'only the write that landed');
+
+  // The other context wrote property 2: one lookup of the ad this side holds, and its row
+  // lands; a lookup sent before the re-read, answering after it, does not undo it.
+  const older = h.store.lookup([]);
+  h.store.reread(2);
+  const asked = h.out.filter((o) => o.message.type === 'lookup_listings').at(-1)?.message;
+  assert.deepEqual(asked, { type: 'lookup_listings', items: [{ source: 'idnes', source_id: 'x2' }] });
+  h.out.splice(h.out.findIndex((o) => o.message === asked), 1)[0]
+    .resolve(ok([row(2, { source: 'idnes', source_id: 'x2', dismissed: true })]));
+  await h.flush();
+  assert.equal(h.store.curation(2)?.dismissed, true);
+  h.reply('lookup_listings', ok([row(2, { source: 'idnes', source_id: 'x2', dismissed: false })]));
+  await older;
+  assert.equal(h.store.curation(2)?.dismissed, true, 'the older answer predates the write');
+  assert.deepEqual(h.told, [1], 'a re-read is no write: nothing is told back (no loop)');
+  h.store.reread(3);  // never looked up here: nothing to show, nothing sent
+  h.switchAccount('user-b');
+  h.store.reread(1);  // the account change forgot every ad
+  assert.equal(h.out.length, 0);
 });
 
 test('a lookup batch notifies once; an unchanged row nobody', async () => {

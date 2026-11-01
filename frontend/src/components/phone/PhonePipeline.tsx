@@ -52,15 +52,15 @@ import {
   cardsWord,
   daysInStage,
   fmtDaysInStage,
-  initialStageIndex,
   readLastStage,
+  stageOnScreen,
   stagePages,
   writeLastStage,
   type StagePage,
 } from '@/lib/phonePipeline';
 import { TAB_BAR_SPACE } from '@/lib/phoneShell';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
-import { pipelineKeys } from '@/lib/queries';
+import { BOARD_GESTURE_HELD } from '@/lib/queries';
 import { useReadHold } from '@/lib/revalidate';
 import { usePipelineViewState } from '@/lib/pipelineState';
 import { ActingAs, actingKey, useActAs, useActingReadOnly, type ActiveBoard } from '@/lib/acting';
@@ -82,6 +82,7 @@ import { StageSheet, TagSheet, type SheetSubject } from './FeedSheets';
 import PhonePipelineSkeleton from './PhonePipelineSkeleton';
 import { usePhoneHeaderAside } from './PhoneShell';
 import StageWash from './StageWash';
+import { usePagerGesture } from './usePagerGesture';
 import { CHIP, CHIP_MD, CHIP_ROW, NO_FOCUS_ZOOM, chipState } from './chips';
 import { ChevronDownIcon, PinIcon } from './phoneIcons';
 import { placeLabelOf } from './placeLabel';
@@ -104,20 +105,6 @@ const stageVars = (stage: PipelineStage): CSSProperties => {
   const accent = stageAccent(stage);
   return { '--st': accent.fg, '--st-soft': accent.soft } as CSSProperties;
 };
-
-/* No scroll event for this long: the pages have come to rest (no `scrollend` in
- * React 18, nor in every browser the phone frame meets). */
-const SCROLL_IDLE_MS = 150;
-
-/* Land the pager on page `index` with no animation, and note where: the scroll
- * event this causes is ours, not a gesture (StagePager `onPagerScroll`). */
-function landPager(el: HTMLDivElement | null, index: number, landed: { current: number | null }): void {
-  if (!el || !el.clientWidth) return;
-  const left = index * el.clientWidth;
-  if (el.scrollLeft === left) return;
-  el.scrollLeft = left;
-  landed.current = el.scrollLeft;
-}
 
 const reducedMotion = (): boolean =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -256,38 +243,39 @@ function StagePager({
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const pagerRef = useRef<HTMLDivElement>(null);
-  /* The stage on screen, by id: the one last looked at on this device (per board,
-   * lib/phonePipeline) until a swipe or a tap settles on another. The stage on
-   * screen is the one remembered — one memory, so nothing falls back to the stage
-   * of mount time. */
+  /* The stage on screen, by id, and the index it was last shown at: the one last
+   * looked at on this device (per board, lib/phonePipeline) until a swipe or a tap
+   * lands on another. The stage on screen is the one remembered — one memory, so
+   * nothing falls back to the stage of mount time. */
   const board = useActAs();
-  const [activeId, setActiveId] = useState<number | null>(() => readLastStage(board));
+  const [onScreen, setOnScreen] = useState<{ id: number | null; index: number }>(() => ({
+    id: readLastStage(board),
+    index: -1,
+  }));
   const [sheetFor, setSheetFor] = useState<{
     kind: 'stage' | 'tags';
     card: PipelineBoardCard;
     subject: SheetSubject;
   } | null>(null);
 
-  /* The page shown last render (-1: none yet). When the stage on screen is gone —
-   * archived elsewhere — the page now in its place, its neighbour, takes over;
-   * before any page was shown (nothing remembered, or a stage since gone), the
-   * entry stage. Whichever it is becomes the stage on screen BY ID before anything
-   * paints, so a stage added or reordered elsewhere later moves its index, never
-   * what is on screen. */
-  const activeRef = useRef(-1);
-  const found = activeId == null ? -1 : pages.findIndex((p) => p.stage.id === activeId);
-  const active =
-    found >= 0
-      ? found
-      : activeRef.current < 0
-        ? initialStageIndex(pages, null)
-        : Math.max(0, Math.min(activeRef.current, pages.length - 1));
+  /* The page to show (lib/phonePipeline `stageOnScreen`: the stage on screen, its
+   * neighbour once it is archived elsewhere, the entry stage before any). Whichever
+   * it is becomes the stage on screen BY ID before anything paints (React's state
+   * adjusted while rendering), so a stage added or reordered elsewhere later moves
+   * its index, never what is on screen. */
+  const active = stageOnScreen(pages, onScreen.id, onScreen.index);
   const shownId = pages[active]?.stage.id ?? null;
-  if (shownId != null && shownId !== activeId) setActiveId(shownId);
-  activeRef.current = active;
+  if (shownId != null && (shownId !== onScreen.id || active !== onScreen.index)) {
+    setOnScreen({ id: shownId, index: active });
+  }
+  /* The page on screen, for the handlers and effects (a scroll's frame, a landing). */
+  const activeRef = useRef(active);
+  useLayoutEffect(() => {
+    activeRef.current = active;
+  });
   useEffect(() => {
-    if (activeId != null) writeLastStage(activeId, board);
-  }, [activeId, board]);
+    if (onScreen.id != null) writeLastStage(onScreen.id, board);
+  }, [onScreen.id, board]);
 
   /* A tab tap's destination, as a STAGE id, while the smooth scroll is on its
    * way: the pages it passes over must not flick the strip through every stage
@@ -298,39 +286,32 @@ function StagePager({
   const frame = useRef(0);
 
   /* A remote change waits while a finger is on the pages or they are still
-   * scrolling: a card added or moved elsewhere lands once the gesture ends,
-   * never under it (lib/revalidate `useReadHold`). */
-  const [touching, setTouching] = useState(false);
-  const [scrolling, setScrolling] = useState(false);
-  const scrollIdle = useRef<number | undefined>(undefined);
-  /* Where our own landing (`landPager`) put the pages, until its scroll event
-   * comes: that event is no gesture. Held, it would cancel the board read a stage
-   * re-read has in flight beside the stages, only to read it again. */
-  const landed = useRef<number | null>(null);
+   * scrolling (./usePagerGesture). */
+  const gesture = usePagerGesture(pagerRef);
   useReadHold(
-    [actingKey(board, pipelineKeys.board), actingKey(board, pipelineKeys.members)],
-    touching || scrolling,
+    BOARD_GESTURE_HELD.map((key) => actingKey(board, key)),
+    gesture.active,
   );
 
-  const settle = (i: number) => {
+  const showStage = (i: number) => {
     const page = pages[i];
-    if (page) setActiveId(page.stage.id);
+    if (page) setOnScreen({ id: page.stage.id, index: i });
   };
 
   /* Land on the active page without animation: on first paint, when the stage
    * order changes under it, and when the width does. */
+  const { land } = gesture;
   const order = pages.map((p) => p.stage.id).join(',');
-  useLayoutEffect(() => landPager(pagerRef.current, activeRef.current, landed), [order]);
+  useLayoutEffect(() => land(activeRef.current), [order, land]);
   useEffect(() => {
-    const onResize = () => landPager(pagerRef.current, activeRef.current, landed);
+    const onResize = () => land(activeRef.current);
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('resize', onResize);
       window.clearTimeout(targetTimer.current);
-      window.clearTimeout(scrollIdle.current);
       cancelAnimationFrame(frame.current);
     };
-  }, []);
+  }, [land]);
 
   /* Keep the active tab inside the strip, 8 px clear of either edge. */
   useEffect(() => {
@@ -344,14 +325,7 @@ function StagePager({
   }, [active]);
 
   const onPagerScroll = () => {
-    const at = pagerRef.current?.scrollLeft;
-    const ours = landed.current != null && at != null && Math.abs(at - landed.current) < 1;
-    landed.current = null;
-    if (!ours) {
-      if (!scrolling) setScrolling(true);
-      window.clearTimeout(scrollIdle.current);
-      scrollIdle.current = window.setTimeout(() => setScrolling(false), SCROLL_IDLE_MS);
-    }
+    gesture.onScroll();
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
@@ -362,13 +336,13 @@ function StagePager({
         if (pages[i]?.stage.id !== target.current) return;
         target.current = null;
       }
-      if (i !== activeRef.current) settle(i);
+      if (i !== activeRef.current) showStage(i);
     });
   };
 
   const goTo = (i: number) => {
     const el = pagerRef.current;
-    settle(i);
+    showStage(i);
     if (!el || !el.clientWidth || Math.round(el.scrollLeft / el.clientWidth) === i) return;
     target.current = pages[i]?.stage.id ?? null;
     window.clearTimeout(targetTimer.current);
@@ -456,9 +430,7 @@ function StagePager({
       <div
         ref={pagerRef}
         onScroll={onPagerScroll}
-        onTouchStart={() => setTouching(true)}
-        onTouchEnd={(e) => setTouching(e.touches.length > 0)}
-        onTouchCancel={(e) => setTouching(e.touches.length > 0)}
+        {...gesture.touch}
         className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {pages.map((p, i) => (

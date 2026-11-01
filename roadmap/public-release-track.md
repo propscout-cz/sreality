@@ -445,7 +445,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
    - Remaining: **extension agent-estimate quota UX** (switch the panel's estimate from
      `mode:'deterministic'` to metered `mode:'agent'` for entitled users, show "(X left)",
      swap the button to "upgrade" at 0 — no purchase flow yet; widen the 120 s poll window,
-     persist `run_id`); and Chrome Web Store submission (on hold per operator).
+     persist `run_id`); and Chrome Web Store submission (Unlisted, under way as spec #2261 since 2026-10-31).
    - **The platform-wide `API_TOKEN` rotation now has a full runbook:**
      `docs/design/api-token-rotation-and-spa-jwt-migration.md`. A 2026-07-23 two-account
      pen-test surfaced its live symptom: the **SPA sends the shared static `API_TOKEN`** (the
@@ -676,3 +676,26 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").
+12. **Waitlist landing page on propscout.cz — LIVE 2026-10-31 17:52Z (#2248, merge a4de3157; DNS switched by the operator).**
+    Operator ask: a conversion-oriented pre-launch page for Facebook/Instagram ads, primary action a waitlist signup.
+    Copy follows Joanna Wiebe's method (one reader: Czech flip + buy-to-rent investors; voice-of-customer mined from
+    1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone
+    screens with invented listings (no portal photo, broker, address or person; nothing from Browse, no agents).
+    Built: `frontend/landing/` + `src/landing/` (own Vite build, `vite.landing.config.ts`), Caddy serves it on the bare
+    domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 700);
+    cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
+    Controller: Limen Ventures s.r.o., IČO 14053179 (ARES; operator 2026-10-31, go-live approved the same day).
+    Live: `propscout.cz` on the vite service (Railway domain 216bdb3e; Cloudflare apex CNAME DNS-only, the redirect
+    rule now www → apex 302), declared in `.railway/railway.ts`. End-to-end check 17:53Z: signup id 1
+    (`utm_source=claude-test`, a test row, exclude or delete it) stored with consent version, variant and answer.
+    **Owed:** the Meta Pixel id (no tracker until then); a Czech lawyer's read of the consent + privacy text
+    (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in).
+    **Copy deck** (2026-10-31): the operator edits the copy in place in an artifact that mirrors the built pages
+    (https://claude.ai/artifact/BCWsBLb1Vj78wSdmJgd73x); edits land in its db, Claude applies them. Rebuild and
+    republish it after every landing change: `frontend/scripts/landing-copy-deck/README.md`.
+    Feature 5 (2026-10-31, operator ask): the Chrome extension, a browser window with the side sheet and the search-page
+    marks (no AI agents card).
+    Admin Sign-ups page (2026-10-31): Admin → Sign-ups lists the waitlist with the answers, the ad each came from, an
+    e-mail copy and a CSV download (`GET /admin/waitlist`); test sign-ups are marked and not counted.
+    **Later:** the invite sender (an e-mail provider, one-click unsubscribe, `invited_at`/`unsubscribed_at`), refreshing
+    the proof numbers.

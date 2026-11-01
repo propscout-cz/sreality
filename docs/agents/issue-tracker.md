@@ -106,7 +106,7 @@ Comment the numbers, leave this open and open a fix ticket that blocks this one;
 
 This is what `/implement-spec` means by "the way the issue tracker closes work", and every PR follows it.
 
-- **Build ticket**: its PR body says `Closes #<n>`.
+- **Build ticket**: its PR body says `Closes #<n>`. A ticket of the agent platform (spec #2055) also flips its `done` in `frontend/src/lib/agentPlatformMap.ts`, the admin Agent platform page, in that PR (CI warns when it doesn't).
 - **Gate ticket**: a measurement comment, then `gh issue close`; a PR touching it says `Refs #<gate>`.
 - **Spec**: its tickets, gates included, are its sub-issues, which keeps it off `status --frontier`. It closes after its last child. While a gate ticket under it is open, a PR says `Refs #<spec>`, and whoever closes the last gate closes the spec.
 

@@ -5,8 +5,8 @@ plans to drop it wholesale at Wave 8 — nothing durable lives here; the
 permanent taxonomy and ground truth moved to `toolkit/tag_annotations.py`
 and its `tag_taxonomy` / `image_tag_labels` tables, migration 442):
 
-* **Sample** (`dedup_sim.labeling_sample`) — which images are in scope for
-  the secondary-CLIP relabel job. Grows on demand.
+* **Sample** (`dedup_sim.labeling_sample`) — the images the secondary-CLIP
+  relabel job scored, until it was deleted (Actions exit R6a, #2018). Grows on demand.
 * **Proposals** (`dedup_sim.label_proposals`) — one row per (image, model):
   what the secondary CLIP encoder suggests. Setting a proposal's state
   resolves its label to a tag (self-registering a freehand correction) and
@@ -67,10 +67,9 @@ def grow_sample(
     added_by: str = "operator",
 ) -> dict[str, Any]:
     """Add up to `count` newest not-yet-sampled images (optionally scoped to
-    one property type) to the relabel sample. Purely a membership grow —
-    the secondary-CLIP backfill script (scripts/label_proposal_backfill.py)
-    is what actually proposes tags for them, run separately (GH Actions
-    dispatch, per PROGRAM.md's compute-placement convention)."""
+    one property type) to the relabel sample. Purely a membership grow: the
+    secondary-CLIP job that proposed tags for the sample was deleted (#2018),
+    so new members gain no proposals."""
     if count < 1:
         raise ValueError("count must be at least 1")
     if count > GROW_SAMPLE_MAX:

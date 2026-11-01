@@ -10,6 +10,9 @@
  * preset's saved SORT is not used: choosing a scope is newest first by decision
  * (Q17); the Filtry sheet's Řazení row changes it from there. */
 
+import type { QueryKey } from '@tanstack/react-query';
+
+import { browseKeys } from './browseKeys';
 import {
   DEFAULT_FILTERS,
   filtersForPreset,
@@ -37,6 +40,14 @@ export const FEED_ALL_FILTERS: ListingFilters = {
   categoryType: null,
   status: 'active',
 };
+
+/* "Skryté": the hidden properties alone (`fetchDismissedCards`; Browse has no
+ * hidden-only lens). Keyed under Browse's `cards` root so a restore, which
+ * re-reads every Browse list, re-reads it too; `showDismissed: true` keeps a
+ * dismissal from patching rows out of it, so no lens engages it and a change
+ * made elsewhere owes it by name (lib/curationSettle `lensTargets`). */
+export const FEED_HIDDEN_FILTERS: ListingFilters = { ...FEED_ALL_FILTERS, showDismissed: true };
+export const feedHiddenKey = (sort: SortSpec): QueryKey => [...browseKeys.cards(FEED_HIDDEN_FILTERS, sort), 'dismissed'];
 
 export function feedFiltersForPreset(preset: FilterPreset | null | undefined): ListingFilters {
   if (!preset) return FEED_ALL_FILTERS;

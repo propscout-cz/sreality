@@ -46,8 +46,11 @@ const queryClient = new QueryClient({
   },
 });
 
-/* Beside the owner, never without it: the curation clock's read is then the one
- * reconnect path for curation, and a hidden tab reconnecting re-reads nothing. */
+/* For the client's whole life: no curation read refetches on reconnect. The curation
+ * sync owner (lib/curationSyncOwner) is the one reconnect path for curation, but it
+ * runs only while someone is signed in and Supabase is configured; outside that,
+ * a curation read follows its staleTime at its next mount. A hidden tab
+ * reconnecting re-reads nothing. */
 applySyncQueryDefaults(queryClient);
 
 createRoot(document.getElementById('root')!).render(

@@ -34,4 +34,6 @@ jobs:
         run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Skill-staleness nudge (non-blocking)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"

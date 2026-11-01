@@ -111,7 +111,7 @@ _OPEN_READING_MAX_S = 7 * 86400
 # apply._Writer spell them inline (no constant to import; tests pin both writers).
 _SEED_HOLDER, _DISPATCH_HOLDER = "rt_seed:", "dispatch:"
 # A worker pass's holder, `<host>:<pid>:<the second its pass started>`: the shape
-# incremental_sql._RT_LEASE_PREDECESSOR_WHERE matches (a test pins the two against each other).
+# job_lease._PREDECESSOR_WHERE matches (a test pins the two against each other).
 _PASS_HOLDER = re.compile(r"[^:]+:[0-9]+:([0-9]{1,18})")
 # RT_FP_READ_SQL's `first_decided_epoch` column (a test pins its place in the select list).
 _FP_DECIDED_COLUMN = 14
@@ -814,7 +814,7 @@ def _free_cell(engine: _Engine, kind: str, taken: _dt.datetime | None, expires: 
             and untaken > engine.interval + fail_min * 60):
         conditions.append(("fail", f"no pass has taken the lease in the {ago(untaken)} since "
                                    f"{origin}, while the lane runs every {engine.interval} s: the "
-                                   f"lane stopped taking it (Problem past {fail_min:g} min beyond "
+                                   f"lane stopped taking it or its row is paused (Problem past {fail_min:g} min beyond "
                                    "that wait)"))
     return judged("lease", conditions, said, value=round(untaken / 60), unit="min", facts=facts)
 

@@ -33,7 +33,7 @@ T: dict[str, Any] = {
     "jobs_gh_gap_min_starts": 10, "jobs_poller_stale_h": 18, "jobs_cron_fail_of_3": 2,
     "jobs_cron_gap_multiple": 3, "jobs_cron_gap_min_starts": 5, "jobs_lane_floor_s": 900,
     "jobs_lane_boot_grace_s": 900, "jobs_lane_daily_interval_s": 3600,
-    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 3600,
+    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 1800,
     "capacity_p50_warn_multiple": 3, "capacity_p50_warn_floor_s": 30,
     "capacity_p50_fail_multiple": 4, "capacity_p50_fail_floor_s": 60,
     "capacity_p95_interval_warn": 0.5, "capacity_p95_interval_fail": 0.8,
@@ -351,6 +351,8 @@ def test_the_watchers_own_job_is_a_cell_like_any_other() -> None:
 
 @pytest.mark.parametrize("answer, said", [
     (pg_errors.InsufficientPrivilege("permission denied for schema cron"), "unreadable"),
+    (pg_errors.InvalidSchemaName('schema "cron" does not exist'), "unreadable"),
+    (pg_errors.UndefinedTable('relation "cron.job_run_details" does not exist'), "unreadable"),
     ([], "returned no rows"),
 ])
 def test_unreadable_or_empty_cron_tables_are_not_measured_never_ok(answer: Any, said: str) -> None:
@@ -1349,3 +1351,14 @@ def test_the_engines_shutdown_aborts_are_no_livelock_and_never_read(reason: str)
     for previous in (None, _held_abort("warn", "warn: its last pass aborted: pair_budget")):
         cell = _cells(_jobs(lanes=lanes, previous=previous)[0])["lane/autodedup"]
         assert (cell["status"], cell["facts"]["last_aborted"]) == ("ok", None)
+
+
+def test_a_stored_cells_facts_read_empty_when_the_cell_or_its_facts_are_missing() -> None:
+    stored = {"a": {"facts": {"missing": True}}, "b": {"facts": None}, "c": {}}
+    assert plat._stored_facts(stored, "a") == {"missing": True}
+    assert plat._stored_facts(stored, "b") == plat._stored_facts(stored, "c") == plat._stored_facts(stored, "z") == {}
+
+
+def test_pg_stat_statements_reads_unreadable_where_pg_cron_does_and_where_it_is_not_preloaded() -> None:
+    assert set(plat._STATEMENTS_UNREADABLE) - set(plat._EXTENSION_UNREADABLE) == {
+        pg_errors.ObjectNotInPrerequisiteState}

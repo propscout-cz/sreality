@@ -8,10 +8,13 @@
  *
  * The "desktop view" override is per device (localStorage), not per account: the
  * operator who wants the full desktop layout on his phone wants it on THAT
- * phone. Flipping it reloads the page, so it is read once per mount; the width
- * is live (rotating an iPad across the breakpoint switches frames). */
+ * phone. Flipping it reloads that page; another tab's flip reaches this one
+ * through the `storage` event, so every frame reader switches at once, as on a
+ * rotation (the width is live: an iPad turned across the breakpoint switches
+ * frames). ONE definition of the frame, `isPhoneFrame()`: the hook renders it,
+ * the curation clock's cadence reads it outside React. */
 
-import { useState, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 
 import { ROUTES, type RoutePath } from './routes';
 
@@ -50,24 +53,31 @@ export function switchDesktopView(on: boolean): void {
 const hasMatchMedia = (): boolean =>
   typeof window !== 'undefined' && typeof window.matchMedia === 'function';
 
-const subscribeNarrow = (onChange: () => void): (() => void) => {
-  if (!hasMatchMedia()) return () => {};
-  const mql = window.matchMedia(PHONE_SHELL_QUERY);
-  mql.addEventListener('change', onChange);
-  return () => mql.removeEventListener('change', onChange);
+/* The frame's two inputs: the width crossing the breakpoint, and the override
+ * written in another tab (`key` null: that tab cleared the storage). */
+const subscribeFrame = (onChange: () => void): (() => void) => {
+  const onStorage = (e: StorageEvent): void => {
+    if (e.key === DESKTOP_VIEW_KEY || e.key === null) onChange();
+  };
+  window.addEventListener('storage', onStorage);
+  const mql = hasMatchMedia() ? window.matchMedia(PHONE_SHELL_QUERY) : null;
+  mql?.addEventListener('change', onChange);
+  return () => {
+    window.removeEventListener('storage', onStorage);
+    mql?.removeEventListener('change', onChange);
+  };
 };
 
 const isNarrow = (): boolean => hasMatchMedia() && window.matchMedia(PHONE_SHELL_QUERY).matches;
 
-export function usePhoneShell(): boolean {
-  const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, () => false);
-  const [desktopView] = useState(readDesktopView);
-  return narrow && !desktopView;
-}
-
-/** The frame `usePhoneShell` draws, read now, outside React: the curation clock's
- * cadence follows it (lib/curationSyncOwner, ruling Q2). */
+/** The frame, read now: a narrow screen and no desktop-view override. The curation
+ * clock's cadence reads it outside React (lib/curationSyncOwner, ruling Q2). */
 export const isPhoneFrame = (): boolean => isNarrow() && !readDesktopView();
+
+/** The frame, rendered: `isPhoneFrame()`, re-read when the width crosses the breakpoint or another tab flips the override. */
+export function usePhoneShell(): boolean {
+  return useSyncExternalStore(subscribeFrame, isPhoneFrame, () => false);
+}
 
 /* The bar is 56 px plus the home-indicator inset, never less than 8 px of air
  * below the labels (#1763: `max(8px, env(safe-area-inset-bottom))`). The frame

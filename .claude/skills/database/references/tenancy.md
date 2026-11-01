@@ -202,16 +202,21 @@ never reset, never rendered.
 - **A tenant table no browser writes.** `curation_clock(account_id, family, counter, changed_at)`, PK
   `(account_id, family)`, families `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`. It is in
   `TENANT_TABLES` with `BROWSER_WRITE_COLUMNS['curation_clock'] = frozenset()` (the `building_runs` precedent), so
-  both tenancy gates check its `account_id`, its policy, no anon access and no browser write; `service_role` holds no
-  DML either. The 696 seed gave every account then present all seven families at 1; a later account gains a family's
-  row on its first bump (signup bumps `board` and `collections`).
+  both tenancy gates check its `account_id`, its policy, no anon access and no browser write. `service_role` reads,
+  never writes: SELECT on the table (701, the Backend rule that the service role reads anything), no INSERT,
+  UPDATE, DELETE or TRUNCATE. The view `curation_clock_public` is the browser's read, not the service role's: its
+  audience reads the caller's accounts from the JWT and only `authenticated` may execute it. The 696 seed gave every
+  account then present all seven families at 1; a later account gains a family's row on its first bump (signup
+  bumps `board` and `collections`).
 - **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
   `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
   … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
   `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
   bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
   joins `accounts` so an account whose deletion cascades the row skips itself, and bumps each (family, account) once
-  per transaction through the transaction-local GUC `curation_clock.bumped`, so a 10⁴-row heal stays O(rows). A
+  per transaction through the transaction-local GUC `curation_clock.bumped`. That string grows ~45 B per (family,
+  account) bumped and `strpos` scans it once per row, so a bulk write costs O(rows × accounts it touches): O(rows)
+  for one account's 10⁴-row heal, never O(rows²) on one hot counter row. A
   rollback, a savepoint rollback or a 0-row statement moves nothing; the API, the merge carriers (service role, any
   account), signup (definer) and FK cascades all move it. A new curation table gets a trigger line in a forward
   migration, a `CLOCKED_TABLES` entry and a `SYNC_TABLES` row together (census a).
@@ -232,9 +237,14 @@ never reset, never rendered.
   `scraper/`, `scripts/`, `autodedup/` or a migration after 696), set or read `curation_clock.bumped` anywhere else
   in code or migrations (census g; a test may clear it to isolate a case), or silence a clock trigger without a
   `-- ci-allow-clock-disable: <reason>` line in that migration (census e: `DISABLE` or `ENABLE REPLICA` of a clock
-  trigger, `ALL` or `USER`, `session_replication_role`, or redefining `bump_curation_clock()` after 696). Dropping
+  trigger, `ALL` or `USER` or a `format()` placeholder, `session_replication_role`, a TRUNCATE of a clocked table, or
+  redefining `bump_curation_clock()` after 696). Dropping
   a clock trigger, its table or the function, or renaming either, leaves the trigger set census (a) compares. A heal
   of a curation table needs no disable: the dedupe already makes it one bump per account and family.
+- **Never TRUNCATE a clocked table; delete instead.** Row triggers never fire on TRUNCATE, so it moves no counter and
+  every open window keeps the rows it showed. Census (e) flags a TRUNCATE of a clocked table in code or in a
+  migration after 696 without the annotation (a TRUNCATE … CASCADE of a table they reference is its named blind
+  spot).
 - **Commit-time failures are visible.** The bump locks its counter row at COMMIT, so a lock it cannot take (a
   `lock_timeout`, the residual deadlock between two multi-family writers that bump in opposite orders) fails the
   commit itself; the tenant pool commits before the response (`TenantConn`, W0), so the caller gets `503 db_busy`,
@@ -249,7 +259,9 @@ never reset, never rendered.
   twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
   (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
 - **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience, the grants,
-  the seed); `tests/test_curation_sync_census.py` (a)-(j), each shown to bite; the live lane
+  the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
+  the objects live, so the apply's exit status, the census and the health alarm are the gates);
+  `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
   `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
   commit-time failure, the read on `curation_clock_pkey`); the health alarm `curation_sync` (`triggers`,
   `board_bumps`; W4's `reads` and `load` watch the browsers' read in `pg_stat_statements`); the SPA's read-contract

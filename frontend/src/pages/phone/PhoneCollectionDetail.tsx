@@ -18,7 +18,7 @@
  * card from this roll in place. A member Browse does not serve has no card; it
  * stays reachable as a plain line under the roll, from the collection's own read. */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -39,9 +39,10 @@ import {
   updateCollection,
 } from '@/lib/api';
 import { deletedTables, revalidateTables } from '@/lib/curationSync';
-import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
+import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
-import { useCollectionCards } from '@/lib/collectionCards';
+import { collectionListKeys, useCollectionCards } from '@/lib/collectionCards';
+import { useHeld, useListHold } from '@/lib/useListHold';
 import { listingKindLabel } from '@/lib/enums';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';
 import { propertyPath } from '@/lib/listingUrl';
@@ -231,40 +232,12 @@ function Header({ collection }: { collection: Collection }) {
 
 /* ⋯ → Přejmenovat: the name and description as fields in place of the heading. */
 function Editor({ collection, onDone }: { collection: Collection; onDone: () => void }) {
-  const qc = useQueryClient();
-  /* Both fields follow the collection while untouched; only what the user changed
-   * is saved (D3, lib/useServerDraft — the desktop's HeaderEditor alike). */
-  const name = useServerDraft(collection.name, trimDraft);
-  const description = useServerDraft(collection.description ?? '', trimDraft);
-  const [error, setError] = useState<string | null>(null);
+  const { name, description, nameRef, descriptionRef, save, canSave, error } = useCollectionEditor(collection, {
+    onDone,
+    failed: 'Změny se nepodařilo uložit.',
+  });
   const nameId = useId();
   const descriptionId = useId();
-  const nameRef = useRef<HTMLInputElement>(null);
-  const descriptionRef = useRef<HTMLInputElement>(null);
-
-  /* The default collection's name is locked, so its first field is the description. */
-  useEffect(() => {
-    (collection.is_system ? descriptionRef : nameRef).current?.focus();
-  }, [collection.is_system]);
-
-  const nextName = name.edited();
-  const nextDescription = description.edited();
-  const dirty = nextName != null || nextDescription != null;
-  const save = useMutation({
-    mutationFn: () =>
-      updateCollection(collection.id, {
-        ...(nextName != null && { name: nextName }),
-        /* A cleared description goes as '': PATCH /collections reads null as "not
-         * given" (coalesce), so null alone is refused and never clears it. */
-        ...(nextDescription != null && { description: nextDescription }),
-      }),
-    onSuccess: () => {
-      void revalidateTables(qc, ['collections']);
-      onDone();
-    },
-    onError: (err: Error) => setError(err.message || 'Změny se nepodařilo uložit.'),
-  });
-  const canSave = dirty && !save.isPending && name.value.trim().length > 0;
   const field =
     'h-11 w-full rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-3 text-[16px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-50';
 
@@ -289,10 +262,7 @@ function Editor({ collection, onDone }: { collection: Collection; onDone: () => 
         id={nameId}
         ref={nameRef}
         type="text"
-        value={name.value}
-        onChange={(e) => name.onChange(e.target.value)}
-        onFocus={name.onFocus}
-        onBlur={name.onBlur}
+        {...name.bind}
         maxLength={200}
         disabled={collection.is_system}
         className={field}
@@ -304,10 +274,7 @@ function Editor({ collection, onDone }: { collection: Collection; onDone: () => 
         id={descriptionId}
         ref={descriptionRef}
         type="text"
-        value={description.value}
-        onChange={(e) => description.onChange(e.target.value)}
-        onFocus={description.onFocus}
-        onBlur={description.onBlur}
+        {...description.bind}
         placeholder="Nepovinný"
         className={field}
       />
@@ -407,30 +374,37 @@ function SharingCard({ collection, id }: { collection: Collection; id: string })
 
 function Members({ collection, members }: { collection: Collection; members: CollectionPropertyRow[] }) {
   const navigate = useNavigate();
-  const { list, uncarded } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
+  const { list, uncarded: current } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
+  /* A change made elsewhere moves the roll at once, but never under a finger
+   * (ruling Q3(c)): the cards park, the "Bez karty" lines (drawn from the
+   * collection's own read, which the header's count rides) wait in the view. */
+  const hand = useListHold(collectionListKeys(collection.id));
+  const uncarded = useHeld(hand, current);
 
   return (
     <div>
       <Header collection={collection} />
       <DayRule label="Nemovitosti" />
-      <CardRoll
-        list={list}
-        rows={list.rows}
-        errorTitle="Nemovitosti se nepodařilo načíst."
-        endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
-        empty={
-          uncarded.length > 0 ? null : isMine(collection) ? (
-            <RollEmpty
-              title="Sbírka je prázdná."
-              detail="Nemovitost sem uložíte záložkou na kartě v Nových nebo na stránce nemovitosti."
-              action={{ label: 'Otevřít Nové', onClick: () => navigate(ROUTES.feed.build()) }}
-            />
-          ) : (
-            <RollEmpty title="Sbírka je zatím prázdná." detail="Až do ní majitel něco uloží, uvidíte to tady." />
-          )
-        }
-      />
-      {uncarded.length > 0 && <Uncarded rows={uncarded} />}
+      <div {...hand}>
+        <CardRoll
+          list={list}
+          rows={list.rows}
+          errorTitle="Nemovitosti se nepodařilo načíst."
+          endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
+          empty={
+            uncarded.length > 0 ? null : isMine(collection) ? (
+              <RollEmpty
+                title="Sbírka je prázdná."
+                detail="Nemovitost sem uložíte záložkou na kartě v Nových nebo na stránce nemovitosti."
+                action={{ label: 'Otevřít Nové', onClick: () => navigate(ROUTES.feed.build()) }}
+              />
+            ) : (
+              <RollEmpty title="Sbírka je zatím prázdná." detail="Až do ní majitel něco uloží, uvidíte to tady." />
+            )
+          }
+        />
+        {uncarded.length > 0 && <Uncarded rows={uncarded} />}
+      </div>
       {/* My collection is managed from its header; a viewer manages nothing, and
           its one write, leaving, lives on the desktop. */}
       {!isMine(collection) && (

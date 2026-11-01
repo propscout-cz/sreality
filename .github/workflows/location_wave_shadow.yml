@@ -124,7 +124,6 @@ jobs:
           if [ -z "$found" ]; then echo "run $RUN uploaded no positions.jsonl" >&2; exit 1; fi
           mkdir -p shadow
           cp "$(dirname "$found")"/{positions.jsonl,movers.jsonl,what_if.json} shadow/
-          echo "movers=$(grep -c . shadow/movers.jsonl || true)" >> "$GITHUB_OUTPUT"
 
       - name: "1: post-wave positions (what_if, READ ONLY)"
         id: whatif
@@ -147,18 +146,24 @@ jobs:
           else args+=(--ids-sql "$IDS_SQL" --ids-timeout-s "${IDS_TIMEOUT_S:-1200}"); fi
           if [ -s "$RUNNER_TEMP/contract.yaml" ]; then args+=(--contract "$RUNNER_TEMP/contract.yaml"); fi
           python -m location_data.what_if "${args[@]}"
-          echo "movers=$(grep -c . shadow/movers.jsonl || true)" >> "$GITHUB_OUTPUT"
 
-      # A skipped step's output is '', so exactly the step that ran decides.
+      # One count after both producers: a SKIPPED step's output is null, which GitHub's expression
+      # engine coerces to 0 and so equals '0' — the condition `whatif != '0' && reuse != '0'` skipped the
+      # gate on run 41220481918 (2,964 movers). Counting here asks one question of the file that exists.
+      - name: Count the movers
+        id: count
+        run: echo "movers=$(grep -c . shadow/movers.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
       - name: "2: size, then this group's base cohort, rulings, live scorer (READ ONLY, no ledger row)"
-        if: ${{ steps.whatif.outputs.movers != '0' && steps.reuse.outputs.movers != '0' }}
+        if: ${{ steps.count.outputs.movers != '0' }}
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GROUP: ${{ inputs.group }}
         run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}"
 
+      # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"
-        if: ${{ steps.whatif.outputs.movers != '0' && steps.reuse.outputs.movers != '0' }}
+        if: ${{ steps.count.outputs.movers != '0' && hashFiles('shadow/base/cohort.jsonl.gz') != '' }}
         run: |
           python -m autodedup.harness shadow shadow/base/cohort.jsonl.gz shadow/positions.jsonl \
             shadow/labels --scorer shadow/scorer.json --out shadow/judge
