@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -11,6 +12,7 @@ import pytest
 import yaml
 from pydantic import Field
 
+from api.agents.agent_files import StoreError
 from api.capabilities import registry
 from api.capabilities.entry import Effect, Entry, Tenancy
 from api.filter_args import Args
@@ -158,3 +160,29 @@ def code_reply(*calls: tuple[str, dict[str, Any]], files: tuple[str, ...] = (), 
         container=container,
         file_ids=files,
     )
+
+
+class InMemoryFileStore:
+    """The store a run's files go to, in a dict. `refuse`: the sha-256 of files that never store; `fail_first`: that many
+    puts fail, then they work."""
+
+    def __init__(self, *, refuse: set[str] | None = None, fail_first: int = 0) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.deleted: list[str] = []
+        self.puts = 0
+        self._refuse = refuse or set()
+        self._fail_first = fail_first
+
+    def put(self, key: str, data: bytes) -> None:
+        self.puts += 1
+        if self.puts <= self._fail_first or key.rsplit("/", 1)[-1] in self._refuse:
+            raise StoreError("refused")
+        self.objects[key] = data
+
+    def get(self, key: str) -> bytes | None:
+        return self.objects.get(key)
+
+    def delete(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.objects.pop(key, None)
+            self.deleted.append(key)

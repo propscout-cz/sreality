@@ -242,6 +242,14 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_agent_runs_live.py tests/test_agent_run_routes_live.py -q
 
+      # The cross-account read of a run's file, through the real route and row-level security. The store is in memory: the
+      # real bucket's answer is gate #2331, since no Storage server runs here.
+      - name: A run's files stay under the account, whatever the attempt (#2073)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_agent_files_live.py -q
+
       # Apply and Undo (#2072): the marker (migration 712) refuses any login but the tenant pool's, so these log in as it.
       - name: A proposal applies once under the user's login, and Undo removes exactly what it added (#2072)
         env:

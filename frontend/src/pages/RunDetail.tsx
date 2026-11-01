@@ -7,6 +7,7 @@ import Stat from '@/components/Stat';
 import { TwoStep } from '@/components/TwoStep';
 import { SectionLabel } from '@/components/section';
 import Timeline from '@/components/estimation/Timeline';
+import FilesPanel from '@/components/runs/FilesPanel';
 import ProposalsPanel from '@/components/runs/ProposalsPanel';
 import { RunJson, RunStateChip } from '@/components/runs/RunParts';
 import { ApiError, cancelAgentRun } from '@/lib/api';
@@ -22,7 +23,7 @@ import { ROUTES } from '@/lib/routes';
  * or an ad's words (lib/agentRuns), so it is React text here and nowhere a link: the result is pre-wrapped text, and the
  * only links are the property pages this file builds from the run's cited ids.
  *
- * Files are names only for now, until #2073 stores them. Proposals are drawn by the server (components/runs/ProposalsPanel). */
+ * Files and proposals have their own panels (components/runs): each draws from what the server says. */
 
 function ResultPanel({ run }: { run: AgentRun }) {
   const cited = citedIds(run.cited_property_ids);
@@ -84,22 +85,6 @@ function StepsPanel({ steps }: { steps: UseQueryResult<{ data: AgentRunStep[] },
           The last refresh failed, so this list may be short.{' '}
           <button type="button" className="underline underline-offset-2" onClick={retry}>Try again</button>
         </p>
-      )}
-    </Panel>
-  );
-}
-
-function FilesPanel({ files }: { files: string[] }) {
-  return (
-    <Panel title="Files" count={files.length} note={files.length ? 'Names only: the files themselves aren’t stored yet' : undefined}>
-      {files.length ? (
-        <ul className="space-y-1">
-          {files.map((name) => (
-            <li key={name} className="break-all font-mono text-[0.78rem] text-[var(--color-ink-2)]">{name}</li>
-          ))}
-        </ul>
-      ) : (
-        <PanelEmpty>No files.</PanelEmpty>
       )}
     </Panel>
   );
@@ -176,7 +161,7 @@ function RunBody({ run }: { run: AgentRun }) {
       {run.error && <ErrorBanner flush title="This run failed:" message={run.error} />}
       <ResultPanel run={run} />
       <StepsPanel steps={steps} />
-      <FilesPanel files={run.files} />
+      <FilesPanel run={run} />
       <ProposalsPanel run={run} />
       <Recorded run={run} />
     </div>
