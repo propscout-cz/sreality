@@ -12,6 +12,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue's run on the PR merged onto main; the queue merges only on these checks.
+  merge_group:
 
 jobs:
   pytest:
@@ -119,7 +121,7 @@ jobs:
 
       - name: Scan the new commits
         env:
-          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || github.event_name == 'merge_group' && format('{0}..{1}', github.event.merge_group.base_sha, github.event.merge_group.head_sha) || format('{0}..{1}', github.event.before, github.sha) }}
         run: scripts/gitleaks.sh git --log-opts="--remerge-diff $RANGE"
 
       # The commit scan never re-reads a fixture line a scrub left alone, and the fixture census judges the scrub by
