@@ -2770,7 +2770,7 @@
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every pull request and on every push to main. Three parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff), a frontend job (the docs budget, then type-check, lint, vitest, the production build and its first-visit JS budget) and a secret scan of the new commits. This is the build gate for every branch.",
+      "description": "CI test suite, runs on every pull request and on every push to main. Three parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff), a frontend job (type-check, lint, vitest, the production build and its first-visit JS budget, then the docs budget) and a secret scan of the new commits. This is the build gate for every branch.",
       "manual": false,
       "schedules": [],
       "onPush": true,
