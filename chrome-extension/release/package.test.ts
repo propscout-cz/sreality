@@ -18,7 +18,7 @@ const API_HOST = 'api.example-deploy.test';
 function manifest(patch: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     manifest_version: 3,
-    name: 'PropScout.cz — výnos & pipeline',
+    name: 'PropScout.cz',
     version: '0.11.7',
     description: 'Panel u nabídek z realitních portálů.',
     permissions: ['identity', 'storage'],
@@ -113,7 +113,7 @@ test('a deployed hostname anywhere in the manifest fails', () => {
 });
 
 test('the brand name is not a deployed hostname, even when the app lives on the bare domain', () => {
-  const m = manifest({ name: 'PropScout.cz — výnos & pipeline', action: { default_title: 'PropScout.cz' } });
+  const m = manifest({ name: 'PropScout.cz', action: { default_title: 'PropScout.cz' } });
   assert.deepEqual(checkPackage(pkg(m), ALLOWED, ['propscout.cz']), []);
   const url = manifest({ homepage_url: 'https://propscout.cz/' });
   assert.match(checkPackage(pkg(url), ALLOWED, ['propscout.cz']).join('\n'), /propscout\.cz/);

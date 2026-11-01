@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 // Shared product brand — the SAME source the SPA + content script use, so the
 // chrome://extensions display name and the toolbar icon's title stay linked to
 // the one definition.
-import { APP_NAME, EXTENSION_NAME } from '../frontend/src/lib/brand';
+import { APP_NAME } from '../frontend/src/lib/brand';
 // The portal-id rules (shared with the SPA's paste-a-link) are the single source
 // of truth for "which hosts we run on" — content_scripts.matches is computed from
 // their page hosts below; manifest.json's checked-in list is a template that
@@ -115,7 +115,7 @@ export default defineConfig(({ mode }) => {
           const manifest = JSON.parse(
             readFileSync(resolve(__dirname, 'manifest.json'), 'utf8'),
           );
-          manifest.name = EXTENSION_NAME;
+          manifest.name = APP_NAME;
           manifest.action.default_title = APP_NAME;
           // Only the hosts that serve pages: a redirect-only host would add a site to
           // the install warning and never run the script (portalIds.ts pageHosts).
