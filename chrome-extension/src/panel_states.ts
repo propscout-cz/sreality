@@ -3,6 +3,7 @@
  * static skeleton that stands while the first answer is out. One card each, the
  * old panel's words. */
 
+import { APP_NAME } from '../../frontend/src/lib/brand';
 import { buildCard } from './card';
 import { h, setBusy } from './dom';
 import { INGEST_STEP_CS, type IngestStep } from './ingest_flow';
@@ -41,9 +42,9 @@ export function signedOutCard(busy: boolean, error: string | null, onSignIn: () 
 }
 
 /* What the extension sends once signed in, said where the user decides to sign in: the
- * Chrome Web Store allows browsing data only for a feature its UI describes (#2279). */
+ * Chrome Web Store allows browsing data only for a feature the extension's UI describes. */
 function disclosure(): HTMLElement {
-  const p = h('p', 'meta', 'Po přihlášení rozšíření posílá na PropScout.cz portál a čísla inzerátů, které na '
+  const p = h('p', 'meta', `Po přihlášení rozšíření posílá na ${APP_NAME} portál a čísla inzerátů, které na `
     + 'podporovaných portálech otevřete nebo máte ve výsledcích hledání, aby k nim ukázalo vaše údaje. ');
   const link = h('a', 'link', 'Ochrana osobních údajů');
   link.href = 'https://propscout.cz/soukromi';

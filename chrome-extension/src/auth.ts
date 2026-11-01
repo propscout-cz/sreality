@@ -9,7 +9,7 @@
 import { DEFAULT_APPEARANCE, parseAppearance } from '../../frontend/src/lib/appearance';
 import { SUPABASE_URL } from './config';
 import { SESSION_KEY, decodeJwtPayload, type StoredSession } from './session';
-import { createTokenSource, type AccessToken } from './token_source';
+import { createTokenSource, isTokenResponse, toStoredSession, type AccessToken } from './token_source';
 import type { AuthState } from './types';
 
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
@@ -28,14 +28,6 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 const VERIFIER_KEY = 'pkceVerifier';
 /* A refresh that has not answered by then counts as no answer: the session is kept. */
 const REFRESH_DEADLINE_MS = 15_000;
-
-interface GoTrueTokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  expires_at?: number;
-  token_type: string;
-}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = '';
@@ -86,12 +78,13 @@ async function gotrueFetch(path: string, init: RequestInit & { accessToken?: str
     ...((rest.headers as Record<string, string> | undefined) ?? {}),
   };
   let res: Response;
+  let text: string;
   try {
     res = await fetch(AUTH_BASE + path, { ...rest, headers });
+    text = await res.text();  // inside: a body that stalls past the deadline is no answer too
   } catch {
     return { ok: false, status: 0, body: null };
   }
-  const text = await res.text();
   let body: unknown = null;
   if (text) {
     try { body = JSON.parse(text); } catch { body = text; }
@@ -105,14 +98,7 @@ async function getStoredSession(): Promise<StoredSession | null> {
   return s ?? null;
 }
 
-async function storeSession(token: GoTrueTokenResponse): Promise<void> {
-  const expires_at = token.expires_at
-    ?? Math.floor(Date.now() / 1000) + token.expires_in;
-  const session: StoredSession = {
-    access_token: token.access_token,
-    refresh_token: token.refresh_token,
-    expires_at,
-  };
+async function saveSession(session: StoredSession): Promise<void> {
   await chrome.storage.local.set({ [SESSION_KEY]: session });
 }
 
@@ -177,12 +163,12 @@ export async function signInWithGoogle(): Promise<{ ok: true } | { ok: false; de
     method: 'POST',
     body: JSON.stringify({ auth_code: code, code_verifier: codeVerifier }),
   });
-  if (!res.ok) {
+  if (!res.ok || !isTokenResponse(res.body)) {
     const detail = extractGoTrueError(res.body)
       ?? `výměna kódu za relaci selhala (HTTP ${res.status})`;
     return { ok: false, detail };
   }
-  await storeSession(res.body as GoTrueTokenResponse);
+  await saveSession(toStoredSession(res.body, Math.floor(Date.now() / 1000)));
   return { ok: true };
 }
 
@@ -192,7 +178,7 @@ export async function signInWithGoogle(): Promise<{ ok: true } | { ok: false; de
  * next call refreshes a session however long it sat idle. */
 const tokens = createTokenSource({
   load: getStoredSession,
-  save: async (session) => { await chrome.storage.local.set({ [SESSION_KEY]: session }); },
+  save: saveSession,
   clear: clearSession,
   now: () => Math.floor(Date.now() / 1000),
   refresh: async (refreshToken) => {

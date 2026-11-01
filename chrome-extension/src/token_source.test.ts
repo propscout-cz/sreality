@@ -1,10 +1,11 @@
 /* `npm test` (node --test; Node >= 22.18 strips the types). */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTokenSource, REFRESH_RETRY_DETAIL, type RefreshReply, type TokenDeps } from './token_source.ts';
+import { createTokenSource, type RefreshReply, type TokenDeps } from './token_source.ts';
 import type { StoredSession } from './session.ts';
 
 const T0 = 1_800_000_000;
+const RETRY = 'Přihlášení se teď nepodařilo obnovit (výpadek spojení), zkuste to znovu.';
 
 /* A GoTrue stand-in: every refresh rotates the refresh token, and presenting a used one revokes the
  * whole session (Supabase's reuse detection), so two racing refreshes would end signed out. */
@@ -16,7 +17,7 @@ function world(opts: { expiresIn?: number } = {}) {
   let valid: string | null = 'r1';
   const used = new Set<string>();
   let generation = 1;
-  let outage: 'network' | 503 | 429 | null = null;
+  let outage: 'network' | 503 | 429 | 'proxy403' | 'html200' | null = null;
 
   const deps: TokenDeps = {
     load: async () => (stored == null ? null : { ...stored }),
@@ -26,6 +27,8 @@ function world(opts: { expiresIn?: number } = {}) {
     refresh: async (token): Promise<RefreshReply | null> => {
       await new Promise((r) => setTimeout(r, 1));  // a real round trip, so callers can interleave
       if (outage === 'network') return null;
+      if (outage === 'proxy403') return { status: 403, body: '<html>Access denied</html>' };
+      if (outage === 'html200') return { status: 200, body: '<html>Wi-Fi login</html>' };
       if (outage != null) return { status: outage, body: { msg: 'unavailable' } };
       if (token !== valid) {
         if (used.has(token)) valid = null;
@@ -44,7 +47,7 @@ function world(opts: { expiresIn?: number } = {}) {
     deps,
     stored: () => stored,
     advance: (seconds: number) => { now += seconds; },
-    outage: (kind: 'network' | 503 | 429 | null) => { outage = kind; },
+    outage: (kind: 'network' | 503 | 429 | 'proxy403' | 'html200' | null) => { outage = kind; },
     revoke: () => { valid = null; },
   };
 }
@@ -70,7 +73,7 @@ test('past expiry after a long idle: refreshed on the next call (no timer needed
 test('network error: still signed in, the call is retryable', async () => {
   const w = world({ expiresIn: 30 });
   w.outage('network');
-  assert.deepEqual(await createTokenSource(w.deps).accessToken(), { kind: 'retry', detail: REFRESH_RETRY_DETAIL });
+  assert.deepEqual(await createTokenSource(w.deps).accessToken(), { kind: 'retry', detail: RETRY });
   assert.equal(w.stored()?.refresh_token, 'r1');
 });
 
@@ -86,6 +89,20 @@ test('429: still signed in, the call is retryable', async () => {
   w.outage(429);
   assert.equal((await createTokenSource(w.deps).accessToken()).kind, 'retry');
   assert.notEqual(w.stored(), null);
+});
+
+test('a 403 from something in between (a proxy, a firewall) keeps the session', async () => {
+  const w = world({ expiresIn: 30 });
+  w.outage('proxy403');
+  assert.deepEqual(await createTokenSource(w.deps).accessToken(), { kind: 'retry', detail: RETRY });
+  assert.equal(w.stored()?.refresh_token, 'r1');
+});
+
+test('a 200 that is not a token (a captive portal\'s page) keeps the session', async () => {
+  const w = world({ expiresIn: 30 });
+  w.outage('html200');
+  assert.deepEqual(await createTokenSource(w.deps).accessToken(), { kind: 'retry', detail: RETRY });
+  assert.equal(w.stored()?.refresh_token, 'r1');
 });
 
 test('after the outage, the next call refreshes and proceeds', async () => {

@@ -4,7 +4,8 @@
  *
  * Only a refresh the auth server REFUSES signs the user out. Supabase rotates refresh tokens with
  * reuse detection, so a refused token is dead for good; anything else (no answer, a timeout, a 5xx,
- * a 429) says nothing about the session, which is kept, and the call reports a retryable error. */
+ * a 429, another 4xx from something in between, a 200 that carries no token) says nothing about the
+ * session, which is kept, and the call reports a retryable error. */
 
 import type { StoredSession } from './session.ts';
 
@@ -34,22 +35,31 @@ export const REFRESH_RETRY_DETAIL = 'Přihlášení se teď nepodařilo obnovit 
  * expired on arrival at the API. */
 const EXPIRY_SKEW_SECONDS = 60;
 
-interface TokenResponse {
+/* GoTrue's token answer (the PKCE exchange and a refresh alike). */
+export interface TokenResponse {
   access_token: string;
   refresh_token: string;
   expires_in: number;
   expires_at?: number;
 }
 
-/* The auth server refused the refresh token itself: a 4xx other than a timeout or rate limit. */
-function refused(status: number): boolean {
-  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+export function isTokenResponse(body: unknown): body is TokenResponse {
+  const b = body as Partial<TokenResponse> | null;
+  return b != null && typeof b === 'object' && typeof b.access_token === 'string'
+    && typeof b.refresh_token === 'string' && typeof b.expires_in === 'number';
 }
 
-function isTokenResponse(body: unknown): body is TokenResponse {
-  const b = body as Partial<TokenResponse> | null;
-  return b != null && typeof b.access_token === 'string' && typeof b.refresh_token === 'string'
-    && typeof b.expires_in === 'number';
+export function toStoredSession(t: TokenResponse, now: number): StoredSession {
+  return { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: t.expires_at ?? now + t.expires_in };
+}
+
+/* GoTrue refused the refresh token itself: its 400, or a body naming a refresh-token or session
+ * error. Any other 4xx comes from something in between (a proxy, a firewall) and proves nothing. */
+function refused(reply: RefreshReply): boolean {
+  if (reply.status === 400) return true;
+  const code = (reply.body as { error_code?: unknown } | null)?.error_code;
+  return reply.status >= 400 && reply.status < 500 && typeof code === 'string'
+    && /^(refresh_token|session)_/.test(code);
 }
 
 export function createTokenSource(deps: TokenDeps): { accessToken(): Promise<AccessToken> } {
@@ -65,20 +75,13 @@ export function createTokenSource(deps: TokenDeps): { accessToken(): Promise<Acc
     if (s == null) return { kind: 'signed_out' };
     if (fresh(s)) return { kind: 'token', token: s.access_token };
     const reply = await deps.refresh(s.refresh_token);
-    if (reply == null || (!refused(reply.status) && !(reply.status >= 200 && reply.status < 300))) {
-      return { kind: 'retry', detail: REFRESH_RETRY_DETAIL };
-    }
-    if (refused(reply.status) || !isTokenResponse(reply.body)) {
+    if (reply != null && refused(reply)) {
       await deps.clear();
       return { kind: 'signed_out' };
     }
-    const t = reply.body;
-    await deps.save({
-      access_token: t.access_token,
-      refresh_token: t.refresh_token,
-      expires_at: t.expires_at ?? deps.now() + t.expires_in,
-    });
-    return { kind: 'token', token: t.access_token };
+    if (reply == null || !isTokenResponse(reply.body)) return { kind: 'retry', detail: REFRESH_RETRY_DETAIL };
+    await deps.save(toStoredSession(reply.body, deps.now()));
+    return { kind: 'token', token: reply.body.access_token };
   }
 
   return {

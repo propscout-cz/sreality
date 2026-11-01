@@ -1,5 +1,7 @@
 node_modules
 dist
+# The store package (npm run package), made from dist/.
+store
 .env
 .env.local
 .env.*.local
