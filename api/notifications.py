@@ -502,6 +502,16 @@ def new_subscription_undo_check(
     return None, int(row[2])
 
 
+def undo_new_subscription(conn: "psycopg.Connection", subscription_id: str, applied_at: datetime) -> None:
+    """Retire the watchdog a proposal created, or 409 with why not; the row lock stops an edit landing between the two."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM notification_subscriptions WHERE id = %s FOR UPDATE", (subscription_id,))
+    refusal, _ = new_subscription_undo_check(conn, subscription_id, applied_at)
+    if refusal:
+        raise HTTPException(409, refusal)
+    delete_subscription(conn, subscription_id)
+
+
 # --- dispatches (the notification feed) -----------------------------------
 
 

@@ -299,13 +299,16 @@ def test_a_second_membership_writes_into_the_runs_account_not_the_oldest(w: Worl
     assert w.marker(run_id)["account_id"] == w.people["b_acc"]
 
 
-def test_apply_and_undo_each_move_the_curation_clock(w: World) -> None:
+@pytest.mark.parametrize("proposal, family", [
+    (lambda pid: _collection(pid), "collections"), (lambda pid: _note(pid), "notes"), (lambda pid: _card(pid), "board"),
+])
+def test_apply_and_undo_each_move_the_curation_clock(w: World, proposal: Callable[[int], dict[str, Any]], family: str) -> None:
     def counter() -> int:
-        return w.one("SELECT coalesce(max(counter), 0) FROM curation_clock WHERE account_id = %s AND family = 'collections'",
-                     w.people["a_acc"])
+        return w.one("SELECT coalesce(max(counter), 0) FROM curation_clock WHERE account_id = %s AND family = %s",
+                     w.people["a_acc"], family)
 
     start = counter()
-    run_id = _applied(w, _collection(w.pids[0]))
+    run_id = _applied(w, proposal(w.pids[0]))
     applied = counter()
     assert applied == start + 1
     assert w.post(run_id, "undo").status_code == 200
@@ -351,6 +354,22 @@ def test_a_watchdogs_places_come_from_ruian_not_the_model(w: World) -> None:
     nowhere = w.run(_watchdog(districts=[{"name": "Nikde", "level": "obec", "id": 999_999_999}]))
     refused = w.post(nowhere, "apply")
     assert refused.status_code == 422 and w.marker(nowhere) is None
+
+
+def test_a_watchdogs_city_index_is_one_we_hold_or_apply_refuses(w: World) -> None:
+    rule = {"index_name": "<b>nic</b>", "op": ">=", "value": 5}
+    run_id = w.run(_watchdog(city_index_rules=[rule]))
+    assert "not one we hold" in " ".join(w.view(run_id)["before"])
+    refused = w.post(run_id, "apply")
+    assert refused.status_code == 422 and w.marker(run_id) is None
+
+
+def test_a_property_we_no_longer_hold_is_drawn_as_a_refusal_before_the_click(w: World) -> None:
+    run_id = w.run(_collection(w.pids[0], 987_654_321))
+    view = w.view(run_id)
+    assert "no longer hold a property" in " ".join(view["before"])
+    assert any(p["property_id"] is None for p in view["properties"])
+    assert w.post(run_id, "apply").status_code == 422 and w.marker(run_id) is None
 
 
 def test_a_proposal_todays_schema_refuses_is_drawn_refused_and_never_written(w: World) -> None:

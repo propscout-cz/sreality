@@ -9,7 +9,7 @@ import { useAgentRunProposals, type AgentProposal, type AgentRun } from '@/lib/a
 import { applyAgentProposal, undoAgentProposal } from '@/lib/api';
 import { tableReads } from '@/lib/curationSync';
 import { fmtAbsolute } from '@/lib/format';
-import { watchdogKeys } from '@/lib/queries';
+import { notificationKeys, watchdogKeys } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
 import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
@@ -148,7 +148,7 @@ export default function ProposalsPanel({ run }: { run: AgentRun }) {
   const write = useOptimisticWrite<ProposalWrite, AgentProposal>({
     mutationKey: WRITE_KEY,
     mutationFn: ({ index, verb }) => WRITES[verb](run.id, index),
-    revalidate: [agentRunKeys.proposals(run.id), ...tableReads(CURATED, null), watchdogKeys.subscriptions],
+    revalidate: [agentRunKeys.proposals(run.id), ...tableReads(CURATED, null), watchdogKeys.subscriptions, notificationKeys.all],
     pendingKey: ({ index }) => index,
     onSuccess: (_, { index }) => setFailed(({ [index]: _settled, ...rest }) => rest),
     onError: (error, { index, verb }) => setFailed((now) => ({ ...now, [index]: { verb, message: error.message } })),

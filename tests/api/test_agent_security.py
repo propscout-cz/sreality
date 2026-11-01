@@ -376,7 +376,7 @@ def _sql_targets(tree: ast.AST) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            upper = " ".join(node.value.split())
+            upper = " ".join(node.value.upper().split())
             for verb in _WRITE_VERBS:
                 at = 0
                 while (at := upper.find(verb, at)) != -1:
@@ -414,11 +414,16 @@ def _callers_of(name: str) -> set[str]:
 def test_the_only_door_to_a_write_is_the_apply_and_undo_routes() -> None:
     assert _callers_of("apply") == {"api/routes/agent_runs.py::apply_proposal"}
     assert _callers_of("undo") == {"api/routes/agent_runs.py::undo_proposal"}
-    # And nothing a run runs reaches them: the executor and its loop import neither the module nor a write's own code.
-    for name in ("executor.py", "loop.py", "claims.py", "terminator.py"):
-        tree = ast.parse((ROOT / "api" / "agents" / name).read_text(encoding="utf-8"))
-        imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
-        assert not imported & {"proposals", "writes"}, name
+    # And nothing a run runs reaches them: nothing else under api/agents imports the door or a module a write goes through,
+    # and only the door runs a handler of a write (`entry.handler`; the registry's own `call` refuses a write first).
+    write_modules = {"proposals", "writes", "curation", "pipeline", "dismissals", "notifications"}
+    for path in (ROOT / "api" / "agents").glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if path.name != "proposals.py":
+            imported = {alias.name.rsplit(".", 1)[-1] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom | ast.Import)
+                        for alias in node.names}
+            assert not imported & write_modules, path.name
+            assert not [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "handler"], path.name
 
 
 @pytest.mark.parametrize("name", sorted(_IN_SCOPE))

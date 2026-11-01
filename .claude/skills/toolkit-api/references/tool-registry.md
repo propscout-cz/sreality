@@ -242,7 +242,9 @@ Each handler calls the module its route calls (`curation`, `pipeline`, `notifica
 **Own scope.** A proposal writes only into what its run creates. No entry takes the id of a collection, tag, stage, note or watchdog
 (census `test_no_write_entry_takes_an_id_but_a_propertys`), so "add to a collection" is `create_collection`'s `property_ids`, and a
 watchdog cannot scope itself by the user's tags, collections or stages (not the WATCHDOG agenda). A place chip's `name` is the model's,
-so Apply replaces it from `ruian_place_names_public` and refuses a code it does not know.
+so Apply replaces it from `ruian_place_names_public` and refuses a code it does not know; a city index rule's `index_name` must be one
+`city_index_definitions_public` holds. A property we no longer hold, a clashing name, an unknown place or index: each drawn as a
+refusal before the click, each a 4xx at Apply that leaves the proposal open.
 
 **A `WriteEntry`** adds to `Entry`: `draw(ctx, args)`, the before and after from our own data (only `agent_text` is the model's words);
 `undo_check(ctx, record, applied_at)`, what the page says of Undo; `undo(ctx, record, applied_at)`; `undo_confirm`. The handler returns

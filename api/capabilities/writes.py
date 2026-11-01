@@ -34,6 +34,7 @@ _PLACES_SQL = (
     "SELECT level, code, name FROM ruian_place_names_public "
     "WHERE (level, code) IN (SELECT * FROM unnest(%s::text[], %s::bigint[]))"
 )
+_CITY_INDEXES_SQL = "SELECT index_name FROM city_index_definitions_public WHERE index_name = ANY(%s)"
 _TITLES_SQL = (
     "SELECT property_id, disposition, subtype, area_m2, price_czk, category_type, display_label "
     "FROM properties_public WHERE property_id = ANY(%s)"
@@ -52,6 +53,8 @@ def _account(ctx: Context) -> Any:
 
 def _drawn(*, title: str, before: list[str], after: list[str], agent_text: Iterable[tuple[str, str | None]] = (),
            properties: list[dict[str, Any]] | None = None, filters: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    if any(p["property_id"] is None for p in properties or ()):
+        before = [*before, "We no longer hold a property here, so Apply is refused."]
     return {"title": title, "before": before, "after": after, "properties": properties or [], "filters": filters or [],
             "agent_text": [{"label": label, "text": text} for label, text in agent_text if text]}
 
@@ -105,7 +108,8 @@ def _new_collection(ctx: Context, args: NewCollectionArgs) -> dict[str, Any]:
     added = curation.add_properties_to_collection(ctx.conn, made["id"], s.AddPropertiesToCollectionIn(property_ids=args.property_ids))
     return {"data": {"collection_id": made["id"], "added_ids": added["added_ids"],
                      "answer": f"Created the collection with {added['added']} of the properties."},
-            "undo": {"collection_id": made["id"], "name": args.name, "description": args.description}}
+            "undo": {"collection_id": made["id"], "name": args.name, "description": args.description,
+                     "added_ids": added["added_ids"]}}
 
 
 def _undo_check_new_collection(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> UndoCheck:
@@ -272,6 +276,17 @@ def _places(conn: psycopg.Connection, chips: list[Chip] | None) -> dict[tuple[st
         return {(level, int(code)): name for level, code, name in cur.fetchall()}
 
 
+def _unknown_city_indexes(conn: psycopg.Connection, filters: WatchdogFilters) -> list[str]:
+    """A rule's index is the one free word in a watchdog's filters: the model's, until our own list holds it."""
+    named = list({rule.index_name for rule in filters.city_index_rules or ()})
+    if not named:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(_CITY_INDEXES_SQL, (named,))
+        known = {r[0] for r in cur.fetchall()}
+    return sorted(set(named) - known)
+
+
 def _enum_label(fid: str, value: Any) -> str:
     options = fr.REGISTRY[fid].enum_values or ()
     return next((o.label_en for o in options if o.value == value), str(value))
@@ -313,7 +328,9 @@ def _draw_watchdog(ctx: Context, args: WatchdogArgs) -> dict[str, Any]:
     with ctx.conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM notification_subscriptions WHERE account_id = %s AND retired_at IS NULL", (_account(ctx),))
         count = int(cur.fetchone()[0])
-    return _drawn(title="New watchdog", before=[f"{_plural(count, 'watchdog')}."],
+    unknown = _unknown_city_indexes(ctx.conn, args.filters)
+    before = [f"{_plural(count, 'watchdog')}."] + (["A city index it names is not one we hold, so Apply is refused."] if unknown else [])
+    return _drawn(title="New watchdog", before=before,
                   after=[f"{_plural(count + 1, 'watchdog')}. This one alerts only on properties that appear from now on, "
                          "never on what is already there."],
                   agent_text=(("Name", args.name),), filters=_filter_lines(args.filters, _places(ctx.conn, args.filters.districts)))
@@ -323,6 +340,8 @@ def _new_watchdog(ctx: Context, args: WatchdogArgs) -> dict[str, Any]:
     places = _places(ctx.conn, args.filters.districts)
     if unknown := [c.id for c in args.filters.districts or () if (c.level, c.id) not in places]:
         raise HTTPException(422, f"No such place in our register: {unknown}.")
+    if unknown := _unknown_city_indexes(ctx.conn, args.filters):
+        raise HTTPException(422, "A city index it names is not one we hold.")
     made = nf.create_subscription(ctx.conn, name=args.name, filter_spec=_spec(args.filters, places), account_id=_account(ctx))
     return {"data": {"subscription_id": made["id"], "answer": "Created the watchdog."}, "undo": {"subscription_id": made["id"]}}
 
@@ -335,12 +354,7 @@ def _undo_check_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: da
 
 
 def _undo_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> str:
-    with ctx.conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM notification_subscriptions WHERE id = %s FOR UPDATE", (record["subscription_id"],))
-    refusal, _ = nf.new_subscription_undo_check(ctx.conn, record["subscription_id"], applied_at)
-    if refusal:
-        raise HTTPException(409, refusal)
-    nf.delete_subscription(ctx.conn, record["subscription_id"])
+    nf.undo_new_subscription(ctx.conn, record["subscription_id"], applied_at)
     return "Retired the watchdog."
 
 
