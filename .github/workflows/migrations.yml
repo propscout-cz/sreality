@@ -45,6 +45,7 @@ on:
       # frontend-only PR could change the zone and never run the rail that guards it.
       - "frontend/src/lib/llmCosts.ts"
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 jobs:
