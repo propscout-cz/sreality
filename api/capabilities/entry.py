@@ -82,12 +82,12 @@ class UndoCheck:
 
 @dataclass(frozen=True)
 class WriteEntry(Entry):
-    """A write the user applies (ADR-0004): never called by a run. `handler` returns `data` (with the `answer` the user
-    reads) and `undo`, the record its inverse takes. Each of `draw`, `undo_check` and `undo` takes the transaction's Context;
-    the last two also take that record and the Apply's stamp, which is the stamp every row it wrote carries."""
+    """A write the user applies (ADR-0004): never called by a run. `handler` returns `data.answer`, what the user reads, and
+    `undo`, the record its inverse takes. `undo_check` and `undo` take that record and the Apply's stamp, the stamp every row
+    it wrote carries."""
 
     draw: Callable[[Context, Any], dict[str, Any]]
     undo_check: Callable[[Context, Mapping[str, Any], datetime], UndoCheck]
-    undo: Callable[[Context, Mapping[str, Any], datetime], str]
+    undo: Callable[[Context, Mapping[str, Any], datetime], None]
     # Undo removes something rule 22 lets a surface remove only behind a confirm step.
     undo_confirm: bool = False

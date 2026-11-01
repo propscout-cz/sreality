@@ -4126,7 +4126,9 @@ renumber.** Navigate by area:
     Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
     while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,
     `entered_stage_at` and `updated_at`, the stage still `is_entry`, no merge on the property since), through `remove_card`, so its
-    ledger event is the same, behind the one two-step confirm. A card the user moved, even back, is their deal: they close it.
+    ledger event is the same, behind the one two-step confirm. A card the user moved, even back, is their deal: they close it. It is
+    the one SPA card write outside `lib/usePipelineCard`: the server draws what a proposal does and the panel re-reads rather than
+    patches, through the same write policy (`lib/useOptimisticWrite`).
 23. **One measure, one definition, one label.** Every per-m² figure the platform computes or
     renders — in SQL, in Python, in the SPA, in the Chrome extension — resolves from ONE named
     measure carrying its own numerator, denominator, unit and validity bounds. No consumer

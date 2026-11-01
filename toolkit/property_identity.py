@@ -281,9 +281,12 @@ def resolve_active_property_id(
     return resolve_active_property_ids(conn, [property_id]).get(property_id)
 
 
+# merged_at is its merge transaction's start, so a merge begun just before `since` can still have carried a row written after it.
+# The margin outlasts any merge transaction: the cost of a false hit is only that a caller holds back.
 _MERGED_SINCE_SQL = (
-    "SELECT p.id FROM properties p WHERE p.id = ANY(%(ids)s) AND p.merged_at >= %(since)s "
-    "UNION SELECT p.merged_into FROM properties p WHERE p.merged_into = ANY(%(ids)s) AND p.merged_at >= %(since)s"
+    "SELECT p.id FROM properties p WHERE p.id = ANY(%(ids)s) AND p.merged_at >= %(since)s - interval '1 hour' "
+    "UNION SELECT p.merged_into FROM properties p WHERE p.merged_into = ANY(%(ids)s) "
+    "AND p.merged_at >= %(since)s - interval '1 hour'"
 )
 
 

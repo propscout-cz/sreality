@@ -1,9 +1,9 @@
-"""A run's proposals as the user meets them: drawn from our own data, applied once, undone (ADR-0004). The one place a write
-entry runs, always in the caller's own tenant transaction, so the write and its marker commit or roll back as one.
+"""A run's proposals as the user meets them: drawn from our own data, applied once, undone (ADR-0004)."""
 
-Proposals are read only from `agent_runs.proposals`, which holds what the terminator accepted; the diary holds refused ones too.
-The marker's writer is migration 712's definer functions: `authenticated` holds SELECT on the table, and agent_runs stays
-read-only to it."""
+# The one place a write entry runs, always in the caller's own tenant transaction, so the write and its marker commit or roll back
+# as one. Proposals are read only from `agent_runs.proposals`, which holds what the terminator accepted; the diary holds refused
+# ones too. The marker's writer is migration 712's definer functions: `authenticated` holds SELECT on the table, and agent_runs
+# stays read-only to it.
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
 
 NOT_FOUND = "no such proposal"
+_NO_LONGER = "This kind of proposal no longer exists, so it cannot be undone."
 _RUN = "SELECT account_id, proposals FROM agent_runs WHERE id = %s"
 _MARKERS = ("SELECT proposal_index, applied_at, undone_at, effect FROM agent_proposal_applies WHERE run_id = %s "
             "AND (%s::integer IS NULL OR proposal_index = %s)")
@@ -66,7 +67,7 @@ def _applied_view(ctx: Context, base: dict[str, Any], entry: WriteEntry | None, 
         return view
     view["answer"] = effect["answer"]
     if entry is None:
-        view["undo"] = {"available": False, "says": "This kind of proposal no longer exists, so it cannot be undone."}
+        view["undo"] = {"available": False, "says": _NO_LONGER}
     else:
         check = entry.undo_check(ctx, effect["undo"], marker["applied_at"])
         view["undo"] = {"available": check.available, "says": check.says}
@@ -101,22 +102,27 @@ def _proposal(proposals: list[Any], index: int) -> Mapping[str, Any]:
     return proposals[index]
 
 
+def _already_applied(ctx: Context, index: int, proposal: Mapping[str, Any], marker: Mapping[str, Any]) -> dict[str, Any]:
+    if marker["undone_at"] is not None:
+        raise HTTPException(409, "You undid this proposal; a proposal applies once.")
+    return _view(ctx, index, proposal, marker)
+
+
 def apply(conn: psycopg.Connection, run_id: int, index: int) -> dict[str, Any]:
     """Write the proposal once: the claim is the compare-and-set, taken before the write, so a second Apply, however close,
     waits for the first's commit and then writes nothing. A refusal rolls the claim back with the transaction, and the
     proposal stays open to try again."""
     account, proposals = _run(conn, run_id)
     proposal = _proposal(proposals, index)
+    ctx = Context(conn, account_id=account)
+    if marker := _markers(conn, run_id, index).get(index):
+        return _already_applied(ctx, index, proposal, marker)
     try:
         entry, args = _parsed(proposal)
     except ToolError as exc:
         raise HTTPException(422, exc.message) from None
-    ctx = Context(conn, account_id=account)
     if not conn.execute(_CLAIM, (run_id, index, entry.name)).fetchone()[0]:
-        marker = _markers(conn, run_id, index)[index]
-        if marker["undone_at"] is not None:
-            raise HTTPException(409, "You undid this proposal; a proposal applies once.")
-        return _view(ctx, index, proposal, marker)
+        return _already_applied(ctx, index, proposal, _markers(conn, run_id, index)[index])
     drawn = entry.draw(ctx, args)
     done = entry.handler(ctx, args)
     conn.execute(_SETTLE, (run_id, index, Jsonb({"undo": done["undo"], "answer": done["data"]["answer"], "drawn": drawn})))
@@ -136,6 +142,6 @@ def undo(conn: psycopg.Connection, run_id: int, index: int) -> dict[str, Any]:
         return _view(ctx, index, proposal, _markers(conn, run_id, index)[index])
     entry = _write_entry(proposal["entry"])
     if entry is None:
-        raise HTTPException(409, "This kind of proposal no longer exists, so it cannot be undone.")
+        raise HTTPException(409, _NO_LONGER)
     entry.undo(ctx, marker["effect"]["undo"], marker["applied_at"])
     return _view(ctx, index, proposal, _markers(conn, run_id, index)[index])

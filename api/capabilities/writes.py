@@ -1,15 +1,13 @@
-"""The writes a run may propose and only its user may apply (ADR-0004), each over the module its route writes through.
+"""The writes a run may propose and only its user may apply (ADR-0004), each over the module its route writes through."""
 
-A write names no collection, tag or stage: a proposal may only write into what the run itself creates, so there is no id here
-to point at someone else's row, and an unknown key is refused (`Args`). A new collection therefore holds its members in the one
-proposal, and "add to a collection" is that proposal's `property_ids`, never a write of its own.
-
-Undo removes exactly what Apply added. The Apply's stamp tells the two apart: its rows carry `applied_at`, `now()` being the
-transaction's start (migration 712), and a merge moves a row without changing that. A `draw` is built from our own data; the
-model's words stay in `agent_text`, marked as its."""
+# A write names no collection, tag or stage: a proposal may only write into what the run itself creates, so there is no id here
+# to point at someone else's row, and an unknown key is refused (`Args`). A new collection holds its members in the one proposal.
+# Undo tells the Apply's rows from the user's by the Apply's stamp: `applied_at`, `now()` being the transaction's start (migration
+# 712), which a merge leaves alone. A `draw` is built from our own data; the model's words stay in `agent_text`, marked as its.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any, Self
@@ -45,7 +43,7 @@ def _plural(n: int, one: str, many: str | None = None) -> str:
     return f"{n} {one}" if n == 1 else f"{n} {many or one + 's'}"
 
 
-def _account(ctx: Context) -> Any:
+def _account(ctx: Context) -> uuid.UUID:
     if ctx.account_id is None:
         raise RuntimeError("a write's Context names the run's account")
     return ctx.account_id
@@ -106,28 +104,23 @@ def _new_collection(ctx: Context, args: NewCollectionArgs) -> dict[str, Any]:
     made = curation.create_collection(ctx.conn, s.CreateCollectionIn(name=args.name, description=args.description),
                                       account_id=str(_account(ctx)))
     added = curation.add_properties_to_collection(ctx.conn, made["id"], s.AddPropertiesToCollectionIn(property_ids=args.property_ids))
-    return {"data": {"collection_id": made["id"], "added_ids": added["added_ids"],
-                     "answer": f"Created the collection with {added['added']} of the properties."},
+    return {"data": {"answer": f"Created the collection with {_plural(added['added'], 'property', 'properties')}."},
             "undo": {"collection_id": made["id"], "name": args.name, "description": args.description,
                      "added_ids": added["added_ids"]}}
 
 
 def _undo_check_new_collection(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> UndoCheck:
     plan = curation.new_collection_undo_plan(ctx.conn, record, applied_at)
-    if plan is None:
-        return UndoCheck(False, "You already deleted this collection.")
-    refusal, removable, stays = plan
-    if refusal is not None:
-        return UndoCheck(False, refusal)
-    if stays:
-        return UndoCheck(True, f"Removes the {len(removable)} the agent added and keeps the collection: it also holds {stays} of yours.")
+    if plan.refusal is not None:
+        return UndoCheck(False, plan.refusal)
+    if plan.stays:
+        return UndoCheck(True, f"Removes the {len(plan.removable)} the agent added and keeps the collection: it also holds "
+                               f"{plan.stays} of yours.")
     return UndoCheck(True, "Deletes the collection.")
 
 
-def _undo_new_collection(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> str:
-    done = curation.undo_new_collection(ctx.conn, record, applied_at)
-    return ("Removed the agent's properties; the collection stays, with yours in it." if done["kept_collection"]
-            else "Deleted the collection.")
+def _undo_new_collection(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> None:
+    curation.undo_new_collection(ctx.conn, record, applied_at)
 
 
 # --- a note or a viewing -------------------------------------------------------------------------------------------
@@ -164,7 +157,7 @@ def _draw_note(ctx: Context, args: NoteArgs) -> dict[str, Any]:
 def _add_note(ctx: Context, args: NoteArgs) -> dict[str, Any]:
     note = curation.create_note(ctx.conn, args.property_id, s.CreateNoteIn(body=args.body, viewing_at=args.viewing_at),
                                 str(_account(ctx)))
-    return {"data": {"note_id": note["id"], "answer": "Added the viewing." if args.viewing_at else "Added the note."},
+    return {"data": {"answer": "Added the viewing." if args.viewing_at else "Added the note."},
             "undo": {"note_id": note["id"]}}
 
 
@@ -173,9 +166,8 @@ def _undo_check_note(ctx: Context, record: Mapping[str, Any], applied_at: dateti
     return UndoCheck(False, refusal) if refusal else UndoCheck(True, "Deletes the note.")
 
 
-def _undo_note(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> str:
+def _undo_note(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> None:
     curation.undo_added_note(ctx.conn, record["note_id"], applied_at)
-    return "Deleted the note."
 
 
 # --- a pipeline card at the entry stage ----------------------------------------------------------------------------
@@ -212,27 +204,29 @@ def _add_card(ctx: Context, args: CardArgs) -> dict[str, Any]:
     card = pipeline.add_card(ctx.conn, s.AddPipelineCardIn(property_id=args.property_id), account_id=account)
     answer = (f"Added to your board at {card['stage_label']}." if card["added"]
               else f"Already on your board at {card['stage_label']}; nothing changed.")
-    return {"data": {"property_id": card["property_id"], "added": card["added"], "answer": answer},
+    return {"data": {"answer": answer},
             "undo": {"property_id": card["property_id"], "added": card["added"], "dismissed": dismissed}}
+
+
+_CARD_NOT_ADDED = "Nothing to undo: Apply changed nothing, and the card there is yours."
 
 
 def _undo_check_card(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> UndoCheck:
     if not record["added"]:
-        return UndoCheck(False, "Nothing to undo: Apply changed nothing, and the card there is yours.")
+        return UndoCheck(False, _CARD_NOT_ADDED)
     refusal = pipeline.added_card_undo_refusal(ctx.conn, record["property_id"], applied_at, account_id=_account(ctx))
     if refusal:
         return UndoCheck(False, refusal)
     return UndoCheck(True, "Takes this card off your board." + (" The property goes back to your dismissed ones." if record["dismissed"] else ""))
 
 
-def _undo_card(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> str:
+def _undo_card(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> None:
     if not record["added"]:
-        raise HTTPException(409, "Nothing to undo: Apply changed nothing, and the card there is yours.")
+        raise HTTPException(409, _CARD_NOT_ADDED)
     account = _account(ctx)
     pipeline.undo_added_card(ctx.conn, record["property_id"], applied_at, account_id=account)
     if record["dismissed"]:
         dismissals.dismiss(ctx.conn, s.DismissPropertyIn(property_id=record["property_id"]), account_id=account)
-    return "Took the card off your board."
 
 
 # --- a watchdog ----------------------------------------------------------------------------------------------------
@@ -343,7 +337,7 @@ def _new_watchdog(ctx: Context, args: WatchdogArgs) -> dict[str, Any]:
     if unknown := _unknown_city_indexes(ctx.conn, args.filters):
         raise HTTPException(422, "A city index it names is not one we hold.")
     made = nf.create_subscription(ctx.conn, name=args.name, filter_spec=_spec(args.filters, places), account_id=_account(ctx))
-    return {"data": {"subscription_id": made["id"], "answer": "Created the watchdog."}, "undo": {"subscription_id": made["id"]}}
+    return {"data": {"answer": "Created the watchdog."}, "undo": {"subscription_id": made["id"]}}
 
 
 def _undo_check_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> UndoCheck:
@@ -353,9 +347,8 @@ def _undo_check_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: da
     return UndoCheck(True, "Retires the watchdog." + (f" Its {_plural(alerts, 'alert')} leave your feed." if alerts else ""))
 
 
-def _undo_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> str:
+def _undo_watchdog(ctx: Context, record: Mapping[str, Any], applied_at: datetime) -> None:
     nf.undo_new_subscription(ctx.conn, record["subscription_id"], applied_at)
-    return "Retired the watchdog."
 
 
 ENTRIES = (

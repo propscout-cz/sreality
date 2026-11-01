@@ -25,7 +25,6 @@ interface ProposalWrite {
   verb: Verb;
 }
 
-const WRITE_KEY = ['write', 'agent-proposals', 'apply-undo'] as const;
 const WRITES: Record<Verb, (id: number, index: number) => Promise<AgentProposal>> = { apply: applyAgentProposal, undo: undoAgentProposal };
 const FAILED: Record<Verb, string> = { apply: 'Not applied:', undo: 'Not undone:' };
 // What an Apply or Undo can touch: the curation it wrote, and the dismissal a card's write lifts or restores.
@@ -146,7 +145,8 @@ export default function ProposalsPanel({ run }: { run: AgentRun }) {
   const proposals = useAgentRunProposals(run.id, count > 0);
   const [failed, setFailed] = useState<Record<number, { verb: Verb; message: string }>>({});
   const write = useOptimisticWrite<ProposalWrite, AgentProposal>({
-    mutationKey: WRITE_KEY,
+    // Per run: a pending key is a proposal's index, which another run's page holds too.
+    mutationKey: ['write', 'agent-proposals', run.id],
     mutationFn: ({ index, verb }) => WRITES[verb](run.id, index),
     revalidate: [agentRunKeys.proposals(run.id), ...tableReads(CURATED, null), watchdogKeys.subscriptions, notificationKeys.all],
     pendingKey: ({ index }) => index,

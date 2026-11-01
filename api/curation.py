@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, ContextManager
 
@@ -298,58 +299,62 @@ _NEW_COLLECTION_STATE_SQL = (
 )
 
 
+@dataclass(frozen=True)
+class NewCollectionUndo:
+    """What Undo may do to the collection an Apply made: why it may not, else the members still the agent's and how many stay."""
+
+    refusal: str | None = None
+    removable: tuple[int, ...] = ()
+    stays: int = 0
+
+
 def new_collection_undo_plan(
     conn: "psycopg.Connection", record: Mapping[str, Any], applied_at: datetime,
-) -> tuple[str | None, list[int], int] | None:
-    """What Undo may do to the collection an Apply made: (why it may not, the members still the agent's, how many stay), or
-    None if the collection is gone. A member is the agent's when it carries the Apply's stamp, whichever property a merge has
-    since moved it to. A member a merge folded another into may hold the user's own, so once they have touched the membership
-    it stays; while `updated_at` still reads the stamp, no member is theirs."""
+) -> NewCollectionUndo:
+    """A member is the agent's when it carries the Apply's stamp, whichever property a merge has since moved it to. A member a
+    merge folded another into may hold the user's own, so once they have touched the membership it stays; while `updated_at`
+    still reads the stamp, no member is theirs."""
     with conn.cursor() as cur:
         cur.execute(_NEW_COLLECTION_STATE_SQL, {"at": applied_at, "id": record["collection_id"]})
         row = cur.fetchone()
     if row is None:
-        return None
+        return NewCollectionUndo("You already deleted this collection.")
     name, description, monitored_at, updated_at, shared, ours, others = row
     ours = [int(i) for i in ours]
     if name != record["name"] or description != record["description"]:
-        return "You renamed or edited this collection, so Undo leaves it to you.", [], 0
+        return NewCollectionUndo("You renamed or edited this collection, so Undo leaves it to you.")
     if monitored_at is not None:
-        return "You turned on monitoring for this collection, so Undo leaves it to you.", [], 0
+        return NewCollectionUndo("You turned on monitoring for this collection, so Undo leaves it to you.")
     if shared:
-        return "You shared this collection, so Undo leaves it to you.", [], 0
+        return NewCollectionUndo("You shared this collection, so Undo leaves it to you.")
     folded = merged_since(conn, ours, applied_at) if updated_at != applied_at else set()
-    removable = [i for i in ours if i not in folded]
+    removable = tuple(i for i in ours if i not in folded)
     stays = int(others) + len(folded)
     if stays and not removable:
-        return "Nothing of the agent's is left in this collection: what it holds is yours.", [], 0
-    return None, removable, stays
+        return NewCollectionUndo("Nothing of the agent's is left in this collection: what it holds is yours.")
+    return NewCollectionUndo(None, removable, stays)
 
 
 def undo_new_collection(
     conn: "psycopg.Connection", record: Mapping[str, Any], applied_at: datetime,
-) -> dict[str, Any]:
+) -> None:
     """Remove exactly what the Apply added: the whole collection if nothing else is in it, else only the agent's members.
     The row lock stops a member being added between the plan and the delete (an add bumps this row first)."""
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM collections WHERE id = %s FOR UPDATE", (record["collection_id"],))
     plan = new_collection_undo_plan(conn, record, applied_at)
-    if plan is None:
-        raise HTTPException(409, "You already deleted this collection.")
-    refusal, removable, stays = plan
-    if refusal is not None:
-        raise HTTPException(409, refusal)
-    if not stays:
+    if plan.refusal is not None:
+        raise HTTPException(409, plan.refusal)
+    if not plan.stays:
         delete_collection(conn, record["collection_id"])
-        return {"removed": len(removable), "kept_collection": False}
+        return
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             "DELETE FROM collection_properties "
             "WHERE collection_id = %s AND property_id = ANY(%s) AND added_at = %s",
-            (record["collection_id"], removable, applied_at),
+            (record["collection_id"], list(plan.removable), applied_at),
         )
         cur.execute("UPDATE collections SET updated_at = now() WHERE id = %s", (record["collection_id"],))
-    return {"removed": len(removable), "kept_collection": True}
 
 
 # --- shares (migration 610) -------------------------------------------------

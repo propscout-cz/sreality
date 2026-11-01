@@ -390,6 +390,15 @@ def test_an_applied_proposal_keeps_its_drawing_and_its_undo_whatever_the_schema_
     assert undone.status_code == 200 and undone.json()["state"] == "undone" and undone.json()["answer"] is None
 
 
+def test_a_repeat_apply_answers_the_same_view_whatever_the_schema_says_later(w: World) -> None:
+    run_id = _applied(w, _note(w.pids[0]))
+    w.svc.execute("""UPDATE agent_runs SET proposals = '[{"entry": "add_note", "args": {"retired_field": 1}}]' WHERE id = %s""", (run_id,))
+    before = w.rows()
+    again = w.post(run_id, "apply")
+    assert again.status_code == 200 and again.json()["state"] == "applied"
+    assert w.rows() == before
+
+
 def test_a_new_watchdog_alerts_nothing_that_is_already_there(w: World) -> None:
     """Rule 16: created by Apply as by the route, `active_since` is its baseline, so no flood of what already matches."""
     run_id = _applied(w, _watchdog())
@@ -593,6 +602,19 @@ def test_undo_of_a_card_on_a_merged_property_is_refused(w: World, survivor_holds
     w.merge(*((agents, yours) if survivor_holds_the_agents_card else (yours, agents)))
     _refused_undo(w, run_id, "merged with another")
     assert len(_cards(w)) == 1
+
+
+def test_a_merge_begun_just_before_the_apply_still_holds_back_a_cards_undo(w: World) -> None:
+    """merged_at is the merge transaction's start, so the merge may be stamped before the Apply it carried a card past."""
+    agents, yours = w.pids[:2]
+    run_id = _applied(w, _card(agents))
+    w.client(w.people["a"]).post("/pipeline/cards", json={"property_id": yours})
+    w.merge(agents, yours)
+    w.svc.execute("UPDATE properties SET merged_at = now() - interval '5 seconds' WHERE id = %s", (yours,))
+    w.svc.execute("UPDATE agent_proposal_applies SET applied_at = now() WHERE run_id = %s", (run_id,))
+    w.svc.execute("UPDATE property_pipeline SET added_at = a.applied_at, entered_stage_at = a.applied_at, updated_at = a.applied_at "
+                  "FROM agent_proposal_applies a WHERE a.run_id = %s AND property_pipeline.property_id = %s", (run_id, agents))
+    _refused_undo(w, run_id, "merged with another")
 
 
 def test_a_cards_undo_puts_back_the_dismissal_its_apply_lifted(w: World) -> None:
