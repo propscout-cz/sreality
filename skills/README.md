@@ -52,6 +52,16 @@ that declares it. The server refuses a submission, and tells the model what to f
 - a proposal names no write tool the agent lists, or its arguments fail that tool's schema;
 - it shares its turn with another call, or with hosted code still waiting to run.
 
+## The photo facets
+
+`photo-facets.md`, beside the folders, is the prompt and the facet list of `assess_property_visuals`, and the operator's
+to edit: each `### key` heading is a facet, the rest is the wording. It is one file for all agents, not in any agent's
+`references/`, because every agent must see the same judgement (a per-agent file would split the cache) and because
+`references/` is appended to an agent's instructions, where it would cost tokens on every model call and tell the agent
+how to grade rather than what the grade was. An agent uses it by listing the tool. Saving any edit makes a new prompt
+version with no code change, so every property is judged again the next time it is asked about, at about $0.10 each;
+batch your edits. CI refuses a heading that is no facet key.
+
 ## Code
 
 An agent with `code: true` gets Claude's hosted code execution tool in every model call (ADR-0005). It is a tool of the

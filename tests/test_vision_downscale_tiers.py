@@ -16,6 +16,7 @@ from toolkit import (
     condition_markers,
     condition_scoring,
     image_similarity,
+    photo_assessment,
 )
 from toolkit.vision_images import COMPARISON_MAX_EDGE, DOCUMENT_MAX_EDGE
 
@@ -69,3 +70,12 @@ def test_building_extraction_listing_photos_use_document_tier(monkeypatch: Any) 
     blocks, n, warning = building_extraction._build_image_blocks(None, 1, 4)
     assert calls == [DOCUMENT_MAX_EDGE, DOCUMENT_MAX_EDGE]
     assert n == 2 and warning is None
+
+
+def test_photo_assessment_sends_photos_at_comparison_tier_and_floor_plans_at_document_tier(monkeypatch: Any) -> None:
+    calls = _recorder(monkeypatch, photo_assessment)
+    photo = photo_assessment.Photo(1, "a", None, 800, 600)
+    plan = photo_assessment.Photo(2, "b", None, 800, 600)
+    photos = photo_assessment.PhotoSet(property_id=1, listing_id=1, stored=2, pending=0, photos=(photo,), plans=(plan,))
+    photo_assessment._content(photos, _FakeR2())
+    assert calls == [COMPARISON_MAX_EDGE, DOCUMENT_MAX_EDGE]

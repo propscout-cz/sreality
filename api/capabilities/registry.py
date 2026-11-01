@@ -11,7 +11,7 @@ import psycopg
 from pydantic import ValidationError
 
 from api import tenant_pool
-from api.capabilities import market, tenant
+from api.capabilities import market, run_scope, tenant, visuals
 from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode, busy, invalid_arguments, to_tool_error
 from api.capabilities.truncate import fit
@@ -27,7 +27,7 @@ def _index(entries: Iterable[Entry]) -> Mapping[str, Entry]:
     return MappingProxyType(out)
 
 
-ENTRIES: Mapping[str, Entry] = _index((*market.ENTRIES, *tenant.ENTRIES))
+ENTRIES: Mapping[str, Entry] = _index((*market.ENTRIES, *tenant.ENTRIES, *visuals.ENTRIES))
 
 
 def validate(name: str, raw_args: object) -> tuple[Entry, Args]:
@@ -45,7 +45,12 @@ def validate(name: str, raw_args: object) -> tuple[Entry, Args]:
 def _connection(caller: Caller, entry: Entry) -> Iterator[psycopg.Connection]:
     """The one place a tool's connection is chosen: the market's, or the caller's own RLS transaction."""
     if entry.tenancy is Tenancy.MARKET:
-        # A market tool only reads: bounded like a tenant GET, in its own transaction on the autocommit service
+        # A paid market fact waits on a model and then caches what it paid for: not inside a transaction, and not READ
+        # ONLY. Each of its statements commits alone on the autocommit connection.
+        if entry.effect is Effect.COSTLY:
+            yield caller.market
+            return
+        # A market tool that reads: bounded like a tenant GET, in its own transaction on the autocommit service
         # connection, so the SET LOCALs end at its COMMIT or ROLLBACK and never outlive the call.
         with caller.market.transaction():
             with caller.market.cursor() as cur:
@@ -66,7 +71,7 @@ def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
     try:
         # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
         with _connection(caller, entry) as conn:
-            result = entry.handler(Context(conn), args)
+            result = entry.handler(Context(conn, run=run_scope.current()), args)
             # A handler that swallowed a database error answered without that read (rent_map's reference swallows
             # any, a time-limit cancel included). The usual cause is that cancel, hence its retryable BUSY.
             if conn.info.transaction_status is psycopg.pq.TransactionStatus.INERROR:
