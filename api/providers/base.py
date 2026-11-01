@@ -214,7 +214,23 @@ def compute_cost_usd(
 # --- Provider protocol ----------------------------------------------------
 
 class ProviderError(Exception):
-    """Raised when a provider fails to produce a Completion."""
+    """Raised when a provider fails to produce a Completion; `status` is the HTTP status when it raised on one."""
+
+    def __init__(self, *args: Any, status: int | None = None) -> None:
+        super().__init__(*args)
+        self.status = status
+
+
+# Refused before any work, so sending it again spends nothing. Not a broken connection, a timeout or another 5xx: those
+# may have billed (a code call up to ten samples) with no usage to show for it, so a retry could pass a cap unseen.
+_REFUSED_UNSPENT = frozenset({429, 503, 529})
+
+
+def is_transient(error: ProviderError) -> bool:
+    """A rate limit or an overload: safe to send again. Read off the SDK's exception by attribute, since each SDK is
+    imported only when its provider is used."""
+    cause = error.__cause__
+    return (error.status or getattr(cause, "status_code", None) or getattr(cause, "code", None)) in _REFUSED_UNSPENT
 
 
 class CompletionProvider(Protocol):
@@ -237,6 +253,7 @@ class CompletionProvider(Protocol):
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion: ...
 
     def price_for(self, model: str) -> ModelPrice | None: ...
@@ -276,6 +293,7 @@ class HostedCodeProvider(CompletionProvider, Protocol):
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
         hosted_code: HostedCode | None = None,
     ) -> Completion: ...
 

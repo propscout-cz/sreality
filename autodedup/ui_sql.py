@@ -32,6 +32,8 @@ what tests/test_sql_placeholders.py exists to reject.
 
 from __future__ import annotations
 
+from autodedup.text_facts import MAX_CODE_POPULATION, MIN_CODE_LEN
+
 # ---------------------------------------------------------------- clusters (the groups view)
 
 CLUSTER_COLUMNS: tuple[str, ...] = (
@@ -873,6 +875,45 @@ _RESIDUAL_PHOTOS = (
     + _judge_best("p.listing_lo", "p.listing_hi")
 )
 
+
+def _order_code(ref: str) -> str:
+    """`listings.ad_reference` as one comparable code: portal prefix and spaces dropped, upper-cased."""
+    return (
+        f"upper(regexp_replace(regexp_replace(regexp_replace(btrim({ref}),"
+        " '^(IDNES|REALITYMIX)-', '', 'i'), '^ID\\s+', '', 'i'), '\\s', '', 'g'))"
+    )
+
+
+# THE SHARED ORDER CODE (operator, 2026-10-31): both ads print the same advertiser's offer number
+# (`listings.ad_reference`, migration 667; idnes prints sreality's `1166` as `IDNES-1166`), gated
+# as research measured it (confirming_signal_hunt.md § 3) with the engine's own code bounds: a
+# short or digit-free code is a per-broker sequence, one carried by more than
+# MAX_CODE_POPULATION listings a developer's product code.
+#
+# Spelled over BOTH sides on purpose. A gate on `la` alone is pushed down into a scan of
+# `listings` (measured: a 13 s parallel hash join with the crowd rebuilt per worker); over both,
+# it stays a join filter on the PK lookups the queue already does. The suffix compare is a cheap
+# necessary condition that keeps the regexes off nearly every pair whose codes differ (exact,
+# since `vocabulary.reference` collapses every whitespace run to one space). No index holds the
+# expression, so the crowd is one hashed, uncorrelated subplan per statement, built only once a
+# pair reaches it — never with the filter off.
+_SHARED = (
+    f"CASE WHEN right(upper(replace(la.ad_reference, ' ', '')), {MIN_CODE_LEN})"
+    f" = right(upper(replace(lb.ad_reference, ' ', '')), {MIN_CODE_LEN})"
+    f" AND {_order_code('la.ad_reference')} = {_order_code('lb.ad_reference')}"
+    f" THEN {_order_code('la.ad_reference')} END"
+)
+_SHARED_CODE = f"""  AND (NOT %(shared_code)s::boolean
+       OR (length({_SHARED}) >= {MIN_CODE_LEN}
+           AND {_SHARED} ~ '[0-9]'
+           AND {_SHARED} NOT IN (
+               SELECT {_order_code("lc.ad_reference")}
+                 FROM listings lc
+                WHERE lc.ad_reference IS NOT NULL
+                GROUP BY 1
+               HAVING count(*) > {MAX_CODE_POPULATION})))
+"""
+
 _RESIDUAL_FILTERS = (
     """
 WHERE p.generation = %(generation)s::text
@@ -891,6 +932,7 @@ WHERE p.generation = %(generation)s::text
     + _VERDICT_MATCHES
     + """)
 """
+    + _SHARED_CODE
 )
 
 # WHAT MAKES A PAIR RESIDUAL, in one place: the two listings are not in ONE cluster of this

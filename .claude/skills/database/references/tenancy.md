@@ -15,6 +15,17 @@ shape for each grain.
 - `current_account_ids()` — `LANGUAGE sql STABLE SECURITY DEFINER`, returns the caller's
   `account_members.account_id` set keyed off `auth.jwt() ->> 'sub'`.
 - `is_platform_admin()` — same shape against `admins`.
+- **An agent run's identity (migration 704, #2070).** The JWT-claims GUC of a run carries `run_account_id` beside
+  `sub`, set only by `api/agents/claims.caller_for`. It narrows: `current_account_ids()` and `acting_account_ids()`
+  intersect with that one account, `acting_account_ids()` ignores `x-act-as`, `is_platform_admin()` answers false. It
+  can only remove power: an account the `sub` is not a member of yields no account, and an empty claim raises. Without
+  it all three answer as 286, 641 and 330 did (`tests/test_agent_runs_live.py` compares them over a grid of claims,
+  headers, methods and roles). A browser user cannot set it: a Supabase JWT is signed, what a user can edit lands
+  under `user_metadata`, which no identity function reads, and no RPC of ours wraps `set_config` for a caller's value.
+  A custom access token hook would be the one way to add a top-level claim; the repo configures none (the dashboard
+  is not in git), and even that could only narrow. Hence a run started by an admin has no admin arm, and a
+  two-membership user's run reads one account; a removed membership empties the next tool call. The SYSTEM arm of
+  291's policies is every account's, a run's included.
 - Grants follow the skill body's "Default privileges" recipe: `handle_new_user()`
   (trigger-only) is executable by no client role; the other two grant `authenticated`
   EXECUTE, since RLS policies invoke them under the querying role.
@@ -425,7 +436,8 @@ routing inside `detach_listings`, whose carry-row identity, twins and conflicts 
 merge's receipt (`api/property_merge.merge_receipt`: the caller's account's own carry rows), the split's preview
 and receipt (`toolkit/property_split`: the caller's account's own items only, nothing of another's), `api/estimation_runs.py`
 (service-role child runs from `building_runs`), the Stripe webhook (no caller identity at
-all — the HMAC over the raw body is the auth), and both Valuo routes (`api/routes/valuo.py` →
+all — the HMAC over the raw body is the auth), the agent executor (`api/agents/executor.py`: `submit` and `cancel`
+take the account the route resolved, and every run row names it), and both Valuo routes (`api/routes/valuo.py` →
 `api/valuo.py`; `valuo_valuations` is RLS-on with zero policies): the account is
 `require_account_id(conn, claims, None)` called on the service-role connection — the one no-account 400,
 with no tenant transaction left open across the POST's two paid calls (`market-value`, then
@@ -443,8 +455,14 @@ and that list mirrors migration 291's three-arm policy (own account OR SYSTEM OR
 admin) rather than inventing a second tenancy definition. It never widens and never returns
 empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credential raises.
 
+`tests/api/test_tenant_caller_census.py` pins who calls `tenant_transaction` directly: `tenant_conn`, and each named
+exception below. A new caller argues its case here and joins the pinned set there. The same census pins the one place
+a caller gets claims, `api/agents/claims.caller_for`, so there is one claims shape: the executor hands the registry that
+caller and opens no transaction of its own.
+
 **Named exception — the tool registry (`api/capabilities/registry._connection`, #2062).** A TENANT tool runs
-inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's verified claims, never acting
+inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's claims (a run's, from the
+builder), never acting
 as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
 every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
 back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection
