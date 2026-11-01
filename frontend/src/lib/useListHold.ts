@@ -6,9 +6,9 @@
  * are paid the moment the hand leaves, so no row moves under it. Only the list's
  * own keys are held: counts, map and stats re-read at once, never held. The
  * list's own reads pass (a first load after a filter or sort change, a page, a
- * refresh the user asks for), and so do the user's own writes: each holds for
- * itself, and the ledger composes the two. A refetch nobody asked for (a
- * reconnect's, a remount's) parks like the re-read it would overwrite.
+ * refresh the user asks for, a sort revisited), and so do the user's own writes:
+ * each holds for itself, and the ledger composes the two. A reconnect refetch
+ * never starts on a list root (lib/curationSync), so none lands under a hand.
  *
  * POINTER. Over: React's pointerover reaches the container from its whole React
  * subtree, a popover portalled out of a row included, so a stage menu opened from
@@ -154,15 +154,18 @@ export function useListHold(keys: readonly QueryKey[]): ListHand {
 
 /** `value` as the list under `hand` shows it: the current one while no hand is
  * on the list, else the one drawn when the hand arrived (a component that mounts
- * under the hand draws the current one), until the hand leaves. No `hand`: the
- * current value. A row the user removes here is the caller's to drop at once. */
+ * under the hand, or is given its hand under it, draws the current one), until
+ * the hand leaves. No `hand`: the current value. A row the user removes here is
+ * the caller's to drop at once. */
 export function useHeld<T>(hand: ListHand | undefined, value: T): T {
   const h = hand ? hands.get(hand) : undefined;
   const shown = useRef(value);
   const latest = useRef(value);
+  const given = useRef(h);
   const [, repaint] = useReducer((n: number) => n + 1, 0);
   latest.current = value;
-  if (!h?.isOn()) shown.current = value;
+  if (!h?.isOn() || given.current !== h) shown.current = value;
+  given.current = h;
   useEffect(
     () => h?.watch((on) => {
       if (!on && shown.current !== latest.current) repaint();

@@ -385,7 +385,8 @@ they are, and the counts, map and stats beside them follow at once. Keyboard foc
 _Avoid_: hover (alone), focus, interaction lock, freeze
 
 **Park (of a read)**:
-A read a list owes that waits while a hand is on the list and is taken the moment the hand leaves.
+A read a list owes that waits while a hand is on the list and is taken the moment the hand leaves;
+the list's own reads never park.
 _Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
 
 **Watchdog**:

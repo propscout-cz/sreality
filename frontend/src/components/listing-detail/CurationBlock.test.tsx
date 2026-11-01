@@ -422,12 +422,11 @@ describe('<CurationBlock> artifact link', () => {
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
-  /* An empty field saves nothing: its button is off, and the form submits nothing
-     either (a browser submits no form through a disabled default button; the
-     synthetic submits pin the handler agreeing with the button). With no link
-     stored an empty field is untouched and closes; over a stored link it stays
-     open, the trash button being what removes a link. */
-  it('an empty field saves nothing: with no link stored it is untouched and closes', async () => {
+  /* An empty field saves nothing: its button is off, and Enter submits no form
+     whose default button is off (what a browser does, which user-event follows).
+     The field stays open, says nothing, and calls nothing; the trash button is what
+     removes a stored link. */
+  it('an empty field, typed then cleared or a stored link cleared, saves nothing on Enter and stays open', async () => {
     const user = userEvent.setup();
     mockReads();
     renderWithReads();
@@ -439,13 +438,13 @@ describe('<CurationBlock> artifact link', () => {
     expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeEnabled();
     await user.clear(field);
     expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeDisabled();
-    fireEvent.submit(field.closest('form')!);
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Odkaz na artefakt' })).toBeNull());
+    await user.type(field, '{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Odkaz na artefakt' })).toBe(field);
     expect(screen.queryByText(/začínající http/)).toBeNull();
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
-  it('a stored link cleared from its field saves nothing and stays open', async () => {
+  it('a stored link cleared from its field saves nothing on Enter and stays open', async () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
@@ -455,7 +454,7 @@ describe('<CurationBlock> artifact link', () => {
     const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
     await user.clear(field);
     expect(screen.getByRole('button', { name: 'Uložit odkaz' })).toBeDisabled();
-    fireEvent.submit(field.closest('form')!);
+    await user.type(field, '{Enter}');
     expect(screen.getByRole('textbox', { name: 'Odkaz na artefakt' })).toBe(field);
     expect(screen.queryByText(/začínající http/)).toBeNull();
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();

@@ -511,12 +511,12 @@ def test_a_caller_in_several_accounts_follows_each_as_own_and_a_share_between_th
     """C joins B's account too: C's read holds B's rows as own (mine) beside C's and A's edit share, and a share from
     B to C is no share row (709's `s.account_id not in me`), so B's families are followed whole, not as a board."""
     a, b, c = world.a, world.b, world.c
-    with svc.cursor() as cur:
-        cur.execute("INSERT INTO account_members (account_id, user_id, role) VALUES (%s, %s, 'member')",
-                    (b.acc, c.user))
-        cur.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) VALUES (%s, %s, 'read')",
-                    (b.acc, c.acc))
     try:
+        with svc.cursor() as cur:
+            cur.execute("INSERT INTO account_members (account_id, user_id, role) VALUES (%s, %s, 'member')",
+                        (b.acc, c.user))
+            cur.execute("INSERT INTO pipeline_shares (account_id, recipient_account_id, mode) "
+                        "VALUES (%s, %s, 'read')", (b.acc, c.acc))
         assert _audience(c.user) == {(c.acc, True, True), (b.acc, True, True), (a.acc, False, True)}
         rows = _view(c.user)
         assert {acc for acc, _f, _m in rows} == {a.acc, b.acc, c.acc}, rows

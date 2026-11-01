@@ -1014,9 +1014,9 @@ rules. Identify which one a task belongs to before you start.
   rows leave and enter (every loaded page re-read from the first) and its count, map and stats
   re-read. While the pointer is over the list or a finger is down on it (keyboard focus is no
   hand), `lib/useListHold` holds the list's own keys through `parkReads`: the scheduler's
-  re-reads park and are paid when the hand leaves; the list's first load, its pages and a refresh
-  the user asks for pass (a reconnect's or a remount's refetch parks like the re-read it would
-  overwrite), the count, map and stats are never held, and a click of the user's own composes
+  re-reads park and are paid when the hand leaves; the list's first load, its pages, a sort revisited
+  and a refresh the user asks for pass (the reconnect refetch is off for the list roots, so none lands
+  under a hand), the count, map and stats are never held, and a click of the user's own composes
   through its own hold. A new list surface spreads `useListHold(keys)` on its container; rows
   drawn from a read that also carries a count (the collection page's table) are held in the view
   with `useHeld`, never by holding that read. The Feed's Skryté roll, which no lens engages, is

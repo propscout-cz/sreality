@@ -904,7 +904,7 @@ describe('parkReads', () => {
   });
 });
 
-describe('parkReads and reads nobody asked for', () => {
+describe('parkReads and the reads it never cancels', () => {
   async function list(qc: QueryClient, fn = vi.fn(async ({ pageParam }: { pageParam: number }) => `p${pageParam}`)) {
     const observer = new InfiniteQueryObserver(qc, {
       queryKey: ['list'],
@@ -919,62 +919,53 @@ describe('parkReads and reads nobody asked for', () => {
   }
   const pagesOf = (qc: QueryClient) => qc.getQueryData<InfiniteData<string>>(['list'])?.pages;
 
-  it("parks a refetch nobody asked for that starts under the hand (a reconnect's, a remount's): owed, paid at the release", async () => {
+  it("lets a refetch the list's observer starts under the hand pass (a sort revisited, a remount): only its own re-reads park", async () => {
     const qc = client();
     const { fn } = await list(qc);
     const hand = parkReads(qc, [{ queryKey: ['list'] }]);
     fn.mockResolvedValueOnce('fresh');
-    void qc.refetchQueries({ queryKey: ['list'] }); // what a reconnect or a remount does
-    await flush();
-    expect(fn).toHaveBeenCalledTimes(2); // it started, and was cancelled
-    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('idle');
-    expect(pagesOf(qc)).toEqual(['p0']); // nothing landed under the hand
-    expect(isOwed(qc, ['list'])).toBe(true);
-
-    hand.release();
-    await flush();
-    expect(fn).toHaveBeenCalledTimes(3);
+    await qc.refetchQueries({ queryKey: ['list'] }); // what a remount or a revisited sort does
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pagesOf(qc)).toEqual(['fresh']);
     expect(isOwed(qc, ['list'])).toBe(false);
+    hand.release();
   });
 
-  it('cancels a refetch nobody asked for in flight when the hand arrives, and pays it at the release', async () => {
+  it('cancels no read in flight when the hand arrives unless it is a payment', async () => {
     const qc = client();
     const late = deferred<string>();
     const { fn } = await list(qc);
     fn.mockReturnValueOnce(late.promise);
-    void qc.refetchQueries({ queryKey: ['list'] });
-    expect(fn).toHaveBeenCalledTimes(2);
-
-    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
-    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('idle');
-    late.resolve('stale');
-    await flush();
-    expect(pagesOf(qc)).toEqual(['p0']);
-    expect(isOwed(qc, ['list'])).toBe(true);
-
-    hand.release();
-    await flush();
-    expect(fn).toHaveBeenCalledTimes(3);
-    expect(isOwed(qc, ['list'])).toBe(false);
-  });
-
-  it('cancels no refetch the user asked for, in flight when the hand arrives or started under it', async () => {
-    const qc = client();
-    const late = deferred<string>();
-    const { observer, fn } = await list(qc);
-    fn.mockReturnValueOnce(late.promise);
-    void observer.refetch(asked); // the user's refresh, in flight
+    void qc.refetchQueries({ queryKey: ['list'] }); // nothing owed: not a payment
     const hand = parkReads(qc, [{ queryKey: ['list'] }]);
     expect(qc.getQueryState(['list'])?.fetchStatus).toBe('fetching');
     late.resolve('fresh');
     await flush();
     expect(pagesOf(qc)).toEqual(['fresh']);
     expect(isOwed(qc, ['list'])).toBe(false);
-
-    fn.mockResolvedValueOnce('fresher');
-    await observer.refetch(asked); // and one started under the hand
-    expect(pagesOf(qc)).toEqual(['fresher']);
     hand.release();
+  });
+
+  it('a refresh the user asked for, in flight when the hand arrives with a re-read owed, is kept and pays the debt', async () => {
+    const qc = client();
+    const late = deferred<string>();
+    const { observer, fn } = await list(qc);
+    void revalidate(qc, [['list']]); // the payment starts
+    expect(fn).toHaveBeenCalledTimes(2);
+    fn.mockReturnValueOnce(late.promise);
+    void observer.refetch(asked); // the user's refresh restarts the read, carrying ASKED
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(isOwed(qc, ['list'])).toBe(true);
+
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('fetching'); // not cancelled
+    late.resolve('fresh');
+    await flush();
+    expect(pagesOf(qc)).toEqual(['fresh']);
+    expect(isOwed(qc, ['list'])).toBe(false); // it paid what was owed
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(3); // nothing left to pay
   });
 });
 

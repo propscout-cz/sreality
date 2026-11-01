@@ -598,8 +598,10 @@ function CardsTab({
       { replace: true },
     );
 
-  const { filters, list, uncarded: current } = useCollectionCards({ collectionId, members, sort });
-  const uncarded = useHeld(hand, current);
+  const { filters, list, complete, uncarded: current } = useCollectionCards({ collectionId, members, sort });
+  /* Held once the roll is in: the list's own first load under the hand (the tab
+   * opened under the pointer) draws the line, a member added elsewhere waits. */
+  const uncarded = useHeld(complete ? hand : undefined, current);
   const countQ = useQuery<number, Error>({
     queryKey: browseKeys.count(filters),
     queryFn: ({ signal }) => fetchBrowseCount(filters, { signal }),

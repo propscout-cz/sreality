@@ -34,10 +34,9 @@
  * infiniteQueryBehavior takes them when it starts) and the list's next scroll
  * asks for it again; a payment that page had cancelled is due at the release —
  * then paints the patches through a per-query LEDGER
- * {base, patches[]}. While a write or a gesture holds a key (a hand spares the
- * reads the user asked for, PARK below), any later non-page fetch on it — a
- * mount, a reconnect, a stray invalidate, a remote target — is cancelled and
- * owed. That cancel waits
+ * {base, patches[]}. While a write or a gesture holds a key (a hand only
+ * parks, PARK below), any later non-page fetch on it — a mount, a reconnect, a
+ * stray invalidate, a remote target — is cancelled and owed. That cancel waits
  * one microtask because query-core dispatches its 'fetch' action before it
  * creates the retryer it would cancel. A page fetch that STARTS while held
  * (`fetchMeta.fetchMore`, useInfiniteList's
@@ -52,13 +51,15 @@
  * overlapping hold releases; the ledger then drops.
  *
  * PARK. `parkReads` is a hand on a list (lib/useListHold, ruling Q3(c) of
- * 2026-11-01). An owed read parks until the release, and any full read that
- * starts or is in flight on a query with data — a payment, a reconnect's or a
- * remount's refetch, a stray invalidate — is cancelled and owed, since it would
- * land under the hand. The list's own reads pass: its first load (a new filter
- * or sort under the hand), a page, and a refetch the user asked for (`ASKED`
- * meta, lib/useInfiniteList's `refetch`). It paints nothing and has no TTL: the
- * hand leaving, or the list unmounting, ends it.
+ * 2026-11-01): it holds only this scheduler's own re-reads. An owed read parks
+ * until the release, and a payment in flight on a query with data when the hand
+ * arrives is cancelled and stays owed, unless the user asked for that read
+ * (`ASKED` meta, lib/useInfiniteList's `refetch`: it pays the debt as it lands).
+ * Every other read passes: a first load, a page, a refetch the list's observer
+ * starts (a sort revisited, a remount), a refresh the user asks for. A reconnect
+ * refetch never starts on a list root (lib/curationSync `applySyncQueryDefaults`),
+ * so none lands under a hand. It paints nothing and has no TTL: the hand
+ * leaving, or the list unmounting, ends it.
  *
  * EPOCH. `resetReads` (the identity change, lib/auth.tsx) drops every owed
  * read, hold and ledger; a hold of the previous account then paints, parks and
@@ -158,7 +159,7 @@ interface HoldRecord {
   id: number;
   epoch: number;
   filters: readonly QueryFilters[];
-  /* A hand on a list (`parkReads`): parks payments, cancels only full reads nobody asked for, no TTL. */
+  /* A hand on a list (`parkReads`): parks payments only, cancels no read it did not owe, no TTL. */
   park: boolean;
   done: boolean;
   /* Online ms already spent; `onlineSince` starts the current online stretch, null while offline. */
@@ -206,7 +207,8 @@ function scheduler(qc: QueryClient): Scheduler {
   return s;
 }
 
-/* Held at all: its payments park. `frozen`: held by a write or a gesture (not only a hand). */
+/* Held at all: its payments park. `frozen`: held by a write or a gesture (not only
+ * a hand), so any full read that starts on it is cancelled and owed. */
 const isHeld = (s: Scheduler, q: Query, frozen = false): boolean => {
   for (const rec of s.holds.values()) {
     if (frozen && rec.park) continue;
@@ -214,13 +216,6 @@ const isHeld = (s: Scheduler, q: Query, frozen = false): boolean => {
   }
   return false;
 };
-
-/* Is a full read of `q` carrying `meta`, starting or in flight, one a hold cancels
- * and owes? Under a write's or a gesture's hold every one is; under a hand one on
- * a query with data that nobody asked for (its first load and its own refresh
- * pass). A page never comes here. */
-const isHeldRead = (s: Scheduler, q: Query, meta: FetchMeta | null | undefined): boolean =>
-  isHeld(s, q, true) || (q.state.data !== undefined && !isAsked(meta) && isHeld(s, q));
 
 function owe(s: Scheduler, q: Query, mode: ReadMode): void {
   const since = ++s.tick;
@@ -305,7 +300,7 @@ function listen(s: Scheduler): void {
       const tick = ++s.tick;
       const page = action.meta?.fetchMore != null;
       s.starts.set(hash, { tick, page });
-      if (!page && s.holds.size > 0 && isHeldRead(s, q, action.meta)) queueMicrotask(() => cancelHeld(s, q, tick));
+      if (!page && s.holds.size > 0 && isHeld(s, q, true)) queueMicrotask(() => cancelHeld(s, q, tick));
       return;
     }
     if (action.type === 'success') {
@@ -369,7 +364,7 @@ function due(debt: Debt): void {
 
 function cancelHeld(s: Scheduler, q: Query, tick: number): void {
   if (s.starts.get(q.queryHash)?.tick !== tick) return;
-  if (q.state.fetchStatus === 'idle' || !isHeldRead(s, q, q.state.fetchMeta)) return;
+  if (q.state.fetchStatus === 'idle' || !isHeld(s, q, true)) return;
   owe(s, q, 'now');
   void q.cancel({ revert: true });
 }
@@ -535,9 +530,10 @@ function handle(s: Scheduler, rec: HoldRecord): Hold {
 }
 
 /** A hand on a list (lib/useListHold): park this scheduler's payments on every
- * query `filters` match until the release. A full read in flight on a query that
- * has data is cancelled and owed (it would land under the hand) unless the user
- * asked for it; a first load and a page pass. */
+ * query `filters` match until the release. A payment in flight on an owed query
+ * that has data is cancelled and stays owed (it would land under the hand) unless
+ * the user asked for that read; a first load, a page and any read the list itself
+ * starts pass. */
 export function parkReads(qc: QueryClient, filters: readonly QueryFilters[]): Hold {
   const s = scheduler(qc);
   const rec: HoldRecord = {
@@ -553,11 +549,10 @@ export function parkReads(qc: QueryClient, filters: readonly QueryFilters[]): Ho
   s.holds.set(rec.id, rec);
   for (const f of rec.filters) {
     for (const q of s.qc.getQueryCache().findAll(f)) {
-      if (q.state.fetchStatus === 'idle' || q.state.data === undefined) continue;
-      if (q.state.fetchMeta?.fetchMore != null || isAsked(q.state.fetchMeta)) continue;
       const debt = s.debts.get(q.queryHash);
-      if (debt) due(debt);
-      else owe(s, q, 'now');
+      if (!debt || q.state.fetchStatus === 'idle' || q.state.data === undefined) continue;
+      if (q.state.fetchMeta?.fetchMore != null || isAsked(q.state.fetchMeta)) continue;
+      due(debt);
       void q.cancel({ revert: true });
     }
   }
