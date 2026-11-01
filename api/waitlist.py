@@ -33,6 +33,9 @@ UTM_KEYS = ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term
 NOTE_MAX = 2000
 # Resend's free plan sends 100 a day across everything, password resets included. 500 once the account is on Pro.
 CONFIRMATION_DAILY_CAP = 80
+# The same shared allowance: a big batch must not use up the day's password resets. Raised once the account is on Pro.
+INVITATION_DAILY_CAP = 50
+INVITE_BATCH_MAX = 200
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _VARIANT_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -149,16 +152,46 @@ def unsubscribe(conn: Any, token: uuid.UUID) -> bool:
         return cur.rowcount == 1
 
 
+def invitations_sent_today(conn: Any) -> int:
+    """Sends today, in Resend's UTC day."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM waitlist_signups WHERE invitation_sent_at >= date_trunc('day', now(), 'UTC')")
+        return cur.fetchone()[0]
+
+
+def invitation_entries(conn: Any, ids: list[int]) -> list[dict[str, Any]]:
+    """The asked-for entries, oldest first, each with what decides whether it can be sent."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT w.id, w.email, w.followup_token, w.unsubscribed_at IS NOT NULL, "
+            f"{_HAS_ACCOUNT_SQL} FROM waitlist_signups w WHERE w.id = ANY(%s) ORDER BY w.created_at, w.id",
+            (ids,),
+        )
+        keys = ("id", "email", "token", "unsubscribed", "has_account")
+        return [dict(zip(keys, row)) for row in cur.fetchall()]
+
+
+def stamp_invitation(conn: Any, entry_id: int) -> None:
+    """The email went: the address may now create an account. The first permission's time stands."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE waitlist_signups SET invited_at = COALESCE(invited_at, now()), invitation_sent_at = now() WHERE id = %s",
+            (entry_id,),
+        )
+
+
 SIGNUP_COLUMNS = ("id", "email", "created_at", "consent_version", "page_variant", "utm", "investor_type", "note",
                   "answered_at", "unsubscribed_at", "invited_at")
+_HAS_ACCOUNT_SQL = "EXISTS (SELECT 1 FROM auth.users u WHERE lower(u.email) = w.email)"
 LIST_MAX = 5000
 
 
 def list_signups(conn: Any, limit: int = LIST_MAX) -> list[dict[str, Any]]:
-    """Every signup, newest first (the admin Sign-ups page); at most `limit` rows."""
+    """Every entry, newest first (the admin Waitlist page), and whether it has an account yet; at most `limit` rows."""
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT {', '.join(SIGNUP_COLUMNS)} FROM waitlist_signups ORDER BY created_at DESC, id DESC LIMIT %s",
+            f"SELECT {', '.join(f'w.{c}' for c in SIGNUP_COLUMNS)}, {_HAS_ACCOUNT_SQL} FROM waitlist_signups w "
+            "ORDER BY w.created_at DESC, w.id DESC LIMIT %s",
             (limit,),
         )
-        return [dict(zip(SIGNUP_COLUMNS, row)) for row in cur.fetchall()]
+        return [dict(zip((*SIGNUP_COLUMNS, "has_account"), row)) for row in cur.fetchall()]
