@@ -884,6 +884,20 @@ def test_the_residual_page_carries_its_own_total(client, conn):
     assert _last_call(conn, usql.RESIDUAL_COUNT_SQL)["zone"] == "band"
 
 
+def test_the_shared_order_code_filter_is_off_unless_asked_and_counts_what_it_shows(client, conn):
+    """Its crowd subplan reads every listing, so the queue never pays for it unasked; on, the page
+    and its "20 of N" read ONE flag. What it keeps is executed in test_residual_shared_code_live."""
+    conn.canned = {"residual": [_residual_row()], "residual_count": [(3,)]}
+    client.get("/autodedup/residual", params={"zone": "band"})
+    assert _last_call(conn, usql.RESIDUAL_SQL)["shared_code"] is False
+    data = client.get("/autodedup/residual", params={"zone": "band", "shared_code": "1"}).json()["data"]
+    assert data["total"] == 3
+    assert _last_call(conn, usql.RESIDUAL_SQL)["shared_code"] is True
+    assert _last_call(conn, usql.RESIDUAL_COUNT_SQL)["shared_code"] is True
+    assert usql._SHARED_CODE in usql._RESIDUAL_WHERE
+    assert client.get("/autodedup/residual", params={"shared_code": "maybe"}).status_code == 422
+
+
 def test_a_store_with_no_count_row_reports_no_total_not_zero(client, conn):
     conn.canned = {"groups": [_cluster()]}
     assert client.get("/autodedup/groups").json()["data"]["total"] is None

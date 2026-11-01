@@ -4489,6 +4489,9 @@ export interface AutodedupResidualFilters {
   min_score?: number | null;
   source_pair?: string | null;
   verdict?: string | null;
+  /* Only pairs whose two ads print one advertiser's order code (`listings.ad_reference`,
+   * normalised and population-capped server-side). Sent only when on. */
+  shared_code?: boolean | null;
   sort?: 'score_desc' | 'random' | null;
   seed?: string | null;
 }
