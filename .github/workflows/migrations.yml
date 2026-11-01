@@ -234,6 +234,13 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_agent_runs_live.py tests/test_agent_run_routes_live.py -q
 
+      # Apply and Undo (#2072): the marker (migration 712) refuses any login but the tenant pool's, so these log in as it.
+      - name: A proposal applies once under the user's login, and Undo removes exactly what it added (#2072)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_agent_proposals_live.py -q
+
       # The security suite's live half (#2074): twenty injected ads through the real executor and the real dossier, the model
       # scripted to obey each. It proves the server's rails hold, not that a model resists; see tests/api/test_agent_security.py.
       - name: Injected ads meet the rails, every denial in the run's diary (#2074)

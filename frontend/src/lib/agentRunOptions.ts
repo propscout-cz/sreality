@@ -36,6 +36,7 @@ export const agentRunKeys = {
   list: ['agent-runs', 'list'] as const,
   run: (id: number) => ['agent-runs', 'run', id] as const,
   steps: (id: number) => ['agent-runs', 'steps', id] as const,
+  proposals: (id: number) => ['agent-runs', 'proposals', id] as const,
 };
 
 /* A run the queue cannot move can wait for days: nothing will change until the brake or the ceiling does. */

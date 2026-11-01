@@ -1,4 +1,5 @@
-"""POST + GET /runs, GET /runs/options, GET /runs/{id}[/steps], POST /runs/{id}/cancel (tenancy: references/tenancy.md, Fourth instance)."""
+"""POST + GET /runs, GET /runs/options, GET /runs/{id}[/steps], POST /runs/{id}/cancel, GET /runs/{id}/proposals, POST
+/runs/{id}/proposals/{index}/apply and /undo (tenancy: references/tenancy.md, Fourth instance)."""
 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from psycopg.rows import dict_row
 from api import dependencies as deps
 from api import schemas as s
 from api import tenant_pool
-from api.agents import executor
+from api.agents import executor, proposals
 from api.agents.definition import DefinitionError, InputError
 
 router = APIRouter(prefix="/runs", tags=["agent-runs"], dependencies=[Depends(tenant_pool.require_account_id)])
@@ -114,3 +115,20 @@ def cancel_run(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
     if status is None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     return {"id": run_id, "status": status}
+
+
+@router.get("/{run_id}/proposals")
+def read_proposals(run_id: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
+    return {"data": proposals.views(conn, run_id)}
+
+
+@router.post("/{run_id}/proposals/{index}/apply")
+def apply_proposal(run_id: int, index: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
+    """Under the user's own login, in this one transaction with its marker; only this route and `undo_proposal` write a user's
+    rows for a run (a census holds it)."""
+    return proposals.apply(conn, run_id, index)
+
+
+@router.post("/{run_id}/proposals/{index}/undo")
+def undo_proposal(run_id: int, index: int, conn: tenant_pool.TenantConn) -> dict[str, Any]:
+    return proposals.undo(conn, run_id, index)

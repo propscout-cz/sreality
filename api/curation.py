@@ -18,6 +18,7 @@ after the tenant UPDATE gate passed.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Callable, ContextManager
 
@@ -28,6 +29,7 @@ from api import attachments
 from api import schemas as s
 from api import shares
 from toolkit.property_identity import (
+    merged_since,
     resolve_active_property_id,
     resolve_active_property_ids,
 )
@@ -222,14 +224,14 @@ def add_properties_to_collection(
 
     INSERT ... ON CONFLICT DO NOTHING — already-present pairs count as
     skipped, property_ids that aren't in the properties table fail the FK
-    and are reported via 422.
+    and are reported via 422. `added_ids` names exactly the rows this call made.
     """
     if not body.property_ids:
         raise HTTPException(422, "property_ids must be non-empty")
     sql = (
         "INSERT INTO collection_properties (collection_id, property_id) "
         "SELECT %s, unnest(%s::bigint[]) "
-        "ON CONFLICT (collection_id, property_id) DO NOTHING"
+        "ON CONFLICT (collection_id, property_id) DO NOTHING RETURNING property_id"
     )
     try:
         with conn.transaction(), conn.cursor() as cur:
@@ -250,13 +252,12 @@ def add_properties_to_collection(
                 )
             survivor_ids = list({resolved[p] for p in body.property_ids})
             cur.execute(sql, (collection_id, survivor_ids))
-            added = cur.rowcount
+            added_ids = sorted(int(r[0]) for r in cur.fetchall())
     except psycopg.errors.ForeignKeyViolation as exc:
         raise HTTPException(
             422, f"one or more property_ids do not exist: {exc}",
         )
-    skipped = len(survivor_ids) - added
-    return {"added": added, "skipped": skipped}
+    return {"added": len(added_ids), "skipped": len(survivor_ids) - len(added_ids), "added_ids": added_ids}
 
 
 def remove_property_from_collection(
@@ -282,6 +283,73 @@ def remove_property_from_collection(
                 (collection_id,),
             )
     return {"removed": removed}
+
+
+# --- the inverse of a proposal's new collection (#2072) -----------------------
+
+_NEW_COLLECTION_STATE_SQL = (
+    "SELECT c.name, c.description, c.monitoring_enabled_at, c.updated_at, "
+    "  EXISTS (SELECT 1 FROM collection_shares s WHERE s.collection_id = c.id), "
+    "  ARRAY(SELECT cp.property_id FROM collection_properties cp "
+    "        WHERE cp.collection_id = c.id AND cp.added_at = %(at)s), "
+    "  (SELECT count(*) FROM collection_properties cp "
+    "   WHERE cp.collection_id = c.id AND cp.added_at <> %(at)s) "
+    "FROM collections c WHERE c.id = %(id)s"
+)
+
+
+def new_collection_undo_plan(
+    conn: "psycopg.Connection", record: Mapping[str, Any], applied_at: datetime,
+) -> tuple[str | None, list[int], int] | None:
+    """What Undo may do to the collection an Apply made: (why it may not, the members still the agent's, how many stay), or
+    None if the collection is gone. A member is the agent's when it carries the Apply's stamp, whichever property a merge has
+    since moved it to. A member a merge folded another into may hold the user's own, so once they have touched the membership
+    it stays; while `updated_at` still reads the stamp, no member is theirs."""
+    with conn.cursor() as cur:
+        cur.execute(_NEW_COLLECTION_STATE_SQL, {"at": applied_at, "id": record["collection_id"]})
+        row = cur.fetchone()
+    if row is None:
+        return None
+    name, description, monitored_at, updated_at, shared, ours, others = row
+    ours = [int(i) for i in ours]
+    if name != record["name"] or description != record["description"]:
+        return "You renamed or edited this collection, so Undo leaves it to you.", [], 0
+    if monitored_at is not None:
+        return "You turned on monitoring for this collection, so Undo leaves it to you.", [], 0
+    if shared:
+        return "You shared this collection, so Undo leaves it to you.", [], 0
+    folded = merged_since(conn, ours, applied_at) if updated_at != applied_at else set()
+    removable = [i for i in ours if i not in folded]
+    stays = int(others) + len(folded)
+    if stays and not removable:
+        return "Nothing of the agent's is left in this collection: what it holds is yours.", [], 0
+    return None, removable, stays
+
+
+def undo_new_collection(
+    conn: "psycopg.Connection", record: Mapping[str, Any], applied_at: datetime,
+) -> dict[str, Any]:
+    """Remove exactly what the Apply added: the whole collection if nothing else is in it, else only the agent's members.
+    The row lock stops a member being added between the plan and the delete (an add bumps this row first)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM collections WHERE id = %s FOR UPDATE", (record["collection_id"],))
+    plan = new_collection_undo_plan(conn, record, applied_at)
+    if plan is None:
+        raise HTTPException(409, "You already deleted this collection.")
+    refusal, removable, stays = plan
+    if refusal is not None:
+        raise HTTPException(409, refusal)
+    if not stays:
+        delete_collection(conn, record["collection_id"])
+        return {"removed": len(removable), "kept_collection": False}
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM collection_properties "
+            "WHERE collection_id = %s AND property_id = ANY(%s) AND added_at = %s",
+            (record["collection_id"], removable, applied_at),
+        )
+        cur.execute("UPDATE collections SET updated_at = now() WHERE id = %s", (record["collection_id"],))
+    return {"removed": len(removable), "kept_collection": True}
 
 
 # --- shares (migration 610) -------------------------------------------------
@@ -474,6 +542,39 @@ def delete_note(
         if cur.rowcount == 0:
             raise HTTPException(404, "note not found")
     return {"deleted": True}
+
+
+def added_note_undo_refusal(
+    conn: "psycopg.Connection", note_id: int, applied_at: datetime,
+) -> str | None:
+    """Why Undo may not delete the note a proposal added, in the user's words, or None. Only as the Apply wrote it: an edit, a
+    share mark or a file is the user's work, and deleting the note would take the file's row with it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT n.created_at, n.updated_at, n.shared FROM property_notes n WHERE n.id = %s", (note_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return "You already deleted this note."
+    created_at, updated_at, shared = row
+    if created_at != applied_at or updated_at is not None:
+        return "You edited this note, so Undo leaves it to you."
+    if shared:
+        return "You marked this note shared, so Undo leaves it to you."
+    if attachments.attachments_by_note(conn, [note_id])[note_id]:
+        return "You attached files to this note, so Undo leaves it to you."
+    return None
+
+
+def undo_added_note(conn: "psycopg.Connection", note_id: int, applied_at: datetime) -> None:
+    """Delete the note a proposal added, or 409 with why not; the row lock stops an edit landing between the two."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT property_id FROM property_notes WHERE id = %s FOR UPDATE", (note_id,))
+        row = cur.fetchone()
+    refusal = added_note_undo_refusal(conn, note_id, applied_at)
+    if refusal is not None or row is None:
+        raise HTTPException(409, refusal or "You already deleted this note.")
+    delete_note(conn, int(row[0]), note_id)
 
 
 # --- artifact link (migration 599) -----------------------------------------
