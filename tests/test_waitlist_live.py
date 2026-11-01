@@ -96,7 +96,7 @@ def test_the_admin_list_reads_every_column_newest_first(tx: _Tx) -> None:
     rows = [r for r in waitlist.list_signups(tx) if r["email"].endswith("@example.cz")]
     assert [r["email"] for r in rows][:2] == ["second@example.cz", "first@example.cz"]
     assert rows[0]["utm"] == {"utm_source": "fb"} and rows[0]["investor_type"] == "both" and rows[0]["note"] == "Plzeň"
-    assert set(rows[0]) == set(waitlist.SIGNUP_COLUMNS)
+    assert set(rows[0]) == {*waitlist.SIGNUP_COLUMNS, "has_account"}
 
 
 def _entry(tx: _Tx, email: str) -> uuid.UUID:
