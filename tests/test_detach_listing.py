@@ -174,6 +174,19 @@ def test_a_reactivating_detach_runs_no_carrier_and_changes_both_once():
     assert "merged_into = NULL, merged_at = NULL, is_active = EXISTS (" in reactivate
 
 
+def test_a_moved_advert_leaves_the_operators_address_pick_behind():
+    """W3b ruling R1: an advert split off is another place, so the detach hands every advert it
+    MOVED back to its own words (`operator_corrections.clear`, in the same transaction); one that
+    stays moves nothing and clears nothing."""
+    db = _Ledger({1: 10, 2: 20, 3: 30})
+    _merged(db, [10, 20, 30])
+    detach_listings(db, [2, 3], decided_by=OP)
+    assert db.cleared == [[2, 3]]
+    db.cleared.clear()
+    _detach(db, 1, decided_by=OP)                      # its own record already: nothing moves
+    assert db.cleared == [[]]
+
+
 @pytest.mark.parametrize("backwards", [False, True])
 def test_merging_then_detaching_every_advert_restores_every_original_property(backwards):
     """W3's gate at unit scale — a refactor of the mechanics changes no grouping: three set

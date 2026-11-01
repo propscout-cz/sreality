@@ -16,7 +16,7 @@ it (`api/`). They do not apply to the scraper.
 
 1. **Tools return facts, not opinions.** No "recommended price", no "this looks like a good
    deal." Tools return data + provenance. Reasoning happens at the agent layer.
-2. **Standard envelope on every tool's return value** (hand-built per module, no shared constructor; `property_identity` / `location_quality` still omit `data_freshness`):
+2. **Standard envelope on every tool's return value** (hand-built per module, no shared constructor; `property_identity` still omits `data_freshness`):
    ```python
    {
      "data": ...,
