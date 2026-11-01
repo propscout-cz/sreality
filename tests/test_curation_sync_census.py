@@ -25,8 +25,10 @@
 #       api/, and nobody outside the clock migration names its dedupe GUC
 #   (h) rail_h  test_only_the_trigger_writes_the_clock: no DML on curation_clock in api/ toolkit/ scraper/ scripts/
 #       autodedup/ or in any migration after the clock's, which writes it exactly twice (the bump and the seed)
-#   (i) rail_i  test_the_audience_restates_ruling_2_and_never_acts: board arm = _BOARD_POLICIES ∩ clocked, edit arm =
-#       (_ACTING_POLICIES − board) ∩ clocked, `shares` only in the own arm; the audience never acts
+#   (i) rail_i  test_the_audience_restates_ruling_2_and_never_acts: the policy is one (account_id, family) lookup over
+#       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
+#       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
+#       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts
 #   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
 #   (k) rail_k  test_no_family_is_a_suffix_of_another: the dedupe GUC holds `<family>:<account>;` entries and finds
 #       one with strpos, so a family that ends another (`ags` inside `tags`) would read as already bumped
@@ -371,34 +373,38 @@ def rail_h(migrations: Migrations, code: list[tuple[str, str]]) -> list[str]:
 
 # --- (i) the audience restates 641's split, and never acts ---------------------------------------------------------
 
-def _top_level_or(expr: str) -> list[str]:
-    arms, depth, start, i = [], 0, 0, 0
-    while i < len(expr):
-        ch = expr[i]
-        depth += {"(": 1, ")": -1}.get(ch, 0)
-        if depth == 0 and expr.startswith(" or ", i):
-            arms.append(expr[start:i].strip())
-            start = i = i + 4
-            continue
-        i += 1
-    arms.append(expr[start:].strip())
-    return arms
+# 708 (F16): one (account, family) lookup over ONE call of the audience, the families per caller kind in a CASE.
+# Only the policy is read here: the view's join on the audience (696) is the read's second call, by ruling.
+_FOLLOWS = re.compile(r"\(account_id, family\) in \( ?select (\w+)\.account_id, (\w+)\.family from "
+                      r"(?:public\.)?curation_clock_audience\(\) (\w+) cross join lateral unnest\( ?case (.*) end ?\) "
+                      r"as (\w+)\(family\) ?\)")
+_FOLLOWS_WHEN = re.compile(r"when (\w+)\.(mine|edit) then array\[([^\]]*)\] ")
+_FOLLOWS_ELSE = re.compile(r"else array\[([^\]]*)\] ?")
 
 
-def policy_arms(using: str) -> dict[str, frozenset[str] | None]:
-    """audience filter (mine / edit / any) → the families its arm allows (None = every family); ValueError when an
-    arm bypasses the audience or two arms share one."""
-    arms: dict[str, frozenset[str] | None] = {}
-    for arm in _top_level_or(_norm(using)):
-        if "curation_clock_audience()" not in arm or "account_ids" in arm:
-            raise ValueError(f"an arm that does not go through curation_clock_audience() alone: {arm}")
-        who = "mine" if "where a.mine" in arm else "edit" if "where a.edit" in arm else "any"
-        fam = re.search(r"family (?:= '(\w+)'|in \(([^)]*)\))", arm)
-        families = None if fam is None else frozenset(re.findall(r"'?(\w+)'?", fam.group(1) or fam.group(2)))
-        if who in arms:
-            raise ValueError(f"two arms for the {who} audience")
-        arms[who] = families
-    return arms
+def policy_arms(using: str) -> dict[str, frozenset[str]]:
+    """caller kind (own / edit share / read share) → the families the policy lets it follow, read off its CASE in
+    order (own carries mine and edit, an edit share edit, a read share neither); ValueError unless the policy is the
+    one pair lookup over a single curation_clock_audience() call."""
+    expr = _norm(using)
+    m = _FOLLOWS.fullmatch(expr)
+    if not m or expr.count("curation_clock_audience") != 1 or "account_ids" in expr:
+        raise ValueError(f"the policy is not one (account_id, family) lookup over curation_clock_audience(): {expr}")
+    picked_account, picked_family, audience, case, unnested = m.groups()
+    whens, rest, pos = [], case + " ", 0
+    while w := _FOLLOWS_WHEN.match(rest, pos):
+        whens.append((w.group(1), w.group(2), frozenset(re.findall(r"'(\w+)'", w.group(3)))))
+        pos = w.end()
+    other = _FOLLOWS_ELSE.fullmatch(rest, pos)
+    if ((picked_account, picked_family) != (audience, unnested) or not other
+            or any(a != audience for a, _f, _s in whens)):
+        raise ValueError(f"the pairs are not the audience's accounts by its CASE's families: {expr}")
+
+    def follows(flags: set[str]) -> frozenset[str]:
+        return next((fams for _a, flag, fams in whens if flag in flags),
+                    frozenset(re.findall(r"'(\w+)'", other.group(1))))
+
+    return {"own": follows({"mine", "edit"}), "edit": follows({"edit"}), "read": follows(set())}
 
 
 def _audience_body(clock_text: str) -> str:
@@ -418,20 +424,20 @@ def rail_i(policies: dict[str, tuple[str, str | None, str | None]], clock_text: 
     except ValueError as exc:
         return [str(exc)]
 
-    def tables(fams: frozenset[str] | None) -> set[str]:
-        return {t for t, f in clocked.items() if fams is None or f in fams}
+    def tables(fams: frozenset[str]) -> set[str]:
+        return {t for t, f in clocked.items() if f in fams}
 
     board = {_ACTING_POLICIES[p] for p in _BOARD_POLICIES} & set(clocked)
     edit = (set(_ACTING_POLICIES.values()) - {_ACTING_POLICIES[p] for p in _BOARD_POLICIES}) & set(clocked)
     problems = []
-    if set(arms) != {"mine", "any", "edit"} or arms["mine"] is not None:
-        problems.append(f"the arms are own (every family), any share (board), edit share: {arms}")
-    elif tables(arms["any"]) != board:
-        problems.append(f"a read share follows {sorted(tables(arms['any']))}; 641's board is {sorted(board)}")
-    elif tables(arms["edit"]) != edit:
-        problems.append(f"an edit share follows {sorted(tables(arms['edit']))} beyond the board; 641's edit "
-                        f"share acts on {sorted(edit)}")
-    if any("shares" in (fams or ()) for who, fams in arms.items() if who != "mine"):
+    if tables(arms["own"]) != set(clocked) or not arms["own"] <= set(clocked.values()):
+        problems.append(f"the caller's own accounts follow {sorted(arms['own'])}, not every family")
+    if tables(arms["read"]) != board:
+        problems.append(f"a read share follows {sorted(tables(arms['read']))}; 641's board is {sorted(board)}")
+    if tables(arms["edit"]) != board | edit:
+        problems.append(f"an edit share follows {sorted(tables(arms['edit']))}; 641's edit share acts on "
+                        f"{sorted(board | edit)}")
+    if "shares" in arms["read"] | arms["edit"]:
         problems.append("a share recipient follows the owner's shares family")
     body = _audience_body(clock_text)
     if "acting_account_ids" in body or "current_account_ids()" not in body:
@@ -655,10 +661,19 @@ def test_the_audience_rail_bites_when_a_read_share_follows_more_than_the_board_o
         assert old in (using or ""), old
         return {**policies, "curation_clock_audience_read": (read, (using or "").replace(old, new), None)}
 
-    assert rail_i(_swap("family = 'board'", "family in ('board', 'notes')"), clock_text, CLOCKED_TABLES)
-    assert rail_i(_swap("'notes', 'links')", "'notes', 'links', 'shares')"), clock_text, CLOCKED_TABLES)
-    assert rail_i(_swap("'tags', 'notes'", "'tags'"), clock_text, CLOCKED_TABLES)
-    assert rail_i(_swap("where a.edit", "where a.mine"), clock_text, CLOCKED_TABLES)
+    assert rail_i(_swap("else array['board']", "else array['board', 'notes']"), clock_text, CLOCKED_TABLES)
+    assert rail_i(_swap("'links'] else", "'links', 'shares'] else"), clock_text, CLOCKED_TABLES)
+    assert rail_i(_swap("'links', 'shares']", "'links']"), clock_text, CLOCKED_TABLES), "own lost shares"
+    assert rail_i(_swap("'tags', 'notes', 'links'] else", "'tags', 'links'] else"), clock_text, CLOCKED_TABLES)
+    assert rail_i(_swap("when a.edit", "when a.mine"), clock_text, CLOCKED_TABLES), "an edit share falls to board"
+    assert rail_i(_swap("when a.mine", "when a.edit"), clock_text, CLOCKED_TABLES), "the edit arm ahead of own"
+    assert rail_i(_swap("unnest(case", "unnest(case when a.account_id is not null then array['board', 'shares']"),
+                  clock_text, CLOCKED_TABLES), "an arm on anything but mine or edit"
+    for bypass in (" or account_id in (select public.current_account_ids())",
+                   " or (account_id, family) in (select a.account_id, 'notes' "
+                   "from public.curation_clock_audience() a)"):
+        policy = {**policies, "curation_clock_audience_read": (read, (using or "") + bypass, None)}
+        assert rail_i(policy, clock_text, CLOCKED_TABLES), bypass
     assert rail_i(policies, clock_text.replace("public.current_account_ids()", "public.acting_account_ids(true)"),
                   CLOCKED_TABLES)
     assert rail_i(policies, clock_text.replace("bool_or(s.mode = 'edit')", "true"), CLOCKED_TABLES)
