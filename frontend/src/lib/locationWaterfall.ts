@@ -1,36 +1,23 @@
-/* The location waterfall's row shape (`location_audit_waterfall`, migrations
- * 523/524). W1 deleted the audit page's reader of the hourly relation: only the
- * dedup candidates funnel reads these rows now, from a run's `stats.waterfall`.
- *
- * The page used to state ONE number — the listings no consumer can see — with
- * nothing to read it against. This relation is the whole chain, from every
- * listing in the database down to that set, so "skryté" is read against the
- * database and not against itself.
+/* The row shape of a NEW DEDUP candidate run's `stats.waterfall`, as the
+ * candidates funnel reads it; a run's rows are as-of the run. The hourly audit
+ * relation that shared this shape was dropped in W1 (migration 719).
  *
  * NO ARITHMETIC HAPPENS HERE. Every count, every loss and every share is
- * computed in the store, in one statement, from the ONE rule Browse and the
- * resolver use (`SERVED_LOCATION_PREDICATE` in location_data/claims_common.py:
- * a listing is served once the store has a point for it, or has determined it is
- * abroad). A client that recomputed a step would be a second definition of the
- * same question, which is the one thing this wave exists to prevent — so this
- * module only orders and nests.
+ * computed by the lane, from the ONE rule Browse and the resolver use
+ * (`SERVED_LOCATION_PREDICATE` in location_data/claims_common.py: a listing is
+ * served once the store has a point for it, or has determined it is abroad). A
+ * client that recomputed a step would be a second definition of the same
+ * question — so this module only orders and nests.
  *
- * THREE KINDS OF ROW:
+ * TWO KINDS OF ROW:
  *   'chain'     the funnel itself — `lost` is the previous chain step's count
- *               minus this one's, written by the store, never derived here;
- *   'deduction' a set carved OUT of the chain (the hidden set: every listing
- *               that fails the rule) — it does not narrow the next step, so it
- *               carries no loss;
- *   'split'     a sub-row partitioning its parent (`parent_key`) exactly.
+ *               minus this one's, written by the lane, never derived here;
+ *   'split'     a sub-row of its parent (`parent_key`).
  *
- * ONE ROW SHAPE, TWO PRODUCERS (W16). The hourly audit relation writes these
- * rows; a NEW DEDUP candidate run stamps the SAME keys, kinds and columns into
- * its own `stats.waterfall`; a run's rows are as-of the run. The WORDING of a
- * step is in `lib/locationSteps.ts`; `label_cs` left this table in migration
- * 526 so a label could not differ by surface.
+ * The WORDING of a step is in `lib/locationSteps.ts`.
  */
 
-export type WaterfallKind = 'chain' | 'deduction' | 'split';
+export type WaterfallKind = 'chain' | 'split';
 
 export interface WaterfallRow {
   step_key: string;
@@ -38,12 +25,12 @@ export interface WaterfallRow {
   /* 0 = the step itself; 1..n = its sub-rows. */
   sub_no: number;
   kind: WaterfallKind;
-  /* The step a sub-row (or a deduction) belongs under; NULL on a chain step. */
+  /* The step a sub-row belongs under; NULL on a chain step. */
   parent_key: string | null;
   n: number;
   /* Chain rows only. NULL where "lost" is not a truthful word for the row. */
   lost: number | null;
-  /* Share of EVERY listing ever collected — the point of the wave. */
+  /* Share of every listing the run looked at. */
   share_pct: number;
 }
 

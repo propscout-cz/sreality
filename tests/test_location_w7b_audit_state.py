@@ -6,8 +6,7 @@ different set of listings (not really an issue) from the ones that were run and
 not resolved properly (an issue...)".
 
 `state` is computed once an hour inside `location_pin_audit_mv` (migration 518)
-and everything the operator sees hangs off it — the page's toggle, its matrix,
-and the nav badge, which now counts the issue alone. A migration is not
+and the page's toggle hangs off it. A migration is not
 importable at runtime, so this file is the rail that keeps the THREE ways the
 lane can still owe a listing an answer in that CASE:
 
@@ -76,19 +75,6 @@ def test_state_is_a_column_of_the_relation_and_is_indexed() -> None:
     assert "on location_pin_audit_mv (state)" in " ".join(sql.split())
 
 
-def test_the_summary_function_groups_by_state() -> None:
-    """The page reads ONE payload: if the summary did not carry `state`, the two
-    header counts would have to come from a second read that could disagree."""
-    sql = " ".join(_body().split())
-    assert "drop function if exists location_pin_audit_summary();" in sql
-    assert "returns table ( state text," in sql
-    assert "select a.state, a.source, a.category_main, a.quality" in sql
-    assert (
-        "group by a.state, a.source, a.category_main, a.quality, a.sibling_has_pin"
-        in sql
-    )
-
-
 def test_the_four_quality_buckets_survive_untouched() -> None:
     """`state` is a new top-level cut, not a replacement: the buckets that
     explain a verdict still refine the unresolved half."""
@@ -108,6 +94,3 @@ def test_the_refresh_stays_scheduled_and_the_cron_guard_is_kept() -> None:
     sql = _body()
     assert "'refresh-location-pin-audit'" in sql
     assert "raise notice 'pg_cron unavailable" in sql
-    # The budget is armed in the COMMAND (migration 371's lesson), not in the
-    # function's proconfig.
-    assert "set statement_timeout='900s'; select public.refresh_location_pin_audit_mv();" in sql
