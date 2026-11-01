@@ -2,8 +2,9 @@ name: "CI: tests"
 
 # CI test suite, runs on every pull request and on every push to main. Three parallel jobs:
 # a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs
-# pytest, then lints with ruff), a frontend job (TypeScript type-check + vitest
-# pure-function tests) and a secret scan of the new commits. This is the build gate for every branch.
+# pytest, then lints with ruff), a frontend job (the docs budget, then type-check, lint, vitest,
+# the production build and its first-visit JS budget) and a secret scan of the new commits. This
+# is the build gate for every branch.
 #
 # A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
 # carried the same check name, and a cancelled twin read as a failed required check.
@@ -12,6 +13,12 @@ on:
   push:
     branches: [main]
   pull_request:
+
+# A new push to a PR cancels its superseded run. A push to main gets a group of its own: a shared
+# group would drop a queued run even with cancel-in-progress off, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pytest:
@@ -67,7 +74,7 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: ruff check --output-format=github .
 
-  vitest:
+  frontend:
     # Frontend tests (vitest, jsdom — see frontend/vite.config.ts).
     # Covers filter state plumbing, the registry adapter, the centre+radius
     # spatial helpers in lib/queries, and component behaviour.
@@ -76,9 +83,40 @@ jobs:
     # `@ts-expect-error` cases fail the BUILD if a basis-blind
     # fmtMeasuredPricePerM2 call ever starts compiling.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 4-vCPU public runners took about 4 min; a private repo's have 2.
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on
+      # CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a
+      # word cap on skill descriptions; routing completeness). HEAD^1 is the base this PR's merge
+      # commit was built on; origin/<base> moves under a re-run.
+      - name: Enforce context budgets (blocking)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: .github/scripts/docs-budget-check.sh . HEAD^1
+
+      # A design doc or roadmap line naming a function that no longer exists misleads the
+      # next session that trusts it. Warns on each backticked symbol the PR's added doc lines
+      # name that no code tree contains; never fails (a plan may name what is not built yet).
+      - name: Docs name only symbols that exist (non-blocking)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: .
+        run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
+
+      - name: Skill-staleness nudge (non-blocking)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"
 
       - uses: actions/setup-node@v6
         with:
@@ -87,16 +125,50 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install
-        working-directory: frontend
         run: npm ci
 
+      # Covers the service worker too.
       - name: Type-check
-        working-directory: frontend
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      # Rules of Hooks (a runtime React contract tsc can't see). Catches a hook
+      # called conditionally / after an early return — the bug that blanked
+      # Listing Detail. Errors fail the build; exhaustive-deps stays a warning.
+      - name: Lint
+        run: npm run lint
 
       - name: Run vitest
-        working-directory: frontend
-        run: npm test
+        run: npm test -- --maxWorkers=2
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-build-only
+
+      # Vite copies public/ into dist/ as-is and Caddy serves these two at fixed
+      # URLs with no SPA fallback, so a build without them ships an app that
+      # cannot install and a worker URL that 404s.
+      - name: Installable shell files are in the build
+        run: test -f dist/sw.js && test -f dist/manifest.webmanifest
+
+      - name: All chunk sizes (informational)
+        run: |
+          du -sh dist
+          for f in dist/assets/*.js; do
+            sz=$(gzip -c "$f" | wc -c)
+            printf '  %-50s %10s bytes gzip\n' "$(basename "$f")" "$sz"
+          done
+
+      # BLOCKING. The previous budget summed `index-*.js` alone and called it "what loads
+      # before any lazy import", noting maplibre/recharts "only count when their route is
+      # opened" — which was false: both were modulepreloaded on every route, so it read
+      # ~239 kB and stayed green while a first visit cost ~608 kB. This measures the entry
+      # PLUS every preload PLUS their static imports, and fails if either heavy library is
+      # back on that path (matched by content, not filename — Rollup renames auto-split
+      # chunks). See frontend/scripts/bundle-budget.mjs.
+      - name: First-visit JS budget
+        run: node scripts/bundle-budget.mjs
 
   secrets:
     # gitleaks over exactly the commits this PR (or this push to main) adds, a merge by what it changed beyond the

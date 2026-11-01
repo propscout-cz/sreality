@@ -39,7 +39,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  extension:
     runs-on: ubuntu-latest
     defaults:
       run:

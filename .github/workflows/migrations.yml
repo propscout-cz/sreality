@@ -47,6 +47,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# As in test.yml: a new push to a PR cancels its superseded run, and every other run finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   schema-and-sql:
     runs-on: ubuntu-latest
