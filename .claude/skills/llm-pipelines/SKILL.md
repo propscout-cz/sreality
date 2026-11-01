@@ -72,11 +72,11 @@ calls an LLM must do the same.
   The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
   `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
   a price-only snapshot never re-bills, and **a prompt edit or a gate opening re-reads the corpus**
-  (delisted adverts only once per schema; they are never filled), so batch such edits. Concurrency
+  (delisted adverts once per schema, never filled), so batch such edits. Concurrency
   + the one pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
   NULL-only (`coalesce`), active rows only, with the `dirty_properties` enqueue in the same CTE and
-  no snapshot; a failed call is cached with an attempt count and given up on after 5 (W3: so is an
-  empty location block on an `llm_text` portal, `text_reading.is_empty`).
+  no snapshot; a failed call is cached with an attempt count, given up after 5, as is an empty
+  location block on an `llm_text` portal (W3).
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
   convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN
