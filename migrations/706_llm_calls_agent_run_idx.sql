@@ -3,7 +3,7 @@
 -- The DROP clears an invalid leftover from an interrupted build, which IF NOT EXISTS would otherwise accept as done.
 -- Apply through apply_migration.yml (`psql -f`): an MCP apply wraps its statements in a transaction and refuses this.
 
-set statement_timeout = 0;
+set statement_timeout = '1800s';
 
 drop index concurrently if exists llm_calls_agent_run_idx;
 
