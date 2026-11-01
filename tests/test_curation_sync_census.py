@@ -12,7 +12,8 @@
 #   (b) rail_b  test_every_tenant_table_is_clocked_or_says_why_not: TENANT_TABLES ⊆ CLOCKED ∪ NOT_CLOCKED, disjoint,
 #       every reason non-empty
 #   (c) rail_c  test_one_family_list: the newest family CHECK == CURATION_FAMILIES (TS) == the families of
-#       CLOCKED_TABLES == the seed's families
+#       CLOCKED_TABLES, and 696's seed names only families the CHECK admits (a family added later, notifications in
+#       715, is never seeded: an account gains its row at its first bump)
 #   (d) rail_d  test_every_clock_trigger_is_a_deferred_constraint_row_trigger: `<table>_curation_clock`, after
 #       insert/update/delete, deferrable initially deferred, for each row
 #   (e) rail_e  test_nothing_silences_the_clock_without_the_annotation: no DISABLE or ENABLE REPLICA of a clock trigger
@@ -29,10 +30,12 @@
 #       one curation_clock_audience() call (708; the view's join on it, 696's, is the read's other call and maps
 #       `mine`); by its CASE, own follows every family, a read share _BOARD_POLICIES ∩ clocked, an edit share that
 #       plus (_ACTING_POLICIES − board) ∩ clocked, no share `shares`; the audience never acts. It reads the audience's
-#       LAST definition (709's): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
+#       LAST definition (709's) and every ALTER FUNCTION on it after that, in that migration or a later one (the last
+#       SECURITY clause stands): a SECURITY DEFINER body, which pipeline_shares' policy no longer backs, must hold
 #       DEFINER_AUDIENCE_FILTERS verbatim (the caller's accounts as `me`; a share to one of them as recipient, from none
 #       of them, none while acting: the whole WHERE)
-#   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the $post$ count
+#   (j) rail_j  test_one_trigger_count: THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES) == the NEWEST
+#       $post$ trigger count (696's 12, 715's 14)
 #   (k) rail_k  test_no_family_is_a_suffix_of_another: the dedupe GUC holds `<family>:<account>;` entries and finds
 #       one with strpos, so a family that ends another (`ags` inside `tags`) would read as already bumped
 #
@@ -268,10 +271,12 @@ def rail_c(migrations: Migrations, ts_text: str, clocked: dict[str, str]) -> lis
     seed = seed_families(_clock_migration(migrations)[1])
     ts = ts_curation_families(ts_text)
     sets = {"the family CHECK": set(check or ()), "CURATION_FAMILIES (TS)": set(ts),
-            "CLOCKED_TABLES' families": set(clocked.values()), "the seed": set(seed)}
+            "CLOCKED_TABLES' families": set(clocked.values())}
     problems = [] if check else ["no migration declares curation_clock_family_check"]
     if len({frozenset(v) for v in sets.values()}) != 1:
         problems.append("the families disagree: " + "; ".join(f"{k} {sorted(v)}" for k, v in sets.items()))
+    if not set(seed) <= set(check or ()):
+        problems.append(f"the seed names a family the CHECK does not admit: {sorted(set(seed) - set(check or ()))}")
     if len(ts) != len(set(ts)):
         problems.append(f"CURATION_FAMILIES repeats a family: {ts}")
     return problems
@@ -423,20 +428,30 @@ DEFINER_AUDIENCE_FILTERS = (
     "and not public.acting() group by s.account_id",
 )
 _DEFINE_AUDIENCE = re.compile(r"create (?:or replace )?function (?:public\.)?curation_clock_audience\(\)(.*?)\$\$(.*?)\$\$")
+_ALTER_AUDIENCE = re.compile(r"alter function (?:public\.)?curation_clock_audience\(\)([^;]*);")
 
 
 def _audience_definition(text: str) -> tuple[str, str]:
-    """(its attributes, its body) of the curation_clock_audience() that the migration `text` defines."""
-    m = _DEFINE_AUDIENCE.search(_norm(_strip_comments(text)))
+    """(its attributes, its body) of the curation_clock_audience() `text` defines; an ALTER FUNCTION after the
+    definition moves its SECURITY clause, the last one standing."""
+    norm = _norm(_strip_comments(text))
+    m = _DEFINE_AUDIENCE.search(norm)
     assert m, "the migration lost curation_clock_audience()"
-    return m.group(1), m.group(2)
+    attributes = m.group(1)
+    for alter in _ALTER_AUDIENCE.finditer(norm, m.end()):
+        if "security invoker" in alter.group(1):
+            attributes = attributes.replace("security definer", "") + " security invoker"
+        elif "security definer" in alter.group(1):
+            attributes += " security definer"
+    return attributes, m.group(2)
 
 
 def _audience_migration(migrations: Migrations) -> tuple[str, str]:
-    """The migration whose curation_clock_audience() stands: the last to define it (696, then 709)."""
-    defined = [(n, t) for n, t in migrations if _DEFINE_AUDIENCE.search(_norm(_strip_comments(t)))]
+    """The migration whose curation_clock_audience() stands (the last to define it: 696, then 709): its name, and
+    its text followed by every later migration's, so an ALTER FUNCTION on the audience after it is read too."""
+    defined = [i for i, (_n, t) in enumerate(migrations) if _DEFINE_AUDIENCE.search(_norm(_strip_comments(t)))]
     assert defined, "no migration defines curation_clock_audience()"
-    return defined[-1]
+    return migrations[defined[-1]][0], "\n".join(t for _n, t in migrations[defined[-1]:])
 
 
 def rail_i(policies: dict[str, tuple[str, str | None, str | None]], audience_text: str,
@@ -479,10 +494,20 @@ def rail_i(policies: dict[str, tuple[str, str | None, str | None]], audience_tex
 
 # --- (j) one number of triggers ----------------------------------------------------------------------------------
 
-def rail_j(thresholds: dict[str, object], clock_text: str, clocked: dict[str, str]) -> list[str]:
-    post = re.search(r"tgenabled = 'o'\) <> (\d+) then", _norm(clock_text))
+_POST_COUNT = re.compile(r"tgenabled = 'o'\) <> (\d+) then")
+
+
+def trigger_count_text(migrations: Migrations) -> str:
+    """The text of the newest migration whose $post$ asserts the clock's trigger count (696, then 715)."""
+    counted = [t for _n, t in migrations if _POST_COUNT.search(_norm(t))]
+    assert counted, "no migration's $post$ asserts the clock's trigger count"
+    return counted[-1]
+
+
+def rail_j(thresholds: dict[str, object], post_text: str, clocked: dict[str, str]) -> list[str]:
+    post = _POST_COUNT.search(_norm(post_text))
     counts = {"THRESHOLDS": thresholds.get("CURATION_CLOCK_TRIGGERS"), "CLOCKED_TABLES": len(clocked),
-              "the $post$ count": int(post.group(1)) if post else None}
+              "the newest $post$ count": int(post.group(1)) if post else None}
     return [] if len(set(counts.values())) == 1 else [f"the trigger counts disagree: {counts}"]
 
 
@@ -544,8 +569,7 @@ def test_the_audience_restates_ruling_2_and_never_acts() -> None:
 
 
 def test_one_trigger_count() -> None:
-    _name, clock_text = _clock_migration(_migrations())
-    assert rail_j(THRESHOLDS, clock_text, CLOCKED_TABLES) == []
+    assert rail_j(THRESHOLDS, trigger_count_text(_migrations()), CLOCKED_TABLES) == []
 
 
 def test_no_family_is_a_suffix_of_another() -> None:
@@ -596,8 +620,14 @@ def test_the_family_rail_bites_on_a_new_family_anywhere() -> None:
     widened = ("alter table public.curation_clock add constraint curation_clock_family_check check (family in "
                "('board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares', 'presets'));")
     assert rail_c(_with(migrations, widened), ts, CLOCKED_TABLES)
-    assert rail_c(migrations, ts.replace("'links', 'shares']", "'links', 'shares', 'presets']"), CLOCKED_TABLES)
+    assert "'shares', 'notifications'," in ts, "CURATION_FAMILIES moved; move this anchor with it"
+    assert rail_c(migrations, ts.replace("'shares', 'notifications',", "'shares', 'notifications', 'presets',"),
+                  CLOCKED_TABLES)
     assert rail_c(migrations, ts, {**CLOCKED_TABLES, "filter_presets": "presets"})
+    narrowed = ("alter table public.curation_clock add constraint curation_clock_family_check check (family in "
+                "('board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'notifications'));")
+    assert any("the seed names a family" in p for p in rail_c(_with(migrations, narrowed), ts, CLOCKED_TABLES)), (
+        "a CHECK that drops a seeded family")
 
 
 def test_the_shape_rail_bites_on_an_immediate_a_statement_level_a_partial_or_a_misnamed_trigger() -> None:
@@ -693,7 +723,10 @@ def test_the_audience_rail_bites_when_a_read_share_follows_more_than_the_board_o
 
     assert rail_i(_swap("else array['board']", "else array['board', 'notes']"), clock_text, CLOCKED_TABLES)
     assert rail_i(_swap("'links'] else", "'links', 'shares'] else"), clock_text, CLOCKED_TABLES)
-    assert rail_i(_swap("'links', 'shares']", "'links']"), clock_text, CLOCKED_TABLES), "own lost shares"
+    assert rail_i(_swap("'shares', 'notifications']", "'notifications']"), clock_text, CLOCKED_TABLES), "own lost shares"
+    assert rail_i(_swap("'shares', 'notifications']", "'shares']"), clock_text, CLOCKED_TABLES), "own lost notifications"
+    assert rail_i(_swap("'links'] else", "'links', 'notifications'] else"), clock_text, CLOCKED_TABLES), (
+        "an edit share follows the owner's bell")
     assert rail_i(_swap("'tags', 'notes', 'links'] else", "'tags', 'links'] else"), clock_text, CLOCKED_TABLES)
     assert rail_i(_swap("when a.edit", "when a.mine"), clock_text, CLOCKED_TABLES), "an edit share falls to board"
     assert rail_i(_swap("when a.mine", "when a.edit"), clock_text, CLOCKED_TABLES), "the edit arm ahead of own"
@@ -725,12 +758,25 @@ def test_the_audience_rail_reads_the_last_definition_and_bites_on_a_bare_definer
     assert _audience_migration([*migrations, ("999_census_bite.sql", later)])[1] == later
     invoker = text.replace("stable security definer", "stable").replace("\n     and not public.acting()", "")
     assert rail_i(policies, invoker, CLOCKED_TABLES) == [], "an invoker body is backed by pipeline_shares' policy"
+    # A definer made by ALTER FUNCTION, in the same migration or a later one, is a definer; an ALTER back to invoker
+    # is not (the last SECURITY clause stands).
+    definer = "\nalter function public.curation_clock_audience() security definer;"
+    assert rail_i(policies, invoker + definer, CLOCKED_TABLES), "a bare body made definer by ALTER FUNCTION"
+    assert rail_i(policies, _audience_migration([*migrations, ("998_bite.sql", invoker), ("999_bite.sql", definer)])[1],
+                  CLOCKED_TABLES), "a bare body made definer by a later migration's ALTER FUNCTION"
+    assert rail_i(policies, invoker + definer + "\nalter function curation_clock_audience() security invoker;",
+                  CLOCKED_TABLES) == []
+    assert rail_i(policies, text + "\nalter function public.curation_clock_audience() security invoker;",
+                  CLOCKED_TABLES) == [], "709's body back to invoker is backed by the policy again"
 
 
 def test_the_count_rail_bites_on_a_threshold_that_drifts() -> None:
-    clock_text = _clock_migration(_migrations())[1]
-    assert rail_j({**THRESHOLDS, "CURATION_CLOCK_TRIGGERS": 11}, clock_text, CLOCKED_TABLES)
-    assert rail_j(THRESHOLDS, clock_text.replace(") <> 12 then", ") <> 13 then"), CLOCKED_TABLES)
+    migrations = _migrations()
+    post_text = trigger_count_text(migrations)
+    assert ") <> 14 then" in post_text and post_text != _clock_migration(migrations)[1], "715's count, not 696's"
+    assert rail_j({**THRESHOLDS, "CURATION_CLOCK_TRIGGERS": 13}, post_text, CLOCKED_TABLES)
+    assert rail_j(THRESHOLDS, post_text.replace(") <> 14 then", ") <> 15 then"), CLOCKED_TABLES)
+    assert rail_j(THRESHOLDS, _clock_migration(migrations)[1], CLOCKED_TABLES), "696's own count no longer fits"
 
 
 def test_the_silencing_rail_bites_on_a_truncate_a_placeholder_and_a_quoted_name() -> None:

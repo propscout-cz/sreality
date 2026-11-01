@@ -174,9 +174,9 @@ jobs:
       - name: Migration 656 re-runs clean after it applied (the lock-timeout retry contract)
         run: psql -v ON_ERROR_STOP=1 -q -f migrations/656_notifications_w6_prune.sql
 
-      # Migration 699 (location W3) is under the same retry contract: its guard, dedup and $post$ hold on a re-run.
-      - name: Migration 699 re-runs clean after it applied (the lock-timeout retry contract)
-        run: psql -v ON_ERROR_STOP=1 -q -f migrations/699_location_w3_one_claim_per_fact.sql
+      # Migration 707 (location W3 PR-2) is under the same retry contract: its drops and $post$ hold on a re-run.
+      - name: Migration 707 re-runs clean after it applied (the lock-timeout retry contract)
+        run: psql -v ON_ERROR_STOP=1 -q -f migrations/707_location_w3_drop_fingerprint.sql
 
       - uses: actions/setup-python@v6
         with:
@@ -195,7 +195,8 @@ jobs:
       # gone page is stamped 410, and only a real schema can answer that. The registry
       # publish check joins for the same reason: carry-forward equality and the
       # completeness read are PostGIS and anti-join answers, not SQL shapes; so W3's readings half, and the location
-      # W3 one claim write (what it changes, keeps and retracts is an executed answer).
+      # W3 one claim write (what it changes, keeps and retracts is an executed answer), and W3b's
+      # address pick (the real drain over a two-town mirror the test seeds).
       # test_map_overlays_live joins because migration 600's tile renderer is plpgsql: its
       # PostGIS calls resolve only when it runs, and only real tiles show the layers it writes.
       # test_connect_read_only_live joins because the wave shadow's "no write" is the server's refusal;
@@ -208,7 +209,7 @@ jobs:
                  tests/location_data/test_location_w10_gone_bodies_live.py \
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_claims_one_write_live.py \
-                 tests/location_data/test_claims_retire.py \
+                 tests/location_data/test_operator_pick_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \
@@ -242,6 +243,13 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_agent_runs_live.py tests/test_agent_run_routes_live.py -q
+
+      # Apply and Undo (#2072): the marker (migration 712) refuses any login but the tenant pool's, so these log in as it.
+      - name: A proposal applies once under the user's login, and Undo removes exactly what it added (#2072)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_agent_proposals_live.py -q
 
       # The security suite's live half (#2074): twenty injected ads through the real executor and the real dossier, the model
       # scripted to obey each. It proves the server's rails hold, not that a model resists; see tests/api/test_agent_security.py.

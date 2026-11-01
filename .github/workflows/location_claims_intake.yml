@@ -265,7 +265,7 @@ jobs:
           # EVERY workflow that can hold `location-batch`. `test_location_batch_hardening.py`
           # derives this list from the workflows' own concurrency blocks, so a new member
           # cannot be missed. (The resolve lane left GitHub in the location programme's W2.)
-          GROUP_WORKFLOWS: "location_claims_intake.yml location_claims_retire.yml location_registry_load.yml"
+          GROUP_WORKFLOWS: "location_claims_intake.yml location_registry_load.yml"
           WORKFLOW: location_claims_intake.yml
         run: |
           summary=$(grep -o 'INTAKE done {.*' intake.log | tail -1 | sed 's/^INTAKE done //')

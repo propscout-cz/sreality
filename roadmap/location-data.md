@@ -1287,8 +1287,9 @@ component is slimmed twice — each wave rewrites one component and slims its st
   blur, which a presence detector could never clear. A payload body that becomes latest again is re-mined;
   the text lane retries an empty location block (1,915 stored ones re-marked). Rollout (design § 5): the
   autodedup shadow gate, then the R2 backup + batched purge (≈ 8.8 M rows, `location_claims_retire.yml`'s
-  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (702:
-  the fingerprint column, its index, both functions; the purge script) after one green intake tick. A
+  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (707:
+  the fingerprint column, its index, both functions; the purge script) after one green intake tick.
+  **Purge done 2026-11-01: 9,312,771 rows deleted, 6,000,747 keys kept, backup 15,313,392 rows in R2.** A
   retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
   keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve
   the current pin. Design: `docs/design/location-quality/w3-one-claim-per-fact.md`.
@@ -1331,6 +1332,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
   the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
   The refetch lane ticks hourly, a constant.
+- **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
+  `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
+  address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
+  300 m), and `POST /location/corrections {property_id, pick}` → `operator_corrections.submit_pick`,
+  the four picker types on every ad (tombstones for the unstated ones; `pick: null` clears), then the
+  location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
+  Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
+  Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

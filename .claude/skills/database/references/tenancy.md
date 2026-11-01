@@ -220,7 +220,8 @@ never reset, never rendered.
   account then present all seven families at 1; a later account gains a family's row on its first bump (signup
   bumps `board` and `collections`).
 - **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
-  `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
+  `search_path = ''`) runs on fourteen `<table>_curation_clock` constraint triggers (696's twelve, 715's two on the
+  notification tables, family `notifications`, own-only), `AFTER INSERT OR UPDATE OR DELETE
   … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
   `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
   bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
@@ -245,8 +246,8 @@ never reset, never rendered.
   ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
   … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
   which maps `mine`. WHY: 696's three OR arms plus the view's join evaluated the audience four times per read. That
-  cost 4.9 ms mean in production against gate #2203's 2.5 ms; each evaluation is about five definer
-  `current_account_ids()` calls, whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
+  cost 4.9 ms mean in production against gate #2203's 2.5 ms, each evaluation then being about five definer
+  `current_account_ids()` calls (one since 709, below), whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
   only the view's join probes `curation_clock_pkey` per followed account; without it the read scans the whole clock,
   O(clock rows), and at 2,000 accounts costs more than 696's read (`docs/design/curation-sync.md` § 3.8). Never name
   the audience twice in the policy, never drop the view's join; the live lane asserts two audience nodes per read and
@@ -270,8 +271,13 @@ never reset, never rendered.
   buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
   the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
   `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
-  rows each caller reads on one backend after another warmed its plan; ≤ 40 buffers warm at both sizes is a ceiling
-  against a scan of a full clock, not against 708 (~20).
+  rows each caller reads on one backend after another warmed its plan, and a caller in several accounts following
+  each as own; ≤ 40 buffers warm at both sizes is a ceiling against a scan of a full clock, not against 708 (~20).
+  Production after 709: 0.973 ms mean and 18.3 buffers over the first 30 reads (2026-11-01).
+  GRANTS ON A HOT FUNCTION (the skill's recipe, its one exception): 709's `CREATE OR REPLACE` keeps the ACL, so it
+  revokes from `public`, `anon` and `service_role` and grants `authenticated` without ever revoking from it. Under
+  statement autocommit a revoke-then-grant pair on a function every open window calls each 5 s would refuse every
+  clock read in between; the same holds for any function its callers reach that often.
 - **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
   volume, including changes before the share and changes that leave no readable trace) and the exact last-change
   time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
@@ -299,9 +305,9 @@ never reset, never rendered.
   refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
   re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
-  twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
+  fourteen; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
   (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
-- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience until 709, the grants,
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, fourteen since 715's own `$post$`, definer bump, invoker audience until 709, the grants,
   the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
@@ -525,7 +531,10 @@ join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come fr
 (shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
 (`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
 (shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
-another account's id is a 404 before the service role opens. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
+another account's id is a 404 before the service role opens. Apply and Undo (`/runs/{id}/proposals/{i}/*`, #2072) stay on the
+`TenantConn` for everything: the curation write under its own RLS, naming the RUN's account (shape 3's explicit predicate, not the
+oldest membership), and the marker in `agent_proposal_applies` (`authenticated` SELECT only, the `curation_clock` idiom) through
+migration 712's definers, each refusing any `session_user` but `tenant_pool`, so PostgREST's `authenticator` cannot call them. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
 browser write) follows: `PUT /runs/limit` takes the gate's account (the body names none) and writes on the service role after the
 route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
 definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row

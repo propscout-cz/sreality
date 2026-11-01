@@ -143,7 +143,7 @@ deny-all RLS (CI-enforced) is the backstop. Functions: 612 removed the built-in 
 so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
 function already has. Recipe, on every function you write: `revoke all on function <sig> from
 public, anon, authenticated;`, then `grant execute` to `authenticated` (or `service_role`) only
-where a caller needs it.
+where a caller needs it. Exception for a hot function: `references/tenancy.md` § Curation clock.
 
 ## Migration safety policy (under autopilot)
 
@@ -480,7 +480,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   keyed upsert (`claims_store.write_claims`) writes only when a value changes, in place; the
   resolver reads one per type, operator first. A wrong contract is RETRACTED (DELETE + re-resolve
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
-  `location_claims_retire.yml` ran once more for W3's purge, deleted in PR-2. The live set is `location_claims`,
+  The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound

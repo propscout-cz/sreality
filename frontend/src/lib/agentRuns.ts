@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   agentRunKeys, WAITING_POLL_MS, type AccountLimit, type AgentRunOptions, type JsonSchema, type QueueState,
 } from './agentRunOptions';
-import { fetchAgentRun, fetchAgentRuns, fetchAgentRunSteps } from './api';
+import { fetchAgentRun, fetchAgentRunProposals, fetchAgentRuns, fetchAgentRunSteps } from './api';
 import { fmtUsd, fmtUsdPerCall } from './format';
 import type { Trace, TraceStep } from './types';
 
@@ -54,6 +54,26 @@ export interface AgentRunStep {
   cost_usd: number;
   duration_ms: number;
   created_at: string;
+}
+
+/* One proposal as the server draws it (api/agents/proposals.py): `before`, `after`, `properties`, `filters` and `answer` are
+ * from our own data; `agent_text` alone is the model's words. */
+export interface AgentProposal {
+  index: number;
+  entry: string;
+  state: 'open' | 'applied' | 'undone';
+  title: string;
+  before: string[];
+  after: string[];
+  agent_text: { label: string; text: string }[];
+  properties: { property_id: number | null; title: string }[];
+  filters: { label: string; value: string }[];
+  refused: string | null;
+  answer: string | null;
+  applied_at: string | null;
+  undone_at: string | null;
+  undo: { available: boolean; says: string | null } | null;
+  undo_confirm: boolean;
 }
 
 export interface StartAgentRun {
@@ -106,6 +126,14 @@ export const useAgentRunSteps = (id: number | null, status: AgentRunStatus) => {
     refetchInterval: () => pollMs([status], queue()),
   });
 };
+
+/* A run's proposals stop moving when it ends, so nothing polls; a write re-reads them. */
+export const useAgentRunProposals = (id: number, enabled: boolean) =>
+  useQuery({
+    queryKey: agentRunKeys.proposals(id),
+    queryFn: () => fetchAgentRunProposals(id),
+    enabled,
+  });
 
 /* Why a queued run isn't moving, for a queue that holds it; null when none does. */
 export function queueHold(queue: QueueState | null | undefined, limit: AccountLimit | null | undefined): string | null {

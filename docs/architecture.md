@@ -870,7 +870,8 @@ rules. Identify which one a task belongs to before you start.
   the unread count on a copper tally, opening `/notifications` under the back affordance (the page
   belongs to no tab and has no phone fork: one `max-md:` pass), hidden where the plan's agenda hides
   notifications. Its number comes from the ONE unread observer `Shell` mounts above both frames
-  (`lib/unreadCount.tsx`: the agenda gate and the 60 s poll the TopBar used to own), which the desktop
+  (`lib/unreadCount.tsx`: the agenda gate; since W7 of the curation sync it follows the clock's
+  `notifications` family, the 60 s poll gone), which the desktop
   badge and the Notifications page read too. The installed app's icon badge
   (`lib/appBadge.ts`, `navigator.setAppBadge`, only when `isInstalledApp()`; every failure swallowed —
   iOS shows it only once notifications are allowed) has three writers: the observer sets the count
@@ -1014,8 +1015,9 @@ rules. Identify which one a task belongs to before you start.
   rows leave and enter (every loaded page re-read from the first) and its count, map and stats
   re-read. While the pointer is over the list or a finger is down on it (keyboard focus is no
   hand), `lib/useListHold` holds the list's own keys through `parkReads`: the scheduler's
-  re-reads park and are paid when the hand leaves; the list's first load, its pages and its own
-  refetch pass, the count, map and stats are never held, and a click of the user's own composes
+  re-reads park and are paid when the hand leaves; the list's first load, its pages, a sort revisited
+  and a refresh the user asks for pass (the reconnect refetch is off for the list roots, so none lands
+  under a hand), the count, map and stats are never held, and a click of the user's own composes
   through its own hold. A new list surface spreads `useListHold(keys)` on its container; rows
   drawn from a read that also carries a count (the collection page's table) are held in the view
   with `useHeld`, never by holding that read. The Feed's Skryté roll, which no lens engages, is
@@ -3381,9 +3383,11 @@ renumber.** Navigate by area:
     needs no carrier; cards and curation stay owned by exactly one account.
     **The curation clock (migration 696, `docs/design/curation-sync.md` § 3.2-3.4): only the database says
     that curation changed, and who FOLLOWS a change is stated once.** `curation_clock` holds one counter per
-    (account, family: `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`), advanced only by
-    `bump_curation_clock()`, a definer function on twelve DEFERRED constraint row triggers (the eleven curation
-    tables bar `property_pipeline_events`, plus both share tables, whose rows bump both parties): once per
+    (account, family: `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`, and since
+    migration 715 `notifications`), advanced only by `bump_curation_clock()`, a definer function on fourteen
+    DEFERRED constraint row triggers (the eleven curation tables bar `property_pipeline_events`, both share tables,
+    whose rows bump both parties, and since 715 `notification_dispatches` and `notification_subscriptions`, own-only:
+    a mark-seen anywhere, a producer's event, a retired watchdog move the bell everywhere): once per
     committed transaction, account and family, nothing on a rollback, every writer seen (the API, the carriers,
     signup, cascades). A counter is a signal, never state and never history: windows compare it for inequality
     and re-read (W4). `curation_clock_audience()` (`current_account_ids()`, never acting; definer plpgsql since
@@ -4122,6 +4126,13 @@ renumber.** Navigate by area:
     filter-preset save modal, the tag pickers, and this stage editor — the single colour-picking
     control app-wide; don't re-inline a swatch grid), and the entry-star / "konec" (terminal)
     controls carry `<InfoIcon>` (i) hints (native `title=`, the codebase's tooltip convention).
+    **Undoing a proposal's card is not a remove toggle (#2072, ADR-0004).** A run may propose a card at the entry stage; the user's
+    Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
+    while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,
+    `entered_stage_at` and `updated_at`, the stage still `is_entry`, no merge on the property since), through `remove_card`, so its
+    ledger event is the same, behind the one two-step confirm. A card the user moved, even back, is their deal: they close it. It is
+    the one SPA card write outside `lib/usePipelineCard`: the server draws what a proposal does and the panel re-reads rather than
+    patches, through the same write policy (`lib/useOptimisticWrite`).
 23. **One measure, one definition, one label.** Every per-m² figure the platform computes or
     renders — in SQL, in Python, in the SPA, in the Chrome extension — resolves from ONE named
     measure carrying its own numerator, denominator, unit and validity bounds. No consumer
@@ -4856,8 +4867,7 @@ what a payload asserted, with a surface, an extraction method, a licence class a
 that FIRST stated its value. For each listing, claim type and author (`licence_class`: `portal` or
 `operator`) it holds ONE claim, the value that author stated most recently (`location_claims_key`);
 the operator outranks the portal at the read (ruling Q5). Columns: identity, the contract entry, five
-typed value slots, the declared-precision trio (`claim_fingerprint` is dead, dropped by migration
-700). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
+typed value slots, the declared-precision trio (`claim_fingerprint` was dropped by migration 707). ONE statement writes it for both producers, `claims_store.write_claims` (the lane below and
 `location_data/operator_corrections.py`): `INSERT … ON CONFLICT (listing_id, claim_type,
 licence_class) DO UPDATE … WHERE` one of the eight value columns `IS DISTINCT FROM` the stored one, so
 an unchanged re-mine or a bump that restates a value writes and enqueues NOTHING, a changed value is an
@@ -4875,6 +4885,23 @@ also takes the values a later version restated unchanged: **a retract, like an a
 by one full re-mine of that source** (`claims_intake --mode full --source X`; bodies and readings
 re-mine by their stamps). `--retract` batches because "the contract's claims" is every listing a
 portal has ever had, and one atomic DELETE of that size spends its `statement_timeout` and rolls back.
+
+**THE OPERATOR'S PICK (W3b, ruling Q5)** is the only operator input, and the listing inspector
+(`/location/listing/*`, `toolkit/location_quality.py`) is gone. An admin's pencil on the property page's
+address line opens Browse's place typeahead; `/maps/resolve` with `address_point: true` binds an address
+pick to its ONE door (the resolver's own `address_points_by_number` on the bound street, or a streetless
+village's obec, exactly one door within `REGISTRY_PIN_CONFLICT_M`; nothing scans the mirror), a street
+or an obec pick as the chips do. `POST /location/corrections {property_id, pick}` (admin) →
+`operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
+`obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
+types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
+to their own words. Its transaction holds the property row `FOR SHARE` before it reads the ads (a detach
+or merge waits); it then resolves the location ad and answers `held` (the row binds the code). Per
+ad, because the location ad is re-elected at every recompute. Not curation (rule 18): a merge leaves
+the claims on their ads, a detach clears them on the ads it moved (R1, `detach_listings` →
+`operator_corrections.clear`). Limits: a portal PSČ or kód ADM can defeat a street or obec pick
+(`held: false`; the UI asks for an address); the portal pin stays evidence; část, okres and kraj picks
+wait for W5.
 
 **ONE LANE, THREE HALVES.** `location_data/claims_intake.py` (hourly, `35 * * * *`, and the worker's
 minute lane) is the only portal writer of `location_claims`, and it reads the three substrates we
@@ -5265,8 +5292,8 @@ standing gate, W3/W4/W5/W5b/W6; `docs/design/location-quality/wave-shadow.md`). 
 position field through `COHORT_LOCATION_SQL` and `export.build_location`, in the export and the live lane
 alike, so the seam is the cohort artifact and `DECISION_MODULES` never change for it. Three commands, no
 production write (every statement in a READ ONLY transaction on `db.connect_read_only()`):
-`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W3's
-`purge`, W4's `remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
+`location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W4's
+`remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
 writes the movers; `autodedup.shadow` sizes their old and new blocks (capped; a split-city mover with no
 quarter rides one `ids` block with every ad a ruling or its property ties to it) and exports them, the rulings
 and the live scorer in-process (no `autodedup.iterations` row); `harness shadow` rewrites the movers'

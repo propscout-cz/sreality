@@ -359,9 +359,9 @@ delegate, a merge). It is a re-read prompted by the curation clock, never a rend
 _Avoid_: live sync, live update, Realtime, push (alone), operator state sync
 
 **Curation clock**:
-One counter per account and family of curation (the board, dismissals, collections, tags, notes, links,
-shares), advanced only by the database, once per committed change. It is a change signal compared only
-for inequality: it holds no content and is not history.
+One counter per account and family (the board, dismissals, collections, tags, notes, links, shares, and
+since 2026-11-01 notifications), advanced only by the database, once per committed change. It is a change
+signal compared only for inequality: it holds no content and is not history.
 _Avoid_: version, tick, revision, change log
 
 **Clock read**:
@@ -378,6 +378,16 @@ _Avoid_: poller, sync engine, listener, watcher
 A content-free note one browser tab sends its sibling tabs after a write committed, so they take a clock
 read now instead of at their next one. It says only "read the clock", never what changed.
 _Avoid_: ping, push, broadcast (alone), doorbell
+
+**Hand (on a list)**:
+The pointer resting over a list, or a finger down on it; while it lasts the rows the user sees stay where
+they are, and the counts, map and stats beside them follow at once. Keyboard focus is no hand.
+_Avoid_: hover (alone), focus, interaction lock, freeze
+
+**Park (of a read)**:
+A read a list owes that waits while a hand is on the list and is taken the moment the hand leaves;
+the list's own reads never park.
+_Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
 
 **Watchdog**:
 A saved filter that alerts an account when a property newly matches it or drops its price.

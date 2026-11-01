@@ -434,7 +434,7 @@ THRESHOLDS: dict[str, Any] = {
     # --- curation_sync (platform alarm, on the worker): does every curation change move the clock --
     # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
     # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
-    "CURATION_CLOCK_TRIGGERS": 12,
+    "CURATION_CLOCK_TRIGGERS": 14,
     # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
     # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
     # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
@@ -489,7 +489,7 @@ _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
 _PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
 # The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
 _NOTIFICATIONS_BUDGET_S = 5.0
-# The curation clock's two reads: twelve catalog rows and the board ledger's last day (~10 events), so 5 s. With it
+# The curation clock's two reads: fourteen catalog rows and the board ledger's last day (~10 events), so 5 s. With it
 # WORKER_ALARMS_DUE_AT_ONCE_S exceeds the worker's pass: the last alarm (parsing) defers one pass when every alarm is
 # due at once, the tested `defer_unfit` path (docs/design/curation-sync.md § 3.9).
 _CURATION_SYNC_BUDGET_S = 5.0

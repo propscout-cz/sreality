@@ -1,7 +1,7 @@
 /* The unread count's one observer (W5a, AUDIT F9): Shell mounts it once, and
  * every reader (the desktop badge, the phone bell, the Notifications page) gets
- * its number from it, so one poll serves both frames. Gated by the agenda, as
- * the nav item is; marking rows read refetches it through `notificationKeys.all`.
+ * its number from it, so one read serves both frames. Gated by the agenda, as
+ * the nav item is; a mark-read anywhere re-reads it through the curation clock (W7).
  * The same number is the installed app's icon badge (ruling R4, lib/appBadge);
  * in the page only this observer sets it (an identity change clears it). */
 import { act, render, screen, waitFor } from '@testing-library/react';
@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
+import { familyTargets } from '@/lib/curationSync';
 import { notificationKeys } from '@/lib/queries';
+import { revalidate } from '@/lib/revalidate';
 import { syncAppBadge } from '@/lib/appBadge';
 import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 
@@ -68,7 +70,7 @@ describe('the unread observer', () => {
     expect(api.getNotificationUnreadCount).toHaveBeenCalledTimes(1);
   });
 
-  it('polls nothing and hides every bell when the plan has no notifications agenda', () => {
+  it('reads nothing and hides every bell when the plan has no notifications agenda', () => {
     signIn(false, { notifications: false });
     renderReaders();
     expect(screen.getByText('badge: hidden')).toBeInTheDocument();
@@ -92,14 +94,35 @@ describe('the unread observer', () => {
     expect(await screen.findByText('bell: 4')).toBeInTheDocument();
   });
 
-  it('refetches when a mark-read invalidates the notifications keys', async () => {
+  /* W7, the operator's ask: a notification resolved in another window or the app. */
+  it('follows a change made elsewhere within one clock answer, every bell at once', async () => {
     signIn(false, { notifications: true });
     const qc = renderReaders();
     expect(await screen.findByText('bell: 4')).toBeInTheDocument();
     vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 1 });
-    await act(() => qc.invalidateQueries({ queryKey: notificationKeys.all }));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
     await waitFor(() => expect(screen.getByText('bell: 1')).toBeInTheDocument());
     expect(screen.getByText('badge: 1')).toBeInTheDocument();
+  });
+
+  it('never moves on a share: an owner I follow carries no notifications read of mine', async () => {
+    signIn(false, { notifications: true });
+    const qc = renderReaders();
+    expect(await screen.findByText('bell: 4')).toBeInTheDocument();
+    expect(familyTargets(qc, 'notifications', 'owner-1')).toEqual([]);
+  });
+
+  it('polls nothing while its reads succeed; only a failed read asks again', async () => {
+    signIn(false, { notifications: true });
+    const qc = renderReaders();
+    expect(await screen.findByText('bell: 4')).toBeInTheDocument();
+    const query = qc.getQueryCache().find({ queryKey: notificationKeys.unreadCount })!;
+    const interval = query.observers[0].options.refetchInterval as (q: typeof query) => number | false;
+    expect(interval(query)).toBe(false);
+    query.setState({ status: 'error' });
+    expect(interval(query)).toBe(60_000);
   });
 });
 

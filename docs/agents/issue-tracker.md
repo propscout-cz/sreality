@@ -58,14 +58,15 @@ Every session posts as the same GitHub account, so an assignee cannot tell sessi
 - The script alone writes claim comments; leave them as written and the assignee empty.
 - `status` shows who holds what (`--help`).
 
-## Merging: the merge light
+## Merging: the merge queue
 
-Railway deploys every merge to `main`, so merges go one PR at a time, each on its own light from the **merge coordinator**. That is a role, not a name: the session that owns the autodedup engine and runs merge windows. Its session name changes on every resume, so find it with `ListAgents` or ask the operator; never message a remembered name.
+`main` takes merges only through GitHub's merge queue: it tests each PR merged onto the current `main` (the required checks' `merge_group` run) and merges one PR at a time, so nobody merges `main` into a branch to keep it current. Railway deploys every merge.
 
-- **Ask for the light** ("green light #<n>") with the PR number, the head SHA, its CI state, and whether the PR adds a migration or touches `autodedup.incremental.DECISION_MODULES`, the apply scope (`app_settings.autodedup_apply_scope`), `.railway/` or the worker's config. Those may need an engine pause; the coordinator decides and runs it.
+- **Enqueue** a green PR with `gh pr ready <n>` (GitHub never merges a draft), then `gh pr merge <n>`. Run each `gh` write as its own command: inside a compound command it falls to the permission classifier. A check that goes red on the merged result drops the PR from the queue: fix, push, enqueue again.
+- **Engine-sensitive PRs enqueue only on the merge coordinator's light**: a PR that adds a migration or touches anything under `autodedup/` (`autodedup.incremental.DECISION_MODULES` included), the apply scope (`app_settings.autodedup_apply_scope`), `scraper/realtime_worker.py`, `scraper/job_lease.py`, `.railway/` or the worker's config. Ask for it ("green light #<n>": the PR number, its head SHA, what it touches). The coordinator sets the brake first if it must and says "enqueue"; after the merge it runs the carry and restores the brake. The coordinator is a role, not a name: the session that owns the autodedup engine. Its session name changes on every resume, so find it with `ListAgents` or ask the operator; never message a remembered name.
+- **A pre-merge step** (a purge, a migration applied ahead of the code) runs before you enqueue.
 - **Claim a migration number** with the coordinator before writing the file, and never apply a migration without telling it.
-- **Windows:** the coordinator may close backend merge windows, since every backend path rebuilds the job-runner. Don't assume a slot.
-- **On the light**, merge current `origin/main` into the branch and wait for CI green on that head: confirm `gh pr view <n> --json headRefOid -q .headRefOid` is the SHA you pushed, then, once its checks have registered, `gh pr checks <n> --watch --fail-fast --interval 30` (10-minute timeout, or in the background). Then run, each as a standalone command (inside a compound command it can fall to the permission classifier), `gh pr ready <n>` (GitHub never merges a draft) and `gh pr merge <n> --merge --match-head-commit <sha>`, where `<sha>` is the full head SHA CI just passed, not the one in your light request. Send the coordinator the merge SHA and wait for its "live" before the next merge.
+- **After the merge**, confirm the deploy yourself (CLAUDE.md, "A merge is not a deploy": every service on the merge SHA); for an engine-sensitive PR, send the coordinator the merge SHA.
 - **If the permission check refuses the merge**, tell the operator in your own session. Never ask another session to merge for you.
 
 ## Post-merge gates are their own tickets

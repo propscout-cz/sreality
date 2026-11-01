@@ -17,7 +17,8 @@ from tests.api.test_admin_route_coverage import _bucket, _reachable_calls  # noq
 
 ROUTES = frozenset({
     ("GET", "/runs/options"), ("PUT", "/runs/limit"), ("POST", "/runs"), ("GET", "/runs"), ("GET", "/runs/{run_id}"),
-    ("GET", "/runs/{run_id}/steps"), ("POST", "/runs/{run_id}/cancel"),
+    ("GET", "/runs/{run_id}/steps"), ("POST", "/runs/{run_id}/cancel"), ("GET", "/runs/{run_id}/proposals"),
+    ("POST", "/runs/{run_id}/proposals/{index}/apply"), ("POST", "/runs/{run_id}/proposals/{index}/undo"),
 })
 
 

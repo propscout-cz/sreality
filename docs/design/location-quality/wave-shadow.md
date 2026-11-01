@@ -41,13 +41,7 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
      claim of a type still outranks. Re-mined claims get ids above every stored one (`NEW_CLAIM_ID`), as
      an insert would. A stored page that would not re-mine (not fetched, refused, scope incomplete) keeps
      today's claims and is counted failed, so the run exits 1.
-   - `purge` (W3): today's read is already one claim per type once W3 lands, so `what_if.purge` reads
-     every stored claim of the ids RAW (`_RAW_CLAIMS_SQL`: each claim's contract version, the portal's
-     active version, whether the active contract declares its type), keeps per (listing, claim type,
-     licence class) the purge's keeper (`keeper_rank`: newest version <= active, then the newest
-     observation, then the id; the same order as `scripts/location_claims_retire.py`, which a DB-lane
-     test holds to the purge's result), then applies the one read (`what_if.one_read`).
-
+   (`purge`, W3's shadow of its own keeper rule, went with the purge in W3's PR-2, migration 707.)
    (`what_if.restate`, the pre-W3 version-window read in Python, was deleted with W3, #2223.)
 
    A **mover** is a listing whose new row differs from `COHORT_LOCATION_SQL`'s row today in any field
@@ -119,13 +113,7 @@ candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
 
 **A wave whose ids are a full scan** reads them from R2 instead: the ids_r2_key input (`what_if
 --ids-r2-key`) fetches a gzipped list, one listing id per line, with step 1's `R2_*` credentials
-(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`. W3: dispatch the purge
-dry run, which writes `backups/w3-claims/<UTC date>/w3_shadow_ids_<run>_<attempt>.txt.gz`; read the key
-from its log; dispatch the shadow:
-```bash
-gh workflow run location_wave_shadow.yml --ref <the W3 ref> -f wave=w3 -f claims=purge \
-    -f scope=apply -f group=1/1 -f ids_r2_key=backups/w3-claims/<date>/w3_shadow_ids_<run>_<attempt>.txt.gz
-```
+(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`.
 
 **A wave too wide for one runner** runs in block groups over ONE set of positions:
 1. Dispatch with `group=1/1`. Step 1 computes the positions; step 2 prints every block with its ad count
@@ -156,11 +144,10 @@ python3 -m autodedup.shadow shadow/w4
 python3 -m autodedup.harness shadow shadow/w4/base/cohort.jsonl.gz shadow/w4/positions.jsonl \
     shadow/w4/labels --scorer shadow/w4/scorer.json --out shadow/w4/judge
 ```
-W3: `--claims purge`; W5, W5b, W6: `--claims none` from the wave's branch (W5, #2251: `scope=apply`,
-slice by slice with the ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice). A block costs what
-its town does (Pardubice: 7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of
-Praha would be 167k ads, about 2.4 GB); over the caps, narrow the ids (one id list per slice of the apply
-scope).
+W5, W5b, W6: `--claims none` from the wave's branch (W5, #2251: `scope=apply`, slice by slice with the
+ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice). A block costs what its town does (Pardubice:
+7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about
+2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
 
 ## Rulings taken (defaults; the operator may override)
 - "Approved-split sessions" (named nowhere in the repo) := the rulings ledger inside the affected blocks

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { AgentRun, AgentRunStep } from '@/lib/agentRuns';
+import type { AgentProposal, AgentRun, AgentRunStep } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 vi.mock('@/lib/api', async (orig) => ({
@@ -12,16 +12,36 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchAgentRunOptions: vi.fn(),
   fetchAgentRun: vi.fn(),
   fetchAgentRunSteps: vi.fn(),
+  fetchAgentRunProposals: vi.fn(),
+  applyAgentProposal: vi.fn(),
+  undoAgentProposal: vi.fn(),
   cancelAgentRun: vi.fn(),
 }));
 
-import { ApiError, cancelAgentRun, fetchAgentRun, fetchAgentRunOptions, fetchAgentRunSteps } from '@/lib/api';
+import {
+  ApiError, applyAgentProposal, cancelAgentRun, fetchAgentRun, fetchAgentRunOptions, fetchAgentRunProposals, fetchAgentRunSteps,
+  undoAgentProposal,
+} from '@/lib/api';
 import RunDetail from './RunDetail';
 
 const options = vi.mocked(fetchAgentRunOptions);
 const fetchRun = vi.mocked(fetchAgentRun);
 const fetchSteps = vi.mocked(fetchAgentRunSteps);
 const cancel = vi.mocked(cancelAgentRun);
+const fetchProposals = vi.mocked(fetchAgentRunProposals);
+const apply = vi.mocked(applyAgentProposal);
+const undo = vi.mocked(undoAgentProposal);
+
+const proposal = (over: Partial<AgentProposal> = {}): AgentProposal => ({
+  index: 0, entry: 'create_collection', state: 'open', title: 'New collection', before: ['No such collection.'],
+  after: ['A new collection holding 1 property.'], agent_text: [{ label: 'Name', text: 'Shortlist' }],
+  properties: [{ property_id: 42, title: '2+kk · 54 m² · Brno' }], filters: [], refused: null, answer: null, applied_at: null,
+  undone_at: null, undo: null, undo_confirm: false, ...over,
+});
+const applied = (over: Partial<AgentProposal> = {}): AgentProposal => proposal({
+  state: 'applied', applied_at: '2026-11-01T12:00:00Z', answer: 'Created the collection with 1 of the properties.',
+  undo: { available: true, says: 'Deletes the collection.' }, ...over,
+});
 
 const IMG = '<img src="https://evil.example/x.png" onerror="alert(1)">';
 const JS = '[click me](javascript:alert(1))';
@@ -73,6 +93,9 @@ beforeEach(() => {
   options.mockReset().mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'open', agents: [], limit: null });
   fetchRun.mockReset().mockResolvedValue(run());
   fetchSteps.mockReset().mockResolvedValue({ data: [] });
+  fetchProposals.mockReset().mockResolvedValue({ data: [] });
+  apply.mockReset();
+  undo.mockReset();
   cancel.mockReset();
 });
 
@@ -85,10 +108,11 @@ describe('model-written text stays inert', () => {
       stop_reason: IMG,
       input: { town: HOSTILE },
       files: [`${IMG}.xlsx`, 'javascript:alert(1)'],
-      proposals: [{ entry: IMG, args: { title: JS, html: IMG } }],
+      proposals: [{ entry: 'add_note', args: { body: IMG } }],
       output: { note: HOSTILE, href: 'javascript:alert(1)' },
       cited_property_ids: [12, 'javascript:alert(1)', -1, 34] as unknown as number[],
     }));
+    fetchProposals.mockResolvedValue({ data: [proposal({ title: 'New note', agent_text: [{ label: 'Note', text: HOSTILE }] })] });
     fetchSteps.mockResolvedValue({
       data: [
         step({ n: 1, kind: 'model', name: IMG, text: [HOSTILE], input: { max_tokens: 1 }, cost_usd: 0.01 }),
@@ -187,16 +211,121 @@ describe('a run read honestly', () => {
     expect(screen.getByText('c0mm1t')).toBeInTheDocument();
   });
 
-  it('shows files and proposals as plain data: no link, no Apply, no Undo', async () => {
-    fetchRun.mockResolvedValue(run({ files: ['model.xlsx'], proposals: [{ entry: 'create_collection', args: { name: 'Shortlist' } }] }));
+  it('shows files as plain names, with no link', async () => {
+    fetchRun.mockResolvedValue(run({ files: ['model.xlsx'] }));
     mount();
     const files = await screen.findByRole('region', { name: 'Files' });
     expect(within(files).getByText('model.xlsx')).toBeInTheDocument();
     expect(within(files).queryByRole('link')).toBeNull();
-    const proposals = screen.getByRole('region', { name: 'Proposals' });
-    expect(within(proposals).getByText('create_collection')).toBeInTheDocument();
-    expect(within(proposals).getByText(/"Shortlist"/)).toBeInTheDocument();
-    expect(within(proposals).queryByRole('button')).toBeNull();
+  });
+});
+
+describe('proposals', () => {
+  const ONE = [{ entry: 'create_collection', args: { name: 'Shortlist' } }];
+  const panel = async () => {
+    mount();
+    const region = await screen.findByRole('region', { name: 'Proposals' });
+    return within(region);
+  };
+
+  it('draws the before and after, marks the agent’s words, and links only the property the server names', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValue({ data: [proposal({ agent_text: [{ label: 'Name', text: JS }] })] });
+    const p = await panel();
+    expect(await p.findByText('No such collection.')).toBeInTheDocument();
+    expect(p.getByText('A new collection holding 1 property.')).toBeInTheDocument();
+    expect(p.getByText('Written by the agent')).toBeInTheDocument();
+    expect(p.getByText(JS)).toBeInTheDocument();
+    expect(p.getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([ROUTES.property.build({ propertyId: 42 })]);
+  });
+
+  it('applies on a click, once, and shows what the server then says', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValueOnce({ data: [proposal()] }).mockResolvedValue({ data: [applied()] });
+    apply.mockResolvedValue(applied());
+    const p = await panel();
+    fireEvent.click(await p.findByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(apply).toHaveBeenCalledWith(7, 0));
+    expect(await p.findByText('Created the collection with 1 of the properties.')).toBeInTheDocument();
+    expect(p.getByText('Applied')).toBeInTheDocument();
+    expect(p.queryByRole('button', { name: 'Apply' })).toBeNull();
+    expect(p.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the Apply button while its write is in flight', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValue({ data: [proposal()] });
+    apply.mockReturnValue(new Promise(() => {}));
+    const p = await panel();
+    fireEvent.click(await p.findByRole('button', { name: 'Apply' }));
+    expect(await p.findByRole('button', { name: 'Applying…' })).toBeDisabled();
+  });
+
+  it('undoes on a click and says what it will leave', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValueOnce({
+      data: [applied({ undo: { available: true, says: 'Removes the 1 the agent added and keeps the collection: it also holds 2 of yours.' } })],
+    }).mockResolvedValue({ data: [applied({ state: 'undone', undone_at: '2026-11-01T13:00:00Z', undo: null })] });
+    undo.mockResolvedValue(applied({ state: 'undone', undo: null }));
+    const p = await panel();
+    expect(await p.findByText(/also holds 2 of yours/)).toBeInTheDocument();
+    fireEvent.click(p.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(undo).toHaveBeenCalledWith(7, 0));
+    expect(await p.findByText('Undone')).toBeInTheDocument();
+    expect(p.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('offers no Undo where it cannot work, and says why', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValue({
+      data: [applied({ undo: { available: false, says: 'You renamed or edited this collection, so Undo leaves it to you.' } })],
+    });
+    const p = await panel();
+    expect(await p.findByText(/You renamed or edited/)).toBeInTheDocument();
+    expect(p.queryByRole('button')).toBeNull();
+  });
+
+  it('takes a pipeline card back only behind the one confirm step (rule 22)', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: [{ entry: 'add_pipeline_card', args: { property_id: 42 } }] }));
+    fetchProposals.mockResolvedValue({
+      data: [applied({ entry: 'add_pipeline_card', title: 'Pipeline card', undo_confirm: true, undo: { available: true, says: 'Takes this card off your board.' } })],
+    });
+    undo.mockResolvedValue(applied());
+    const p = await panel();
+    fireEvent.click(await p.findByRole('button', { name: 'Undo' }));
+    expect(undo).not.toHaveBeenCalled();
+    fireEvent.click(p.getByRole('button', { name: 'Keep it' }));
+    expect(undo).not.toHaveBeenCalled();
+    fireEvent.click(p.getByRole('button', { name: 'Undo' }));
+    fireEvent.click(p.getByRole('button', { name: 'Yes, take the card off' }));
+    await waitFor(() => expect(undo).toHaveBeenCalledWith(7, 0));
+  });
+
+  it('says why a write failed, beside the proposal, and keeps the proposal open', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValue({ data: [proposal()] });
+    apply.mockRejectedValue(new ApiError('collection name already exists', 409, null));
+    const p = await panel();
+    fireEvent.click(await p.findByRole('button', { name: 'Apply' }));
+    expect(await p.findByRole('alert')).toHaveTextContent('Not applied: collection name already exists');
+    expect(p.getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
+
+  it('offers no Apply on a proposal today’s schema refuses', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockResolvedValue({ data: [proposal({ refused: 'unknown field', before: [], after: [] })] });
+    const p = await panel();
+    expect(await p.findByText(/This can’t be applied/)).toBeInTheDocument();
+    expect(p.queryByRole('button')).toBeNull();
+  });
+
+  it('says so when they cannot be read, and offers another try', async () => {
+    fetchRun.mockResolvedValue(run({ proposals: ONE }));
+    fetchProposals.mockRejectedValue(new Error('down'));
+    const p = await panel();
+    expect(await p.findByRole('alert')).toHaveTextContent('Could not load the proposals: down');
+    expect(p.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 });
 

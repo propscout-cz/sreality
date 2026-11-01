@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from fastapi import HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
 from api.cursor import decode_cursor, encode_cursor
@@ -391,6 +392,17 @@ def get_subscription(
     return _row_to_sub(row[:-1], int(row[-1] or 0)).__dict__
 
 
+def _refuse_unrenderable(spec: WatchdogFilterSpec | None) -> None:
+    """422 for a spec the matcher's one compiler refuses (a retired filter, an agenda violation): stored, it would mute its
+    watchdog every pass. Here, not at a route, so every caller of a write gets it."""
+    if spec is None:
+        return
+    try:
+        check_filter_spec(spec)
+    except SPEC_REJECTIONS as exc:
+        raise HTTPException(status_code=422, detail=f"filter_spec: {exc}") from exc
+
+
 def create_subscription(
     conn: "psycopg.Connection",
     *,
@@ -402,6 +414,7 @@ def create_subscription(
     # account_id is NOT NULL (migration 364) and REQUIRED here (no default): the
     # route resolves exactly one via tenant_pool.require_account_id, which 400s
     # when the caller has none, so this INSERT can never bind a silent NULL.
+    _refuse_unrenderable(filter_spec)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO notification_subscriptions "
@@ -427,6 +440,7 @@ def update_subscription(
     filter_spec: WatchdogFilterSpec | None = None,
     is_active: bool | None = None,
 ) -> dict[str, Any] | None:
+    _refuse_unrenderable(filter_spec)
     sets: list[str] = []
     params: list[Any] = []
     if name is not None:
@@ -466,6 +480,36 @@ def delete_subscription(
             (subscription_id,),
         )
         return cur.rowcount > 0
+
+
+def new_subscription_undo_check(
+    conn: "psycopg.Connection", subscription_id: str, applied_at: datetime,
+) -> tuple[str | None, int]:
+    """Why Undo may not retire the watchdog a proposal created, in the user's words, or None; and how many alerts it has told."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT retired_at, updated_at, "
+            "  (SELECT count(*) FROM notification_dispatches d WHERE d.subscription_id = %s "
+            f"    AND {VISIBLE_SQL}) "
+            "FROM notification_subscriptions WHERE id = %s",
+            (subscription_id, subscription_id),
+        )
+        row = cur.fetchone()
+    if row is None or row[0] is not None:
+        return "You already deleted this watchdog.", 0
+    if row[1] != applied_at:
+        return "You changed this watchdog, so Undo leaves it to you.", 0
+    return None, int(row[2])
+
+
+def undo_new_subscription(conn: "psycopg.Connection", subscription_id: str, applied_at: datetime) -> None:
+    """Retire the watchdog a proposal created, or 409 with why not; the row lock stops an edit landing between the two."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM notification_subscriptions WHERE id = %s FOR UPDATE", (subscription_id,))
+    refusal, _ = new_subscription_undo_check(conn, subscription_id, applied_at)
+    if refusal:
+        raise HTTPException(409, refusal)
+    delete_subscription(conn, subscription_id)
 
 
 # --- dispatches (the notification feed) -----------------------------------

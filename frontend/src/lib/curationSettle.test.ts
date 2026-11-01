@@ -28,6 +28,11 @@ const pages = (...ids: number[][]): InfiniteData<Page> => ({
   pages: ids.map((rows) => ({ rows: rows.map((property_id) => ({ property_id })) })),
   pageParams: ids.map((_, i) => i),
 });
+/* Pages stamped with their read times (lib/useInfiniteList `readAt`). */
+const stamped = (readAt: number[], ...ids: number[][]): InfiniteData<Page & { readAt: number }> => ({
+  pages: ids.map((rows, i) => ({ rows: rows.map((property_id) => ({ property_id })), readAt: readAt[i] })),
+  pageParams: ids.map((_, i) => i),
+});
 const rowsOf = (qc: QueryClient, key: QueryKey) =>
   qc.getQueryData<InfiniteData<Page>>(key)!.pages.map((p) => p.rows.map((r) => r.property_id));
 
@@ -240,6 +245,42 @@ describe('the settle', () => {
 
     await waitFor(() => expect(result.current.rows).toEqual([{ property_id: 1 }]));
     expect(result.current.hasNextPage).toBe(true);
+  });
+});
+
+describe('the stale side, judged by the page that holds the row', () => {
+  /* A page read later (under a hand, say) does not refresh the rows before it: a
+   * map re-read after P's page but before that later page is the current side
+   * for P, so the query's own `dataUpdatedAt` would misjudge it. */
+  it('a page read after the map leaves the rows before it the stale side: the row drops in place', () => {
+    const qc = new QueryClient();
+    const f = filters({ tags: scope({ in: [1] }) });
+    const now = Date.now();
+    const key = browseKeys.cards(f, DEFAULT_SORT);
+    qc.setQueryData(key, stamped([now - 30_000, now + 1_000], [P, 7], [8]), { updatedAt: now + 1_000 });
+    qc.setQueryData(browseKeys.count(f), 50);
+    // P lost tag 1 elsewhere; the marks were re-read after P's page, before the later one.
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>(), { updatedAt: now - 10_000 });
+
+    settle(qc, 'tags', () => qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [2]]]))); // attach tag 2
+    expect(rowsOf(qc, key)).toEqual([[7], [8]]);
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
+  });
+
+  it('a row on a page read after the map is the current side: that cohort re-reads whole, nothing drops', () => {
+    const qc = new QueryClient();
+    const f = filters({ tags: scope({ in: [1] }) });
+    const now = Date.now();
+    const key = browseKeys.cards(f, DEFAULT_SORT);
+    qc.setQueryData(key, stamped([now - 30_000, now + 1_000], [7], [P, 8]), { updatedAt: now + 1_000 });
+    qc.setQueryData(browseKeys.count(f), 50);
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>(), { updatedAt: now - 10_000 });
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    settle(qc, 'tags', () => qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [2]]])));
+    expect(rowsOf(qc, key)).toEqual([[7], [P, 8]]);
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(50);
+    expect(invalidated(spy).some((k) => k[1] === f)).toBe(true);
   });
 });
 

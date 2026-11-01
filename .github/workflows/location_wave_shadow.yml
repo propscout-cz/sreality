@@ -10,7 +10,7 @@ name: "Ops: Location wave shadow (the engine gate)"
 #   gh workflow run location_wave_shadow.yml -f wave=w4 -f claims=remine -f scope=apply -f limit=50 \
 #     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
 #   gh workflow run location_wave_shadow.yml -f wave=w4 -f group=2/3 -f positions_run_id=<that run>
-#   gh workflow run location_wave_shadow.yml -f wave=w3 -f claims=purge -f ids_r2_key=<the dry run's key>
+#   gh workflow run location_wave_shadow.yml -f wave=<wave> -f claims=none -f ids_r2_key=<a key of ids>
 #
 # Steps (docs/design/location-quality/wave-shadow.md): `what_if` re-resolves the listings
 # `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
@@ -33,11 +33,11 @@ on:
         required: true
         type: string
       claims:
-        description: "The wave's claim change: none (W5/W5b/W6), remine (W4), purge (W3)"
+        description: "The wave's claim change: none (W5/W5b/W6), remine (W4)"
         required: true
         default: none
         type: choice
-        options: [none, remine, purge]
+        options: [none, remine]
       contract_ref:
         description: "remine: <git ref>:<path> of the wave's contract, read with git show"
         required: false
@@ -60,7 +60,7 @@ on:
         default: 0
         type: number
       ids_r2_key:
-        description: "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored"
+        description: "An R2 key of gzipped listing ids, one per line; ids_sql is then ignored"
         required: false
         default: ""
         type: string

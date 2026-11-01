@@ -27,6 +27,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from autodedup import ui_sql as usql
+from location_data import operator_corrections
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
@@ -279,6 +280,26 @@ def resolve_active_property_id(
 ) -> int | None:
     """Single-id `resolve_active_property_ids`; None if no active survivor."""
     return resolve_active_property_ids(conn, [property_id]).get(property_id)
+
+
+# merged_at is its merge transaction's start, so a merge begun just before `since` can still have carried a row written after it.
+# The margin outlasts any merge transaction: the cost of a false hit is only that a caller holds back.
+_MERGED_SINCE_SQL = (
+    "SELECT p.id FROM properties p WHERE p.id = ANY(%(ids)s) AND p.merged_at >= %(since)s::timestamptz - interval '1 hour' "
+    "UNION SELECT p.merged_into FROM properties p WHERE p.merged_into = ANY(%(ids)s) "
+    "AND p.merged_at >= %(since)s::timestamptz - interval '1 hour'"
+)
+
+
+def merged_since(conn: "psycopg.Connection", ids: Iterable[int], since: datetime) -> set[int]:
+    """Those of `ids` a merge has touched since `since`, retired or surviving: what the operator state on them says about whose
+    it was may have changed. Read-only; safe inside a caller txn."""
+    ids = list(ids)
+    if not ids:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(_MERGED_SINCE_SQL, {"ids": ids, "since": since})
+        return {int(r[0]) for r in cur.fetchall()}
 
 
 def canonical_advert(conn: "psycopg.Connection", property_id: int) -> int | None:
@@ -913,8 +934,10 @@ def detach_listings(
     named in `new`, go to a NEW record (`_born`). Every property the steps lock is locked first,
     in id order. The curation the adverts take is planned before anything moves (`curation`,
     else `property_carriers.curation_plan` per property left, along `merge_group_id`'s carry
-    rows when given) and routed after (`route_curation`), counted in `curation`. Idempotent,
-    each `outcome` saying why nothing moved. A detach writes no ruling (`rulings_written` stays
+    rows when given) and routed after (`route_curation`), counted in `curation`. A moved advert
+    leaves the operator's address pick behind (`operator_corrections.clear`, W3b ruling R1: it
+    was split off because it is another place). Idempotent, each `outcome` saying why nothing
+    moved. A detach writes no ruling (`rulings_written` stays
     0; `reason` is unused since a split writes its own); then `properties_changed` ONCE over
     every property left and reached. An unknown advert refuses the set before anything moves;
     an empty set is a no-op. Callers: `toolkit.property_split`; `autodedup.apply.unapply` and
@@ -952,6 +975,7 @@ def detach_listings(
                     routed = carriers.route_curation(cur, plan, left=left, landed=landed)
                     for key, n in routed.items():
                         counts[key] = counts.get(key, 0) + n
+            operator_corrections.clear(conn, [d.listing_id for d in moved])
             properties_changed(conn, [p for d in moved for p in (d.left, d.target)])
 
     return {
