@@ -21,7 +21,8 @@ import * as queries from '@/lib/queries';
 import { CARD_PAGE_SIZE, curationKeys, type CardRow, type PipelineMembers } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { collectionCardFilters } from '@/lib/collectionCards';
-import { revalidateTables } from '@/lib/curationSync';
+import { familyTargets, revalidateTables } from '@/lib/curationSync';
+import { revalidate } from '@/lib/revalidate';
 import { propertyPath } from '@/lib/listingUrl';
 import { cardRow } from '@/test/cardRow';
 import { watchReads } from '@/test/reads';
@@ -626,6 +627,42 @@ describe('<CollectionDetail>', () => {
       } finally {
         vi.unstubAllGlobals();
       }
+    });
+
+    /* Ruling Q3(c) with the pointer hold (2026-11-01): a member removed on another
+     * device leaves the cards and the table within one clock read, but not under
+     * the pointer; the count beside the cards re-reads at once. */
+    it('drops a member removed elsewhere once the pointer leaves the members, the count at once', async () => {
+      const SECOND: CollectionPropertyRow = { ...MEMBER, property_id: 44, sreality_id: 902, display_label: 'Praha 6' };
+      const CARD2 = cardRow(44, { sreality_id: 902, display_label: 'Praha 6' });
+      vi.mocked(api.getCollection).mockResolvedValue({ ...WITH_MEMBER, properties: [MEMBER, SECOND] });
+      vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [CARD, CARD2], nextCursor: null });
+      vi.mocked(queries.fetchBrowseCount).mockResolvedValue(2);
+      const { qc } = renderPage();
+      await waitFor(() => expect(cardLink(CARD)).toBeDefined());
+      await waitFor(() => expect(screen.getByText('2 of 2')).toBeInTheDocument());
+      fireEvent.pointerOver(cardLink(CARD)!);
+      const reads = {
+        collection: vi.mocked(api.getCollection).mock.calls.length,
+        cards: vi.mocked(queries.fetchListingsForCards).mock.calls.length,
+      };
+
+      vi.mocked(api.getCollection).mockResolvedValue({ ...WITH_MEMBER, properties: [SECOND] });
+      vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [CARD2], nextCursor: null });
+      vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1);
+      vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[44, [1]]]));
+      await act(async () => {
+        void revalidate(qc, familyTargets(qc, 'collections', null));
+      });
+      await waitFor(() => expect(screen.getByText('2 of 1')).toBeInTheDocument());
+      expect(api.getCollection).toHaveBeenCalledTimes(reads.collection);
+      expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(reads.cards);
+      expect(cardLink(CARD)).toBeDefined();
+
+      fireEvent.pointerLeave(cardLink(CARD)!);
+      await waitFor(() => expect(cardLink(CARD)).toBeUndefined());
+      expect(api.getCollection).toHaveBeenCalledTimes(reads.collection + 1);
+      expect(screen.getByText('1 of 1')).toBeInTheDocument();
     });
 
     it('an empty collection shows its sentence and no tabs', async () => {

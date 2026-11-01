@@ -41,7 +41,8 @@ import {
 import { deletedTables, revalidateTables } from '@/lib/curationSync';
 import { useCollectionEditor } from '@/lib/useCollectionEditor';
 import { isMine } from '@/lib/collectionRules';
-import { useCollectionCards } from '@/lib/collectionCards';
+import { collectionListKeys, useCollectionCards } from '@/lib/collectionCards';
+import { useListHold } from '@/lib/useListHold';
 import { listingKindLabel } from '@/lib/enums';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';
 import { propertyPath } from '@/lib/listingUrl';
@@ -374,29 +375,33 @@ function SharingCard({ collection, id }: { collection: Collection; id: string })
 function Members({ collection, members }: { collection: Collection; members: CollectionPropertyRow[] }) {
   const navigate = useNavigate();
   const { list, uncarded } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
+  /* A change made elsewhere moves the roll at once, but never under a finger (ruling Q3(c)). */
+  const hand = useListHold(collectionListKeys(collection.id));
 
   return (
     <div>
       <Header collection={collection} />
       <DayRule label="Nemovitosti" />
-      <CardRoll
-        list={list}
-        rows={list.rows}
-        errorTitle="Nemovitosti se nepodařilo načíst."
-        endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
-        empty={
-          uncarded.length > 0 ? null : isMine(collection) ? (
-            <RollEmpty
-              title="Sbírka je prázdná."
-              detail="Nemovitost sem uložíte záložkou na kartě v Nových nebo na stránce nemovitosti."
-              action={{ label: 'Otevřít Nové', onClick: () => navigate(ROUTES.feed.build()) }}
-            />
-          ) : (
-            <RollEmpty title="Sbírka je zatím prázdná." detail="Až do ní majitel něco uloží, uvidíte to tady." />
-          )
-        }
-      />
-      {uncarded.length > 0 && <Uncarded rows={uncarded} />}
+      <div {...hand}>
+        <CardRoll
+          list={list}
+          rows={list.rows}
+          errorTitle="Nemovitosti se nepodařilo načíst."
+          endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
+          empty={
+            uncarded.length > 0 ? null : isMine(collection) ? (
+              <RollEmpty
+                title="Sbírka je prázdná."
+                detail="Nemovitost sem uložíte záložkou na kartě v Nových nebo na stránce nemovitosti."
+                action={{ label: 'Otevřít Nové', onClick: () => navigate(ROUTES.feed.build()) }}
+              />
+            ) : (
+              <RollEmpty title="Sbírka je zatím prázdná." detail="Až do ní majitel něco uloží, uvidíte to tady." />
+            )
+          }
+        />
+        {uncarded.length > 0 && <Uncarded rows={uncarded} />}
+      </div>
       {/* My collection is managed from its header; a viewer manages nothing, and
           its one write, leaving, lives on the desktop. */}
       {!isMine(collection) && (

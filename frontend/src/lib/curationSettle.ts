@@ -16,9 +16,10 @@
  * side is stale? The MAP, if one of the member reads the verdict stands on is
  * still owed (lib/revalidate `isOwed`) or was read before the list was: that
  * cohort re-reads, nothing drops. Otherwise the LIST — a change made elsewhere
- * after it was read, which a list follows only at its next mount (ruling
- * Q3(a)): the row is judged like any other, so a click that leaves it out drops
- * it in place and only the aggregates re-read. Read times are the cache's
+ * after it was read, whose re-read (ruling Q3(c): within one clock read) has not
+ * landed yet, or is parked while the user's hand is on the list (lib/useListHold):
+ * the row is judged like any other, so a click that leaves it out drops it in
+ * place and only the aggregates re-read. Read times are the cache's
  * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger).
  *
  * `settlePatches` are CachePatches built BEFORE the member maps move (that is

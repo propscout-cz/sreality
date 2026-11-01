@@ -24,6 +24,7 @@ import {
   HOLD_TTL_MS,
   holdReads,
   isOwed,
+  parkReads,
   repayOwed,
   resetReads,
   revalidate,
@@ -769,6 +770,132 @@ describe('useReadHold', () => {
     rerender({ active: false });
     expect(fn).toHaveBeenCalledTimes(1);
     await flush();
+  });
+});
+
+/* A hand on a list (lib/useListHold): only the scheduler's own re-reads wait. */
+describe('parkReads', () => {
+  /* A mounted list of pages `p0`, `p1`, …; `fn` answers each page at once unless told otherwise. */
+  async function list(qc: QueryClient, fn = vi.fn(async ({ pageParam }: { pageParam: number }) => `p${pageParam}`)) {
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: ['list'],
+      queryFn: fn as never,
+      initialPageParam: 0,
+      getNextPageParam: (_last: string, all: string[]) => all.length,
+      staleTime: Infinity,
+    });
+    observer.subscribe(() => {});
+    await flush();
+    return { observer, fn };
+  }
+  const pagesOf = (qc: QueryClient) => qc.getQueryData<InfiniteData<string>>(['list'])?.pages;
+
+  it('parks an owed read until the release, then pays it once', async () => {
+    const qc = client();
+    const { fn } = await list(qc);
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    void revalidate(qc, [['list']]);
+    void revalidate(qc, [['list']]);
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(1); // the first load only
+    expect(isOwed(qc, ['list'])).toBe(true);
+
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+
+  it('cancels a payment in flight when the hand arrives; it stays owed and is paid at the release', async () => {
+    const qc = client();
+    const late = deferred<string>();
+    const { fn } = await list(qc);
+    fn.mockReturnValueOnce(late.promise);
+    void revalidate(qc, [['list']]); // the payment, in flight
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    expect(qc.getQueryState(['list'])?.fetchStatus).toBe('idle');
+    late.resolve('stale');
+    await flush();
+    expect(pagesOf(qc)).toEqual(['p0']); // it never lands under the hand
+    expect(isOwed(qc, ['list'])).toBe(true);
+
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(isOwed(qc, ['list'])).toBe(false);
+  });
+
+  it("lets the list's own reads pass: a page, a refetch it asks for, and a first load", async () => {
+    const qc = client();
+    const { observer, fn } = await list(qc);
+    const hand = parkReads(qc, [{ queryKey: ['list'] }, { queryKey: ['other'] }]);
+    void revalidate(qc, [['list']]);
+
+    await observer.fetchNextPage();
+    expect(pagesOf(qc)).toEqual(['p0', 'p1']);
+    await flush();
+    expect(isOwed(qc, ['list'])).toBe(true); // a page pays nothing: still parked
+
+    await observer.refetch(); // the user's refresh: two pages from the first
+    expect(fn).toHaveBeenCalledTimes(4);
+    expect(isOwed(qc, ['list'])).toBe(false); // and it paid what was owed
+
+    const first = vi.fn(async () => 'loaded');
+    mount(qc, ['other'], first); // a new key's first load under the hand (a filter or sort change)
+    await flush();
+    expect(qc.getQueryData(['other'])).toBe('loaded');
+    hand.release();
+  });
+
+  it('cancels no first load in flight when the hand arrives', async () => {
+    const qc = client();
+    const load = deferred<number>();
+    mount(qc, ['a'], () => load.promise);
+    void revalidate(qc, [['a']]);
+    const hand = parkReads(qc, [{ queryKey: ['a'] }]);
+    expect(qc.getQueryState(['a'])?.fetchStatus).toBe('fetching');
+    load.resolve(1);
+    await flush();
+    expect(qc.getQueryData(['a'])).toBe(1);
+    hand.release();
+  });
+
+  it('has no TTL: a hand resting for minutes keeps the read parked, with no warning', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const qc = client();
+    qc.setQueryData(['a'], 0);
+    const fn = counter();
+    mount(qc, ['a'], fn);
+    const hand = parkReads(qc, [{ queryKey: ['a'] }]);
+    holdReads(qc, [{ queryKey: ['b'] }]).release(); // a write's hold: the online clock runs
+    void revalidate(qc, [['a']]);
+    vi.advanceTimersByTime(HOLD_TTL_MS * 3);
+    expect(fn).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    hand.release();
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("composes with a write's hold: its patch paints, its settle frees only its own hold, one read at the hand's release", async () => {
+    const qc = client();
+    const { fn } = await list(qc);
+    const hand = parkReads(qc, [{ queryKey: ['list'] }]);
+    void revalidate(qc, [['list']]); // a change made elsewhere, parked
+
+    const drop = cachePatch<InfiniteData<string>>({ queryKey: ['list'] }, (d) => d && { ...d, pages: [] });
+    const write = holdReads(qc, [{ queryKey: ['list'] }], [drop]);
+    expect(pagesOf(qc)).toEqual([]); // the click paints at once, under the hand
+    await revalidate(qc, [['list']], { release: write }); // the settle
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(pagesOf(qc)).toEqual([]);
+
+    hand.release();
+    await flush();
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(pagesOf(qc)).toEqual(['p0']);
   });
 });
 

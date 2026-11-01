@@ -201,9 +201,9 @@ describe('the settle', () => {
   });
 
   /* The same "no" from a map read after the list, nothing owed: the map is
-   * current, so the LIST is the stale side — a change made elsewhere it follows
-   * only at its next mount (ruling Q3(a)). A click that leaves the row out drops
-   * it like any other. */
+   * current, so the LIST is the stale side — a change made elsewhere whose
+   * re-read has not landed, or is parked under the user's hand (ruling Q3(c),
+   * lib/useListHold). A click that leaves the row out drops it like any other. */
   it('a list shown against a current map is the stale side: the row drops in place, the aggregates re-read', () => {
     const qc = new QueryClient();
     const f = filters({ tags: scope({ in: [1, 2] }) });
@@ -320,7 +320,8 @@ describe('the member map', () => {
  * is in flight: neither that read nor one started during the write may land
  * over the click's patch with a pre-write count, and the count is the server's
  * once the write has settled (the scheduler's holds, lib/revalidate). The read
- * is owed 'now', or 'mount' (LENS_REREAD) and being paid by the count's mount. */
+ * is owed 'now' (LENS_REREAD), or 'mount' (a re-read that failed three times)
+ * and being paid by the count's mount. */
 describe('a remote re-read during a click', () => {
   const f = filters({ pipeline: scope({ set: 'out' }) });
   const ENTRY: PipelineStage = {
@@ -385,7 +386,7 @@ describe('a remote re-read during a click', () => {
 
   it("nor does a 'mount' re-read its mount is paying when the click comes", async () => {
     const { qc, remote, count, mountBrowse, land } = rig(1);
-    void revalidate(qc, [{ queryKey: browseKeys.count(f), mode: 'mount' }]); // a remote lens change: owed till the mount
+    void revalidate(qc, [{ queryKey: browseKeys.count(f), mode: 'mount' }]); // owed till the mount
     const result = mountBrowse();
     await act(async () => {}); // the first observer pays it, a microtask later
     expect(count).toHaveBeenCalledTimes(1);

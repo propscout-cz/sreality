@@ -8,13 +8,14 @@
  * pages list it apart from the collection's own read. */
 
 import { useMemo } from 'react';
+import type { QueryKey } from '@tanstack/react-query';
 
 import { browseKeys } from '@/lib/browseKeys';
 import { useCollectionMembers } from '@/lib/collectionCache';
 import { FEED_ALL_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import type { KeysetCursor } from '@/lib/keyset';
-import { CARD_PAGE_SIZE, fetchListingsForCards, type CardRow, type SortSpec } from '@/lib/queries';
+import { CARD_PAGE_SIZE, curationKeys, fetchListingsForCards, type CardRow, type SortSpec } from '@/lib/queries';
 import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import type { CollectionPropertyRow } from '@/lib/types';
 import { useInfiniteList } from '@/lib/useInfiniteList';
@@ -28,6 +29,13 @@ export function collectionCardFilters(id: number): ListingFilters {
     showDismissed: true,
     collections: { set: null, in: [id], out: [] },
   };
+}
+
+/** What the collection page lists, for a hand on it (lib/useListHold): the
+ * collection's own read (its table, the cards' "without a card" rows) and its
+ * cards in every order. */
+export function collectionListKeys(id: number): QueryKey[] {
+  return [curationKeys.collection(id), browseKeys.cohortCards(collectionCardFilters(id))];
 }
 
 export function useCollectionCards({

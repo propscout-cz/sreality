@@ -77,6 +77,7 @@ import {
   type DismissedCardRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useListHold } from '@/lib/useListHold';
 
 /* Browse's whole filter set is large; the sheet loads on its first open. */
 const FilterSheet = lazyChunk(() => import('@/components/phone/FilterSheet'));
@@ -176,6 +177,9 @@ export default function Feed() {
   const list = hidden ? hiddenRoll : feed;
   const activeKey = hidden ? hiddenKey : feedKey;
   const rows: CardRow[] = list.rows;
+  /* A change made elsewhere moves the roll at once, but never under a finger
+   * (ruling Q3(c)); the count in the header re-reads regardless. */
+  const hand = useListHold([activeKey]);
 
   const hiddenCountQ = useQuery({
     queryKey: dismissalKeys.count,
@@ -384,31 +388,33 @@ export default function Feed() {
       </div>
 
       <CardHydrationProvider listingIds={listingIds} renders={{ photos: PHOTOS_PER_CARD }}>
-        <Roll
-          hidden={hidden}
-          loading={list.isLoading || waitingForPreset}
-          error={list.isError}
-          onRetry={() => list.refetch()}
-          rows={rows}
-          groups={groups}
-          todayKey={todayKey}
-          clock={pragueClock(updatedAt)}
-          order={newestFirst ? null : sortLabel(sort)}
-          refresh={refresh}
-          coverTag={coverTag}
-          onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
-        />
-        {rows.length > 0 && (
-          <InfiniteSentinel
-            onReach={list.fetchNextPage}
-            hasNextPage={list.hasNextPage}
-            isFetchingNextPage={list.isFetchingNextPage}
-            loadedCount={rows.length}
-            total={null}
-            loadingLabel="Načítám…"
-            endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+        <div {...hand}>
+          <Roll
+            hidden={hidden}
+            loading={list.isLoading || waitingForPreset}
+            error={list.isError}
+            onRetry={() => list.refetch()}
+            rows={rows}
+            groups={groups}
+            todayKey={todayKey}
+            clock={pragueClock(updatedAt)}
+            order={newestFirst ? null : sortLabel(sort)}
+            refresh={refresh}
+            coverTag={coverTag}
+            onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
           />
-        )}
+          {rows.length > 0 && (
+            <InfiniteSentinel
+              onReach={list.fetchNextPage}
+              hasNextPage={list.hasNextPage}
+              isFetchingNextPage={list.isFetchingNextPage}
+              loadedCount={rows.length}
+              total={null}
+              loadingLabel="Načítám…"
+              endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+            />
+          )}
+        </div>
       </CardHydrationProvider>
 
       {sheetOpen && (
