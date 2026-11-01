@@ -22,6 +22,8 @@ from typing import Any, NamedTuple
 import psycopg
 import pytest
 
+from api import curation
+from api import schemas as s
 from scripts.checks import platform as plat
 from scripts.verify_pipeline import THRESHOLDS
 from tests._admin_gate_registry import ADMIN_ONLY_RELATIONS
@@ -573,6 +575,25 @@ def test_a_caller_in_several_accounts_follows_each_as_own_and_a_share_between_th
         with svc.cursor() as cur:
             cur.execute("DELETE FROM pipeline_shares WHERE account_id = %s AND recipient_account_id = %s", (b.acc, c.acc))
             cur.execute("DELETE FROM account_members WHERE account_id = %s AND user_id = %s", (b.acc, c.user))
+
+
+def test_a_collection_patch_clears_a_description_on_null_or_blank_and_keeps_it_when_absent(
+        svc: psycopg.Connection, world: _World) -> None:
+    """#2208, on the real SQL and through the tenant's row policy: each kind of patch, and each clearing bumps once."""
+    def patch(**fields: Any) -> str | None:
+        with scoped(world.a.user, method="PATCH") as conn:
+            return curation.update_collection(conn, world.coll, s.UpdateCollectionIn(**fields))["description"]
+
+    def stored() -> str | None:
+        return _one(svc, "SELECT description FROM collections WHERE id = %s", (world.coll,))
+
+    assert patch(description="kept") == "kept" == stored()
+    assert patch(monitoring_enabled=False) == "kept" == stored(), "left out keeps it"
+    with _watch(svc, _accounts(world)) as moved:
+        assert patch(description=None) is None and stored() is None, "an explicit null clears it, alone"
+    assert moved == {(world.a.acc, "collections"): 1}
+    patch(description="again")
+    assert patch(description="") is None and stored() is None, "blank is NULL, never ''"
 
 
 def test_anon_reads_no_clock(svc: psycopg.Connection) -> None:

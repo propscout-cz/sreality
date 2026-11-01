@@ -619,8 +619,29 @@ def test_update_collection_is_one_update_returning_the_collection():
     [(sql, params)] = conn.executed
     assert "name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END" in sql
     assert "RETURNING c.id, c.name" in sql
-    assert params == ("x", "d", None, 1)
+    assert params == ("x", True, "d", None, 1)
     assert conn.tx == ["commit"]
+
+
+@pytest.mark.parametrize(("payload", "set_description", "description"), [
+    ({"description": None}, True, None),   # an explicit null clears it, alone or not
+    ({"description": ""}, True, None),     # an empty text column is NULL, never ''
+    ({"description": "  "}, True, None),
+    ({"description": " kept "}, True, " kept "),
+    ({"name": "x"}, False, None),          # left out keeps it
+    ({"monitoring_enabled": True}, False, None),
+])
+def test_update_collection_tells_an_absent_description_from_a_cleared_one(payload, set_description, description):
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_COLL])])
+    curation.update_collection(conn, 1, _s.UpdateCollectionIn.model_validate(payload))
+    [(sql, params)] = conn.executed
+    assert "description = CASE WHEN %s::boolean THEN %s::text ELSE c.description END" in sql
+    assert params[1:3] == (set_description, description)
+
+
+def test_a_new_collection_stores_an_empty_description_as_null():
+    assert _s.CreateCollectionIn(name="x", description="").description is None
+    assert _s.CreateCollectionIn(name="x", description="d").description == "d"
 
 
 def test_update_collection_not_owned_is_404_without_a_probe():
@@ -662,10 +683,12 @@ def test_update_collection_duplicate_name_is_409():
     assert exc.value.detail == "collection name already exists"
 
 
-def test_update_collection_empty_patch_is_422_and_touches_nothing():
+@pytest.mark.parametrize("payload", [{}, {"name": None}, {"monitoring_enabled": None}])
+def test_update_collection_empty_patch_is_422_and_touches_nothing(payload):
+    """A null name or flag is no change: those columns are NOT NULL, so null has nothing to clear."""
     conn = ScriptConn([])
     with pytest.raises(fastapi.HTTPException) as exc:
-        curation.update_collection(conn, 1, _s.UpdateCollectionIn())
+        curation.update_collection(conn, 1, _s.UpdateCollectionIn.model_validate(payload))
     assert exc.value.status_code == 422
     assert conn.executed == []
 

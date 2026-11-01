@@ -317,15 +317,21 @@ TagColor = Literal[
 ]
 
 
+def _blank_to_null(text: str | None) -> str | None:
+    """A nullable text column holds NULL, never a blank string: one normalisation for every write."""
+    return text if text and text.strip() else None
+
+
 class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
-    description:        str | None = None
+    description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool = False
 
 
 class UpdateCollectionIn(BaseModel):
     name:               str | None = Field(default=None, min_length=1, max_length=200)
-    description:        str | None = None
+    # Sent as null or blank clears it, left out keeps it (`model_fields_set`).
+    description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool | None = None
 
 

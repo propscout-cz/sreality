@@ -290,15 +290,13 @@ describe('<CollectionDetail>', () => {
       await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { description: 'Jiný popis' }));
     });
 
-    /* PATCH /collections reads null as "not given": a description cleared alone
-       goes as '', or the API refuses it ("nothing to update"). */
     it('clears the description alone', async () => {
-      vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, description: '' });
+      vi.mocked(api.updateCollection).mockResolvedValue({ ...DATA.collection, description: null });
       renderPage();
       await choose('Přejmenovat');
       fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: '  ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { description: '' }));
+      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(1, { description: null }));
     });
 
     it('keeps a typed name over a rename made elsewhere', async () => {
