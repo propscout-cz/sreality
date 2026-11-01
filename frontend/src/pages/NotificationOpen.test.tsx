@@ -13,6 +13,7 @@ import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import { notificationKeys } from '@/lib/queries';
+import { isOwed } from '@/lib/revalidate';
 import type { WatchdogDispatch } from '@/lib/types';
 
 import NotificationOpen from './NotificationOpen';
@@ -86,7 +87,7 @@ describe('/n/:dispatchId', () => {
     expect(api.postPushOpened).toHaveBeenCalledTimes(1);
     expect(api.postPushOpened).toHaveBeenCalledWith(42);
     /* The bell's number refetches, as the feed's own mark-seen does. */
-    expect(qc.getQueryState(notificationKeys.unreadCount)?.isInvalidated).toBe(true);
+    expect(isOwed(qc, notificationKeys.unreadCount)).toBe(true); // the bell re-reads through the scheduler (W7)
   });
 
   it('says so in Czech in the phone frame', async () => {

@@ -105,6 +105,8 @@ vi.mock('@/lib/api', async (orig) => ({
 }));
 
 import { getNotificationUnreadCount, listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
+import { familyTargets } from '@/lib/curationSync';
+import { revalidate } from '@/lib/revalidate';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import Notifications from './Notifications';
 
@@ -119,13 +121,14 @@ function renderPage(page: WatchdogDispatchesResponse = feed) {
     pageParams: [null],
   });
   qc.setQueryData(notificationKeys.unreadCount, counts);
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <Notifications />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 beforeEach(() => {
@@ -164,12 +167,18 @@ describe('<Notifications> listing rows', () => {
     expect(row).toHaveAttribute('target', '_blank');
     expect(row).toHaveAttribute('rel', 'noopener');
 
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 2 })); // a right click marks nothing
+    expect(markWatchdogDispatchSeen).not.toHaveBeenCalled();
     fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
     await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
-    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
-    fireEvent.click(row);
-    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(2));
     expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d1');
+  });
+
+  it('open and mark the row read on a plain click too', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    renderPage();
+    fireEvent.click(screen.getByRole('link', { name: /^New match Praha 5/ }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
   });
 
   it('render a row with nothing to open as a button that only marks it read', async () => {
@@ -411,6 +420,106 @@ describe('<Notifications> header', () => {
 
 /* The count is Shell's one observer (lib/unreadCount); the page polls none of
  * its own, so outside Shell it reads zero and has nothing to mark. */
+/* W7, ruling Q1b re-ruled 2026-11-01: "if I resolve a notification in another window
+ * or the app, I want the count to update everywhere." */
+describe('<Notifications> follows the curation clock', () => {
+  const read = { ...feed, data: feed.data.map((d) => ({ ...d, seen_at: '2026-05-12T12:00:00+00:00' })) };
+  const name = /^New match Praha 5/;
+
+  it('polls nothing: the feed re-reads on the clock alone', () => {
+    const { qc } = renderPage();
+    const query = qc.getQueryCache().find({ queryKey: notificationKeys.feed({ source: 'all', seen: 'all' }) });
+    expect(query?.observers[0].options.refetchInterval).toBeUndefined();
+  });
+
+  it('a row marked read elsewhere reads as read within one clock answer', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread');
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription(''));
+  });
+
+  it('holds the rows under the pointer and pays when it leaves', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const row = screen.getByRole('link', { name });
+    fireEvent.pointerOver(row);
+    const before = vi.mocked(listNotifications).mock.calls.length;
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    expect(listNotifications).toHaveBeenCalledTimes(before);
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread');
+
+    fireEvent.pointerLeave(row);
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription(''));
+  });
+
+  it('a click under the pointer reads as read and drops the count at once, the write still in flight', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    let answer!: (row: typeof baseDispatch) => void;
+    vi.mocked(markWatchdogDispatchSeen).mockReturnValue(new Promise((resolve) => {
+      answer = resolve as typeof answer;
+    }) as never);
+    const row = screen.getByRole('link', { name });
+    fireEvent.pointerOver(row);
+    const unreadBefore = qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count;
+    fireEvent.click(row);
+    expect(qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count).toBe(unreadBefore - 1);
+    await waitFor(() => expect(row).toHaveAccessibleDescription(''));
+    fireEvent.click(row); // already read: no second write
+    expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      answer({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    });
+    expect(row).toHaveAccessibleDescription('');
+  });
+
+  it('a failed read offers a retry; a failed re-read keeps the rows, the banner under them', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    vi.mocked(listNotifications).mockRejectedValue(new Error('down'));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    expect(await screen.findByText(/Failed to load/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name })).toBeInTheDocument();
+
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Failed to load/)).toBeNull());
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('');
+  });
+
+  it('a mark-seen that fails puts the row and the count back', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const unreadBefore = qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count;
+    vi.mocked(markWatchdogDispatchSeen).mockRejectedValue(new Error('down'));
+    fireEvent.click(screen.getByRole('link', { name }));
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread'));
+    expect(qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count).toBe(unreadBefore);
+  });
+});
+
 describe('<Notifications> unread count', () => {
   it('reads the shared observer and polls no count of its own', () => {
     vi.mocked(getNotificationUnreadCount).mockClear();

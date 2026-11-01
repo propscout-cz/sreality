@@ -25,7 +25,9 @@ import {
 } from './curationSync';
 import { FEED_HIDDEN_FILTERS, feedHiddenKey } from './feed';
 import { DEFAULT_FILTERS } from './filters';
-import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, pipelineShareKeys } from './queries';
+import {
+  curationKeys, DEFAULT_SORT, dismissalKeys, notificationKeys, pipelineKeys, pipelineShareKeys, watchdogKeys,
+} from './queries';
 import { isOwed, revalidate } from './revalidate';
 
 const TABLES = Object.keys(SYNC_TABLES) as SyncTable[];
@@ -49,9 +51,9 @@ describe('tableReads', () => {
     for (const key of theirs) expect(key.slice(0, 2)).toEqual(['acting', OWNER]);
   });
 
-  it('a card write (property_pipeline + property_dismissals) re-reads members, board and dismissals', () => {
+  it('a card write (property_pipeline + property_dismissals) re-reads members, board, dismissals and the bell', () => {
     expect(hashes(tableReads(['property_pipeline', 'property_dismissals'], null))).toEqual(
-      hashes([pipelineKeys.members, pipelineKeys.board, dismissalKeys.all]),
+      hashes([pipelineKeys.members, pipelineKeys.board, dismissalKeys.all, notificationKeys.all]),
     );
   });
 
@@ -75,9 +77,20 @@ describe('tableReads', () => {
   });
 });
 
+describe('the bell and the dismissal lens', () => {
+  it('a dismissal made elsewhere re-reads the bell and the feed, and never for an owner I follow', () => {
+    const qc = new QueryClient();
+    const keys = (owner: string | null) => familyTargets(qc, 'dismissals', owner).map((t) => hashKey(t.queryKey));
+    expect(keys(null)).toContain(hashKey(notificationKeys.all));
+    expect(keys(OWNER)).not.toContain(hashKey(notificationKeys.all));
+  });
+});
+
 describe('deletedTables', () => {
   it('a collection delete writes its memberships and shares, a tag delete its memberships, a note delete its files', () => {
-    expect(deletedTables('collections')).toEqual(['collections', 'collection_properties', 'collection_shares']);
+    expect(deletedTables('collections')).toEqual([
+      'collections', 'collection_properties', 'collection_shares', 'notification_dispatches',
+    ]);
     expect(deletedTables('tags')).toEqual(['tags', 'property_tags']);
     expect(deletedTables('property_notes')).toEqual(['property_notes', 'property_attachments']);
     expect(deletedTables('pipeline_stages')).toEqual(['pipeline_stages']);
@@ -89,9 +102,9 @@ describe('deletedTables', () => {
     );
   });
 
-  it('the shares a collection delete takes add no read its memberships do not', () => {
+  it('the shares a collection delete takes add no read its memberships do not; its monitor alerts add the bell', () => {
     expect(hashes(tableReads(deletedTables('collections'), null))).toEqual(
-      hashes(tableReads(['collections', 'collection_properties'], null)),
+      hashes([...tableReads(['collections', 'collection_properties'], null), notificationKeys.all]),
     );
   });
 });
@@ -241,7 +254,7 @@ describe('clockChanges', () => {
  * feeds, or is listed in NOT_SYNCED with its reason: a new read cannot be added
  * outside the map without this failing. */
 describe('the key census', () => {
-  const factories = { curationKeys, pipelineKeys, dismissalKeys, pipelineShareKeys };
+  const factories = { curationKeys, pipelineKeys, dismissalKeys, pipelineShareKeys, notificationKeys, watchdogKeys };
   const members = Object.entries(factories).flatMap(([factory, keys]) =>
     Object.entries(keys).map(([name, k]) => ({
       name: `${factory}.${name}`,

@@ -220,7 +220,8 @@ never reset, never rendered.
   account then present all seven families at 1; a later account gains a family's row on its first bump (signup
   bumps `board` and `collections`).
 - **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
-  `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
+  `search_path = ''`) runs on fourteen `<table>_curation_clock` constraint triggers (696's twelve, 715's two on the
+  notification tables, family `notifications`, own-only), `AFTER INSERT OR UPDATE OR DELETE
   … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
   `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
   bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
@@ -304,9 +305,9 @@ never reset, never rendered.
   refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
   re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
-  twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
+  fourteen; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
   (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
-- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience until 709, the grants,
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, fourteen since 715's own `$post$`, definer bump, invoker audience until 709, the grants,
   the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane

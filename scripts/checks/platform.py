@@ -983,7 +983,7 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 
 # --- curation_sync: does every committed curation change move the clock? -------------------
 #
-# Curation sync (docs/design/curation-sync.md § 3.9, migration 696): twelve deferred constraint triggers are the
+# Curation sync (docs/design/curation-sync.md § 3.9, migrations 696 and 715): fourteen deferred constraint triggers are the
 # curation clock's only writer, so a trigger disabled by a hygiene migration, or a bump that stopped landing, leaves
 # every open window showing stale curation with no error anywhere. Two cells are should-never-happen:
 #   triggers     Problem unless exactly CURATION_CLOCK_TRIGGERS triggers on bump_curation_clock() are enabled and

@@ -44,7 +44,7 @@ T: dict[str, Any] = {
     "CAPACITY_REFERENCE_FROM": _dt.date(2026, 10, 17), "llm_error_share_warn": 0.2,
     "llm_error_share_min_calls": 20, "llm_starved_min_attempts": 5,
     "llm_spend_24h_warn_usd": 130, "llm_spend_24h_fail_usd": 150, "llm_lookback_h": 72,
-    "migration_drift_window": 25, "GITHUB_DELIVERY_SLACK_S": 18 * 3600, "CURATION_CLOCK_TRIGGERS": 12,
+    "migration_drift_window": 25, "GITHUB_DELIVERY_SLACK_S": 18 * 3600, "CURATION_CLOCK_TRIGGERS": 14,
     "CURATION_CLOCK_QUIET_H": 24, "CURATION_CLOCK_LOAD_PCT": 5.0,
 }
 

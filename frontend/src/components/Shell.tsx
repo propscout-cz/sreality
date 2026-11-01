@@ -164,7 +164,7 @@ export default function Shell() {
     </ErrorBoundary>
   );
   /* The unread count's one observer sits above both frames, so the desktop
-   * badge, the phone bell and the Notifications page read one poll. */
+   * badge, the phone bell and the Notifications page read one number. */
   return (
     <UnreadCountProvider>
       <NewEstimationProvider>

@@ -322,12 +322,12 @@ alter policy curation_clock_audience_read on public.curation_clock
     select a.account_id, f.family
       from public.curation_clock_audience() a
      cross join lateral unnest(case
-       when a.mine then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares']
+       when a.mine then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links', 'shares', 'notifications']
        when a.edit then array['board', 'dismissals', 'collections', 'tags', 'notes', 'links']
        else array['board'] end) as f(family)));
 ```
 
-- The CASE goes in order: own rows carry `mine` and `edit`, an edit share only `edit`, a read share neither. So own accounts follow all seven families, an edit share the board and the five curation families, a read share the board. Census (i) reads the families off that CASE.
+- The CASE goes in order: own rows carry `mine` and `edit`, an edit share only `edit`, a read share neither. So own accounts follow all eight families (seven until 715), an edit share the board and the five curation families, a read share the board. Census (i) reads the families off that CASE.
 - The audience is not inlined (its `SET search_path` rules that out), so it is one Function Scan wherever it is called: one in the policy, one in the view's join. Locally, one evaluation (0.33 ms) is the sum of its SECURITY DEFINER `current_account_ids()` calls, three in its body and two in `pipeline_shares`' policy [V, local].
 - **Two, not one (operator ruling 2026-11-01):** PostgreSQL never pulls a policy's subquery up into a join, so the policy's hashed SubPlan cannot drive an index. The view's join is what probes `curation_clock_pkey` per followed account; without it the read scans the whole clock, O(clock rows), and at 2,000 accounts costs more than 696's read did (§ 3.8). The ruling keeps the join, and the index with it, for the price of the second evaluation.
 - `$post$` asserts row security on the clock (the view's join keeps the followed accounts; only the policy keeps a share to its families), one SELECT policy for `authenticated` whose expression names the audience once, the view invoker with its five columns and its one join on the audience, and 701's grants.
@@ -430,7 +430,7 @@ grant execute on function public.curation_clock_audience() to authenticated;    
 **`frontend/src/lib/curationSync.ts`: THE table→read map. It is pure.**
 
 ```ts
-export const CURATION_FAMILIES = ['board','dismissals','collections','tags','notes','links','shares'] as const;
+export const CURATION_FAMILIES = ['board','dismissals','collections','tags','notes','links','shares','notifications'] as const;   // 'notifications' since W7 (715)
 export type CurationFamily = (typeof CURATION_FAMILIES)[number];
 interface SyncEntry { family: CurationFamily; reads: readonly QueryKey[]; ownReads?: readonly QueryKey[]; lens?: CurationLens }
 export const SYNC_TABLES = { /* rows below */ } as const satisfies Record<string, SyncEntry>;
@@ -682,10 +682,11 @@ def require_acting_account_id(conn: TenantConn, ...) -> uuid.UUID: ...
 
 **Decision 16 (changed): in scope** are the 12 tables above and every surface that reads them: kanban, phone stages, Browse glyphs, lens aggregates, property header and `CurationBlock`, collections, viewings, note counts, files, links, the share switcher and revocation. Every writer is covered.
 
+**In since W7 (#2327, migration 715; ruling Q1b re-ruled 2026-11-01):** the notification bell's number, the feed and the Watchdog list, through an eighth family, `notifications`, on `notification_dispatches` and `notification_subscriptions` (own-only). A mark-seen anywhere, an event a producer writes, a merge's re-point and a retired or edited watchdog move it; `VISIBLE_SQL`'s dependence on `notification_subscriptions.retired_at` is covered by the second trigger, and its dependence on `property_dismissals` by that table's own family, which owes the bell and the feed too. Its dependence on `properties.first_seen_at` (a merge withdrawing a 'new' event, rule 16's `RETRACTED_SQL`) is not covered: market data carries no clock (rail f), so that case reaches the bell at its next read, the next change of the family or a reload. The 30 s and 60 s polls are gone; only a read that failed asks again (the bell each minute, the feed's Retry).
+
 **Explicitly out:**
-- Notifications (Q1b; the 30 s and 60 s polls stay, `pages/Notifications.tsx:51`, `lib/unreadCount.tsx:43`). `VISIBLE_SQL` also depends on `notification_subscriptions.retired_at` and `properties.first_seen_at`, which this clock cannot cover [V·r].
 - Ad status and price (the "Stav" filter); a census forbids clocking `listings`, `properties` or `listing_snapshots`.
-- Estimation runs, presets, dashboards and watchdogs (F5).
+- Estimation runs, presets and dashboards (F5); watchdogs follow since W7 (their table is clocked for the bell).
 - The extension as receiver (Q4).
 - Stale-intent conflicts (Q5).
 - `own_account_id` (F4).
@@ -718,7 +719,7 @@ Formulas:
   - 709 takes `current_account_ids()` from 8–10 calls per read to 2, one per evaluation (`pg_stat_get_xact_function_calls`). The live lane pins that count, which is what tells 709's shape from 708's, and shows it failing on 696's function put back. Its ≤ 40-buffer bound is the ticket's ceiling, not a line between the shapes: on the lane's vacuumed clock 709's warm read is ~7 buffers and 708's ~20, both under it. It catches a read that scans a full clock (2,000 accounts × 7 families with index scans off), and on a lane database reused across runs the dead rows of earlier cases' rollbacks alone took 709's lane-size read to 40, so the case vacuums the clock first.
   - Why a+b+c and not b+c: b+c is the cheapest first read (by ~0.25 ms), and a+b+c the cheapest warm read (by ~0.25 ms). Production's ~88-buffer mean puts about a quarter of reads on a backend's first read [A: (88 − 13) / (310 − 13) ≈ 0.25], so a+b+c has the lower expected mean unless more than half the reads are first reads. Why not the invoker a+c: see § 3.2 F17, the trade.
   - The production figure after the apply is owed to gate #2203: a `pg_stat_statements` re-sample of the PostgREST read over ≥ 100 calls (ticket: mean ≤ 2.0 ms, ≤ 40 buffers). No function shape moves the first-read share of that mean: if a quarter of reads still land on a backend's first read, ≤ 40 buffers is out of reach of any shape; that part is connection lifetime, not SQL. So the ticket's ≤ 40-buffer acceptance was predicted to fail in production [A: 0.75 × ~7 + 0.25 × ~300 ≈ 80]. **Measured after the apply (2026-11-01 08:51Z, the first 30 production reads): 0.973 ms mean and 18.3 shared buffers per call** [V], both under the ticket's lines as means: the prediction overstated the first-read share (at 18.3, fewer than a twentieth of those reads were first reads). The ≤ 40 holds as a mean, not per read (a first read is still ~310 buffers), and the ticket's ≥ 100-call sample, like #2308's ≥ 500, rides gate #2203's measurement (both tickets closed at the merge). F18 (connection lifetime) stays a candidate for the gate to raise, not a need.
-- **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets, the lens lists and aggregates of every mounted Browse cohort included (ruling Q3(c), W6; under Q3(a), W1–W4, they waited for the next mount). A list under a hand pays once, at the leave. Coalesced per answer per window. The self-echo is included.
+- **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets, the lens lists and aggregates of every mounted Browse cohort included (ruling Q3(c), W6; under Q3(a), W1–W4, they waited for the next mount). A list under a hand pays once, at the leave. Coalesced per answer per window. The self-echo is included. W7 adds the `notifications` family: its targets are the bell's count (~0.1 KB, every signed-in window with the agenda) and, where the feed or the Watchdog list is mounted, that page; against the 30 s and 60 s polls it replaces (~2 reads a minute per window, change or not) it is fewer reads at today's event rate.
 
 | Scenario | Clock reads | Fan-out |
 |---|---|---|
@@ -774,9 +775,9 @@ Registry edits (W3):
 **Kill switches (Decision 19).**
 - **Reader:** a forward migration `revoke select on curation_clock_public, curation_clock from authenticated; revoke execute on function curation_clock_audience() from authenticated;`.
   - Clients go to permanent-error mode, which sheds the load.
-  - Polls are unaffected (Q1b out).
+  - No poll stands behind it since W7: the bell and the feed stop following too, until a reload. (Until W7: polls unaffected.)
   - Re-enabling takes a migration that re-grants.
-- **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 12, carrying `-- ci-allow-clock-disable: <reason>`.
+- **Writer** (any commit-time failure the clock causes, e.g. a bump bug that 5xx's every curation write): a forward migration `alter table <t> disable trigger <t>_curation_clock` × 14, carrying `-- ci-allow-clock-disable: <reason>`.
   - It is non-destructive (database skill).
   - The `triggers` cell goes red while it is in force, by intent.
   - Census (a) and (d) do not read the enabled state and are unaffected.
@@ -837,7 +838,7 @@ Registry edits (W3):
 | Stale "one pre-tenancy NULL `property_notes` row" | `.claude/skills/database/references/tenancy.md` | W3 | — |
 
 **Kept on purpose:**
-- the notification polls (Q1b);
+- ~~the notification polls (Q1b)~~ removed in W7 (#2327): the bell and the feed follow the clock;
 - Feed's resume re-read;
 - `useBuildSkew`, `serviceWorker.ts`, the acting `storage` sync and `useSharedBoardGuard`;
 - job polls;
@@ -911,20 +912,20 @@ Each wave is one PR, with a draft PR opened early.
   - `curation_clock` (the clock itself);
   - `delegated_edits` (written in its curation row's transaction);
   - `property_pipeline_events` (same, board);
-  - `notification_dispatches` (Q1b);
+  - `notification_dispatches` (Q1b; clocked since W7, § 3.7);
   - presets, groups, subscriptions, estimations, buildings, entitlements, dashboards and dashboard shares (F5).
 - `tests/test_tenant_isolation_live.py`: `curation_clock_public` added to `_TENANT_VIEWS`.
 - `tests/test_curation_sync_census.py` (offline):
   - (a) the trigger set the migrations leave == `CLOCKED_TABLES` == `SYNC_TABLES` table→family parsed from `frontend/src/lib/curationSync.ts`. The migrations are replayed in order: a drop of a trigger, of the bump function or of a clocked table removes a trigger, a table or trigger rename moves it, and every trigger left must be named `<table>_curation_clock`.
   - (b) `TENANT_TABLES ⊆ CLOCKED ∪ NOT_CLOCKED`; every reason non-empty.
-  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES` == the seed's families.
+  - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES`; 696's seed names only families the CHECK admits (W7's `notifications` is unseeded).
   - (d) every clock trigger is `constraint … after insert or update or delete … deferrable initially deferred … for each row`.
   - (e) nothing silences a clock trigger without a `-- ci-allow-clock-disable: <reason>` line of its own: in a migration or in code, `DISABLE` or `ENABLE REPLICA` of a `*_curation_clock` trigger (or `all` / `user` on a clocked table, also as one action of several in an `ALTER TABLE`, or a `format()` placeholder that could name either), or `session_replication_role`; in code or a migration after 696, a TRUNCATE of a clocked table (row triggers never fire on it) or a redefinition of `bump_curation_clock()`.
   - (f) no clock trigger on `listings|properties|listing_snapshots`.
   - (g) no `x-sync-origin` or origin GUC in `api/`; nothing in code or migrations but 696 names the dedupe GUC `curation_clock.bumped`.
   - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696; 696 writes it exactly twice (the bump and the seed).
   - (i) the policy's board arm families map to tables == `_BOARD_POLICIES` tables ∩ `CLOCKED_TABLES`; the edit arm == (`_ACTING_POLICIES` − board) ∩ `CLOCKED_TABLES`; `shares` appears only in the `mine` arm.
-  - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)` == the count 696's `$post$` asserts.
+  - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)` == the count the newest `$post$` asserts (696's 12, 715's 14).
   - (k) no family is a suffix of another: the dedupe GUC's `<family>:<account>;` entries are found by `strpos` (#2244).
 - `tests/test_curation_clock_live.py` + a `.github/workflows/migrations.yml` step beside `test_pipeline_shares_live` (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED: "1"`), else `test_live_lanes_census.py:100-105` fails [V·r].
 - The health check with the `triggers` and `board_bumps` cells (§3.9) and its registry edits.
@@ -972,6 +973,14 @@ Each wave is one PR, with a draft PR opened early.
 - Docs: this document (Decisions 7 and 7b, § 3.8, § 7 risk 15, § 8 Q3, § 9, § 12), `docs/architecture.md` (Frontend territory and the rule-22 settle passage), the track. `GLOSSARY.md` is unchanged: its Curation sync entry never said a list waits for navigation.
 - After the deploy: the Railway status, then the operator's recipe step 4 (§ 9) on the desktop. **Gate #2203's Browse RPC line** ("map/stats/count calls per day ≤ baseline + 25 %") was set under Q3(a), which kept those reads out of the fan-out; W6 puts them in, so that line is re-baselined on the 7 days after W6's deploy, not judged against the pre-W6 baseline.
 
+**W7 `feature/curation-sync-w7-bell` (DB + SPA; #2327). After the review 3 repairs (#2326).** Ruling Q1b re-ruled 2026-11-01 (§ 8).
+- `migrations/714_curation_clock_notifications.sql`: the family CHECK and 708's policy name an eighth family, `notifications`, in the caller's own arm only; two more deferred constraint row triggers, `notification_dispatches_curation_clock` and `notification_subscriptions_curation_clock`, on 696's `bump_curation_clock()`; no seed (an account gains its row at its first bump); `$post$`: 14 triggers, the CHECK admits the family, the policy names it once.
+- `tests/_tenant_registry.py`: both tables move from `NOT_CLOCKED` to `CLOCKED_TABLES`; `scripts/verify_pipeline.py` `CURATION_CLOCK_TRIGGERS` 14; census (c) reads 696's seed as a subset of the newest CHECK, (j) the newest `$post$` count; the live lane: A holds a watchdog and an unseen event, the family's writes (an event marked seen; a watchdog created), the operator's case (a producer's event, a mark-seen, a bulk insert, a retired watchdog each bump once; no share follows it), the catalog at 14.
+- `lib/curationSync.ts`: `CURATION_FAMILIES` + `'notifications'`; `SYNC_TABLES` `notification_dispatches` → own read `notificationKeys.all` (the bell's count and the feed), `notification_subscriptions` → `notificationKeys.all` + `watchdogKeys.all`; `SYNC_ROOTS` + `['notifications']`, `['watchdog']` (no reconnect refetch: the owner's `online` clock read is the path).
+- `pages/Notifications.tsx`: no 30 s poll; a hand on the feed (`useListHold`, the rows park under the pointer or a finger, the bell's count follows at once); a row's mark-seen is one `useOptimisticWrite` (the row and the bell repaint inside the click); mark-all settles through `revalidateTables(['notification_dispatches'])`, as `pages/NotificationOpen.tsx` does. `lib/unreadCount.tsx`: no 60 s poll.
+- Docs: § 3.2, § 3.7, § 5, § 8 Q1b, § 9, § 12; `docs/architecture.md` (the bell, rule 18's clock paragraph); `references/tenancy.md` (fourteen); GLOSSARY "Curation clock"; the track.
+- After the deploy: the Railway status; the health `curation_sync` `triggers` cell at 14; the two-window recipe on the bell; the trigger count and the bell's reads on gate #2203.
+
 ## 7. Risks and mitigations
 
 | # | Risk | Mitigation |
@@ -1006,7 +1015,7 @@ Each wave is one PR, with a draft PR opened early.
 
 **Q1. Which statuses follow across windows? RULED: all curation plus the pipeline and collection shares; nothing else.**
 - (a) **In:** stage, Skryto, Kolekce, Štítky, Poznámky/Prohlídky/soubory, Odkaz, share grants and revokes.
-- (b) **Out:** the notification badge, feed and read state. Their visibility also depends on deleted watchdogs and on merges changing a property's first-seen date, which the clock cannot see, so the 30 s and 60 s polls stay as they are.
+- (b) **Out** as ruled 2026-10-31: the notification badge, feed and read state. Their visibility also depends on deleted watchdogs and on merges changing a property's first-seen date, which the clock cannot see, so the 30 s and 60 s polls stay as they are. **Re-ruled 2026-11-01 (the operator): in.** "If I resolve a notification in another window or the app, I want the count to update everywhere." W7 (#2327): the eighth family `notifications` on both notification tables (the retired-watchdog dependence covered; the merge-first-seen one named as the residual, § 3.7), the polls removed. Assumed, for the operator to overrule: a new event moves the bell live too (the same trigger fires on INSERT); the Watchdog list follows as well (its table is clocked for the bell); the feed holds under the hand like every list.
 - (c) **Out:** ad Aktivní/Neaktivní and price (the Pipeline "Stav" filter). It is scraper data at about 10⁴ changes a day, and it refreshes with every board re-read.
 - (d) **Out:** estimation runs started elsewhere (F5).
 
@@ -1115,6 +1124,7 @@ Each wave is one PR, with a draft PR opened early.
     - with `request.headers` `x-act-as` (valid owner, foreign owner, garbage) each caller sees own rows only and no error;
     - `curation_clock_audience()` returns only own accounts and share owners;
     - anon is denied.
+11. **W7, the bell (715):** a producer's event, a mark-seen by the owner, a 50-row service-role insert and a retired watchdog each bump A's `notifications` once; A's own read holds the family, B's and C's reads of A never do; the catalog case counts 14 triggers; every account seeded by 696 holds its seven, `notifications` arriving at the first bump.
 11. `EXPLAIN (format json)` of the read as a tenant uses `curation_clock_pkey`, with no seq scan on the clock. **Since 708 (F16):** analyzed, the read shows exactly two `curation_clock_audience` Function Scans, each run once (the policy's and the view's join), at the lane's size and at 2,000 accounts; the small read maps `mine` right for own rows and an edit share's rows. 708's `$post$` refuses the clock with row security off and the view without its join on the audience. **Since 709 (F17):** a read on a warm backend calls `current_account_ids()` twice, once per evaluation, and reads ≤ 40 shared buffers (a ceiling, not a line between 708 and 709), at both sizes, for the owner and an edit share's recipient; on that same backend the edit recipient, the read recipient and the edit recipient with `x-act-as` read exactly their own rows. Bite: 696's function put back makes more calls; a read that scans a full clock (2,000 × 7, index scans off) breaks the ceiling. 709's `$post$` refuses the audience back as invoker, a definer body that follows while acting, neutralises that filter or drops its `not in`, and an owner held by `pipeline_shares`' row policy.
 12. The `board_bumps` SQL returns 0 after scripted card writes.
 13. Catalog: 12 enabled deferred triggers; definer bump; audience definer plpgsql on `search_path = ''`, ROWS 4 (709; invoker until then), its body naming no admin-only relation; no browser or service-role DML on the clock; view `security_invoker`; seed complete.
@@ -1449,3 +1459,14 @@ Where a wave built something other than the design, the section concerned now sa
 5. GLOSSARY: Hand (on a list) and Park (of a read), the list sense told from Curation's "by hand".
 6. Tests: `lib/revalidate.test.ts` +3 (a refetch nobody asked for parks when it starts under the hand and when in flight at its arrival; the user's own passes both ways), `lib/curationSettle.test.ts` +2 (the row's page time, both sides), `lib/useInfiniteList.test.tsx` 2 (new: `readAt`, `ASKED`), `pages/CollectionDetail.test.tsx` +1 (the Cards tab's line under the pointer), `components/listing-detail/CurationBlock.test.tsx` +1 and the empty-field case rewritten (the viewing pickers; the button and the handler agreeing); each new case fails on the code as merged. Full vitest 4455 [V]. Census +4 bite cases (ALTER FUNCTION both ways, in the same and a later migration); the live lane 40 [V, local].
 7. Owed: the ≥ 100- and ≥ 500-read production samples with gate #2203's measurement; W7 (#2327), the notification bell, is its own wave.
+
+**W7 (#2327), as built** (ruling Q1b re-ruled 2026-11-01; branch `feature/curation-sync-w7-bell` off the review 3 repairs):
+1. `migrations/715_curation_clock_notifications.sql`. The number moved twice while building: 712 and 714 were taken by open PRs (#2330, #2332) between the checks. As § 6 W7 lists; no seed, because a row that appears counts as moved (`clockChanges`), so an account's first bump is followed like any other.
+2. The clock's one new reach is the service role's writes: the producers (one statement per transaction, `_commit_one`) and the merge carrier's re-point. Both already hold the notification-events advisory lock (shared and exclusive) to their commit, where the deferred triggers fire, so several accounts' counters are never taken in two orders by two transactions, and a mark-seen holds one. Nothing rewrites a watchdog per pass: `notification_subscriptions` moves only on the owner's create, edit and retire. So the family ticks on real changes, not on producer passes.
+3. A row's mark-seen is an optimistic write, not a plain re-read. The hand made this necessary: the pointer is on the row it just clicked, so the re-read parks and the row would read as unread until the pointer left. The row and the bell repaint inside the click, a failed write puts both back, and under the Unread filter the row leaves when the hand does. `notificationKeys.anyFeed` is the new prefix the patch names.
+4. Census: (c) reads 696's seed as a subset of the newest CHECK, since a later family is never seeded; (j) reads the newest `$post$` trigger count (`trigger_count_text`); (i)'s bite cases name the eighth family (own lost it; an edit share following the owner's bell). The key census covers `notificationKeys` and `watchdogKeys` too.
+5. Named residual: a merge that moves a property's `first_seen_at` can withdraw a 'new' event (`RETRACTED_SQL`) without touching that account's dispatch rows, so the bell shows it until its next read. The clock cannot see market data (rail f). With the polls gone that read comes at the next change of the family, a reload or a remount; ruling Q1b's concern, accepted here and flagged to the operator in the PR.
+6. Assumptions the ruling did not state, each flagged in the PR body: a new event moves the bell live too; the Watchdog list follows (its table is clocked for the bell); the feed holds under the hand; the polls are removed rather than kept beside the clock.
+7. Tests: `pages/Notifications.test.tsx` +6 (no poll; a row read elsewhere follows; held under the pointer and paid at the leave; a click under the pointer repaints with the write in flight; a failed write puts both back; the plain click), `lib/unreadCount.test.tsx` +2 (the bell follows the clock, no poll, never on a share), `pages/NotificationOpen.test.tsx` (owed, not invalidated); `tests/test_curation_clock_live.py` +1 (the operator's case) and two more table rows of the per-table case.
+8. Adversarial review repairs: `VISIBLE_SQL` also reads `property_dismissals`, which the first build missed, so a hidden property's alerts stayed on the bell until the next tick: its table entry owes `notificationKeys.all` (own only), and `useDismissal` re-reads it locally. A collection delete cascades to `notification_dispatches` (206), so `ON_DELETE` names it. With no poll a failed read had no way back: a failed first load of the bell showed 0, and the clock read goes to PostgREST, so it keeps answering while the API is down. The bell asks again each minute only while its last read failed; the feed offers a Retry and keeps its rows when a re-read or a page fails.
+9. Owed after the deploy: the Railway status, the health `triggers` cell at 14 (Problem from the apply until the worker runs this merge: `verify_pipeline` pins the count exactly, so apply right before enqueueing), the operator's two-window recipe on the bell, and the trigger count and the bell's reads on gate #2203.

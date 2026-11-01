@@ -359,9 +359,9 @@ delegate, a merge). It is a re-read prompted by the curation clock, never a rend
 _Avoid_: live sync, live update, Realtime, push (alone), operator state sync
 
 **Curation clock**:
-One counter per account and family of curation (the board, dismissals, collections, tags, notes, links,
-shares), advanced only by the database, once per committed change. It is a change signal compared only
-for inequality: it holds no content and is not history.
+One counter per account and family (the board, dismissals, collections, tags, notes, links, shares, and
+since 2026-11-01 notifications), advanced only by the database, once per committed change. It is a change
+signal compared only for inequality: it holds no content and is not history.
 _Avoid_: version, tick, revision, change log
 
 **Clock read**:

@@ -1518,10 +1518,10 @@ latency, skip mix, churn by `end_reason`) are design-doc SQL, reviewed after 7 d
 ## `curation_sync` — does every committed curation change move the clock? (curation sync W3, 2026-10-31)
 
 `check_curation_sync` in `scripts/checks/platform.py`, a platform alarm on the worker every hour, after
-`notifications`, no owner page, a 5 s budget (twelve catalog rows, the board ledger's last day, one
+`notifications`, no owner page, a 5 s budget (fourteen catalog rows, the board ledger's last day, one
 `pg_stat_statements` aggregate and its own previous result). The curation
 clock (migration 696, `docs/design/curation-sync.md` § 3.9, `.claude/skills/database/references/tenancy.md`
-§ Curation clock) is advanced only by twelve deferred triggers, so its failures are silent everywhere else.
+§ Curation clock) is advanced only by fourteen deferred triggers (715), so its failures are silent everywhere else.
 
 | Cell | Problem | Why this line |
 |---|---|---|

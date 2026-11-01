@@ -20,13 +20,17 @@
 
 import { useId, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import {
   listNotifications,
   markAllNotificationsSeen,
   markWatchdogDispatchSeen,
 } from '@/lib/api';
+import { revalidateTables, tableReads } from '@/lib/curationSync';
 import { notificationKeys } from '@/lib/queries';
+import { cachePatch } from '@/lib/revalidate';
+import { useListHold } from '@/lib/useListHold';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import { dispatchTarget } from '@/lib/dispatchTarget';
 import { useNewTabProps } from '@/lib/linkGestures';
 import { ROUTES } from '@/lib/routes';
@@ -34,9 +38,10 @@ import { usePageTitle } from '@/lib/pageTitle';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { usePushOpenedParam } from '@/lib/push';
 import { useUnreadCount } from '@/lib/unreadCount';
-import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
+import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
@@ -48,8 +53,8 @@ import type {
 
 type SourceFilter = NotificationSourceKind | 'all';
 
-const POLL_MS = 30_000;
 const PAGE_SIZE = 50;
+const noop = () => {};
 
 /* dispatchTarget's answer for a row with nothing to open: the feed itself. */
 const FEED = ROUTES.notifications.build();
@@ -88,8 +93,9 @@ export default function Notifications() {
   const [seen, setSeen] = useState<WatchdogSeenFilter>('all');
   usePushOpenedParam();
 
+  const feedKey = notificationKeys.feed({ source, seen });
   const feed = useInfiniteList<WatchdogDispatch>({
-    queryKey: notificationKeys.feed({ source, seen }),
+    queryKey: feedKey,
     queryFn: async (cursor) => {
       const resp = await listNotifications({
         source_kind: source === 'all' ? undefined : source,
@@ -101,17 +107,30 @@ export default function Notifications() {
     },
     pageSize: PAGE_SIZE,
     getRowId: (d) => d.id,
-    refetchInterval: POLL_MS,
   });
+  /* The feed follows the curation clock (W7, lib/curationSync): a mark-seen, a new
+   * event or a retired watchdog anywhere re-reads it within one clock read, but
+   * never under the hand (ruling Q3(c)): the rows park while the pointer rests on
+   * them or a finger is down, the bell's count follows at once. No poll. */
+  const hand = useListHold([feedKey]);
 
   const markAll = useMutation({
     mutationFn: () => markAllNotificationsSeen(),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.all });
-    },
+    onSuccess: () => revalidateTables(qc, ['notification_dispatches']),
   });
 
   const rows = feed.rows;
+  /* No poll comes back for a failed read, so it offers its own retry; a failed next
+   * page or re-read keeps the rows already drawn, the banner under them. */
+  const failed = feed.isError ? (
+    <ErrorBanner
+      flush={rows.length === 0}
+      title="Failed to load:"
+      message={feed.error?.message ?? 'The notifications did not load.'}
+      retryLabel="Retry"
+      onRetry={feed.isFetchNextPageError ? feed.fetchNextPage : feed.refetch}
+    />
+  ) : null;
   /* Shell's one unread observer (lib/unreadCount), the number the bells show. */
   const { count: unread } = useUnreadCount();
 
@@ -135,13 +154,11 @@ export default function Notifications() {
         <SegmentedBar hug tone={tone} label="Read state" options={SEEN_OPTS} value={seen} onChange={setSeen} />
       </div>
 
-      <div className="mt-7 max-md:mt-4">
+      <div {...hand} className="mt-7 max-md:mt-4">
         {feed.isLoading ? (
           <div className="text-sm text-[var(--color-ink-3)]">Loading…</div>
-        ) : feed.isError ? (
-          <div className="text-sm text-[var(--color-brick)]">
-            Failed to load: {feed.error?.message}
-          </div>
+        ) : failed && rows.length === 0 ? (
+          failed
         ) : rows.length === 0 ? (
           <EmptyState seen={seen} />
         ) : (
@@ -156,13 +173,15 @@ export default function Notifications() {
             {/* Only while there is more: the list ends silently, as it did under the button. */}
             {feed.hasNextPage && (
               <InfiniteSentinel
-                onReach={feed.fetchNextPage}
+                /* A failed next page waits for the banner's retry: it would ask again in a loop. */
+                onReach={feed.isFetchNextPageError ? noop : feed.fetchNextPage}
                 hasNextPage
                 isFetchingNextPage={feed.isFetchingNextPage}
                 loadedCount={rows.length}
                 total={null}
               />
             )}
+            {failed}
           </>
         )}
       </div>
@@ -220,13 +239,28 @@ function NotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   return <StandardNotificationRow dispatch={d} />;
 }
 
+type FeedPages = InfiniteData<InfiniteListPage<WatchdogDispatch>>;
+
+/* The one optimistic write of a row (lib/useOptimisticWrite): the row reads as read
+ * and the bell drops one inside the click, so neither waits for a re-read a hand on
+ * the list has parked (the pointer is on the row it just clicked). The re-read
+ * follows: under the Unread filter the row leaves when the hand does. */
 function useMarkSeen(d: WatchdogDispatch): () => void {
-  const qc = useQueryClient();
-  const markSeen = useMutation({
+  const markSeen = useOptimisticWrite({
+    mutationKey: ['write', 'notifications', 'mark-seen'],
     mutationFn: () => markWatchdogDispatchSeen(d.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.all });
-    },
+    patch: () => [
+      cachePatch<FeedPages>({ queryKey: notificationKeys.anyFeed }, (old) => old && {
+        ...old,
+        pages: old.pages.map((p) => ({
+          ...p,
+          rows: p.rows.map((r) => (r.id === d.id ? { ...r, seen_at: new Date().toISOString() } : r)),
+        })),
+      }),
+      cachePatch<{ unread_count: number }>({ queryKey: notificationKeys.unreadCount, exact: true }, (old) =>
+        old && { ...old, unread_count: Math.max(0, old.unread_count - 1) }),
+    ],
+    revalidate: tableReads(['notification_dispatches'], null),
   });
   return () => {
     if (d.seen_at == null) markSeen.mutate();
