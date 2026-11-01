@@ -14,7 +14,8 @@
  */
 
 import type { WaitlistResponse } from './waitlist';
-import type { AgentRun, AgentRunOptions, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
+import type { AgentRunOptions } from './agentRunOptions';
+import type { AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,

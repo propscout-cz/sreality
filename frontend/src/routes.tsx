@@ -17,7 +17,6 @@ import Brokers from './pages/Brokers';
 import Collections from './pages/Collections';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
-import WatchdogEdit from './pages/WatchdogEdit';
 import Notifications from './pages/Notifications';
 
 // Admin-only pages are code-split out of the default bundle — a non-admin
@@ -72,6 +71,8 @@ const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
 // the section cards' growth off the first-visit budget.
 const EstimationDetail = lazyChunk(() => import('./pages/EstimationDetail'));
 const BrokerDetail = lazyChunk(() => import('./pages/BrokerDetail'));
+// A watchdog's editor opens from the watchdog list, not on a first visit: moved here to pay for the Runs nav read.
+const WatchdogEdit = lazyChunk(() => import('./pages/WatchdogEdit'));
 // Agent runs: an operator tool behind an allowlist, so never part of a first visit. Open to any session: a refused
 // account reads why, and the API decides what each caller may do.
 const Runs = lazyChunk(() => import('./pages/Runs'));
@@ -209,7 +210,15 @@ export const routes: RouteObject[] = [
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
       { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
+      {
+        path: ROUTES.watchdogEdit.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <WatchdogEdit />
+          </Suspense>
+        ),
+        handle: { title: 'Edit watchdog' },
+      },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
       {
         path: ROUTES.notificationOpen.childPath,

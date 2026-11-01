@@ -4,9 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import ErrorBanner from '@/components/ErrorBanner';
 import { Field } from '@/components/controls';
 import { startAgentRun } from '@/lib/api';
-import {
-  agentRunKeys, buildInput, fieldsOf, QUEUE_HOLD, type AgentOption, type FormField, type FormValues, type QueueState,
-} from '@/lib/agentRuns';
+import { agentRunKeys, type AgentOption, type QueueState } from '@/lib/agentRunOptions';
+import { buildInput, fieldsOf, QUEUE_HOLD, type FormField, type FormValues } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 const BOX = 'w-full min-w-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-2 py-1.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] aria-[invalid=true]:border-[var(--color-brick)]';

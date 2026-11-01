@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { AgentRunOptions, AgentRunRow } from '@/lib/agentRuns';
+import type { AgentRunOptions } from '@/lib/agentRunOptions';
+import type { AgentRunRow } from '@/lib/agentRuns';
 import { ROUTES } from '@/lib/routes';
 
 vi.mock('@/lib/api', async (orig) => ({

@@ -6,27 +6,14 @@
  * dangerouslySetInnerHTML, nothing that autolinks), and the one link a run gets is built here from an id. */
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchAgentRun, fetchAgentRunOptions, fetchAgentRuns, fetchAgentRunSteps } from './api';
+import {
+  agentRunKeys, WAITING_POLL_MS, type AgentRunOptions, type JsonSchema, type QueueState,
+} from './agentRunOptions';
+import { fetchAgentRun, fetchAgentRuns, fetchAgentRunSteps } from './api';
 import { fmtUsd, fmtUsdPerCall } from './format';
 import type { Trace, TraceStep } from './types';
 
 export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-/* Whether a queued run can move now: `dark` the brake is off, `parked` the daily ceiling or a missing setting holds it. */
-export type QueueState = 'dark' | 'parked' | 'open';
-
-export interface AgentOption {
-  name: string;
-  description: string;
-  input_schema: JsonSchema;
-}
-
-/* The one answer to "may this caller start a run": allowlist today, a plan's agenda with #2319; the server decides. */
-export interface AgentRunOptions {
-  start: { allowed: boolean; reason: string | null };
-  /* null for a refused account, which reads no platform state. */
-  queue: QueueState | null;
-  agents: AgentOption[];
-}
 
 export interface AgentRunRow {
   id: number;
@@ -76,18 +63,8 @@ export interface StartAgentRun {
 }
 
 const LIVE_POLL_MS = 3000;
-/* A run the queue cannot move can wait for days: nothing will change until the brake or the ceiling does. */
-const WAITING_POLL_MS = 30_000;
 
 export const isLive = (status: string | undefined): boolean => status === 'queued' || status === 'running';
-
-export const agentRunKeys = {
-  all: ['agent-runs'] as const,
-  options: ['agent-runs', 'options'] as const,
-  list: ['agent-runs', 'list'] as const,
-  run: (id: number) => ['agent-runs', 'run', id] as const,
-  steps: (id: number) => ['agent-runs', 'steps', id] as const,
-};
 
 /* How often to read runs in these states: often while one can move, rarely while all wait on the queue, not once none is live. */
 export function pollMs(statuses: readonly string[], queue: QueueState | null | undefined): number | false {
@@ -95,16 +72,6 @@ export function pollMs(statuses: readonly string[], queue: QueueState | null | u
   const canMove = statuses.includes('running') || queue == null || queue === 'open';
   return canMove ? LIVE_POLL_MS : WAITING_POLL_MS;
 }
-
-/* The Shell's nav and the pages share this one read. `enabled` is false before a session exists. */
-export const useAgentRunOptions = ({ enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {}) =>
-  useQuery({
-    queryKey: agentRunKeys.options,
-    queryFn: fetchAgentRunOptions,
-    enabled,
-    staleTime: 5 * 60_000,
-    refetchInterval: live ? WAITING_POLL_MS : false,
-  });
 
 const useCachedQueue = () => {
   const queryClient = useQueryClient();
@@ -204,15 +171,6 @@ export const citedIds = (ids: readonly unknown[] | null | undefined): number[] =
   (ids ?? []).filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0);
 
 /* --- an input schema as a form -------------------------------------------------------------------------------------- */
-
-export interface JsonSchema {
-  type?: string;
-  description?: string;
-  enum?: string[];
-  required?: string[];
-  properties?: Record<string, JsonSchema>;
-  items?: JsonSchema;
-}
 
 export type FieldKind = 'text' | 'integer' | 'number' | 'choice' | 'boolean' | 'list' | 'json';
 

@@ -9,9 +9,10 @@ import { SectionLabel } from '@/components/section';
 import Timeline from '@/components/estimation/Timeline';
 import { RunJson, RunStateChip } from '@/components/runs/RunParts';
 import { ApiError, cancelAgentRun } from '@/lib/api';
+import { agentRunKeys, useAgentRunOptions } from '@/lib/agentRunOptions';
 import {
-  agentRunKeys, citedIds, fmtRunCost, isLive, stepsByAttempt, toTrace, useAgentRun, useAgentRunOptions, useAgentRunSteps,
-  waitingNote, type AgentRun, type AgentRunStep,
+  citedIds, fmtRunCost, isLive, stepsByAttempt, toTrace, useAgentRun, useAgentRunSteps, waitingNote, type AgentRun,
+  type AgentRunStep,
 } from '@/lib/agentRuns';
 import { fmtAbsolute, fmtCount } from '@/lib/format';
 import { ROUTES } from '@/lib/routes';
