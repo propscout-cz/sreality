@@ -47,9 +47,11 @@ webhook, plans or payment.
 Each PR is usable alone.
 
 **PR 1: sending works.** Operator, click by click: Resend domains and their DNS records in Cloudflare, Supabase custom
-SMTP, the Czech reset template. Exit: a reset email reaches a non-team address.
+SMTP, the Czech reset template. Exit: a reset email reaches an inbox and shows in Resend's log. Supabase's SMTP settings
+have no Reply-To, so the reset email names `support@propscout.cz` in its text instead.
 
-**PR 2: waitlist email.** The confirmation from `POST /waitlist`, which never fails the signup when sending fails;
+**PR 2: waitlist email.** Declares `RESEND_API_KEY` in `.railway/railway.ts`: it was added in the dashboard, and an
+undeclared name plans as a delete on the next apply. The confirmation from `POST /waitlist`, which never fails the signup when sending fails;
 one-click unsubscribe (RFC 8058) setting `unsubscribed_at`; the privacy page (Resend as a processor, US storage, the
 `info@` contact); the price and "zaváděcí" text on the landing page, thank-you page and copy deck. The deck is rebuilt
 per `frontend/scripts/landing-copy-deck/README.md`. Must ship before any email goes out.
@@ -76,6 +78,7 @@ reuse the push wording (`api/notification_render.py`): no per-m² figure, no sen
 > přišla nám žádost o nové heslo k vašemu účtu.
 > **[Nastavit nové heslo]**
 > Pokud jste o změnu nežádali, nic se neděje. Vaše heslo zůstává stejné.
+> Potřebujete pomoc? Napište nám na support@propscout.cz.
 
 **Waitlist confirmation.** Subject: *Máte místo na čekací listině PropScoutu*. Preview: *Zaváděcí cenu máte
 rezervovanou.*
