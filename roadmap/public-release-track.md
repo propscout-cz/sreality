@@ -445,7 +445,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
    - Remaining: **extension agent-estimate quota UX** (switch the panel's estimate from
      `mode:'deterministic'` to metered `mode:'agent'` for entitled users, show "(X left)",
      swap the button to "upgrade" at 0 — no purchase flow yet; widen the 120 s poll window,
-     persist `run_id`); and Chrome Web Store submission (on hold per operator).
+     persist `run_id`); and Chrome Web Store submission (Unlisted, under way as spec #2261 since 2026-10-31).
    - **The platform-wide `API_TOKEN` rotation now has a full runbook:**
      `docs/design/api-token-rotation-and-spa-jwt-migration.md`. A 2026-07-23 two-account
      pen-test surfaced its live symptom: the **SPA sends the shared static `API_TOKEN`** (the

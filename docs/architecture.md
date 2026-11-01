@@ -1054,11 +1054,12 @@ rules. Identify which one a task belongs to before you start.
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
-  used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
+  used there for `name`), and `portalIds.test.ts` fails when the template
   and the rules name different hosts, so onboarding a new portal means its rule in
   `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
-  is narrowed at build time to just the two live API/auth origins the background worker fetches
-  (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
+  stays empty: the background worker calls the API and the auth service under ordinary CORS, and the
+  store package's guard (`chrome-extension/release/allowed.ts`, a hand-written literal) holds the
+  permissions, the portal sites and the empty host list; CI fails a PR whose build differs from it. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
   API) rather than a full page load, which MV3's manifest-declared content script does NOT
   re-inject for. `background.ts` listens for `chrome.webNavigation.onHistoryStateUpdated`
@@ -1092,9 +1093,13 @@ rules. Identify which one a task belongs to before you start.
   public, same ID + update channel). Chrome only auto-updates on a strictly-greater version, so
   `vite.config.ts` stamps the patch component from `GITHUB_RUN_NUMBER` (monotonic, never resets);
   the committed `MAJOR.MINOR` is the hand-owned release marker. Publishing to the store reassigns
-  the extension ID, which is baked into the Supabase redirect allowlist, the Google OAuth client,
-  and `CORS_ALLOW_ORIGINS` — add the new ID alongside the old one before cutover
-  (`chrome-extension/README.md`, "Keeping it up to date"). Match patterns are exact-host, so an apex-canonical
+  the extension ID, which is baked into the Supabase redirect allowlist and `CORS_ALLOW_ORIGINS`
+  (Google only ever sees Supabase's callback, so its OAuth client needs no extension entry) — add
+  the new ID alongside the old one before cutover (`chrome-extension/README.md`, "Keeping it up to
+  date"). CI builds the **store package** on every PR (`npm run package`, `release/package.ts`): the
+  build without its `key`, refused if it carries a source map, a deployed hostname, a description
+  over 132 characters, or permissions, sites or host permissions other than `release/allowed.ts`;
+  artifact `chrome-extension-store`, beside the keyed `chrome-extension-dist` for unpacked installs. Match patterns are exact-host, so an apex-canonical
   portal (e.g. `realitymix.cz`) needs its apex pattern, not just `www.`. **The panel is Chrome's side
   panel** (operator ruling 2026-10-31, replacing the 2026-10-28 overlay sheet: the page narrows beside
   it, nothing is covered; `.interface-design/system.md` § Section cards, X1): our own page
@@ -1200,8 +1205,9 @@ rules. Identify which one a task belongs to before you start.
   195,001 B unminified, the registry no longer in it.)
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` (`transport.ts`, one `send` for the content script and the side
-  panel) so `host_permissions` covers the API origin and the fetch isn't subject to the portal's
-  CORS posture. Neither the content script nor the side panel calls `fetch` directly.
+  panel), so it leaves from the extension's own origin, which the API's `CORS_ALLOW_ORIGINS` names
+  (the manifest grants no host permission), never under the portal page's CORS posture. Neither the
+  content script nor the side panel calls `fetch` directly.
 - **Own Supabase session (Wave 1, shipped 2026-07-21) — no bearer token in the bundle
   anymore.** Hand-rolled PKCE (`src/auth.ts`) against GoTrue via
   `chrome.identity.launchWebAuthFlow` (no `supabase-js`): `VITE_SUPABASE_URL` +
@@ -1212,16 +1218,16 @@ rules. Identify which one a task belongs to before you start.
   territory entry below and `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
   `manifest.json` pins a stable extension ID via a generated RSA keypair's public
   half in the `key` field (needed because the GoTrue PKCE redirect URL,
-  `https://<id>.chromiumapp.org/`, must be pre-registered with Supabase + Google, and
-  "Load unpacked" would otherwise assign a different ID per machine/download path).
-  `host_permissions` is computed at build time in `vite.config.ts` from the same two origins,
-  replacing a checked-in `https://*/*` wildcard. The extension is now safe to distribute
-  broadly (no embedded secret); Chrome Web Store submission still needs the non-code
-  readiness items in `docs/design/waves-1-4-public-features.md` (privacy policy,
-  single-purpose statement, staged rollout).
-- The extension's origin (`chrome-extension://<id>`) must be added to the FastAPI
-  service's `CORS_ALLOW_ORIGINS` env var — the id is fixed by the pinned `key` above, so
-  this is a one-time step per deployment, not per-install.
+  `https://<id>.chromiumapp.org/`, must be in Supabase's redirect allowlist, and
+  "Load unpacked" would otherwise assign a different ID per machine/download path); the store
+  package drops the key, since the store assigns its own ID. `host_permissions` is empty: GoTrue
+  answers any origin, and the API allows the extension's origin by CORS. The extension carries
+  no embedded secret; its store path is spec #2261 (`docs/design/brand-domain-and-store/PROGRAM.md`).
+- The extension's origin (`chrome-extension://<id>`) is in the API's `CORS_ALLOW_ORIGINS` (since
+  2026-10-31, #2275); without it every API call fails, since the manifest grants no host permission.
+  It is a kept Railway variable: the value lives in Railway and the operator edits it there
+  (§ Railway service configuration), never an agent. One entry per extension ID, not per install:
+  the store's ID gets its own entry before review (#2280).
 - Backend rules (psycopg, stdlib-first, etc.) and SPA conventions (React, Tailwind,
   design tokens) do NOT apply inside `chrome-extension/`.
 

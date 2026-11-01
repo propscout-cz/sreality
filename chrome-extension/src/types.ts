@@ -215,8 +215,8 @@ export interface IngestState {
 }
 
 /* Message protocol between the content script or the side panel and the
- * background worker. The background worker is the only context allowed to make
- * API fetches — host_permissions covers it without CORS getting in the way.
+ * background worker. The background worker is the only context that makes API
+ * fetches, from the extension's origin, which the API's CORS allowlist names.
  * Both post messages and get the typed result back. */
 export type ApiMessage =
   | { type: 'lookup_listings'; items: PortalLookupItem[] }
