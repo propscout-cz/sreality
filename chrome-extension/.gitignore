@@ -2,6 +2,8 @@ node_modules
 dist
 # The store package (npm run package), made from dist/.
 store
+# The side-panel harness's screenshots + check list (npm run e2e).
+e2e-shots
 .env
 .env.local
 .env.*.local
