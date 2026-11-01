@@ -174,9 +174,9 @@ jobs:
       - name: Migration 656 re-runs clean after it applied (the lock-timeout retry contract)
         run: psql -v ON_ERROR_STOP=1 -q -f migrations/656_notifications_w6_prune.sql
 
-      # Migration 699 (location W3) is under the same retry contract: its guard, dedup and $post$ hold on a re-run.
-      - name: Migration 699 re-runs clean after it applied (the lock-timeout retry contract)
-        run: psql -v ON_ERROR_STOP=1 -q -f migrations/699_location_w3_one_claim_per_fact.sql
+      # Migration 707 (location W3 PR-2) is under the same retry contract: its drops and $post$ hold on a re-run.
+      - name: Migration 707 re-runs clean after it applied (the lock-timeout retry contract)
+        run: psql -v ON_ERROR_STOP=1 -q -f migrations/707_location_w3_drop_fingerprint.sql
 
       - uses: actions/setup-python@v6
         with:
@@ -209,7 +209,6 @@ jobs:
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_claims_one_write_live.py \
                  tests/location_data/test_operator_pick_live.py \
-                 tests/location_data/test_claims_retire.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \

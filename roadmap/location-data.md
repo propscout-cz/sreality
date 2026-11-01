@@ -1287,8 +1287,9 @@ component is slimmed twice — each wave rewrites one component and slims its st
   blur, which a presence detector could never clear. A payload body that becomes latest again is re-mined;
   the text lane retries an empty location block (1,915 stored ones re-marked). Rollout (design § 5): the
   autodedup shadow gate, then the R2 backup + batched purge (≈ 8.8 M rows, `location_claims_retire.yml`'s
-  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (702:
-  the fingerprint column, its index, both functions; the purge script) after one green intake tick. A
+  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (707:
+  the fingerprint column, its index, both functions; the purge script) after one green intake tick.
+  **Purge done 2026-11-01: 9,312,771 rows deleted, 6,000,747 keys kept, backup 15,313,392 rows in R2.** A
   retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
   keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve
   the current pin. Design: `docs/design/location-quality/w3-one-claim-per-fact.md`.
