@@ -51,7 +51,7 @@ last-writer-wins.
       applied and merged 2026-11-01).** Two audience evaluations per read, the primary key kept at scale (ruling
       2026-11-01); the audience plpgsql, definer, one `current_account_ids()` call. Production delta after 709: 0.973 ms
       and 18.3 buffers over 30 reads; the tickets' ≥ 100- and ≥ 500-read samples ride gate #2203's measurement.
-- [ ] **Review 3 repairs (#2249, #2306, F16 + F17): the third two-axis review's findings.** The desktop collection
+- [ ] **Review 3 repairs (#2326, PR #2329): the third two-axis review's findings on #2249, #2306, F16 + F17.** The desktop collection
       cards' "without a card" line held under the hand; the stale-side judge reads the row's page time; a hand parks
       every refetch nobody asked for and spares the user's own; the artifact link's empty field and the viewing
       pickers' cleared-both path; census (i) sees `ALTER FUNCTION`; a several-accounts live case; the GLOSSARY's

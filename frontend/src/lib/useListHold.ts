@@ -6,8 +6,9 @@
  * are paid the moment the hand leaves, so no row moves under it. Only the list's
  * own keys are held: counts, map and stats re-read at once, never held. The
  * list's own reads pass (a first load after a filter or sort change, a page, a
- * refresh it asks for), and so do the user's own writes: each holds for itself,
- * and the ledger composes the two.
+ * refresh the user asks for), and so do the user's own writes: each holds for
+ * itself, and the ledger composes the two. A refetch nobody asked for (a
+ * reconnect's, a remount's) parks like the re-read it would overwrite.
  *
  * POINTER. Over: React's pointerover reaches the container from its whole React
  * subtree, a popover portalled out of a row included, so a stage menu opened from

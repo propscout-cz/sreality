@@ -118,11 +118,7 @@ const memberKeys = (propertyId: number, f: ListingFilters): QueryKey[] => [
 /* When `q` read the row: the newest `readAt` of the pages holding it, else (a page
  * from before the stamp) the query's own read time. */
 const rowReadAt = (q: Query, propertyId: number): number =>
-  Math.max(
-    ...((q.state.data as InfiniteData<ListPage> | undefined)?.pages ?? [])
-      .filter((p) => p.rows.some((r) => r.property_id === propertyId))
-      .map((p) => p.readAt ?? q.state.dataUpdatedAt),
-  );
+  Math.max(...pagesHolding(q.state.data, propertyId).map((p) => p.readAt ?? q.state.dataUpdatedAt));
 
 /* A "no" from a map whose read is owed, or older than the row's, is the map's staleness. */
 function staleMap(qc: QueryClient, propertyId: number, f: ListingFilters, lists: readonly Query[]): boolean {
@@ -134,10 +130,13 @@ function staleMap(qc: QueryClient, propertyId: number, f: ListingFilters, lists:
   });
 }
 
-const holds = (data: unknown, propertyId: number): boolean =>
-  ((data as InfiniteData<ListPage> | undefined)?.pages ?? []).some((p) =>
+/* The loaded pages of a list that hold the property. */
+const pagesHolding = (data: unknown, propertyId: number): ListPage[] =>
+  ((data as InfiniteData<ListPage> | undefined)?.pages ?? []).filter((p) =>
     p.rows.some((r) => r.property_id === propertyId),
   );
+
+const holds = (data: unknown, propertyId: number): boolean => pagesHolding(data, propertyId).length > 0;
 
 const isList = (q: Query) => (LIST_ROOTS as readonly unknown[]).includes(q.queryKey[0]);
 

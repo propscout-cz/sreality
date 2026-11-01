@@ -655,19 +655,20 @@ function OwnNoteRow({
   const drop = useFileDrop((files) => void attach(files));
 
   const trimmed = body.normalized;
-  const openEditor = () => {
+  /* The three drafts and the toggle's drop, back to the note. */
+  const resetDrafts = () => {
     body.reset();
     day.reset();
     time.reset();
     setDropped(false);
+  };
+  const openEditor = () => {
+    resetDrafts();
     setEditing(true);
   };
   const closeEditor = () => {
     setEditing(false);
-    body.reset();
-    day.reset();
-    time.reset();
-    setDropped(false);
+    resetDrafts();
     setError(null);
   };
   /* Only what the user changed; a viewing may lose its text, a plain note never. */
