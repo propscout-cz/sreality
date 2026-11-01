@@ -6,7 +6,8 @@
  * tab (edge_tab.ts), the panel's opener; any other page on a portal host gets the
  * search-page overlay (index_overlay.ts: per-card controls and the corner dock).
  * Both draw from this page's store (store.ts), over the one transport (transport.ts):
- * every network call goes to the background worker; this script never fetches. The
+ * every network call goes to the background worker, which calls from the
+ * extension's origin, not the portal page's; this script never fetches. The
  * side panel of this tab's window holds a port to it while open: the subject goes up
  * it, and each side re-reads a property the other wrote. */
 

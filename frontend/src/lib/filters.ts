@@ -1,4 +1,4 @@
-import type { Disposition } from './types';
+import type { Disposition, PipelineStage } from './types';
 import {
   BUILDING_MATERIAL_BUCKETS,
   CONDITION_CANONICAL,
@@ -1045,15 +1045,28 @@ export interface PresetSpec {
  * `status` deliberately stays at its default `any`: a deal whose listing was
  * delisted mid-negotiation must not vanish from the pipeline view.
  *
+ * The scope is the board's OPEN stages, picked by id (operator 2026-11-01): a
+ * deal closed into a terminal stage is history, so the view leaves it out, and
+ * the sidebar adds a closed stage back with one click. Ids, not "any stage
+ * minus the closed ones": that would leave the closed stages excluded after the
+ * chip is turned off. With no closed stage (or the stages not read yet) the
+ * scope is the whole pipeline.
+ *
  * The modifier semantics are still available — the sidebar's Curation → Pipeline
  * control ANDs the scope onto the current filters without resetting anything.
  * Chip = view, sidebar control = modifier, exactly like preset chip vs sidebar. */
-export const pipelineViewFilters = (): ListingFilters => ({
-  ...DEFAULT_FILTERS,
-  categoryMain: [],
-  categoryType: null,
-  pipeline: { set: 'in', in: [], out: [] },
-});
+export const pipelineViewFilters = (
+  stages: ReadonlyArray<Pick<PipelineStage, 'id' | 'is_terminal'>> = [],
+): ListingFilters => {
+  const open = stages.filter((s) => !s.is_terminal).map((s) => s.id);
+  const closesSome = open.length > 0 && open.length < stages.length;
+  return {
+    ...DEFAULT_FILTERS,
+    categoryMain: [],
+    categoryType: null,
+    pipeline: closesSome ? { set: null, in: open, out: [] } : { set: 'in', in: [], out: [] },
+  };
+};
 
 /* A preset keeps EVERY filter, the lenses included — the curated sets (tags,
  * collections, pipeline), the broker and the dismissed reveal: they are in what
