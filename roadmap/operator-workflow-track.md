@@ -15,7 +15,9 @@ while visible, and re-reads only what it holds through one table→read map and 
 use too. Rulings 2026-10-31: Q1 all curation plus the pipeline and collection shares (notifications, ad status and
 price, estimation runs out); Q2 ≤ 5 s desktop, ≤ 15 s phone, no Realtime doorbell (F7, only on a future ≈ 1 s
 ruling); Q3 (a), an open list keeps its rows, counts, map and stats until navigation and only the per-card marks
-follow; Q4 the extension stays a sender; Q5 last-writer-wins.
+follow, re-ruled (c) 2026-11-01: the list follows fully within one clock read, its rows held while the pointer is
+over it or a finger on it, its counts, map and stats never held (W6); Q4 the extension stays a sender; Q5
+last-writer-wins.
 
 - [x] **W0: the API commits before it answers (#2198, PR #2204, merged 2026-10-31).** `tenant_pool.TenantConn` (function
       scope) on every tenant route and both account helpers, so a failed COMMIT answers 503 or 500, never a 200; the
@@ -39,9 +41,15 @@ follow; Q4 the extension stays a sender; Q5 last-writer-wins.
 - [ ] **Post-review fixes (#2244): the six W2–W4 reviews' findings.** The viewing day and time as two drafts, the
       pager's stuck holds, the nudge on every committed write, migration 701 (the service role reads the clock), census
       (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
+- [ ] **W6: an open list follows fully, held under the hand (#2303, SPA, built 2026-11-01, PR pending).** Ruling
+      Q3(c): `LENS_REREAD` `'now'` for lists and aggregates; `lib/useListHold.ts` over `parkReads` holds a list's
+      re-reads while the pointer, a finger or shown keyboard focus is on it (Browse cards, the Feed roll, the
+      collection page, the phone broker roll); counts, map and stats never held. The design's Decision 7b and § 12
+      "W6 (#2303), as built". Owed: the Feed's Skryté roll still follows only at its toggle (follow-up).
 - [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
-      statement time, no clock deadlocks, the API error rate at baseline. Whoever closes it sets the index row back
-      to 🟢.
+      statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
+      was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6
+      deploys. Whoever closes it sets the index row back to 🟢.
 
 ### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
 
