@@ -125,6 +125,7 @@ def patch_gemini(monkeypatch):
         types_mod.Tool = _FakeTool
         types_mod.Content = _FakeContent
         types_mod.GenerateContentConfig = _FakeGenerateConfig
+        types_mod.HttpOptions = lambda *, timeout: {"timeout": timeout}
 
         genai_mod = types.ModuleType("google.genai")
         genai_mod.types = types_mod
@@ -179,6 +180,15 @@ def test_text_block_round_trips(patch_gemini):
     assert out.usage.input_tokens == 12
     assert out.usage.output_tokens == 4
     assert client.models.calls[0]["config"].kwargs["system_instruction"] == "be terse"
+
+
+def test_a_deadline_becomes_the_requests_http_timeout_in_milliseconds(patch_gemini):
+    client = patch_gemini(_text_response("hi"))
+    message = [Message(role="user", content=[TextBlock(text="hi")])]
+    GeminiProvider().complete(system="", messages=message, tools=[], model="gemini-2.5-pro")
+    assert "http_options" not in client.models.calls[0]["config"].kwargs
+    GeminiProvider().complete(system="", messages=message, tools=[], model="gemini-2.5-pro", timeout_s=12.5)
+    assert client.models.calls[1]["config"].kwargs["http_options"] == {"timeout": 12500}
 
 
 def test_role_assistant_is_mapped_to_model(patch_gemini):

@@ -106,10 +106,11 @@ class ScriptedCodeProvider(_ScriptedProvider):
         self.refuse_delete: Exception | None = None
 
     def complete(self, *, system: str, messages: list[Message], tools: list[ToolSchema], model: str,
-                 max_tokens: int = 4096, tool_choice: str | None = None, hosted_code: HostedCode | None = None) -> Completion:
+                 max_tokens: int = 4096, tool_choice: str | None = None, timeout_s: float | None = None,
+                 hosted_code: HostedCode | None = None) -> Completion:
         self.hosted.append(hosted_code)
         return super().complete(system=system, messages=messages, tools=tools, model=model, max_tokens=max_tokens,
-                                tool_choice=tool_choice)
+                                tool_choice=tool_choice, timeout_s=timeout_s)
 
     def upload_file(self, *, name: str, media_type: str, data: bytes, expires_in_s: int) -> str:
         self.uploaded.append((name, media_type, data, expires_in_s))
