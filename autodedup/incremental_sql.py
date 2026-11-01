@@ -73,74 +73,14 @@ select set_config('idle_in_transaction_session_timeout', %(idle_timeout_ms)s::te
 
 # ------------------------------------------------------------------ mutual exclusion
 #
-# Lease-row CAS, never pg_advisory_lock: a session lock strands over the transaction pooler.
-# The update is the claim — one statement, no read-then-write race — and a lease is taken only
-# when the current one has expired.
-RT_LEASE_TAKE_SQL = """
-insert into autodedup.rt_lease (name, holder, taken_at, expires_at)
-values (%(name)s::text, %(holder)s::text, now(), now() + make_interval(secs => %(ttl)s))
-on conflict (name) do update set
-    holder     = excluded.holder,
-    taken_at   = now(),
-    expires_at = excluded.expires_at
- where autodedup.rt_lease.expires_at < now()
-returning holder
-"""
-
-RT_LEASE_RELEASE_SQL = """
-update autodedup.rt_lease
-   set expires_at = now()
- where name = %(name)s::text
-   and holder = %(holder)s::text
-"""
-
-# The pass's FENCE (E941), its transaction's last statement before the commit: this holder's
-# lease row, still live by the CLOCK (`now()` is the transaction's start, which a release the
-# worker's shutdown wrote mid-pass is later than), locked until the commit. A release that
-# landed first leaves no row and the pass rolls back; one that comes after waits for the commit.
-RT_LEASE_HOLD_SQL = """
-select holder
-  from autodedup.rt_lease
- where name = %(name)s::text
-   and holder = %(holder)s::text
-   and expires_at > clock_timestamp()
-   for update
-"""
-
-# Who holds it, for a refusal that names the holder (`autodedup/rt_lease.py`).
+# The lane's lease row (`scraper/job_lease.py` writes it; `autodedup/rt_lease.py` adapts it), for a
+# refusal that names the holder and the Health cell. A row never taken has no lease to read.
 RT_LEASE_READ_SQL = """
-select l.holder, l.taken_at, l.expires_at, l.expires_at > now() as live
-  from autodedup.rt_lease l
- where l.name = %(name)s::text
+select j.lease_holder, j.last_started_at, j.lease_expires_at, j.lease_expires_at > now() as live
+  from scheduled_jobs j
+ where j.job_name = %(name)s::text
+   and j.lease_expires_at is not null
 """
-
-# E948: the LIVE lease a dead predecessor of this container left. A worker pass's holder is
-# `<hostname>:<pid>:<the second its pass started>` (`incremental_lane.pass_holder`). One worker
-# process runs per container, and a restart in place keeps the hostname and, under the same
-# entrypoint, the pid (1 on Railway), so a live row naming THIS hostname and pid and a second
-# before this process booted belongs to a process that is gone; a second worker on one host has
-# a pid of its own and never ends the first one's lease. Only that three-field shape can match
-# — `rt_seed:<host>:<pid>:<second>` and `dispatch:<run>` never do — the pid is compared as text,
-# and the CASE keeps the cast off every other shape. An expired row is no predecessor's death: a
-# pass that ended released its lease. ONE predicate, two statements: the release, and the read
-# that names the lease a pass at the claim cap's floor leaves to its TTL.
-_RT_LEASE_PREDECESSOR_WHERE = """
- where name = %(name)s::text
-   and expires_at > now()
-   and case when holder ~ '^[^:]+:[0-9]+:[0-9]{1,18}$'
-            then split_part(holder, ':', 1) = %(host)s::text
-                 and split_part(holder, ':', 2) = %(pid)s::text
-                 and split_part(holder, ':', 3)::bigint < %(booted)s::bigint
-            else false
-       end
-"""
-RT_LEASE_RELEASE_PREDECESSOR_SQL = ("""
-update autodedup.rt_lease
-   set expires_at = now()""" + _RT_LEASE_PREDECESSOR_WHERE + """returning holder
-""")
-RT_LEASE_PREDECESSOR_SQL = ("""
-select holder
-  from autodedup.rt_lease""" + _RT_LEASE_PREDECESSOR_WHERE)
 
 # ------------------------------------------------------------------ the watermark feeds
 #
@@ -1653,16 +1593,6 @@ RT_FRESH_SETTINGS_SQL = """
 with gone as (
     delete from autodedup.settings
      where key = any(%(keys)s::text[])
- returning 1
-)
-select count(*)::bigint from gone
-"""
-
-RT_FRESH_LEASE_SQL = """
-with gone as (
-    delete from autodedup.rt_lease
-     where name = %(name)s::text
-       and holder is distinct from %(holder)s::text
  returning 1
 )
 select count(*)::bigint from gone

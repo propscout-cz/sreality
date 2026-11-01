@@ -34,13 +34,14 @@ from autodedup.export import ARTIFACT_NAME, build_location, fetch_block_ids, run
 from autodedup.incremental import GENERATION
 from autodedup.incremental_sql import RT_CALIBRATION_SCORER_SQL
 from autodedup.labels import PairKey, pair_key
-from autodedup.labels_lane import run_labels
+from autodedup.labels_lane import DEFAULT_GENERATION, run_labels
 
 POSITIONS_FILE: str = "positions.jsonl"
 MOVERS_FILE: str = "movers.jsonl"
 WHAT_IF_FILE: str = "what_if.json"
 SCORER_FILE: str = "scorer.json"
 SHADOW_FILE: str = "shadow.json"
+GROUP_FILE: str = "group.json"
 D83_EDGES: tuple[str, ...] = ("merge_gained", "merge_lost", "copairs_gained", "copairs_lost")
 MAX_ADS: int = 60_000
 MAX_BLOCKS: int = 40
@@ -55,6 +56,41 @@ select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.ca
   from public.listings l
   left join public.listing_location ll on ll.listing_id = l.id
  where l.id = any(%(ids)s::bigint[])
+"""
+
+
+# Every block (E300's export grain) that holds an advert some ruling names, today: the sources the
+# labels lane exports (pair verdicts, the cluster-grain verdicts' member sets, the operator's
+# must-not-links, the Browse merges). A block holding none can move no ruling, so it cannot fail.
+RULED_BLOCKS_SQL = """
+with ruled as (
+    select v.listing_lo as listing_id from autodedup.verdicts v
+     where v.kind = 'pair' and v.listing_lo is not null and v.listing_hi is not null
+    union
+    select v.listing_hi from autodedup.verdicts v
+     where v.kind = 'pair' and v.listing_lo is not null and v.listing_hi is not null
+    union
+    select unnest(v.member_ids) from autodedup.verdicts v
+     where v.kind = 'cluster' and v.member_ids is not null
+    union
+    select m.listing_id from autodedup.verdicts v
+      join autodedup.cluster_members m
+        on m.cluster_key = v.cluster_key and m.generation = %(generation)s::text
+     where v.kind = 'cluster' and v.member_ids is null
+    union
+    select n.listing_lo from autodedup.must_not_link n where n.source = 'operator'
+    union
+    select n.listing_hi from autodedup.must_not_link n where n.source = 'operator'
+    union
+    select unnest(o.member_ids) from autodedup.operator_merges o
+)
+select distinct case when ll.obec_kod = any(%(split)s::bigint[])
+                     then 'quarter:' || ll.cast_obce_kod
+                     else 'town:' || ll.obec_kod end as block
+  from ruled r
+  join public.listing_location ll on ll.listing_id = r.listing_id
+ where ll.obec_kod is not null
+   and (ll.cast_obce_kod is not null or not ll.obec_kod = any(%(split)s::bigint[]))
 """
 
 
@@ -91,21 +127,92 @@ def in_apply_scope(conn: psycopg.Connection, listing_ids: Iterable[int]) -> list
     return sorted(int(row[0]) for row in rows if scope.outside(Member.read(row)) is None)
 
 
+def side_block(side: dict[str, Any] | None) -> str | None:
+    """A row's block at E300's grain: its quarter in a split city, else its town; None when
+    it has no town, or sits in a split city with no quarter (its candidates are the whole city)."""
+    if not side or side.get("obec_kod") is None:
+        return None
+    if int(side["obec_kod"]) not in SPLIT_CITY_OBEC_KODS:
+        return f"town:{int(side['obec_kod'])}"
+    if side.get("cast_obce_kod") is not None:
+        return f"quarter:{int(side['cast_obce_kod'])}"
+    return None
+
+
 def blocks_for(movers: Iterable[dict[str, Any]]) -> tuple[list[str], int]:
-    """Each mover's old and new block at E300's grain, and the split-city sides with no quarter."""
+    """Each mover's old and new block, and the split-city sides with no quarter (never exported)."""
     keys: dict[str, None] = {}
     left_out = 0
     for mover in movers:
         for side in (mover.get("old"), mover.get("new")):
-            if not side or side.get("obec_kod") is None:
-                continue
-            if int(side["obec_kod"]) not in SPLIT_CITY_OBEC_KODS:
-                keys[f"town:{int(side['obec_kod'])}"] = None
-            elif side.get("cast_obce_kod") is not None:
-                keys[f"quarter:{int(side['cast_obce_kod'])}"] = None
-            else:
-                left_out += 1  # its candidates are the whole city, which is never exported
+            if (block := side_block(side)) is not None:
+                keys[block] = None
+            elif side and side.get("obec_kod") is not None:
+                left_out += 1
     return list(keys), left_out
+
+
+def ruled_blocks(conn: psycopg.Connection) -> set[str]:
+    """The blocks holding an advert some ruling names (`RULED_BLOCKS_SQL`)."""
+    _, rows = read(conn, RULED_BLOCKS_SQL, {"split": sorted(SPLIT_CITY_OBEC_KODS),
+                                            "generation": DEFAULT_GENERATION})
+    return {str(row[0]) for row in rows}
+
+
+def judgeable(movers: Iterable[dict[str, Any]], ruled: set[str]) -> tuple[set[str], set[int]]:
+    """The blocks to export and the movers no ruling can see. A mover with a side in a ruled block
+    brings BOTH its blocks: it reaches the cohort only through its old one."""
+    keep: set[str] = set()
+    blind: set[int] = set()
+    for mover in movers:
+        sides = [block for block in (side_block(mover.get("old")), side_block(mover.get("new")))
+                 if block is not None]
+        if any(block in ruled for block in sides):
+            keep.update(sides)
+        else:
+            blind.add(int(mover["listing_id"]))
+    return keep, blind
+
+
+def parse_group(text: str) -> tuple[int, int]:
+    """`i/n`, 1 <= i <= n: the i-th of n contiguous block groups."""
+    index, _, count = str(text).partition("/")
+    if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
+        raise argparse.ArgumentTypeError(f"--block-group must be i/n with 1 <= i <= n: {text!r}")
+    return int(index), int(count)
+
+
+def chunks(blocks: Iterable[str], count: int) -> list[list[str]]:
+    """The blocks sorted by key and cut into `count` contiguous groups, the first ones a block
+    longer when they do not divide evenly."""
+    ordered = sorted(blocks)
+    size, extra = divmod(len(ordered), count)
+    out, at = [], 0
+    for index in range(count):
+        step = size + (1 if index < extra else 0)
+        out.append(ordered[at:at + step])
+        at += step
+    return out
+
+
+def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int | None:
+    """The fewest groups whose every chunk fits both caps; None when one block alone does not."""
+    if any(ads > max_ads for ads in sizes.values()):
+        return None
+    for count in range(1, len(sizes) + 1):
+        if all(len(chunk) <= max_blocks and sum(sizes[b] for b in chunk) <= max_ads
+               for chunk in chunks(sizes, count)):
+            return count
+    return None
+
+
+def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
+    """The movers whose old block another group exports: not judged here, and not unjudged."""
+    chunk = set(group.get("blocks") or ())
+    if not chunk:
+        return set()
+    return {int(mover["listing_id"]) for mover in _jsonl(movers)
+            if (block := side_block(mover.get("old"))) is not None and block not in chunk}
 
 
 def block_sizes(conn: psycopg.Connection, blocks: list[str]) -> dict[str, int]:
@@ -118,6 +225,8 @@ def block_sizes(conn: psycopg.Connection, blocks: list[str]) -> dict[str, int]:
 def export_cohort(conn_factory: Callable[[], Any], shadow_dir: Path, blocks: list[str]
                   ) -> dict[str, Any]:
     """Step 2's export: the base cohort over `blocks`, the rulings and the live scorer."""
+    if not blocks:
+        raise ValueError("no block to export (an empty list would mean the trial cohort)")
     cohort = run_export(conn_factory, {"blocks": " ".join(blocks)}, shadow_dir / "base")
     labels = run_labels(conn_factory, {}, shadow_dir / "labels")
     conn = conn_factory()
@@ -176,29 +285,38 @@ def recent_same(rulings: Path, since: str = RECENT_SINCE) -> set[PairKey]:
     return {key for stamp, key in stamped if str(stamp or "") >= since and newest.get(key) == SAME}
 
 
-def judge(report: dict[str, Any], done: Override, *, together: set[PairKey],
-          recent: set[PairKey], what_if: dict[str, Any]) -> dict[str, Any]:
-    """PASS = E111 clean and no ruled pair moved against its ruling; D83 and recent pairs listed."""
+def judge(report: dict[str, Any], done: Override, *, base_e111: dict[str, Any],
+          together: set[PairKey], recent: set[PairKey], what_if: dict[str, Any],
+          elsewhere: set[int] = frozenset(), unjudgeable: set[int] = frozenset()
+          ) -> dict[str, Any]:
+    """PASS = no NEW operator negative inside a K-B family and no ruled pair moved against its
+    ruling; E111's standing state (both arms), D83 and the recent pairs are reported."""
     lists = report["d83"]["lists"]
     broken = ([row for row in lists["copairs_lost"] if row[2] == SAME]
               + [row for row in lists["copairs_gained"] if row[2] == DIFFERENT])
     honoured = ([row for row in lists["copairs_gained"] if row[2] == SAME]
                 + [row for row in lists["copairs_lost"] if row[2] == DIFFERENT])
-    revoked = bool(report["revocation"]["revoked"])
+    candidate_e111 = report["revocation"]
+    new = sorted({tuple(pair) for pair in candidate_e111["negatives"]}
+                 - {tuple(pair) for pair in base_e111["negatives"]})
     judged = {key for key in recent if key[0] in done.cohort and key[1] in done.cohort}
     split = judged & {(int(row[0]), int(row[1])) for row in broken}
     held = judged & together
-    unjudged_movers = len(done.listed - done.cohort)
+    blind = set(unjudgeable) & done.listed
+    unjudged_movers = len(done.listed - done.cohort - set(elsewhere) - blind)
     return {
-        "pass": not revoked and not broken,
+        "pass": not new and not broken,
         "partial": bool(what_if.get("limit")) or unjudged_movers > 0,
         "run": what_if,
-        "revoked": revoked,
+        "e111": {"base": base_e111, "candidate": candidate_e111,
+                 "new_negatives": [list(pair) for pair in new]},
         "broken_rulings": broken,
         "honoured_rulings": honoured,
         "movers_listed": len(done.listed),
         "movers_in_cohort": len(done.changed),
         "movers_unjudged": unjudged_movers,
+        "movers_elsewhere": len((set(elsewhere) - blind) & done.listed),
+        "movers_unjudgeable": len(blind),
         "recent_same": {"pairs": len(recent), "judged": len(judged),
                         "held": len(held), "broken": len(split),
                         "apart_in_both": len(judged - held - split),
@@ -212,31 +330,62 @@ def judge(report: dict[str, Any], done: Override, *, together: set[PairKey],
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="autodedup.shadow", description=__doc__.splitlines()[0])
     parser.add_argument("shadow_dir", help="the directory `what_if` wrote movers.jsonl into")
-    parser.add_argument("--max-ads", type=int, default=MAX_ADS, help="refuse a larger cohort")
+    parser.add_argument("--block-group", type=parse_group, default=(1, 1), metavar="I/N",
+                        help="export and judge the i-th of n contiguous block groups")
+    parser.add_argument("--max-ads", type=int, default=MAX_ADS, help="refuse a larger group")
     parser.add_argument("--max-blocks", type=int, default=MAX_BLOCKS, help="refuse more blocks")
+    parser.add_argument("--all-blocks", action="store_true",
+                        help="keep the blocks no ruling is inside (they add only D83 lines)")
     args = parser.parse_args(argv)
     from scraper import db
 
     shadow_dir = Path(args.shadow_dir)
-    blocks, left_out = blocks_for(_jsonl(shadow_dir / MOVERS_FILE))
+    movers = _jsonl(shadow_dir / MOVERS_FILE)
+    blocks, left_out = blocks_for(movers)
     if not blocks:
         raise SystemExit(f"no exportable block in {shadow_dir / MOVERS_FILE}")
     conn = db.connect_read_only()
     try:
-        sizes = block_sizes(conn, blocks)
+        every = block_sizes(conn, blocks)
+        ruled = None if args.all_blocks else ruled_blocks(conn)
     finally:
         conn.close()
-    for block, ads in sizes.items():
-        print(f"[shadow] {block} {ads} ads")
-    total = sum(sizes.values())
-    print(f"[shadow] {len(sizes)} blocks, {total} ads; {left_out} split-city sides without a "
-          "quarter left out", flush=True)
-    if len(sizes) > args.max_blocks or total > args.max_ads:
-        print(f"[shadow] REFUSED: over --max-blocks {args.max_blocks} or --max-ads "
-              f"{args.max_ads}; narrow the ids (--scope apply, --limit) or raise a cap",
-              file=sys.stderr)
+    for block in sorted(every):
+        print(f"[shadow] {block} {every[block]} ads")
+    kept, blind = (set(every), set()) if ruled is None else judgeable(movers, ruled)
+    skipped = sorted(set(every) - kept)
+    no_ruling = {"blocks": len(skipped), "ads": sum(every[block] for block in skipped)}
+    print(f"[shadow] {no_ruling['blocks']} blocks skipped: no ruling inside ({no_ruling['ads']} "
+          f"ads); {len(blind)} movers unjudgeable (no ruling on either side)", flush=True)
+    sizes = {block: every[block] for block in every if block in kept}
+    index, count = args.block_group
+    chunk = chunks(sizes, count)[index - 1]
+    ads = sum(sizes[block] for block in chunk)
+    needed = groups_needed(sizes, args.max_blocks, args.max_ads) if sizes else 0
+    print(f"[shadow] {len(sizes)} blocks kept, {sum(sizes.values())} ads; {left_out} split-city "
+          f"sides without a quarter left out; group {index}/{count}: {len(chunk)} blocks, {ads} "
+          f"ads; groups needed under the caps: {needed if needed is not None else 'none'}",
+          flush=True)
+    record = {"group": f"{index}/{count}", "blocks": chunk, "ads": ads,
+              "all_blocks": len(sizes), "all_ads": sum(sizes.values()),
+              "blocks_skipped_no_ruling": no_ruling, "unjudgeable": sorted(blind),
+              "rulings_filter": ruled is not None}
+    if not chunk:
+        # An empty list would export the trial cohort (`cohort.parse_blocks("")`): never.
+        (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),
+                                             encoding="utf-8")
+        print(f"[shadow] group {index}/{count} holds no block a ruling is inside: nothing in it "
+              "can fail, nothing exported", flush=True)
+        return 0
+    if len(chunk) > args.max_blocks or ads > args.max_ads:
+        advice = (f"dispatch --block-group i/{needed} for i in 1..{needed}" if needed
+                  else "narrow the ids or raise --max-ads")
+        print(f"[shadow] REFUSED: group {index}/{count} is over --max-blocks {args.max_blocks} "
+              f"or --max-ads {args.max_ads}; {advice}", file=sys.stderr)
         return 2
-    summary = export_cohort(db.connect_read_only, shadow_dir, blocks)
+    summary = export_cohort(db.connect_read_only, shadow_dir, chunk)
+    (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),
+                                         encoding="utf-8")
     print(json.dumps({**summary, "left_out": left_out}, indent=1, sort_keys=True))
     print(f"[shadow] base cohort: {shadow_dir / 'base' / ARTIFACT_NAME}")
     return 0

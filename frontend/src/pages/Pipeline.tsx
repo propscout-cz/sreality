@@ -38,7 +38,7 @@ import { revalidateTables } from '@/lib/curationSync';
 import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
-import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import { BOARD_GESTURE_HELD, matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
 import { holdReads, type Hold } from '@/lib/revalidate';
 import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
@@ -831,9 +831,9 @@ export const boardCollision: CollisionDetection = (args) => {
 /* No sensor, no drag: a read-only board's DndContext never starts one. */
 const NO_SENSORS: ReturnType<typeof useSensors> = [];
 
-/* What a drag holds: the board and the members map, and the stages — they are
- * the droppable columns (docs/design/curation-sync.md Decision 10). */
-const DRAG_HELD = [pipelineKeys.board, pipelineKeys.members, pipelineKeys.stages] as const;
+/* What a drag holds: a gesture's board reads, and the stages — they are the
+ * droppable columns (docs/design/curation-sync.md Decision 10). */
+const DRAG_HELD = [...BOARD_GESTURE_HELD, pipelineKeys.stages] as const;
 
 /* A drag holds its board's reads from pick-up to drop, so a re-read — a change
  * made elsewhere, a mount — never repaints the columns under the card in hand:
@@ -1171,9 +1171,7 @@ function StageEditorRow({
           </button>
         </div>
         <input
-          value={code.value}
-          onChange={(e) => code.onChange(e.target.value)}
-          onFocus={code.onFocus}
+          {...code.bind}
           onBlur={saveCode}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -1185,9 +1183,7 @@ function StageEditorRow({
           className="w-10 shrink-0 rounded-[var(--radius-sm)] border border-transparent bg-[var(--color-inset)] px-1 py-1 text-center font-mono text-sm tabular-nums text-[var(--color-ink)] hover:border-[var(--color-rule)]"
         />
         <input
-          value={label.value}
-          onChange={(e) => label.onChange(e.target.value)}
-          onFocus={label.onFocus}
+          {...label.bind}
           onBlur={saveLabel}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();

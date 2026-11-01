@@ -6,6 +6,7 @@ engine e2e's synthetic cohort, so nothing here reaches a database.
 
 from __future__ import annotations
 
+import argparse
 import gzip
 import io
 import json
@@ -121,10 +122,117 @@ def test_an_oversized_shadow_is_refused_before_anything_is_exported(monkeypatch,
                         lambda conn, blocks: {block: 40_000 for block in blocks})
     monkeypatch.setattr(shadow, "export_cohort",
                         lambda *a, **k: pytest.fail("exported past the cap"))
-    assert shadow.main([str(tmp_path)]) == 2
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     printed = capsys.readouterr()
-    assert f"town:{BEROUN} 40000 ads" in printed.out and "REFUSED" in printed.err
-    assert shadow.main([str(tmp_path), "--max-ads", "1000000", "--max-blocks", "1"]) == 2
+    assert f"town:{BEROUN} 40000 ads" in printed.out
+    assert "groups needed under the caps: 2" in printed.out
+    assert "dispatch --block-group i/2 for i in 1..2" in printed.err
+    assert shadow.main([str(tmp_path), "--all-blocks", "--max-ads", "1000000",
+                        "--max-blocks", "1"]) == 2
+
+
+def test_blocks_are_cut_into_contiguous_sorted_groups_and_n_is_the_fewest_that_fit():
+    blocks = ["town:9", "quarter:2", "town:1", "quarter:1", "town:5"]
+    assert shadow.chunks(blocks, 2) == [["quarter:1", "quarter:2", "town:1"], ["town:5", "town:9"]]
+    assert shadow.chunks(blocks, 1) == [sorted(blocks)]
+    sizes = {"town:1": 30, "town:2": 30, "town:3": 30, "town:4": 5}
+    assert shadow.groups_needed(sizes, max_blocks=40, max_ads=60) == 2
+    assert shadow.groups_needed(sizes, max_blocks=1, max_ads=1000) == 4
+    assert shadow.groups_needed({"town:1": 70}, max_blocks=40, max_ads=60) is None
+    assert shadow.parse_group("2/3") == (2, 3)
+    for bad in ("0/3", "4/3", "1", "a/b"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            shadow.parse_group(bad)
+
+
+def test_a_group_exports_only_its_chunk_and_records_it(monkeypatch, tmp_path: Path):
+    """The block list comes from ALL movers; group 2/2 exports the second contiguous chunk, under
+    the caps applied to that chunk alone."""
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"old": {"obec_kod": 1}, "new": {"obec_kod": 2}},
+        {"old": {"obec_kod": 3}, "new": {"obec_kod": 4}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([]))
+    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {b: 40_000 for b in blocks})
+    exported: list[list[str]] = []
+    monkeypatch.setattr(shadow, "export_cohort",
+                        lambda factory, out, blocks: exported.append(blocks) or {})
+    assert shadow.main([str(tmp_path), "--all-blocks", "--block-group", "2/4",
+                        "--max-ads", "50000"]) == 0
+    assert exported == [["town:2"]]
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert (group["group"], group["blocks"], group["all_blocks"]) == ("2/4", ["town:2"], 4)
+
+
+def _movers_three_blocks(tmp_path: Path, monkeypatch: Any) -> list[list[str]]:
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"listing_id": 1, "old": {"obec_kod": 1}, "new": {"obec_kod": 1}},
+        {"listing_id": 2, "old": {"obec_kod": 2}, "new": {"obec_kod": 2}},
+        {"listing_id": 3, "old": {"obec_kod": 3}, "new": {"obec_kod": 3}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([]))
+    monkeypatch.setattr(shadow, "block_sizes",
+                        lambda conn, blocks: {b: 100 * int(b.split(":")[1]) for b in blocks})
+    monkeypatch.setattr(shadow, "ruled_blocks", lambda conn: {"town:1", "town:77"})
+    exported: list[list[str]] = []
+    monkeypatch.setattr(shadow, "export_cohort",
+                        lambda factory, out, blocks: exported.append(blocks) or {})
+    return exported
+
+
+def test_only_the_blocks_a_ruling_is_inside_are_exported(monkeypatch, tmp_path: Path, capsys):
+    """Two of three blocks hold no ruling: no ruled pair can move there, so they could add only
+    D83 lines; they are skipped, counted, and their movers are unjudgeable (never unjudged)."""
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    assert shadow.main([str(tmp_path)]) == 0
+    assert exported == [["town:1"]]
+    assert "2 blocks skipped: no ruling inside (500 ads); 2 movers unjudgeable" in (
+        capsys.readouterr().out)
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert group["blocks_skipped_no_ruling"] == {"blocks": 2, "ads": 500}
+    assert (group["unjudgeable"], group["rulings_filter"]) == ([2, 3], True)
+
+
+def test_all_blocks_restores_every_movers_block(monkeypatch, tmp_path: Path):
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    monkeypatch.setattr(shadow, "ruled_blocks",
+                        lambda conn: pytest.fail("--all-blocks reads no ruling"))
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 0
+    assert exported == [["town:1", "town:2", "town:3"]]
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert group["blocks_skipped_no_ruling"] == {"blocks": 0, "ads": 0}
+    assert (group["unjudgeable"], group["rulings_filter"]) == ([], False)
+
+
+def test_a_mover_entering_a_ruled_block_brings_its_old_block():
+    """It reaches the cohort only through its old (stored) block, so both of its blocks stay;
+    a mover with no ruled side is unjudgeable."""
+    movers = [{"listing_id": 1, "old": {"obec_kod": 5}, "new": {"obec_kod": 1}},
+              {"listing_id": 2, "old": {"obec_kod": 6}, "new": {"obec_kod": 7}},
+              {"listing_id": 3, "old": {"obec_kod": PRAHA}, "new": {"obec_kod": 1}}]
+    assert shadow.judgeable(movers, {"town:1"}) == ({"town:5", "town:1"}, {2})
+
+
+def test_no_ruled_block_exports_nothing_and_never_the_trial_cohort(monkeypatch, tmp_path: Path,
+                                                                  capsys):
+    exported = _movers_three_blocks(tmp_path, monkeypatch)
+    monkeypatch.setattr(shadow, "ruled_blocks", lambda conn: set())
+    assert shadow.main([str(tmp_path)]) == 0 and exported == []
+    assert "nothing in it can fail, nothing exported" in capsys.readouterr().out
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert (group["blocks"], group["unjudgeable"]) == ([], [1, 2, 3])
+
+
+def test_the_export_refuses_an_empty_block_list(tmp_path: Path):
+    with pytest.raises(ValueError):
+        shadow.export_cohort(lambda: pytest.fail("connected"), tmp_path, [])
+
+
+def test_the_ruled_blocks_read_is_the_labels_lanes_sources_at_the_export_grain():
+    sql = " ".join(shadow.RULED_BLOCKS_SQL.split())
+    for source in ("autodedup.verdicts v where v.kind = 'pair'", "v.kind = 'cluster'",
+                   "autodedup.must_not_link n where n.source = 'operator'",
+                   "autodedup.operator_merges", "'quarter:' || ll.cast_obce_kod",
+                   "'town:' || ll.obec_kod"):
+        assert source in sql, source
 
 
 def test_the_apply_scope_filter_is_the_apply_paths_own_predicate():
@@ -172,19 +280,26 @@ def test_the_override_rewrites_only_the_blocks_that_change(tmp_path: Path):
 # ------------------------------------------------------------------ step 3: the gate
 
 
+def _e111(*negatives: tuple[int, int]) -> dict[str, Any]:
+    return {"negatives": [list(pair) for pair in negatives], "revoked": bool(negatives)}
+
+
 def _report(gained: list[list[Any]] = (), lost: list[list[Any]] = (), *,
-            revoked: bool = False, merges: list[list[int]] = ()) -> dict[str, Any]:
-    return {"revocation": {"revoked": revoked},
+            negatives: tuple = (), merges: list[list[int]] = ()) -> dict[str, Any]:
+    return {"revocation": _e111(*negatives),
             "d83": {"lists": {"copairs_gained": list(gained), "copairs_lost": list(lost),
                               "merge_gained": list(merges), "merge_lost": []}}}
 
 
 def _judge(report: dict[str, Any], *, changed: set[int] = frozenset(), listed: set[int] = None,
            cohort: set[int] = frozenset(range(1, 10)), together: set = frozenset(),
-           recent: set = frozenset(), what_if: dict[str, Any] | None = None) -> dict[str, Any]:
+           recent: set = frozenset(), what_if: dict[str, Any] | None = None,
+           base_negatives: tuple = (), elsewhere: set[int] = frozenset(),
+           unjudgeable: set[int] = frozenset()) -> dict[str, Any]:
     done = shadow.Override(set(changed if listed is None else listed), set(cohort), set(changed))
-    return shadow.judge(report, done, together=set(together), recent=set(recent),
-                        what_if=what_if or {})
+    return shadow.judge(report, done, base_e111=_e111(*base_negatives), together=set(together),
+                        recent=set(recent), what_if=what_if or {}, elsewhere=set(elsewhere),
+                        unjudgeable=set(unjudgeable))
 
 
 def test_the_gate_fails_a_ruling_that_loses_its_standing():
@@ -197,8 +312,18 @@ def test_the_gate_fails_a_ruling_that_loses_its_standing():
     assert verdict["pass"] and len(verdict["honoured_rulings"]) == 2
 
 
-def test_the_gate_fails_a_revoked_e110_and_never_fails_on_d83_alone():
-    assert not _judge(_report(revoked=True))["pass"]
+def test_e111_fails_only_on_a_negative_the_move_brought_into_a_family():
+    """E111 reports and never decides: a negative the base already holds is today's state
+    (PASS, both arms reported); one the candidate adds is the move's doing (FAIL)."""
+    standing = _judge(_report(negatives=[(3, 4)]), base_negatives=[(3, 4)])
+    assert standing["pass"] and standing["e111"]["new_negatives"] == []
+    assert standing["e111"]["base"]["negatives"] == standing["e111"]["candidate"]["negatives"]
+    new = _judge(_report(negatives=[(3, 4), (5, 6)]), base_negatives=[(3, 4)])
+    assert not new["pass"] and new["e111"]["new_negatives"] == [[5, 6]]
+    assert _judge(_report(), base_negatives=[(3, 4)])["pass"]  # the move dissolved one
+
+
+def test_the_gate_never_fails_on_d83_alone():
     verdict = _judge(_report(gained=[[1, 9, "unruled", None]], merges=[[1, 9], [3, 4]]),
                      changed={9})
     assert verdict["pass"] and not verdict["partial"]
@@ -210,6 +335,27 @@ def test_a_limited_run_or_an_unjudged_mover_is_partial_and_still_judged():
     assert _judge(_report(), what_if={"limit": 50})["partial"]
     verdict = _judge(_report(), changed={1}, listed={1, 404})
     assert verdict["partial"] and verdict["movers_unjudged"] == 1 and verdict["pass"]
+
+
+def test_an_unjudgeable_mover_is_neither_unjudged_nor_elsewhere_nor_partial():
+    """No ruling sits on either of its blocks: it cannot fail, so it is reported apart; the
+    recent `same` pairs are still counted over all of them (a skipped block holds none)."""
+    verdict = _judge(_report(), changed={1}, listed={1, 2, 3}, elsewhere={2, 3}, unjudgeable={3},
+                     recent={(1, 9), (40, 41)})
+    assert (verdict["movers_unjudgeable"], verdict["movers_elsewhere"],
+            verdict["movers_unjudged"], verdict["partial"]) == (1, 1, 0, False)
+    assert (verdict["recent_same"]["pairs"], verdict["recent_same"]["unjudged"]) == (2, 1)
+
+
+def test_a_mover_another_group_exports_is_not_unjudged(tmp_path: Path):
+    movers = _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"listing_id": 1, "old": {"obec_kod": BEROUN}}, {"listing_id": 404, "old": {"obec_kod": 7}},
+        {"listing_id": 405, "old": None}])
+    elsewhere = shadow.outside_group(movers, {"blocks": [f"town:{BEROUN}"]})
+    assert elsewhere == {404}
+    assert shadow.outside_group(movers, {}) == set()
+    verdict = _judge(_report(), changed={1}, listed={1, 404, 405}, elsewhere=elsewhere)
+    assert (verdict["movers_elsewhere"], verdict["movers_unjudged"]) == (1, 1)
 
 
 def test_the_recent_same_pairs_are_counted_apart():
@@ -256,8 +402,8 @@ def test_harness_shadow_passes_a_move_that_keeps_every_ruling(tmp_path: Path):
     assert code == 0 and verdict["pass"] and not verdict["partial"]
     assert (verdict["movers_in_cohort"], verdict["movers_listed"]) == (1, 1)
     assert verdict["recent_same"]["held"] == 1 and verdict["recent_same"]["since"] == "2026-10-27"
-    assert any(line.startswith("shadow PASS  ids 9 requested, scope apply, limit 0")
-               for line in printed.splitlines())
+    assert any(line.startswith("shadow PASS  group 1/1  ids 9 requested, scope apply, limit 0")
+               and "E111 base 0 / candidate 0, new 0" in line for line in printed.splitlines())
     for arm in ("base", "candidate"):
         assert (tmp_path / "judge" / arm / harness.RUN_FILE).is_file()
     assert (tmp_path / "judge" / "candidate" / "evaluate.json").is_file()
@@ -269,20 +415,22 @@ def test_harness_shadow_fails_when_a_move_splits_a_same_ruling(tmp_path: Path):
     code, verdict, printed = _shadow(
         tmp_path, [{**FAR, "listing_id": TWIN_B}], [_same(TWIN_A, TWIN_B)],
         settings=Settings(unit_evidence_required=False))
-    assert code == 1 and not verdict["pass"] and not verdict["revoked"]
+    assert code == 1 and not verdict["pass"] and verdict["e111"]["new_negatives"] == []
     assert verdict["broken_rulings"] == [[TWIN_A, TWIN_B, "same", None]]
     assert verdict["recent_same"]["broken"] == 1
     assert f"BROKEN {TWIN_A} x {TWIN_B} (same)" in printed
 
 
-def test_harness_shadow_fails_when_e110_is_revoked(tmp_path: Path):
-    """An operator negative inside a K-B family (the re-post pair) revokes E110: the gate fails
-    whatever the movers did."""
+def test_harness_shadow_reports_a_standing_revocation_and_passes(tmp_path: Path):
+    """An operator negative inside a K-B family (the re-post pair) revokes E110 in BOTH arms:
+    today's state, reported on both, never the wave's FAIL (run 41213246616's false FAIL)."""
     code, verdict, printed = _shadow(tmp_path, [FAR], [
         {"listing_lo": REPOST_A, "listing_hi": REPOST_B, "verdict": "different",
          "decided_at": "2026-10-28"}])
-    assert code == 1 and verdict["revoked"] and not verdict["pass"]
-    assert "shadow FAIL" in printed
+    assert code == 0 and verdict["pass"]
+    assert verdict["e111"]["base"]["negatives"] == [[REPOST_A, REPOST_B]]
+    assert verdict["e111"]["candidate"]["negatives"] == [[REPOST_A, REPOST_B]]
+    assert "E111 base 1 / candidate 1, new 0" in printed
 
 
 # ------------------------------------------------------------------ fakes

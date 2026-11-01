@@ -20,8 +20,8 @@ Independent of the analytical, UI, and map tracks.
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
   not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
-  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the four
-  scripts, the six dispatch-only workflows, `listing_condition_scores`, the two
+  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the five
+  remaining scripts, the three dispatch-only workflows (Actions exit R6a deleted the marker-mining pair and the model A/B, #2018), `listing_condition_scores`, the two
   `listings.*_condition_level` columns, their data, the Settings per-kraj toggle (a toggle alone
   runs nothing) and the engine's tests. Retired from every surface: the four
   `*_condition_level_min/_max` registry filters (Browse sidebar + URL `bld_cond_*`/`apt_cond_*`,

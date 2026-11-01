@@ -94,6 +94,7 @@ import {
   type SortDirection,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useListHold } from '@/lib/useListHold';
 import { CardHydrationProvider } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
 import type { BrowseViewState, TabKey } from '@/lib/browseState';
@@ -374,6 +375,9 @@ export default function BrowseExperience({
     enabled: tab === 'map',
     gcTime: 10 * 60_000,
   });
+  /* A change made elsewhere moves the cards at once, but not under the hand
+   * (ruling Q3(c)); the count, map and stats re-read regardless. */
+  const cardsHand = useListHold([browseKeys.cards(filters, sort)]);
 
   /* W7a: the visible card cohort, for the shared hydration layer. Photos used to
    * be awaited INSIDE the cards queryFn, so no card painted until every card's
@@ -684,6 +688,7 @@ export default function BrowseExperience({
                 estimatingIds={estimatingIds}
                 estimateRefusals={estimateRefusals}
                 onEstimate={onEstimate}
+                hand={cardsHand}
               />
               </CardHydrationProvider>
               {!mapCollapsed.value && (

@@ -116,7 +116,7 @@ function Popover({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const captionId = useId();
 
-  const trimmed = name.value.trim();
+  const trimmed = name.normalized;
   const dup =
     trimmed.length > 0 &&
     trimmed.toLowerCase() !== tag.name.toLowerCase() &&
@@ -166,10 +166,7 @@ function Popover({
       <input
         type="text"
         aria-labelledby={captionId}
-        value={name.value}
-        onChange={(e) => name.onChange(e.target.value)}
-        onFocus={name.onFocus}
-        onBlur={name.onBlur}
+        {...name.bind}
         maxLength={50}
         /* No `autoFocus`: AnchoredPopover moves focus to the first control in
          * the panel on mount — this input — and back to the pencil on close. */

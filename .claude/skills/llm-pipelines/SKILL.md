@@ -26,6 +26,8 @@ Several analytical toolkit functions reach for Claude. Each caches its result lo
 auto-invalidates, logs to `llm_calls` under a distinct `called_for`, and is a write-allowed
 exception per Toolkit rule #5. System prompts and model IDs are operator-tunable via
 `app_settings` (model defaults `claude-sonnet-4-5`).
+A tool loop's turn goes back as `Completion.reply` (thinking, thought signatures): `toolkit-api` rule 11.
+Hosted code, its files and cost: `skills/README.md` § Code.
 The three the estimation agent can call (`summarize_listing`, `compare_listing_images`,
 `read_floor_plan`) take an optional `estimation_run_id`; the agent's handlers pass the run's id,
 so the nested call's `llm_calls` row counts toward the run's cost, its `max_cost_usd` cap (re-read
@@ -48,7 +50,8 @@ calls an LLM must do the same.
   operator-supplied attachment (floor plan, drawing, photo).
 - `discover_condition_markers` (`toolkit/condition_markers.py`, migration 064, cache
   `listing_marker_extractions`) — mines Czech technical-state phrases ("zateplená budova", "po
-  kompletní rekonstrukci") to feed the condition-scoring marker dictionary.
+  kompletní rekonstrukci") to feed the condition-scoring marker dictionary. Parked with rule #14; nothing
+  calls it since its fleet loop and clustering scripts were deleted (Actions exit R6a, #2018).
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
   curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact

@@ -51,10 +51,10 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
   Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
   no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`styles/tokens.css`) need operator OK. Backend rules don't apply.
-- **Chrome extension** (`chrome-extension/`) — Manifest v3, **vanilla TS only** (no React /
-  Tailwind), closed shadow-root panel. Every network call goes through the background worker
-  (`chrome.runtime.sendMessage`), never a direct `fetch`. Build-time `VITE_API_*` inlined
-  (Path 1; ship `dist/` to trusted operators only). Backend + SPA rules don't apply here.
+- **Chrome extension** (`chrome-extension/`) — MV3, **vanilla TS only** (no React/Tailwind);
+  shadow roots on portal pages, the panel in Chrome's side panel. Network calls go via the
+  background worker (`chrome.runtime.sendMessage`), never `fetch`. `VITE_API_*` inlined at
+  build (Path 1; ship `dist/` to trusted operators only). Backend/SPA rules don't apply.
 
 When in doubt which territory a task is in, ask. Don't import frontend deps into the Python tree or vice versa.
 ## Working with the operator
@@ -212,7 +212,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal, re-attribution, broker re-point) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); the worker's maintenance lane (`run_incremental_pass`, 30 s)
     attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
-    the reconcile backstop. Both take the maintenance lease row (migration 279), so they never overlap. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
+    the reconcile backstop. Both take the `property_maintenance` lease row, so they never overlap. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`
     adapter + a config row (`PortalConfig`/`PortalLimits` = its politeness); shared code grows NO new portal-name
@@ -282,7 +282,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
 - **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
   `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
-  `/health` + the `/images/{key}` photo proxy are open by design, and the Stripe webhook verifies its own signature.
+  `/health`, `/images/{key}` photos and the landing's `POST /waitlist` are open by design; the Stripe webhook checks its signature.
 
 ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
 nor is email as a future second push-ledger channel (inactive; rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.

@@ -1,28 +1,16 @@
-/* The side sheet's header (on the panel's own background, not a card) and the
- * folded tab's marks. Grain, field by field (MS11): the price, its per-m², the
- * live colour and the move pill are THIS ad's; what the property is (status, days
- * on market, facts, MF) is the property's. Every label and number comes from the
- * app's own modules. */
+/* The side panel's header (on the panel's own background, not a card). Grain,
+ * field by field (MS11): the price, its per-m², the live colour and the move pill
+ * are THIS ad's; what the property is (status, days on market, facts, MF) is the
+ * property's. Every label and number comes from the app's own modules. */
 
 import { categoryMainLabel, categoryTypeLabel, enumLabel, subtypeLabel } from '../../frontend/src/lib/enums';
-import {
-  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2, fmtPct, fmtTomDays,
-} from '../../frontend/src/lib/format';
+import { fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2, fmtTomDays } from '../../frontend/src/lib/format';
 import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/src/lib/measure';
 import { MF_YIELD_LABEL, MF_YIELD_TITLE, mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
-import type { PipelineStage } from '../../frontend/src/lib/types';
 import { h } from './dom';
-import { codeBadge, lineIcon, stageLook } from './glyphs';
-import { factChips, tabMarkList } from './panel_logic';
+import { lineIcon, moveBadge } from './glyphs';
+import { factChips } from './panel_logic';
 import type { PortalListing } from './types';
-
-/* This ad's last price move, by magnitude with its arrow (a cut is good news here: sage). */
-export function moveBadge(pct: number): HTMLElement {
-  const down = pct < 0;
-  const pill = h('span', `move ${down ? 'move--down' : 'move--up'}`, `${down ? '↓' : '↑'} ${fmtPct(Math.abs(pct))}`);
-  pill.title = `Poslední změna ceny inzerátu: ${fmtPct(pct, { signed: true })}`;
-  return pill;
-}
 
 function mfTitle(l: PortalListing): string {
   const shape = mfShape(l.mf_reference_rent);
@@ -105,22 +93,4 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
   }
   head.appendChild(pricing);
   return head;
-}
-
-/* The folded tab, after the PS mark: the deal's stage badge, this ad's price drop, MF. */
-export function tabMarks(
-  l: PortalListing | null, move: number | null, stages: readonly PipelineStage[] | null,
-): Node[] {
-  if (l == null || !l.found) return [];
-  const look = stageLook(l.pipeline);
-  const code = look && codeBadge(look, stages);
-  if (code != null) code.title = `V pipeline: ${l.pipeline?.stage_label ?? ''}`;
-  const mf = mfYieldText(l.mf_gross_yield_pct, l.mf_reference_rent);
-  let box: HTMLElement | null = null;
-  if (mf != null) {
-    box = h('span', 'tab-mf');
-    box.title = MF_YIELD_TITLE;
-    box.append(h('span', 'l4', 'MF'), h('span', 'mono', mf));
-  }
-  return tabMarkList<Node>(code, move, box, moveBadge);
 }

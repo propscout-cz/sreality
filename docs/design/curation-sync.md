@@ -1,6 +1,6 @@
 # Curation sync: open windows follow a curation change made anywhere
 
-Status: **Approved 2026-10-31 (spec #2197); build in progress.** All five rulings are in (§ 8; Q3 was ruled (a), not the recommended (b)). Waves W0–W4 (§ 6) are #2198–#2202 and the gate #2203 follows W4; track `roadmap/operator-workflow-track.md` § Phase U-SYNC; decision record ADR-0008. The design is Lens C (the pulled curation clock), revised against four adversarial reviews (security, correctness, operability, completeness); § 12 is that review's ledger, and its build ledger records what each wave built differently.
+Status: **Approved 2026-10-31 (spec #2197); build in progress.** All five rulings are in (§ 8; Q3 was ruled (a), not the recommended (b), and re-ruled (c) with a pointer hold on 2026-11-01, built in W6). Waves W0–W4 (§ 6) are #2198–#2202 and the gate #2203 follows W4; track `roadmap/operator-workflow-track.md` § Phase U-SYNC; decision record ADR-0008. The design is Lens C (the pulled curation clock), revised against four adversarial reviews (security, correctness, operability, completeness); § 12 is that review's ledger, and its build ledger records what each wave built differently.
 
 Tags:
 - **[V]** means the reviser read it this session (code, `node_modules`, site-packages or docs).
@@ -37,7 +37,7 @@ Rejected terms:
 - A re-read stays owed until a read issued after the change has landed: a change can be delayed, never lost.
 
 **Named exceptions** (each one is ruled or filed as a follow-up):
-- An open Browse, Feed or collection list keeps its rows, counts, map and stats until the next navigation (or Feed's resume re-read, or a reconnect refetch of a Browse or Feed list); only the per-row marks follow now (ruling Q3a). The window's own writes settle by ruling 9's per-property judge (Decision 7).
+- An open Browse, Feed or collection list follows a change made elsewhere fully, within one clock read: rows leave and enter, and its counts, map and stats re-read (ruling Q3(c), 2026-11-01). Its rows wait only while the user's hand is on the list (the pointer over it, a finger on it) and move when the hand leaves; counts, map and stats never wait (Decision 7b). The window's own writes settle by ruling 9's per-property judge (Decision 7).
 - The two parties of a collection share do not yet follow each other's shared curation (F2).
 - An open property that is merged away elsewhere shows its emptied curation until navigation (F14).
 - Extension panels do not receive (Q4/F1).
@@ -310,10 +310,13 @@ begin
 end $post$;
 ```
 
+**After 696, as built (#2244):** migration `701_curation_clock_service_role_read.sql` grants the service role SELECT on `curation_clock` (the Backend territory's rule that the service role reads anything; 696's `revoke all … from service_role` had taken it with the writes). The service role still holds no INSERT, UPDATE, DELETE or TRUNCATE, and nothing on `curation_clock_public`: the view is the browser's read, its audience reads the caller's accounts from the JWT, and only `authenticated` executes `curation_clock_audience()`, so a service-role SELECT on the view would be refused (and, with EXECUTE, empty). A backend reader reads the table, whole.
+
 **Decision 3: deferred constraint row triggers.** A no-op UPDATE is skipped, and the bump runs **once per (transaction, account, family)**.
 - Row triggers never fire on 0-row statements. That matters because there are about 21k autodedup steps a day that touch no curation [V·r].
+- Row triggers never fire on TRUNCATE either: a TRUNCATE of a clocked table moves no counter, so every open window keeps the rows it showed. **Never TRUNCATE a clocked table; delete instead.** Census (e) flags one in code or in a migration after 696 [V, #2244].
 - Deferral means the counter row is locked only from the bump until the commit record is flushed (milliseconds), and a rollback does nothing.
-- A transaction-local GUC dedupes the bump. It is correct because windows compare only for inequality. It keeps a 10⁴-row heal migration O(rows), so there is no sanctioned "disable the trigger" backfill recipe and census (e) stays strict.
+- A transaction-local GUC dedupes the bump. It is correct because windows compare only for inequality. The string grows about 45 B per (family, account) bumped and `strpos` scans it once per row, so a bulk write costs O(rows × accounts it touches): a 10⁴-row heal of one account's curation is O(rows), never O(rows²) on one hot counter row. So there is no sanctioned "disable the trigger" backfill recipe and census (e) stays strict. The entries are `<family>:<account>;`, found by `strpos`, so no family may be a suffix of another (census k).
 - Savepoint rollbacks are safe: deferred events queued in an aborted subtransaction are discarded [A: standard PG].
 
 **Decision 4: the bump is SECURITY DEFINER; the audience function is INVOKER.**
@@ -331,7 +334,7 @@ end $post$;
 **Decision 22 (new): the tenancy rails hold the clock.**
 - `curation_clock` joins `TENANT_TABLES` **and** gets `BROWSER_WRITE_COLUMNS['curation_clock'] = frozenset()` (the `building_runs` precedent, `tests/_tenant_registry.py:52-56` [V]). So both tenancy gates check `account_id`, the policy, no anon access and **no browser write**, today and in every later migration.
 - `curation_clock_public` joins `_TENANT_VIEWS` (`tests/test_tenant_isolation_live.py:48-60` [V]).
-- The `$post$` block asserts the same at apply time.
+- The `$post$` block asserts the same at apply time. Under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves every object it checked live. The apply's exit status, the census and the `curation_sync` alarm are the gates, not a rollback [V, #2244].
 
 **Deadlocks (residual).**
 - The dedupe leaves at most one bump per (tx, account, family). Within a firing, the order is by account id.
@@ -381,8 +384,8 @@ export type CurationFamily = (typeof CURATION_FAMILIES)[number];
 interface SyncEntry { family: CurationFamily; reads: readonly QueryKey[]; ownReads?: readonly QueryKey[]; lens?: CurationLens }
 export const SYNC_TABLES = { /* rows below */ } as const satisfies Record<string, SyncEntry>;
 export type SyncTable = keyof typeof SYNC_TABLES;
-/** Ruling Q3(a): a REMOTE lens change reaches Browse at its next mount, lists and aggregates alike; marks follow now. */
-export const LENS_REREAD = { lists: 'mount', aggregates: 'mount' } as const satisfies Record<string, ReadMode>;
+/** Ruling Q3(c) + the pointer hold (2026-11-01): a REMOTE lens change re-reads Browse lists and aggregates at once; a list waits under a hand (lib/useListHold). */
+export const LENS_REREAD = { lists: 'now', aggregates: 'now' } as const satisfies Record<string, ReadMode>;
 export const SYNC_ROOTS: readonly QueryKey[];   // ['pipeline'] ['curation'] ['dismissals'] ['pipeline-shares'] ['acting']
 export function applySyncQueryDefaults(qc: QueryClient): void;      // refetchOnReconnect:false per SYNC_ROOT (main.tsx, called from W4)
 export function tableReads(tables: readonly SyncTable[], actAs: string | null): QueryKey[];
@@ -399,7 +402,7 @@ export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-fact
 | property_pipeline | board | `pipelineKeys.board`, `.members` | — | pipeline |
 | pipeline_stages | board | `.stages`, `.board`, `.members` (**closes D2**) | — | pipeline |
 | property_dismissals | dismissals | `dismissalKeys.all` | — | dismissed |
-| collections | collections | `curationKeys.collections` | `curationKeys.anyCollection` (new member `['curation','collection']`; a remote change owes it `LENS_REREAD.lists`) | collections |
+| collections | collections | `curationKeys.collections` | `curationKeys.anyCollection` (new member `['curation','collection']`; a remote change owes it `LENS_REREAD.lists`, `'now'`) | collections |
 | collection_properties | collections | `.propertyCollectionMembers`, `.collections` | `.anyCollection`, `.allPropertyNotes`, `.noteCounts` (shared-note visibility joins this table, 610:136-145 [V]) | collections |
 | tags | tags | `.tags` (`property_tags_public` reads only `property_tags`; a tag DELETE names both tables, 202 cascades) | — | tags |
 | property_tags | tags | `.propertyTagMembers`, `.tags` (GET /tags counts `listing_count`) | — | tags |
@@ -417,18 +420,36 @@ export const NOT_SYNCED: Readonly<Record<string, string>>;           // key-fact
 - `PIPELINE_REVALIDATE` is replaced by `tableReads(['property_pipeline','property_dismissals'], actAs)`, pinned **set-equal** (by `hashKey`) to today's `[members, board, dismissals]`.
 - A remote change knows only its family and takes the union of the family's tables.
 
-**Decision 7: remote lens changes go through `LENS_REREAD` (ruling Q3(a), 2026-10-31); a local write keeps ruling 9's judge, with the stale-side rule.**
+**Decision 7: remote lens changes go through `LENS_REREAD` (ruling Q3(a) 2026-10-31, re-ruled (c) with a pointer hold 2026-11-01); a local write keeps ruling 9's judge, with the stale-side rule.**
 - `lensTargets(qc, lens, reread)` is a new export of `curationSettle.ts` and reuses `cohorts()`. `familyTargets` passes `LENS_REREAD` as `reread`, because `curationSync.ts` imports `curationSettle.ts` and not the other way round [V, W1]. For each cohort that engages the lens:
-  - `browseKeys.aggregates` (map, stats, counts, broker board) are owed `'mount'`;
-  - lists are owed `'mount'`.
+  - `browseKeys.aggregates` (map, stats, counts, broker board) are owed `'now'`: they re-read within one clock read, and are never held by a hand;
+  - lists are owed `'now'`: rows leave and enter within one clock read, except while a hand is on the list (Decision 7b).
 - An open collection page (`curationKeys.anyCollection`) is a list too: `familyTargets` owes it `LENS_REREAD.lists` [V, W1].
-- Every other read the family's tables feed re-reads now: the member maps (the per-card marks), the kanban board and its stages, the collections and tag indexes with their counts, notes, links and shares. No Browse list, Browse aggregate or open collection page moves under the user [V, W1].
+- The Feed's Skryté roll (`lib/feed` `FEED_HIDDEN_FILTERS`, `feedHiddenKey`) reads the hidden properties alone, so `showDismissed: true` keeps every lens off it; `lensTargets` owes it by name, as a list, for every dismissal change (W6 review repair; before it, an open Skryté roll followed only at its next toggle).
+- Every other read the family's tables feed re-reads now too: the member maps (the per-card marks), the kanban board and its stages, the collections and tag indexes with their counts, notes, links and shares.
+- A cohort cached but not on screen (an older filter set, a closed tab of Browse) is owed `'now'` and paid when an observer shows it again, as any inactive query is (Decision 14).
+- Until 2026-11-01 (ruling Q3(a), W1–W4) both modes were `'mount'`: no Browse list, Browse aggregate or open collection page moved under the user until its next mount. The `'mount'` machinery in `lib/revalidate.ts` stays: an errored re-read falls to it after 3 attempts.
 - Local writes keep ruling 9's per-property judge (`curationSettle.ts` header [V, W1]). The stale-side rule below refines its "stale map" row.
 - **The stale-side rule** (`curationSettle.ts` `staleMap`, used by `settlePatches` [V, W1]). A click's before-verdict from a member map can say "no" while a cached list still shows the row. One of them is stale:
   - The **map** is, if one of the member reads the verdict stands on is owed (`isOwed`) or was read before the list was (its `dataUpdatedAt` strictly older than the newest of the cohort's lists showing the row; equal read times count as the list side). Nothing drops, and the after-verdict decides the re-read as for any row: a cohort that still says no (or cannot judge) re-reads whole; one the click brought in re-reads nothing — as today.
-  - Otherwise the **list** is: a change made elsewhere after it was read, which under Q3(a) a list follows only at its next mount. The row is judged like any other: a click that leaves it out drops it in place and only the aggregates re-read; one that brings it in re-reads nothing.
+  - Otherwise the **list** is: a change made elsewhere after it was read, whose re-read has not landed yet. The row is judged like any other: a click that leaves it out drops it in place and only the aggregates re-read; one that brings it in re-reads nothing.
+  - With lists owed `'now'` (W6) the list is the stale side only for the moment before its re-read lands, or while a hand holds it (Decision 7b). Under a hand that is the usual case, not a rare one: the marks re-read at once and the rows wait, so a click on a row another device moved is judged by its current marks. The rule is unchanged and stays correct either way; its tests stay as W1 wrote them.
 - The ledger writes every patch with `updatedAt` = its base's read time (Decision 9), so a paint never makes a map look fresh.
 - **What changes versus today: exactly one case.** A local click on a row that a list shows while a member map read no earlier than the list (nothing owed) already says "no", and the click leaves the row out. Today that cohort re-reads whole; now the row drops in place and only the aggregates re-read.
+
+**Decision 7b (W6): a hand on a list holds its rows, never its aggregates** (ruling 2026-11-01: "List re-reads HOLD while the pointer is over the list (and during an active touch on the phone) and apply when the pointer leaves, so nothing shifts under the user's hand. Aggregates (counts, map, stats) are never held").
+- **What holds:** `lib/useListHold.ts` `useListHold(keys)` returns props spread on the list's container. It holds while the pointer is over the container, from a pointerdown inside it, and from a touchstart on it until the last finger that came down on it lifts (`lib/fingers.ts` `trackFingers`, W2's pager logic, now shared): the ruling's two hands. Keyboard focus is no hand (W6 review repair: as first built it was a third, which the ruling does not name, and a focused row removed by the user's own click fires no focusout, so it could hold the list for good).
+  - Over and leave are React's pointer events, which follow the React tree, so a stage menu portalled out of a card keeps the hand on the list. A portal unmounted under the pointer leaves no pointerout to compute a leave from, so a pointerover anywhere that did not pass through the container (a document listener, after React's root) also ends the hand.
+- **Where:** the Browse card grid (`ListingCards` `hand`, its header included), the Feed roll (`pages/Feed.tsx`, the visible roll's key, Skryté included), the open collection page (desktop `Members`, both tabs; phone, the card roll and its "Bez karty" lines; both over `lib/collectionCards.ts` `collectionListKeys(id)`: `browseKeys.cohortCards(f)`, its cards in every order), and the phone broker page's roll (`PhoneBrokerDetail`; a Browse cohort a remote dismissal now moves).
+- **Only the list's keys:** the hook is given the list's queries, never `browseKeys.aggregates`, so a remote change re-reads the count, map and stats at once while the rows wait.
+- **Rows held in the view** (W6 review repair): the collection page's own read (`curationKeys.collection(id)`) carries its header (name, description, member count) as well as the rows of its table and of the phone's "Bez karty" lines. A count is never held, so that read is never parked: it lands at once, and the rows drawn from it are held in the view instead (`useHeld(hand, value)`: the value drawn when the hand arrived, until it leaves; a component that mounts under the hand, such as the table opened from its tab, draws the current value). A row the user removes from the table leaves at once (its own Remove; the row is keyed by its membership, `property_id` and `added_at`, so a re-add elsewhere comes back as a new row), and the table's own count ("Properties N") follows the read. As first built the hand parked that read, which held the header's count, and parked the user's own Remove: the mouse on its way to the button was a hand on the members, so the removed row stayed until the pointer left. A collection emptied elsewhere shows its empty sentence at once, the members block having nothing left to hold.
+- **What a hand holds is the scheduler's own re-reads, nothing else** (`lib/revalidate.ts` `parkReads`):
+  - an owed read parks until the release; a full read in flight on an owed query that has data when the hand arrives is cancelled and stays owed;
+  - the list's own reads pass: its first load (a new filter or sort under the pointer: the sort control sits in the grid's header), a page (`fetchMeta.fetchMore`), a refetch it or the user asks for (the Feed's refresh, a retry). A hand never blocks the sentinel;
+  - no TTL: a pointer resting on a list for minutes is the normal case, and the hand's leave or the list's unmount ends it.
+  - Why not `holdReads` / `useReadHold` (Decision 9, W2's pager): they cancel every full read that starts on a held key, a first load included, and drop a page in flight at registration. Under a resting pointer a new sort would never load and the sentinel's page would be dropped (tested). `parkReads` is the same record in the same scheduler, flagged: `isHeld` parks payments for both kinds; only a write's or a gesture's hold cancels reads that start under it.
+- **The user's own writes compose:** a click under the hand registers its own hold (`useOptimisticWrite`), paints through the ledger at once (a row it leaves out drops in place), and its settle releases only its own hold. A list re-read it names, and the change made elsewhere, stay parked under the hand and are paid once, at the leave (W2's `useDragHold` precedent).
+- **The release:** the parked debt is paid with `query.fetch`. For an infinite list query-core refetches every loaded page in order from the first, each page's cursor taken from the page fetched before it (`infiniteQueryBehavior.js`, 5.100.9 [V]), and writes the pages in one data write when the last has landed; no page is shown new while a later one is old. A row that no longer matches is gone, a newcomer stands at its sort position, the list keeps its page count (a newcomer pushes the last loaded row to the next page; the sentinel brings it back), and its keyset cursors stay valid. Placeholder data keeps the rows on screen during the read, the cards keep their React keys, and `useScrollRestoration` restores only on a new cohort, so the scroll offset is not reset. In Chrome, Edge and Firefox CSS scroll anchoring keeps the rows on screen in place when rows above them leave or enter [A]; Safari has no scroll anchoring [A], so there a row leaving above the viewport moves what is on screen up by one card. On the desktop the move happens after the pointer left the list; on the phone up to a read after the finger lifted, possibly during a fling's momentum. On a page-scrolled list (the desktop collection page: its cards and its table scroll with the page) the window's scrollbar lies outside the list, so grabbing it is a leave, and a parked re-read can land while the scrollbar is dragged, as during the fling; Browse's grid scrolls its own column, whose scrollbar is inside the list.
 
 **Decision 8: Browse never receives owner-space targets.** `familyTargets(…, owner≠null)` returns only `actingKey(owner, reads)`, never ownReads or lens targets (`curationSettle.ts:112-113` [V]). This invariant has its own test.
 
@@ -441,6 +462,7 @@ export interface Hold { release(): void; rollback(): void }                     
 export function revalidate(qc: QueryClient, items: readonly (Revalidation | QueryKey)[], opts?: { release?: Hold }): Promise<void>;  // settles with the reads it started or joined
 export function holdReads(qc: QueryClient, filters: readonly QueryFilters[], patches?: readonly CachePatch[]): Hold;
 export function useReadHold(keys: readonly QueryKey[], active: boolean): void;
+export function parkReads(qc: QueryClient, filters: readonly QueryFilters[]): Hold;   // W6: a hand on a list (Decision 7b)
 export function isOwed(qc: QueryClient, key: QueryKey): boolean;
 export function repayOwed(qc: QueryClient): void;            // W4's owner, on each clock answer: retry errored 'now' debts
 export function resetReads(qc: QueryClient): void;           // epoch++; drop owed reads, holds, ledgers
@@ -502,26 +524,32 @@ This is TanStack's documented norm for concurrent optimistic updates ("invalidat
 `settleMemberWrite` (non-optimistic tag and collection writes) uses the same `holdReads` plus `revalidate`, so no read can interleave regardless of microtask order.
 
 **Decision 10 (extended): interaction holds, and one draft rule for every curation editor.**
-- **Kanban drag:** an imperative `holdReads` in `onDragStart` over `actingKey(actAs, board|members|stages)`.
+- **Kanban drag:** an imperative `holdReads` in `onDragStart` over `actingKey(actAs, board|members|stages)` (`BOARD_GESTURE_HELD` plus the stages).
   - Stages are included because they are the droppable columns.
   - `onDragEnd` calls `move.mutate(plan)` first (its own hold registers), **then** releases the drag hold. `onDragCancel` and unmount also release it (`Pipeline.tsx:870-884` [V]).
-- **Phone pager** (`PhonePipeline.tsx:241-268` [V]):
-  - `settle(i)` also sets `remembered.current`;
-  - `target` stores a **stage id**, not an index;
-  - `useReadHold([board, members], gestureActive)` covers an active touch or pager scroll.
+- **Phone pager** (as built: `components/phone/PhonePipeline.tsx`, `components/phone/usePagerGesture.ts`, `lib/phonePipeline.ts`):
+  - the stage on screen is state, by id, with the index it was last shown at, and it is the one remembered (`writeLastStage`); there is no remembered ref. `stageOnScreen(pages, id, previous)` shows it while it exists, the page now in its place (its neighbour) once it is archived elsewhere, and the entry stage before any page was shown;
+  - a tab tap's target is a **stage id**, not an index;
+  - `useReadHold(BOARD_GESTURE_HELD, gesture)` (the board and members, `lib/queries`; the drag adds the stages) holds while a finger is on the pages or they are still scrolling. Only fingers that came down on the pages count. A finger's touchend and touchcancel go to the node it came down on even once that node is removed (a stage archived elsewhere, a tag chip re-drawn by its own read), and a removed node's events never bubble to the pager, so each counted finger's own node is listened to: such a finger holds until it lifts. Every lift, a touchcancel too, keeps the fingers the event still lists that are on the pages or already counted. Scrolling ends after 150 ms without a scroll event (`SCROLL_IDLE_MS`, React 18 has no `onScrollEnd`); the pager's own landing after a reorder or a resize is no gesture.
   - The stage sheet already re-resolves its card [V·r].
-- **`lib/useServerDraft.ts`** (new):
+- **A hand on a Browse, Feed or collection list** (W6): Decision 7b. Lighter than the two above (`parkReads`): it parks only the scheduler's own re-reads, so the list's first load, its pages and its own refetch pass.
+- **`lib/useServerDraft.ts`** (as built):
 
   ```ts
-  /** A field edited over server state: follows the server while untouched; saves only what the user changed. */
-  export function useServerDraft(server: string): {
-    value: string; onChange(v: string): void; onFocus(): void; onBlur(): void;
-    edited(): string | null;   // null = the user changed nothing (a server change is never written back)
-    reset(): void;
+  /** A field over `server`: follows it while untouched, keeps the user's draft once they change it. */
+  export function useServerDraft<T extends string>(server: T, normalize: (v: T) => T = asIs): {
+    value: T; normalized: T;                       // what the field shows; that through normalize (what a save sends)
+    onChange(v: T): void; onFocus(): void; onBlur(): void;
+    bind: string extends T ? DraftBind : never;   // <input {...draft.bind} />: a free-text draft only (a colour has none)
+    edited(): T | null;   // null = no net change, or the server already holds it (a server change is never written back)
+    saved(): void;        // the draft went to the server: the next server value, whatever it is, ends it
+    reset(): void;        // drops the draft and the focus (an editor opening or closing)
   };
+  export const trimDraft: (v: string) => string;   // the normalize of a field saved trimmed
   ```
 
-  - It is used by `StageEditorRow` (label and code, D3), TagEditPopover, the CollectionDetail rename, PhoneCollectionDetail, the CurationBlock note body and ArtifactLinkRow.
+  - Focus does not freeze an untouched field: it follows the server while focused (the tag popover autofocuses its name field for its whole life). The user's first change starts a draft over the value they saw; it ends, unfocused (at the blur, at once on a control with no focus), when it equals its base or the server has reached it, and `edited()` is null in both cases.
+  - It is used by `StageEditorRow` (label and code, D3), TagEditPopover (name, colour), both collection rename editors through `lib/useCollectionEditor`, the CurationBlock note body, its viewing **day and time as two drafts** (so a time-only edit saves the time on whatever day the note holds by then, never the day the editor opened on), and ArtifactLinkRow (an empty field asks for a whole address, as before W2).
   - ArtifactLinkRow's `setQueryData`-on-success is replaced by `revalidateTables(['property_artifact_links'])` (done in W1, #2205; W2 adds only `useServerDraft`).
 
 **`frontend/src/lib/curationSyncOwner.ts`: THE owner.** It is a plain module: no React state and no query-cache entry.
@@ -545,7 +573,7 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 
 **Decision 12 (rewritten): the owner owns every trigger, and every trigger is visibility-gated.**
 - **Interval:** `SYNC_INTERVAL_MS[frame]` from the last read's start (and never sooner than 1 s after its answer) while `document.visibilityState === 'visible'`; the frame is `isPhoneFrame()`, read at each answer. Hidden means no timer and zero requests: hiding aborts a read in flight and drops a pending nudge [V, W4].
-- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now. A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V]. A read still in flight that started under 1 s ago is already the shown page's, so the pair a bfcache restore fires reads once. With none in flight, a show under 1 s after the last start reads once that second has passed: the hide before it aborted that read or disarmed the next, and a sub-second tab flick must still leave the interval running [V, W4].
+- **`visibilitychange`→visible and `pageshow`:** abort any in-flight read and read now (in permanent-error mode a show is one more trigger, spaced 60 s, and aborts nothing). A read in flight across an iOS suspension could otherwise hang until `PG_DEADLINE_MS` (20 s) [V]. A read still in flight that started under 1 s ago is already the shown page's, so the pair a bfcache restore fires reads once. With none in flight, a show under 1 s after the last start reads once that second has passed: the hide before it aborted that read or disarmed the next, and a sub-second tab flick must still leave the interval running [V, W4].
 - **`focus`, `online` and the nudge** (coalesced over 100 ms): request a read, ignored while hidden, coalesced with the read in flight (one follow-up), and never less than 1 s after the last read started. As built, each asks for a read that starts after it: `focus` also takes one that started under 1 s before it (a desktop tab switch fires `visibilitychange` then `focus`, one read), `online` and the nudge do not (a read from before cannot have reached the server, or seen that commit) [V, W4]. A trigger that is already due reads at once; the start's first read waits one task, so a StrictMode remount sends one request.
 - **Errors:**
   - Transient (network, the 20 s deadline, 5xx, 408, 429, and 401): interval of 5 s × 2ⁿ, capped at 60 s, reset on success. As built, a 401 is transient: it is a session supabase-js has not yet refreshed (it falls back to the anon key, whose read answers 401), which passes by itself; the kill switch answers a signed-in read 403 [V, W4].
@@ -553,7 +581,7 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
   - No toast and no retry storm. An answer whose processing throws is logged, and its follow-up and the interval go on [V, W4].
 - The global focusManager is untouched (R12), and `refetchOnWindowFocus:false` stays, with its reason now stated: the owner supersedes it.
 - `applySyncQueryDefaults` sets `refetchOnReconnect:false` on `SYNC_ROOTS`, so the clock read is the single reconnect path for curation and hidden tabs stay at zero cost. Browse lists keep today's behaviour. `main.tsx` calls it beside the owner (W4; W1 left it uncalled until the clock read existed) [V, W4].
-- The nudge is posted from one `MutationCache` subscription on every mutation `success`, held by the owner (`qc.getMutationCache().subscribe`), so `stop()` ends it and a signed-out window posts nothing [V, W4]. Under W0, success means committed. Without `BroadcastChannel` the owner neither posts nor listens and still reads on its other triggers, and the whole owner is gated on `isSupabaseConfigured()`.
+- The nudge is posted on every committed write: `lib/mutationCache`'s `onSuccess` tells the listeners of its cache (`onCommittedWrite`), and the owner listens, so `stop()` ends it and a signed-out window posts nothing. The cache's `onSuccess` runs before the hook's own, so a write whose `onSuccess` or `onSettled` throws (which query-core then settles as an error) still nudges [V, #2244]. Under W0, a resolved write means committed. Without `BroadcastChannel` the owner neither posts nor listens and still reads on its other triggers, and the whole owner is gated on `isSupabaseConfigured()`.
 
 **Decision 13: mount `useCurationSync(loading ? null : userId)` in `AuthProvider`, declared after the identity effect.**
 - React runs the changed cleanups before the setups, so an account switch runs **stop → `resetReads` + `clear()` → start**.
@@ -569,7 +597,7 @@ export function fetchCurationClock(o: { signal?: AbortSignal }): Promise<ClockRo
 | hourly TOKEN_REFRESHED | nothing: keyed on `userId`; each read calls `getSession()` (`index.mjs:524-529`) [V·r] |
 | account switch, sign-out | stop → reset + clear → start / nothing |
 | hidden | no reads; a read in flight is aborted |
-| shown, pageshow | abort and read now |
+| shown, pageshow | abort and read now; a show under 1 s after the last start keeps the read in flight (a bfcache restore fires both events: one read) or, with none, reads once that second has passed; in permanent-error mode a show waits out the 60 s spacing and aborts nothing |
 | focus, online, nudge | one read, ≥ 1 s gap, visible only |
 | PostgREST or DB down | transient back-off; first good answer diffs against the last good one; errored debts re-paid ≤ 3× |
 | kill switch | permanent-error mode: ≤ 1 read per 60 s per triggered window; app equals today's, except that curation does not refetch on reconnect (`applySyncQueryDefaults` holds whatever the owner's state) |
@@ -614,14 +642,19 @@ def require_acting_account_id(conn: TenantConn, ...) -> uuid.UUID: ...
 
 Formulas:
 - **Clock reads:** visible windows ÷ T × ~1.8 KB, at ~2.3 ms of DB each (`pipeline_stages_public` mean 2.28 ms over 2,426 calls) [V·r].
-- **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets (under the unruled Q3(b), plus the lens aggregates mounted; under the ruled Q3(a) they wait for the next mount). Coalesced per answer per window. The self-echo is included.
+- **Change fan-out:** for each change of family F of account A, Σ over visible windows of A (and of board recipients) of F's *mounted* targets, the lens lists and aggregates of every mounted Browse cohort included (ruling Q3(c), W6; under Q3(a), W1–W4, they waited for the next mount). A list under a hand pays once, at the leave. Coalesced per answer per window. The self-echo is included.
 
 | Scenario | Clock reads | Fan-out |
 |---|---|---|
-| Today (~5 visible windows, ~30 changes/day) | 1 read/s ≈ 0.0023 vCPU (0.19 % of the 1.21 vCPU baseline [V·r]), ~4 GB/month [A] | ~30 × 2 windows × ~0.3 MB ≈ 18 MB/day [A]: noise |
-| 1,000 accounts, ~325 visible windows [A], 50 changes/account/day [A] | 65 reads/s ≈ 0.15 vCPU; ~90 GB/month at 10 h × 22 d [A] | 50k changes × ~2 windows × ~0.3 MB [A] ≈ 30 GB/day ≈ 660 GB/month before coalescing (≈ $37/month over the 250 GB quota at $0.09/GB [V·r]) |
+| Today (~5 visible windows, ~30 changes/day) | 1 read/s ≈ 0.0023 vCPU (0.19 % of the 1.21 vCPU baseline [V·r]), ~4 GB/month [A] | marks: ~30 × 2 windows × ~0.3 MB ≈ 18 MB/day [A]; with the Browse map (W6): ~30 × 2 × ~0.8 MB ≈ 48 MB/day [A]: noise |
+| 1,000 accounts, ~325 visible windows [A], 50 changes/account/day [A] | 65 reads/s ≈ 0.15 vCPU; ~90 GB/month at 10 h × 22 d [A] | marks: 50k changes × ~2 windows × ~0.3 MB [A] ≈ 30 GB/day ≈ 660 GB/month (≈ $37/month over the 250 GB quota at $0.09/GB [V·r]); with the Browse map (W6): 50k × 2 × ~0.8 MB ≈ 80 GB/day ≈ 1.76 TB/month (≈ $136/month over the quota), before coalescing |
 
-- **The dominant term under Q3(b) would be the Browse map**: up to 22 MB [V], typically ~0.5 MB [A], re-read in every visible Browse window of the account on each remote dismissal or pipeline change. **Ruling Q3(a) removes it** (`LENS_REREAD.aggregates = 'mount'`), so the fan-out column above is an upper bound; per-answer coalescing still caps bursts of mark re-reads.
+- **The dominant term is the Browse map**: up to 22 MB [V], typically ~0.5 MB [A], re-read in every visible Browse window of the account on each remote dismissal, pipeline, tag or collection change whose lens its cohort engages. Ruling Q3(a) had kept it out (`LENS_REREAD.aggregates = 'mount'`); **ruling Q3(c) (2026-11-01, W6) puts it back in** (`'now'`), with the list's pages (a re-read refetches every loaded page) and the count and stats beside it. The W6 row above is an upper bound: it counts every visible window as a Browse window whose cohort engages the lens, and per-answer coalescing folds a burst of changes into one re-read per window. A 22 MB map (an unbounded cohort at full pin budget) on every change would be ~44× the typical figure; the `load` cell (§ 3.9) and gate #2203's Browse RPC line are where it would show.
+- **The self-echo now reaches Browse too:** the writing window's own clock answer owes its Browse lists and aggregates `'now'`, so a curation click on Browse re-reads its count, map and stats once more at its echo (coalesced per answer) and its list, every loaded page, once no hand is on it. The click itself still refetches no list (ruling 9); its echo does, as follows (W6 review, stated, not changed):
+  - A triage run with the pointer resting on the grid refetches the list once, at the leave.
+  - On the phone the finger lifts between taps, so a triage run on the Feed refetches the whole roll at about each clock answer that carries its echo: at most one per 15 s, e.g. ~4 refetches of every loaded page in a minute's run, against 0 under Q3(a).
+  - On the desktop a pointer moved to the map between clicks (the hover sync) pays the refetch at each leave; coming back while it is in flight cancels it (`parkReads`: it would land under the hand) and the pages it had fetched are wasted; the next leave starts it again. A delay before paying would only move that window, not close it.
+  - Skipping the echo's list targets needs to know which families the window's own committed writes bumped: the counter delta alone cannot tell an echo from a change made elsewhere in the same clock window, and skipping on a guess would leave that change unfollowed, against Q3(c). That accounting (each local write's families, across its ~45 call sites) is follow-up F15; whether this cost stands until then is the operator's call (owed with W6).
 - The phone frame at 15 s cuts phone clock reads by 3×.
 - The F7 doorbell (not built, ruling Q2) would cut clock-read cost (T relaxes to 30 s) but **not** fan-out.
 - **Breakpoints:**
@@ -651,11 +684,12 @@ Cells:
   - This is exact because events are written only in the transaction of a `property_pipeline` change (`api/pipeline.py:280,326,380`) [V·r].
   - `now()` is the transaction start, which is ≤ the bump's `clock_timestamp()`.
   - The seed makes it hold from the moment of apply.
+  - A day with no card event is OK and says "no card events in the last 24 h" [V, #2244].
 - `reads` (W4): **Watch** (never paged) when the `pg_stat_statements` call count for `curation_clock_public` has not advanced for 24 h (`THRESHOLDS["CURATION_CLOCK_QUIET_H"]`). As built, the count is the entries run as `authenticated` whose text names the view (the pattern is a bound parameter, so the check's own statement never matches; a verification query run as postgres never counts). `quiet_since` is carried forward in the cell facts through `previous_result`; an evicted entry (fewer calls, no reset) is no advance, a statistics reset (`pg_stat_statements_info.stats_reset`) with calls since is one. Not measured without the extension (CI; the PREPARE sweep allowlists the read, the `cron.` precedent), and Not measured when the worker sees an `authenticated` entry's text as `<insufficient privilege>` (its role lacks `pg_read_all_stats`, so the pattern could match nothing) [V, W4]. Whether the worker's role holds `pg_read_all_stats` in production, and PostgREST's read being recorded under `authenticated` (it runs after `SET LOCAL ROLE`), are [A].
 - `load` (W4): **Watch** when the clock read's share of total statement time (`total_exec_time`) between two measurements is ≥ 5 % (`THRESHOLDS["CURATION_CLOCK_LOAD_PCT"]`, the re-costing trigger). A first measurement, a statistics reset or an evicted entry takes a baseline: the cell is Not measured (`unknown`, its facts kept for the next run). It is Not measured wherever `reads` is, for the same reasons [V, W4].
 
 Registry edits (W3):
-- `CHECKS` (and the comment "these thirteen" → fourteen; the budget arithmetic comment at `verify_pipeline.py:449` becomes 7 × 45 + 180 + 5 + 5 = 505 s: when every alarm falls due at once, the last one defers one pass, an existing tested path).
+- `CHECKS` (and the comment "these thirteen" → fourteen; every worker alarm due at once owes `WORKER_ALARMS_DUE_AT_ONCE_S`, computed from the registry in `scripts/verify_pipeline.py` since #2244, 505 s: past the worker's 500 s pass, so the last alarm defers one pass, an existing tested path).
 - `THRESHOLDS`.
 - `tests/scripts/test_verify_pipeline.py`: `_WORKER_KEYS` (`:55-58`), the owner/domain map (`:455-474`), and the non-default budget map (`:424`).
 - `tests/toolkit/test_system_alerts_replay.py` `_REGISTRY` (`:46-53`): `"curation_sync": ("alarm", 3600, _RW)`.
@@ -742,12 +776,13 @@ Each wave is one PR, with a draft PR opened early.
 - **Claim:** claim the wave ticket (`python3 -m scripts.ticket_claim claim <n>`). The PR says `Closes #<wave>`; it uses `Refs #<spec>` (and `Refs #<gate>` where a gate is owed).
 - **Merge:** merge `origin/main` and get CI green on the light; merge-coordinator light; Railway commit status after merge (`gh api repos/{owner}/{repo}/commits/<sha>/status`).
 - **Build:** one heavy agent at a time locally.
-- **Order:** W0 ∥ W1 ∥ W2, then W3 (after W0 is **live**), then W4 (after W1 and W2 merged and 696 applied). There is no W5: ruling Q2 needs no doorbell (F7).
+- **Order:** W0 ∥ W1 ∥ W2, then W3 (after W0 is **live**), then W4 (after W1 and W2 merged and 696 applied). There is no W5: ruling Q2 needs no doorbell (F7). W6 (ruling Q3(c), 2026-11-01) follows W0–W4 and the post-review fixes, all live.
 
 **Tickets** (filed 2026-10-31):
 - spec #2197 `Curation sync (U-SYNC)`;
 - W0 #2198, W1 #2199, W2 #2200, W3 #2201, W4 #2202;
 - `gate` #2203 after W4 (blocked by W4);
+- W6 #2303 (filed 2026-11-01, on the Q3 re-ruling);
 - F-items: `ready-for-human` where a ruling is needed, `ready-for-agent` where complete.
 
 **Docs budgets:** CLAUDE.md is **not touched** (15 B free [V]). ROADMAP edits are byte-neutral or smaller (27 B free on 2026-10-31 [V]). Database SKILL.md (270 B free [V]) gets at most two pointer phrases; the rest goes to `references/tenancy.md` (uncapped).
@@ -808,12 +843,13 @@ Each wave is one PR, with a draft PR opened early.
   - (b) `TENANT_TABLES ⊆ CLOCKED ∪ NOT_CLOCKED`; every reason non-empty.
   - (c) the newest family CHECK == `CURATION_FAMILIES` (TS) == the families in `CLOCKED_TABLES` == the seed's families.
   - (d) every clock trigger is `constraint … after insert or update or delete … deferrable initially deferred … for each row`.
-  - (e) nothing silences a clock trigger without a `-- ci-allow-clock-disable: <reason>` line of its own: in a migration or in code, `DISABLE` or `ENABLE REPLICA` of a `*_curation_clock` trigger (or `all` / `user` on a clocked table, also as one action of several in an `ALTER TABLE`), or `session_replication_role`; in a migration after 696, a redefinition of `bump_curation_clock()`.
+  - (e) nothing silences a clock trigger without a `-- ci-allow-clock-disable: <reason>` line of its own: in a migration or in code, `DISABLE` or `ENABLE REPLICA` of a `*_curation_clock` trigger (or `all` / `user` on a clocked table, also as one action of several in an `ALTER TABLE`, or a `format()` placeholder that could name either), or `session_replication_role`; in code or a migration after 696, a TRUNCATE of a clocked table (row triggers never fire on it) or a redefinition of `bump_curation_clock()`.
   - (f) no clock trigger on `listings|properties|listing_snapshots`.
   - (g) no `x-sync-origin` or origin GUC in `api/`; nothing in code or migrations but 696 names the dedupe GUC `curation_clock.bumped`.
   - (h) no DML on `curation_clock` in `api/ toolkit/ scraper/ scripts/ autodedup/` or in any migration after 696; 696 writes it exactly twice (the bump and the seed).
   - (i) the policy's board arm families map to tables == `_BOARD_POLICIES` tables ∩ `CLOCKED_TABLES`; the edit arm == (`_ACTING_POLICIES` − board) ∩ `CLOCKED_TABLES`; `shares` appears only in the `mine` arm.
-  - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)`.
+  - (j) `THRESHOLDS["CURATION_CLOCK_TRIGGERS"] == len(CLOCKED_TABLES)` == the count 696's `$post$` asserts.
+  - (k) no family is a suffix of another: the dedupe GUC's `<family>:<account>;` entries are found by `strpos` (#2244).
 - `tests/test_curation_clock_live.py` + a `.github/workflows/migrations.yml` step beside `test_pipeline_shares_live` (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED: "1"`), else `test_live_lanes_census.py:100-105` fails [V·r].
 - The health check with the `triggers` and `board_bumps` cells (§3.9) and its registry edits.
 - No CI bootstrap change [V·r].
@@ -824,7 +860,7 @@ Each wave is one PR, with a draft PR opened early.
   - `health-dashboard.md` § 4;
   - `pipeline-verification.md`;
   - track bullet.
-- Apply via MCP `apply_migration` **before merge**, and tell the coordinator. Verify with the §9 catalog row.
+- Apply **before merge**, and tell the coordinator. Verify with the §9 catalog row. As built: applied through `apply_migration.yml` (run 41204108856, 2026-10-31 13:07Z), merged 13:31Z (§ 12).
 
 **W4 `feature/curation-sync` (SPA owner). After W1, W2 and the 696 apply.**
 - New: `lib/curationSyncOwner.ts` + test.
@@ -851,6 +887,15 @@ Each wave is one PR, with a draft PR opened early.
 
   If it fails, use the reader kill switch (§3.9) and reopen W4. If the API raises commit-time 5xx caused by the clock, use the writer switch. Whoever closes the gate flips `ROADMAP.md:47` back to 🟢.
 
+**W6 `feature/curation-sync-browse-follows` (SPA, no DB; #2303). After W0–W4 and the post-review fixes, live.** Ruling Q3(c) with the pointer hold (2026-11-01).
+- `lib/curationSync.ts`: `LENS_REREAD = { lists: 'now', aggregates: 'now' }`, its comment the ruling.
+- New: `lib/useListHold.ts` + test (Decision 7b); `lib/fingers.ts` (`trackFingers`, moved out of `components/phone/usePagerGesture.ts`, which imports it).
+- `lib/revalidate.ts`: `parkReads` (a hand: parks the scheduler's own payments, cancels no read the list starts, no TTL); holds carry a `park` flag, and only a write's or a gesture's hold cancels reads that start under it.
+- Mounted on: `components/ListingCards.tsx` (`hand` prop, spread on the grid) from `components/BrowseExperience.tsx`; `pages/Feed.tsx` (the roll); `pages/CollectionDetail.tsx` `Members`; `pages/phone/PhoneCollectionDetail.tsx` (the roll); `pages/phone/PhoneBrokerDetail.tsx` (the roll). `lib/browseKeys.ts` `cohortCards(f)` and `lib/collectionCards.ts` `collectionListKeys(id)` name the collection page's lists.
+- Tests: the W6 lines of § 9; the `'mount'` pins of `curationSync.test.ts`, `curationSettle.test.ts` and `curationSyncOwner.test.ts` rewritten to `'now'`; the stale-side tests unchanged.
+- Docs: this document (Decisions 7 and 7b, § 3.8, § 7 risk 15, § 8 Q3, § 9, § 12), `docs/architecture.md` (Frontend territory and the rule-22 settle passage), the track. `GLOSSARY.md` is unchanged: its Curation sync entry never said a list waits for navigation.
+- After the deploy: the Railway status, then the operator's recipe step 4 (§ 9) on the desktop. **Gate #2203's Browse RPC line** ("map/stats/count calls per day ≤ baseline + 25 %") was set under Q3(a), which kept those reads out of the fan-out; W6 puts them in, so that line is re-baselined on the 7 days after W6's deploy, not judged against the pre-W6 baseline.
+
 ## 7. Risks and mitigations
 
 | # | Risk | Mitigation |
@@ -868,8 +913,8 @@ Each wave is one PR, with a draft PR opened early.
 | 11 | A hygiene migration silences the clock | Census (e) incl. named disables; `triggers` cell |
 | 12 | Swallowed re-read (initial load, inactive in-flight, hold cancel, manual setData) | Owed reads (Decision 14) |
 | 13 | Startup race | Duration rule (Decision 14b) + start-time owe |
-| 14 | Leaked hold | Epoch reset; TTL 140 s online time + warn |
-| 15 | Rows, counts, map and stats of an open list stay as read until navigation (ruling Q3a) | Marks repaint now; a click on a row a remote change left stale is settled by the stale-side rule (Decision 7): under a stale map nothing drops and a cohort that still says no re-reads whole; under a stale list a click that leaves the row out drops it in place and only the aggregates re-read |
+| 14 | Leaked hold | A write's or a gesture's hold: epoch reset; TTL 140 s online time + warn. A hand's park (W6, `parkReads`) has no TTL by design (a pointer resting on a list for minutes is the normal case): the hand's leave, the list's unmount, the epoch reset, or a pointerover anywhere outside the list (the document-level backstop) ends it. Not caught by those: a touch whose touchend and touchcancel never arrive (the next touch on the list, or the unmount, ends it), and a pointer that leaves the browser window without a pointerleave (its next pointerover ends it). Keyboard focus is no hand, so focus lost to a removed node holds nothing |
+| 15 | Rows of an open list stay as read while a hand is on it (ruling Q3(c) 2026-11-01; until then Q3(a): rows, counts, map and stats until navigation) | Marks, counts, map and stats re-read now; the rows move at the leave (Decision 7b); a click on a row a remote change left stale is settled by the stale-side rule (Decision 7): under a stale map nothing drops and a cohort that still says no re-reads whole; under a stale list a click that leaves the row out drops it in place and only the aggregates re-read |
 | 16 | Self-echo cost | ≤ 1 family re-read set per answer per writing window; accepted |
 | 17 | Nudge before commit | Resolved by W0 (success = committed) |
 | 18 | A window left visible overnight | ≈ 17k reads/day ≈ 31 MB; F12 idle back-off only if measured |
@@ -881,7 +926,7 @@ Each wave is one PR, with a draft PR opened early.
 | 24 | A note deleted elsewhere while edited unmounts its editor and loses the draft | Accepted (the note no longer exists); last-writer-wins otherwise (Q5) |
 | 25 | A dead clock read is invisible (no client telemetry, `lib/lazyChunk.ts:123-129` [V·r]) | Read-contract test; `reads` cell |
 
-## 8. Rulings (operator, 2026-10-31: all five in; Q3 as (a), the rest as recommended)
+## 8. Rulings (operator, 2026-10-31: all five in; Q3 as (a), the rest as recommended; Q3 re-ruled (c) with a pointer hold 2026-11-01)
 
 **Q1. Which statuses follow across windows? RULED: all curation plus the pipeline and collection shares; nothing else.**
 - (a) **In:** stage, Skryto, Kolekce, Štítky, Poznámky/Prohlídky/soubory, Odkaz, share grants and revokes.
@@ -894,10 +939,10 @@ Each wave is one PR, with a draft PR opened early.
 - (c) **Phone screen (under 768 px): a read every 15 s while open**, and at once when the app is reopened. A request every 5 s keeps the phone's radio awake [A].
 - (b) ≈ 1 s via a Realtime doorbell: **not built**; follow-up F7, only on a future ≈ 1 s ruling. It would add a WAL-decoding slot (cost unmeasured), a CI shim, a dashboard toggle and a feature without a GA label, and open a revocation window: a recipient whose share is revoked keeps receiving content-free "something changed" pokes until their login token refreshes (≤ 1 h at Supabase's default [A]).
 
-**Q3. An open Browse, Feed or collection list when a property changes on another device. RULED: (a).**
-- (a) **Everything the list shows (rows, counts, map, stats) stays as read until you navigate; only the per-card marks update.** Cheapest, and fully consistent: `LENS_REREAD = { lists: 'mount', aggregates: 'mount' }` (Decision 7). The window's own writes keep today's behaviour, read as ruling 9's per-property judge (§ 12).
-- (b) *Recommended, not ruled:* counts, map and stats update within seconds; rows refresh on the next navigation. A later ruling would switch `aggregates` to `'now'`; the stale-side rule is already built (Decision 7).
-- (c) *Not ruled:* rows also enter and leave while the pointer is outside the list; each change re-reads every loaded page.
+**Q3. An open Browse, Feed or collection list when a property changes on another device. RULED (a) 2026-10-31; RE-RULED (c) + pointer hold 2026-11-01.**
+- (a) *Ruled 2026-10-31, built W1–W4, superseded:* everything the list shows (rows, counts, map, stats) stays as read until you navigate; only the per-card marks update. `LENS_REREAD = { lists: 'mount', aggregates: 'mount' }`. The window's own writes keep today's behaviour, read as ruling 9's per-property judge (§ 12).
+- (b) *Not ruled:* counts, map and stats update within seconds; rows refresh on the next navigation.
+- (c) **RULED 2026-11-01 (W6), with a pointer hold: an open Browse, Feed or collection list follows a change made elsewhere fully. Rows enter and leave, and counts, map and stats update, within one clock read. List re-reads HOLD while the pointer is over the list (and during an active touch on the phone) and apply when the pointer leaves, so nothing shifts under the user's hand. Aggregates (counts, map, stats) are never held.** `LENS_REREAD = { lists: 'now', aggregates: 'now' }` (Decision 7); the hold is Decision 7b (the pointer and a finger, as ruled; keyboard focus is no hand); each change re-reads every loaded page of the list, the self-echo's included (§ 3.8). The window's own writes are unchanged (ruling 9's judge, the stale-side rule).
 
 **Q4. The Chrome extension as a receiver. RULED: (i), it stays a sender.** Re-reading what is on screen when the portal tab becomes visible (ii) is follow-up F1.
 
@@ -919,17 +964,29 @@ Each wave is one PR, with a draft PR opened early.
   - ledger: A fails while B is pending on `members` → B's patch survives (ii); A fails after B fails → no resurrection; a count patch is never double-applied; an outside write becomes the base, never patched twice; a patch keeps its base's read time through a paint and a rollback;
   - epoch: after `resetReads`, an old rollback or release paints and parks nothing (vi), and a settle releasing an old hold owes nothing;
   - TTL counts only online time; `HOLD_TTL_MS` equals `REQUEST_DEADLINE_MS + 10_000`;
+  - `parkReads` (W6): parks an owed read until the release, then pays it once; cancels a payment in flight when the hand arrives and keeps it owed; lets a page, the list's own refetch and a first load pass, and cancels no first load in flight; has no TTL; composes with a write's hold (its patch paints, its settle frees only its own hold, one read at the hand's release);
   - release + settle keys → exactly one fetch (the D1 regression, using the real `createMutationCache()` and the `deferred()` helper, as in `useOptimisticWrite.test.tsx:37-47`).
 - `lib/curationSync.test.ts`:
   - every `SyncTable` × {own, owner}; owner targets are `['acting',O,…]` only (Decision 8);
   - `pipeline_stages` reaches `members` (D2);
   - `tableReads(['property_pipeline','property_dismissals'], null)` is set-equal to `[members, board, dismissals]`;
   - `clockChanges` changed/appeared/disappeared/unchanged, and the first-answer age rule;
-  - `LENS_REREAD` targets: a remote lens change owes Browse lists and aggregates `'mount'` and nothing `'now'`; an open collection page waits for its next mount while the marks re-read now;
+  - `LENS_REREAD` targets (rewritten in W6): a remote lens change owes Browse lists and aggregates `'now'` and re-reads a mounted cohort's list and count at once with the marks; a cohort cached but not on screen is read when shown again; an open collection page is owed `'now'`; a dismissal also owes the Feed's Skryté roll as a list, never an owner's (W6 review repair);
   - key-coverage census; local-write keys covered by their tables.
 - `lib/curationSettle.test.ts`:
   - an aggregate re-read in flight at click time → `browse-count` correct after settle (i);
   - the stale side, both branches, each with a click that leaves the row out: a member map that is owed, or was read before the list, says "no" → that cohort re-reads whole and nothing drops; a map read no earlier than the list, nothing owed, says "no" → the row drops in place and only the aggregates re-read.
+- `lib/useListHold.test.tsx` (W6; a remote change arrives as W4's owner delivers it, `revalidate(qc, familyTargets(qc, family, null))`):
+  - a remote dismissal re-reads the count, map and stats at once while the rows stay under a resting pointer (a second change too), and the rows move, in one list re-read, once the pointer leaves; with no hand the row leaves at once;
+  - a pointerover outside the list ends the hand (a portal closed under the pointer);
+  - a remote pipeline stage change moves a row from one stage cohort to the other, into its sort position; a hand on one list holds only that list;
+  - a page fetched under the hand lands; the held change lands at the leave, every loaded page refetched from the first;
+  - a new order chosen under the hand loads at once (it fails with `holdReads` in place of `parkReads`);
+  - a click of the user's own under the hand composes: the row drops in place, the count re-reads, the change made elsewhere waits for the leave, one list re-read then;
+  - a finger holds from touchstart until the last one lifts;
+  - keyboard focus is no hand (W6 review repair): a focus inside holds nothing, and a focused row the user's own click removed holds nothing once the pointer leaves (both failed as first built);
+  - `useHeld`: a value held in the view, its read landing at once with its count while the rows stay as drawn until the pointer leaves or the finger lifts, and following at once with no hand.
+- Page cases (W6): `components/BrowseExperience.test.tsx` (the count at once, the cards after the pointer leaves), `pages/Feed.test.tsx` (a property hidden elsewhere leaves the roll after the finger lifts; an open Skryté roll follows a hide and a restore made elsewhere), `pages/CollectionDetail.test.tsx` (a member removed elsewhere leaves the cards, and the table's rows, after the pointer leaves, the counts beside the cards and in the header at once; a row the user removes leaves at once, the pointer still over the members, and draws again once re-added elsewhere), `pages/phone/PhoneCollectionDetail.test.tsx` (after the finger lifts; the "Bez karty" lines wait under a finger, the header's count does not).
 - `lib/useServerDraft.test.ts`:
   - follows the server while untouched;
   - a server change while focused is never written back;
@@ -959,7 +1016,7 @@ Each wave is one PR, with a draft PR opened early.
 
 **Offline pytest:**
 - W0 `tests/api/test_tenant_conn_scope.py`;
-- `tests/test_curation_sync_census.py` (a)–(j);
+- `tests/test_curation_sync_census.py` (a)–(k);
 - `tests/test_curation_clock_read_contract.py`;
 - health registry pins;
 - existing rails unchanged (`test_migration_rls_grants` rules 2/3/5 and the stray-acting rail; tenant live sweeps; `test_pipeline_shares_live` exact `delegated_edits` counts, because the bump writes only `curation_clock`).
@@ -990,7 +1047,7 @@ Each wave is one PR, with a draft PR opened early.
 1. Two windows on `/pipeline`; move a card in B → A follows in ≈ 0.5 s.
 2. Move from the phone, then from the extension → A follows within 5 s.
 3. Rename a stage in B → A's column and the Browse badges follow.
-4. Dismiss on the phone → A's Browse card shows the eye; the row, the count, the map and the stats stay until A navigates (Q3a).
+4. Dismiss on the phone → A's Browse card shows the eye and its count, map and stats move within 5 s; with A's pointer resting on the cards the row stays, and it leaves once the pointer moves onto the map (Q3(c), Decision 7b).
 5. Minimise A, move on the phone, restore A → current.
 6. Drag in A while the phone moves another card → nothing moves until the drop.
 7. Revoke a share → the recipient toasts within 5 s.
@@ -1055,6 +1112,7 @@ Expected: `12 / false / false / ≥ 0 / advancing / 0 / ≤ 2.5`, plus the Railw
 - **F12** Idle back-off for visible but untouched windows, if measured.
 - **F13** A "moved elsewhere" cue.
 - **F14** An open property merged away elsewhere follows its survivor: re-read the open property when an own curation family moves.
+- **F15** The self-echo re-reads no list: each committed local write reports the families it bumped, and the owner skips the lens list targets of a family whose counter moved by no more than this window's own writes since the last answer (§ 3.8). Until then a triage run refetches the list at its echoes (≤ one per clock answer, on the phone about every 15 s).
 
 (F6 became W0.)
 
@@ -1200,14 +1258,14 @@ Where a wave built something other than the design, the section concerned now sa
 3. `pages/Pipeline.tsx` `useDragHold`: `holdReads` over `actingKey(actAs, board | members | stages)` at `onDragStart`; `onDragEnd` calls `move.mutate(plan)` first (its hold registers synchronously, the app's MutationCache has no `onMutate`), then releases; cancel and unmount release. Board and members parked by the drag are paid once at the move's settle; stages at the drop.
 4. `components/phone/PhonePipeline.tsx`: no `remembered` ref; the stage on screen is state seeded from `readLastStage`, switched to by id when it does not resolve (the neighbour after an archive, the entry stage when none), remembered by an effect; the tab-tap target is a stage id; `useReadHold([board, members], touching || scrolling)` with touchstart/touchend/touchcancel (a finger still down keeps the hold) and scroll events plus a 150 ms idle timer (`SCROLL_IDLE_MS`, React 18 has no onScrollEnd); the pager's own re-aim (`landPager`, after a reorder or resize) does not start the hold.
 5. `pages/CollectionDetail.tsx`, `pages/phone/PhoneCollectionDetail.tsx`: a cleared description is sent as `''` until #2208 teaches `PATCH /collections` to tell an explicit `null` from an absent field (`coalesce` reads `null` as "unchanged").
-6. Tests: `lib/useServerDraft.test.ts` 11; Pipeline (D3 rename, typed name kept and saved alone, a remote target during a drag lands after the drop, a drag started during a board re-read shows no repaint, unmount mid-drag); PhonePipeline (archive falls to the neighbour, a reorder during a tab-tap scroll lands on the tapped stage, a remote add during a touch waits, a scroll with no touch); D3 cases for the five other editors; full vitest 4332 after merging W1's final head.
+6. Tests: `lib/useServerDraft.test.ts` 13; Pipeline (D3 rename, typed name kept and saved alone, a remote target during a drag lands after the drop, a drag started during a board re-read shows no repaint, unmount mid-drag); PhonePipeline (archive falls to the neighbour, a reorder during a tab-tap scroll lands on the tapped stage, a remote add during a touch waits, a scroll with no touch); D3 cases for the five other editors; full vitest 4332 after merging W1's final head.
 
 **W3 (#2201), as built:**
-1. `migrations/696_curation_clock.sql` (the number is provisional until the merge coordinator's claim): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback). It applies statement by statement (no `begin`/`commit`; `if not exists`, `or replace`, and `drop … if exists` before the policy and each trigger), so a re-run of the file resumes a partial apply: the first apply (`apply_migration.yml`, 2026-10-31) ran as one transaction, held four trigger tables until COMMIT and deadlocked on the fifth (`collection_properties`); it rolled back whole. Census (a)'s locator reads `create table if not exists`, and (a)/(e) have bites for a later trigger drop and a later copy of 696.
-2. `tests/test_curation_sync_census.py` goes beyond § 6's first wording, and § 6 now says so. (a) replays drops and renames and checks each trigger's name. (c) adds the seed's families. (e) also catches `ENABLE REPLICA`, an action buried in a multi-action `ALTER TABLE`, code as well as migrations, and a later redefinition of the bump; an annotation counts only on a line of its own. (g) also covers the dedupe GUC. (h) pins 696's two writes. The review added the replay in (a) and the wider (e): `drop function … cascade` and `enable replica trigger` had passed every rail.
+1. `migrations/696_curation_clock.sql` (the number claimed with the merge coordinator 2026-10-31 12:08Z): `curation_clock_audience()` declares `ROWS 4`. With the default estimate of 1000, live item 11 (the read on `curation_clock_pkey` with 2,000 accounts) fails [V]. § 3.2 shows it. The migration also adds a COMMENT ON for the view and both functions, and a longer header (who follows whom, apply order, rollback). It applies statement by statement (no `begin`/`commit`; `if not exists`, `or replace`, and `drop … if exists` before the policy and each trigger), so a re-run of the file resumes a partial apply: the first apply (`apply_migration.yml`, 2026-10-31) ran as one transaction, held four trigger tables until COMMIT and deadlocked on the fifth (`collection_properties`); it rolled back whole. Under statement autocommit the `$post$` block rolls nothing back: a failed assert fails the apply and leaves the objects live, so the apply's exit status, the census and the health alarm are the gates (Decision 22). Census (a)'s locator reads `create table if not exists`, and (a)/(e) have bites for a later trigger drop and a later copy of 696.
+2. `tests/test_curation_sync_census.py` goes beyond § 6's first wording, and § 6 now says so. (a) replays drops and renames and checks each trigger's name. (c) adds the seed's families. (e) also catches `ENABLE REPLICA`, an action buried in a multi-action `ALTER TABLE`, code as well as migrations, and a later redefinition of the bump; an annotation counts only on a line of its own. (g) also covers the dedupe GUC. (h) pins 696's two writes. (j) also pins the count 696's `$post$` asserts. The review added the replay in (a) and the wider (e): `drop function … cascade` and `enable replica trigger` had passed every rail.
 3. `tests/test_curation_clock_live.py`: a fifth tenant E; item 6 counts firings and adds the property delete and the `account_id` move (§ 9). A trigger missing from `collection_properties`, `property_tags` or `property_attachments` had passed the first cascade case [V].
 4. `docs/architecture.md`: the DB half is a paragraph in rule 18 beside W0's (§ 6 lists it).
-5. The 696 apply (before the merge, after W0 is live) and its § 9 catalog check are owed; the 2026-10-31 attempt changed nothing (item 1).
+5. 696 was applied through `apply_migration.yml` (run 41204108856, 2026-10-31 13:07Z, after W0 was live; the number claimed 12:08Z), before the merge (#2217, 13:31Z); the first attempt that day changed nothing (item 1).
 
 **W4 (#2202), as built** (two commits on W3's head `cb1dcd054`, the owner `d8a55f59a`; W3's later head `a11b25382` merged in at the review, then the review repairs):
 1. `lib/curationSyncOwner.ts`: the owner as § 3.5 lists it, a closure per `startCurationSync(qc)` (no module state, no cache entry). Decision 12 and Decision 14b now say what it does where it refines them: `focus` takes a read that started under 1 s before it, `online` and the nudge need one that starts after them (the nudge keeps the newest receipt time over its 100 ms coalescing, so a nudge arriving inside that window is never answered by an older read); a show under 1 s after a read's start takes that read while it is in flight (a bfcache restore fires `pageshow` and `visibilitychange`: one read), and otherwise reads once that second has passed (a hide in between aborted the read or disarmed the next); hiding aborts the read in flight; the interval runs from the last read's start but never sooner than 1 s after its answer; a 401 is transient and a transient failure while in permanent-error mode keeps that mode; a due trigger reads at once, the start's first read one task later (StrictMode's remount stops it unsent); the next read is armed before an answer is processed, and a processing error is logged with the follow-up still run, so it cannot stop the loop; the first answer's time since start is the larger of the `performance.now()` and the `Date.now()` durations (Decision 14b).
@@ -1222,3 +1280,34 @@ Where a wave built something other than the design, the section concerned now sa
 10. Tests: `lib/curationSyncOwner.test.ts` 32 (every § 9 case, plus: hiding aborts a read in flight, a page that starts hidden reads nothing, a hide and show within 1 s after an aborted and after an answered read, a first answer after a sleep, an owner's row maps to acting reads, the start-time owe, an errored debt re-paid at most 3 times, a 401 backs off and resumes, an answer that cannot be processed, the nudge posted only on success, no `BroadcastChannel`, a signed-out window); `lib/auth.test.tsx` +2; `lib/phoneShell.test.tsx` +2; `tests/scripts/test_checks_curation_sync.py` 27 (21 new); `tests/test_curation_clock_read_contract.py` 3.
 11. Review repairs (the commit after the merge of `a11b25382`): a hide and show within 1 s of the last start had left nothing in flight and nothing armed, so a visible window stopped following curation until the next trigger (now Decision 12's show rule); a 401 left the owner in permanent-error mode with no way out but a trigger, so a window left alone after a failed token refresh stayed frozen (now transient; Risk 4); an answer whose processing threw lost its follow-up and surfaced as an unhandled rejection; `performance.now()` standing still across a device sleep could shrink the first answer's window (Decision 14b); `reads` counted fewer calls under the same reset as an advance, and read a masked statement text as zero calls; the kill-switch Lifecycle row now names the reconnect refetch `applySyncQueryDefaults` removes. `pipeline-verification.md`'s `curation_sync` table no longer breaks before its `reads` row.
 12. Owed after the merge: the Railway status, the § 9 read-only check, the operator's manual recipe (§ 9), then gate #2203's 7 days.
+
+**Post-review fixes (#2244), as built** (one PR after W0–W4 merged, from the six review reports on W2–W4; `frontend/src/` omitted):
+1. `lib/useServerDraft.ts`: a `bind` member (`DraftBind`, `{ value, onChange(e), onFocus, onBlur }`) for an input or a textarea, beside the explicit members, typed for a free-text draft only (`string extends T ? DraftBind : never`: an input types any string, which a narrowed draft such as TagEditPopover's colour would take unchecked; a `@ts-expect-error` test pins it); `normalized` (the value through `normalize`, what a save sends); `Draft.over` is `savedOver`; the internal settle is `dropFinishedDraft`. Every input call site spreads `bind` and reads `normalized` in place of a second `.trim()`; ArtifactLinkRow's hook result is `url`. Decision 10 states the hook as built. `lib/useServerDraft.test.ts` 15.
+2. `components/listing-detail/CurationBlock.tsx`: the note's viewing day and time are two drafts, each over its own server value, bound to the date and time inputs (`NoteViewing.tsx` `ViewingFields` takes `day` and `time` binds; the composer passes `slotFields(slot, setSlot)`); the day-time text codec is gone. A time-only edit saves the time on the day the note holds by then: the review found the old codec wrote the day the editor opened on back over one moved elsewhere.
+3. `lib/useCollectionEditor.ts` (new): the two collection rename editors' drafts, focus, save and `canSave`, with the `''`-for-a-cleared-description comment once, citing #2208.
+4. `components/listing-detail/ArtifactLinkRow.tsx`: a submit of an empty field, untouched or typed then cleared, shows `NOT_A_URL` and stays open, as before W2 (W2 closed it silently); a save still sends only what the user typed.
+5. `components/phone/PhonePipeline.tsx`: the page to show is `lib/phonePipeline.ts` `stageOnScreen(pages, id, previous)` (pure, tested; `initialStageIndex` and its dead `remembered` parameter are gone), over state that holds the stage on screen by id and the index it was last shown at, adjusted while rendering; the ref the handlers read is written in a layout effect, never during render. `components/phone/usePagerGesture.ts` (new) holds the gesture: only fingers that came down on the pages count (a finger lifting while another rests on the strip kept the hold for ever); each counted finger's own node is listened to for its touchend and touchcancel, because a node removed under the finger (a page archived elsewhere, or a tag chip that `PhoneCardTags` re-draws from its own read, re-rendering no page) still gets them and they never bubble to the pager, so such a finger holds until it lifts; every lift, a touchcancel too, keeps the fingers the event still lists that are on the pages or already counted. The pager spreads only `onTouchStart`. Tests: a finger lifting off the strip, a page archived and a tag chip re-drawn under a resting finger (each held until the lift on the removed node), a touchcancel that leaves a finger down; each fails on the W2 code or on the first post-review build.
+6. `lib/queries.ts` `BOARD_GESTURE_HELD` (board and members): the phone pager holds it, the drag holds it plus the stages (`pages/Pipeline.tsx` `DRAG_HELD`).
+7. `lib/curationSyncOwner.ts`: the baseline moves only after the answer's targets are computed and owed, so an answer whose `familyTargets` throws leaves its change to the next answer (a test with a throwing `familyTargets`); the transient test is every failure but a 4xx, plus 401, 408 and 429, each stated with its reason, and its comment says how it is wider than `lib/api` `isTransientApiError` (one request's retry now vs a read seconds later), without calling it (W4's predicate, unchanged); `monotonicNow` (not `clock`, the glossary term), `errors.permanentMode`, the loop's state in three small objects (`reads`, `errors`, `nudge`); `[ACTING_SEGMENT]` from `lib/acting` (now exported; `SYNC_ROOTS` uses it too); the start-time owe is one `revalidate(…, { skipInitialLoads: true })`, a new option of `lib/revalidate`, replacing `cachedReads`; the header keeps the why and points here. The nudge rides `lib/mutationCache` `onCommittedWrite`: the cache's `onSuccess`, which runs before the hook's own, tells its listeners, so a committed write whose `onSuccess` or `onSettled` throws still nudges (W4's `success` subscription missed it); a listener that throws is logged and fails no write; `stop()` unsubscribes (Decision 12). Tests: the targets are listed by hand, never asked of `familyTargets`; the `repayOwed` call count and `FakeChannel.created` gave way to behaviour (reads paid, one nudge per write); the `fetchCurationClock` test moved to `lib/queries.test.ts`; `lib/curationSyncOwner.test.ts` 33 (vitest's count), `lib/mutationCache.test.ts` 2, `lib/revalidate.test.ts` +1.
+8. `lib/phoneShell.ts`: `usePhoneShell()` renders `isPhoneFrame()`, the one definition; its store subscribes to the breakpoint and to the `storage` event for the override (`subscribeFrame`), so another tab's flip switches every reader in this one at once, as a rotation does, never each at its next render; tests pin the two equal across the breakpoint and the override, and two readers switching together on a `storage` event. `main.tsx`: the `applySyncQueryDefaults` comment says the defaults hold for the client's life while the owner runs only signed in with Supabase configured.
+9. `migrations/701_curation_clock_service_role_read.sql` (number claimed; independent of 697–700): the service role reads the clock table again, and still writes it never (§ 3.2). `tests/test_curation_clock_live.py` pins every role's read and write grant on the table and the view, and reads the table as `service_role`.
+10. `tests/test_curation_sync_census.py`: (e) also flags a TRUNCATE of a clocked table (code, or a migration after 696) and a `format()` placeholder that could name a clock trigger; new (k), no family a suffix of another; double-quoted identifiers are read, by (h)'s write match too (`UPDATE "curation_clock"`, `public."curation_clock"`, pinned); the create-trigger parse is one helper; the test names say what they pin, with the letter map and the census's blind spots in its header comment.
+11. `scripts/checks/platform.py`: one `_stored_facts` at every read of a stored cell's facts; `_EXTENSION_UNREADABLE` for pg_cron and pg_stat_statements, the latter adding 55000; one Not-measured exit for `reads` and `load`; no impossible empty-row fallback; `_CLOCK_TRIGGER_ARMED`, one clause counted and negated; `board_bumps` on a day with no card event says "no card events in the last 24 h" (OK). `scripts/verify_pipeline.py` `WORKER_ALARMS_DUE_AT_ONCE_S` (505 s, computed from the registry) replaces the arithmetic in five places, and `tests/scripts/test_verify_pipeline.py` pins it at the 505 s the docs state; the worker's comment names it, but the worker does not import it: the harness stays a lazy import of `_health_sync`, and no worker code reads the figure.
+12. Docs: § 3.2 (701, TRUNCATE, the GUC's real bound), Decisions 10, 12 and 22, the Lifecycle `shown` row, § 6 W3 rails (e), (j), (k), § 12 W2 item 6 (13 tests at merge), W3 items 1, 2 and 5 (696 was applied through the apply workflow, not owed, not by MCP); `docs/architecture.md` (the drag-hold sentence after the `onError` passage, `bind`, the two viewing drafts, the committed-write nudge, `isPhoneFrame`, 701); `references/tenancy.md` (service role reads, never writes; never TRUNCATE; the GUC bound; (a)–(k); `$post$` under autocommit); `GLOSSARY.md` (Nudge, Curation sync owner); the track's U-SYNC phase.
+13. Review repairs (the commit after `efc68a226`): 701 had also granted SELECT on `curation_clock_public`, which gave the service role nothing (the view calls `curation_clock_audience()`, whose EXECUTE only `authenticated` holds, and the audience reads the JWT), while five doc sites said the service role reads the view; it now grants the table alone, its `$post$` checks every role on both relations, and the live test reads the table as `service_role` and is refused the view. Census (h) missed a double-quoted write. The pager's detached-finger prune ran only when the pager re-rendered, so a finger on a tag chip its own read re-drew kept the board held for ever; and a touchcancel dropped fingers still down. `usePhoneShell` read the override live with no subscription, so another tab's flip switched this tab's readers one render at a time. `bind` accepted any string on a narrowed draft. The transient predicate's `isTransientApiError` arm added nothing.
+
+**W6 (#2303), as built** (ruling Q3(c) with the pointer hold, 2026-11-01; branch `feature/curation-sync-browse-follows` off `9916d620b`; `frontend/src/` omitted):
+1. `lib/curationSync.ts`: `LENS_REREAD = { lists: 'now', aggregates: 'now' }`. Its consumers are `familyTargets` (the open collection page through `LIST_READS`, every Browse cohort through `lensTargets`) and the tests; the owner's start-time owe (Decision 14b) now owes a cached Browse list `'now'`, an initial load in flight still skipped. The `'mount'` machinery stays in `lib/revalidate.ts` (an errored read falls to it).
+2. The hold is **not** `useReadHold` (the task's suggestion, W2's pager): `holdReads` cancels every full read that starts on a held key, a list's first load included, and drops a page in flight when it registers. Under a resting pointer a new sort chosen in the grid's header would not load until the pointer left (a test fails that way), and a page the sentinel asked for as the pointer arrived would be dropped. `lib/revalidate.ts` `parkReads` is the same hold record flagged `park`: payments park on it, it cancels only a full read in flight on an owed query with data (a payment that would land under the hand), and it has no TTL (a pointer rests on a list for minutes; `HOLD_TTL_MS` would release it under the hand with a warning). `isHeld(s, q, frozen)` keeps the cancel of later reads to write and gesture holds.
+3. `lib/useListHold.ts`: keyboard focus counts only when the browser shows it (`:focus-visible`), not any focus as first worded: a click leaves focus on a card's button, and a list held by that focus would not follow after the pointer left. The leave also has a backstop the ruling did not name, a pointerover or focusin anywhere that did not pass through the container (a portal unmounted under the pointer leaves no pointerout). No React state: the hand registers and releases in the event itself, so a pointer crossing the grid re-renders nothing. (Keyboard arm removed in the review repairs, item 9.)
+4. `lib/fingers.ts`: `trackFingers` moved out of `components/phone/usePagerGesture.ts` (pure move, the pager imports it; its FINGERS comment points there).
+5. Mounted beyond the ruling's three surfaces: the phone broker page's roll (`PhoneBrokerDetail`), a Browse cohort a remote dismissal now moves. The collection page holds `collectionListKeys(id)`: its own read (which also carries the header: name, description, member count, so these wait under a hand on the members too) and `browseKeys.cohortCards(f)` (new member: one cohort's cards in every order). (The own read no longer held since the review repairs, item 9.)
+6. Not followed (unchanged, a gap against "Feed follows fully"): the Feed's Skryté roll is keyed under Browse's `cards` root with `showDismissed: true`, so no lens engages it and `SYNC_TABLES` names no Browse read by rule; a property hidden or restored elsewhere reaches an open Skryté roll at its next toggle, as before W6. Follow-up, not built. (Built in the review repairs, item 9.)
+7. Tests: `lib/useListHold.test.tsx` 10 (new), `lib/revalidate.test.ts` 44 (+6 `parkReads`), `lib/curationSync.test.ts` 53 (two Q3(a) cases rewritten), `lib/curationSettle.test.ts` 20 and `lib/curationSyncOwner.test.ts` 33 (comments and one expectation to `'now'`), `components/BrowseExperience.test.tsx` +1, `pages/Feed.test.tsx` +1, `pages/CollectionDetail.test.tsx` +1, `pages/phone/PhoneCollectionDetail.test.tsx` +1. With the old `LENS_REREAD` 9 of the 10 hold cases fail; without the hold 7 do; with `holdReads` in its place the new-order case does.
+8. Docs: this document (§ 1, Decisions 7, 7b and 10, § 3.8, § 6 W6, § 7 risk 15, § 8 Q3, § 9, this entry), `docs/architecture.md` (Frontend territory, the rule-22 settle passage), `roadmap/operator-workflow-track.md` (W6 bullet; gate #2203's Browse RPC line re-baselined after W6's deploy). `GLOSSARY.md` unchanged (its Curation sync entry never said a list waits).
+9. Review repairs (the commit after `5d590fcb1`):
+   - Keyboard focus is no hand (item 3's arm removed): the ruling names the pointer and a touch, and a focused row the user's own click removed fires no focusout under the focus fixup rule, so the hand stayed on and the list stopped following until the next focusin.
+   - The collection page's own read is no longer held (item 5): it carries the header's member count, and a count is never held. `collectionListKeys(id)` is the cards alone; the table's rows and the phone's "Bez karty" lines are held in the view (`useListHold` `useHeld`, Decision 7b). The park on that read had also held the user's own Remove in the table, whose re-read was the only way the row left: the mouse on its way to the button was a hand on the members, so the row stayed, its button back to "Remove", until the pointer left. A removed row now leaves at once (`PropertyRowView` draws nothing once its Remove succeeded, keyed by membership so a re-add elsewhere draws again). The click-through test had used `fireEvent.click`, which registers no hand; the W6 page test that pinned the held header now pins it at once.
+   - The Feed's Skryté roll follows a hide and a restore made elsewhere (item 6's gap closed): `lensTargets` owes `browseKeys.cohortCards(FEED_HIDDEN_FILTERS)` as a list for the dismissed lens; the roll's key moved to `lib/feed` (`feedHiddenKey`).
+   - Stated, not changed: the self-echo's list refetch during a triage run (§ 3.8; F15; the operator's call), the page scrollbar as a leave (Decision 7b, the release), parks in risk 14. `useListHold` hashes its keys without a cast.
+   - Tests: `lib/useListHold.test.tsx` 12 (the two keyboard cases replaced by two that fail on the code as first built; +2 `useHeld`), `lib/curationSync.test.ts` 53 (the dismissal case also pins the Skryté roll), `pages/CollectionDetail.test.tsx` 41 (+3, the W6 case rewritten), `pages/phone/PhoneCollectionDetail.test.tsx` +1, `pages/Feed.test.tsx` +1; each new or rewritten case fails on the code as first built. Full vitest 4437 [V].

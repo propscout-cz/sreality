@@ -9,6 +9,8 @@ name: "Ops: Location wave shadow (the engine gate)"
 #
 #   gh workflow run location_wave_shadow.yml -f wave=w4 -f claims=remine -f scope=apply -f limit=50 \
 #     -f contract_ref="origin/feature/location-w4-realitymix-v8:contracts/portals/realitymix.yaml"
+#   gh workflow run location_wave_shadow.yml -f wave=w4 -f group=2/3 -f positions_run_id=<that run>
+#   gh workflow run location_wave_shadow.yml -f wave=w3 -f claims=purge -f ids_r2_key=<the dry run's key>
 #
 # Steps (docs/design/location-quality/wave-shadow.md): `what_if` re-resolves the listings
 # `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
@@ -57,6 +59,26 @@ on:
         required: false
         default: 0
         type: number
+      ids_r2_key:
+        description: "An R2 key of gzipped listing ids, one per line (the W3 purge dry run's); ids_sql is then ignored"
+        required: false
+        default: ""
+        type: string
+      ids_timeout_s:
+        description: "ids_sql's own statement budget, seconds (the per-listing reads keep the default)"
+        required: false
+        default: 1200
+        type: number
+      group:
+        description: "i/n: export and judge the i-th of n contiguous block groups (1/1 prints n when over the caps)"
+        required: false
+        default: "1/1"
+        type: string
+      positions_run_id:
+        description: "Reuse that run's positions, movers and what_if.json and skip step 1 (one wave, several groups)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   # One shadow at a time: two would hold two long read-only sessions and two harness runs.
@@ -69,6 +91,7 @@ jobs:
     timeout-minutes: 300
     permissions:
       contents: read
+      actions: read   # `positions_run_id` downloads an earlier run's artifact
     steps:
       - uses: actions/checkout@v6
         with:
@@ -89,8 +112,22 @@ jobs:
           CONTRACT_REF: ${{ inputs.contract_ref }}
         run: git show "$CONTRACT_REF" > "$RUNNER_TEMP/contract.yaml"
 
+      - name: "Reuse an earlier run's positions"
+        id: reuse
+        if: ${{ inputs.positions_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ inputs.positions_run_id }}
+        run: |
+          gh run download "$RUN" --pattern 'wave-shadow-*' -D "$RUNNER_TEMP/prior"
+          found=$(find "$RUNNER_TEMP/prior" -name positions.jsonl | head -1)
+          if [ -z "$found" ]; then echo "run $RUN uploaded no positions.jsonl" >&2; exit 1; fi
+          mkdir -p shadow
+          cp "$(dirname "$found")"/{positions.jsonl,movers.jsonl,what_if.json} shadow/
+
       - name: "1: post-wave positions (what_if, READ ONLY)"
         id: whatif
+        if: ${{ inputs.positions_run_id == '' }}
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -101,20 +138,32 @@ jobs:
           SCOPE: ${{ inputs.scope }}
           IDS_SQL: ${{ inputs.ids_sql }}
           LIMIT: ${{ inputs.limit }}
+          IDS_TIMEOUT_S: ${{ inputs.ids_timeout_s }}
+          IDS_R2_KEY: ${{ inputs.ids_r2_key }}
         run: |
-          args=(--ids-sql "$IDS_SQL" --scope "$SCOPE" --limit "${LIMIT:-0}" --claims "$CLAIMS" --out shadow)
+          args=(--scope "$SCOPE" --limit "${LIMIT:-0}" --claims "$CLAIMS" --out shadow)
+          if [ -n "$IDS_R2_KEY" ]; then args+=(--ids-r2-key "$IDS_R2_KEY")
+          else args+=(--ids-sql "$IDS_SQL" --ids-timeout-s "${IDS_TIMEOUT_S:-1200}"); fi
           if [ -s "$RUNNER_TEMP/contract.yaml" ]; then args+=(--contract "$RUNNER_TEMP/contract.yaml"); fi
           python -m location_data.what_if "${args[@]}"
-          echo "movers=$(grep -c . shadow/movers.jsonl || true)" >> "$GITHUB_OUTPUT"
 
-      - name: "2: size, then base cohort, rulings, live scorer (READ ONLY, no ledger row)"
-        if: ${{ steps.whatif.outputs.movers != '0' }}
+      # One count after both producers: a SKIPPED step's output is null, which GitHub's expression
+      # engine coerces to 0 and so equals '0' — the condition `whatif != '0' && reuse != '0'` skipped the
+      # gate on run 41220481918 (2,964 movers). Counting here asks one question of the file that exists.
+      - name: Count the movers
+        id: count
+        run: echo "movers=$(grep -c . shadow/movers.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
+      - name: "2: size, then this group's base cohort, rulings, live scorer (READ ONLY, no ledger row)"
+        if: ${{ steps.count.outputs.movers != '0' }}
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: python -m autodedup.shadow shadow
+          GROUP: ${{ inputs.group }}
+        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}"
 
+      # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"
-        if: ${{ steps.whatif.outputs.movers != '0' }}
+        if: ${{ steps.count.outputs.movers != '0' && hashFiles('shadow/base/cohort.jsonl.gz') != '' }}
         run: |
           python -m autodedup.harness shadow shadow/base/cohort.jsonl.gz shadow/positions.jsonl \
             shadow/labels --scorer shadow/scorer.json --out shadow/judge
@@ -129,6 +178,7 @@ jobs:
             shadow/movers.jsonl
             shadow/scorer.json
             shadow/what_if.json
+            shadow/group.json
             shadow/judge/
             !shadow/judge/**/cohort.jsonl.gz
           if-no-files-found: warn

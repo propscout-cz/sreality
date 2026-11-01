@@ -98,10 +98,14 @@ export function writeLastStage(stageId: number, board: string | null = null): vo
   }
 }
 
-/* The page to open on: the remembered stage while it still exists, else the
- * entry stage (where a new card lands), else the first. */
-export function initialStageIndex(pages: ReadonlyArray<StagePage>, remembered: number | null): number {
-  const at = remembered == null ? -1 : pages.findIndex((p) => p.stage.id === remembered);
+/** The page to show: the stage on screen (`id`) while it exists. Once gone —
+ * archived elsewhere — the page now in its place, `previous` being the index it
+ * was last shown at: its neighbour. Before any page was shown (`previous` < 0:
+ * nothing remembered, or a remembered stage since gone), the entry stage (where a
+ * new card lands), else the first. */
+export function stageOnScreen(pages: ReadonlyArray<StagePage>, id: number | null, previous: number): number {
+  const at = id == null ? -1 : pages.findIndex((p) => p.stage.id === id);
   if (at >= 0) return at;
+  if (previous >= 0) return Math.max(0, Math.min(previous, pages.length - 1));
   return Math.max(0, pages.findIndex((p) => p.stage.is_entry));
 }

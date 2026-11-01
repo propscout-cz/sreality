@@ -604,7 +604,7 @@ mode_window() {
   if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then
     gate "Has the merge coordinator now set realtime_autodedup_interval_seconds to 0 (the brake)?"
     BRAKE_ASKED=1
-    agent_reports "autodedup.rt_lease is empty (one SQL read)"
+    agent_reports "the autodedup_realtime lease in scheduled_jobs is clear (one SQL read)"
   elif [[ "$label" == worker ]]; then
     say "Not needed: every change targets $RUNNER (#2025-R2 (a): $RUNNER alone needs no brake)."
   else

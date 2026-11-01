@@ -17,7 +17,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { filterPresetKeys, DEFAULT_SORT, sortToParam } from '@/lib/queries';
+import { filterPresetKeys, DEFAULT_SORT, pipelineKeys, sortToParam } from '@/lib/queries';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import type { FilterPreset, FilterPresetGroup } from '@/lib/types';
 
@@ -53,6 +53,7 @@ import {
 import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
+const STAGES = [{ id: 1, is_terminal: false }, { id: 9, is_terminal: true }];
 
 /* The dirty chip's menu: Save changes writes at once (no dialog, operator 2026-10-27). */
 const saveChanges = () => {
@@ -68,6 +69,7 @@ function renderBar({
   onActivePresetIdChange = vi.fn(),
   onLoad = vi.fn(),
   onLoadPipelineView = vi.fn(),
+  stages = [],
 }: {
   filters?: ListingFilters;
   activePresetId?: string | null;
@@ -75,10 +77,12 @@ function renderBar({
   groups?: FilterPresetGroup[];
   onActivePresetIdChange?: (id: string | null) => void;
   onLoad?: (p: FilterPreset) => void;
-  onLoadPipelineView?: () => void;
+  onLoadPipelineView?: (stages: ReadonlyArray<{ id: number; is_terminal: boolean }>) => void;
+  stages?: ReadonlyArray<{ id: number; is_terminal: boolean }>;
 } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(filterPresetKeys.all, { data: presets, total: presets.length, groups });
+  qc.setQueryData(pipelineKeys.stages, stages);
   return render(
     <QueryClientProvider client={qc}>
       <FilterPresetBar
@@ -117,13 +121,14 @@ describe('<FilterPresetBar> chip names', () => {
 });
 
 describe('<FilterPresetBar> behaviour', () => {
-  it('leads with the Pipeline chip, which loads its view', () => {
+  it('leads with the Pipeline chip, which loads its view over the board stages', () => {
     const onLoadPipelineView = vi.fn();
-    renderBar({ onLoadPipelineView });
+    renderBar({ onLoadPipelineView, stages: STAGES });
     const buttons = screen.getAllByRole('button');
     expect(buttons[0]).toHaveTextContent('Pipeline');
     fireEvent.click(buttons[0]);
     expect(onLoadPipelineView).toHaveBeenCalledTimes(1);
+    expect(onLoadPipelineView).toHaveBeenCalledWith(STAGES);
   });
 
   it('loads a preset on a chip click', () => {

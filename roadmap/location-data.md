@@ -1251,7 +1251,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. `what_if.restate` and `what_if.purge` are
   **deleted when W3 lands** (W3 replaces the read; `what_if --claims purge` then reads all claims raw and
   applies the keeper rule). Owed before W5's shadow: an id-grain export block for movers that sit in no
-  block today (Praha rows gaining a quarter).
+  block today (Praha rows gaining a quarter). Only the blocks a ruling is inside are now
+  exported (a ruling-free block cannot fail; `--all-blocks` opts out): W4's 515 blocks needed 14 groups.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

@@ -269,7 +269,7 @@ def test_both_walks_page_by_a_keyset_and_the_prune_by_the_page_range() -> None:
 def test_the_reset_empties_the_page_row_with_its_generation() -> None:
     db = FakePg()
     db.settings[pages_key(GEN)] = {BLOCK: {"after": 2, "page": 1, "of": 0}}
-    reset_generation(db, GEN, holder="test")
+    reset_generation(db, GEN)
     assert pages_key(GEN) not in db.settings
 
 

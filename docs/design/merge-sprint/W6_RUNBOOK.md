@@ -41,7 +41,7 @@ first.
 - No merge to main, no deploy and no `apply_migration.yml` dispatch other than this runbook's own
   (steps 9, 10 and 12), and no Supabase compute change.
 - No `autodedup.yml` dispatch in any mode (`rt_seed`, `apply`, `unapply` or a live-stream dry run): each
-  takes `autodedup.rt_lease` for up to 5 hours, and a live apply or unapply runs only when the brake is 0.
+  takes `rt_lease` for up to 5 hours, and a live apply or unapply runs only when the brake is 0.
 - Until the apply, no ad-hoc read that filters, sorts or aggregates `properties.last_seen_at`, and none
   that names `property_status_events_public`, `listing_feed_public` or `listing_feed_visible` as an
   identifier. The keyset-index gate in section 0 is one-way: one planner probe of
@@ -51,7 +51,7 @@ first.
 3b. **04:40–04:45, the bootstrap gate.** Read the build flag, the lease and the worker in one call:
    ```sql
    select (select value #>> '{}' from autodedup.settings where key = 'rt_bootstrap:rt') bootstrap,
-          (select string_agg(holder || ' until ' || expires_at, '; ') from autodedup.rt_lease where expires_at > now()) live_lease,
+          (select string_agg(lease_holder || ' until ' || lease_expires_at, '; ') from scheduled_jobs where job_name = 'autodedup_realtime' and lease_expires_at > now()) live_lease,
           started_at, details->'autodedup'->>'passes' passes, details->'autodedup'->>'failed_passes' failed_passes,
           details->'autodedup'->'last'->>'rss_after_trim_mb' rss_after_trim_mb,
           details->'autodedup'->'last'->>'memory_limit_mb' memory_limit_mb
@@ -87,7 +87,7 @@ first.
    A message that chooses the day, such as "ok, run W6 asap" on 2026-10-10, is not that go.
 8. **The lease and the bootstrap.** Run this twice, two minutes apart:
    ```sql
-   select (select string_agg(holder || ' until ' || expires_at, '; ') from autodedup.rt_lease where expires_at > now()) live_lease,
+   select (select string_agg(lease_holder || ' until ' || lease_expires_at, '; ') from scheduled_jobs where job_name = 'autodedup_realtime' and lease_expires_at > now()) live_lease,
           (select value #>> '{}' from autodedup.settings where key = 'rt_bootstrap:rt') bootstrap,
           details->'autodedup'->>'passes' passes, details->'autodedup'->>'last_pass_at' last_pass_at,
           details->'autodedup'->>'in_flight_s' in_flight_s
@@ -108,7 +108,7 @@ first.
   ```sql
   select (select value #>> '{}' from public.app_settings where key = 'realtime_autodedup_interval_seconds') interval_s,
          (select value #>> '{}' from autodedup.settings where key = 'rt_bootstrap:rt') bootstrap,
-         (select string_agg(holder, '; ') from autodedup.rt_lease where expires_at > now()) live_lease,
+         (select string_agg(lease_holder, '; ') from scheduled_jobs where job_name = 'autodedup_realtime' and lease_expires_at > now()) live_lease,
          (select string_agg(holder, '; ') from public.property_maintenance_lease where holder like 'full:%' and expires_at > now()) sweep;
   ```
 - **C2, the index gate:** expect both keyset indexes at 0 scans and null, `stats_reset` null, and

@@ -43,7 +43,8 @@ api = [
   # Depends(scope="function") commits before the response (api/tenant_pool.TenantConn); 0.139 is the version verified.
   "fastapi>=0.139",
   "uvicorn[standard]>=0.30",
-  "anthropic>=0.40",
+  # 2.3: `client.files` out of beta, with `expires_in_seconds` (the hosted code agents' Files API, ADR-0005).
+  "anthropic>=2.3",
   # Gemini backend for the reasoning agent (api/providers/gemini.py).
   # `google-generativeai` is deprecated; google-genai is the current SDK.
   "google-genai>=0.3",
