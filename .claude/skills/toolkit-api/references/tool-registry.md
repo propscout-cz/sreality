@@ -233,12 +233,19 @@ changing the SQL the tool runs. The live tenant check is `tests/test_capabilitie
 
 ## Runs (`api/agents/executor.py`, #2070)
 
-Three entry points; nothing in production calls them until #2071 (routes) and #2075 (agent-worker).
+Three entry points; the routes below call two, and nothing claims a run until #2075 (agent-worker).
+
+**Routes (`api/routes/agent_runs.py`, #2071).** `POST`/`GET /runs`, `GET /runs/{id}`, `/steps`, `POST /runs/{id}/cancel`,
+`GET /runs/options`, pinned by `tests/api/test_agent_run_routes.py`; their tenancy: `database/references/tenancy.md`, Fourth
+instance. A step's `summary` stands in for a tool's whole result, so polling stays light. `/runs/options` is what the SPA's
+form and nav follow: `start_refusal` is the ONE gate (`submit` applies it first, so a refused caller learns nothing of the
+agents); a new gate joins `_refusal` and every surface follows. Refused callers read no agents and `queue: null`.
+Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
 
 - **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
-  service connection, for the identity a route stamped from the caller's own token: the input checked, then the
-  allowlist (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
-  `not_allowlisted`), a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
+  service connection, for the identity a route stamped from the caller's own token: the allowlist
+  (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
+  `not_allowlisted`), the input checked, a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
   the in-flight cap (`agent_account_in_flight_cap`; `SubmitRefused` `in_flight_cap`), insert as `queued`. It takes no
   act-as.
 - **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
@@ -291,3 +298,28 @@ bill, and a run deleted mid-call must not lose it.
 **Identity.** `api/agents/claims.caller_for(market, *, principal_user_id, account_id)` is the one claims builder and it
 hands the registry a `Caller`: no new `tenant_transaction` caller. `scripts/agent_run.py` has no run row, so it calls the
 same builder with the user the operator named and that user's first account, and reads as a run reads.
+
+## The security suite and the recorded runs (#2074)
+
+**What a green run means.** Every model in it is scripted, and scripted to obey the injected text. It does not test whether
+a model resists an injection; it tests that the server's rails hold when one does not. A live model's eval is #2075's script.
+
+**Two lanes, on every pull request.** `tests/api/test_agent_security.py` and `tests/api/test_agent_cassettes.py` in CI's
+pytest job; `tests/test_agent_security_live.py` in its own `schema-and-sql` step. `CONTRACT` at the top of the first states
+the whole contract line by line and names each proving test, wherever it lives; a test renamed away fails it.
+
+**Adding an injected ad.** A row in `tests/api/_adversarial_ads.py` names its attack, a function in
+`tests/test_agent_security_live.py` that scripts what an obedient model does (`Obeyed`: its replies, the denials the diary
+must hold in order, what may be paid). The run itself then asserts the rest for every ad: the text reached the model only as
+a tool result, only the in-scope proposal was kept, no tenant table moved, no cap was passed.
+
+**A new write tool** names a property only as `property_id` or `property_ids` (`terminator.PROPERTY_ARGS`; a census), since
+the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys.
+Open, each a strict xfail: a proposal into a collection the run did not create (#2072 owes it); `markdown` naming a
+property, which no rail reads (the page must draw links only from the cited ids).
+
+**Recorded runs.** Every file under `tests/cassettes/` replays through the current loop and terminator against the agent's
+current folder and must end as it ended (a changed skill body is no failure; a tool removed or an answer now refused is). A
+corrupt or misnamed file fails by name. Each folder in `skills/` owes recordings (`FLOORS` in `tests/api/_agent_replay.py`:
+the scout ten, any other one), so the lane is legitimately empty only until the first agent lands.
+

@@ -520,6 +520,13 @@ statement names that account (shape 3), and `opened` reaches the account through
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
 
+**Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
+`_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account
+(shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
+(`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
+(shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
+another account's id is a 404 before the service role opens.
+
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
 counterparties only) and by the admin entitlements route; and the share route's email lookup,
