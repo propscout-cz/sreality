@@ -600,6 +600,25 @@ _Avoid_: signature, error summary, failure reason
 
 ### Where users meet the platform
 
+**Sign-up**:
+Creating an account on the platform. Joining the waitlist is not a sign-up.
+_Avoid_: registration; sign-up for a waitlist entry
+
+**Waitlist entry**:
+One person's place on the waitlist: their email address and the consent they gave. It holds no
+account and grants no access.
+_Avoid_: sign-up, lead, subscriber
+
+**Waitlist invitation**:
+The permission for the person behind a waitlist entry to create an account under that entry's email
+address, and the message that tells them. It decides nothing about plans. Always the full term, so it
+is never taken for a share.
+_Avoid_: invite (alone)
+
+**Introductory price**:
+The price reserved for people with a waitlist entry; "zaváděcí cena" on every Czech surface.
+_Avoid_: founder's price, zakladatelská cena
+
 **Extension**:
 The platform's Chrome extension, which shows a property's data and actions on portal pages.
 _Avoid_: plugin, add-on
