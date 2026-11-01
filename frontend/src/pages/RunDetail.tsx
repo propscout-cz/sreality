@@ -8,6 +8,7 @@ import { TwoStep } from '@/components/TwoStep';
 import { SectionLabel } from '@/components/section';
 import Timeline from '@/components/estimation/Timeline';
 import FilesPanel from '@/components/runs/FilesPanel';
+import ProposalsPanel from '@/components/runs/ProposalsPanel';
 import { RunJson, RunStateChip } from '@/components/runs/RunParts';
 import { ApiError, cancelAgentRun } from '@/lib/api';
 import { agentRunKeys, useAgentRunOptions } from '@/lib/agentRunOptions';
@@ -22,7 +23,7 @@ import { ROUTES } from '@/lib/routes';
  * or an ad's words (lib/agentRuns), so it is React text here and nowhere a link: the result is pre-wrapped text, and the
  * only links are the property pages this file builds from the run's cited ids.
  *
- * Proposals are read-only data for now: #2072 applies them and replaces its section below. */
+ * Files and proposals have their own panels (components/runs): each draws from what the server says. */
 
 function ResultPanel({ run }: { run: AgentRun }) {
   const cited = citedIds(run.cited_property_ids);
@@ -84,28 +85,6 @@ function StepsPanel({ steps }: { steps: UseQueryResult<{ data: AgentRunStep[] },
           The last refresh failed, so this list may be short.{' '}
           <button type="button" className="underline underline-offset-2" onClick={retry}>Try again</button>
         </p>
-      )}
-    </Panel>
-  );
-}
-
-function proposalEntry(proposal: unknown): string {
-  const entry = (proposal as { entry?: unknown } | null)?.entry;
-  return typeof entry === 'string' ? entry : 'proposal';
-}
-
-function ProposalsPanel({ proposals }: { proposals: unknown[] }) {
-  return (
-    <Panel title="Proposals" count={proposals.length}
-      note={proposals.length ? 'Read-only: applying a proposal isn’t built yet, and nothing here has been applied' : undefined}>
-      {proposals.length === 0 ? (
-        <PanelEmpty>No proposals.</PanelEmpty>
-      ) : (
-        proposals.map((proposal, i) => (
-          <PanelGroup key={i} title={proposalEntry(proposal)}>
-            <RunJson value={(proposal as { args?: unknown } | null)?.args ?? proposal} />
-          </PanelGroup>
-        ))
       )}
     </Panel>
   );
@@ -183,7 +162,7 @@ function RunBody({ run }: { run: AgentRun }) {
       <ResultPanel run={run} />
       <StepsPanel steps={steps} />
       <FilesPanel run={run} />
-      <ProposalsPanel proposals={run.proposals} />
+      <ProposalsPanel run={run} />
       <Recorded run={run} />
     </div>
   );

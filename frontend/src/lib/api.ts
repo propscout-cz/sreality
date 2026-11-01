@@ -15,7 +15,7 @@
 
 import type { WaitlistResponse } from './waitlist';
 import type { AccountLimit, AgentRunOptions } from './agentRunOptions';
-import type { AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
+import type { AgentProposal, AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,
@@ -655,6 +655,12 @@ export const fetchAgentRunSteps = (id: number): Promise<{ data: AgentRunStep[] }
   request<{ data: AgentRunStep[] }>(`/runs/${id}/steps`);
 export const fetchAgentRunFile = (runId: number, fileId: number): Promise<Blob> =>
   requestBlob(`/runs/${runId}/files/${fileId}`);
+export const fetchAgentRunProposals = (id: number): Promise<{ data: AgentProposal[] }> =>
+  request<{ data: AgentProposal[] }>(`/runs/${id}/proposals`);
+export const applyAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/apply`, { method: 'POST' });
+export const undoAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/undo`, { method: 'POST' });
 export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status: AgentRunStatus; created: boolean }> =>
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>

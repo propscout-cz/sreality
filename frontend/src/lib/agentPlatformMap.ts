@@ -7,7 +7,7 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, a security test suite on every pull request, the run queue, the Runs page with its routes, a daily spending limit per account, and storage for the files an agent produces, ready but not yet used. ' +
+  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, a security test suite on every pull request, the run queue, the Runs page with its routes, a daily spending limit per account, Apply and Undo on a run\'s proposals, and storage for the files an agent produces, ready but not yet used. ' +
   'The page stays out of the menu until an account is on the allowlist, which is still absent, and on a plan with agents, and a started run would only wait: the scout and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
@@ -55,7 +55,7 @@ export const MILESTONES: Milestone[] = [
     tickets: [
       { n: 2070, done: true, title: 'Run queue and diary: submit, execute once, cancel' },
       { n: 2071, done: true, title: 'Run routes and the minimal Runs page' },
-      { n: 2072, done: false, title: 'Propose, Apply, Undo' },
+      { n: 2072, done: true, title: 'Propose, Apply, Undo' },
       { n: 2073, done: true, title: 'Agent files in Supabase Storage' },
       { n: 2074, done: true, title: 'Recorded-run regression and security tests in CI' },
       { n: 2319, done: true, title: 'A daily spending limit per account, and a plan without agents' },
@@ -131,8 +131,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
 export const HOSTED_CODE = { label: 'Build files', name: 'run_python', ticket: 2068 };
 
 export const PROPOSALS: { label: string; ticket: number }[] = [
-  { label: 'new collection', ticket: 2072 },
-  { label: 'add to collection', ticket: 2072 },
+  { label: 'new collection, with its properties', ticket: 2072 },
   { label: 'note or viewing', ticket: 2072 },
   { label: 'pipeline card', ticket: 2072 },
   { label: 'watchdog', ticket: 2072 },
@@ -199,8 +198,8 @@ export const SERVICES: ServiceRow[] = [
     change: 'New Railway service, same image as the API.',
     builtBy: [2075],
   },
-  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes, run routes and file downloads done. Gains Apply and Undo.' },
-  { name: 'Website', job: 'The app you use.', change: 'Has the Runs page: a form, the step timeline, the result, files to download, proposals to read, and your daily limit under the avatar. Gains Apply and Undo.' },
+  { name: 'API', job: 'Serves the website and holds the tools.', change: 'Security fixes, run routes, Apply and Undo, and file downloads done.' },
+  { name: 'Website', job: 'The app you use.', change: 'Has the Runs page: a form, the step timeline, the result, files to download, proposals you apply and undo, and your daily limit under the avatar.' },
   { name: 'realtime-worker', job: 'Always-on scraping, maintenance and alerts.', change: 'Loses its estimation lane in M2.' },
   { name: 'job-runner', job: 'Scheduled jobs moved off GitHub Actions.', change: 'Separate programme (Actions exit). Shares the Railway config file.' },
 ];

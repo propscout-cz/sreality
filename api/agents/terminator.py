@@ -19,6 +19,7 @@ from api.filter_args import Args
 from api.providers import HostedFile
 
 NAME = "submit_result"
+PROPOSALS_MAX = 20
 # What a write tool or an agent's output calls a property: the rail reads these, and tests/api/test_agent_security.py holds
 # each of them to it.
 PROPERTY_ARGS = frozenset({"property_id", "property_ids"})
@@ -36,7 +37,7 @@ class _Submission(Args):
         description="Every property the answer names, by the property_id a tool returned in this run.")
     files: list[str] = Field(default_factory=list, description="Files this run produced that go with the answer.")
     proposed_actions: list[_Proposal] = Field(
-        default_factory=list,
+        default_factory=list, max_length=PROPOSALS_MAX,
         description="Changes the user may apply with one click; nothing is written unless they do.")
 
 

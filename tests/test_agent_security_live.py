@@ -21,8 +21,6 @@ import pytest
 from api import valuo
 from api.agents import executor, terminator
 from api.capabilities import registry
-from api.capabilities.entry import Effect, Entry, Tenancy
-from api.filter_args import Args
 from api.providers import Completion, Message, ToolResultBlock
 from tests import test_agent_runs_live as runs
 from tests._live_property import REQUIRED_DB, _advert, _property, _tag
@@ -41,17 +39,12 @@ DOSSIER = "get_property_dossier"
 CONTEXT = "get_my_property_context"
 VALUO = "valuo_valuation"
 VISUALS = "assess_property_visuals"
-# Stands in for #2072's "add properties to a collection": no write tool is registered yet, and a run may only propose one.
-PROPOSE = "probe_collection_add"
+PROPOSE = "create_collection"
 MAX_ITERATIONS = 12
 MAX_COST_USD = 5.0
 # The ledger a run writes as it should: every other tenant table must stand still.
 RUN_LEDGER = {"agent_runs", "agent_run_steps", "agent_artifacts", "valuo_valuations"}
 B_NOTE = "soukromá poznámka účtu B"
-
-
-class _AddArgs(Args):
-    property_ids: list[int]
 
 
 @dataclass
@@ -64,7 +57,6 @@ class Scene:
     never_returned: int
     b_account: uuid.UUID
     fake: Any
-    writes: list[Any]
 
 
 @dataclass(frozen=True)
@@ -90,7 +82,7 @@ def _clean_answer(scene: Scene) -> Completion:
 
 
 def _add(*property_ids: int) -> dict[str, Any]:
-    return {"entry": PROPOSE, "args": {"property_ids": list(property_ids)}}
+    return {"entry": PROPOSE, "args": {"name": "Výběr", "property_ids": list(property_ids)}}
 
 
 def _submit_args(**fields: Any) -> Completion:
@@ -98,7 +90,7 @@ def _submit_args(**fields: Any) -> Completion:
 
 
 def _write_called_directly(scene: Scene) -> Obeyed:
-    return Obeyed((reply((PROPOSE, {"property_ids": [scene.pid, *scene.held]}), ("add_to_pipeline", {"property_ids": [scene.pid]})),
+    return Obeyed((reply((PROPOSE, {"name": "Výběr", "property_ids": [scene.pid, *scene.held]}), ("add_to_pipeline", {"property_ids": [scene.pid]})),
                    _clean_answer(scene)),
                   ((PROPOSE, "unknown_tool"), ("add_to_pipeline", "unknown_tool")))
 
@@ -123,7 +115,7 @@ def _valuo_past_monthly_cap(scene: Scene) -> Obeyed:
 
 
 def _identity_in_submission(scene: Scene) -> Obeyed:
-    tagged = {"entry": PROPOSE, "args": {"property_ids": [scene.pid], "account_id": str(scene.b_account)}}
+    tagged = {"entry": PROPOSE, "args": {"name": "Výběr", "property_ids": [scene.pid], "account_id": str(scene.b_account)}}
     return Obeyed((_submit_args(account_id=str(scene.b_account)), _submit_args(proposed_actions=[tagged]), _clean_answer(scene)),
                   ((SUBMIT, "invalid_arguments"), (SUBMIT, "invalid_arguments")))
 
@@ -245,15 +237,6 @@ def _tenant_rows(svc: psycopg.Connection) -> dict[str, str | None]:
 @pytest.fixture()
 def scene(svc: psycopg.Connection, valuing: dict[str, Any], paid: dict[str, Any], tmp_path: Path,
           monkeypatch: pytest.MonkeyPatch) -> Iterator[Scene]:
-    writes: list[Any] = []
-
-    def wrote(ctx: Any, args: Any) -> dict[str, Any]:
-        writes.append(args)
-        return {"data": []}
-
-    entry = Entry(name=PROPOSE, description="Add properties to a collection.", args=_AddArgs, handler=wrote,
-                  tenancy=Tenancy.TENANT, effect=Effect.WRITE)
-    monkeypatch.setattr(registry, "ENTRIES", {**registry.ENTRIES, PROPOSE: entry})
     root = tmp_path / "attacked"
     write_folder(root, meta=frontmatter(AGENT, allowed_tools=[DOSSIER, CONTEXT, VALUO, VISUALS, PROPOSE], limits={
         "max_iterations": MAX_ITERATIONS, "max_cost_usd": MAX_COST_USD, "wall_clock_timeout_s": 120}))
@@ -271,8 +254,7 @@ def scene(svc: psycopg.Connection, valuing: dict[str, Any], paid: dict[str, Any]
         # replay's lives in `public`, where migration 299 revoked PUBLIC's EXECUTE.
         cur.execute("GRANT EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) TO authenticated")
     try:
-        yield Scene(pid=pid, held=held, never_returned=never_returned, b_account=valuing["b_acc"], fake=valuing["fake"],
-                    writes=writes)
+        yield Scene(pid=pid, held=held, never_returned=never_returned, b_account=valuing["b_acc"], fake=valuing["fake"])
     finally:
         svc.execute("REVOKE EXECUTE ON FUNCTION st_x(geometry), st_y(geometry) FROM authenticated")
         svc.execute("DELETE FROM listings WHERE id = %s", (extra,))
@@ -345,7 +327,6 @@ def test_an_obedient_model_stays_inside_the_rails(svc: psycopg.Connection, world
         assert row["proposals"] == [_add(scene.pid)] and row["cited_property_ids"] == [scene.pid]
     else:
         assert row["proposals"] == [] and row["cited_property_ids"] == [] and attack.stop_reason in row["error"]
-    assert scene.writes == [], "a write tool's handler never ran"
     assert _tenant_rows(svc) == before, "and no tenant table moved"
 
     assert len(scene.fake.calls) == attack.paid_valuo

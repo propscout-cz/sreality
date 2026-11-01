@@ -46,11 +46,20 @@ SUBMIT = terminator.NAME
 SYSTEM = "Find properties and cite them."
 
 RUNS_LIVE = "tests/test_agent_runs_live.py"
+PROPOSALS_LIVE = "tests/test_agent_proposals_live.py"
 SECURITY_LIVE = "tests/test_agent_security_live.py"
 CENSUS = "tests/api/test_capabilities_census.py"
 
 # The whole contract: each line, and the tests that prove it. A test renamed or removed fails below.
 CONTRACT: dict[str, list[tuple[str, str]]] = {
+    "a proposal writes once, only on the user's click, only inside the run's own scope, and Undo removes exactly that": [
+        (PROPOSALS_LIVE, "test_a_double_apply_writes_once_and_undo_removes_exactly_what_it_added"),
+        (PROPOSALS_LIVE, "test_two_concurrent_applies_write_once"),
+        (PROPOSALS_LIVE, "test_another_accounts_token_gets_404_and_writes_nothing"),
+        (PROPOSALS_LIVE, "test_the_marker_is_no_browsers_to_write_and_only_the_pools_login_may_call_it"),
+        ("tests/api/test_agent_security.py", "test_a_proposal_into_a_collection_the_run_did_not_create_is_refused"),
+        ("tests/api/test_agent_security.py", "test_the_only_door_to_a_write_is_the_apply_and_undo_routes"),
+    ],
     "forged claims see zero rows": [
         (RUNS_LIVE, "test_a_claim_naming_an_account_the_user_is_not_in_reads_nothing"),
         (RUNS_LIVE, "test_only_a_top_level_claim_narrows_so_a_users_own_metadata_cannot"),
@@ -285,22 +294,162 @@ def test_the_answers_text_cannot_name_a_property_no_tool_returned() -> None:
         _accept({"markdown": f"Nejlepší je nemovitost {INVENTED_PROPERTY}.", "cited_property_ids": [7]})
 
 
-# NOTE FOR #2072: this is the part of "no proposal outside the run's own collection" that needs Apply's shape. Today no
-# write tool is registered and the terminator holds no idea of a collection the run itself created, so a proposal naming
-# any collection id passes it, as would a foreign tag_id or stage_id on the other entries ("tag property X of account B").
-# #2072 registers the five entries and decides how a proposal names the run's own collection: make this test pass against
-# that shape (the strict xfail fails the build the day it does), drop the mark, and add one per entry that takes such an id.
-@pytest.mark.usefixtures("probes")
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
-                   reason="#2072: the terminator cannot yet refuse a proposal on a collection the run did not create")
-def test_a_proposal_into_a_collection_the_run_did_not_create_is_refused() -> None:
+# A proposal writes only into what its run creates (#2072): a new collection holds its own members, and no write entry takes the
+# id of a collection, tag or stage, so a foreign one has nowhere to go. The census below holds every entry to that.
+def _real_agent() -> Definition:
+    return _agent(tools=tuple(e.name for e in registry.ENTRIES.values() if e.effect is Effect.WRITE))
+
+
+_IN_SCOPE = {
+    "create_collection": {"name": "Výběr", "property_ids": [7]},
+    "add_note": {"property_id": 7, "body": "Zavolat"},
+    "add_pipeline_card": {"property_id": 7},
+    "create_watchdog": {"name": "Brno", "filters": {"category_type": "prodej"}},
+}
+
+
+def test_the_write_entries_are_the_ones_this_suite_holds_to_scope() -> None:
+    assert set(_IN_SCOPE) == {e.name for e in registry.ENTRIES.values() if e.effect is Effect.WRITE}
+
+
+@pytest.mark.parametrize("entry", sorted(_IN_SCOPE))
+@pytest.mark.parametrize("foreign", ["collection_id", "tag_id", "stage_id", "note_id", "subscription_id"])
+def test_a_proposal_into_a_collection_the_run_did_not_create_is_refused(entry: str, foreign: str) -> None:
+    def submit(args: dict[str, Any]) -> terminator.Answer:
+        return terminator.accept(_proposing(entry, **args), definition=_real_agent(), seen=frozenset({7}), produced={})
+
+    assert submit(_IN_SCOPE[entry]).proposed_actions == ({"entry": entry, "args": _IN_SCOPE[entry]},), "the positive control"
+    with pytest.raises(ToolError) as refused:
+        submit({**_IN_SCOPE[entry], foreign: 4242})
+    assert refused.value.code is ToolErrorCode.INVALID_ARGUMENTS
+
+
+def test_no_write_entry_takes_an_id_but_a_propertys() -> None:
+    """Nothing here names a row the run did not create: a filter's `category_sub_cb` is a vocabulary, and no id ends in `_id`."""
+    for entry in registry.ENTRIES.values():
+        if entry.effect is Effect.WRITE:
+            fields = {d.rsplit(".", 1)[-1].removesuffix("[]") for d, _ in _walk(entry.input_schema)}
+            ids = {f for f in fields if f.endswith(("_id", "_ids"))}
+            assert ids <= terminator.PROPERTY_ARGS, entry.name
+
+
+def test_a_watchdog_proposal_cannot_scope_itself_by_the_users_tags_collections_or_stages() -> None:
+    fields = {d.rsplit(".", 1)[-1].removesuffix("[]") for d, _ in _walk(registry.ENTRIES["create_watchdog"].input_schema)}
+    assert not fields & {"tags", "collections", "pipeline", "tags_in", "collections_in", "pipeline_in"}
+
+
+def test_a_proposal_that_fails_its_entrys_schema_is_refused_at_submit_not_at_apply() -> None:
+    for bad in ({"name": "", "property_ids": [7]}, {"name": "x", "property_ids": []}):
+        with pytest.raises(ToolError) as refused:
+            terminator.accept(_proposing("create_collection", **bad), definition=_real_agent(), seen=frozenset({7}), produced={})
+        assert refused.value.code is ToolErrorCode.INVALID_ARGUMENTS
     with pytest.raises(ToolError):
-        _accept(_proposing(ADD, property_ids=[7], collection_id=4242))
+        terminator.accept(_proposing("add_note", property_id=7), definition=_real_agent(), seen=frozenset({7}), produced={})
+
+
+def test_a_proposal_for_a_property_no_tool_returned_is_refused_on_every_entry_that_names_one() -> None:
+    for entry, args in (("create_collection", {"name": "x", "property_ids": [7, 8]}), ("add_note", {"property_id": 8, "body": "x"}),
+                        ("add_pipeline_card", {"property_id": 8})):
+        with pytest.raises(ToolError) as refused:
+            terminator.accept(_proposing(entry, **args), definition=_real_agent(), seen=frozenset({7}), produced={})
+        assert refused.value.code is ToolErrorCode.REFUSED
+
+
+def test_a_watchdog_spec_the_matcher_cannot_render_is_refused_at_submit() -> None:
+    with pytest.raises(ToolError) as refused:
+        terminator.accept(_proposing("create_watchdog", name="x", filters={"category_type": "prodej", "near_city_proximity": {}}),
+                          definition=_real_agent(), seen=frozenset(), produced={})
+    assert refused.value.code is ToolErrorCode.INVALID_ARGUMENTS
+
+
+def test_a_run_holds_at_most_a_bounded_number_of_proposals() -> None:
+    actions = [{"entry": "add_pipeline_card", "args": {"property_id": 7}}] * (terminator.PROPOSALS_MAX + 1)
+    with pytest.raises(ToolError):
+        terminator.accept({"markdown": "x", "proposed_actions": actions}, definition=_real_agent(), seen=frozenset({7}), produced={})
+
+
+# The census: the executor writes no tenant rows, and the only tenant writes a run ends in are the Apply and Undo routes.
+_WRITE_VERBS = ("INSERT INTO ", "UPDATE ", "DELETE FROM ")
+
+
+def _sql_targets(tree: ast.AST) -> set[str]:
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            upper = " ".join(node.value.upper().split())
+            for verb in _WRITE_VERBS:
+                at = 0
+                while (at := upper.find(verb, at)) != -1:
+                    at += len(verb)
+                    found.add(upper[at:].split(" ", 1)[0].split("(", 1)[0].strip().lower())
+    return found
+
+
+def test_nothing_under_api_agents_names_a_tenant_table_for_a_write_but_the_run_ledger() -> None:
+    from tests._tenant_registry import TENANT_TABLES
+
+    # The ledger, plus the spending limit PUT /runs/limit sets through the executor (#2319): what a run's owner asks for, no curation.
+    ledger = {"agent_runs", "agent_run_steps", "agent_artifacts", "valuo_valuations", "agent_account_limits"}
+    seen: set[str] = set()
+    for path in (ROOT / "api" / "agents").glob("*.py"):
+        targets = _sql_targets(ast.parse(path.read_text(encoding="utf-8")))
+        seen |= targets
+        assert not (targets & set(TENANT_TABLES)) - ledger, path.name
+    assert {"agent_runs", "agent_run_steps"} <= seen, "the walk reads the executor's own writes"
+
+
+def _callers_of(name: str) -> set[str]:
+    """Each `api/` file calling `proposals.<name>`, by the scope that does."""
+    hits: set[str] = set()
+    for path in (ROOT / "api").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                for node in ast.walk(fn):
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
+                            and isinstance(node.func.value, ast.Name) and node.func.value.id == "proposals"):
+                        hits.add(f"{path.relative_to(ROOT).as_posix()}::{fn.name}")
+    return hits
+
+
+def test_the_only_door_to_a_write_is_the_apply_and_undo_routes() -> None:
+    assert _callers_of("apply") == {"api/routes/agent_runs.py::apply_proposal"}
+    assert _callers_of("undo") == {"api/routes/agent_runs.py::undo_proposal"}
+    # And nothing a run runs reaches them: nothing else under api/agents imports the door or a module a write goes through,
+    # and only the door runs a handler of a write (`entry.handler`; the registry's own `call` refuses a write first).
+    write_modules = {"proposals", "writes", "curation", "pipeline", "dismissals", "notifications"}
+    for path in (ROOT / "api" / "agents").glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if path.name != "proposals.py":
+            imported = {alias.name.rsplit(".", 1)[-1] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom | ast.Import)
+                        for alias in node.names}
+            assert not imported & write_modules, path.name
+            assert not [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "handler"], path.name
+
+
+@pytest.mark.parametrize("name", sorted(_IN_SCOPE))
+def test_the_registry_will_not_run_a_write_whoever_asks(name: str) -> None:
+    from api.capabilities.entry import Caller
+
+    with pytest.raises(ToolError) as refused:
+        registry.call(Caller(market=_FakeConn(), claims={"sub": "a"}), name, _IN_SCOPE[name])
+    assert refused.value.code is ToolErrorCode.FORBIDDEN
+
+
+def test_every_write_entry_declares_its_inverse_and_its_draw() -> None:
+    from api.capabilities.entry import WriteEntry
+
+    for entry in registry.ENTRIES.values():
+        assert isinstance(entry, WriteEntry) == (entry.effect is Effect.WRITE), entry.name
+
+
+def test_proposals_are_read_from_the_runs_row_never_the_diary() -> None:
+    """The diary (`agent_run_steps`) holds the refused proposals too (#2074)."""
+    assert "agent_run_steps" not in (ROOT / "api" / "agents" / "proposals.py").read_text(encoding="utf-8")
 
 
 def test_a_write_tool_names_a_property_only_where_the_terminator_looks() -> None:
-    """The rail reads `property_id` and `property_ids`: a field called anything else would walk past it. No write tool is
-    registered until #2072, so today only the walker is under test."""
+    """The rail reads `property_id` and `property_ids`: a field called anything else would walk past it."""
     assert _misnamed(portable(_Fine)) == []
     assert _misnamed(portable(_Evasive)) == ["properties", "subject_property", "target.property"]
     for entry in registry.ENTRIES.values():

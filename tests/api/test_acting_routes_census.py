@@ -80,7 +80,11 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "GET /runs/options",
     "GET /runs/{run_id}",
     "GET /runs/{run_id}/steps",
+    "GET /runs/{run_id}/files/{file_id}",
     "POST /runs/{run_id}/cancel",
+    "GET /runs/{run_id}/proposals",
+    "POST /runs/{run_id}/proposals/{index}/apply",
+    "POST /runs/{run_id}/proposals/{index}/undo",
     # An account's own spending limit: sharing a board never hands it over (#2319).
     "PUT /runs/limit",
 })
