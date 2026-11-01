@@ -38,15 +38,24 @@ last-writer-wins.
       `applySyncQueryDefaults` called in `main.tsx`, the `reads` and `load` cells of `curation_sync`. What it built
       differently: the design's § 12 build ledger. After its deploy: the Railway status, the § 9 read-only check, the
       operator's two-window recipe, and the gate clock starts.
-- [ ] **Post-review fixes (#2244): the six W2–W4 reviews' findings.** The viewing day and time as two drafts, the
-      pager's stuck holds, the nudge on every committed write, migration 701 (the service role reads the clock), census
-      (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
-- [ ] **W6: an open list follows fully, held under the hand (#2303, SPA, built 2026-11-01, PR pending).** Ruling
+- [x] **Post-review fixes (#2244, PR #2249, merged 2026-11-01): the six W2–W4 reviews' findings.** The viewing day and
+      time as two drafts, the pager's stuck holds, the nudge on every committed write, migration 701 (the service role
+      reads the clock), census (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
+- [x] **W6: an open list follows fully, held under the hand (#2303, SPA, PR #2306, merged 2026-11-01).** Ruling
       Q3(c): `LENS_REREAD` `'now'` for lists and aggregates; `lib/useListHold.ts` over `parkReads` holds a list's
       re-reads while the pointer or a finger is on it (Browse cards, the Feed roll with Skryté, the collection page,
       the phone broker roll); counts, map and stats never held (the collection header's count included: its table's
       rows hold in the view). The design's Decision 7b and § 12 "W6 (#2303), as built", item 9 the review repairs.
       Owed: the operator's call on the self-echo's list refetch during a triage run (design § 3.8, follow-up F15).
+- [x] **F16 + F17: the clock read at 0.97 ms (#2308 PR #2309 migration 708; #2311 PR #2314 migration 709; both
+      applied and merged 2026-11-01).** Two audience evaluations per read, the primary key kept at scale (ruling
+      2026-11-01); the audience plpgsql, definer, one `current_account_ids()` call. Production delta after 709: 0.973 ms
+      and 18.3 buffers over 30 reads; the tickets' ≥ 100- and ≥ 500-read samples ride gate #2203's measurement.
+- [ ] **Review 3 repairs (#2326, PR #2329): the third two-axis review's findings on #2249, #2306, F16 + F17.** The desktop collection
+      cards' "without a card" line held under the hand; the stale-side judge reads the row's page time; a hand parks
+      every refetch nobody asked for and spares the user's own; the artifact link's empty field and the viewing
+      pickers' cleared-both path; census (i) sees `ALTER FUNCTION`; a several-accounts live case; the GLOSSARY's
+      Hand and Park; the stale charter, tenancy and database-skill lines. The design's § 12 entry "Review 3 repairs".
 - [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
       statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
       was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6

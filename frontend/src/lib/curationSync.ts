@@ -20,6 +20,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { hashKey } from '@tanstack/react-query';
 
 import { ACTING_SEGMENT, actingKey } from '@/lib/acting';
+import { browseKeys } from '@/lib/browseKeys';
 import { lensTargets, type CurationLens } from '@/lib/curationSettle';
 import { curationKeys, dismissalKeys, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
 import { revalidate, type Hold, type ReadMode, type Revalidation } from '@/lib/revalidate';
@@ -119,11 +120,19 @@ export const SYNC_ROOTS: readonly QueryKey[] = [
   [ACTING_SEGMENT],
 ];
 
+/* The Browse list roots (the cards in every order, the Feed's rolls, a collection's cards). */
+const BROWSE_LIST_ROOTS: readonly QueryKey[] = browseKeys.lists.map(([root]) => [root]);
+
 /** No reconnect refetch under SYNC_ROOTS, so a hidden tab stays at zero requests.
  * main.tsx calls it beside the owner (lib/curationSyncOwner), whose clock read on
- * `online` is the one reconnect path for curation. */
+ * `online` is the one reconnect path for curation. Nor under the Browse list
+ * roots (review 3 repairs, #2326): a list under a hand must have no read land
+ * under it that nobody asked for, and a reconnect's is the one such read (focus
+ * refetches are off app-wide); a curation change the list missed offline reaches
+ * it through that clock read, a market change at its next mount, as on focus.
+ * The counts, map and stats keep theirs: never held, they may land any time. */
 export function applySyncQueryDefaults(qc: QueryClient): void {
-  for (const root of SYNC_ROOTS) qc.setQueryDefaults(root, { refetchOnReconnect: false });
+  for (const root of [...SYNC_ROOTS, ...BROWSE_LIST_ROOTS]) qc.setQueryDefaults(root, { refetchOnReconnect: false });
 }
 
 /** The reads a write to `tables` moves, deduplicated: the caller's own, or the
