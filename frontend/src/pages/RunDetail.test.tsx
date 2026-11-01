@@ -70,7 +70,7 @@ function expectInert(root: HTMLElement) {
 }
 
 beforeEach(() => {
-  options.mockReset().mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'open', agents: [] });
+  options.mockReset().mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'open', agents: [], limit: null });
   fetchRun.mockReset().mockResolvedValue(run());
   fetchSteps.mockReset().mockResolvedValue({ data: [] });
   cancel.mockReset();
@@ -151,8 +151,15 @@ describe('a run read honestly', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('database busy');
   });
 
+  it('says the account\'s own limit holds a queued run, with the figures', async () => {
+    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'limited', agents: [], limit: { limit_usd: 10, spent_today_usd: 10.5 } });
+    fetchRun.mockResolvedValue(run({ status: 'queued', result_markdown: null, stop_reason: null, cost_usd: 0, finished_at: null, started_at: null }));
+    mount();
+    expect(await screen.findByText(/spent \$10\.50 of its \$10\.00 daily limit/)).toBeInTheDocument();
+  });
+
   it('says why a queued run waits, and shows the empty sections as empty', async () => {
-    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [] });
+    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
     fetchRun.mockResolvedValue(run({ status: 'queued', result_markdown: null, stop_reason: null, cost_usd: 0, finished_at: null, started_at: null }));
     mount();
     expect(await screen.findByText(/switched off/)).toBeInTheDocument();
@@ -254,7 +261,7 @@ describe('live refresh', () => {
   });
 
   it('reads a run the queue holds rarely, not every few seconds', async () => {
-    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [] });
+    options.mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
     fetchRun.mockResolvedValue(run({ status: 'queued', result_markdown: null, finished_at: null, started_at: null }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

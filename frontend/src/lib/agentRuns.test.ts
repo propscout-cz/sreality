@@ -19,6 +19,7 @@ describe('pollMs', () => {
     expect(pollMs(['queued'], undefined)).toBe(3000);
     expect(pollMs(['queued'], 'dark')).toBe(30_000);
     expect(pollMs(['queued', 'succeeded'], 'parked')).toBe(30_000);
+    expect(pollMs(['queued'], 'limited')).toBe(30_000);
     expect(pollMs(['succeeded', 'failed'], 'open')).toBe(false);
     expect(pollMs([], 'open')).toBe(false);
   });
@@ -74,6 +75,17 @@ describe('waitingNote', () => {
     expect(waitingNote(row, 'parked')).toMatch(/paused/);
     expect(waitingNote(row, 'open')).toMatch(/free slot/);
     expect(waitingNote(row, undefined)).toMatch(/queued/i);
+  });
+  it('names the spend and the limit when only the account\'s own limit holds a run', () => {
+    const note = waitingNote(row, 'limited', { limit_usd: 10, spent_today_usd: 10.5 });
+    expect(note).toContain('$10.50');
+    expect(note).toContain('$10.00');
+    expect(note).toMatch(/midnight UTC/);
+    expect(note).toMatch(/raise the limit/);
+    expect(note).not.toMatch(/switched off|paused/i);
+  });
+  it('shows a gap, not a number, for a figure it was not given', () => {
+    expect(waitingNote(row, 'limited', null)).toContain('—');
   });
   it('says a stop is on its way and that a retry began again', () => {
     expect(waitingNote({ ...row, status: 'running' as const, cancel_requested_at: 'x' as string | null }, 'open')).toMatch(/next step/);

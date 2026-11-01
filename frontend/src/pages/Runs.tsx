@@ -7,7 +7,7 @@ import { RunStateChip } from '@/components/runs/RunParts';
 import StartRunForm from '@/components/runs/StartRunForm';
 import { useAgentRunOptions, type AgentRunOptions, type QueueState } from '@/lib/agentRunOptions';
 import { fmtRunCost, isLive, useAgentRuns, type AgentRunRow } from '@/lib/agentRuns';
-import { fmtAbsolute, fmtCount } from '@/lib/format';
+import { fmtAbsolute, fmtCount, fmtUsd } from '@/lib/format';
 import { ROUTES } from '@/lib/routes';
 
 /* Agent runs: start one, see yours. An operator tool behind an allowlist for now, so it reads in English like the admin
@@ -17,7 +17,7 @@ import { ROUTES } from '@/lib/routes';
 const TH = 'py-1.5 pr-3 text-[11px] leading-[14px] font-semibold uppercase tracking-[0.08em] text-[var(--color-ink-3)]';
 const TD = 'py-2 pr-3 align-top';
 
-const QUEUE_WORD: Readonly<Record<QueueState, string>> = { dark: 'Switched off', parked: 'Paused', open: 'Open' };
+const QUEUE_WORD: Readonly<Record<QueueState, string>> = { dark: 'Switched off', parked: 'Paused', limited: 'At limit', open: 'Open' };
 
 function StartPanel({ options }: { options: UseQueryResult<AgentRunOptions, Error> }) {
   let body;
@@ -35,7 +35,7 @@ function StartPanel({ options }: { options: UseQueryResult<AgentRunOptions, Erro
       </p>
     );
   } else {
-    body = <StartRunForm agents={options.data.agents} queue={options.data.queue} />;
+    body = <StartRunForm agents={options.data.agents} queue={options.data.queue} limit={options.data.limit} />;
   }
   return <Panel title="Start a run">{body}</Panel>;
 }
@@ -98,6 +98,10 @@ export default function Runs() {
           <Stat label="Queued" value={count('queued')} />
           <Stat label="Running" value={count('running')} />
           {options.data?.queue && <Stat label="Queue" value={QUEUE_WORD[options.data.queue]} />}
+          {options.data?.limit && (
+            <Stat label="Spent today" value={fmtUsd(options.data.limit.spent_today_usd)}
+              hint={`of your ${fmtUsd(options.data.limit.limit_usd)} daily limit`} />
+          )}
         </div>
         <StartPanel options={options} />
         <Panel title="Recent runs" count={runs.data ? rows.length : null}

@@ -81,6 +81,8 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "GET /runs/{run_id}",
     "GET /runs/{run_id}/steps",
     "POST /runs/{run_id}/cancel",
+    # An account's own spending limit: sharing a board never hands it over (#2319).
+    "PUT /runs/limit",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)

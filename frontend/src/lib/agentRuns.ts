@@ -7,7 +7,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  agentRunKeys, WAITING_POLL_MS, type AgentRunOptions, type JsonSchema, type QueueState,
+  agentRunKeys, WAITING_POLL_MS, type AccountLimit, type AgentRunOptions, type JsonSchema, type QueueState,
 } from './agentRunOptions';
 import { fetchAgentRun, fetchAgentRuns, fetchAgentRunSteps } from './api';
 import { fmtUsd, fmtUsdPerCall } from './format';
@@ -107,16 +107,19 @@ export const useAgentRunSteps = (id: number | null, status: AgentRunStatus) => {
   });
 };
 
-/* Why a queued run isn't moving, for a queue that holds it. */
-export const QUEUE_HOLD: Readonly<Partial<Record<QueueState, string>>> = {
-  dark: 'The executor is switched off, so a queued run waits until it is switched on.',
-  parked: 'Agent runs are paused for now (the daily spending ceiling or a setting), so a queued run waits until that lifts.',
-};
+/* Why a queued run isn't moving, for a queue that holds it; null when none does. */
+export function queueHold(queue: QueueState | null | undefined, limit: AccountLimit | null | undefined): string | null {
+  if (queue === 'dark') return 'The executor is switched off, so a queued run waits until it is switched on.';
+  if (queue === 'parked') return 'Agent runs are paused for now (the daily spending ceiling or a setting), so a queued run waits until that lifts.';
+  if (queue !== 'limited') return null;
+  return `This account has spent ${fmtUsd(limit?.spent_today_usd)} of its ${fmtUsd(limit?.limit_usd)} daily limit, so a queued run waits until midnight UTC, or until you raise the limit in the menu under your avatar.`;
+}
 
 /* Why a live run is not simply working, or null when it is. */
 export function waitingNote(
   run: Pick<AgentRunRow, 'status' | 'attempts' | 'cancel_requested_at'>,
   queue: QueueState | null | undefined,
+  limit?: AccountLimit | null,
 ): string | null {
   if (run.status === 'running') {
     if (run.cancel_requested_at) return 'Stopping at its next step.';
@@ -124,7 +127,8 @@ export function waitingNote(
   }
   if (run.status !== 'queued') return null;
   if (queue === 'open') return 'Queued. It starts when the worker has a free slot.';
-  return queue && QUEUE_HOLD[queue] ? `Queued. ${QUEUE_HOLD[queue]}` : 'Queued.';
+  const hold = queueHold(queue, limit);
+  return hold ? `Queued. ${hold}` : 'Queued.';
 }
 
 /* --- the diary as the Timeline's trace ------------------------------------------------------------------------------ */

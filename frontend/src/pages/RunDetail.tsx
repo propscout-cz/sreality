@@ -176,7 +176,7 @@ function RunBody({ run }: { run: AgentRun }) {
   const live = isLive(run.status);
   const steps = useAgentRunSteps(run.id, run.status);
   const { data: options } = useAgentRunOptions({ live });
-  const note = waitingNote(run, options?.queue);
+  const note = waitingNote(run, options?.queue, options?.limit);
 
   /* The run's last read can land after its last step: fetch the diary once more as a run ends. */
   const { refetch: refetchSteps } = steps;
