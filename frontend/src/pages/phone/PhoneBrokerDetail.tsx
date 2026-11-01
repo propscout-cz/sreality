@@ -40,6 +40,7 @@ import { portalsWord } from '@/components/phone/FeedCard';
 import { CARD_PAGE_SIZE, DEFAULT_SORT, fetchListingsForCards, type CardRow } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useListHold } from '@/lib/useListHold';
 
 import { Initials } from './PhoneBrokers';
 
@@ -354,8 +355,10 @@ function Offer({ brokerId }: { brokerId: number }) {
     pageSize: CARD_PAGE_SIZE,
     getRowId: (r) => r.property_id,
   });
+  /* A dismissal elsewhere moves the roll at once, but never under a finger (ruling Q3(c)). */
+  const hand = useListHold([browseKeys.cards(filters, sort)]);
   return (
-    <section aria-label="Nabídka" className="border-t border-[var(--color-rule)]">
+    <section {...hand} aria-label="Nabídka" className="border-t border-[var(--color-rule)]">
       <DayRule label="Nabídka" />
       <CardRoll
         list={list}

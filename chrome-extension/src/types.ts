@@ -2,9 +2,10 @@
  * app's own types (frontend/src/lib/types.ts, the same routes), imported. */
 import type { Appearance } from '../../frontend/src/lib/appearance';
 import type { ReferenceRent } from '../../frontend/src/lib/mfReference';
+import type { PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ListingSnapshotPublic, PropertySource, TagColor } from '../../frontend/src/lib/types';
 
-/* Subset of the SPA's EstimationRun shape — only the fields the side sheet's
+/* Subset of the SPA's EstimationRun shape — only the fields the side panel's
  * Výnos editor reads (the old panel's estimation flow, moved unchanged). */
 
 export interface YieldScenario {
@@ -213,10 +214,10 @@ export interface IngestState {
   queue: { attempts: number; claimed_at: string | null; given_up: boolean } | null;
 }
 
-/* Message protocol between content script and background worker.
- * The background worker is the only context allowed to make API
- * fetches — host_permissions covers it without CORS getting in the
- * way. Content scripts post messages, get the typed result back. */
+/* Message protocol between the content script or the side panel and the
+ * background worker. The background worker is the only context that makes API
+ * fetches, from the extension's origin, which the API's CORS allowlist names.
+ * Both post messages and get the typed result back. */
 export type ApiMessage =
   | { type: 'lookup_listings'; items: PortalLookupItem[] }
   | { type: 'ingest_listing'; url: string }
@@ -256,12 +257,23 @@ export type ApiMessage =
   | { type: 'get_auth_state' }
   | { type: 'get_billing' };
 
-/* Background → content, the other direction: webNavigation.onHistoryStateUpdated
- * fires when a portal's SPA soft-navigates (History API, no new document), which
- * static manifest content_scripts never re-inject for. The background worker
- * relays the new URL so the already-running content script can re-decide what
- * to render without needing a real page reload. */
-export type RouteMessage = { type: 'route_changed'; url: string };
+/* What a tab shows the side panel: the ad of its detail page, or the search card
+ * last opened in the panel; `url` is the ad's page ("Přidat do databáze" sends it). */
+export interface PanelSubject {
+  ref: PortalRef;
+  url: string;
+}
+
+/* Content → every extension context: this tab has our content script (the side
+ * panel of its window connects to it); `open` on a click — the background opens
+ * the panel while the click's user gesture is still live. */
+export type PanelCall = { type: 'panel'; open: boolean };
+
+/* Over the port the side panel opens to each tab of its window (config.ts PANEL_PORT):
+ * the tab's subject, up; a property one side wrote, either way (the other re-reads it). */
+export type PortMessage =
+  | { type: 'subject'; subject: PanelSubject | null }
+  | { type: 'property_written'; property_id: number };
 
 /* The caller's agent-estimation allowance (GET /billing/me → agent_estimations),
  * for the panel's "(zbývá X)" counter + the upgrade prompt at zero. `metered`

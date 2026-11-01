@@ -109,6 +109,8 @@ const adminItems: ReadonlyArray<MenuItem> = [
   { to: ROUTES.health.build(), label: 'Health' },
   // The propscout.cz waitlist: who signed up from the landing page, and from which ad.
   { to: ROUTES.signups.build(), label: 'Sign-ups' },
+  // Where the agent platform programme stands; each of its tickets' PRs updates it.
+  { to: ROUTES.agentPlatform.build(), label: 'Agent platform' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —
   // invisible whenever the queue happened to be empty.

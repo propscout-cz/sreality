@@ -4,7 +4,7 @@
 where a lock taken on one backend and released on another silently strands. The row is the
 lock: a claim is a conditional UPDATE, a crashed holder's lease simply expires.
 
-Two shapes over one row:
+Three shapes over one row:
 
 * `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
   A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
@@ -27,6 +27,9 @@ Two shapes over one row:
   a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
   by `Hold.fenced` and ends each transaction with `fence` cannot commit under a lapsed lease. The release falls back to
   one fresh connection when the holding one died.
+* `acquire` / `end` / `predecessor` / `end_predecessor` — the same lane row for a holder that outlives one `with` block (the autodedup
+  lane, adapted by `autodedup/rt_lease.py`: its take, its release and a shutdown's release sit on different connections).
+  `end` lapses the lease instead of clearing it: the row keeps who held it and when it ended.
 """
 from __future__ import annotations
 
@@ -163,22 +166,55 @@ UPDATE job_runs
 
 _UPSERT_LANE_SQL = """
 INSERT INTO scheduled_jobs (job_name, cadence, runner)
-VALUES (%s, %s::interval, %s)
+VALUES (%(job)s, %(cadence)s::interval, %(runner)s)
 ON CONFLICT (job_name) DO NOTHING
 """
 
 _ACQUIRE_LANE_SQL = f"""
 UPDATE scheduled_jobs j
-   SET lease_holder = %s,
-       lease_expires_at = now() + make_interval(secs => %s),
+   SET lease_holder = %(holder)s,
+       lease_expires_at = now() + make_interval(secs => %(ttl)s),
        last_started_at = now(),
        last_outcome = 'running'
- WHERE j.job_name = %s
+ WHERE j.job_name = %(job)s
    AND j.retired_at IS NULL
    AND {_UNPAUSED}
    AND {_FREE}
 RETURNING j.job_name
 """
+
+# Keeps the holder: `lease_expires_at` is then when the lease ended. An outcome is its holder's to report, in its logs.
+_END_LANE_SQL = """
+UPDATE scheduled_jobs
+   SET lease_expires_at = now(), last_outcome = NULL
+ WHERE job_name = %(job)s
+   AND lease_holder = %(holder)s
+"""
+
+# E948: the LIVE lease a dead predecessor of this container left. A pass's holder is `<hostname>:<pid>:<the second its
+# pass started>` (`incremental_lane.pass_holder`). One worker process runs per container, and a restart in place keeps
+# the hostname and, under the same entrypoint, the pid (1 on Railway), so a live row naming THIS hostname and pid and a
+# second before this process booted belongs to a process that is gone; a second worker on one host has a pid of its own
+# and never ends the first one's lease. Only that three-field shape can match (`rt_seed:<host>:<pid>:<second>` and
+# `dispatch:<run>` never do), the pid is compared as text, and the CASE keeps the cast off every other shape. An expired
+# row is no predecessor's death: a pass that ended released its lease.
+_PREDECESSOR_WHERE = """
+ WHERE job_name = %(job)s
+   AND lease_expires_at > now()
+   AND CASE WHEN lease_holder ~ '^[^:]+:[0-9]+:[0-9]{1,18}$'
+            THEN split_part(lease_holder, ':', 1) = %(host)s::text
+                 AND split_part(lease_holder, ':', 2) = %(pid)s::text
+                 AND split_part(lease_holder, ':', 3)::bigint < %(booted)s::bigint
+            ELSE false
+       END
+"""
+_END_PREDECESSOR_SQL = ("""
+UPDATE scheduled_jobs
+   SET lease_expires_at = now(), last_outcome = NULL""" + _PREDECESSOR_WHERE + """RETURNING lease_holder
+""")
+_PREDECESSOR_SQL = ("""
+SELECT lease_holder
+  FROM scheduled_jobs""" + _PREDECESSOR_WHERE)
 
 
 # Each runner-facing call is one transaction under this bound. One statement, so the PREPARE sweep checks it.
@@ -673,6 +709,42 @@ def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, e
         original.add_note(note)
 
 
+def acquire(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str, ttl_s: int,
+            holder: str) -> Hold | None:
+    """The lane's `Hold` (its row made if new, bounded like a runner call), or None when another holder has a live lease
+    or the row is paused or retired."""
+    sent_at = clock()
+    with _bounded(conn) as cur:
+        cur.execute(_UPSERT_LANE_SQL, {"job": job_name, "cadence": cadence, "runner": runner})
+        cur.execute(_ACQUIRE_LANE_SQL, {"holder": holder, "ttl": ttl_s, "job": job_name})
+        acquired = cur.fetchone() is not None
+    return Hold(job_name, holder, ttl_s, _fence_at(sent_at, ttl_s)) if acquired else None
+
+
+def end(conn: psycopg.Connection, job_name: str, holder: str) -> None:
+    """Ends `holder`'s lease on the lane, and only that holder's. Unbounded: one that follows the holder's `fence` waits
+    for its commit."""
+    with conn.cursor() as cur:
+        cur.execute(_END_LANE_SQL, {"job": job_name, "holder": holder})
+
+
+def _predecessor(conn: psycopg.Connection, sql: str, job_name: str, host: str, pid: int, booted_epoch: int) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute(sql, {"job": job_name, "host": host, "pid": str(int(pid)), "booted": int(booted_epoch)})
+        row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def predecessor(conn: psycopg.Connection, job_name: str, *, host: str, pid: int, booted_epoch: int) -> str | None:
+    """The holder of the live lease a dead predecessor of this process left (`_PREDECESSOR_WHERE`), read and left live."""
+    return _predecessor(conn, _PREDECESSOR_SQL, job_name, host, pid, booted_epoch)
+
+
+def end_predecessor(conn: psycopg.Connection, job_name: str, *, host: str, pid: int, booted_epoch: int) -> str | None:
+    """Ends that same lease; its holder, or None."""
+    return _predecessor(conn, _END_PREDECESSOR_SQL, job_name, host, pid, booted_epoch)
+
+
 @contextmanager
 def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str = "github_actions",
          ttl_s: int = 3600, holder: str | None = None, wait_s: float = 0,
@@ -683,20 +755,15 @@ def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str =
     holder = holder or holder_id()
     give_up_at = clock() + wait_s
     while True:
-        sent_at = clock()
-        with _bounded(conn) as cur:
-            cur.execute(_UPSERT_LANE_SQL, (job_name, cadence, runner))
-            cur.execute(_ACQUIRE_LANE_SQL, (holder, ttl_s, job_name))
-            acquired = cur.fetchone() is not None
-        if acquired or clock() >= give_up_at:
+        hold = acquire(conn, job_name, cadence=cadence, runner=runner, ttl_s=ttl_s, holder=holder)
+        if hold is not None or clock() >= give_up_at:
             break
         LOG.info("LEASE busy job=%s: trying again in %ds", job_name, WAIT_POLL_S)
         time.sleep(WAIT_POLL_S)
-    if not acquired:
+    if hold is None:
         LOG.info("LEASE busy job=%s", job_name)
         yield None
         return
-    hold = Hold(job_name, holder, ttl_s, _fence_at(sent_at, ttl_s))
     outcome, error, original = "ok", None, None
     try:
         yield hold

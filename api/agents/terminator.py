@@ -16,6 +16,7 @@ from api.capabilities.entry import Effect
 from api.capabilities.errors import ToolError, ToolErrorCode, invalid_arguments
 from api.capabilities.schema import portable
 from api.filter_args import Args
+from api.providers import HostedFile
 
 NAME = "submit_result"
 
@@ -42,7 +43,7 @@ class Answer:
 
     markdown: str
     cited_property_ids: tuple[int, ...]
-    files: tuple[str, ...]
+    files: tuple[HostedFile, ...]
     proposed_actions: tuple[Mapping[str, Any], ...]
     output: Mapping[str, Any] | None
 
@@ -64,6 +65,9 @@ def schema(definition: Definition) -> dict[str, Any]:
         input_schema["required"] = [*input_schema.get("required", ()), "output"]
     description = ("Hand in the answer; the run ends when it is accepted. Call it alone in its turn. Cite only "
                    "properties a tool returned in this run; a refusal says what to fix.")
+    if definition.code:
+        description += ("\n\nA file reaches the user only from $OUTPUT_DIR: copy it there in the command that lists "
+                        "that directory, then name it in `files` as listed. Each command has its own $OUTPUT_DIR.")
     for name in entries:
         entry = registry.ENTRIES[name]
         description += f"\n\nYou may propose {name}: {entry.description} Its arguments: {json.dumps(entry.input_schema)}"
@@ -99,7 +103,7 @@ def _check_output(definition: Definition, output: Any) -> None:
         raise ToolError(ToolErrorCode.INVALID_ARGUMENTS, f"invalid output: {where}", details=details)
 
 
-def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Set[str]) -> Answer:
+def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Mapping[str, HostedFile]) -> Answer:
     """The answer, or a ToolError the model can act on: a shape error, an uncited property, a file this run did
     not produce, or a proposal that names no write tool this agent lists or fails that tool's schema."""
     if not isinstance(raw, dict):
@@ -115,7 +119,8 @@ def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Set[st
         raise ToolError(ToolErrorCode.REFUSED,
                         f"no tool returned property {uncited} in this run; cite only property_ids a tool returned")
     if unknown := [f for f in submission.files if f not in produced]:
-        raise ToolError(ToolErrorCode.REFUSED, f"this run produced no file named {unknown}")
+        raise ToolError(ToolErrorCode.REFUSED,
+                        f"this run produced no file named {unknown}; the files it has: {sorted(produced)}")
     entries = proposable(definition)
     for i, proposal in enumerate(submission.proposed_actions):
         if proposal.entry not in entries:
@@ -128,7 +133,7 @@ def accept(raw: Any, *, definition: Definition, seen: Set[int], produced: Set[st
     return Answer(
         markdown=submission.markdown,
         cited_property_ids=tuple(submission.cited_property_ids),
-        files=tuple(submission.files),
+        files=tuple(produced[name] for name in dict.fromkeys(submission.files)),
         proposed_actions=tuple({"entry": p.entry, "args": p.args} for p in submission.proposed_actions),
         output=output,
     )

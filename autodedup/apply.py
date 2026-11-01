@@ -1457,7 +1457,7 @@ def lane_interval(conn: Any) -> int:
 
 
 class _Writer:
-    """THE lane's lease (`autodedup.rt_lease`), held by a live dispatch: one writer of
+    """THE lane's lease (`rt_lease`), held by a live dispatch: one writer of
     production merges at a time (A9). The worker's lane reconciles under it, so a live apply or
     unapply takes it for its run and refuses while a pass holds it — and refuses outright while
     the lane is RUNNING (its interval above 0): an unapply would be re-merged by the lane's next
@@ -1492,7 +1492,7 @@ class _Writer:
             self.released = rt_lease.release_stale(self.conn, self.release)
         if not rt_lease.take(self.conn, self.holder, rt_lease.DISPATCH_TTL_S):
             raise SystemExit(
-                f"refused: autodedup.rt_lease is {rt_lease.describe(self.conn)}. Set "
+                f"refused: rt_lease is {rt_lease.describe(self.conn)}. Set "
                 f"app_settings.{LANE_INTERVAL_SETTING} to 0, wait for the lease to clear, and "
                 "run again. Nothing was written.")
         self.held = True

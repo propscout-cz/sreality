@@ -1,7 +1,7 @@
 """A9 — the real-time lane's reconcile: the live stream's groups onto production, in the pass.
 
 The worker's `autodedup` lane decides, groups AND merges in one pass under one lease
-(`autodedup.rt_lease`): after the pass's transaction commits, `run` takes the groups it
+(`rt_lease`): after the pass's transaction commits, `run` takes the groups it
 re-clustered plus a slice swept past the `rt_reconcile` cursor and hands them to THE apply
 path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the scope,
 carry-along, spans-groups, refused-before) and `apply.apply_group`

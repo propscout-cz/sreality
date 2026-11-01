@@ -185,6 +185,66 @@ fixed time (40 minutes for a pass, 5 hours for a seed or a batch run) and releas
 one its holder never released blocks the engine until that time runs out.
 _Avoid_: lock (alone), mutex, claim, latch
 
+### Inside the engine
+
+**Pair** (UI: "pár"):
+Two ads the engine compares; every engine decision is about exactly one pair.
+_Avoid_: candidate, edge, match (for the pair itself)
+
+**Score** (UI: "skóre"):
+The engine's number from 0 to 1 for how much a pair looks like one unit.
+_Avoid_: probability, confidence, similarity
+
+**Grey band** (UI: "šedé pásmo"):
+The score range in which the engine does not decide on its own: a pair there waits for a ruling unless a
+certificate proves the unit.
+_Avoid_: band, zone, grey zone, undecided, residual (for the range)
+
+**Certificate** (UI: "důkaz"):
+One of the few facts that prove two ads are one unit, so the engine may merge a pair out of the grey band:
+an identical photo, one text contained in the other, a shared order code.
+_Avoid_: proof, evidence (alone), demonstrate, warrant
+
+**Blocker** (UI: "blokace"):
+A fact that says "two units" and holds a pair in the grey band even when it has a certificate: a different
+street, two printed areas, floors two apart.
+_Avoid_: gate, distinguishing fact, d43 fact, wall
+
+**Promotion** (UI: "povýšení"):
+The engine's move of a pair from the grey band into a merge, allowed only with a certificate and no blocker.
+_Avoid_: warrant, upgrade, auto-merge
+
+**Disqualifier** (UI: "diskvalifikátor"):
+A check run before scoring that discards a pair outright, so it never gets a score: areas more than 8 % apart,
+floors two apart, a category clash.
+_Avoid_: veto, guard, pre-filter
+
+**Nominator** (UI: "nominátor"):
+A shared trait by which the engine picks which ads to compare at all: the same photo, the same text, the same
+place. Two ads with no shared nominator never form a pair.
+_Avoid_: key, blocking key, block key, probe
+
+**Attribute** (UI: "atribut"):
+A structured fact of an ad: disposition, area, floor, price, category.
+_Avoid_: column, field, feature
+
+**Parameter** (UI: "parametr"):
+Any measurable trait of a pair that research tests as a possible certificate, such as a shared order code.
+_Avoid_: signal, feature, indicator, flag
+
+**Order code** (UI: "kód zakázky"):
+The advertiser's own number for an offer, printed in the ad and the same on every portal.
+_Avoid_: reference, ad reference, ID zakázky, code (alone)
+
+**Truth** (UI: "pravda"):
+The set of the operator's rulings, same and different, against which every engine rule is measured.
+_Avoid_: labels, ground truth, gold set, calibration set
+
+**Engine area** (UI: "oblast enginu"):
+The towns and districts whose ads the engine reads and decides on; the apply scope is the part of it where it
+may also merge.
+_Avoid_: scope, rt scope, coverage
+
 ### What users add
 
 **Curation**:

@@ -1,7 +1,8 @@
 # Brand domain, Chrome Web Store, MCP server — program plan
 
 **Status: approved 2026-10-06. W1 (domain cutover) is LIVE on `propscout.cz` since 2026-10-25 (#2005) —
-see "W1 as run" below; its old hosts go after 7 quiet days. W0 and W2–W6 are not started.**
+see "W1 as run" below; its old hosts go after 7 quiet days. Spec #2261 (2026-10-31) delivers the rest of the
+Extension's store path; the MCP server moved to the agent-platform program (ADR 0002).**
 Investigated 2026-09-26. Spot-checked against `main` (`03b72cda`) and production on 2026-10-03
 (§ 11 lists what moved in between).
 
@@ -81,7 +82,7 @@ is Unlisted.
 | Claim in the repo | Verdict | How it was checked |
 | --- | --- | --- |
 | Publishing keeps the extension ID pinned by the manifest `key` | **False.** The store refuses a new upload whose manifest has `key` and assigns its own ID. | Two fact-checks; developer reports dated 2026-09-20 and 2026-09-25; Google's own procedure runs store → manifest |
-| `CORS_ALLOW_ORIGINS` contains the extension origin | **False in production.** A preflight from the extension origin gets HTTP 400. The extension works only through host permissions. | Live request, 2026-09-26 and 2026-10-03 |
+| `CORS_ALLOW_ORIGINS` contains the extension origin | **False in production then** (true since 2026-10-31, #2275): a preflight from the extension origin got HTTP 400, so the extension worked only through host permissions. | Live request, 2026-09-26 and 2026-10-03 |
 | Both the API and Supabase origins must be host permissions | **False.** Supabase Auth answers any origin. A background worker with empty host permissions calls the API under normal CORS. | Two fact-checks, one with a live Chrome 151 test; Starlette echoes requested headers on preflight |
 | The extension's redirect URL must be registered in the Google OAuth client | **False.** Google only ever sees Supabase's callback. Only Supabase's redirect allowlist needs it. | Code path in `chrome-extension/src/auth.ts` |
 | Railway redeploys when a variable changes | **False.** Edits are staged; someone clicks Deploy. | Railway docs, 2026 |
