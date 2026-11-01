@@ -15,8 +15,8 @@
  *              (migration 536). Absent while the property is a LIVE deal.
  *
  * Operator state is PROPERTY-grain and lives in the one store (store.ts): a
- * write repaints every card of that property on the page, and the panel when it
- * shows the same property — both draw from the store, neither syncs the other.
+ * write repaints every card of that property on the page, and the side panel
+ * (its own store) re-reads that property when it lands.
  *
  * A card in the pipeline, a collection or tagged also gets that drawn over its
  * photo (index_photo_mark.ts): the photo toned in the stage colour under the
@@ -78,7 +78,8 @@ export interface CardLayerDeps {
   cache: Map<string, PortalListing>;
   /* The yield badge for this card, or null when it gets none. */
   badgeFor: (listing: PortalListing) => BadgeView | null;
-  openPanel: (ref: PortalRef, href: string, listing: PortalListing) => void;
+  /* Show this card's ad in the side panel (a click: the panel may open). */
+  openPanel: (ref: PortalRef, href: string) => void;
   /* Whether dismissed properties are drawn barely visible right now. */
   veilOn: () => boolean;
   /* Say why a write failed (the dock's line). */
@@ -206,7 +207,7 @@ const CARD_CSS = `
 `;
 
 /* A popover surface with the accent "filed" top edge. The collection menu's
- * rows are the shared save checklist (checklist.ts), the side sheet's pickers'. */
+ * rows are the shared save checklist (checklist.ts), the side panel's pickers'. */
 const MENU_CSS = `
   ${tokens}
   :host { all: initial; }
@@ -427,10 +428,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       void flashFailure(store.toggleDismiss(now.propertyId), 'Skrytí se nepodařilo uložit');
     };
     badge.onclick = () => {
-      const listing = cache.get(sourceId);
-      if (listing == null) return;
       closeMenu(false);
-      deps.openPanel(ref, href, listing);
+      deps.openPanel(ref, href);
     };
 
     for (const type of SHIELDED_EVENTS) {

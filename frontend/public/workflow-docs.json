@@ -366,7 +366,7 @@
     {
       "filename": "build-extension.yml",
       "name": "CI: build Chrome extension",
-      "description": "Builds the chrome-extension/ bundle and uploads dist/ as a workflow artifact you can download from the Actions tab. Keeps the build off the operator's laptop (no local Node install needed).",
+      "description": "Builds the chrome-extension/ bundle and uploads two workflow artifacts: chrome-extension-dist   dist/ as built: keeps the pinned manifest `key`, so a \"Load unpacked\" install has the fixed dev ID chrome-extension-store  the store package (release/package.ts): no `key`, no source maps, checked against release/allowed.ts The store-package step runs on every pull request, so a PR that adds a permission, a portal site or a host permission fails here until chrome-extension/release/allowed.ts says so too.",
       "manual": true,
       "schedules": [],
       "onPush": true,

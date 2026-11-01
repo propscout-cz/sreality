@@ -1261,6 +1261,21 @@ component is slimmed twice — each wave rewrites one component and slims its st
   And `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
   mirror of the shape test.
+- **W4 — realitymix@8 — built 2026-10-31** (#2219, PR #2220, gate #2222; no migration; no `RESOLVER_VERSION`
+  bump). The `estimated` marker reads `div#map` alone: where the agency gave no GPS the server writes its own
+  geocode of the address onto `#print-map` (dropping "okres X": Beroun -> Moravský Beroun) and leaves
+  `#map` blank, and v7's first-match read of the print node never saw it (3,622 of the 3,656 declared
+  rows have both nodes blank). ~11k active pinned ads (7.4k–15.1k; ≤ 19,527 on the 0.01″ grid) become
+  declared estimates: under v5.9 ~610 obec-grain pins outside their town stand at the town point, and
+  ~6.6k street-bound geocodes yield to the RÚIAN street point (the W18 ladder as it stands: a register
+  street point beats a blurred pin). The dead C6 `odbl` branch is deleted; the geocode is filed `portal`,
+  declared `estimated`. Rollout: merge AFTER W2 is live (its queue order drains `claim_insert` rows ahead of
+  the full sweep), then `gh workflow run location_claims_intake.yml --ref main` by hand — the only
+  projector; ~102k stored bodies re-mine in 2–3 chained runs (~1 h), ~526k claims re-insert until W3
+  purges the v7 copies. The standing autodedup shadow gate (PROGRAM.md) runs before the re-mine.
+  Acceptance (gate #2222): realitymix outside cell ≤ 110 (from 712), 0 declared pins outside, 0 off-grid
+  declared; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
+  (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
 
 - **W1 — one location scorecard — built 2026-10-31** (#2218; migration 698; location data quality
   programme, rulings Q3/Q6/Q7). `location_quality_by_source` defines every location quality number
@@ -1721,7 +1736,7 @@ all closed, several proven against a throwaway PostgreSQL 18 built from `.deb` f
   `surface='archived_html'` (C9), the page's own `page_kind` (C10),
   `snapshot_anchor='unanchored_latest_fetch'` (C4), plus the archived arm of the coordinate
   ladder (`ARCHIVED_COORDINATE_RULES`, one detail-map entry per portal; the `mapy_affected` veto
-  above the substrate branch; realitymix's Nominatim fallback is `'odbl'`). Evidence is refused in
+  above the substrate branch; realitymix's Nominatim fallback is `'odbl'` (branch deleted 2026-10-31, W4: it emitted 0 rows ever)). Evidence is refused in
   Python, never by the CHECK. Also: C7 now counts distinct **sources**, so one portal read two
   ways is one voice, and `tests/location_data/test_lane_identifiers.py` makes every `LANE` /
   `JOB_NAME` / `CONCURRENCY_GROUP` / version constant globally unique. **Inert on merge,

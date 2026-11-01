@@ -23,6 +23,7 @@ import {
   type ClockRow,
   type SyncTable,
 } from './curationSync';
+import { FEED_HIDDEN_FILTERS, feedHiddenKey } from './feed';
 import { DEFAULT_FILTERS } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, pipelineShareKeys } from './queries';
 import { isOwed, revalidate } from './revalidate';
@@ -133,29 +134,37 @@ describe('familyTargets', () => {
     expect(browse.some((t) => t.queryKey[1] !== f)).toBe(false);
   });
 
-  it('a dismissal elsewhere reaches the cohorts that hide dismissed properties', () => {
+  /* The Skryté roll reads the hidden alone, so `showDismissed` keeps every lens
+   * off it; a dismissal moves it all the same (review repair, W6). */
+  it("a dismissal elsewhere reaches the cohorts that hide dismissed properties, and the Feed's Skryté roll", () => {
     const qc = new QueryClient();
     qc.setQueryData(browseKeys.count(unscoped), 1);
     qc.setQueryData(browseKeys.count({ ...unscoped, showDismissed: true }), 1);
     const browse = familyTargets(qc, 'dismissals', null).filter((t) => t.mode != null);
-    expect(browse.length).toBeGreaterThan(0);
-    expect(browse.every((t) => t.queryKey[1] === unscoped)).toBe(true);
+    const skryte = browse.filter((t) => t.queryKey[1] === FEED_HIDDEN_FILTERS);
+    expect(skryte).toEqual([{ queryKey: browseKeys.cohortCards(FEED_HIDDEN_FILTERS), mode: LENS_REREAD.lists }]);
+    expect(feedHiddenKey(DEFAULT_SORT).slice(0, 2)).toEqual(skryte[0].queryKey);
+    const cohorts = browse.filter((t) => !skryte.includes(t));
+    expect(cohorts.length).toBeGreaterThan(0);
+    expect(cohorts.every((t) => t.queryKey[1] === unscoped)).toBe(true);
+    expect(familyTargets(qc, 'dismissals', 'owner-a').some((t) => t.queryKey[1] === FEED_HIDDEN_FILTERS)).toBe(false);
   });
 
-  it('a collections change elsewhere leaves an open collection page to its next mount; the marks follow at once', () => {
+  it('a collections change elsewhere re-reads an open collection page at once, with the marks', () => {
     const targets = familyTargets(new QueryClient(), 'collections', null);
-    expect(targets).toContainEqual({ queryKey: curationKeys.anyCollection, mode: LENS_REREAD.lists });
+    expect(targets).toContainEqual({ queryKey: curationKeys.anyCollection, mode: 'now' });
     expect(targets).toContainEqual({ queryKey: curationKeys.propertyCollectionMembers });
     expect(targets).toContainEqual({ queryKey: curationKeys.collections });
   });
 
-  /* Ruling Q3(a), 2026-10-31: a remote lens change leaves lists, counts, map and
-   * stats until navigation; only the marks follow at once. */
-  it('LENS_REREAD leaves every Browse read to its next mount', () => {
-    expect(LENS_REREAD).toEqual({ lists: 'mount', aggregates: 'mount' });
+  /* Ruling Q3(c) with the pointer hold, 2026-11-01 (re-ruling Q3(a)): a remote
+   * lens change re-reads lists, counts, map and stats at once; a list waits only
+   * while a hand is on it (lib/useListHold.test.tsx). */
+  it('LENS_REREAD re-reads every Browse read at once', () => {
+    expect(LENS_REREAD).toEqual({ lists: 'now', aggregates: 'now' });
   });
 
-  it('a remote lens change reads nothing of a mounted cohort until it mounts again; the marks follow at once', async () => {
+  it('a remote lens change re-reads a mounted cohort, its list and its count, at once with the marks', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const cards = browseKeys.cards(f, DEFAULT_SORT);
     const count = browseKeys.count(f);
@@ -181,15 +190,20 @@ describe('familyTargets', () => {
     void revalidate(qc, familyTargets(qc, 'board', null));
     await flush();
     expect(marks).toHaveBeenCalledTimes(1);
-    expect(list).not.toHaveBeenCalled();
-    expect(total).not.toHaveBeenCalled();
-    expect(isOwed(qc, cards) && isOwed(qc, count)).toBe(true);
-
-    for (const unmount of cohort) unmount();
-    mountCohort();
-    await flush();
     expect(list).toHaveBeenCalledTimes(1);
     expect(total).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, cards) || isOwed(qc, count)).toBe(false);
+
+    // A cohort cached but not on screen is read once it is shown again, not before.
+    for (const unmount of cohort) unmount();
+    void revalidate(qc, familyTargets(qc, 'board', null));
+    await flush();
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(isOwed(qc, cards) && isOwed(qc, count)).toBe(true);
+    mountCohort();
+    await flush();
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(total).toHaveBeenCalledTimes(2);
     expect(isOwed(qc, cards) || isOwed(qc, count)).toBe(false);
   });
 
