@@ -2,8 +2,8 @@ name: "CI: tests"
 
 # CI test suite, runs on every pull request and on every push to main. Three parallel jobs:
 # a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs
-# pytest, then lints with ruff), a frontend job (the docs budget, then type-check, lint, vitest,
-# the production build and its first-visit JS budget) and a secret scan of the new commits. This
+# pytest, then lints with ruff), a frontend job (type-check, lint, vitest, the production build
+# and its first-visit JS budget, then the docs budget) and a secret scan of the new commits. This
 # is the build gate for every branch.
 #
 # A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
@@ -75,7 +75,7 @@ jobs:
         run: ruff check --output-format=github .
 
   frontend:
-    # Frontend tests (vitest, jsdom — see frontend/vite.config.ts).
+    # The SPA's checks and build, then the docs budget. Vitest runs under jsdom (frontend/vite.config.ts).
     # Covers filter state plumbing, the registry adapter, the centre+radius
     # spatial helpers in lib/queries, and component behaviour.
     # The `Type-check` step below is load-bearing, not hygiene: it is part (a)
@@ -93,31 +93,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on
-      # CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a
-      # word cap on skill descriptions; routing completeness). HEAD^1 is the base this PR's merge
-      # commit was built on; origin/<base> moves under a re-run.
-      - name: Enforce context budgets (blocking)
-        if: github.event_name == 'pull_request'
-        working-directory: .
-        run: .github/scripts/docs-budget-check.sh . HEAD^1
-
-      # A design doc or roadmap line naming a function that no longer exists misleads the
-      # next session that trusts it. Warns on each backticked symbol the PR's added doc lines
-      # name that no code tree contains; never fails (a plan may name what is not built yet).
-      - name: Docs name only symbols that exist (non-blocking)
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        working-directory: .
-        run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
-
-      - name: Skill-staleness nudge (non-blocking)
-        if: github.event_name == 'pull_request'
-        working-directory: .
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"
-
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -125,9 +100,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install
+        id: install
         run: npm ci
 
-      # Covers the service worker too.
+      # Every step below still runs after a failed one: one run reports them all together. Covers the service worker too.
       - name: Type-check
         run: npm run typecheck
 
@@ -135,12 +111,16 @@ jobs:
       # called conditionally / after an early return — the bug that blanked
       # Listing Detail. Errors fail the build; exhaustive-deps stays a warning.
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run lint
 
       - name: Run vitest
-        run: npm test -- --maxWorkers=2
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test -- --maxWorkers=2 --minWorkers=1
 
       - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build
         env:
           VITE_SUPABASE_URL: https://example.supabase.co
@@ -150,9 +130,11 @@ jobs:
       # URLs with no SPA fallback, so a build without them ships an app that
       # cannot install and a worker URL that 404s.
       - name: Installable shell files are in the build
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: test -f dist/sw.js && test -f dist/manifest.webmanifest
 
       - name: All chunk sizes (informational)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           du -sh dist
           for f in dist/assets/*.js; do
@@ -168,7 +150,33 @@ jobs:
       # back on that path (matched by content, not filename — Rollup renames auto-split
       # chunks). See frontend/scripts/bundle-budget.mjs.
       - name: First-visit JS budget
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node scripts/bundle-budget.mjs
+
+      # The always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on
+      # CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a
+      # word cap on skill descriptions; routing completeness). HEAD^1 is the base this PR's merge
+      # commit was built on; origin/<base> moves under a re-run.
+      - name: Enforce context budgets (blocking)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        working-directory: .
+        run: .github/scripts/docs-budget-check.sh . HEAD^1
+
+      # A design doc or roadmap line naming a function that no longer exists misleads the
+      # next session that trusts it. Warns on each backticked symbol the PR's added doc lines
+      # name that no code tree contains; never fails (a plan may name what is not built yet).
+      - name: Docs name only symbols that exist (non-blocking)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        working-directory: .
+        run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
+
+      - name: Skill-staleness nudge (non-blocking)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        working-directory: .
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"
 
   secrets:
     # gitleaks over exactly the commits this PR (or this push to main) adds, a merge by what it changed beyond the

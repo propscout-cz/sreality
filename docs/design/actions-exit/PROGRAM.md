@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service and the move of its first three jobs (#2025) landed, their 7-day gate #2123 running, R6a's ruled deletions and the pHash retry in the images lane (#2018) in review. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service and the move of its first three jobs (#2025) landed, their 7-day gate #2123 running, R6a's ruled deletions and the pHash retry in the images lane (#2018) in review, W6's one `frontend` CI job (#2034) in review. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -345,7 +345,7 @@ jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the 
 GitHub run-rate under 50,000 min/month.**
 
 ### W6 — Consolidate CI, prove the private paths, flip
-`test.yml` absorbs `frontend-build` and `docs-budget` as one `frontend` job (vitest `--maxWorkers=2`, timeout
+`test.yml` absorbs `frontend-build` and `docs-budget` as one `frontend` job (vitest `--maxWorkers=2 --minWorkers=1`, timeout
 sized for 2-vCPU runners; the budget step keeps `fetch-depth: 0`, its `HEAD^1` base argument and a PR-only
 `if:`); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed `extension`; required
 contexts → pytest, schema-and-sql, frontend, secrets (ruling 2026-10-28); gitleaks: one history scan, a PR job
