@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAgentRunOptions } from '@/lib/agentRunOptions';
 import { useAuth } from '@/lib/auth';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
@@ -9,7 +10,7 @@ import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
 
-const AgentLimitDialog = lazy(() => import('./runs/AgentLimitDialog'));
+const AgentLimitDialog = lazyChunk(() => import('./runs/AgentLimitDialog'));
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
