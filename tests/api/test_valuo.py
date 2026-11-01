@@ -465,7 +465,8 @@ class _Cur:
         p = [_plain(x) for x in params]
         rows = self.store.rows
         if text.startswith("insert into valuo_valuations"):
-            account, listing_id, env, sha, request, provenance = p
+            account, listing_id, env, sha, request, provenance, agent_run_id = p
+            assert agent_run_id is None, "the website's POST names no run"
             if self.store.live_twin(account, env, listing_id, request):
                 self.result = []
                 return

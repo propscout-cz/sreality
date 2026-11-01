@@ -15,7 +15,7 @@ without saying whose data it reads and what it does.
   for a read and `POST` otherwise). Every read is bounded as PostgREST bounds the SPA's signed-in GET
   (`tenant_pool.READ_BOUND`: READ ONLY under `authenticated`'s 8 s `statement_timeout`): a tenant read through its
   GET, a market call in a transaction of its own, so its `SET LOCAL`s end with it and never outlive the call on the
-  shared service connection.
+  shared service connection. A TENANT COSTLY tool holds neither across its paid call (§ A paid tenant tool).
 - **`effect`**: `READ`, `WRITE`, `COSTLY` (money: Valuo, an LLM) or `CODE`. A market tool only reads (census; its
   transaction is READ ONLY anyway), so a write is only ever to the user's own data. One named exception
   (`_PAID_MARKET_FACTS` in the census), below: a market fact that costs money the first time and writes only the cache of
@@ -184,10 +184,43 @@ off at `MAX_REPLY_TOKENS` (8,000, thinking included) or fails the schema is bill
 on Opus 5.5 (13–20 photos at ~590 tokens each, 2–3k tokens out), half that on Sonnet 5.5, an estimate until the
 comparison measures it; at most about $0.32 on Opus. `llm_calls.called_for = 'assess_property_visuals'`.
 
+## A paid tenant tool: `valuo_valuation` (#2067, MVP Q18)
+
+`api/capabilities/valuo_tool.py`: TENANT, COSTLY, takes one `property_id` and no overrides, so a model steers neither the
+request nor the dedupe, and every refusal is the website's (`api/valuo.new_valuation`, the one path to Valuo and the one
+writer of its ledger, rule 12). A property with a required value missing, such as its condition, is refused naming it.
+
+**The connection.** `_connection` opens the caller's tenant transaction (`GET`, `act_as=None`) only to read
+`current_account_ids()`, which migration 704 narrows to the run's claim; anything but exactly the claim's account is
+FORBIDDEN. That transaction ends, and the handler gets `ctx.account_id` on the autocommit service connection: the ledger
+is the service role's alone, and no transaction or tenant connection spans the request.
+
+**The order, each before any money and none writing a row:** no run, or a scope with no run row (`scripts/agent_run.py`:
+`LLMClient` without an `agent_run_id`, so a row could name no run), refused; `MAX_CALLS_PER_RUN` (3) reached; no budget for
+the model call that reads the answer (`left_usd() <= 0`); under `MIN_LEFT_S` (50 s, both Valuo calls at their timeouts);
+`agent_valuo_monthly_cap` absent, null or not a number; then `new_valuation`'s own refusals; then the cap, atomically.
+
+**The three per run** is `RunScope.counts`, seeded at the attempt's first call from the rows naming the run, because a
+restart builds a new scope and the limit is per run. A row takes the slot once committed and before the request, so a
+Valuo failure or a crash keeps it. A refusal, a stored answer reused (the same request the same day, `as_of` included) and
+a running twin take none. At three, even a free reuse is refused.
+
+**The monthly cap** (`valuo._write_ahead`) is one transaction: `pg_advisory_xact_lock` per account, the write-ahead INSERT, the
+count; over the cap it rolls back, so no reader sees the row. It commits before the request. Two runs of an account cannot
+both take the last slot (`tests/test_agent_runs_live.py`). A row counts whatever its status: one is written only as its
+request goes out and nothing in it proves Valuo did not bill. It counts the account's rows since the start of the
+Europe/Prague month in the credential's environment, the website's included. The website is NOT bound and takes no lock:
+it can pass the number, and an agent is then refused; an agent cannot.
+
+**Cost.** Nothing in the code or docs holds Valuo's price, so none is invented. A call is recorded on the ledger row
+(`agent_run_id`) and the journal step (`data.valuation_id`, `metadata.valuo_calls_paid`, `metadata.cost_usd` null, the step's
+`cost_usd` 0). It is OUTSIDE the run's dollar cap, `agent_runs.cost_usd` and the daily ceiling (`_RUN_SPEND`, `llm_calls`
+only): only the two call counts bound it. A failure is a REFUSED tool error whose `details` name the row.
+
 ## Adding a tool
 
 One `Entry` in `market.py` or `tenant.py` (or a module of its own beside them, like `visuals.py`), its effect named at the declaration (`market._read` builds READ
-entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § below; a write comes
+entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § above; a write comes
 with #2072's inverse). Reuse
 `filter_model` for any registry filter; give every other field a `description`. The census (`tests/api/test_capabilities_census.py`)
 then checks it: a real tenancy and effect, no identity field at any depth (account, user, acting, owner, …), a

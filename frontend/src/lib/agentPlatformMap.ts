@@ -43,7 +43,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2065, done: true, title: 'Agent folders, the generic loop, the result check, a local runner' },
       { n: 2179, done: true, title: 'Models keep their own reply blocks across tool calls' },
       { n: 2066, done: true, title: 'Structured photo assessment with a cache' },
-      { n: 2067, done: false, title: 'Valuo as a capped, recorded paid tool' },
+      { n: 2067, done: true, title: 'Valuo as a capped, recorded paid tool' },
       { n: 2068, done: true, title: 'Agent Python on Claude\'s hosted code execution' },
       { n: 2069, done: false, title: 'The scout\'s folder, and your grading of ten shortlists' },
     ],
@@ -110,7 +110,7 @@ export const TOOL_GROUPS: ToolGroup[] = [
       { name: 'find_comparables_relaxed' },
       { name: 'estimate_yield' },
       { name: 'compute_reference_rent' },
-      { name: 'valuo_valuation', ticket: 2067 },
+      { name: 'valuo_valuation' },
     ],
   },
   {
@@ -220,7 +220,7 @@ export const TRADE_OFF =
 
 export const NEEDS_YOU: { head: string; text: string; ticket?: number }[] = [
   { head: 'Rotate the GitHub tokens.', text: 'The last credentials pending.', ticket: 2061 },
-  { head: 'Pick the Valuo monthly cap.', text: 'One number per account.' },
+  { head: 'Pick the Valuo monthly cap.', text: 'One number, the same for every account. No agent can call Valuo until it is set, and your own clicks on the property page count towards it.' },
   { head: 'Edit the photo facet list.', text: 'Claude drafts version 1.', ticket: 2066 },
   { head: 'Grade 10 scout shortlists.', text: 'This happens before the production path is finished.', ticket: 2069 },
   { head: 'Write the customer-group page, later.', text: 'What makes a property attractive to whom. The scout works without it.' },

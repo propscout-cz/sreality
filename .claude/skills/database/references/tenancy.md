@@ -443,7 +443,9 @@ builder), never acting
 as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
 every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
 back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection
-the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`).
+the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`). A TENANT
+COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
+service connection, as the Valuo routes do: no tenant transaction across a paid call.
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens

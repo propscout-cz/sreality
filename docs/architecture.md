@@ -1889,7 +1889,9 @@ renumber.** Navigate by area:
     dedupe looks under the variable's environment) before the row settles `failed`/`duplicate` and the
     stored sandbox answer is shown: sandbox volume only, accepted for a misconfiguration. Each call is one row in
     `valuo_valuations` (migration 637), written only by `api/valuo.py`, never an `estimation_runs`
-    row. Three reasons, each sufficient: browser roles hold INSERT/UPDATE on `estimation_runs`
+    row; an agent run reaches the same path through `valuo_valuation`, its row naming the run (`agent_run_id`,
+    migration 710), at most 3 per run and within `agent_valuo_monthly_cap` per account, which counts the website's rows
+    but binds only agents (`toolkit-api` `references/tool-registry.md`). Three reasons, each sufficient: browser roles hold INSERT/UPDATE on `estimation_runs`
     (291), so anyone could forge a "production" Valuo row; a row with no account falls back to
     SYSTEM, which every account reads (431); and `property_estimates_public` (412) counts every
     successful run, so sandbox calls would light Browse's "s odhadem" filter. The table is

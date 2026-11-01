@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -40,10 +41,12 @@ class Caller:
 
 @dataclass(frozen=True)
 class Context:
-    """What a handler gets: the one connection its tenancy picked, and the run it is called in, if any."""
+    """What a handler gets: the one connection its tenancy picked, the run it is called in, if any, and, for a tenant's
+    paid tool, the account that run spends for."""
 
     conn: psycopg.Connection
     run: RunScope | None = None
+    account_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)

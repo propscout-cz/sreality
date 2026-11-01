@@ -1,4 +1,4 @@
-"""valuo_valuations (migrations 637 + 646) and api/valuo.py's statements, against the replayed schema: the row is
+"""valuo_valuations (migrations 637 + 646 + 710) and api/valuo.py's statements, against the replayed schema: the row is
 saved `pending` before the paid call and finished once, an identical request reuses its answer or meets
 its running twin (the double submit pays once), a refusal writes nothing, the CHECKs refuse a priceless
 success and an unexplained failure, the comparables' photos land beside the answer, a sandbox answer is
@@ -9,6 +9,8 @@ Runs in CI's migrations job (`TEST_DATABASE_URL`, DB_RAILS_REQUIRED=1); every te
 
 from __future__ import annotations
 
+import uuid
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -102,7 +104,7 @@ def test_a_double_submit_meets_its_running_twin_and_pays_once(cur, flat, fake_va
     subject, location = valuo._load(flat["conn"], flat["pid"])
     request, provenance = valuo.build_request(subject, location, {})
     [twin] = valuo._rows(flat["conn"], valuo._INSERT_SQL, (flat["account"], flat["lid"], CRED.environment,
-                                                            CRED.token_sha, Jsonb(request), Jsonb(provenance)))
+                                                            CRED.token_sha, Jsonb(request), Jsonb(provenance), None))
     assert twin["status"] == "pending"
     with pytest.raises(HTTPException) as err:
         _value(flat)
@@ -216,3 +218,150 @@ def test_no_browser_role_reads_the_table(cur):
     for role in ("anon", "authenticated"):
         cur.execute("SELECT has_table_privilege(%s, 'public.valuo_valuations', 'SELECT')", (role,))
         assert cur.fetchone()[0] is False
+
+
+# --- a run's call: the monthly cap, against the real ledger (#2067; two runs racing: tests/test_agent_runs_live.py) ---
+
+RUN = 41
+
+
+def _by_run(flat: dict[str, Any], *, cap: float = 5, account: Any = None, cred: valuo_client.Credential = CRED,
+            run: int = RUN) -> tuple[dict[str, Any], list[int]]:
+    slots: list[int] = []
+    out = valuo.new_valuation(flat["conn"], flat["pid"], {}, account_id=account or flat["account"], cred=cred,
+                              run=valuo.RunCall(run, cap, lambda: slots.append(1)))
+    return out, slots
+
+
+def _refused_by_cap(flat: dict[str, Any], **kw: Any) -> None:
+    with pytest.raises(HTTPException) as err:
+        _by_run(flat, **kw)
+    assert err.value.status_code == 429 and err.value.detail["code"] == valuo.MONTHLY_CAP
+
+
+def _spent(cur: Any, flat: dict[str, Any], *, status: str = "success", environment: str = "sandbox",
+           at: str = "now()", account: Any = None) -> None:
+    """A row of the ledger, as any path left it."""
+    cur.execute(
+        "INSERT INTO valuo_valuations (account_id, listing_id, environment, token_sha, request, provenance, status, "
+        f"response, error, created_at) VALUES (%s, %s, %s, 'x', %s, '{{}}', %s, %s, %s, {at})",  # noqa: S608 - fixed
+        (account or flat["account"], flat["lid"], environment, Jsonb({"n": uuid.uuid4().hex}), status,
+         Jsonb(PRICED) if status == "success" else None,
+         Jsonb({"code": "timeout", "message": "m"}) if status == "failed" else None))
+
+
+def test_a_runs_row_names_its_run_and_the_websites_names_none(cur, flat, fake_valuo):
+    out, slots = _by_run(flat)
+    assert out["valuation"]["status"] == "success" and slots == [1]
+    assert fake_valuo.pending_at_call == [1], "the row is saved and committed before the paid call"
+    assert valuo.calls_on_run(flat["conn"], RUN) == 1
+    pid = _property(cur)
+    lid = _advert(cur, pid, source="idnes", condition="dobry")
+    _located(cur, lid)
+    _recompute(cur, pid)
+    valuo.new_valuation(flat["conn"], pid, {}, account_id=flat["account"], cred=CRED)
+    cur.execute("SELECT agent_run_id FROM valuo_valuations WHERE account_id = %s ORDER BY id", (flat["account"],))
+    assert [r[0] for r in cur.fetchall()] == [RUN, None]
+
+
+def test_a_call_past_the_cap_makes_no_paid_request_and_leaves_no_row(cur, flat, fake_valuo):
+    _spent(cur, flat)
+    _refused_by_cap(flat, cap=1)
+    assert fake_valuo.pending_at_call == [], "no paid request"
+    assert len(_rows(cur, flat["account"])) == 1, "no pending row"
+
+
+@pytest.mark.parametrize("status", ["success", "pending", "failed"])
+def test_every_row_that_may_have_cost_money_counts(cur, flat, fake_valuo, status):
+    _spent(cur, flat, status=status)
+    _refused_by_cap(flat, cap=1)
+    assert fake_valuo.pending_at_call == []
+
+
+def test_the_last_slot_can_be_taken_and_a_failure_keeps_it(cur, flat, fake_valuo):
+    fake_valuo.answer = valuo_client.ValuoError("unavailable", 503)
+    out, slots = _by_run(flat, cap=1)
+    assert out["valuation"]["status"] == "failed" and slots == [1]
+    assert valuo.calls_on_run(flat["conn"], RUN) == 1
+    fake_valuo.answer = PRICED
+    _refused_by_cap(flat, cap=1)
+    assert len(fake_valuo.pending_at_call) == 1
+
+
+def test_a_cap_of_zero_allows_nothing(cur, flat, fake_valuo):
+    _refused_by_cap(flat, cap=0)
+    assert fake_valuo.pending_at_call == [] and _rows(cur, flat["account"]) == []
+
+
+def test_only_this_accounts_rows_in_this_environment_count(cur, flat, fake_valuo):
+    _spent(cur, flat, account=_account(cur))
+    _spent(cur, flat, environment="production")
+    out, _ = _by_run(flat, cap=1)
+    assert out["valuation"]["status"] == "success", "another account's and the other credential's rows are not this cap's"
+
+
+def test_the_month_is_the_calendar_month_in_prague(cur, flat, fake_valuo):
+    month = "date_trunc('month', now(), 'Europe/Prague')"
+    _spent(cur, flat, at=f"{month} - interval '1 second'")
+    out, _ = _by_run(flat, cap=1)
+    assert out["valuation"]["status"] == "success", "the month before does not count"
+    cur.execute("DELETE FROM valuo_valuations WHERE account_id = %s", (flat["account"],))
+    _spent(cur, flat, at=f"{month} + interval '1 second'")
+    _refused_by_cap(flat, cap=1)
+
+
+def test_the_cap_counts_the_websites_calls_but_never_stops_the_website(cur, flat, fake_valuo):
+    _spent(cur, flat)
+    _refused_by_cap(flat, cap=1)
+    assert _value(flat)["valuation"]["status"] == "success", "the website's POST is not bound"
+    assert len(fake_valuo.pending_at_call) == 1
+
+
+def test_an_answer_already_stored_is_free_at_a_full_cap_and_takes_no_slot(cur, flat, fake_valuo):
+    first = _value(flat)["valuation"]
+    out, slots = _by_run(flat, cap=1)
+    assert out["reused"] is True and out["valuation"]["id"] == first["id"]
+    assert slots == [] and len(fake_valuo.pending_at_call) == 1
+
+
+def test_a_running_twin_takes_no_slot(cur, flat, fake_valuo):
+    subject, location = valuo._load(flat["conn"], flat["pid"])
+    request, provenance = valuo.build_request(subject, location, {})
+    valuo._rows(flat["conn"], valuo._INSERT_SQL, (flat["account"], flat["lid"], CRED.environment, CRED.token_sha,
+                                                  Jsonb(request), Jsonb(provenance), None))
+    slots: list[int] = []
+    with pytest.raises(HTTPException) as err:
+        valuo.new_valuation(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=CRED,
+                            run=valuo.RunCall(RUN, 5, lambda: slots.append(1)))
+    assert err.value.status_code == 409 and slots == [] and fake_valuo.pending_at_call == []
+
+
+def test_the_existing_refusals_cost_nothing_and_take_no_slot(cur, flat, fake_valuo):
+    slots: list[int] = []
+    run = valuo.RunCall(RUN, 5, lambda: slots.append(1))
+    with pytest.raises(HTTPException) as unconfigured:
+        valuo.new_valuation(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=None, run=run)
+    assert unconfigured.value.status_code == 503
+    with pytest.raises(HTTPException) as missing:
+        valuo.new_valuation(flat["conn"], 2_000_000_000, {}, account_id=flat["account"], cred=CRED, run=run)
+    assert missing.value.status_code == 404
+    cur.execute("UPDATE listings SET condition = NULL WHERE id = %s", (flat["lid"],))
+    _recompute(cur, flat["pid"])
+    with pytest.raises(HTTPException) as blocked:
+        valuo.new_valuation(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=CRED, run=run)
+    assert blocked.value.detail["code"] == "missing_required" and blocked.value.detail["fields"] == ["rating"]
+    assert slots == [] and fake_valuo.pending_at_call == [] and _rows(cur, flat["account"]) == []
+
+
+@pytest.mark.parametrize(("stored", "read"), [(None, None), ("null", None), ('"10"', None), ("true", None), ("3", 3),
+                                              ("0", 0), ("2.5", 2.5)])
+def test_the_cap_is_a_number_or_nothing(cur, flat, stored, read):
+    cur.execute("DELETE FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,))
+    if stored is not None:
+        cur.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb)", (valuo.CAP_SETTING, stored))
+    assert valuo.monthly_cap(flat["conn"]) == read
+
+
+def test_the_migration_lands_no_cap_so_no_agent_can_call_valuo_until_the_operator_says() -> None:
+    sql = Path(__file__).resolve().parents[1].joinpath("migrations/710_valuo_valuations_agent_run.sql")
+    assert f"('{valuo.CAP_SETTING}', 'null'," in sql.read_text(encoding="utf-8")
