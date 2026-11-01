@@ -158,7 +158,7 @@ describe('<NewDedupDashboard>', () => {
     await screen.findByText(LOCATION_STEPS.all_listings.en);
 
     /* Every label is read from the ONE wording module — a step renamed there is
-     * renamed on the audit page and here at once, and this test cannot pass with
+     * renamed everywhere at once, and this test cannot pass with
      * a name only one page uses. The counts are the lane's, not a sum. */
     const step = (key: keyof typeof LOCATION_STEPS) =>
       screen.getByText(LOCATION_STEPS[key].en).closest('li')!;

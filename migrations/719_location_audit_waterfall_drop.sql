@@ -14,14 +14,15 @@
 --   CONCURRENTLY and stamps the artifact.
 -- KEPT: location_pin_audit_mv and its indexes, the audit LIST's relation, until W6 (design: w1-page-reads-cells.md).
 --
--- DESTRUCTIVE, on derived objects only: the table is a 9-row hourly rewrite, its backup the receipt of its rows in
--- this PR's body. Nothing on main reads these objects, and production's pg_proc, views and
+-- DESTRUCTIVE, on derived objects only: the table is a 9-row hourly rewrite, backed up first to R2
+-- (backup_before_drop.yml, label w1-waterfall). Nothing on main reads these objects, and production's pg_proc, views and
 -- pg_depend name none of them but the two producers dropped here.
 --
 -- APPLY: only on the operator's "yes, apply it". Not around minute :25, when the old job runs. Every statement is
 -- idempotent, so a lock_timeout retry resumes from statement 1.
 -- VERIFY:
---   select command from cron.job where jobname = 'refresh-location-pin-audit';   -- the chokepoint
+--   select username, command from cron.job where jobname = 'refresh-location-pin-audit'; -- postgres, the chokepoint
+--   select matviewowner from pg_matviews where matviewname = 'location_pin_audit_mv';     -- postgres
 --   select producer from derived_artifacts where name = 'location_pin_audit_mv'; -- refresh_matview
 --   select to_regclass('public.location_audit_waterfall');                       -- null
 --   then after the next :25, derived_artifacts.last_succeeded_at for location_pin_audit_mv moves.
@@ -35,7 +36,7 @@ begin
     '25 * * * *',
     $$set statement_timeout='900s'; select public.refresh_matview('location_pin_audit_mv');$$
   );
-exception when others then
+exception when invalid_schema_name then
   raise notice 'pg_cron unavailable; refresh-location-pin-audit not re-pointed (%)', sqlerrm;
 end
 $cron$;

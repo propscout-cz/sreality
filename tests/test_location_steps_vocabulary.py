@@ -143,7 +143,7 @@ def _ts_steps() -> dict[str, dict[str, str]]:
     }
 
 
-def test_every_step_key_either_producer_stamps_is_worded_in_both_languages() -> None:
+def test_every_step_key_the_funnel_stamps_is_worded_in_both_languages() -> None:
     """RED by: a new step landing in the backend with no label — the page would then print
     the raw key, or worse, a blank cell where a count belongs."""
     ts = _ts_steps()
