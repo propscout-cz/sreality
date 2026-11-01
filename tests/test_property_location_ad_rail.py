@@ -535,6 +535,8 @@ def test_every_cohort_counts_a_property_once_through_the_shared_cohort_shape() -
 # Every Python read of toolkit/publication.py, by (module, scope, what it renders): its grain and why. The rule is a
 # property's; browse_projection carries its text verbatim (tests/test_668_publication_gate.py), these render it.
 PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
+    ("scripts/photo_assessment_compare.py", "_SAMPLE_SQL", 'published_predicate("p")'):
+        ("property", "the two-model comparison samples only what Browse may serve"),
     ("api/notifications.py", "_build_match_clauses", 'published_property_predicate("l.property_id")'):
         ("property", "both watchdog producers over properties_public, published as browse_projection publishes"),
     ("api/notifications.py", "match_once", 'visible_since_sql("pp")'):

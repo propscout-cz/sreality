@@ -38,7 +38,7 @@ it (`api/`). They do not apply to the scraper.
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
    (default 7).** Don't trust `is_active` alone — a listing not seen for 30 days is
    functionally inactive.
-5. **No writes from the toolkit, with nine explicit exceptions.** Read-only by default. The
+5. **No writes from the toolkit, with ten explicit exceptions.** Read-only by default. The
    exceptions are:
    - `verify_listing_freshness` (and `scraper.freshness.freshness_check` that it wraps), so
      an agent can confirm a comparable is still valid before relying on it. Every call logs to
@@ -52,9 +52,9 @@ it (`api/`). They do not apply to the scraper.
      (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `compare_listing_images`, which writes the pairwise visual comparison to
      `listing_image_comparisons` (canonical-ordered pair) on cache miss.
+   - `assess_property_visuals` (`references/tool-registry.md`), one judgement per photo set and prompt version.
    - `extract_building_units`, which writes the structural unit decomposition to
-     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss —
-     the vision extractor behind the building-paste flow.
+     `building_unit_extractions` (keyed on `(sreality_id, snapshot_id)`) on cache miss.
    - `read_floor_plan`, which writes a structured Claude-vision analysis of one
      operator-supplied attachment to `building_attachment_analyses` (keyed on
      `(attachment_id, model)`) on cache miss. Only callable inside the building flow; the
@@ -62,7 +62,7 @@ it (`api/`). They do not apply to the scraper.
      `building_run_id`.
    - `discover_condition_markers`, which writes a structured list of Czech "condition
      markers" to `listing_marker_extractions` (keyed on `(sreality_id, snapshot_id)`) on
-     cache miss — feeds the condition-scoring marker dictionary.
+     cache miss.
    - `score_listing_condition` (PARKED, rule #14: dispatch-only; nothing reads its levels), which writes per-listing building/apartment condition levels
      (1..5) + matched marker_ids + per-axis confidence to `listing_condition_scores` (keyed
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`
@@ -71,7 +71,7 @@ it (`api/`). They do not apply to the scraper.
    Every write-allowed exception caches an expensive external/LLM fact locally and
    auto-invalidates (a new snapshot or a model bump yields a fresh key); the LLM/OSM source is the truth, the table is a mirror. No other toolkit
    function may write. The API service should still connect with a read-only role if Postgres
-   permits; these nine paths then need a separately-elevated route. For now we ship with one
+   permits; these ten paths then need a separately-elevated route. For now we ship with one
    role and discipline.
    **Broker merge-review writes are durable decisions, not just status flips** (suppressions the nightly sweep
    honours, lifts, the `*_by` stamps): `references/broker-review-writes.md`.

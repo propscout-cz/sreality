@@ -19,7 +19,7 @@ import pytest
 from api import tenant_pool
 from api.agents import claims, executor, loop, terminator
 from api.agents.definition import load
-from api.capabilities import registry
+from api.capabilities import registry, run_scope
 from api.capabilities.entry import Context, Effect, Entry, Tenancy
 from api.filter_args import Args
 from api.providers import Completion, HostedFile, ModelPrice
@@ -28,6 +28,7 @@ from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
 from tests.api._agent_fixtures import ScriptedCodeProvider, code_reply, frontmatter, reply, write_folder
 from tests.api._fakes import _ScriptedProvider
+from toolkit import photo_assessment as pa
 
 pytestmark = REQUIRED_DB
 
@@ -39,6 +40,10 @@ SUBMIT = terminator.NAME
 ANSWER = reply((SUBMIT, {"markdown": "Done."}))
 SETTINGS = ("agent_executor_enabled", "agent_daily_ceiling_usd", "agent_account_running_cap",
             "agent_account_in_flight_cap", "agent_run_allowlist")
+
+
+# Every value the daily ceiling counts: a leftover row of either parks the next test's claims.
+_DELETE_RUN_SPEND = "DELETE FROM llm_calls WHERE called_for IN ('agent_run', 'assess_property_visuals')"
 
 
 def _connect() -> psycopg.Connection:
@@ -88,14 +93,15 @@ def world(svc: psycopg.Connection, people: dict[str, Any], tmp_path: Path, monke
                        ("agent_account_running_cap", 2), ("agent_account_in_flight_cap", 20),
                        ("agent_run_allowlist", emails)):
         _set(svc, key, value)
-    svc.execute("DELETE FROM llm_calls WHERE called_for = 'agent_run'")
+    svc.execute(_DELETE_RUN_SPEND)
     try:
         yield {**people, "folder": tmp_path / AGENT, "emails": emails}
     finally:
         for key in SETTINGS:
             _set(svc, key, before.get(key))
         svc.execute("DELETE FROM agent_runs")
-        svc.execute("DELETE FROM llm_calls WHERE called_for = 'agent_run'")
+        svc.execute(_DELETE_RUN_SPEND)
+        svc.execute("DELETE FROM photo_set_assessments")
 
 
 def _submit(svc: psycopg.Connection, world: dict[str, Any], key: str = "a", idempotency_key: str | None = None) -> int:
@@ -820,6 +826,18 @@ def test_a_ceiling_of_a_cent_parks_new_claims_and_raising_it_frees_them(svc: psy
     assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", second)
 
 
+def test_photo_assessment_spend_alone_parks_new_claims_at_the_ceiling(svc: psycopg.Connection, world: dict[str, Any]) -> None:
+    _set(svc, "agent_daily_ceiling_usd", 0.01)
+    svc.execute("INSERT INTO llm_calls (called_for, provider, model, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens, cost_usd, duration_ms) VALUES ('assess_property_visuals', 'anthropic', %s, 1, 1, 0, 0, "
+                "0.02, 1)", (MODEL,))
+    queued = _submit(svc, world, "a")
+    assert _work_on(_Model()) == executor.Worked("parked")
+    assert _run(svc, queued)["status"] == "queued"
+    _set(svc, "agent_daily_ceiling_usd", 10)
+    assert _work_on(_Model(ANSWER)) == executor.Worked("succeeded", queued)
+
+
 @pytest.mark.parametrize("key", ["agent_daily_ceiling_usd", "agent_account_running_cap"])
 def test_an_absent_number_parks_rather_than_guesses(svc: psycopg.Connection, world: dict[str, Any], key: str) -> None:
     run_id = _submit(svc, world, "a")
@@ -1112,3 +1130,102 @@ def test_cancel_reaches_only_this_accounts_runs_and_leaves_an_ended_run_as_it_is
     assert _work_on(_Model(ANSWER)).state == "succeeded"
     assert _cancel(svc, world, run_id) == "succeeded"
     assert _run(svc, run_id)["cancel_requested_at"] is None
+
+
+# --- a paid tool on the executor's path (#2066) --------------------------------------------------------------------------
+
+VISUALS = "assess_property_visuals"
+
+
+class _R2:
+    def download_bytes(self, key: str) -> bytes:
+        return b"bytes"
+
+
+@pytest.fixture()
+def paid(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """An agent that lists the tool, over a photo set per property id and the real cache and ledger. photo_set's own SQL
+    is tests/test_photo_assessment_live.py's."""
+    root = world["folder"].parent / "paid"
+    write_folder(root, meta=frontmatter(AGENT, allowed_tools=[VISUALS], limits={
+        "max_iterations": 30, "max_cost_usd": 5.0, "wall_clock_timeout_s": 60}))
+    monkeypatch.setattr(executor, "SKILLS_DIR", root)
+    monkeypatch.setattr(pa, "photo_set", lambda conn, pid: pa.PhotoSet(
+        property_id=pid, listing_id=pid * 10, stored=1, pending=0, plans=(),
+        photos=(pa.Photo(pid * 100, f"img/{pid}.jpg", None, 800, 600),)))
+    monkeypatch.setattr(pa.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(pa.image_storage.R2Client, "from_env", staticmethod(lambda: _R2()))
+    return world
+
+
+def _assessed() -> Completion:
+    facets = {key: {"score": 4, "evidence": f"{key} vidět"} for key in pa.load_facets().keys}
+    return reply((pa.TOOL_NAME, {"facets": facets}), usage=(20_000, 2_000), model=pa.DEFAULT_MODEL)
+
+
+def _ask(*property_ids: int) -> Completion:
+    return reply(*[(VISUALS, {"property_id": pid}) for pid in property_ids])
+
+
+def _ledger(svc: psycopg.Connection, run_id: int) -> list[tuple[int, str, float]]:
+    rows = svc.execute("SELECT id, called_for, cost_usd FROM llm_calls WHERE agent_run_id = %s ORDER BY id", (run_id,))
+    return [(row[0], row[1], float(row[2])) for row in rows.fetchall()]
+
+
+def test_a_paid_tool_lands_on_the_runs_ledger_and_counts_into_its_cost_exactly_once(
+        svc: psycopg.Connection, paid: dict[str, Any]) -> None:
+    run_id = _submit(svc, paid, "a")
+    answer = reply((SUBMIT, {"markdown": "Hotovo.", "cited_property_ids": [7]}))
+    model = _Model(_ask(7), _assessed(), answer)
+    assert _work_on(model) == executor.Worked("succeeded", run_id)
+
+    ledger = _ledger(svc, run_id)
+    assert [called_for for _, called_for, _ in ledger] == ["agent_run", VISUALS, "agent_run"]
+    total = sum(cost for _, _, cost in ledger)
+    assert ledger[1][2] > 0
+    assert float(_run(svc, run_id)["cost_usd"]) == pytest.approx(total)
+    steps = _steps(svc, run_id)
+    assert float(sum(s["cost_usd"] for s in steps)) == pytest.approx(total), "every bill in the diary, none twice"
+    tool_step = next(s for s in steps if s["name"] == VISUALS)
+    assert tool_step["llm_call_id"] == ledger[1][0] and float(tool_step["cost_usd"]) == pytest.approx(ledger[1][2])
+    assert 0 < model.calls[1]["timeout_s"] <= 60, "what is left of the run's wall clock bounds the vision call"
+    assert model.calls[1]["system"] == pa.load_facets().system
+    held = svc.execute("SELECT count(*) FROM photo_set_assessments").fetchone()[0]
+    assert held == 1
+
+
+def test_a_worker_counts_the_ten_per_run_and_leaks_nothing_into_the_next(svc: psycopg.Connection, paid: dict[str, Any]) -> None:
+    first = _submit(svc, paid, "a")
+    answer = reply((SUBMIT, {"markdown": "Hotovo."}))
+    model = _Model(_ask(*range(1, 12)), *[_assessed() for _ in range(10)], answer)
+    assert _work_on(model) == executor.Worked("succeeded", first)
+    assert [c for _, c, _ in _ledger(svc, first)].count(VISUALS) == 10
+    refused = [s for s in _steps(svc, first) if s["name"] == VISUALS and "error" in s["payload"]["output"]]
+    assert [s["payload"]["input"]["property_id"] for s in refused] == [11]
+    assert "10" in refused[0]["payload"]["output"]["error"]["message"]
+    assert run_scope.current() is None, "the scope ends with each tool call"
+
+    second = _submit(svc, paid, "b")
+    next_model = _Model(_ask(11, 1), _assessed(), answer)
+    assert _work_on(next_model) == executor.Worked("succeeded", second)
+    assert [c for _, c, _ in _ledger(svc, second)].count(VISUALS) == 1, "11 paid afresh, 1 served from the first run's"
+    outputs = [s["payload"]["output"]["data"] for s in _steps(svc, second) if s["name"] == VISUALS]
+    assert [o["cache_hit"] for o in outputs] == [False, True]
+
+
+def test_an_interrupted_run_is_not_paid_for_twice_when_it_starts_over(svc: psycopg.Connection, paid: dict[str, Any]) -> None:
+    run_id = _submit(svc, paid, "a")
+    stop = threading.Event()
+    interrupted = _Model(_ask(7), _assessed(), _ask(8), during=lambda n: stop.set() if n == 3 else None)
+    assert _work_on(interrupted, stop).state == "released"
+    spent = float(_run(svc, run_id)["cost_usd"])
+    assert spent > 0
+
+    answer = reply((SUBMIT, {"markdown": "Hotovo.", "cited_property_ids": [7]}))
+    again = _Model(_ask(7), answer)
+    assert _work_on(again) == executor.Worked("succeeded", run_id)
+    row = _run(svc, run_id)
+    assert row["attempts"] == 2
+    ledger = _ledger(svc, run_id)
+    assert [c for _, c, _ in ledger].count(VISUALS) == 1, "the first attempt's judgement is the cache's now"
+    assert float(row["cost_usd"]) == pytest.approx(sum(cost for _, _, cost in ledger))

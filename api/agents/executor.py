@@ -31,6 +31,7 @@ from api.capabilities.truncate import encode
 from api.llm_client import LLMClient, ProviderError
 from api.providers import CompletionProvider
 from scraper import db
+from toolkit import photo_assessment
 
 LOG = logging.getLogger(__name__)
 
@@ -117,9 +118,11 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, status"""
 
 # Serialised, so two workers cannot both count an account under its cap and overshoot it together.
 _CLAIM_LOCK = "SELECT pg_advisory_xact_lock(hashtext('agent_run_claim'))"
+# Every model call a run can make: its own turns and a paid tool's. A tool that spends on a model adds its value here.
+_RUN_SPEND = (loop.CALLED_FOR, photo_assessment.CALLED_FOR)
 _SPENT_TODAY = """
 SELECT coalesce(sum(cost_usd), 0) FROM llm_calls
- WHERE called_for = %s AND called_at >= date_trunc('day', now(), 'UTC')"""
+ WHERE called_for = ANY(%s) AND called_at >= date_trunc('day', now(), 'UTC')"""
 _CLAIM = f"""
 UPDATE agent_runs SET status = 'running', lease_until = {_LEASE}, started_at = coalesce(started_at, now())
  WHERE id = (SELECT r.id FROM agent_runs r
@@ -281,7 +284,7 @@ def _claim(conn: psycopg.Connection, settings: Mapping[str, Any]) -> _Claimed | 
         return "parked"
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_CLAIM_LOCK)
-        cur.execute(_SPENT_TODAY, (loop.CALLED_FOR,))
+        cur.execute(_SPENT_TODAY, (list(_RUN_SPEND),))
         spent = float(cur.fetchone()[0])
         if spent >= ceiling:
             LOG.warning("AGENT_RUN parked: $%.4f spent today, ceiling $%.2f", spent, ceiling)
