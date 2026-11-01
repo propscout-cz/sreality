@@ -47,7 +47,8 @@ A run ends successfully only on `submit_result`, which carries `markdown`, `cite
 `proposed_actions` (`{entry, args}`) appears only for an agent that lists a write tool, and `output` only for one
 that declares it. The server refuses a submission, and tells the model what to fix, when:
 
-- a cited id was never a `property_id` under `data` in this run's tool results;
+- a cited id, or a property named in `output` or in a proposal's arguments (`property_id`, `property_ids`, at any depth),
+  was never a `property_id` under `data` in this run's tool results, so an output's shortlist names properties by those keys;
 - a file was not produced by this run (the refusal lists those it has);
 - a proposal names no write tool the agent lists, or its arguments fail that tool's schema;
 - it shares its turn with another call, or with hosted code still waiting to run.
@@ -100,8 +101,10 @@ python -m scripts.agent_run skills/<name> --user <auth user id> --input @input.j
 
 The runner acts as that user on production data, read-only. Each model call is priced into `llm_calls` as
 `agent_run`. `--record` writes a cassette: the journal saved, which `tests/api/_agent_replay.py` plays back
-through the same loop with no model and no database. A production cassette carries what the user can see,
-their own collections and notes included, so keep it out of git while the repository is public. It keeps a produced
+through the same loop with no model and no database. A cassette saved under `tests/cassettes/` replays on every pull
+request, and an agent folder owes at least one there (`tests/api/test_agent_cassettes.py`; the scout, ten). A production
+cassette carries what the user can see, their own collections and notes included, so scrub it before it goes in git while
+the repository is public: the lane refuses one holding an e-mail address, and nothing checks the rest. It keeps a produced
 file's name, type, size and hash, never its bytes; a replay serves a blank file of that size.
 
 `python -m scripts.agent_code_live [--max-usd 2.00]` runs one real code turn under a dollar cap with no agent folder

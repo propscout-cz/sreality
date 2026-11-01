@@ -291,3 +291,28 @@ bill, and a run deleted mid-call must not lose it.
 **Identity.** `api/agents/claims.caller_for(market, *, principal_user_id, account_id)` is the one claims builder and it
 hands the registry a `Caller`: no new `tenant_transaction` caller. `scripts/agent_run.py` has no run row, so it calls the
 same builder with the user the operator named and that user's first account, and reads as a run reads.
+
+## The security suite and the recorded runs (#2074)
+
+**What a green run means.** Every model in it is scripted, and scripted to obey the injected text. It does not test whether
+a model resists an injection; it tests that the server's rails hold when one does not. A live model's eval is #2075's script.
+
+**Two lanes, on every pull request.** `tests/api/test_agent_security.py` and `tests/api/test_agent_cassettes.py` in CI's
+pytest job; `tests/test_agent_security_live.py` in its own `schema-and-sql` step. `CONTRACT` at the top of the first states
+the whole contract line by line and names each proving test, wherever it lives; a test renamed away fails it.
+
+**Adding an injected ad.** A row in `tests/api/_adversarial_ads.py` names its attack, a function in
+`tests/test_agent_security_live.py` that scripts what an obedient model does (`Obeyed`: its replies, the denials the diary
+must hold in order, what may be paid). The run itself then asserts the rest for every ad: the text reached the model only as
+a tool result, only the in-scope proposal was kept, no tenant table moved, no cap was passed.
+
+**A new write tool** names a property only as `property_id` or `property_ids` (`terminator.PROPERTY_ARGS`; a census), since
+the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys.
+Open, each a strict xfail: a proposal into a collection the run did not create (#2072 owes it); `markdown` naming a
+property, which no rail reads (the page must draw links only from the cited ids).
+
+**Recorded runs.** Every file under `tests/cassettes/` replays through the current loop and terminator against the agent's
+current folder and must end as it ended (a changed skill body is no failure; a tool removed or an answer now refused is). A
+corrupt or misnamed file fails by name. Each folder in `skills/` owes recordings (`FLOORS` in `tests/api/_agent_replay.py`:
+the scout ten, any other one), so the lane is legitimately empty only until the first agent lands.
+

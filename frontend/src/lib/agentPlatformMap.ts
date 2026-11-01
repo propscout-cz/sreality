@@ -7,7 +7,7 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
+  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, the security fixes, and a security test suite on every pull request. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
 export interface Ticket {
@@ -56,7 +56,7 @@ export const MILESTONES: Milestone[] = [
       { n: 2071, done: false, title: 'Run routes and the minimal Runs page' },
       { n: 2072, done: false, title: 'Propose, Apply, Undo' },
       { n: 2073, done: false, title: 'Agent files in Supabase Storage' },
-      { n: 2074, done: false, title: 'Recorded-run regression and security tests in CI' },
+      { n: 2074, done: true, title: 'Recorded-run regression and security tests in CI' },
       { n: 2075, done: false, title: 'agent-worker in production and your first scout run' },
     ],
   },
@@ -210,7 +210,7 @@ export const CANT_DO: { head: string; text: string }[] = [
   { head: 'Change your data.', text: 'Every write is a proposal. Apply works once, and Undo reverses it.' },
   { head: 'See another account.', text: 'Your own data is read under your login. A file request across accounts returns nothing.' },
   { head: 'Write its own database queries.', text: 'It calls named tools with checked inputs.' },
-  { head: 'Invent a property.', text: 'Every cited property must have come from that run\'s tool results.' },
+  { head: 'Invent a property.', text: 'Every property it cites, lists or proposes must have come from that run\'s tool results. Its written text is free, so a name there is only its claim.' },
   { head: 'Overspend.', text: 'Cost cap per run, daily ceiling for the platform, at most 10 paid photo assessments per run, Valuo at most 3 per run plus a monthly cap.' },
   { head: 'Start for just anyone.', text: 'Only accounts on the allowlist can start a run.' },
 ];
