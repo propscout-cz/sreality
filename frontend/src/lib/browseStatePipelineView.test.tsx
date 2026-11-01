@@ -61,14 +61,14 @@ describe('loadPipelineView (URL adapter)', () => {
   it('replaces a narrowed cohort with the neutral pipeline view', () => {
     const h = mount('/browse?cat=byt&deal=pronajem&price_max=5000000&disp=2%2Bkk');
     act(() => h.state.loadPipelineView([]));
-    expect(h.filters).toEqual(pipelineViewFilters());
+    expect(h.filters).toEqual(pipelineViewFilters([]));
     expect(h.filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
     expect(h.filters.categoryMain).toEqual([]);
     expect(h.filters.categoryType).toBeNull();
     expect(h.filters.priceMax).toBeNull();
   });
 
-  it('scopes to the open stages only — a closed deal is history (operator 2026-11-01)', () => {
+  it('scopes to the live stages only (operator 2026-11-01)', () => {
     const h = mount('/browse?cat=byt');
     act(() => h.state.loadPipelineView(STAGES));
     expect(h.filters.pipeline).toEqual({ set: null, in: [1, 2], out: [] });
