@@ -30,6 +30,6 @@ comment on column public.valuo_valuations.agent_run_id is
 insert into public.app_settings (key, value, description) values
   ('agent_valuo_monthly_cap', 'null',
    'Valuo valuations an agent run may take one account up to per calendar month, Europe/Prague, counting every row of '
-   'that account and credential environment in valuo_valuations, the website''s included (the website itself is not '
-   'bound). A JSON number. Absent or anything else = no agent may call Valuo.')
+   'that account in valuo_valuations, the website''s included (the website itself is not bound). A JSON number. Absent '
+   'or anything else = no agent may call Valuo.')
 on conflict (key) do nothing;

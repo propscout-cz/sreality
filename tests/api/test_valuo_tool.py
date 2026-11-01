@@ -182,7 +182,7 @@ def test_a_free_reuse_takes_no_slot(world: World) -> None:
     scope = world.scope()
     for pid in (1, 2, 3, 4):
         out = world.call(scope, pid)
-        assert out["data"]["reused"] is True and out["metadata"]["valuo_calls_paid"] == 0
+        assert out["data"]["reused"] is True and out["metadata"]["valuo_calls_made"] == 0
     assert scope.counts[NAME] == 0
 
 
@@ -195,7 +195,29 @@ def test_a_failure_after_the_row_exists_takes_a_slot_and_says_what_it_cost(world
     scope = world.scope()
     error = world.refused(scope)
     assert error.code is ToolErrorCode.REFUSED and scope.counts[NAME] == 1
-    assert error.details == ({"valuation_id": 900, "code": "unavailable", "valuo_calls_paid": 1},)
+    assert error.details == ({"valuation_id": 900, "code": "unavailable", "valuo_calls_made": 1},)
+
+
+def test_a_duplicate_that_went_out_says_so_though_it_answers_from_its_twin(world: World) -> None:
+    """A sandbox token named production: the request went out, then met its stored answer."""
+    def duplicate(call: valuo.RunCall) -> dict[str, Any]:
+        call.took_slot()
+        return {"reused": True, "valuation": PRICED}
+    world.answer = duplicate
+    assert world.call(world.scope())["metadata"]["valuo_calls_made"] == 1
+
+
+def test_a_twin_still_running_is_no_answer(world: World) -> None:
+    """A sandbox token's duplicate can come back as its twin before that twin has an answer."""
+    world.answer = lambda call: {"reused": True, "valuation": {**PRICED, "status": "pending", "result": None}}
+    error = world.refused(world.scope())
+    assert error.code is ToolErrorCode.REFUSED and error.details[0]["code"] == "pending"
+
+
+def test_no_valuo_token_is_refused_for_good_not_as_a_retry(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(valuo_client, "credential", lambda: None)
+    error = world.refused(world.scope())
+    assert error.code is ToolErrorCode.REFUSED and not error.retryable and not world.paid
 
 
 def test_a_crash_after_the_row_exists_keeps_the_slot(world: World) -> None:
@@ -209,7 +231,7 @@ def test_a_crash_after_the_row_exists_keeps_the_slot(world: World) -> None:
 
 def test_a_refusal_from_the_money_path_takes_no_slot(world: World) -> None:
     def refuse(call: valuo.RunCall) -> dict[str, Any]:
-        raise valuo._refuse(429, valuo.MONTHLY_CAP, "over the cap")
+        raise valuo._refuse(429, "monthly_cap", "over the cap")
     world.answer = refuse
     scope = world.scope()
     assert world.refused(scope).code is ToolErrorCode.REFUSED and scope.counts[NAME] == 0
@@ -243,7 +265,7 @@ def test_a_run_that_could_not_afford_to_read_the_answer_does_not_buy_it(world: W
 def test_a_run_whose_clock_ends_before_the_answer_could_land_does_not_buy_it(world: World) -> None:
     error = world.refused(world.scope(left_s=valuo_tool.MIN_LEFT_S - 1))
     assert error.code is ToolErrorCode.REFUSED and "time" in error.message and not world.paid
-    assert valuo_tool.MIN_LEFT_S == 50, "the market-value call and its photo call, each at the client's own (5, 20)"
+    assert valuo_tool.MIN_LEFT_S == 25, "the market-value call at the client's own (5, 20)"
 
 
 # --- what the model and the diary read ------------------------------------------------------------------------------
@@ -253,8 +275,8 @@ def test_the_answer_names_its_ledger_row_its_cost_in_calls_and_its_unit(world: W
     out = world.call(scope, 7)
     data, meta = out["data"], out["metadata"]
     assert data["property_id"] == 7 and data["valuation_id"] == 900 and data["reused"] is False
-    assert data["result"]["avg_price_m2"] == 85_700 and data["ppm2_basis"] == "sale_capital_czk_m2"
+    assert data["result"]["avg_price_m2"] == 85_700 and data["price_per_m2_basis"] == "sale_capital_czk_m2"
     assert data["records"] == [{"id": 1, "price": 5_000_000}], "photos are the page's"
-    assert meta == {"valuo_calls_paid": 1, "cost_usd": None, "run_calls_used": 1, "run_calls_limit": 3,
+    assert meta == {"valuo_calls_made": 1, "cost_usd": None, "run_calls_used": 1, "run_calls_limit": 3,
                     "cost_note": valuo_tool.COST_NOTE}
     assert scope.settle() == (0.0, None), "no price is known, so no dollars reach the run's cost"

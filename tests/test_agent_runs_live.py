@@ -26,6 +26,7 @@ from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
 from api.llm_client import LLMClient
 from api.providers import Completion, HostedFile, ModelPrice
+from scripts import agent_run
 from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, db_url, signups
 from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
@@ -1273,7 +1274,7 @@ def valuing(svc: psycopg.Connection, world: dict[str, Any], monkeypatch: pytest.
     monkeypatch.setattr(valuo_client, "credential", lambda: valuo_client.Credential("sandbox", "live-test-token"))
     monkeypatch.setattr(valuo_client, "calculate", fake.calculate)
     monkeypatch.setattr(valuo_client, "advert_details", lambda cred, ids: [])
-    before = svc.execute("SELECT value FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,)).fetchone()
+    before = svc.execute("SELECT value, description FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,)).fetchone()
     _set(svc, valuo.CAP_SETTING, 10)
     pids, lids = [], []
     with svc.cursor() as cur:
@@ -1291,10 +1292,14 @@ def valuing(svc: psycopg.Connection, world: dict[str, Any], monkeypatch: pytest.
         yield {**world, "pids": pids, "fake": fake}
     finally:
         svc.execute("DELETE FROM valuo_valuations WHERE listing_id = ANY(%s)", (lids,))
+        # The lanes after this one count their own seeds on the one replay: an ad or property left here fails them.
+        svc.execute("DELETE FROM listing_location WHERE listing_id = ANY(%s)", (lids,))
+        svc.execute("DELETE FROM listings WHERE id = ANY(%s)", (lids,))
+        svc.execute("DELETE FROM properties WHERE id = ANY(%s)", (pids,))
         svc.execute("DELETE FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,))
         if before is not None:
-            svc.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb)",
-                        (valuo.CAP_SETTING, json.dumps(before[0])))
+            svc.execute("INSERT INTO app_settings (key, value, description) VALUES (%s, %s::jsonb, %s)",
+                        (valuo.CAP_SETTING, json.dumps(before[0]), before[1]))
 
 
 def _value_of(*property_ids: int) -> Completion:
@@ -1434,12 +1439,18 @@ def test_another_accounts_share_cannot_spend_its_cap_or_reach_its_ledger(svc: ps
     assert not fake.calls and not _ledger_rows(svc, valuing["b_acc"]) and not _ledger_rows(svc, valuing["a_acc"])
 
 
-def test_the_run_scope_of_the_local_runner_spends_nothing(svc: psycopg.Connection, valuing: dict[str, Any]) -> None:
-    """scripts/agent_run.py: a real loop and a real claim, no run row, so no ledger row could name it."""
-    scope = run_scope.RunScope(llm=LLMClient(svc, providers={}), left_usd=lambda: 1.0, left_s=lambda: 300.0)
-    with pytest.raises(ToolError) as err, run_scope.running(scope):
-        registry.call(_caller(svc, valuing["a"], valuing["a_acc"]), VALUO, {"property_id": valuing["pids"][0]})
-    assert err.value.code is ToolErrorCode.REFUSED
+def test_the_local_runner_reaches_the_tool_and_is_refused_before_any_money(
+        svc: psycopg.Connection, valuing: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """scripts/agent_run.py itself: a real loop and a real claim, no run row, so no ledger row could name it."""
+    model = _Model(_value_of(valuing["pids"][0]), reply((SUBMIT, {"markdown": "Hotovo."})))
+    monkeypatch.setattr(agent_run.db, "connect", _connect)
+    monkeypatch.setattr(agent_run.dependencies, "get_providers", lambda: {"anthropic": model})
+    folder = executor.SKILLS_DIR / AGENT
+    assert agent_run.main([str(folder), "--user", str(valuing["a"]), "--input", '{"town": "Brno"}']) == 0
+    assert "Hotovo." in capsys.readouterr().out
+    told = json.dumps(model.calls[1]["messages"][-1].content[0].content)
+    assert "refused" in told and "agent run" in told
     assert not valuing["fake"].calls and not _ledger_rows(svc, valuing["a_acc"])
 
 

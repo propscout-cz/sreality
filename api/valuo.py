@@ -198,7 +198,6 @@ REFUSALS: dict[str, str] = {
 ABANDONED = {"code": "abandoned", "http_status": None, "message": "Ocenění se nedokončilo."}
 DUPLICATE = {"code": "duplicate", "http_status": None, "message": "Stejné ocenění už je uložené."}
 CAP_SETTING = "agent_valuo_monthly_cap"
-MONTHLY_CAP = "monthly_cap"
 
 RESULT_KEYS = ("avg_price", "range_price", "avg_price_m2", "range_price_m2", "std_price_m2", "calc_area",
                "distance", "flags")  # range_price = Valuo's confidence band; min/max_price are not it
@@ -428,10 +427,10 @@ _RUN_CALLS_SQL = "select count(*) from valuo_valuations where agent_run_id = %s"
 _ACCOUNT_LOCK_SQL = "select pg_advisory_xact_lock(hashtext('valuo_monthly_cap'), hashtext(%s))"
 # Every row: one is written only as its request goes out, and nothing in it proves Valuo did not bill. A row that made no
 # request (the process died between the INSERT and the call) cannot be told from one that died during it, so it counts
-# too. The credential's environment only: sandbox answers cost nothing and must not spend the production allowance.
+# too. A sandbox row as well: nothing here says Valuo does not bill one, and the cap may only err towards fewer calls.
 _MONTH_CALLS_SQL = f"""
 select count(*) as used from valuo_valuations
- where account_id = %s and environment = %s and created_at >= date_trunc('month', now(), '{_PRAGUE.key}')
+ where account_id = %s and created_at >= date_trunc('month', now(), '{_PRAGUE.key}')
 """
 
 
@@ -556,14 +555,14 @@ def _write_ahead(conn: Any, run: RunCall | None, insert: tuple[Any, ...]) -> dic
     if run is None:
         [row] = _rows(conn, _INSERT_SQL, insert) or [None]
         return row
-    account_id, environment = insert[0], insert[2]
+    account_id = insert[0]
     with conn.transaction():
         _rows(conn, _ACCOUNT_LOCK_SQL, (str(account_id),))
         [row] = _rows(conn, _INSERT_SQL, insert) or [None]
         if row is not None:
-            [month] = _rows(conn, _MONTH_CALLS_SQL, (account_id, environment))
+            [month] = _rows(conn, _MONTH_CALLS_SQL, (account_id,))
             if month["used"] > run.monthly_cap:
-                raise _refuse(429, MONTHLY_CAP, f"this account has used its {run.monthly_cap:g} Valuo valuations for "
+                raise _refuse(429, "monthly_cap", f"this account has used its {run.monthly_cap:g} Valuo valuations for "
                               f"this calendar month ({_PRAGUE.key}), the website's included; nothing was paid")
     return row
 
@@ -607,7 +606,9 @@ def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, acc
         response = exc.response
         error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message, "detail": exc.detail}
     ids = [] if error else [r["id"] for r in _records(response["result"], None) if r["id"] is not None][:ADVERT_LIMIT]
-    if ids:  # the photos are a garnish: their failure never fails the valuation it would decorate
+    # The photos are a garnish, so their failure never fails the valuation it would decorate. A run reads none, and the
+    # second request is not one to spend for it: its row stays NULL, "not fetched", on the property page too.
+    if ids and run is None:
         try:
             adverts = valuo_client.advert_details(cred, ids)
         except valuo_client.ValuoError as exc:

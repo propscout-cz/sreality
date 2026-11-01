@@ -197,8 +197,8 @@ is the service role's alone, and no transaction or tenant connection spans the r
 
 **The order, each before any money and none writing a row:** no run, or a scope with no run row (`scripts/agent_run.py`:
 `LLMClient` without an `agent_run_id`, so a row could name no run), refused; `MAX_CALLS_PER_RUN` (3) reached; no budget for
-the model call that reads the answer (`left_usd() <= 0`); under `MIN_LEFT_S` (50 s, both Valuo calls at their timeouts);
-`agent_valuo_monthly_cap` absent, null or not a number; then `new_valuation`'s own refusals; then the cap, atomically.
+the model call that reads the answer (`left_usd() <= 0`); under `MIN_LEFT_S` (25 s, the market-value call at its timeouts);
+`agent_valuo_monthly_cap` absent, null or not a number; no Valuo token (refused, not the route's retryable 503); then `new_valuation`'s own refusals; then the cap, atomically.
 
 **The three per run** is `RunScope.counts`, seeded at the attempt's first call from the rows naming the run, because a
 restart builds a new scope and the limit is per run. A row takes the slot once committed and before the request, so a
@@ -209,13 +209,14 @@ a running twin take none. At three, even a free reuse is refused.
 count; over the cap it rolls back, so no reader sees the row. It commits before the request. Two runs of an account cannot
 both take the last slot (`tests/test_agent_runs_live.py`). A row counts whatever its status: one is written only as its
 request goes out and nothing in it proves Valuo did not bill. It counts the account's rows since the start of the
-Europe/Prague month in the credential's environment, the website's included. The website is NOT bound and takes no lock:
+Europe/Prague month, the website's and any sandbox row included (nothing says a sandbox row is free). The website is NOT bound and takes no lock:
 it can pass the number, and an agent is then refused; an agent cannot.
 
 **Cost.** Nothing in the code or docs holds Valuo's price, so none is invented. A call is recorded on the ledger row
-(`agent_run_id`) and the journal step (`data.valuation_id`, `metadata.valuo_calls_paid`, `metadata.cost_usd` null, the step's
+(`agent_run_id`) and the journal step (`data.valuation_id`, `metadata.valuo_calls_made`, `metadata.cost_usd` null, the step's
 `cost_usd` 0). It is OUTSIDE the run's dollar cap, `agent_runs.cost_usd` and the daily ceiling (`_RUN_SPEND`, `llm_calls`
-only): only the two call counts bound it. A failure is a REFUSED tool error whose `details` name the row.
+only): only the two call counts bound it. A failure is a REFUSED tool error whose `details` name the row. A run skips the
+second request, `advert/detail` (the comparables' photos): it reads none, so its row's `adverts` stays NULL on the page too.
 
 ## Adding a tool
 

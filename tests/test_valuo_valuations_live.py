@@ -10,7 +10,6 @@ Runs in CI's migrations job (`TEST_DATABASE_URL`, DB_RAILS_REQUIRED=1); every te
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -236,7 +235,7 @@ def _by_run(flat: dict[str, Any], *, cap: float = 5, account: Any = None, cred: 
 def _refused_by_cap(flat: dict[str, Any], **kw: Any) -> None:
     with pytest.raises(HTTPException) as err:
         _by_run(flat, **kw)
-    assert err.value.status_code == 429 and err.value.detail["code"] == valuo.MONTHLY_CAP
+    assert err.value.status_code == 429 and err.value.detail["code"] == "monthly_cap"
 
 
 def _spent(cur: Any, flat: dict[str, Any], *, status: str = "success", environment: str = "sandbox",
@@ -293,11 +292,32 @@ def test_a_cap_of_zero_allows_nothing(cur, flat, fake_valuo):
     assert fake_valuo.pending_at_call == [] and _rows(cur, flat["account"]) == []
 
 
-def test_only_this_accounts_rows_in_this_environment_count(cur, flat, fake_valuo):
+def test_another_accounts_rows_do_not_count(cur, flat, fake_valuo):
     _spent(cur, flat, account=_account(cur))
-    _spent(cur, flat, environment="production")
     out, _ = _by_run(flat, cap=1)
-    assert out["valuation"]["status"] == "success", "another account's and the other credential's rows are not this cap's"
+    assert out["valuation"]["status"] == "success"
+
+
+def test_a_row_of_the_other_environment_counts_too(cur, flat, fake_valuo):
+    _spent(cur, flat, environment="production")
+    _refused_by_cap(flat, cap=1)
+
+
+def test_a_runs_call_asks_for_no_photos_and_the_websites_still_does(cur, flat, fake_valuo, monkeypatch):
+    fake_valuo.answer = PRICED | {"result": PRICED["result"] | {"records": [{"id": 7, "price": 1}]}}
+    asked: list[Any] = []
+    monkeypatch.setattr(valuo_client, "advert_details", lambda cred, ids: asked.append(ids) or [])
+    assert _by_run(flat)[0]["valuation"]["records"][0]["id"] == 7
+    assert asked == [], "a second request nothing in a run reads"
+    cur.execute("SELECT adverts FROM valuo_valuations WHERE account_id = %s", (flat["account"],))
+    assert cur.fetchone()[0] is None
+    fake_valuo.answer = fake_valuo.answer | {"ver": "second"}
+    other = _property(cur)
+    lid = _advert(cur, other, source="idnes", condition="dobry", area_m2=71)
+    _located(cur, lid)
+    _recompute(cur, other)
+    valuo.new_valuation(flat["conn"], other, {}, account_id=flat["account"], cred=CRED)
+    assert asked == [[7]]
 
 
 def test_the_month_is_the_calendar_month_in_prague(cur, flat, fake_valuo):
@@ -362,6 +382,8 @@ def test_the_cap_is_a_number_or_nothing(cur, flat, stored, read):
     assert valuo.monthly_cap(flat["conn"]) == read
 
 
-def test_the_migration_lands_no_cap_so_no_agent_can_call_valuo_until_the_operator_says() -> None:
-    sql = Path(__file__).resolve().parents[1].joinpath("migrations/710_valuo_valuations_agent_run.sql")
-    assert f"('{valuo.CAP_SETTING}', 'null'," in sql.read_text(encoding="utf-8")
+def test_the_migration_lands_no_cap_so_no_agent_can_call_valuo_until_the_operator_says(cur, flat) -> None:
+    cur.execute("SELECT value, description FROM app_settings WHERE key = %s", (valuo.CAP_SETTING,))
+    value, description = cur.fetchone()
+    assert value is None and "Europe/Prague" in description
+    assert valuo.monthly_cap(flat["conn"]) is None

@@ -7,7 +7,7 @@ export const AS_OF = '2026-11-01';
 
 export const TODAY =
   'No agent can be started in production yet. The foundations are merged: the read tools, the agent loop and its ' +
-  'result check, the cached photo assessment, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
+  'result check, the cached photo assessment, the capped Valuo tool, hosted Python, and the security fixes. The scout, the Runs page and the agent-worker service don\'t exist yet, and ' +
   'the only agent you can use today is still the old hard-wired estimator.';
 
 export interface Ticket {

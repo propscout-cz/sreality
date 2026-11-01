@@ -12,9 +12,8 @@ import psycopg
 from pydantic import ValidationError
 
 from api import tenant_pool
-from api.agents.claims import RUN_ACCOUNT_CLAIM
 from api.capabilities import market, run_scope, tenant, valuo_tool, visuals
-from api.capabilities.entry import Caller, Context, Effect, Entry, Tenancy
+from api.capabilities.entry import RUN_ACCOUNT_CLAIM, Caller, Context, Effect, Entry, Tenancy
 from api.capabilities.errors import ToolError, ToolErrorCode, busy, invalid_arguments, to_tool_error
 from api.capabilities.truncate import fit
 from api.filter_args import Args
@@ -47,7 +46,8 @@ def validate(name: str, raw_args: object) -> tuple[Entry, Args]:
 
 @contextlib.contextmanager
 def _connection(caller: Caller, entry: Entry) -> Iterator[Context]:
-    """The one place a tool's connection is chosen: the market's, or the caller's own RLS transaction."""
+    """The one place a tool's connection is chosen: the market's, the caller's own RLS transaction, or, for a tenant's
+    paid tool, the market's once the login has named the account."""
     run = run_scope.current()
     if entry.tenancy is Tenancy.MARKET:
         # A paid market fact waits on a model and then caches what it paid for: not inside a transaction, and not READ
