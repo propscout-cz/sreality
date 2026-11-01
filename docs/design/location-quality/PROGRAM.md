@@ -1,7 +1,7 @@
 # Location data quality programme
 
 **Status: APPROVED 2026-10-31 (operator rulings below). Build runs wave by wave; this file is the as-built record.**
-Tickets: W0 #2210 (gate #2211, PR #2212); v5.9 #2192 (gate #2193, PR #2194). Later waves file their tickets when they start.
+Tickets: W0 #2210 (gate #2211, PR #2212); v5.9 #2192 (gate #2193, PR #2194); W3b #2247. Later waves file their tickets when they start.
 Origin: the operator's follow-up on the location refactoring sprint (2026-10-30), eight read-only investigations, a synthesis and an adversarial review; the plan as reviewed follows, then the rulings that amend it.
 
 ## Rulings 2026-10-31 (amend the plan below; where they differ, the ruling wins)
@@ -32,6 +32,8 @@ Consumers of `admin_boundaries` and what each takes from the mirror instead: bro
 
 ### W3b: the address picker (added 2026-10-31)
 On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-matched picker: the place typeahead the chips use, extended to streets and house numbers (address points). The pick is written as one operator claim per current ad of the property (an `address_point_id`, `street_name` or `obec_name` claim with licence `operator`); operator outranks portal under W3's one precedence rule. Later-attached ads resolve from their own words. The Location Quality inspector form and its route are deleted.
+
+**As built 2026-10-31 (#2247; design and measurements: `w3b-address-picker.md`).** No migration, table, view, index, claim type or design token. A pick writes all four picker types (`address_point_id`, `street_name`, `obec_name`, `okres_name`) on every ad, the register's names for the picked level and tombstones for the rest, so a re-pick replaces the operator's statement and "Vrátit údaje z inzerátů" (`pick: null`) is four tombstones per ad. `/maps/resolve` gained the `address_point` flag (one door within 300 m of the pick, else no code). Rulings taken as defaults: R1 = (b), a detach clears the pick on the ads it moved. Named limits: L1 a portal PSČ or kód ADM can defeat a street or obec pick (`held: false`), L2 the portal pin stays evidence, L3 část/okres/kraj picks wait for W5. Deleted: `toolkit/location_quality.py`, `/location/listing/*`, the inspector and correction form, the old submit and its 8-type list. Owed before the merge: about 20 real Mapy address picks on production to confirm the 300 m slack picks one door.
 
 ### W5b: the pin refines within the words (added 2026-10-31)
 After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
