@@ -1,4 +1,4 @@
-/* The admin Sign-ups page's data: GET /admin/waitlist (api/routes/waitlist.py), one row per e-mail on the
+/* The admin Waitlist page's data: GET /admin/waitlist (api/routes/waitlist.py), one row per e-mail on the
  * propscout.cz waitlist (migration 700). Types and pure helpers; the page is pages/Signups.tsx. */
 
 export type InvestorType = 'flip' | 'rent' | 'both' | 'starting';
@@ -15,6 +15,47 @@ export interface WaitlistSignup {
   answered_at: string | null;
   unsubscribed_at: string | null;
   invited_at: string | null;
+  has_account: boolean;
+}
+
+export type EntryState = 'unsubscribed' | 'account' | 'invited' | 'waiting';
+
+/* One state per entry. An account outranks everything but a withdrawal: nothing more can be sent to it either way. */
+export const entryState = (s: WaitlistSignup): EntryState =>
+  s.unsubscribed_at ? 'unsubscribed' : s.has_account ? 'account' : s.invited_at ? 'invited' : 'waiting';
+
+export const STATE_LABEL: Record<EntryState, string> = {
+  waiting: 'waiting',
+  invited: 'invited',
+  account: 'account created',
+  unsubscribed: 'unsubscribed',
+};
+
+export interface InviteResult {
+  sent: number[];
+  skipped: { id: number; reason: 'unsubscribed' | 'account' | 'cap' | 'failed' }[];
+}
+
+/* The next N to invite, in signup order: oldest waiting entries, tests left out. */
+export function nextToInvite(rows: WaitlistSignup[], n: number): number[] {
+  return rows
+    .filter((r) => !isTest(r) && entryState(r) === 'waiting')
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+    .slice(0, n)
+    .map((r) => r.id);
+}
+
+/* What a send did, in one line for the toast. */
+export function inviteSummary({ sent, skipped }: InviteResult): string {
+  const why: Record<InviteResult['skipped'][number]['reason'], string> = {
+    unsubscribed: 'unsubscribed',
+    account: 'already has an account',
+    cap: "over today's limit",
+    failed: 'failed to send',
+  };
+  const counts = new Map<string, number>();
+  for (const s of skipped) counts.set(why[s.reason], (counts.get(why[s.reason]) ?? 0) + 1);
+  return [`Sent ${sent.length}`, ...[...counts].map(([label, n]) => `${n} ${label}`)].join(' · ');
 }
 
 export interface WaitlistResponse {
@@ -30,7 +71,7 @@ export const INVESTOR_LABEL: Record<InvestorType, string> = {
   starting: 'Teprve začíná',
 };
 
-/* A sign-up made to test the form (the go-live check used utm_source=claude-test): listed, never counted. */
+/* An entry made to test the form (the go-live check used utm_source=claude-test): listed, never counted. */
 export const isTest = (s: WaitlistSignup): boolean => /test/i.test(s.utm?.utm_source ?? '');
 
 export interface SignupSummary {
@@ -62,7 +103,7 @@ export function summarize(rows: WaitlistSignup[], now: number = Date.now()): Sig
   return { total, last7, answered, byType, tests };
 }
 
-/* Where a sign-up came from, in one line: the ad's source, campaign and content, then the headline it saw. */
+/* Where an entry came from, in one line: the ad's source, campaign and content, then the headline it saw. */
 export function cameFrom(s: WaitlistSignup): string {
   const parts = [s.utm?.utm_source, s.utm?.utm_campaign, s.utm?.utm_content].filter(Boolean);
   const ad = parts.length ? parts.join(' · ') : 'direct';
@@ -76,7 +117,7 @@ export interface SourceRow {
   count: number;
 }
 
-/* Sign-ups per ad source × campaign × headline variant, most first; tests excluded. */
+/* Entries per ad source × campaign × headline variant, most first; tests excluded. */
 export function bySource(rows: WaitlistSignup[]): SourceRow[] {
   const m = new Map<string, SourceRow>();
   for (const r of rows) {

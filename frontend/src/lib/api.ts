@@ -13,7 +13,7 @@
  * signed-out tab off every page.
  */
 
-import type { WaitlistResponse } from './waitlist';
+import type { InviteResult, WaitlistResponse } from './waitlist';
 import type { AccountLimit, AgentRunOptions } from './agentRunOptions';
 import type { AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
@@ -643,7 +643,9 @@ export const listSkills = (
     query: { include_archived: options.includeArchived ?? false },
   });
 
-/* The propscout.cz waitlist, newest first, for the admin Sign-ups page (GET /admin/waitlist, admin-only). */
+/* The propscout.cz waitlist, newest first, for the admin Waitlist page (GET /admin/waitlist, admin-only). */
+export const inviteWaitlistEntries = (ids: number[]): Promise<InviteResult> =>
+  apiPost<InviteResult>('/admin/waitlist/invite', { ids });
 export const fetchWaitlistSignups = (): Promise<WaitlistResponse> => request<WaitlistResponse>('/admin/waitlist');
 
 /* Agent runs (api/routes/agent_runs.py): never acted for, so no wrapper here takes `actAs`. */

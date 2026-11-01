@@ -95,8 +95,8 @@ export const routes: RouteObject[] = [
   // Full-page auth screens (outside the app Shell, so they stay reachable
   // while logged out — everything under the Shell requires a session).
   { path: ROUTES.login.pattern, element: <Login />, handle: { title: 'Sign in' } },
-  { path: ROUTES.forgotPassword.pattern, element: <ForgotPassword />, handle: { title: 'Reset password' } },
-  { path: ROUTES.resetPassword.pattern, element: <UpdatePassword />, handle: { title: 'New password' } },
+  { path: ROUTES.forgotPassword.pattern, element: <ForgotPassword />, handle: { title: 'Obnovení hesla' } },
+  { path: ROUTES.resetPassword.pattern, element: <UpdatePassword />, handle: { title: 'Nové heslo' } },
   {
     path: '/',
     element: (
@@ -148,7 +148,7 @@ export const routes: RouteObject[] = [
       { path: ROUTES.listingLegacy.childPath, element: <AdvertRedirect />, handle: { title: 'Property' } },
       { path: ROUTES.health.childPath, element: <AdminPage><Health /></AdminPage>, handle: { title: 'Health' } },
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
-      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
+      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Waitlist' } },
       { path: ROUTES.agentPlatform.childPath, element: <AdminPage><AgentPlatform /></AdminPage>, handle: { title: 'Agent platform' } },
       {
         path: ROUTES.runs.childPath,

@@ -1,7 +1,7 @@
 # Email: password reset, the waitlist, notifications
 
 > **Status: APPROVED 2026-10-31 (operator, in one interview). PR 1 done 2026-11-01 (a reset email delivered through
-> Resend); PR 2 in progress.** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
+> Resend). PR 2 live 2026-11-01 (a real confirmation delivered). PR 3 in progress.** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
 
 **Terms.** Sign-up, waitlist entry, waitlist invitation and introductory price are defined in `GLOSSARY.md`.
 
@@ -56,11 +56,14 @@ one-click unsubscribe (RFC 8058) setting `unsubscribed_at`; the privacy page (Re
 `info@` contact, the app section's supplier list too); the price and "zaváděcí" text on the landing page, thank-you page and copy deck. The deck is rebuilt
 per `frontend/scripts/landing-copy-deck/README.md`. Must ship before any email goes out.
 
-**PR 3: invitations.** The hook; the admin buttons and states setting `invited_at`; the Sign-ups → Waitlist rename; the
-Czech screens, with the invitation button opening on account creation. **Test first:** that the hook covers Google
-sign-ups and that hosted Supabase runs it as a database function. If either fails, fall back to creating the account
-when the invitation link is clicked. **Switch-on order:** hook on, then email confirmation off, then sign-up on, so
-nobody can register unchecked at any moment.
+**PR 3: invitations.** The hook (`hook_before_user_created`, migration 714); the admin buttons and states; the
+Sign-ups → Waitlist rename (UI text only; the code keeps its names, as `GLOSSARY.md` allows); the Czech screens, with the
+invitation button opening on account creation. A send stamps `invited_at` only after Resend accepts it, so a failed send
+gives no permission. **Switch-on order, after the merge:** hook on, then email confirmation off, then sign-up on, so
+nobody can register unchecked at any moment. **Test at switch-on:** Supabase's docs don't say the hook covers Google, so
+a stranger's Google account and password must both be refused, and an invited address must get in. If either refusal
+fails, sign-up goes back off and the fallback is creating the account when the invitation link is clicked. Merging alone
+changes only the admin page and the sign-in screens' words.
 
 **PR 4: notification email.** The setting and the daily summary. `notification_deliveries` is keyed on (event, device)
 and an email has no device, so the schema is settled here. The worker needs its own key, since its lanes run on a

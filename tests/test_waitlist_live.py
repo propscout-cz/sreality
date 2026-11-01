@@ -134,3 +134,59 @@ def test_unsubscribing_keeps_the_first_time_and_stops_the_confirmation(tx: _Tx) 
     with tx.cursor() as cur:
         cur.execute("SELECT email, unsubscribed_at IS NOT NULL FROM waitlist_signups WHERE followup_token = %s", (token,))
         assert cur.fetchone() == ("out@example.cz", True)
+
+
+def _hook(tx: _Tx, email: str) -> dict[str, Any]:
+    with tx.cursor() as cur:
+        cur.execute("SELECT public.hook_before_user_created(%s)", (Jsonb({"user": {"email": email}}),))
+        return cur.fetchone()[0]
+
+
+def test_only_an_invited_address_may_create_an_account(tx: _Tx) -> None:
+    _entry(tx, "invited@example.cz")
+    _entry(tx, "waiting@example.cz")
+    with tx.cursor() as cur:
+        cur.execute("SELECT id FROM waitlist_signups WHERE email = 'invited@example.cz'")
+        entry_id = cur.fetchone()[0]
+    waitlist.stamp_invitation(tx, entry_id)
+    assert _hook(tx, "invited@example.cz") == {}
+    assert _hook(tx, "Invited@Example.CZ") == {}
+    for refused in ("waiting@example.cz", "stranger@example.cz"):
+        error = _hook(tx, refused)["error"]
+        assert error["http_code"] == 403 and "nemá pozvánku" in error["message"]
+
+
+def test_sending_again_keeps_the_first_permission_and_counts_each_send(tx: _Tx) -> None:
+    _entry(tx, "again@example.cz")
+    with tx.cursor() as cur:
+        cur.execute("UPDATE waitlist_signups SET invitation_sent_at = NULL")
+        cur.execute("UPDATE waitlist_signups SET invited_at = now() - interval '3 days', "
+                    "invitation_sent_at = now() - interval '3 days' WHERE email = 'again@example.cz' RETURNING id, invited_at")
+        entry_id, first = cur.fetchone()
+    assert waitlist.invitations_sent_today(tx) == 0
+    waitlist.stamp_invitation(tx, entry_id)
+    assert waitlist.invitations_sent_today(tx) == 1
+    with tx.cursor() as cur:
+        cur.execute("SELECT invited_at FROM waitlist_signups WHERE id = %s", (entry_id,))
+        assert cur.fetchone()[0] == first
+
+
+def test_the_lists_know_whether_an_entry_has_an_account(tx: _Tx) -> None:
+    _entry(tx, "member@example.cz")
+    _entry(tx, "nobody@example.cz")
+    with tx.cursor() as cur:
+        cur.execute("INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), 'Member@Example.cz')")
+    rows = {r["email"]: r for r in waitlist.list_signups(tx)}
+    assert rows["member@example.cz"]["has_account"] is True and rows["nobody@example.cz"]["has_account"] is False
+    ids = [rows["member@example.cz"]["id"], rows["nobody@example.cz"]["id"]]
+    assert [(e["email"], e["has_account"]) for e in waitlist.invitation_entries(tx, ids)] == [
+        ("member@example.cz", True), ("nobody@example.cz", False),
+    ]
+
+
+def test_no_browser_role_can_call_the_hook(tx: _Tx) -> None:
+    with tx.cursor() as cur:
+        for role in ("anon", "authenticated"):
+            cur.execute("SELECT has_function_privilege(%s, 'public.hook_before_user_created(jsonb)', 'EXECUTE')", (role,))
+            assert cur.fetchone()[0] is False
+

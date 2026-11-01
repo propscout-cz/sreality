@@ -6,7 +6,7 @@ const NOW = Date.parse('2026-11-10T12:00:00Z');
 function row(over: Partial<WaitlistSignup> = {}): WaitlistSignup {
   return {
     id: 1, email: 'a@example.cz', created_at: '2026-11-09T10:00:00Z', consent_version: '2026-10-31', page_variant: 'default',
-    utm: {}, investor_type: null, note: null, answered_at: null, unsubscribed_at: null, invited_at: null, ...over,
+    utm: {}, investor_type: null, note: null, answered_at: null, unsubscribed_at: null, invited_at: null, has_account: false, ...over,
   };
 }
 
