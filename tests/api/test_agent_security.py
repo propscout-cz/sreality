@@ -46,11 +46,20 @@ SUBMIT = terminator.NAME
 SYSTEM = "Find properties and cite them."
 
 RUNS_LIVE = "tests/test_agent_runs_live.py"
+PROPOSALS_LIVE = "tests/test_agent_proposals_live.py"
 SECURITY_LIVE = "tests/test_agent_security_live.py"
 CENSUS = "tests/api/test_capabilities_census.py"
 
 # The whole contract: each line, and the tests that prove it. A test renamed or removed fails below.
 CONTRACT: dict[str, list[tuple[str, str]]] = {
+    "a proposal writes once, only on the user's click, only inside the run's own scope, and Undo removes exactly that": [
+        (PROPOSALS_LIVE, "test_a_double_apply_writes_once_and_undo_removes_exactly_what_it_added"),
+        (PROPOSALS_LIVE, "test_two_concurrent_applies_write_once"),
+        (PROPOSALS_LIVE, "test_another_accounts_token_gets_404_and_writes_nothing"),
+        (PROPOSALS_LIVE, "test_the_marker_is_no_browsers_to_write_and_only_the_pools_login_may_call_it"),
+        ("tests/api/test_agent_security.py", "test_a_proposal_into_a_collection_the_run_did_not_create_is_refused"),
+        ("tests/api/test_agent_security.py", "test_the_only_door_to_a_write_is_the_apply_and_undo_routes"),
+    ],
     "forged claims see zero rows": [
         (RUNS_LIVE, "test_a_claim_naming_an_account_the_user_is_not_in_reads_nothing"),
         (RUNS_LIVE, "test_only_a_top_level_claim_narrows_so_a_users_own_metadata_cannot"),

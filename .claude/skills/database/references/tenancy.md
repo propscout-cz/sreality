@@ -525,7 +525,10 @@ join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come fr
 (shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
 (`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
 (shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
-another account's id is a 404 before the service role opens.
+another account's id is a 404 before the service role opens. Apply and Undo (`/runs/{id}/proposals/{i}/*`, #2072) stay on the
+`TenantConn` for everything: the curation write under its own RLS, naming the RUN's account (shape 3's explicit predicate, not the
+oldest membership), and the marker in `agent_proposal_applies` (`authenticated` SELECT only, the `curation_clock` idiom) through
+migration 712's definers, each refusing any `session_user` but `tenant_pool`, so PostgREST's `authenticator` cannot call them.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's

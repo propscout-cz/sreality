@@ -1,8 +1,8 @@
 # The tool registry (`api/capabilities/`, #2062)
 
 Every platform operation an agent may call is ONE `Entry` in ONE table, reached through ONE function,
-`registry.call(caller, name, raw_args)`. The agent loop (#2065), the terminator, Apply (#2072) and any later MCP or
-HTTP adapter are thin callers of `validate` / `call` / `schemas`; none reshapes an entry.
+`registry.call(caller, name, raw_args)`, except that a write has no path through `call` (§ Writes). The agent loop (#2065), the
+terminator, Apply (#2072) and any later MCP or HTTP adapter are thin callers of `validate` / `call` / `schemas`; none reshapes an entry.
 
 ## An entry
 
@@ -221,8 +221,8 @@ second request, `advert/detail` (the comparables' photos): it reads none, so its
 ## Adding a tool
 
 One `Entry` in `market.py` or `tenant.py` (or a module of its own beside them, like `visuals.py`), its effect named at the declaration (`market._read` builds READ
-entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § above; a write comes
-with #2072's inverse). Reuse
+entries only; a costly or writing tool is its own `Entry`, tenant unless it is a paid market fact, § above; a write is a
+`WriteEntry`, § Writes). Reuse
 `filter_model` for any registry filter; give every other field a `description`. The census (`tests/api/test_capabilities_census.py`)
 then checks it: a real tenancy and effect, no identity field at any depth (account, user, acting, owner, …), a
 market tool only reading and taking no id but `property_id`/`listing_id` (or their lists `property_ids`/`listing_ids`),
@@ -230,6 +230,60 @@ a portable schema that Gemini's SDK builds, null offered where it is accepted, n
 column no surface may show, no connection opened outside `registry.py`, and every declared filter and point attribute
 changing the SQL the tool runs. The live tenant check is `tests/test_capabilities_live.py`. List or call one by hand:
 `python -m scripts.capabilities_demo list|call`.
+
+## Writes (`api/capabilities/writes.py`, `api/agents/proposals.py`, #2072, ADR-0004)
+
+A run never writes a user's rows. It proposes; the user's click applies. **The four entries:** `create_collection` (name,
+description, `property_ids`: the collection and its members in one proposal), `add_note` (a note, or a viewing with `viewing_at`),
+`add_pipeline_card` (at the entry stage), `create_watchdog` (name, strict `filters`: the WATCHDOG agenda, `category_type` required).
+Each handler calls the module its route calls (`curation`, `pipeline`, `notifications`): no second write path, and a route's check
+(a watchdog's renderable spec, now in `notifications`) reaches every caller.
+
+**Own scope.** A proposal writes only into what its run creates. No entry takes the id of a collection, tag, stage, note or watchdog
+(census `test_no_write_entry_takes_an_id_but_a_propertys`), so "add to a collection" is `create_collection`'s `property_ids`, and a
+watchdog cannot scope itself by the user's tags, collections or stages (not the WATCHDOG agenda). A place chip's `name` is the model's,
+so Apply replaces it from `ruian_place_names_public` and refuses a code it does not know.
+
+**A `WriteEntry`** adds to `Entry`: `draw(ctx, args)`, the before and after from our own data (only `agent_text` is the model's words);
+`undo_check(ctx, record, applied_at)`, what the page says of Undo; `undo(ctx, record, applied_at)`; `undo_confirm`. The handler returns
+`data.answer` and `undo`, the record the inverse takes. `registry.call` refuses every write (FORBIDDEN); `registry.validate` hands it
+to `proposals.py`, the one place a handler runs, reached only by `POST /runs/{id}/proposals/{i}/apply` and `/undo`. Censuses in
+`tests/api/test_agent_security.py`; live in `tests/test_agent_proposals_live.py`.
+
+**Once.** `agent_proposal_claim` (migration 712), an `INSERT ... ON CONFLICT DO NOTHING` on `(run_id, proposal_index)`, runs BEFORE the
+write, in the request's one tenant transaction, and `agent_proposal_settle` records the effect after it. A second Apply waits on the
+first's uncommitted row: a commit makes it a no-op answering the same view, a rollback (a refused write, a crash) lets it through. No
+window exists between the write and its marker. The table's only writers are those definers: `authenticated` holds SELECT, `agent_runs`
+stays read-only, and each function refuses any login but `tenant_pool` (`session_user`, so PostgREST's `authenticator` is refused),
+acting, a run's narrowed claim, and a run the caller's accounts do not hold. An undone proposal does not apply again. The writes take
+the RUN's account, not `require_account_id`'s oldest membership.
+
+**Whose rows.** `applied_at` is `now()`, the transaction's start, so every row the Apply wrote carries exactly that stamp, and a merge
+moves a row without changing it. Undo removes by the stamp, and so finds a row a merge moved; a row the user re-added has a later one.
+
+| Undo of | The user has since | Undo |
+|---|---|---|
+| a new collection | done nothing, or removed members | deletes the collection |
+| | added members | removes the agent's members, keeps the collection and theirs |
+| | added members, then a merge folded one into an agent's | that member stays too (it may hold theirs) |
+| | left none of the agent's members | refuses |
+| | renamed or described it, shared it, turned on monitoring | refuses |
+| | deleted it | refuses: already gone |
+| a note or viewing | edited it, marked it shared, attached a file | refuses (a note's delete orphans its file) |
+| | deleted it | refuses: already gone |
+| | nothing, and a merge moved it | deletes it by id |
+| a pipeline card | moved it, even back to the entry stage; rearranged it | refuses |
+| | removed it, or removed and re-added it | refuses |
+| | nothing, but its property was merged (either side) | refuses: a merge may have folded their card into it |
+| | nothing: card untouched at the entry stage | removes it, behind one confirm step (rule 22), and restores the dismissal Apply lifted |
+| a pipeline card already there at Apply | | no write, and refuses: the card is theirs |
+| a watchdog | changed it, or deleted it | refuses |
+| | nothing | retires it (rule 16: never a delete); its alerts leave the feed |
+
+A refusal leaves the proposal applied. `GET /runs/{id}/proposals` carries `undo: {available, says}`, so the page offers Undo only where
+it can work; a call anyway is a 409 with the same words.
+
+**A new watchdog alerts nothing already there:** `active_since` is its baseline as for the route's (`match_once`; a live test).
 
 ## Runs (`api/agents/executor.py`, #2070)
 
@@ -314,9 +368,9 @@ must hold in order, what may be paid). The run itself then asserts the rest for 
 a tool result, only the in-scope proposal was kept, no tenant table moved, no cap was passed.
 
 **A new write tool** names a property only as `property_id` or `property_ids` (`terminator.PROPERTY_ARGS`; a census), since
-the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys.
-Open, each a strict xfail: a proposal into a collection the run did not create (#2072 owes it); `markdown` naming a
-property, which no rail reads (the page must draw links only from the cited ids).
+the terminator refuses a proposal, or a declared `output`, naming a property no tool returned, and reads only those keys. It
+takes no other id (a census, § Writes). Open, a strict xfail: `markdown` naming a property, which no rail reads (the page draws
+links only from the cited ids).
 
 **Recorded runs.** Every file under `tests/cassettes/` replays through the current loop and terminator against the agent's
 current folder and must end as it ended (a changed skill body is no failure; a tool removed or an answer now refused is). A

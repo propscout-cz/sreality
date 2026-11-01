@@ -4122,6 +4122,11 @@ renumber.** Navigate by area:
     filter-preset save modal, the tag pickers, and this stage editor — the single colour-picking
     control app-wide; don't re-inline a swatch grid), and the entry-star / "konec" (terminal)
     controls carry `<InfoIcon>` (i) hints (native `title=`, the codebase's tooltip convention).
+    **Undoing a proposal's card is not a remove toggle (#2072, ADR-0004).** A run may propose a card at the entry stage; the user's
+    Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
+    while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,
+    `entered_stage_at` and `updated_at`, the stage still `is_entry`, no merge on the property since), through `remove_card`, so its
+    ledger event is the same, behind the one two-step confirm. A card the user moved, even back, is their deal: they close it.
 23. **One measure, one definition, one label.** Every per-m² figure the platform computes or
     renders — in SQL, in Python, in the SPA, in the Chrome extension — resolves from ONE named
     measure carrying its own numerator, denominator, unit and validity bounds. No consumer
