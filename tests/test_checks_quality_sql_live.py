@@ -92,7 +92,7 @@ _SENT = {
     "_CHURN_SQL": "test_churn_counts_second_and_later_snapshots_per_portal_and_day_beside_its_active_ads",
     "_URL_SQL": "test_data_quality_reads_the_ship_time_red_off_the_view_and_skips_land",
     "_LOCATION_STOCK_SQL": "test_the_scorecard_splits_the_townless_by_evidence_past_the_listing_edge",
-    "_LOCATION_SAMPLE_SQL": "test_the_sample_takes_its_truth_from_the_address_point_and_its_pin_from_the_newest_coordinate",
+    "_LOCATION_SAMPLE_SQL": "test_the_sample_takes_its_truth_from_a_door_the_words_named_and_its_pin_from_the_newest_coordinate",
     "_REGISTRY_LIVENESS_SQL": "test_the_registry_cell_reads_the_current_versions_age_and_a_newer_one_left_staged",
 }
 
