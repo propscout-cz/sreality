@@ -52,12 +52,12 @@ last-writer-wins.
       applied and merged 2026-11-01).** Two audience evaluations per read, the primary key kept at scale (ruling
       2026-11-01); the audience plpgsql, definer, one `current_account_ids()` call. Production delta after 709: 0.973 ms
       and 18.3 buffers over 30 reads; the tickets' ≥ 100- and ≥ 500-read samples ride gate #2203's measurement.
-- [ ] **Review 3 repairs (#2326, PR #2329): the third two-axis review's findings on #2249, #2306, F16 + F17.** The desktop collection
+- [x] **Review 3 repairs (#2326, PR #2329, merged 2026-11-01): the third two-axis review's findings on #2249, #2306, F16 + F17.** The desktop collection
       cards' "without a card" line held under the hand; the stale-side judge reads the row's page time; a hand parks
       every refetch nobody asked for and spares the user's own; the artifact link's empty field and the viewing
       pickers' cleared-both path; census (i) sees `ALTER FUNCTION`; a several-accounts live case; the GLOSSARY's
       Hand and Park; the stale charter, tenancy and database-skill lines. The design's § 12 entry "Review 3 repairs".
-- [ ] **W7: the notification bell follows the clock (#2327, DB + SPA, migration 715).** Ruling Q1b re-ruled
+- [x] **W7: the notification bell follows the clock (#2327, PR #2334, migration 715, merged 2026-11-01).** Ruling Q1b re-ruled
       2026-11-01 ("if I resolve a notification in another window or the app, I want the count to update everywhere"):
       an eighth family `notifications` on `notification_dispatches` and `notification_subscriptions` (own-only); the
       bell's count, the feed and the Watchdog list re-read on a mark-seen, a new event, a merge's re-point or a retired
