@@ -55,6 +55,16 @@ describe('<AgentLimitDialog>', () => {
     expect(await screen.findByText('$12.50')).toBeInTheDocument();
   });
 
+  it('shows what was saved at once, even when the next read never lands', async () => {
+    mount();
+    fireEvent.change(await field(), { target: { value: '12.5' } });
+    options.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByRole('button', { name: 'Save limit' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved.');
+    expect(await field()).toHaveValue('12.5');
+    expect(screen.getByText('$12.50')).toBeInTheDocument();
+  });
+
   it('takes 0, which means no run starts', async () => {
     mount();
     fireEvent.change(await field(), { target: { value: '0' } });

@@ -185,7 +185,7 @@ UNGATED: dict[str, Ungated] = {
         "function", "reachable", ("713_agent_account_limits.sql",),
         "An account's own agent spend today, the one number GET /runs/options shows under the caller's login and the "
         "claim compares with its limit. SECURITY DEFINER and narrow: a member reads their account, the service role "
-        "any, anyone else NULL; one sum out, never a call, a model or a run (tests/test_agent_runs_live.py)."),
+        "or a platform admin any, anyone else NULL; one sum out, never a call, a model or a run (tests/test_agent_runs_live.py)."),
     "curation_clock_audience": Ungated(
         "function", "reachable", ("709_curation_clock_audience_plan.sql",),
         "Reads no admin-only relation: registered as a SECURITY DEFINER function the browser may call "

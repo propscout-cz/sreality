@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from psycopg.rows import dict_row
 
 from api import dependencies as deps
@@ -54,8 +54,10 @@ def _rows(conn: psycopg.Connection, sql: str, *params: Any) -> list[dict[str, An
         return cur.fetchall()
 
 
-def _limit_usd(value: Any) -> Decimal:
-    """A JSON number from 0 to the bound, in whole cents. 0 is an amount: no run is claimed."""
+def _limit_usd(body: Any) -> Decimal:
+    """`{"daily_limit_usd": n}`, n from 0 to the bound in whole cents; 0 is an amount: no run is claimed. Judged here, not by
+    a model: a model's 422 echoes the input, and a NaN anywhere in it makes that answer a 500."""
+    value = body["daily_limit_usd"] if isinstance(body, dict) and body.keys() == {"daily_limit_usd"} else None
     usd = None if isinstance(value, bool) or not isinstance(value, (int, float)) else Decimal(str(value))
     if usd is None or not usd.is_finite() or not 0 <= usd <= MAX_DAILY_LIMIT_USD or usd != usd.quantize(_CENT):
         raise HTTPException(status_code=422, detail=f"The limit must be a number of dollars from 0 to {MAX_DAILY_LIMIT_USD}, "
@@ -84,13 +86,13 @@ def run_options(
 
 @router.put("/limit")
 def set_limit(
-    body: s.AgentLimitIn,
     conn: tenant_pool.TenantConn,
+    body: Any = Body(),
     account: uuid.UUID = Depends(tenant_pool.require_account_id),
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     """This account's daily agent limit, its own to set: no browser grant writes it, so the route is what judges the value."""
-    usd = _limit_usd(body.daily_limit_usd)
+    usd = _limit_usd(body)
     with deps.open_background_conn() as svc:
         refusal = executor.start_refusal(svc, principal_user_id=uuid.UUID(claims["sub"]), account_id=account)
         if refusal is not None:

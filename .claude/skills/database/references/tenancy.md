@@ -528,7 +528,7 @@ join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come fr
 another account's id is a 404 before the service role opens. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
 browser write) follows: `PUT /runs/limit` takes the gate's account (the body names none) and writes on the service role after the
 route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
-definer because `llm_calls` has no browser grant: a member reads their account, the service role any, anyone else NULL. Its row
+definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row
 cascades with the account; the account's `llm_calls` rows stay (704: no foreign key) and count only towards the platform ceiling.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked

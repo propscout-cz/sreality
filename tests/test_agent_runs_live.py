@@ -11,6 +11,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -1480,7 +1481,7 @@ def _ended_run(svc: psycopg.Connection, world: dict[str, Any], key: str, usd: fl
 
 
 def _set_limit(svc: psycopg.Connection, world: dict[str, Any], key: str, usd: float) -> None:
-    executor.set_account_limit(svc, account_id=world[f"{key}_acc"], daily_limit_usd=usd)
+    executor.set_account_limit(svc, account_id=world[f"{key}_acc"], daily_limit_usd=Decimal(str(usd)))
 
 
 def test_an_account_at_its_limit_waits_and_the_account_behind_it_claims(svc: psycopg.Connection, world: dict[str, Any]) -> None:
@@ -1586,7 +1587,7 @@ def test_deleting_an_account_takes_its_limit_and_leaves_its_spend_to_the_ceiling
         _set(svc, "agent_run_allowlist", [*world["emails"], *[r[0] for r in svc.execute(
             "SELECT email FROM auth.users WHERE id = %s", (made["x"],)).fetchall()]])
         svc.execute("UPDATE entitlements SET plan = 'pilot' WHERE account_id = %s", (made["x_acc"],))
-        executor.set_account_limit(svc, account_id=made["x_acc"], daily_limit_usd=30)
+        executor.set_account_limit(svc, account_id=made["x_acc"], daily_limit_usd=Decimal(30))
         gone = _ended_run(svc, made, "x", 25)
     assert svc.execute("SELECT count(*) FROM agent_account_limits WHERE account_id = %s", (made["x_acc"],)).fetchone()[0] == 0
     assert svc.execute("SELECT agent_run_id FROM llm_calls WHERE agent_run_id = %s", (gone,)).fetchone()[0] == gone

@@ -5,7 +5,7 @@
 --   without touching one. 0 means no run is claimed. The claim reads it beside the platform ceiling, which stays.
 -- THE SPEND. `agent_account_spent_today` is its one definition: the claim calls it on the service connection, GET
 --   /runs/options on the caller's own. llm_calls has no browser grant, so it is a definer with its own check: a member
---   reads their account, the service role any, and anyone else gets NULL, which the claim's `<` never passes.
+--   reads their account, the service role or a platform admin any, and anyone else gets NULL, which the claim's `<` never passes.
 --   An account's deletion cascades its runs and leaves their llm_calls rows (704: no foreign key): those stop counting
 --   for any account and still count towards the platform ceiling. So do the comparison script's rows, which carry no run.
 --   `finished_at` prunes the runs to probe; the extra day covers a lost worker's call landing just after its run ended.
@@ -68,7 +68,7 @@ as $$
              and c.called_for = any(p_called_for)
              and c.called_at >= date_trunc('day', now(), 'UTC')) s
 $$;
-revoke all on function public.agent_account_spent_today(uuid, text[]) from public, anon;
+revoke all on function public.agent_account_spent_today(uuid, text[]) from public, anon, authenticated;
 grant execute on function public.agent_account_spent_today(uuid, text[]) to authenticated;
 
 insert into public.plans (key, name, position, agendas, agent_estimations_monthly_quota, trial_agent_estimations_monthly_quota)

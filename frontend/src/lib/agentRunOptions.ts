@@ -47,7 +47,7 @@ export const agentRunKeys = {
   steps: (id: number) => ['agent-runs', 'steps', id] as const,
 };
 
-/* A run the queue cannot move can wait for days: nothing will change until the brake or the ceiling does. */
+/* A run the queue cannot move can wait for days: nothing will change until the brake, the ceiling or the limit does. */
 export const WAITING_POLL_MS = 30_000;
 
 /* The Shell's nav and the pages share this one read. `enabled` is false before a session exists. */

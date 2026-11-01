@@ -301,7 +301,7 @@ def account_limit(svc: psycopg.Connection, tenant: psycopg.Connection, *, accoun
     return AccountLimit(limit_usd=row[0], spent_today_usd=row[1])
 
 
-def set_account_limit(conn: psycopg.Connection, *, account_id: uuid.UUID, daily_limit_usd: Decimal | float) -> None:
+def set_account_limit(conn: psycopg.Connection, *, account_id: uuid.UUID, daily_limit_usd: Decimal) -> None:
     conn.execute(_SET_LIMIT, (account_id, daily_limit_usd))
 
 

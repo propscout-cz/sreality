@@ -4,7 +4,7 @@ import Dialog, { DialogClose } from '@/components/Dialog';
 import ErrorBanner from '@/components/ErrorBanner';
 import { Field } from '@/components/controls';
 import { setAgentRunLimit } from '@/lib/api';
-import { agentRunKeys, useAgentRunOptions } from '@/lib/agentRunOptions';
+import { agentRunKeys, useAgentRunOptions, type AgentRunOptions } from '@/lib/agentRunOptions';
 import { fmtUsd } from '@/lib/format';
 
 /* This account's daily agent spending limit, opened from the avatar's menu. Loaded on demand: the first visit carries
@@ -29,7 +29,9 @@ export default function AgentLimitDialog({ onClose }: { onClose: () => void }) {
 
   const save = useMutation({
     mutationFn: setAgentRunLimit,
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      /* The answer goes in first: until the next read lands the box would show the old limit, and a second Save would write it back. */
+      queryClient.setQueryData<AgentRunOptions>(agentRunKeys.options, (old) => old && { ...old, limit: saved });
       setTyped(null);
       void queryClient.invalidateQueries({ queryKey: agentRunKeys.options });
     },

@@ -340,12 +340,21 @@ def test_the_body_cannot_name_another_account(svc: psycopg.Connection, world: di
     b'{"daily_limit_usd": true}', b'{"daily_limit_usd": null}', b'{"daily_limit_usd": [1]}', b'{"daily_limit_usd": NaN}',
     b'{"daily_limit_usd": Infinity}', b'{"daily_limit_usd": -Infinity}', b'{"daily_limit_usd": 1e400}',
     b'{"daily_limit_usd": 1e308}', b'{"daily_limit_usd": 1000000.01}', b'{"daily_limit_usd": 1.234}',
-    b'{"daily_limit_usd": 0.001}', b'{}',
+    b'{"daily_limit_usd": 0.001}', b'{}', b'{"daily_limit_usd": 1, "x": NaN}', b'{"daily_limit_usd": 1, "x": 1}',
+    b'{"x": NaN}', b'NaN', b'10', b'"10"', b'[]', b'null', b'{"daily_limit_usd": 1' + b'0' * 400 + b'}',
 ])
 def test_a_limit_that_is_no_amount_is_a_422_and_writes_nothing(svc: psycopg.Connection, world: dict[str, Any],
                                                                as_user: Callable[[uuid.UUID], TestClient], raw: bytes) -> None:
     answered = as_user(world["a"]).put("/runs/limit", content=raw, headers={"Content-Type": "application/json"})
     assert answered.status_code == 422, answered.text
+    assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
+
+
+def test_a_number_too_long_to_parse_is_refused_and_writes_nothing(svc: psycopg.Connection, world: dict[str, Any],
+                                                                  as_user: Callable[[uuid.UUID], TestClient]) -> None:
+    raw = b'{"daily_limit_usd": 1' + b'0' * 5000 + b'}'
+    answered = as_user(world["a"]).put("/runs/limit", content=raw, headers={"Content-Type": "application/json"})
+    assert answered.status_code == 400, answered.text
     assert svc.execute("SELECT count(*) FROM agent_account_limits").fetchone()[0] == 0
 
 
