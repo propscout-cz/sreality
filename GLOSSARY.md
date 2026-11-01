@@ -39,6 +39,13 @@ the most precise location whatever the ad's status, ties by the canonical order 
 Often the canonical ad, not always. A surface about one ad keeps that ad's own location.
 _Avoid_: place, pin ad, anchor ad, located ad, representative location
 
+**RÚIAN door**:
+One address point in the state RÚIAN register: one building entrance, known by its kód ADM and its
+house number. It is a building's door, not a unit inside it, so the flats of one building share it,
+a house normally has its own, and a plot of land has none of its own. An ad has a RÚIAN door only
+when that door is certain; everything else stands at a coarser level and says so.
+_Avoid_: address point (in prose), house number, door (alone, where a physical door could be meant)
+
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
 _Avoid_: dupe, match, twin
@@ -666,6 +673,12 @@ A map layer drawn from an outside public dataset — metro routes, flood zones, 
 rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
 which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
+
+**Sreality Datasets**:
+The monthly price statistics sreality publishes per town, which the platform fetches and stores
+under RÚIAN town codes. They are sreality's numbers, not computed from ads, and they feed the
+Datasets page. Fetching a town needs sreality's own number for it, translated to its RÚIAN code.
+_Avoid_: town statistics, price stats, statistics (alone)
 
 **Count mark**:
 The number a map shows for one world tile when more properties are in view than the pin limit (a
