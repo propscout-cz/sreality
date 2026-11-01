@@ -212,6 +212,12 @@ finish() {
 # source, networking or domain change, or, with a service named, a change whose TARGET is anything else.
 # Outputs go to ~/.railway-m0 (mode 700); no secret is captured or written anywhere.
 
+# `declare -A` below needs bash 4; macOS ships 3.2, which dies on it with a bare "vite: unbound variable".
+if (( BASH_VERSINFO[0] < 4 )); then
+  printf 'this wizard needs bash 4 or newer, and this is %s: run brew install bash, then open a new terminal\n' "$BASH_VERSION" >&2
+  exit 2
+fi
+
 MODE="${1:-}"
 case "$MODE" in
   preflight|window|drift|runner-list|runner-pause) ;;
