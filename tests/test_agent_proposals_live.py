@@ -362,6 +362,15 @@ def test_a_proposal_todays_schema_refuses_is_drawn_refused_and_never_written(w: 
     assert w.rows() == before and w.marker(run_id) is None
 
 
+def test_an_applied_proposal_keeps_its_drawing_and_its_undo_whatever_the_schema_says_later(w: World) -> None:
+    run_id = _applied(w, _note(w.pids[0]))
+    w.svc.execute("""UPDATE agent_runs SET proposals = '[{"entry": "add_note", "args": {"retired_field": 1}}]' WHERE id = %s""", (run_id,))
+    view = w.view(run_id)
+    assert view["state"] == "applied" and view["title"] == "New note" and view["undo"]["available"]
+    undone = w.post(run_id, "undo")
+    assert undone.status_code == 200 and undone.json()["state"] == "undone" and undone.json()["answer"] is None
+
+
 def test_a_new_watchdog_alerts_nothing_that_is_already_there(w: World) -> None:
     """Rule 16: created by Apply as by the route, `active_since` is its baseline, so no flood of what already matches."""
     run_id = _applied(w, _watchdog())

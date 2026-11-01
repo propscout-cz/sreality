@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 
 from api.capabilities import registry
 from api.capabilities.entry import Context, WriteEntry
-from api.capabilities.errors import ToolError
+from api.capabilities.errors import ToolError, ToolErrorCode
 from api.filter_args import Args
 
 NOT_FOUND = "no such proposal"
@@ -44,32 +44,47 @@ def _markers(conn: psycopg.Connection, run_id: int, index: int | None = None) ->
         return {row["proposal_index"]: row for row in cur.fetchall()}
 
 
+def _write_entry(name: str) -> WriteEntry | None:
+    entry = registry.ENTRIES.get(name)
+    return entry if isinstance(entry, WriteEntry) else None
+
+
 def _parsed(proposal: Mapping[str, Any]) -> tuple[WriteEntry, Args]:
     """Its entry and arguments, parsed as Apply will write them; a ToolError if today's schema no longer takes them."""
     entry, args = registry.validate(proposal["entry"], proposal["args"])
     if not isinstance(entry, WriteEntry):
-        raise ToolError(registry.ToolErrorCode.REFUSED, f"{entry.name} is no write")
+        raise ToolError(ToolErrorCode.REFUSED, f"{entry.name} is no write")
     return entry, args
+
+
+def _applied_view(ctx: Context, base: dict[str, Any], entry: WriteEntry | None, marker: Mapping[str, Any]) -> dict[str, Any]:
+    """Drawn as it stood when the user applied it, whatever today's schema says of its arguments."""
+    effect = marker["effect"]
+    view = {**base, **effect["drawn"], "applied_at": marker["applied_at"], "undone_at": marker["undone_at"],
+            "state": "applied" if marker["undone_at"] is None else "undone"}
+    if marker["undone_at"] is not None:
+        return view
+    view["answer"] = effect["answer"]
+    if entry is None:
+        view["undo"] = {"available": False, "says": "This kind of proposal no longer exists, so it cannot be undone."}
+    else:
+        check = entry.undo_check(ctx, effect["undo"], marker["applied_at"])
+        view["undo"] = {"available": check.available, "says": check.says}
+        view["undo_confirm"] = entry.undo_confirm
+    return view
 
 
 def _view(ctx: Context, index: int, proposal: Mapping[str, Any], marker: Mapping[str, Any] | None) -> dict[str, Any]:
     base = {"index": index, "entry": proposal["entry"], "state": "open", "refused": None, "answer": None, "applied_at": None,
             "undone_at": None, "undo": None, "undo_confirm": False}
+    if marker is not None:
+        return _applied_view(ctx, base, _write_entry(proposal["entry"]), marker)
     try:
         entry, args = _parsed(proposal)
     except ToolError as exc:
         return {**base, "title": proposal["entry"], "before": [], "after": [], "agent_text": [], "properties": [],
                 "filters": [], "refused": exc.message}
-    base["undo_confirm"] = entry.undo_confirm
-    if marker is None:
-        return {**base, **entry.draw(ctx, args)}
-    effect = marker["effect"]
-    view = {**base, **effect["drawn"], "applied_at": marker["applied_at"], "undone_at": marker["undone_at"],
-            "answer": effect["answer"], "state": "applied" if marker["undone_at"] is None else "undone"}
-    if marker["undone_at"] is None:
-        check = entry.undo_check(ctx, effect["undo"], marker["applied_at"])
-        view["undo"] = {"available": check.available, "says": check.says}
-    return view
+    return {**base, **entry.draw(ctx, args)}
 
 
 def views(conn: psycopg.Connection, run_id: int) -> list[dict[str, Any]]:
@@ -119,6 +134,8 @@ def undo(conn: psycopg.Connection, run_id: int, index: int) -> dict[str, Any]:
     ctx = Context(conn, account_id=account)
     if not conn.execute(_UNDO, (run_id, index)).fetchone()[0]:
         return _view(ctx, index, proposal, _markers(conn, run_id, index)[index])
-    entry, _ = _parsed(proposal)
+    entry = _write_entry(proposal["entry"])
+    if entry is None:
+        raise HTTPException(409, "This kind of proposal no longer exists, so it cannot be undone.")
     entry.undo(ctx, marker["effect"]["undo"], marker["applied_at"])
     return _view(ctx, index, proposal, _markers(conn, run_id, index)[index])
