@@ -107,6 +107,9 @@ export const ROUTES = {
   signups: def('/signups'),
   // Where the agent platform programme stands (admin), in plain words.
   agentPlatform: def('/agent-platform'),
+  // Start, follow and cancel agent runs: shown to accounts that may start one (GET /runs/options).
+  runs: def('/runs'),
+  runDetail: def('/runs/:id'),
   estimations: def('/estimations'),
   estimationDetail: def('/estimation/:id'),
   brokers: def('/brokers'),

@@ -233,12 +233,19 @@ changing the SQL the tool runs. The live tenant check is `tests/test_capabilitie
 
 ## Runs (`api/agents/executor.py`, #2070)
 
-Three entry points; nothing in production calls them until #2071 (routes) and #2075 (agent-worker).
+Three entry points; the routes below call two, and nothing claims a run until #2075 (agent-worker).
+
+**Routes (`api/routes/agent_runs.py`, #2071).** `POST`/`GET /runs`, `GET /runs/{id}`, `/steps`, `POST /runs/{id}/cancel`,
+`GET /runs/options`, pinned by `tests/api/test_agent_run_routes.py`; their tenancy: `database/references/tenancy.md`, Fourth
+instance. A step's `summary` stands in for a tool's whole result, so polling stays light. `/runs/options` is what the SPA's
+form and nav follow: `start_refusal` is the ONE gate (`submit` applies it first, so a refused caller learns nothing of the
+agents); a new gate joins `_refusal` and every surface follows. Refused callers read no agents and `queue: null`.
+Everything a run holds is untrusted: render it as text (`lib/agentRuns.ts`).
 
 - **`submit(conn, *, principal_user_id, account_id, agent, value, provider=None, idempotency_key=None)`**, on the
-  service connection, for the identity a route stamped from the caller's own token: the input checked, then the
-  allowlist (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
-  `not_allowlisted`), a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
+  service connection, for the identity a route stamped from the caller's own token: the allowlist
+  (`app_settings.agent_run_allowlist`, a JSON list of emails, confirmed only; absent = nobody; `SubmitRefused`
+  `not_allowlisted`), the input checked, a per-account advisory transaction lock, a repeated idempotency key (returns the run it made),
   the in-flight cap (`agent_account_in_flight_cap`; `SubmitRefused` `in_flight_cap`), insert as `queued`. It takes no
   act-as.
 - **`work_once(*, stop, providers=None, connect=db.connect)`** returns `Worked(state, run_id)`. `dark` when
