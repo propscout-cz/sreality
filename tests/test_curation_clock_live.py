@@ -541,7 +541,7 @@ def test_no_browser_role_writes_the_clock(world: _World) -> None:
             _as(world.a.user, sql, params)
 
 
-# --- 11. one clock read evaluates the audience once (706, F16 #2308) ----------------------------------------------
+# --- 11. one clock read evaluates the audience twice and keeps the primary key (706, F16 #2308) ------------------
 
 _READ = "SELECT account_id, family, counter, mine, age_ms FROM curation_clock_public"
 
@@ -554,83 +554,59 @@ def _plan_nodes(plan: dict[str, Any]) -> Iterator[dict[str, Any]]:
 
 
 def _analyzed_read(cur: psycopg.Cursor[Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """The read's analyzed plan in the caller's scope: (its top node, every audience node in it)."""
+    """The read's analyzed plan in the caller's scope: (its top node, every audience Function Scan in it)."""
     cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_READ}")
     out = cur.fetchone()[0]
     top = (json.loads(out) if isinstance(out, str) else out)[0]["Plan"]
-    return top, [n for n in _plan_nodes(top) if "curation_clock_audience" in
-                 (n.get("Function Name"), n.get("Relation Name"))]
+    return top, [n for n in _plan_nodes(top) if n.get("Function Name") == "curation_clock_audience"]
 
 
-def test_one_clock_read_evaluates_the_audience_once_and_maps_mine(world: _World) -> None:
+def test_one_clock_read_evaluates_the_audience_twice_and_maps_mine(world: _World) -> None:
     """696 evaluated it four times per read (three policy arms and the view's join: 4.9 ms mean in production against
-    gate #2203's 2.5 ms); the policy is now one pair lookup and the view reads `mine` from current_account_ids()."""
+    gate #2203's 2.5 ms). 706's policy is one pair lookup, so a read evaluates it twice, each once: in the policy and in
+    the view's join, which maps `mine` (ruling 2026-11-01)."""
     a, c = world.a.acc, world.c.acc
     with scoped(world.c.user) as conn:
         with conn.cursor() as cur:
             top, audience = _analyzed_read(cur)
             cur.execute(_READ)
             rows = {(acc, fam): mine for acc, fam, _n, mine, _age in cur.fetchall()}
-    assert len(audience) == 1, top
-    assert audience[0]["Actual Loops"] == 1, f"the audience ran once, not per row: {top}"
+    assert len(audience) == 2, f"two audience evaluations, the policy's and the view's join: {top}"
+    assert all(n["Actual Loops"] == 1 for n in audience), f"each ran once, not per row: {top}"
     assert {acc for acc, _f in rows} == {a, c}, rows
     assert all(mine for (acc, _f), mine in rows.items() if acc == c), f"own rows are mine: {rows}"
     assert not any(mine for (acc, _f), mine in rows.items() if acc == a), f"the shared owner's are not: {rows}"
     assert {f for acc, f in rows if acc == a} == set(EDIT_FAMILIES), rows
 
 
-def _clock_size(cur: psycopg.Cursor[Any]) -> tuple[int, int]:
-    """(rows, heap pages) of curation_clock in the caller's transaction, read as the table's owner."""
-    cur.execute("SELECT count(*), pg_relation_size('public.curation_clock') / current_setting('block_size')::int "
-                "FROM curation_clock")
-    rows, pages = cur.fetchone()
-    return int(rows), int(pages)
-
-
-def _read_beyond_the_clock(cur: psycopg.Cursor[Any], user: uuid.UUID) -> tuple[dict[str, Any], int, int]:
-    """The read's warm analyzed plan as `user`, the clock's rows, and the buffers it touched beyond the clock's pages
-    (the audience, `mine`): what one read costs that is not its pass over the clock."""
-    rows, pages = _clock_size(cur)
-    with scoped(user, cur=cur):
-        _analyzed_read(cur)
-        top, _audience = _analyzed_read(cur)
-    return top, rows, top.get("Shared Hit Blocks", 0) + top.get("Shared Read Blocks", 0) - pages
-
-
-def test_the_clock_read_grows_only_by_its_one_pass_over_the_clock(world: _World) -> None:
-    """2,000 accounts with a counter each (through the trigger), analyzed inside a transaction rolled back after.
-    696's view join probed curation_clock_pkey per followed account; 706 trades that probe for ONE pass over the
-    clock under one hashed SubPlan, O(clock rows) (charter § 3.8; § 12 F16 item 3, the operator's call). That pass is
-    all that may grow with the clock: the scan runs once and probes each row once, the audience runs once, and the
-    buffers the read touches beyond the clock's pages stay what they are at the lane's own size."""
+def test_the_clock_read_probes_the_primary_key_at_scale(world: _World) -> None:
+    """2,000 accounts with a counter each (through the trigger), analyzed inside a transaction rolled back after. The
+    view's join probes curation_clock_pkey per followed account, so the read does not grow with the clock; a policy's
+    subquery never becomes a join, so without that join the read scans the whole clock (charter § 3.8, § 12 F16)."""
     a, c = world.a.acc, world.c.acc
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
-            _top, _rows, small = _read_beyond_the_clock(cur, world.c.user)
             cur.execute("WITH made AS (INSERT INTO accounts (kind, name) SELECT 'personal', 'clock-scale-' || g "
                         "FROM generate_series(1, 2000) g RETURNING id) "
                         "INSERT INTO tags (account_id, name, color) SELECT id, 'scale', 'slate' FROM made")
             cur.execute("SET CONSTRAINTS ALL IMMEDIATE")
             cur.execute("ANALYZE curation_clock")
-            top, rows, beyond = _read_beyond_the_clock(cur, world.c.user)
+            cur.execute("SELECT count(*) FROM curation_clock")
+            rows = cur.fetchone()[0]
             with scoped(world.c.user, cur=cur):
+                top, audience = _analyzed_read(cur)
                 cur.execute(_READ)
                 accounts = {r[0] for r in cur.fetchall()}
     finally:
         conn.rollback()
         conn.close()
-    audience = [n for n in _plan_nodes(top) if n.get("Function Name") == "curation_clock_audience"]
-    scans = [n for n in _plan_nodes(top) if n.get("Relation Name") == "curation_clock"]
-    assert rows > 2000 and len(audience) == 1 and audience[0]["Actual Loops"] == 1, top
-    assert len(scans) == 1 and "hashed SubPlan" in scans[0].get("Filter", ""), (
-        f"the policy probes one hash of the followed pairs per row, never a per-row audience: {top}")
-    scan = scans[0]
-    assert scan["Actual Loops"] == 1 and scan["Actual Rows"] + scan.get("Rows Removed by Filter", 0) == rows, (
-        f"one pass, each of the {rows} clock rows probed once: {scan}")
-    assert beyond <= small + 4, (
-        f"beyond its pass over the clock the read touched {small} buffers at the lane's size, {beyond} at 2,000 "
-        f"accounts: something per row: {top}")
+    clock = [n for n in _plan_nodes(top) if n.get("Relation Name") == "curation_clock"
+             or n.get("Index Name") == "curation_clock_pkey"]
+    assert rows > 2000, rows
+    assert any(n.get("Index Name") == "curation_clock_pkey" for n in clock), top
+    assert not any(n["Node Type"] == "Seq Scan" for n in clock), f"no pass over the {rows} clock rows: {top}"
+    assert len(audience) == 2 and all(n["Actual Loops"] == 1 for n in audience), top
     assert accounts == {a, c}, accounts
 
 
@@ -641,15 +617,25 @@ def _post_706() -> str:
     return m.group(0)
 
 
-def test_706s_post_refuses_a_clock_without_row_security() -> None:
-    """Since 706 the view reads the clock table whole (no join on the audience), so the table's policy is the read's
-    only gate: 706's $post$ passes on the lane's schema and refuses the clock with row security off."""
+def test_706s_post_refuses_a_clock_without_row_security_or_without_the_views_join() -> None:
+    """706's $post$ passes on the lane's schema. It refuses the clock with row security off (the view's join keeps the
+    accounts, the policy alone a share's families) and the view rewritten without its join on the audience (706 as
+    first built: the join is what keeps curation_clock_pkey at scale)."""
     conn = psycopg.connect(db_url())
     try:
         with conn.cursor() as cur:
             cur.execute(_post_706())
+            cur.execute("SAVEPOINT bite")
             cur.execute("ALTER TABLE public.curation_clock DISABLE ROW LEVEL SECURITY")
             with pytest.raises(psycopg.errors.RaiseException, match="row security is off on curation_clock"):
+                cur.execute(_post_706())
+            cur.execute("ROLLBACK TO SAVEPOINT bite")
+            cur.execute("CREATE OR REPLACE VIEW public.curation_clock_public WITH (security_invoker = true) AS "
+                        "SELECT c.account_id, c.family, c.counter, "
+                        "c.account_id IN (SELECT public.current_account_ids()) AS mine, "
+                        "greatest(0, extract(epoch FROM statement_timestamp() - c.changed_at) * 1000)::bigint "
+                        "AS age_ms FROM public.curation_clock c")
+            with pytest.raises(psycopg.errors.RaiseException, match="joins the audience once"):
                 cur.execute(_post_706())
     finally:
         conn.rollback()
