@@ -338,6 +338,26 @@ describe('pipelineViewFilters', () => {
     expect(f.bounds).toBeNull();
   });
 
+  it('scopes to the open stages, leaving the closed ones out (operator 2026-11-01)', () => {
+    const f = pipelineViewFilters([
+      { id: 1, is_terminal: false },
+      { id: 74, is_terminal: false },
+      { id: 9, is_terminal: true },
+    ]);
+    // By id, not "any stage minus the closed": turning the chip off then
+    // clears the whole scope instead of leaving the closed stages excluded.
+    expect(f.pipeline).toEqual({ set: null, in: [1, 74], out: [] });
+    expect(f.categoryType).toBeNull();
+    expect(fromSearchParams(toSearchParams(f))).toEqual(f);
+  });
+
+  it('is the whole pipeline when no stage is closed or the stages are unread', () => {
+    const whole = { set: 'in', in: [], out: [] };
+    expect(pipelineViewFilters([{ id: 1, is_terminal: false }]).pipeline).toEqual(whole);
+    expect(pipelineViewFilters([{ id: 9, is_terminal: true }]).pipeline).toEqual(whole);
+    expect(pipelineViewFilters([]).pipeline).toEqual(whole);
+  });
+
   it('keeps status "any" so a delisted deal stays visible', () => {
     // A property whose listing went inactive mid-negotiation is exactly the one
     // an operator needs to see on the board.

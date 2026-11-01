@@ -51,10 +51,10 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
   Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
   no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`styles/tokens.css`) need operator OK. Backend rules don't apply.
-- **Chrome extension** (`chrome-extension/`) — Manifest v3, **vanilla TS only** (no React /
-  Tailwind), closed shadow-root panel. Every network call goes through the background worker
-  (`chrome.runtime.sendMessage`), never a direct `fetch`. Build-time `VITE_API_*` inlined
-  (Path 1; ship `dist/` to trusted operators only). Backend + SPA rules don't apply here.
+- **Chrome extension** (`chrome-extension/`) — MV3, **vanilla TS only** (no React/Tailwind);
+  shadow roots on portal pages, the panel in Chrome's side panel. Network calls go via the
+  background worker (`chrome.runtime.sendMessage`), never `fetch`. `VITE_API_*` inlined at
+  build (Path 1; ship `dist/` to trusted operators only). Backend/SPA rules don't apply.
 
 When in doubt which territory a task is in, ask. Don't import frontend deps into the Python tree or vice versa.
 ## Working with the operator

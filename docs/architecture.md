@@ -1044,9 +1044,9 @@ rules. Identify which one a task belongs to before you start.
   inside `frontend/`.
 
 **Chrome-extension territory** (`chrome-extension/`):
-- Manifest v3 browser extension that overlays a side sheet on portal listing pages (the
-  property's facts, price history, the operator's curation, the MF gross yield and the Výnos
-  estimate). The content script matches **every scraped portal's host** (sreality,
+- Manifest v3 browser extension whose panel — Chrome's own side panel, beside the portal page —
+  shows a listing's property (its facts, price history, the operator's curation, the MF gross
+  yield and the Výnos estimate). The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
   `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
   `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
@@ -1054,11 +1054,12 @@ rules. Identify which one a task belongs to before you start.
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
-  used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
+  used there for `name`), and `portalIds.test.ts` fails when the template
   and the rules name different hosts, so onboarding a new portal means its rule in
   `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
-  is narrowed at build time to just the two live API/auth origins the background worker fetches
-  (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
+  stays empty: the background worker calls the API and the auth service under ordinary CORS, and the
+  store package's guard (`chrome-extension/release/allowed.ts`, a hand-written literal) holds the
+  permissions, the portal sites and the empty host list; CI fails a PR whose build differs from it. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
   API) rather than a full page load, which MV3's manifest-declared content script does NOT
   re-inject for. `background.ts` listens for `chrome.webNavigation.onHistoryStateUpdated`
@@ -1067,21 +1068,24 @@ rules. Identify which one a task belongs to before you start.
   page-type decision (`content.ts`, the entry and router) without needing a real reload — this
   fixed the "panel only appears after F5" bug. The router keys on the **listing identity**
   (`source:sourceId`), not the raw href, so a gallery/tracking query-param rewrite doesn't
-  re-open the side sheet and discard the operator's note draft + calculator edits. Every panel
+  re-open the side panel and discard the operator's note draft + calculator edits. Every panel
   open is a new **epoch** (`panel.ts`): anything resuming after an `await` (the lookup, the price
   history, the ~6-minute estimation poll in `panel_agents.ts`, the add-to-database flow) applies
-  only while its epoch is current — without it, listing A's answers paint into listing B's sheet —
+  only while its epoch is current — without it, listing A's answers paint into listing B's panel —
   and the Moje card guards its note reads and writes by property id, which survives a re-open of
-  the same listing. **The operator's curation lives in ONE store** (`src/store.ts`, shared by the panel and
-  the search-page cards, no DOM or `chrome`, unit-tested under `node --test`): each property's
+  the same listing. **The operator's curation lives in ONE store per context** (`src/store.ts`: the side
+  panel's, and each portal page's for its search cards and edge tab; no DOM or `chrome`, unit-tested
+  under `node --test`): each property's
   pipeline / collections / tags / dismissal keyed by `property_id`, the stage / collection / tag
   lists (one status each, the bounded retry), the one optimistic write path (put back once on
   failure, one write per property and kind at a time) and the transport's ONE session generation.
   Every lookup goes through it and seeds curation as it answers, except a property written since
   the lookup went out (a late answer never undoes a write); each overlay run re-reads a list the
   first time a card needs it, so a failed read is asked again and an app-side rename shows.
-  Both surfaces subscribe and re-render from it, so neither syncs the other, and its header lists
-  the invariants its tests hold. Index-card badges mark the card with the **listing id** they were
+  A context's surfaces subscribe and re-render from it; across the two contexts a landed write is
+  told over the panel's port (`property_written`, property id only) and the other store re-reads
+  that property through an ad of it it holds (invariant 9). Its header lists the invariants its
+  tests hold. Index-card badges mark the card with the **listing id** they were
   drawn for (not a boolean), so a card DOM node recycled by the portal's router is re-badged
   rather than left showing the previous listing's yield.
   **Distribution + auto-update:** an unpacked install has no update channel at all, so the
@@ -1089,18 +1093,42 @@ rules. Identify which one a task belongs to before you start.
   public, same ID + update channel). Chrome only auto-updates on a strictly-greater version, so
   `vite.config.ts` stamps the patch component from `GITHUB_RUN_NUMBER` (monotonic, never resets);
   the committed `MAJOR.MINOR` is the hand-owned release marker. Publishing to the store reassigns
-  the extension ID, which is baked into the Supabase redirect allowlist, the Google OAuth client,
-  and `CORS_ALLOW_ORIGINS` — add the new ID alongside the old one before cutover
-  (`chrome-extension/README.md`, "Keeping it up to date"). Match patterns are exact-host, so an apex-canonical
-  portal (e.g. `realitymix.cz`) needs its apex pattern, not just `www.`. **Detail pages** get the
-  **side sheet** (operator rulings 2026-10-28; `.interface-design/system.md` § Section cards, X1): a
-  full-height ~360 px sheet on the right edge in one closed shadow root (`sheet.ts`), covering the
-  page (never pushing it), opening by itself; folded it is a tab on that edge (PS mark, stage badge,
-  this ad's price drop, MF). The fold is remembered in `chrome.storage.local` (`panelFolded`; the old
-  panel's `panelMinimized` is read once as the first fold and removed) and the sheet starts folded
-  on a viewport under 1280 px. Its top bar holds the wordmark, "V aplikaci" (the
+  the extension ID, which is baked into the Supabase redirect allowlist and `CORS_ALLOW_ORIGINS`
+  (Google only ever sees Supabase's callback, so its OAuth client needs no extension entry) — add
+  the new ID alongside the old one before cutover (`chrome-extension/README.md`, "Keeping it up to
+  date"). CI builds the **store package** on every PR (`npm run package`, `release/package.ts`): the
+  build without its `key`, refused if it carries a source map, a deployed hostname, a description
+  over 132 characters, or permissions, sites or host permissions other than `release/allowed.ts`;
+  artifact `chrome-extension-store`, beside the keyed `chrome-extension-dist` for unpacked installs. Match patterns are exact-host, so an apex-canonical
+  portal (e.g. `realitymix.cz`) needs its apex pattern, not just `www.`. **The panel is Chrome's side
+  panel** (operator ruling 2026-10-31, replacing the 2026-10-28 overlay sheet: the page narrows beside
+  it, nothing is covered; `.interface-design/system.md` § Section cards, X1): our own page
+  `sidepanel.html` (`sidepanel.ts`, frame `frame.ts`; manifest `side_panel`, permission `sidePanel`,
+  Chrome ≥ 116), ONE global panel per window, so it stays open across the window's tabs. It shows the
+  **subject of the window's active tab**, which that tab's content script owns — a detail page's ad,
+  or the search card last opened in the panel; a tab with neither (or without our script) shows one
+  quiet card. The panel opens a port to every tab of its window (`chrome.tabs.connect`: on load, when
+  a tab that loads later calls `{type:'panel'}`, when one is dragged in); the subject goes up it, and
+  `panel_logic.createSubjectRouter` picks the active tab's, re-opening only on a change of AD and
+  holding the skeleton while the active tab is still connecting. Reading a tab's URL would need the
+  `tabs` permission: the panel asks the tab instead. Chrome opens a side panel only on a user action,
+  so it never opens by itself: the toolbar icon toggles it (`setPanelBehavior`), and a click on the
+  detail page's **edge tab** (`edge_tab.ts`, a closed shadow root on the right edge: PS mark, stage
+  badge, this ad's price drop, MF, read through the page's store) or a search card's badge sends
+  `{type:'panel', open:true}`, on which the background calls `sidePanel.open({windowId})` before any
+  await (the gesture must still be live). The edge tab hides while the port is up (reading the
+  drop's price history only while it shows); the panel's unload closes the port and brings it back,
+  and so does `pagehide` into the back/forward cache, which closes ports without an onDisconnect in
+  the frozen page (`pageshow` calls the panel again; a load-time call replaces any port still held).
+  An extension update orphans the open pages' scripts: the edge tab turns into "obnovte stránku"
+  (its click reloads), and the panel, which cannot reach them, words its empty card to cover it. A
+  tab switch never loses work: `panel_mine` keeps a half-typed note per property, `panel_agents`
+  saves an edit still in its 500 ms debounce at once against its own run, and keeps a run in flight
+  per ad (the lookup serves finished runs only), so going back shows it running instead of offering
+  a second metered run. With no ad the panel still reads the session: the sign-in card when signed
+  out, else the empty card under the account menu. Its top bar holds the wordmark, "V aplikaci" (the
   `{VITE_APP_BASE_URL}/listing/{source}/{native}` deep link), the account menu (email + Odhlásit) and
-  the fold. Under it: the header (`panel_header.ts`: deal, status, days on market, title, address,
+  › (`window.close()`, which closes the side panel). Under it: the header (`panel_header.ts`: deal, status, days on market, title, address,
   the property type's fact chips, this ad's price in the live colour with its last move and per-m²
   + basis, the MF gross yield only when served), then three section cards. **Vývoj ceny**
   (`panel_price.ts`) draws one step line per ad from `GET /properties/{id}/price-history`
@@ -1117,8 +1145,8 @@ rules. Identify which one a task belongs to before you start.
   flats for sale, its four-field assumptions editor (rent / fond oprav+SVJ / cena /
   **rekonstrukce**, the renovation joining the price as the acquisition-cost denominator —
   migration 213) — the agents to come ("Brzy") and a chat box with no backend yet. The other states
-  (signed out, an ad we lack with "Přidat do databáze", a failure, the static loading skeleton) are
-  one card each (`panel_states.ts`). The lookup carries the property's header facts at their MS11
+  (no ad in the active tab, signed out, an ad we lack with "Přidat do databáze", a failure, the static
+  loading skeleton) are one card each (`panel_states.ts`). The lookup carries the property's header facts at their MS11
   grain (`docs/design/merge-sprint/PROGRAM.md`), off the same `properties_public` row as MF, NULL
   before attach, the plot through `plot_area_m2` (keys: `portal_lookup._LISTING_COLS`).
   The editable **net-yield calculator** mirrors the SPA's `YieldBlock` by value: the yield % is
@@ -1131,38 +1159,39 @@ rules. Identify which one a task belongs to before you start.
   /listings/lookup` returns the listing's `property_id` + pipeline membership, and every curation
   write goes through the store to the SAME JWT-gated (`tenant_conn`) routes the SPA uses — one write
   path, one `<FunnelIcon>` glyph everywhere. Reachable from index/search pages too: the per-card
-  badge opens the same sheet (unfolded).
+  badge makes its ad that tab's subject and opens the side panel.
   **Index/search pages** get per-card badges via anchor-href scanning (no per-portal card
   selectors — robust to markup changes). The default display is a **read** through
   `POST /listings/lookup`, which maps a card's on-page `(source, native id)` to our row +
   MF figures. Badges come only from a successful
-  lookup; a failed one raises ONE page-level notice (bottom-LEFT corner — the listing sheet owns the
-  right edge — in a closed shadow root, shown only while cards the URL doesn't rule out as sale
+  lookup; a failed one raises ONE page-level notice (bottom-LEFT corner, in a closed shadow root,
+  shown only while cards the URL doesn't rule out as sale
   apartments wait on it): a sign-in button when signed out (that 401 used to leave search pages
   silent, read as a broken extension — 2026-09-24), "Obnovit stránku" when the extension was
   reloaded / updated / disabled / removed under the open tab (the overlay then stops scanning),
   the error + "Zkusit znovu" otherwise (no button for a build without an API URL). × lasts for
   the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once. Every content
   script watches the stored session's user (`session.ts` `onAccountChange`, through the store; a token refresh changes nothing): an account
-  change in any tab clears the store (curation, lists, writes in flight), drops the lookup cache and card controls and re-asks the cards and any open panel at
+  change in any tab clears every store (curation, lists, writes in flight), drops the lookup cache and card controls and re-asks the cards and any open panel at
   once (or prompts); a reply to a call sent before the change is never delivered (the store's `call`, auth messages
   excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per round (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
   `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
   `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
-  `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
-  classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
-  `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
-- **Vanilla TypeScript only — no React, no Tailwind.** Every surface lives inside a closed
-  shadow root. The search-page roots (card cluster, its menus, the photo mark, the dock and its
+  `vite build --mode content`, `--mode background`, then `--mode sidepanel`: `content.js` a
+  self-contained IIFE classic script with `index_overlay.ts` and `edge_tab.ts` bundled in,
+  `background.js` and `sidepanel.js` ESM) plus a copied-over `manifest.json`, `sidepanel.html` and
+  `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
+- **Vanilla TypeScript only — no React, no Tailwind.** Every surface on a portal page lives inside a
+  closed shadow root; the side panel is our own page. The search-page roots (card cluster, its menus, the photo mark, the dock and its
   notice) take the app's palette as it is, `frontend/src/styles/tokens.css?inline` (`--color-*`,
   `--radius-*`; its rules name `:host(…)`), and wear the user's appearance: `src/appearance.ts`
   `themeHost` stamps `data-scheme` / `data-theme` on each host by `lib/appearance.ts`
   `paintAppearance`, from the profile's `user_metadata.appearance` that `get_auth_state` reads off the
   session token (Měď light when signed out or unset; asked at start and on every session change;
-  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The side
-  sheet is one of them: `tokens.css` + its one stylesheet `src/panel.css` (system fonts only, no web
-  font on a portal page). Every definition the app already has is IMPORTED from
+  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The edge
+  tab is one of them. The side panel takes `tokens.css` (its `:root` rules) + its one stylesheet
+  `src/panel.css` on its own document, `themeHost` stamping `<html>` (system fonts only). Every definition the app already has is IMPORTED from
   `frontend/src/lib` (formatters, the per-m² vocabulary, the MF shape and yield text, the stage
   look, the collection rules, the appearance values, the wire types), and `vite.config.ts`'s
   `assert-pure-app-imports` fails the build when such a module imports anything but another plain
@@ -1170,13 +1199,15 @@ rules. Identify which one a task belongs to before you start.
   rail, but the extension's `tsc` checks their whole closure (`lib/types.ts` reaches `filters.ts`
   and the filter registry) under `verbatimModuleSyntax`, and in CI with no `frontend/node_modules`,
   so a type import written without `type`, or any package import there, fails the extension job.
-  Keep the bundle small. (2026-10-28: the side sheet broke this — `content.js` grew by half, most
-  of it the filter registry that `lib/portals.ts` and `lib/enums.ts` load; the fix is owed and
-  the operator's call, `roadmap/ui-track.md` § the extension's panel.)
+  Keep the portal pages' bundle small. (2026-10-28: the overlay sheet grew `content.js` by half, most
+  of it the filter registry `lib/enums.ts` loads; 2026-10-31: the panel moved to the side panel's
+  own bundle, `sidepanel.js`, an extension page loaded once per window, and `content.js` is back to
+  195,001 B unminified, the registry no longer in it.)
 - Every network call goes through the background service worker via
-  `chrome.runtime.sendMessage` so `host_permissions` covers the API origin and the fetch
-  isn't subject to the portal's CORS posture. The content script never calls `fetch`
-  directly.
+  `chrome.runtime.sendMessage` (`transport.ts`, one `send` for the content script and the side
+  panel), so it leaves from the extension's own origin, which the API's `CORS_ALLOW_ORIGINS` names
+  (the manifest grants no host permission), never under the portal page's CORS posture. Neither the
+  content script nor the side panel calls `fetch` directly.
 - **Own Supabase session (Wave 1, shipped 2026-07-21) — no bearer token in the bundle
   anymore.** Hand-rolled PKCE (`src/auth.ts`) against GoTrue via
   `chrome.identity.launchWebAuthFlow` (no `supabase-js`): `VITE_SUPABASE_URL` +
@@ -1187,16 +1218,16 @@ rules. Identify which one a task belongs to before you start.
   territory entry below and `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
   `manifest.json` pins a stable extension ID via a generated RSA keypair's public
   half in the `key` field (needed because the GoTrue PKCE redirect URL,
-  `https://<id>.chromiumapp.org/`, must be pre-registered with Supabase + Google, and
-  "Load unpacked" would otherwise assign a different ID per machine/download path).
-  `host_permissions` is computed at build time in `vite.config.ts` from the same two origins,
-  replacing a checked-in `https://*/*` wildcard. The extension is now safe to distribute
-  broadly (no embedded secret); Chrome Web Store submission still needs the non-code
-  readiness items in `docs/design/waves-1-4-public-features.md` (privacy policy,
-  single-purpose statement, staged rollout).
-- The extension's origin (`chrome-extension://<id>`) must be added to the FastAPI
-  service's `CORS_ALLOW_ORIGINS` env var — the id is fixed by the pinned `key` above, so
-  this is a one-time step per deployment, not per-install.
+  `https://<id>.chromiumapp.org/`, must be in Supabase's redirect allowlist, and
+  "Load unpacked" would otherwise assign a different ID per machine/download path); the store
+  package drops the key, since the store assigns its own ID. `host_permissions` is empty: GoTrue
+  answers any origin, and the API allows the extension's origin by CORS. The extension carries
+  no embedded secret; its store path is spec #2261 (`docs/design/brand-domain-and-store/PROGRAM.md`).
+- The extension's origin (`chrome-extension://<id>`) is in the API's `CORS_ALLOW_ORIGINS` (since
+  2026-10-31, #2275); without it every API call fails, since the manifest grants no host permission.
+  It is a kept Railway variable: the value lives in Railway and the operator edits it there
+  (§ Railway service configuration), never an agent. One entry per extension ID, not per install:
+  the store's ID gets its own entry before review (#2280).
 - Backend rules (psycopg, stdlib-first, etc.) and SPA conventions (React, Tailwind,
   design tokens) do NOT apply inside `chrome-extension/`.
 
@@ -3141,7 +3172,7 @@ renumber.** Navigate by area:
     sole pipeline affordance), the listing-detail header (`CollectionSaveToggle`; the page's second
     editor, a chip row in `CurationBlock`, was deleted 2026-10), the phone curation row and margin
     marks, and the Chrome-extension panel.**
-    The side sheet shows the property's saved collections as chips (three, then "+N"), and its
+    The side panel shows the property's saved collections as chips (three, then "+N"), and its
     "+" and "+N" open the SPA header's `CollectionSaveMenu` reproduced by value: the one save
     checklist (`chrome-extension/src/checklist.ts`) that the search cards share, own collections
     only, monitored ones first and bell-marked. It replaced a one-click "Sledovat" bell that
@@ -3814,7 +3845,7 @@ renumber.** Navigate by area:
     and were never at risk.)
     The confirm therefore names that consequence and points at the terminal stages, which
     close a deal while KEEPING its record — the data-preserving alternative to deletion. The menu
-    also replaced the listing header's own `<select>` + bare ✕; the Chrome-extension side sheet puts
+    also replaced the listing header's own `<select>` + bare ✕; the Chrome-extension side panel puts
     removal under its "Uzavřít ▾" menu, after the closed stages, behind the same two-step confirm. The kanban is the sanctioned exception, on both counts: moves are
     drag-and-drop and its trash already carried the confirm.
     **Menus hang off `<AnchoredPopover>`, which portals to `<body>`.** Not a style choice: the funnel
@@ -3919,7 +3950,9 @@ renumber.** Navigate by area:
     `property_ids_filter` (migration 378), which now carries only with-estimates ∩ broker. The
     funnels still render from `fetchPipelineMembers`. It is surfaced as a chip in the preset row
     (lit on the IN side only, `scopeIncludes`), and it behaves like the
-    other chips in that row: clicking it **loads a VIEW** — the scope over a NEUTRAL cohort
+    other chips in that row: clicking it **loads a VIEW** — the board's OPEN stages, by id (a deal closed
+    into a terminal stage is history, operator 2026-11-01; the whole pipeline when no stage is closed or the
+    stages are unread; the sidebar adds a closed stage back), over a NEUTRAL cohort
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters
@@ -4046,7 +4079,7 @@ renumber.** Navigate by area:
     move lands it in the target column. **On the listing-detail header** (a record page, no board
     to drag onto) the shared `<PipelineStageMenu>` changes the stage and removes behind its
     two-step confirm, and the not-yet-in-pipeline state is the funnel "Přidat do pipeline". The
-    **Chrome-extension side sheet** (vanilla TS) changes the stage on a step bar over the open
+    **Chrome-extension side panel** (vanilla TS) changes the stage on a step bar over the open
     stages (`STEP_BAR_MAX` = 4, `panel_logic.stageControl`), or a native `<select>` of them above
     that, and removes only under its "Uzavřít ▾" menu (the closed stages, then "Odebrat z pipeline…"
     behind the two-step confirm); it has no ✕. All three surfaces (kanban drag, listing-detail

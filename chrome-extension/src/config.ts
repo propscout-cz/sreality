@@ -1,7 +1,7 @@
-/* What the build inlines, read once for both bundles — the background worker's and
- * the content script's (each vite pass bundles its own copy, as with session.ts):
- * the base URLs, normalized, and the failure details one side answers and the
- * other tells apart. */
+/* What the build inlines, read once for every bundle — the background worker's, the
+ * content script's and the side panel's (each vite pass bundles its own copy, as with
+ * session.ts): the base URLs, normalized, and the names and failure details one side
+ * answers and another tells apart. */
 
 /* Tolerate a URL entered without a scheme (`api.up.railway.app`): fetch needs an
  * absolute one, so default to https; drop a trailing slash so `BASE + path`
@@ -32,6 +32,19 @@ export const API_NOT_CONFIGURED_DETAIL = 'API base URL not configured';
  * invalidated" for a reload, an update, a disable and a removal, so the copy
  * names none of them. Only a page reload helps. */
 export const EXTENSION_RELOADED_DETAIL = 'Spojení s rozšířením se přerušilo — obnovte stránku';
+
+/* The port the side panel opens to each tab of its window (tabs.connect). */
+export const PANEL_PORT = 'side_panel';
+
+/* What a failure offers: sign in; reload the page; retry; or nothing. */
+export type FailureKind = 'signed_out' | 'reload' | 'error' | 'fatal';
+
+export function failureKind(detail: string): FailureKind {
+  if (detail === NOT_SIGNED_IN_DETAIL) return 'signed_out';
+  if (detail === EXTENSION_RELOADED_DETAIL) return 'reload';
+  if (detail === API_NOT_CONFIGURED_DETAIL) return 'fatal';
+  return 'error';
+}
 
 /* A failure detail in the operator's words. */
 export function friendlyDetail(detail: string): string {

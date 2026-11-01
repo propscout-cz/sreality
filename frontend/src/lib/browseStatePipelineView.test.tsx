@@ -51,10 +51,16 @@ function mount(initial: string) {
   };
 }
 
+const STAGES = [
+  { id: 1, is_terminal: false },
+  { id: 2, is_terminal: false },
+  { id: 9, is_terminal: true },
+];
+
 describe('loadPipelineView (URL adapter)', () => {
   it('replaces a narrowed cohort with the neutral pipeline view', () => {
     const h = mount('/browse?cat=byt&deal=pronajem&price_max=5000000&disp=2%2Bkk');
-    act(() => h.state.loadPipelineView());
+    act(() => h.state.loadPipelineView([]));
     expect(h.filters).toEqual(pipelineViewFilters());
     expect(h.filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
     expect(h.filters.categoryMain).toEqual([]);
@@ -62,17 +68,24 @@ describe('loadPipelineView (URL adapter)', () => {
     expect(h.filters.priceMax).toBeNull();
   });
 
+  it('scopes to the open stages only — a closed deal is history (operator 2026-11-01)', () => {
+    const h = mount('/browse?cat=byt');
+    act(() => h.state.loadPipelineView(STAGES));
+    expect(h.filters.pipeline).toEqual({ set: null, in: [1, 2], out: [] });
+    expect(new URLSearchParams(h.search).get('pipeline')).toBe('1,2');
+  });
+
   it('deselects the active preset in the same write', () => {
     const h = mount('/browse?preset=abc-123&cat=dum');
     expect(h.state.activePresetId).toBe('abc-123');
-    act(() => h.state.loadPipelineView());
+    act(() => h.state.loadPipelineView([]));
     expect(new URLSearchParams(h.search).has('preset')).toBe(false);
     expect(h.state.activePresetId).toBeNull();
   });
 
   it('keeps the map-overlay knobs (they are not cohort filters)', () => {
     const h = mount('/browse?cat=byt&rentmap=1&colorby=overall&tab=stats');
-    act(() => h.state.loadPipelineView());
+    act(() => h.state.loadPipelineView([]));
     const sp = new URLSearchParams(h.search);
     expect(sp.get('rentmap')).toBe('1');
     expect(sp.get('colorby')).toBe('overall');
@@ -81,7 +94,7 @@ describe('loadPipelineView (URL adapter)', () => {
 
   it('is undoable — the load pushes a history entry rather than replacing', () => {
     const h = mount('/browse?cat=dum&deal=prodej');
-    act(() => h.state.loadPipelineView());
+    act(() => h.state.loadPipelineView([]));
     expect(h.filters.pipeline).not.toBeNull();
     act(() => h.back());
     // Back is the undo for "the chip wiped my filters" — it only works because

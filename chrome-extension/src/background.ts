@@ -1,7 +1,8 @@
 /* Background service worker. The single context that talks to the
- * FastAPI service — host_permissions covers the API origin and the
- * call doesn't have to go through sreality.cz's CORS. Content scripts
- * post messages here; we route them to the api helpers. */
+ * FastAPI service: its calls leave from the extension's origin, which the
+ * API's CORS allowlist names, never through a portal page's CORS. Content
+ * scripts and the side panel post messages here; we route them to the api
+ * helpers. It also opens Chrome's side panel (sidepanel.ts). */
 
 import {
   addNote,
@@ -31,7 +32,7 @@ import {
 } from './api';
 import { getAuthState, refreshIfSignedIn, signInWithGoogle, signOut } from './auth';
 import { PORTALS } from '../../frontend/src/lib/portalIds';
-import type { ApiMessage, ApiResult, RouteMessage } from './types';
+import type { ApiMessage, ApiResult, PanelCall, RouteMessage } from './types';
 
 /* MV3 service-worker eviction kills any in-memory auto-refresh timer, so the
  * lazy per-request refresh (api.ts's getAccessToken) is backstopped by this
@@ -48,6 +49,12 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === REFRESH_ALARM) void refreshIfSignedIn();
+});
+
+/* The toolbar icon opens and closes the side panel — one global panel per window,
+ * so it stays open across the window's tabs. */
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err: unknown) => {
+  console.error('[mf-ext] side panel behaviour', err);
 });
 
 /* Several portals (sreality's Next.js app confirmed live; others are React/Vue
@@ -70,10 +77,20 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 
 chrome.runtime.onMessage.addListener(
   (
-    message: ApiMessage,
-    _sender,
+    message: ApiMessage | PanelCall,
+    sender,
     sendResponse: (response: ApiResult<unknown>) => void,
   ) => {
+    /* A tab's call to the side panel, answered by nobody. open() before any await:
+     * Chrome opens a side panel only while the click's user gesture is live. */
+    if (message.type === 'panel') {
+      if (message.open && sender.tab != null) {
+        chrome.sidePanel.open({ windowId: sender.tab.windowId }).catch((err: unknown) => {
+          console.error('[mf-ext] side panel open', err);
+        });
+      }
+      return false;
+    }
     handleMessage(message)
       .then(sendResponse)
       .catch((err: unknown) => {
