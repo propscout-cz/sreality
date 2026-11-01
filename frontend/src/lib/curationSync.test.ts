@@ -286,12 +286,14 @@ describe('the key census', () => {
 });
 
 describe('applySyncQueryDefaults', () => {
-  it('turns the reconnect refetch off under SYNC_ROOTS only', () => {
+  it('turns the reconnect refetch off under SYNC_ROOTS and the Browse list roots, never an aggregate', () => {
     const qc = new QueryClient();
     applySyncQueryDefaults(qc);
     expect(qc.getQueryDefaults(pipelineKeys.board).refetchOnReconnect).toBe(false);
     expect(qc.getQueryDefaults(actingKey(OWNER, curationKeys.tags)).refetchOnReconnect).toBe(false);
     expect(qc.getQueryDefaults(pipelineShareKeys.all).refetchOnReconnect).toBe(false);
+    expect(qc.getQueryDefaults(browseKeys.cohortCards(DEFAULT_FILTERS)).refetchOnReconnect).toBe(false);
     expect(qc.getQueryDefaults(browseKeys.count(DEFAULT_FILTERS)).refetchOnReconnect).toBeUndefined();
+    expect(qc.getQueryDefaults(browseKeys.map(DEFAULT_FILTERS, 200)).refetchOnReconnect).toBeUndefined();
   });
 });

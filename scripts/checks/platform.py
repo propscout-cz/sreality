@@ -399,7 +399,7 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
         conditions.append(("fail", f"one pass in flight for {_ago(in_flight)}"))
     elif in_flight is not None and in_flight > LANE_INFLIGHT_WARN_S:
         conditions.append(("warn", f"one pass in flight for {_ago(in_flight)}"))
-    flap = _flap(previous.get(subject), passes, failed, thresholds)
+    flap = _flap(held_facts, passes, failed, thresholds)
     if flap:
         conditions.append(("warn", flap))
     # An abort (the engine's pair_budget or deadline: the pass rolled back, nothing committed) is
@@ -443,10 +443,8 @@ def _abort_reason(value: Any) -> str | None:
     return _oneline(value) or None
 
 
-def _flap(prev: dict[str, Any] | None, passes: int, failed: int,
-          thresholds: dict[str, Any]) -> str | None:
-    """Half or more of the passes since this check's previous result failed, over enough passes."""
-    facts = (prev or {}).get("facts") or {}
+def _flap(facts: dict[str, Any], passes: int, failed: int, thresholds: dict[str, Any]) -> str | None:
+    """Half or more of the passes since this check's previous result (its stored `facts`) failed, over enough passes."""
     if facts.get("passes") is None or facts.get("failed_passes") is None:
         return None
     done, broke = passes - int(facts["passes"]), failed - int(facts["failed_passes"])
