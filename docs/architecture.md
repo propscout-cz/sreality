@@ -1707,6 +1707,14 @@ renumber.** Navigate by area:
    ads as content, blanking them and bumping `last_seen_at`; realitymix served a category page at a
    detail URL the same way). Shape-keyed on the parsed `ScrapedListing`, never portal-keyed; sreality's
    API payload fails JSON parsing instead.
+   The index side of the same block: a walk that fetched `portal_runner.EMPTY_WALK_MIN_PAGES` (100)
+   pages or more and collected no ad exits 1 with `errors` + 1 and logs `CHECK empty_walk status=fail`,
+   its reason line, so the workflow and its `gh/<stem>` cell read red (2026-11-02, #2348: ceskereality's
+   Anubis challenge answered HTTP 200 to every page, and 8 such walks read `success` with `errors` 0). It
+   keys on `collected`, never `declared`, since a challenge page can echo the site's "Máme tady N" meta
+   text, and it runs after nomination, so rule #3 is untouched: such a walk still finalizes (`ended_at`)
+   and reached no end. Measured over 30 days of `scrape_runs`: no healthy walk of 100+ pages collected
+   under 1,681 ads.
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,

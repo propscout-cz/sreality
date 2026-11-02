@@ -465,7 +465,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
   collected vs our active DB count (`active=` lives in this log line only; the `scraping` check's missing arm and the
   `coverage` gauge judge the gaps)
 - `CYCLE … anchor=… resumed=… skipped=…` first; at the end `CYCLE ended … closed=…`, `INDEX total=N pages=M enqueued=K`
-- `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories)
+- `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories; + 1, exit 1 on `CHECK empty_walk status=fail`: 100+ pages, 0 ads)
 
 **Detail drain** (the worker's drain lane, or an ad-hoc `--drain-only` / flagless run):
 - `DRAIN reclaimed stale claims=N` when a prior SIGKILLed run left claims behind
@@ -492,7 +492,6 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `IMAGES lane ... phash_retried=... phash_hashed=... phash_given_up=...` per pass, also in the heartbeat; a row given up logs one
   `PHASH gave up id=...` WARNING, and `phash_attempts = 0` re-queues (after an R2 outage)
 
-A run ending with `errors > 0` is not necessarily a failure (single-listing fetch errors are
-tolerated). A run that did not emit a `RUN done` line is a real failure — check the GitHub
-Actions log for a stack trace.
+`errors > 0` need not be a failure (single-listing errors are tolerated). No `RUN done` line is a
+real failure: check the Actions log for a stack trace.
 

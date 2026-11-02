@@ -20,12 +20,15 @@ unchanged and still decides each slice's logged `outcome` and the subtype descen
 from __future__ import annotations
 
 import re
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from scraper import ceskereality_main as m
 from scraper import portal as m_portal
+from scraper import portal_runner
 from scraper.ceskereality_client import (
     KRAJ_SLUGS,
     OKRES_SLUGS,
@@ -1228,3 +1231,51 @@ def test_an_unmeasurable_national_probe_no_longer_decides(monkeypatch):
     _seen, _c, total, _pages, complete = _walk(portal, fake, monkeypatch)
     assert complete is True
     assert total == 5600                            # declared_sum, not None
+
+
+# --- the anti-bot challenge, as the site really serves it (2026-11-02) ------------
+
+
+_CHALLENGE = (
+    Path(__file__).parent / "fixtures" / "portal_html" / "ceskereality_anubis_challenge.html"
+).read_text("utf-8")
+
+
+class _ChallengeClient:
+    """HTTP 200 and the same challenge for every URL; its meta tags echo the slice's "Máme tady N"."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def fetch_search(self, url):  # noqa: ANN001
+        self.urls.append(url)
+        return _CHALLENGE, 200
+
+    def fetch_index(self, sale_type, cat, page=None):  # noqa: ANN001
+        return _CHALLENGE, 200
+
+
+def test_the_challenge_page_declares_a_count_and_carries_no_card():
+    parsed = m.parse_index(_CHALLENGE)
+    assert (parsed.total, parsed.items, parsed.next_offset) == (1093, [], None)
+
+
+def test_a_challenge_page_is_our_stop_whatever_count_it_echoes():
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    bad = portal._walk_slice(_ChallengeClient(), "prodej", "byty", "stredocesky-kraj")
+    assert (bad.declared_total, bad.rows, bad.stop, bad.reached_end) == (1093, [], "barren", False)
+
+
+def test_a_challenged_walk_collects_nothing_nominates_nothing_and_reads_red(monkeypatch):
+    client = _ChallengeClient()
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: client)
+    categories = [{"sale_type": "prodej", "category": "byty"}] * 8
+    portal = m.CeskerealityPortal(replace(default_config("ceskereality"), categories=categories))
+
+    rc, agg = portal_runner.run_index_walk(portal, dry_run=True)
+
+    assert agg["index_pages"] >= portal_runner.EMPTY_WALK_MIN_PAGES
+    assert (rc, agg["errors"]) == (1, 1)
+    assert all(c["collected"] == 0 for c in agg["by_category"])
+    assert not any(c["walk_reached_end"] for c in agg["by_category"])
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
