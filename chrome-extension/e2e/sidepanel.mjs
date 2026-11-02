@@ -89,6 +89,7 @@ const BASE = {
   get_auth_state: { signedIn: true, email: 'operator@example.cz', appearance: { scheme: 'med', theme: 'light', at: iso(0) } },
   lookup_listings: [row({}), ROW_B],
   get_price_history: { sources: SOURCES, snapshots: SNAPS },
+  get_property_location: { lat: 50.1028, lon: 14.44295, zoom: 16, country_status: 'cz' },
   list_pipeline_stages: STAGES, list_collections: COLLECTIONS, list_tags: TAGS, list_notes: NOTES,
   get_billing: { plan: 'pro', status: 'active', agent_estimations: { quota: 10, used: 3, remaining: 7, is_trial: false, metered: true } },
   add_pipeline_card: { property_id: 502, stage_id: 1, stage_key: 'zajem', stage_label: 'Zájem', stage_code: '1', stage_color: 'copper', entered_stage_at: iso(0), added: true },
@@ -229,10 +230,11 @@ function serveDist(route) {
 }
 
 /* The side panel on window 1, tab `active` active; `settle` ms for it to paint. */
-async function panel({ replies = {}, tabs = { 10: SUBJECT, 11: SUBJECT_B }, active = 10, appearance, height = 900, delay = 60, settle = 900 } = {}) {
+async function panel({ replies = {}, without = [], tabs = { 10: SUBJECT, 11: SUBJECT_B }, active = 10, appearance, height = 900, delay = 60, settle = 900 } = {}) {
   const p = await newPage(400, height);
   await p.route('https://ext.test/**', serveDist);
   const all = { ...BASE, ...replies };
+  for (const type of without) delete all[type];
   if (appearance) all.get_auth_state = { ...all.get_auth_state, appearance: { ...appearance, at: iso(0) } };
   await p.addInitScript(panelInit, { replies: all, tabs, active, delay });
   await p.goto(PANEL_URL);
@@ -302,6 +304,23 @@ scenario('signed out', async () => {
   const p = await panel({ replies: { get_auth_state: SIGNED_OUT } });
   await shot(p, 'signed-out');
   check('signed out: the sign-in card', /Přihlásit se přes Google/.test(await text(p, '.body') ?? ''));
+});
+
+scenario("the header's links", async () => {
+  let p = await panel();
+  const valuo = p.locator('[data-key="link-valuo"]');
+  check('Valuo opens its map at the property, in a new tab', (await valuo.getAttribute('href')) === 'https://app.valuo.cz/mapa#16/50.10280/14.44295' && (await valuo.getAttribute('target')) === '_blank', String(await valuo.getAttribute('href')));
+  await shot(p, 'header-links');
+  await p.close();
+  p = await panel({ replies: { get_property_location: { lat: 48.2, lon: 16.37, zoom: 12, country_status: 'foreign' } } });
+  check('abroad: no links row', (await p.locator('.links').count()) === 0);
+  await p.close();
+  // An unanswered read retries: the row is held open, so the cards don't jump, then goes.
+  p = await panel({ without: ['get_property_location'] });
+  check('while the location is read the row is held open, no link yet', (await p.locator('.links').count()) === 1 && (await p.locator('[data-key="link-valuo"]').count()) === 0);
+  await p.waitForTimeout(3_000);
+  check('no location after the retries: no links row', (await p.locator('.links').count()) === 0);
+  await p.close();
 });
 
 scenario('no content script in the active tab', async () => {

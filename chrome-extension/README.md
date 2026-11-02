@@ -37,7 +37,10 @@ maxima, remax, mmreality, ceskereality).
     house type; a commercial unit its type, floor and condition; a plot its
     ownership only (a fact the property lacks is left out). This ad's price in
     the live colour, its own last price move and its per-m² with the basis's
-    unit; the MF gross yield beside it only when the lookup serves one.
+    unit; the MF gross yield beside it only when the lookup serves one. Under
+    the price a small **Odkazy** row of links out (`propertyLinks` in
+    `src/panel_logic.ts`): first **Valuo ↗**, its map at the property's point
+    (`GET /properties/{id}/location`, the zoom by how precisely the point is known).
   - **Vývoj ceny** (`src/panel_price.ts`): one step line per ad of the property
     from `GET /properties/{id}/price-history` through the app's
     `lib/priceHistory` and `lib/chartAxis` — the canonical ad first in the

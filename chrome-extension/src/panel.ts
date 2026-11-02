@@ -14,11 +14,12 @@ import { mountFrame } from './frame';
 import { isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
 import { POLL_INTERVAL_MS, POLL_MAX_ATTEMPTS, createAgents } from './panel_agents';
 import { header } from './panel_header';
+import { propertyLinks, type PropertyLink } from './panel_logic';
 import { createMine } from './panel_mine';
 import { adMove, priceCard, priceSeries, type HistoryView } from './panel_price';
 import { emptyCard, errorCard, notFoundCard, signedOutCard, skeleton } from './panel_states';
 import { sleep, type Store } from './store';
-import type { AuthState, IngestState, PortalListing, PriceHistory } from './types';
+import type { AuthState, IngestState, PortalListing, PriceHistory, PropertyLocation } from './types';
 import type { PriceSeries } from '../../frontend/src/lib/priceHistory';
 
 /* `empty`: the active tab shows no ad (not a listing, or no page of ours). */
@@ -31,6 +32,8 @@ interface PanelState {
   listing: PortalListing | null;
   /* Null for an ad not yet attached to a property (nothing to chart yet). */
   history: HistoryView | null;
+  /* The header's links; null while the property's location is read. */
+  links: PropertyLink[] | null;
   error: string | null;
   signingIn: boolean;
   ingestStep: IngestStep | null;
@@ -39,7 +42,7 @@ interface PanelState {
 }
 
 const initial = (): PanelState => ({
-  phase: 'loading', email: null, listing: null, history: null, error: null,
+  phase: 'loading', email: null, listing: null, history: null, links: null, error: null,
   signingIn: false, ingestStep: null, ingestMessage: null, accountOpen: false,
 });
 
@@ -103,7 +106,7 @@ export function createPanel(store: Store) {
         return [notFoundCard(state.ingestStep, state.ingestMessage, ingestForbidden, () => { void ingest(); })];
       case 'active': {
         const l = view() as PortalListing;
-        const nodes: Node[] = [header(l, adMove(series, l.listing_id))];
+        const nodes: Node[] = [header(l, adMove(series, l.listing_id), state.links)];
         if (state.history != null) {
           nodes.push(priceCard(state.history, series, l.canonical_listing_id, () => { void loadHistory(epoch); }));
         }
@@ -145,6 +148,11 @@ export function createPanel(store: Store) {
     set({ history: res.ok ? { status: 'ok', data: res.data } : { status: 'failed' } });
   }
 
+  async function loadLinks(at: number, propertyId: number): Promise<void> {
+    const res = await store.retry(() => store.call<PropertyLocation>({ type: 'get_property_location', property_id: propertyId }));
+    if (res != null) setIf(at, { links: res.ok ? propertyLinks(res.data) : [] });
+  }
+
   /* Paint one lookup row and start what a held ad needs; shared with the add flow. */
   function show(at: number, listing: PortalListing | null): void {
     if (at !== epoch) return;
@@ -155,9 +163,13 @@ export function createPanel(store: Store) {
     set({
       phase: held != null ? 'active' : 'not_found', listing,
       history: held?.property_id != null ? { status: 'loading' } : null,
+      links: held?.property_id != null ? null : [],
       ingestStep: null, ingestMessage: null,
     });
-    if (held?.property_id != null) void loadHistory(at);
+    if (held?.property_id != null) {
+      void loadHistory(at);
+      void loadLinks(at, held.property_id);
+    }
   }
 
   /* Shows (or re-reads) one ad: a detail page's own, or the search card last opened. */

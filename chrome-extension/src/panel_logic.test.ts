@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CHIPS_MAX, STEP_BAR_MAX, chartShape, createSubjectRouter, cutChips, factChips, fmtDate, portalNote, stageControl,
-  clampTabTop, tabMarkList, type FactFormat, type FactRow,
+  clampTabTop, propertyLinks, tabMarkList, type FactFormat, type FactRow,
 } from './panel_logic.ts';
 import type { PanelSubject } from './types';
 
@@ -67,6 +67,14 @@ test('a call is this panel\'s only from a tab of its window, and only once it kn
   assert.equal(r.ours({ windowId: 7 }), true);
   assert.equal(r.ours({ windowId: 8 }), false);
   assert.equal(r.ours(undefined), false, 'a call from no tab (another extension page)');
+});
+
+test('the Valuo link opens its map at the property, at the zoom its precision earns; none abroad', () => {
+  const at = { lat: 50.08751234, lon: 14.4213, zoom: 16, country_status: 'cz' as const };
+  assert.equal(propertyLinks(at)[0].href, 'https://app.valuo.cz/mapa#16/50.08751/14.42130');
+  assert.equal(propertyLinks({ ...at, zoom: 12 })[0].href, 'https://app.valuo.cz/mapa#12/50.08751/14.42130');
+  assert.deepEqual(propertyLinks({ ...at, country_status: 'foreign' }), []);
+  assert.equal(propertyLinks({ ...at, country_status: 'undetermined' }).length, 1);
 });
 
 test('the edge tab stays on the window, its top in reach when the window is too short', () => {

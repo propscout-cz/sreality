@@ -123,6 +123,8 @@ toolkit work.
   cards (operator rulings 2026-10-28, X1): full height on the right, folding to a tab, a header, "Vývoj ceny" (one
   step line per ad), "Moje" (pipeline step bar + "Uzavřít ▾", collections, tags, notes), "AI agenti" (the Výnos
   estimate, three agents "Brzy", a chat box with no backend). The old floating panel is deleted.
+- **Built 2026-11-02 (branch `feature/extension-header-links`): the panel header's "Odkazy" row** of links out; first
+  Valuo's map at the property's point, at the zoom its precision earns. A new link is one entry in `propertyLinks`.
 - **Built 2026-11-01 (branch `feature/extension-tab-drag`): the extension wears the PS mark and the plain name** in
   Chrome's own strip over the panel, the toolbar and the store (the old "%" icon and "výnos & pipeline" go; the strip
   itself is Chrome's and stays), and the edge tab drags up and down, staying where it was left on every portal.
