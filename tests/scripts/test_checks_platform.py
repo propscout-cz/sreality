@@ -577,6 +577,11 @@ def test_the_heartbeat_lane_is_the_watchers_and_the_health_lane_is_judged() -> N
     assert cells["lane/health"]["status"] == "fail"
 
 
+def test_the_beats_version_is_no_lane() -> None:
+    cells = _cells(_jobs(lanes={"version": "abc123", "health": _lane(interval_s=60.0, last_pass_at=_iso(minutes=1))})[0])
+    assert "lane/version" not in cells and "lane/health" in cells
+
+
 def test_the_checks_lane_list_is_the_workers() -> None:
     """The check mirrors scraper/realtime_worker.LANES (it never imports the worker): a lane added
     there without here would never be missed."""

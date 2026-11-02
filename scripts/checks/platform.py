@@ -276,7 +276,7 @@ select beat_at, started_at, details from worker_heartbeats where worker = %(work
 # scraper/realtime_worker.LANES, in its order (a check never imports the worker; a test pins the two). The worker seeds
 # every lane it registers into its heartbeat at boot, so a lane named here and absent from the beat was written by an
 # OLDER process beating beside this one (a deploy overlap). It cannot see a lone worker on old code: that worker runs
-# the old check too, and only Railway's per-service commit status shows it (the W2b gate reads that).
+# the old check too, and only its beat's `version` shows it (scripts/check_worker_version.py).
 WORKER_LANES: tuple[str, ...] = (
     "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",

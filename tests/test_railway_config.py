@@ -206,22 +206,38 @@ def test_the_runner_replica_is_the_registrys_replica() -> None:
     assert "cpu: RUNNER_CPUS" in runner and "memoryBytes: RUNNER_MEMORY_BYTES" in runner
 
 
-def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
-    """A watch-skipped deploy keeps the old image, so a runner that misses a tree its image copies runs stale code.
-    `COPY --from=<stage>` copies from a build stage, not the repo; .railway/ stays out (applies are by hand)."""
+def _dockerfile_copy_sources() -> set[str]:
+    """Each COPY source as a watch pattern; `COPY --from=<stage>` copies from a build stage, not the repo."""
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    lines = re.findall(r"^COPY\b.*$", dockerfile, re.M)
+    assert not [line for line in lines if line.endswith("\\") or "[" in line], "a COPY form this census cannot read"
     copied: set[str] = set()
-    for line in re.findall(r"^COPY (?:\S+ )*\S+$", dockerfile, re.M):
+    for line in lines:
         if "--from=" in line:
             continue
         for source in [w for w in line.split()[1:-1] if not w.startswith("--")]:
             first = Path(source).parts[0]
             copied.add(f"/{first}/**" if (ROOT / first).is_dir() else f"/{first}")
+    return copied
+
+
+def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
+    """A watch-skipped deploy keeps the old image, so a runner that misses a tree its image copies runs stale code.
+    .railway/ stays out (applies are by hand)."""
+    copied = _dockerfile_copy_sources()
     watch = iac_constant("BACKEND_WATCH")
     assert len(watch) == len(set(watch))
     assert sorted(copied - set(watch)) == [], "the runner would not redeploy on these"
     assert set(watch) - copied == {"/Dockerfile", "/.dockerignore"}
     assert "watchPatterns: BACKEND_WATCH" in iac_entry("jobRunner")
+
+
+@pytest.mark.parametrize("service", ["worker", "jobRunner"])
+def test_a_backend_service_watches_the_whole_image_or_nothing(service: str) -> None:
+    """The worker shares this image. No watch list deploys it on every merge; any other list than BACKEND_WATCH would
+    skip a deploy its image needs, and the skip still posts `success`. scripts/check_worker_version.py reads this list."""
+    assert _dockerfile_copy_sources() <= set(iac_constant("BACKEND_WATCH"))
+    assert set(re.findall(r"watchPatterns: (\S+?)\b", iac_entry(service))) <= {"BACKEND_WATCH"}
 
 
 def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
