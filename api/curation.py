@@ -73,12 +73,13 @@ _CREATE_COLLECTION_SQL = (
     f"RETURNING {_COLLECTION_PROJECTION}"
 )
 
-# One statement for every patch: an absent field keeps its value (coalesce), and a system
-# collection keeps its name in the SET so the 409 below is decided on the RETURNING row.
+# One statement for every patch: an absent field keeps its value, and a system collection keeps
+# its name in the SET so the 409 below is decided on the RETURNING row. Only the description is
+# nullable, so only it tells absent from null; a null name or flag has nothing to clear (coalesce).
 _UPDATE_COLLECTION_SQL = (
     "UPDATE collections c SET "
     "  name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END, "
-    "  description = coalesce(%s, c.description), "
+    "  description = CASE WHEN %s::boolean THEN %s::text ELSE c.description END, "
     "  monitoring_enabled = coalesce(%s, c.monitoring_enabled), "
     "  updated_at = now() "
     f"WHERE c.id = %s RETURNING {_COLLECTION_PROJECTION}"
@@ -181,14 +182,15 @@ def update_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
 ) -> dict[str, Any]:
-    fields = (body.name, body.description, body.monitoring_enabled)
-    if all(f is None for f in fields):
+    set_description = "description" in body.model_fields_set
+    if body.name is None and body.monitoring_enabled is None and not set_description:
         raise HTTPException(422, "nothing to update")
     try:
         # The UPDATE is the ownership gate (rowcount 0 -> 404); an HTTPException raised inside
         # the transaction rolls it back, so a refused system rename writes nothing.
         with conn.transaction(), conn.cursor() as cur:
-            cur.execute(_UPDATE_COLLECTION_SQL, (*fields, collection_id))
+            cur.execute(_UPDATE_COLLECTION_SQL,
+                        (body.name, set_description, body.description, body.monitoring_enabled, collection_id))
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(404, "collection not found")

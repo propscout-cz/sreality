@@ -32,10 +32,20 @@ export interface AgentRunRow {
   finished_at: string | null;
 }
 
+/* A produced file's facts; its name and type are the model's words. `stored` false: the answer named it and its bytes
+ * could not be kept. */
+export interface AgentRunFile {
+  id: number;
+  name: string;
+  media_type: string;
+  size_bytes: number;
+  stored: boolean;
+}
+
 export interface AgentRun extends AgentRunRow {
   result_markdown: string | null;
   cited_property_ids: number[];
-  files: string[];
+  files: AgentRunFile[];
   proposals: unknown[];
   output: unknown;
   definition_sha: string;

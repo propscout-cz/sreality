@@ -367,17 +367,15 @@ describe('<CollectionDetail> on the phone: the header actions (P31)', () => {
     expect(api.updateCollection).toHaveBeenCalledWith(7, { description: 'Jen popis' });
   });
 
-  /* PATCH /collections reads null as "not given": a description cleared alone
-     goes as '', or the API refuses it ("nothing to update"). */
   it('clears the description alone', async () => {
-    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, description: '' });
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, description: null });
     const user = userEvent.setup();
     renderPage();
     await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
     await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
     await user.clear(screen.getByLabelText('Popis'));
     await user.click(screen.getByRole('button', { name: 'Uložit' }));
-    expect(api.updateCollection).toHaveBeenCalledWith(7, { description: '' });
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { description: null });
   });
 
   it('deletes after the two-step confirm from ⋯ → Smazat sbírku', async () => {

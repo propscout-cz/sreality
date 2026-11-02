@@ -57,7 +57,7 @@ The bar is how often two stated doors of one property agree. A pin-named door mu
 
 ## The scorecard (migration 717)
 
-The operator retired the radius on 2026-11-02; W6 becomes deletion only. So the pin sample has no reader. 717 is `create or replace` of the one view, 698's text but for:
+The operator retired the radius on 2026-11-01; W6 becomes deletion only. So the pin sample has no reader. 717 is `create or replace` of the one view, 698's text but for:
 - the `sample` cohort is gone: the `smp` and `pin` CTEs, `pin_error_m`, `radius_cover`;
 - determinism, W5's deferral: the containment probe orders by code behind an `OFFSET 0` fence, the same text as `CONTAINING_OBEC_SQL`. `EXPLAIN` rail: the fenced plan reaches `ruian_aug_pip_gist` before `ruian_admin_units`; a bare `ORDER BY` plan does not.
 

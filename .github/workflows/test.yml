@@ -78,7 +78,7 @@ jobs:
     # `@ts-expect-error` cases fail the BUILD if a basis-blind
     # fmtMeasuredPricePerM2 call ever starts compiling.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -17,8 +19,9 @@ from tests.api.test_admin_route_coverage import _bucket, _reachable_calls  # noq
 
 ROUTES = frozenset({
     ("GET", "/runs/options"), ("PUT", "/runs/limit"), ("POST", "/runs"), ("GET", "/runs"), ("GET", "/runs/{run_id}"),
-    ("GET", "/runs/{run_id}/steps"), ("POST", "/runs/{run_id}/cancel"), ("GET", "/runs/{run_id}/proposals"),
-    ("POST", "/runs/{run_id}/proposals/{index}/apply"), ("POST", "/runs/{run_id}/proposals/{index}/undo"),
+    ("GET", "/runs/{run_id}/steps"), ("GET", "/runs/{run_id}/files/{file_id}"), ("POST", "/runs/{run_id}/cancel"),
+    ("GET", "/runs/{run_id}/proposals"), ("POST", "/runs/{run_id}/proposals/{index}/apply"),
+    ("POST", "/runs/{run_id}/proposals/{index}/undo"),
 })
 
 
@@ -44,7 +47,7 @@ def test_each_run_route_is_on_the_tenant_gate_and_never_acts(key: tuple[str, str
 
 @pytest.mark.parametrize("method, path", sorted(ROUTES))
 def test_no_token_is_turned_away_before_any_database(method: str, path: str) -> None:
-    assert TestClient(app).request(method, path.replace("{run_id}", "1")).status_code == 401
+    assert TestClient(app).request(method, re.sub(r"\{\w+\}", "1", path)).status_code == 401
 
 
 def test_a_garbled_act_as_header_is_a_400_before_any_database() -> None:

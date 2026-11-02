@@ -106,9 +106,8 @@ const QUALITY_LABEL: Record<PinAuditQuality, string> = {
 /* The two states, in the operator's words and with the verdict attached: one of
  * them is a finding and the other is not, and the label has to say so.
  *
- * ONE NAME PER STATE (W16): the name comes from the shared wording module
- * (the waterfall's `hidden` split carried the same two states), and nothing
- * here re-types it. */
+ * ONE NAME PER STATE (W16): the name comes from the shared wording module, and
+ * nothing here re-types it. */
 const STATE_LABEL: Record<PinAuditState, string> = {
   pending: stepLabel('hidden_pending', 'cs'),
   unresolved: stepLabel('hidden_unresolved', 'cs'),

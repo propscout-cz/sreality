@@ -1721,7 +1721,7 @@ startup timeout", each ringing the `jobs` check's cron cell for a job this gauge
 `/location-quality`, which renders this stored row through Health's `HEALTH_QUERY` and nothing else). Since W1 (2026-10-31, #2218) it reads ONE view, `location_quality_by_source` (migration 698,
 service_role only; long shape `cohort, source, metric, class, n, of_n, q50, q90, q95, q100`), in one statement (~12 s
 warm); the shared fragments are `location_steps`' rendered verbatim
-(`tests/location_data/test_location_quality_view_contract.py`). 57 cells since W5b (radius retired 2026-11-02), fixed lines (Q7):
+(`tests/location_data/test_location_quality_view_contract.py`). 57 cells since W5b (radius retired 2026-11-01), fixed lines (Q7):
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
@@ -1729,8 +1729,8 @@ warm); the shared fragments are `location_steps`' rendered verbatim
 | `<portal>/town_withheld` | the same set holding no town-bearing claim: the page names no town (Q6) | 1 or more | never |
 | `<portal>/ku` | Czech address-grain rows with a town and no `katastr_kod` at the running `RESOLVER_VERSION`, the degenerate-boundary obce excused; facts KÚ coverage by grain | never | 1 or more |
 | `<portal>/outside` | positions CHECK flagged (`pin_outside_obec`, `pin_outside_cz`, `country_conflict`) the town's pip polygon does not cover (Q3, strict); facts the disputed mix | never | 1 or more |
-| `<portal>/street` | (address + street) / Czech ads with a town, by the rank table; facts share, bounds, n, grains | Wilson UPPER bound under `location_street_floor[portal]` over `location_street_floor_min_n` (200) | never, until the operator rules the floors (W1-b) |
-| `served/town`, `served/town_withheld`, `served/outside`, `served/street` | the same over published properties at their location ad (rule 15); facts per portal | as above; `served/street` under 0.44 (`location_served_street_floor`) | as above |
+| `<portal>/street` | (address + street) / Czech ads with a town, by the rank table; facts share, bounds, n, grains | never | Wilson UPPER bound under `location_street_floor[portal]` over `location_street_floor_min_n` (200): ruling W1-b |
+| `served/town`, `served/town_withheld`, `served/outside`, `served/street` | the same over published properties at their location ad (rule 15); facts per portal | as above | as above; `served/street` under 0.44 (`location_served_street_floor`) |
 | `registry` | the RÚIAN registry's current version and any staged load (`registry_versions`) | never | no current version, a load staged for more than 24 h (`location_registry_max_staged_hours`), or a current version older than 40 d (`location_registry_max_age_days`) |
 | `freshness/version` | rows not at `RESOLVER_VERSION`, plus rows at it on a stale registry label (each once) | its first non-zero reading | non-zero in this AND the previous stored result |
 | `freshness/evidence` | the oldest `claim_insert`/`operator_edit` resolve waiting (min); backfill a fact | never | past 60 min (`location_evidence_backlog_max_min`) |

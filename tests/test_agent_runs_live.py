@@ -413,7 +413,7 @@ def test_the_diary_is_append_only_yet_an_account_deletion_still_cascades(svc: ps
 
 def _artifact(svc: psycopg.Connection, account: uuid.UUID, run_id: int, attempt: int | None, n: int | None) -> None:
     svc.execute("INSERT INTO agent_artifacts (account_id, run_id, step_attempt, step_n, kind, name, size_bytes, sha256, "
-                "storage_key) VALUES (%s, %s, %s, %s, 'md', 'x', 1, 'x', 'x')", (account, run_id, attempt, n))
+                "storage_key) VALUES (%s, %s, %s, %s, 'md', %s, 1, 'x', 'x')", (account, run_id, attempt, n, uuid.uuid4().hex))
 
 
 def test_an_artifact_names_its_step_by_attempt_and_goes_with_its_account(svc: psycopg.Connection) -> None:
@@ -702,14 +702,15 @@ def _code_model(*replies: Completion, stop: threading.Event | None = None) -> Sc
 
 def test_a_code_run_stores_its_files_names_never_their_bytes(svc: psycopg.Connection, world: dict[str, Any], tmp_path: Path,
                                                              monkeypatch: pytest.MonkeyPatch) -> None:
-    """#2073 owns where the bytes go; the row names them, the diary holds their facts, and neither holds a byte."""
+    """The artifact names them, the diary holds their facts, and neither holds a byte (the bytes: tests/test_agent_files_live.py)."""
     _code_world(world, monkeypatch, tmp_path)
     run_id = _submit(svc, world, "a")
     answer = (SUBMIT, {"markdown": "Here.", "files": ["report.csv"]})
     model = _code_model(code_reply(files=("file_out_1",), stop="pause_turn"), code_reply(answer))
     assert executor.work_once(providers={"anthropic": model}, stop=threading.Event(), connect=_connect) == executor.Worked("succeeded", run_id)
     row = _run(svc, run_id)
-    assert row["files"] == ["report.csv"] and row["result_markdown"] == "Here."
+    assert row["result_markdown"] == "Here." and row["files"] == [], "agent_artifacts is the one record of a run's files"
+    assert svc.execute("SELECT name FROM agent_artifacts WHERE run_id = %s", (run_id,)).fetchall() == [("report.csv",)]
     steps = _steps(svc, run_id)
     assert [s["kind"] for s in steps] == ["model", "file", "model", "tool"], "a pause is its own model step"
     assert steps[1]["payload"]["output"]["name"] == "report.csv" and steps[1]["payload"]["output"]["bytes"] == len(REPORT.data)

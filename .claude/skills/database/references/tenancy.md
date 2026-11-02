@@ -539,6 +539,10 @@ browser write) follows: `PUT /runs/limit` takes the gate's account (the body nam
 route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
 definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row
 cascades with the account; the account's `llm_calls` rows stay (704: no foreign key) and count only towards the platform ceiling.
+A run's files (`GET /runs/{id}/files/{file}`, #2073) read `agent_artifacts` on the tenant connection, and only that row's key
+reaches the store: a foreign id and a missing one are the same 404, and no path is an input. The bucket `agent-files` is private
+with no policy on `storage.objects`, so no browser role, the owner's included, reads an object at Storage (714). An account's
+deletion cascades the rows; the worker's hourly `agent_files.sweep` then removes every object older than an hour that no row names.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
