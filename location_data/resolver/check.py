@@ -14,9 +14,11 @@ Three reasons ship:
   BIND's pin-derived rungs (R7/R8) the comparison is circular, and a sliver is no disagreement.
 * `pin_outside_cz` — the pin is outside the Czech state polygon while the row names a Czech
   town. Almost always a geocoder artifact; the town is the trustworthy half.
-* `country_conflict` — text says another country, the registry says Czech. 3 of the 5
+* `country_conflict` — text says another country, a Czech TOWN bound. 3 of the 5
   corpus `foreign_suspect` rows were unambiguously Czech artifacts, so trusting either side
-  unconditionally is wrong in both directions.
+  unconditionally is wrong in both directions. A bare region is no such side: BIND reaches R9
+  only when no word and no pin bound a town, so against another country it decides nothing
+  and the row is foreign.
 * `pin_off_street` (W18) — the ad NAMES a street the register places, and its own EXACT pin
   is farther from that street than the street reaches. It is the WEAKEST of the four and is
   reported last: a pin in the wrong country or the wrong town says something about the row's
@@ -210,7 +212,8 @@ def check(
     # A Czech ADMIN UNIT that bound at any level is already a country determination — the
     # gazetteer it came out of is the Czech one. An okres-only bind used to fall through to
     # "no town, no pin, no country claim" and collapse to `undetermined`, which reads as "we
-    # have nothing" about a row that names a region.
+    # have nothing" about a row that names a region. It determines nothing against another
+    # country, though: the store keeps a region word the page stopped stating (W3).
     bound_cz = has_town or filled.okres_kod is not None or filled.kraj_kod is not None
     # Only a PORTAL PIN can be somewhere the rest of the row denies. A registry point and an
     # admin centroid both come OUT of the RÚIAN mirror, so asking whether they are in Czechia
@@ -223,11 +226,12 @@ def check(
     pin = pin_claim.point if pin_claim is not None else None
     in_cz = registry.in_czechia_polygon(*pin) if pin else None
 
+    if foreign and not has_town:
+        code = next(iter(sorted(foreign))) if len(foreign) == 1 else None
+        return Verdict(country_status="foreign",
+                       country_code=None if code == UNKNOWN_FOREIGN else code)
+
     if not bound_cz:
-        if foreign:
-            code = next(iter(sorted(foreign))) if len(foreign) == 1 else None
-            return Verdict(country_status="foreign",
-                           country_code=None if code == UNKNOWN_FOREIGN else code)
         if in_cz is False:
             # A pin outside the state polygon with nothing Czech to anchor it. The pin is
             # the only evidence there is, and it says "not here".
@@ -236,8 +240,9 @@ def check(
             return Verdict(country_status="cz", country_code="CZ")
         return Verdict(country_status="undetermined", country_code=None)
 
-    # ---- a Czech admin unit bound. Everything below decides whether the row agrees with
-    # itself; the containment test needs a TOWN, which a region-only bind does not have.
+    # ---- a Czech admin unit bound, and any foreign word has a town against it. Everything below
+    # decides whether the row agrees with itself; the containment test needs a TOWN, which a
+    # region-only bind does not have.
     # ONE precedence, coarsest disagreement first: a pin in the wrong COUNTRY or the wrong
     # TOWN says something about the row's identity, and a pin merely off the street it names
     # says something about the coordinate alone.
