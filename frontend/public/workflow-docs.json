@@ -765,6 +765,24 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
     },
     {
+      "filename": "engine_light.yml",
+      "name": "CI: engine light",
+      "description": "Fails an engine-sensitive PR (a numbered migration, autodedup/, the worker or its lease, .railway/) that does not carry the merge coordinator's light, the label engine-light. Every PR and every merge group gets a verdict.",
+      "manual": false,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": true,
+      "paths": null,
+      "inputs": [],
+      "secrets": [],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 5,
+      "permissions": "contents: read, pull-requests: write",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/engine_light.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/engine_light.yml"
+    },
+    {
       "filename": "export_raw_pages_archive.yml",
       "name": "Export portal_raw_pages archive to R2",
       "description": "Location-data program W0 item 0o: the ~447k-row / 14 GB portal_raw_pages archive is the only surviving copy of several portals' best location signal, so a full off-database copy goes to R2 under backups/portal-raw-pages/<snapshot>/. Chunked + resumable — re-dispatch with the same snapshot date to continue an interrupted run; the final step verifies the manifest row count against the DB. Deletion of the live table is guarded by tests/test_portal_raw_pages_guard.py. workflow_dispatch only; re-run with a new snapshot date for a fresh export.",
