@@ -1157,37 +1157,51 @@ def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
 # portals violated a CHECK constraint the code assumed existed, and scrape_runs.errors read 0
 # the whole time. CI proves a migration REPLAYS against an empty database; it says nothing
 # about production. This asks the live catalog directly: for each of the newest migrations, do
-# the objects it declares actually exist? The ledger (supabase_migrations.schema_migrations) is
+# the objects it declares exist, and are the ones it drops gone? The ledger (supabase_migrations.schema_migrations) is
 # deliberately NOT the oracle; scripts/migration_objects.py says why. One cell per file, OK ones
 # included, so a file applied late recovers on a measured OK. Unverifiable keeps its old meaning
-# (no object the probe can look up); a file that only redefines objects an earlier file already
+# (nothing the probe can look up); a file that only redefines objects an earlier file already
 # made reads OK, not unverifiable as the design's § 4 asks: owed with the apply ledger (#1855).
 
-_UNVERIFIABLE = ("Unverifiable: it declares no object the catalog probe can look up (only "
-                 "grants, drops, data updates or cron changes, or objects a later migration "
-                 "retires), so this check cannot see whether it was applied.")
+_UNVERIFIABLE = ("Unverifiable: it declares or drops no object the catalog probe can look up (only "
+                 "grants, function drops, data updates or cron changes, or objects a later migration "
+                 "retires or re-creates), so this check cannot see whether it was applied.")
 
 
-def _migration_cell(filename: str, objects: list[Any],
+def _migration_cell(filename: str, objects: list[Any], dropped: list[Any],
                     present: dict[tuple[str, str], bool]) -> dict[str, Any]:
-    """One migration file: applied, not applied, partly applied, or unverifiable."""
-    if not objects:
+    """One migration file: applied, not applied, partly applied, drop not applied, or unverifiable."""
+    # A still-present drop is Watch, never Problem: destructive applies follow their deploy by design.
+    if not objects and not dropped:
         return _cell(filename, "unknown", _UNVERIFIABLE, facts={"objects": 0})
     absent = [o for o in objects if not present.get((o.kind, o.ident), False)]
+    # No answer for a drop proves nothing, so only a row that says absent counts as gone.
+    lingering = [o for o in dropped if present.get((o.kind, o.ident), True)]
     facts: dict[str, Any] = {"objects": len(objects), "absent": len(absent)}
-    if not absent:
-        return _cell(filename, "ok", f"Applied: all {len(objects)} of its objects exist.",
-                     value=0, unit="objects absent", facts=facts)
-    facts["first_absent"] = str(absent[0])
-    if len(absent) == len(objects):
+    if dropped:
+        facts |= {"dropped": len(dropped), "still_present": len(lingering)}
+    if absent:
+        facts["first_absent"] = str(absent[0])
+    if lingering:
+        facts["first_still_present"] = str(lingering[0])
+    if absent and len(absent) == len(objects):
         return _cell(filename, "fail", (
             f"Not applied: none of its {len(objects)} objects exist ({absent[0]} absent), so "
             "code that assumes this schema fails on every write. Apply it."),
             value=len(absent), unit="objects absent", facts=facts)
-    return _cell(filename, "warn", (
-        f"Partly applied: {len(absent)} of its {len(objects)} objects are absent ({absent[0]}): "
-        "a half-applied migration, or the object parser misread the file."),
-        value=len(absent), unit="objects absent", facts=facts)
+    unit = "objects out of place" if dropped else "objects absent"
+    if not absent and not lingering:
+        said = [f"all {len(objects)} of its objects exist"] if objects else []
+        said += [f"its {len(dropped)} dropped objects are gone"] if dropped else []
+        return _cell(filename, "ok", f"Applied: {' and '.join(said)}.", value=0, unit=unit, facts=facts)
+    findings = []
+    if absent:
+        findings.append(f"Partly applied: {len(absent)} of its {len(objects)} objects are absent ({absent[0]}): "
+                        "a half-applied migration, or the object parser misread the file.")
+    if lingering:
+        findings.append(f"Drop not applied: {len(lingering)} of {len(dropped)} dropped objects still exist; "
+                        f"apply it once its last reader is live ({lingering[0]}).")
+    return _cell(filename, "warn", " ".join(findings), value=len(absent) + len(lingering), unit=unit, facts=facts)
 
 
 def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
@@ -1203,9 +1217,11 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
                         "was probed (the probe reads a repository checkout's migrations/)."),
         }
 
-    checkable = {mig.filename: [o for o in mig.objects if SAFE_IDENT.match(o.ident)]
-                 for mig in migrations}
-    probes = [(o.kind, o.ident) for objects in checkable.values() for o in objects]
+    def safe(objects: list[Any]) -> list[Any]:
+        return [o for o in objects if SAFE_IDENT.match(o.ident)]
+
+    checkable = {mig.filename: (safe(mig.objects), safe(mig.dropped)) for mig in migrations}
+    probes = [(o.kind, o.ident) for lists in checkable.values() for objects in lists for o in objects]
     present: dict[tuple[str, str], bool] = {}
     if probes:
         for kind, ident, is_present in fetchall(conn, MIGRATION_OBJECT_PROBE_SQL, {
@@ -1213,5 +1229,5 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
         }):
             present[(kind, ident)] = bool(is_present)
     return _result("migration_drift",
-                   [_migration_cell(mig.filename, checkable[mig.filename], present)
+                   [_migration_cell(mig.filename, *checkable[mig.filename], present)
                     for mig in migrations], {})

@@ -4,6 +4,7 @@ the receipt script's mapping, hermetically."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -110,6 +111,73 @@ def test_probe_sends_every_safe_object_and_reports_presence() -> None:
     assert conn.calls[0][1]["kinds"] == [o.kind for o in objects]
     assert conn.calls[0][1]["idents"] == [o.ident for o in objects]
     assert [present for _, _, present in out] == [True, True, False]
+
+
+def _receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sql: str, rows: list[tuple]) -> int:
+    """`--verify` over a file holding `sql`, with the catalog answering `rows`."""
+    from scraper import db
+
+    monkeypatch.setattr(db, "connect", lambda: contextlib.nullcontext(_Conn(rows)))
+    path = tmp_path / "700_x.sql"
+    path.write_text(sql)
+    return receipt.main(["--verify", str(path)])
+
+
+_THREE_DROPS = "drop table if exists gone_a;\ndrop index if exists gone_b;\nalter table t drop column gone_c;\n"
+
+
+def test_receipt_all_drops_gone_exits_0(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    rows = [("relation", "gone_a", False), ("relation", "gone_b", False), ("column", "t.gone_c", False)]
+    assert _receipt(tmp_path, monkeypatch, _THREE_DROPS, rows) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[-1] == "::notice::receipt OK: 0 present, 3 dropped-absent"
+    assert not [line for line in out if " 0 objects" in line]
+
+
+def test_receipt_one_drop_still_present_exits_1(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    rows = [("relation", "gone_a", False), ("relation", "gone_b", True), ("column", "t.gone_c", False)]
+    assert _receipt(tmp_path, monkeypatch, _THREE_DROPS, rows) == 1
+    out = capsys.readouterr().out
+    assert "::error::" in out and "relation:gone_b" in out and "receipt OK" not in out
+
+
+def test_receipt_counts_creates_and_drops_apart(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    sql = "create table fresh (id int);\ndrop table stale;\n"
+    assert _receipt(tmp_path, monkeypatch, sql, [("relation", "fresh", True), ("relation", "stale", False)]) == 0
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "::notice::receipt OK: 1 present, 1 dropped-absent"
+
+
+def test_receipt_a_missing_create_still_exits_1(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    sql = "create table fresh (id int);\ndrop table stale;\n"
+    assert _receipt(tmp_path, monkeypatch, sql, [("relation", "fresh", False), ("relation", "stale", False)]) == 1
+    assert "relation:fresh" in capsys.readouterr().out
+
+
+def test_receipt_a_drop_the_file_recreates_is_expected_present(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    sql = "drop policy if exists p on t;\ncreate policy p on t using (true);\n"
+    assert _receipt(tmp_path, monkeypatch, sql, [("policy", "t.p", True)]) == 0
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "::notice::receipt OK: 1 present, 0 dropped-absent"
+
+
+@pytest.mark.parametrize("sql", ["update app_settings set v = 1;\n", "drop function if exists retired(int);\n"])
+def test_receipt_nothing_probeable_reads_unverifiable(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, sql: str) -> None:
+    assert _receipt(tmp_path, monkeypatch, sql, []) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[-1].startswith("::notice::UNVERIFIABLE") and "receipt OK" not in "".join(out)
+
+
+def test_plan_lists_what_the_file_drops(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    path = tmp_path / "700_x.sql"
+    path.write_text("drop table stale;\n")
+    assert receipt.main(["--plan", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "drops relation:stale" in out and "1 probeable" in out and "nothing probeable" not in out
 
 
 def test_statement_count_ignores_comments_and_trailing_whitespace() -> None:
