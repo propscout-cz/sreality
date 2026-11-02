@@ -3,7 +3,7 @@
 Rulings: Q1 (quarter = část obce; MOMC stays a match key), Q10 (Praha's okres = 9999 under ČÚZK's own
 name), Q13 (destructive steps pre-approved, each with an R2 backup and a receipt), and of 2026-11-01:
 hold the 11-01 load and dispatch vintage 2026-10-31 after the merge; ORP and POU retire too; the
-standing shadow gate runs. Numbers measured on prod 2026-11-01 unless dated.
+standing shadow gate runs; W5 merges first. Numbers measured on prod 2026-11-01 unless dated.
 
 ## The rule
 **Levels loaded = levels bound, served or used as match keys, and every served level is a full
@@ -21,9 +21,9 @@ when RÚIAN 3.4.1 abolished 3100 (2022) and is the only product that omits it.
 - **No unit or street had ever been SCD-2-closed in production** (0 of 58,904, 0 of 83,476).
 - **Praha in the serving layer.** 179,398 `listing_location` rows with `obec_kod = 554782` and okres
   NULL (49,900 active), 70,338 `browse_list` rows (23,841 active); no other obec has one.
-- **The SO tie.** 463 Praha rows (199 active) sit at quarter grain with `cast_obce_kod NULL`: a "Praha N"
-  part claim binds the SO, which wins the tie by unit id, and FILL maps nothing for `spravni_obvod`. 0
-  such rows outside Praha.
+- **The SO tie.** 463 Praha rows (199 active) sit at quarter grain with `cast_obce_kod NULL` under v5.9.1: a
+  "Praha N" part claim bound the SO, which won the tie by unit id, and FILL mapped nothing for
+  `spravni_obvod`. 0 such rows outside Praha. W5 ends this.
 - **No reader, re-checked on main at 699a8e206** (repo: `location_data`, `api`, `toolkit`, `scraper`,
   `autodedup`, `scripts`, `frontend/src`, the extension; live `pg_proc`, `pg_views`, `pg_depend`): none for
   the four levels, for `orp_of`/`pou_of`/`momc_in_so`, or for the six columns. `listing_location` has no
@@ -57,8 +57,8 @@ never fired), `has_polygon`, `display_path` (written, never read); `ruian_addres
   `iter_strukt` still checks each member's whole header. The address-row parser stays a faithful 19 columns.
 - `ruian_boundaries`: `ORP_P` and `POU_P` leave `LAYERS` (6 of the pack's 12 layers load); `COMPLETE_LEVELS`
   gains `okres`. `name_index._UNIT_LEVELS` follows `LEVEL_ORDER`.
-- Resolver, dead references only, no `RESOLVER_VERSION` bump: `PART_LEVELS = ("cast_obce", "momc")`; no `"zsj"`
-  in `bind` / `core`; `resolve_db`'s by-name reads select a NULL point, the chain reads `gp.pt`.
+- Resolver, no `RESOLVER_VERSION` bump: `resolve_db`'s by-name reads select a NULL point, the chain reads `gp.pt`
+  (W5 removed the retired levels' names).
 - CI: one Praha tree (`mini_mirror._praha_tree`: kraj 19, okres 9999, obec 554782); the fake okres 3100 and
   its name collision with kraj 19 are gone. `test_registry_reparent_live.py` (schema-replay job) drives the
   first close through the loader's own statements and replays the migration over seeded rows.
@@ -88,9 +88,8 @@ keyed by unit id (Praha, 112 KÚ, okres 9999).
   no okres" (`autodedup/incremental_scope.py`) goes stale: fix it with the next edit to that file.
 - **Resolver confidence: unchanged.** Portal okres claims ("Praha", "Praha N", "Hlavní město Praha") do not match
   ČÚZK's name, as today. **Legacy `admin_boundaries`** already says 9999; both registries now agree, which W8 needs.
-- **Transitional, the 463 rows (199 active):** with the SO gone, "Praha N" binds MOMC "Praha N" and FILL's `momc`
-  arm writes a quarter code until W5 moves them to obec grain. The autodedup quarter blocks and the new-dedup
-  district veto start seeing it. This is what the shadow gate is for.
+- **The 463 Praha rows (199 active, 264 inactive) are W5's, not W7's.** W5 merged first, so `MATCH_LEVELS` holds no SO and
+  they go to obec grain on W5's sweep. W7 gives no row a MOMC code.
 
 ## Migration 718 and the rollout
 `migrations/718_location_w7_registry_read_levels.sql` retires the four levels (`valid_to`, `retired_at`, nothing
@@ -108,8 +107,8 @@ was cancelled before any step, `registry_versions` holds v1–v3 only and 0 stag
 two CSV zips answer 200 on HEAD. A vintage already recorded could not carry W7: a current one only finishes, a staged
 one resumes from its checkpoints and keeps its old tree. Registry liveness goes red when v3 passes 40 days, about 11-10.
 
-1. **Wave shadow, from the branch once it has merged main** (`wave-shadow.md`):
-   `gh workflow run location_wave_shadow.yml --ref feature/location-w7-registry-read-levels -f wave=w7-registry -f claims=none -f scope=apply -f ids_sql="SELECT ll.listing_id FROM listing_location ll WHERE ll.obec_kod = 554782 AND ll.granularity = 'cast_obce_or_quarter' AND ll.cast_obce_kod IS NULL"`
+1. **Once W5's sweep has drained, the wave shadow from the branch** (`wave-shadow.md`; expect 0 movers):
+   `gh workflow run location_wave_shadow.yml --ref feature/location-w7-registry-read-levels -f wave=w7-registry -f claims=none -f scope=apply -f ids_sql="SELECT ll.listing_id FROM listing_location ll WHERE ll.obec_kod = 554782 ORDER BY ll.listing_id LIMIT 5000"`
 2. Merge. Confirm the worker and api rollout: `gh api repos/propscout-cz/sreality/commits/<sha>/status`.
 3. Back up, read the receipt:
    `gh workflow run backup_before_drop.yml -f label=w7-registry -f targets="ruian_admin_units:id,display_path,has_polygon ruian_address_points:kod_adm,praha_obvod_unit_id,momc_unit_id ruian_admin_unit_relations"`
@@ -129,19 +128,15 @@ out townless, and is served again once the post-publish sweep repairs it. Measur
 while a full sweep runs, against about 30 an hour at rest (design, 10-30), so step 5 is the difference between about 160
 rows and about 145,000. A versioned unit predicate would not close the gap: address points are current-only by design.
 
-## W5 (PR #2254) and the merge order
-Main keeps working once the units close, with or without W5: every by-name read filters `u.valid_to IS NULL`, so a closed
-level simply answers nothing. W5 names none of the retired levels either.
+## W5 merged first
+W5 (639efab67) went first, as ruled, and W7 merged main with W5's side of every overlap: quarter = část only, MOMC anchors its
+town, one grain (`grain_of`), `MATCH_LEVELS`. So W7's resolver diff is one file, `resolve_db`: the by-name reads select a NULL
+point instead of a column that was NULL on every row, and the chain reads `gp.pt` without the coalesce that never fired. No
+`RESOLVER_VERSION` bump. Every by-name read filters `u.valid_to IS NULL`, so a closed level answers nothing.
 
-They conflict textually and only textually: 7 files (`bind.py`, `composite.py`, `core.py`, `fill.py`,
-`test_resolver_check.py`, `test_resolver_katastr.py`, `docs/architecture.md`), every hunk W7's small edit against W5's rewrite of
-the same lines. Taking W5's side of the code and tests and rewriting `o3100` to `o9999` in the tests (trial merge of 81d27d84b,
-2026-11-01): 345 resolver and loader tests pass. Neither wave needs the other's data.
-
-**The order changes the data, not the code.** W5 first: the 463 rows go straight to obec grain, W7's shadow has no movers, and
-the two sweeps can be one if W5's deploy and the publish fall together. W7 first (Q14): those rows carry a MOMC code from the
-publish until W5, the shape Q1 rejects, and two corpus sweeps. W5 first if it can land before registry liveness goes red
-(about 11-10); otherwise W7 first and accept the transition.
+**The registry load cannot be shadowed.** `what_if` reads the live registry, and what the load changes (okres 9999, new unit
+ids under the same codes) reaches no field of `COHORT_LOCATION_SQL`. The gate proves the branch's resolver equals main's on
+Praha: 0 movers, which holds only once W5's sweep has drained, because a row still at v5.9.1 would count as a mover of W5's.
 
 ## Acceptance (after publish and W2's sweep)
 1. 0 rows, and 0 active: `select count(*) from listing_location ll join listings l on l.id = ll.listing_id where ll.obec_kod = 554782 and ll.okres_kod is null` (and with `l.is_active`). Every Praha row: `okres_kod = 9999`, `okres_name = 'území Hlavního města Prahy'`.
@@ -151,7 +146,7 @@ publish until W5, the shape Q1 rejects, and two corpus sweeps. W5 first if it ca
 5. 0 live units at the four levels, 24,225 with `retired_at`; the new version's name index holds 0 rows for them; 0 `momc_in_so`/`orp_of`/`pou_of` rows.
 6. `information_schema.columns` returns 0 for the six columns; index `ruian_admin_units_defpoint` gone.
 7. 0 non-Praha `listing_location` rows change okres in the sweep.
-8. Every row carries the new `registry_version`. Praha quarter-grain rows with `cast_obce_kod NULL` = 0 (from 463).
+8. Every row carries the new `registry_version`.
 
 ## Risks and what stays open
 - **ČÚZK changes the pack.** Dropping 9999 or the field fails the load loudly (`okres_partition`, `BoundarySchemaError`, the okres completeness gate): a ruling, never a silent NULL. The same if ČÚZK splits Praha into okres-level obvody.

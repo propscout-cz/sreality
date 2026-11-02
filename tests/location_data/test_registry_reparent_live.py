@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
     reason="TEST_DATABASE_URL not set — the registry re-parent live checks run only in CI's DB job",
 )
 
-from autodedup.incremental_sql import RT_SCOPE_OKRES_OBCE_SQL  # noqa: E402
+from autodedup.incremental_sql import RT_SCOPE_OKRES_OBCE_SQL, RT_SCOPE_PARENT_OBEC_SQL  # noqa: E402
 from location_data import name_index, ruian_load  # noqa: E402
 from location_data.resolver import resolve_db  # noqa: E402
 
@@ -269,6 +269,47 @@ def test_the_readers_answer_once_after_the_first_close(conn):
         "SELECT count(*) FROM ruian_place_names_public WHERE level = 'obec' AND code = %s",
         (PRAHA,),
     ).fetchone() == (1,)
+
+
+def _walk_up(conn: Any, unit_id: int) -> list[tuple[str, int]]:
+    """(level, code) from a unit up through `parent_id`, as the chain reads walk it."""
+    return [tuple(r) for r in conn.execute(
+        "WITH RECURSIVE c AS (SELECT id, parent_id, level::text AS level, code, 0 AS d "
+        "FROM ruian_admin_units WHERE id = %s UNION ALL SELECT p.id, p.parent_id, p.level::text, "
+        "p.code, c.d + 1 FROM ruian_admin_units p JOIN c ON p.id = c.parent_id) "
+        "SELECT level, code FROM c ORDER BY d", (unit_id,)).fetchall()]
+
+
+def test_the_chain_holds_for_the_live_row_the_closed_row_and_an_untouched_town(conn):
+    """část → obec → okres → kraj through `parent_id`: the live row gains the okres, the closed
+    row keeps the chain it had (a reader pinned to the old version walks that), another town
+    is the same row with the same chain, and the engine's quarter → town read answers once."""
+    _load_w7_over_old_shape(conn)
+    old, new = _unit(conn, "cast_obce", PART)
+    top = [("kraj", KRAJ), ("region_soudrznosti", REGION), ("stat", STAT)]
+    assert _walk_up(conn, new[0]) == [("cast_obce", PART), ("obec", PRAHA),
+                                      ("okres", PRAHA_OKRES), *top]
+    assert _walk_up(conn, old[0]) == [("cast_obce", PART), ("obec", PRAHA), *top]
+    [town_part] = _unit(conn, "cast_obce", TOWN_PART)
+    assert _walk_up(conn, town_part[0]) == [
+        ("cast_obce", TOWN_PART), ("obec", TOWN), ("okres", OTHER_OKRES), ("kraj", OTHER_KRAJ),
+        ("region_soudrznosti", REGION), ("stat", STAT)]
+    assert [tuple(r) for r in conn.execute(
+        RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART, TOWN_PART]})] in (
+            [(PART, PRAHA), (TOWN_PART, TOWN)], [(TOWN_PART, TOWN), (PART, PRAHA)])
+
+
+def test_a_mid_load_reader_finds_the_old_town_until_its_children_reopen(conn):
+    """Each level commits alone, so between levels a live část points at the closed Praha row.
+    The engine's parent read has no `valid_to` on the parent, so it still answers Praha."""
+    v1 = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, v1)
+    _old_shape_units(conn, stage)
+    ruian_load.upsert_units(conn, stage, v1, V1_DATE)
+    conn.execute("UPDATE ruian_admin_units SET valid_to = %s WHERE level = 'obec' AND code = %s",
+                 (V2_DATE, PRAHA))
+    assert [tuple(r) for r in conn.execute(
+        RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART]})] == [(PART, PRAHA)]
 
 
 def test_the_migration_retires_by_scd2_and_deletes_only_the_unread_relations(conn):
