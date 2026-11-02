@@ -126,8 +126,8 @@ gzip + zstd compression, immutable caching for hashed `assets/*`
 bundles, the installable app's own files (below), and a `/healthz`
 endpoint that Railway uses for liveness.
 
-CI lives at `.github/workflows/frontend-build.yml` and runs
-`npm install && npm run build` on every pull request (and on a push to `main`) to catch broken builds
+CI is the `frontend` job of `.github/workflows/test.yml`: on every pull request
+and push to `main` it runs typecheck, lint, tests and `npm run build` to catch broken builds
 before Railway sees them; it also fails when `dist/sw.js` or
 `dist/manifest.webmanifest` is missing.
 
