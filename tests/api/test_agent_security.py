@@ -33,8 +33,8 @@ from api.providers.gemini import GeminiProvider
 from tests.api._adversarial_ads import ADS, INVENTED_PROPERTY, AdText
 from tests.api._agent_fixtures import READS, WRITE, install_probes
 from tests.api._fakes import _FakeConn
+from tests.api._tool_fixtures import _identity_fields, _walk
 from tests.api._wire_stub import anthropic_reply, gemini_reply, wire_stub
-from tests.api.test_capabilities_census import _identity_fields, _walk
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = "claude-opus-5-5"

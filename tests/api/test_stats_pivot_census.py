@@ -23,15 +23,13 @@ from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import RESULT_BUDGET, encode
 from tests.api._script_conn import ScriptConn
-from tests.migration_defs import latest_definition
-from tests.test_browse_map_read_contract import REPO, _balanced_block, _builder_keys, _strip_ts_comments, _ts
-from tests.test_portal_exclusion_migration import _params
+from tests._read_contract import _balanced_block, _builder_keys, _strip_ts_comments, _ts, registry_key_map
+from tests.migration_defs import _params, latest_definition
 from toolkit import filter_registry as fr
 from toolkit.filter_compiler import RETIRED_FILTERS
 from toolkit.measures import BASIS_MIXED, BASIS_UNKNOWN, SALE_CAPITAL_CZK_M2
 
 FN = "browse_stats_properties"
-FILTERS_TS = REPO / "frontend" / "src" / "lib" / "filters.ts"
 
 
 def census(signature: list[tuple[str, str]], params: Mapping[str, str], unmapped: Mapping[str, str]) -> list[str]:
@@ -71,15 +69,6 @@ def test_the_census_fails_on_a_type_drift_a_vanished_parameter_an_overlap_and_a_
 
 def test_the_tool_sends_exactly_the_keys_the_dashboard_sends_plus_its_spec() -> None:
     assert set(sp.PARAMS) - {"spec"} == _builder_keys()
-
-
-def registry_key_map() -> dict[str, str]:
-    """filters.ts REGISTRY_KEY_MAP: registry id -> the ListingFilters field Browse keeps its value in."""
-    src = FILTERS_TS.read_text(encoding="utf-8")
-    block = _strip_ts_comments(_balanced_block(src, src.index("{", src.index("export const REGISTRY_KEY_MAP"))))
-    keys = dict(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:\s*'(\w+)'", block, flags=re.MULTILINE))
-    assert len(keys) > 60, f"only parsed {len(keys)} REGISTRY_KEY_MAP entries: the parse broke"
-    return keys
 
 
 def _builder_fields() -> dict[str, str | None]:

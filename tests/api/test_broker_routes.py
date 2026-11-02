@@ -370,14 +370,14 @@ def test_the_unmasked_routes_still_stamp_the_policy(
                                   "/broker-review/candidates"])
 def test_a_read_counting_the_broker_book_is_bounded(path: str) -> None:
     """READ ONLY at 8 s, as the board's own read (tenant_pool.read_conn; tests/test_broker_board_live.py)."""
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     (route,) = [r for m, p, r in _api_routes() if (m, p) == ("GET", path)]
     assert tenant_pool.read_conn in _reachable_calls(route.dependant)
 
 
 def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     live = {
         (method, path)
@@ -396,7 +396,7 @@ def test_no_broker_route_rides_the_static_token() -> None:
     caller's claims, so `apply_pii_policy` could not see admin status — a broker
     read re-gated on it would be a silent regression (until 2026-10-13 that gate
     also admitted the bundle-public static key: unauthenticated PII access)."""
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     offenders = sorted(
         f"  {method} {path}"

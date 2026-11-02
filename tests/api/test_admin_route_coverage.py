@@ -26,8 +26,7 @@ from fastapi.routing import APIRoute  # noqa: E402
 
 from api import dependencies as deps  # noqa: E402
 from api import tenant_pool  # noqa: E402
-from api.main import app  # noqa: E402
-from tests.api._routes import flat_routes  # noqa: E402
+from tests.api._routes import _api_routes, _bucket, _reachable_calls  # noqa: E402
 
 # Routes that legitimately authenticate some other way. Every entry is a deliberate,
 # reviewable decision — adding one should take an argument, not a reflex.
@@ -62,44 +61,6 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
 _MOUNT_SENTINELS: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling", "/notifications",
 )
-
-
-def _reachable_calls(dependant) -> set:
-    """Every dependency callable reachable from a route, including nested ones."""
-    seen: set[int] = set()
-    out: set = set()
-    stack = list(dependant.dependencies)
-    while stack:
-        d = stack.pop()
-        call = getattr(d, "call", None)
-        if call is not None and id(call) not in seen:
-            seen.add(id(call))
-            out.add(call)
-        stack.extend(d.dependencies)
-    return out
-
-
-def _bucket(route: APIRoute) -> str:
-    calls = _reachable_calls(route.dependant)
-    if deps.require_admin in calls:
-        return "admin"
-    if tenant_pool.tenant_conn in calls or deps.verify_jwt in calls:
-        return "tenant"
-    if deps.require_token in calls or deps.token_claims in calls:
-        return "token"
-    # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
-    # read scope, so it buckets with it.
-    if deps.account_scope in calls:
-        return "token"
-    return "public"
-
-
-def _api_routes() -> list[tuple[str, str, APIRoute]]:
-    return [
-        (method, r.path, r)
-        for r in flat_routes(app.routes)
-        for method in sorted(r.methods - {"HEAD", "OPTIONS"})
-    ]
 
 
 def test_admin_routers_are_mounted() -> None:

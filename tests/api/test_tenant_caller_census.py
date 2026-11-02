@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.api.test_account_scope_census import _NESTED, _qualnames
+from tests.api._ast_census import _NESTED, _qualnames
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = "tenant_transaction"
