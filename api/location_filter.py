@@ -14,7 +14,9 @@ and `admin_boundaries.id` IS the RÚIAN code (migrations 083/141), so a chip and
 listing come from one register.
 
 WHAT YOU PICK IS WHAT YOU FILTER. A chip is exactly one unit at the level the
-operator picked; a street chip filters at its street, never its town. A chip
+operator picked; a street chip filters at its street, never its town. A městská
+část is no level: its pick adds one `cast_obce` chip per část (`api.maps.resolve`),
+and nothing here knows it happened. A chip
 without a (level, code) cannot exist: `DistrictChip` refuses one (a 422 on every
 write), the typeahead never makes one, and migration 606 deleted the last stored
 rows that held one. Nothing re-reads a chip by name — a name can mean several

@@ -363,3 +363,65 @@ def test_the_dropped_columns_are_gone_and_their_index_with_them(conn):
          ["nuts_lau", "definition_point", "has_polygon", "display_path", "praha_obvod_unit_id"]),
     ).fetchone() == (0,)
     assert conn.execute("SELECT to_regclass('ruian_admin_units_defpoint')").fetchone() == (None,)
+
+
+def _door_of_another_part(conn: Any, kod_adm: int, part_unit: int, momc_unit: int) -> None:
+    """A clone of DOOR in another část and at the given unit rows; every other column is DOOR's."""
+    conn.execute("CREATE TEMP TABLE door_clone ON COMMIT DROP AS "
+                 "SELECT * FROM ruian_address_points WHERE kod_adm = %s", (DOOR,))
+    conn.execute("UPDATE door_clone SET kod_adm = %s, cast_obce_unit_id = %s, momc_unit_id = %s",
+                 (kod_adm, part_unit, momc_unit))
+    [cols] = conn.execute(
+        "SELECT string_agg(column_name, ', ') FROM information_schema.columns "
+        "WHERE table_name = 'ruian_address_points' AND is_generated = 'NEVER'").fetchone()
+    conn.execute(f"INSERT INTO ruian_address_points ({cols}) SELECT {cols} FROM door_clone")
+    conn.execute("DROP TABLE door_clone")
+
+
+def test_a_mestska_cast_finds_its_parts_on_doors_at_either_version_of_its_units(conn):
+    """A load re-points doors in place: its městská část holds the closed row on one door, the open
+    one on the next, and a část may do the same. The set is joined on the stable code."""
+    from api.maps import _momc_part_codes
+
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), (new_momc, *_) = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    other_part = conn.execute(
+        "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+        "first_version_id, last_version_id) VALUES ('cast_obce', 9910068, 'Dejvice', 'dejvice', "
+        "'x9910068'::ltree, %s, %s, %s) RETURNING id", (V2_DATE, m.v2, m.v2),
+    ).fetchone()[0]
+
+    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [(PART, "Vokovice")]
+
+    conn.execute("UPDATE ruian_address_points SET momc_unit_id = %s, cast_obce_unit_id = %s "
+                 "WHERE kod_adm = %s", (old_momc, old_part, DOOR))
+    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [(PART, "Vokovice")]
+
+    _door_of_another_part(conn, DOOR + 100, other_part, new_momc)
+    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [
+        (9910068, "Dejvice"), (PART, "Vokovice")]
+    assert _momc_part_codes(conn, momc_code=MOMC + 1, obec_code=PRAHA) == []
+
+
+def test_a_retired_door_gives_a_mestska_cast_no_part(conn):
+    from api.maps import _momc_part_codes
+
+    _load_w7_over_old_shape(conn)
+    conn.execute("UPDATE ruian_address_points SET valid_to = %s WHERE kod_adm = %s", (V2_DATE, DOOR))
+    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == []
+
+
+def test_a_mestska_cast_pick_reads_the_name_index_and_answers_its_parts(conn):
+    """The `/maps/resolve` seam below the point, on a real schema."""
+    from api.maps import _bind_momc
+
+    m = _load_w7_over_old_shape(conn)
+    _, (new_momc, *_) = _unit(conn, "momc", MOMC)
+    _, (new_praha, *_) = _unit(conn, "obec", PRAHA)
+    conn.execute("INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, "
+                 "name_norm, name_kind, parent_obec_unit_id) VALUES ('momc', %s, %s, 'Praha 6', "
+                 "'praha 6', 'official', %s)", (new_momc, m.v2, new_praha))
+    momc = _bind_momc(conn, version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
+    assert momc is not None and momc.name == "Praha 6" and momc.parts == [(PART, "Vokovice")]
+    assert _bind_momc(conn, version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None

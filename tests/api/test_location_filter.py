@@ -166,3 +166,12 @@ def test_no_text_column_is_read_any_more() -> None:
 def test_empty_alias_raises() -> None:
     with pytest.raises(ValueError):
         district_where([DistrictChip(name="Praha", level="obec", id=554782)], alias="")
+
+
+def test_a_mestska_cast_picked_as_its_parts_is_one_any_of_codes():
+    """Ruling 2026-11-02, #2380: ordinary část chips, so the Watchdog's predicate is Browse's union."""
+    chips = [DistrictChip(name=name, context="Praha", level="cast_obce", id=code)
+             for name, code in (("Bubeneč", 400301), ("Dejvice", 400302))]
+    where, params = district_where(chips, alias="l")
+    assert where == ["(l.cast_obce_id = ANY(%(district_codes_cast_obce)s))"]
+    assert params == {"district_codes_cast_obce": [400301, 400302]}

@@ -33,12 +33,14 @@ export interface MapySuggestion {
  * null for a pick that names no level (a country), and `adresni_misto` for an
  * address the address picker asked as a door (`addressPoint`). `name` is the
  * register's name of the unit, `context` the register name of its obec below
- * the obec level. */
+ * the obec level. A městská část has no code (rows carry none): `id` is null,
+ * `level` is `cast_obce` and `parts` holds the části its doors stand in. */
 export interface LocationResolution {
   level: string | null;
   id: number | null;
   name: string | null;
   context: string | null;
+  parts?: ReadonlyArray<{ id: number; name: string }>;
 }
 
 interface SuggestResponse {

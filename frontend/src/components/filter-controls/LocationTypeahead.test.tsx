@@ -324,3 +324,57 @@ describe('<LocationTypeahead> chip controls name their level', () => {
     expect(screen.getByRole('button', { name: 'Exclude Jihlava (Okres)' })).toBeInTheDocument();
   });
 });
+
+describe('<LocationTypeahead> městská část picks (ruling 2026-11-02, #2380)', () => {
+  const PRAHA_6: MapySuggestion = {
+    name: 'Praha 6', label: 'Obec', type: 'regional.municipality',
+    position: { lon: 14.39, lat: 50.1 },
+  };
+  /* The server's answer: no code of its own, the části its doors stand in. */
+  const momc = (...parts: Array<[number, string]>): LocationResolution => ({
+    level: 'cast_obce', id: null, name: 'Praha 6', context: 'Praha',
+    parts: parts.map(([id, name]) => ({ id, name })),
+  });
+  const cast = (id: number, name: string): DistrictChip => ({
+    name, context: 'Praha', level: 'cast_obce', id,
+  });
+
+  it('adds one ordinary část chip per part and says what it did', async () => {
+    const user = renderHost();
+    resolveSuggestion.mockResolvedValue(momc([400301, 'Bubeneč'], [400302, 'Dejvice']));
+    await pick(user, 'Praha 6', PRAHA_6);
+
+    await waitFor(() => expect(lastValue()).toEqual([
+      cast(400301, 'Bubeneč'), cast(400302, 'Dejvice'),
+    ]));
+    expect(screen.getByRole('button', { name: 'Remove Dejvice · Praha (Část obce)' })).toBeInTheDocument();
+    expect(notice()).toHaveTextContent('Praha 6 added as its 2 parts');
+  });
+
+  it('keeps a part already chosen as it is: an excluded one stays excluded', async () => {
+    const excluded: DistrictChip = { ...cast(400302, 'Dejvice'), excluded: true };
+    const user = renderHost([excluded]);
+    resolveSuggestion.mockResolvedValue(momc([400301, 'Bubeneč'], [400302, 'Dejvice']));
+    await pick(user, 'Praha 6', PRAHA_6);
+
+    await waitFor(() => expect(lastValue()).toEqual([excluded, cast(400301, 'Bubeneč')]));
+  });
+
+  it('a second pick of the same městská část changes nothing', async () => {
+    const user = renderHost([cast(400301, 'Bubeneč'), cast(400302, 'Dejvice')]);
+    resolveSuggestion.mockResolvedValue(momc([400301, 'Bubeneč'], [400302, 'Dejvice']));
+    await pick(user, 'Praha 6', PRAHA_6);
+
+    await waitFor(() => expect(notice()).toHaveTextContent('Already selected'));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('an answer with no valid part adds no chip', async () => {
+    const user = renderHost();
+    resolveSuggestion.mockResolvedValue(momc([0, 'Nikde']));
+    await pick(user, 'Praha 6', PRAHA_6);
+
+    await waitFor(() => expect(notice()).toHaveTextContent("Praha 6 can't be used as a filter"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
