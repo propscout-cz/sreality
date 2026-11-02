@@ -202,13 +202,24 @@ def _unit(unit_id, level, code, name, name_norm, path, parent=None, lat=None, lo
     )
 
 
+def _praha_tree() -> list[AdminUnit]:
+    """Praha as ČÚZK's state pack publishes it: okres 9999, the one okres the CSV chain omits."""
+    return [
+        _unit(11, "kraj", 19, "Hlavní město Praha", "hlavni mesto praha", "k19",
+              lat=50.0755, lon=14.4378),
+        _unit(12, "okres", 9999, "území Hlavního města Prahy", "uzemi hlavniho mesta prahy",
+              "k19.o9999", parent=11, lat=50.0755, lon=14.4378),
+        _unit(13, "obec", 554782, "Praha", "praha", "k19.o9999.b554782", parent=12,
+              lat=50.0755, lon=14.4378, psc_set=("16000", "18000")),
+    ]
+
+
 def default_mirror() -> MiniMirror:
     """One kraj/okres tree per regression case, plus a fully addressed obec.
 
     Unit POINTS are modelled as the mirror actually has them (W2-a3): stát, kraj, okres and
     obec carry one, a část obce or a městský obvod does NOT — `ruian_boundaries.LAYERS` draws
-    no polygon at those levels and `ruian_admin_units.definition_point` is a column the
-    loader has never written. A fixture that gave Vokovice a point would test a registry we
+    no polygon at those levels. A fixture that gave Vokovice a point would test a registry we
     do not have.
     """
     units = [
@@ -236,15 +247,10 @@ def default_mirror() -> MiniMirror:
         _unit(10, "obec", 599212, "Bílovec", "bilovec", "k80.o3804.b599212", parent=9,
               lat=49.7573, lon=18.0158, psc_set=("74301",)),
         # --- Praha (street-name-contains-village trap) + Bořislav village
-        _unit(11, "kraj", 19, "Hlavní město Praha", "hlavni mesto praha", "k19",
-              lat=50.0755, lon=14.4378),
-        _unit(12, "okres", 3100, "Hlavní město Praha", "hlavni mesto praha", "k19.o3100",
-              parent=11, lat=50.0755, lon=14.4378),
-        _unit(13, "obec", 554782, "Praha", "praha", "k19.o3100.b554782", parent=12,
-              lat=50.0755, lon=14.4378, psc_set=("16000", "18000")),
+        *_praha_tree(),
         # No point: RÚIAN draws no ČástObce polygon at all, so a quarter-bound row takes
         # its town's point.
-        _unit(14, "cast_obce", 490067, "Vokovice", "vokovice", "k19.o3100.b554782.c490067",
+        _unit(14, "cast_obce", 490067, "Vokovice", "vokovice", "k19.o9999.b554782.c490067",
               parent=13),
         _unit(15, "obec", 567639, "Bořislav", "borislav", "k42.o3805.b567639", parent=6,
               lat=50.5794, lon=13.9200, psc_set=("41502",)),
@@ -437,18 +443,15 @@ def statutory_city_mirror() -> MiniMirror:
               lat=49.2211, lon=16.7530),
         _unit(107, "cast_obce", 124257, "Podolí", "podoli", "k116.o3703.b583634.c124257",
               parent=106),
-        # --- Praha: no okres at all, and the quarter at BOTH levels
-        _unit(110, "kraj", 19, "Hlavní město Praha", "hlavni mesto praha", "k19",
-              lat=50.0755, lon=14.4378),
-        _unit(111, "obec", 554782, "Praha", "praha", "k19.b554782", parent=110,
-              lat=50.0755, lon=14.4378),
-        _unit(112, "momc", 500119, "Praha 4", "praha 4", "k19.b554782.m500119", parent=111),
+        # --- Praha, and the quarter at BOTH levels
+        *_praha_tree(),
+        _unit(112, "momc", 500119, "Praha 4", "praha 4", "k19.o9999.b554782.m500119", parent=13),
         _unit(113, "momc", 539635, "Praha-Řeporyje", "praha reporyje",
-              "k19.b554782.m539635", parent=111),
-        _unit(114, "cast_obce", 400190, "Podolí", "podoli", "k19.b554782.c400190",
-              parent=111),
-        _unit(115, "cast_obce", 490270, "Řeporyje", "reporyje", "k19.b554782.c490270",
-              parent=111),
+              "k19.o9999.b554782.m539635", parent=13),
+        _unit(114, "cast_obce", 400190, "Podolí", "podoli", "k19.o9999.b554782.c400190",
+              parent=13),
+        _unit(115, "cast_obce", 490270, "Řeporyje", "reporyje", "k19.o9999.b554782.c490270",
+              parent=13),
         # --- Plzeň
         _unit(120, "kraj", 32, "Plzeňský kraj", "plzensky kraj", "k32",
               lat=49.7384, lon=13.3736),

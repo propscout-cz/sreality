@@ -244,10 +244,10 @@ class _Seed:
     def unit(self, level: str, code: int, version_id: int, *, parent: int | None = None) -> int:
         """A registry unit still valid (no valid_to)."""
         return int(self.conn.execute(
-            "insert into ruian_admin_units (level, code, name, name_norm, parent_id, path, display_path, valid_from, "
-            "  first_version_id, last_version_id) values (%s::ruian_level, %s, %s, %s, %s, %s::ltree, %s, "
+            "insert into ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, "
+            "  first_version_id, last_version_id) values (%s::ruian_level, %s, %s, %s, %s, %s::ltree, "
             "  current_date - 30, %s, %s) returning id",
-            (level, code, f"w6 {code}", f"w6 {code}", parent, f"w6x{code}", f"w6 {code}", version_id, version_id),
+            (level, code, f"w6 {code}", f"w6 {code}", parent, f"w6x{code}", version_id, version_id),
         ).fetchone()[0])
 
     def discrepancy(self, version_id: int, ku: int, kind: str) -> None:

@@ -5,15 +5,16 @@ name: "Location: RÚIAN registry load"
 # pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per
 # unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer
 # -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes
-# only when the state, every obec and every katastrální území has its geometry, so a killed or
-# incomplete run leaves an inert staged version that any later dispatch resumes.
+# only when the state, every okres, every obec and every katastrální území has its geometry, so a
+# killed or incomplete run leaves an inert staged version that any later dispatch resumes.
 #
 # 10:00 UTC on the 1st is comfortably after the measured generation times (OB_ADR 08:04,
 # strukt_ADR 23:43 the prior day). The boundary pack has no vintage in its URL and ČÚZK
 # refreshes it in place daily, so a resume never downloads: it restores the vintage's archived
 # bytes from R2 and refuses (exit 1) only if they differ from the recorded sha256. A member
 # unit ČÚZK dissolves between the month-end CSV and the pack's load day would hold the
-# version back with no excuse path (none seen so far). `registry liveness` in
+# version back with no excuse path (none seen so far), and an obec the pack gives no okres
+# stops the load before the mirror moves (`okres_partition`). `registry liveness` in
 # `location_town_coverage` goes red when the current version is over 40 days old or a newer
 # one has sat staged over 24 h. Everything here is CC BY 4.0 ČÚZK open data — free, no key,
 # no registration.
