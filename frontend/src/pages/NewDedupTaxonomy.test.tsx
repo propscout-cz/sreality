@@ -446,6 +446,21 @@ describe('<NewDedupTaxonomy>', () => {
 
   // --- editor --------------------------------------------------------------
 
+  it('never shows the form before it holds the tag\'s definition', async () => {
+    // A MutationObserver runs right after React commits, before a passive effect would.
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      const means = screen.queryByLabelText<HTMLTextAreaElement>('means');
+      if (means) seen.push(means.value);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    renderPage();
+    await selectKuchyne();
+    observer.disconnect();
+
+    expect(seen[0]).toBe('A room whose primary function is cooking.');
+  });
+
   it('loads the selected tag\'s definition into the form', async () => {
     renderPage();
     await selectKuchyne();
