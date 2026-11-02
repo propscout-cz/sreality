@@ -15,7 +15,7 @@ Origin: the operator's follow-up on the location refactoring sprint (2026-10-30)
 | Q5 | Corrections stay, as a pencil on the property page's address line opening a RÚIAN-matched address picker; the chosen entity becomes an operator claim on every current ad of the property and outranks the portal. Admin-gated (builder's call). The admin inspector form goes. | New wave W3b after W3. |
 | Q6 | Confirmed after the operator checked the 27 pages: unresolved stays red, page-withheld shows as Watch. | W1 as planned. |
 | Q7 | Fixed red thresholds from day one; nothing measured twice: W1 first folds the five existing location counters (gauge cells, Location Quality aggregates, pin-audit matview, audit waterfall, gate SQL) into the one scorecard. | W1 acceptance line 1. Pin-accuracy cells wait for W6. |
-| Q8 | **The map is the source when it is there.** An exact pin resolves to the RÚIAN address point and refines the row below the town the words bound (street, house number), never contradicting it. The remax header slot is NOT read; for remax pages without a pin the ruled map attribute stays. | New wave W5b after W5 (a pin → address point rung, tolerance calibrated against address points; June 2026 measured 99.2 % precision at 15 m). W4 shrinks to realitymix. |
+| Q8 | **Narrowed by Q8 (a), 2026-11-02: what is certain gets a door (a flat or a house, its pin within 1 m of the address point; W5b below).** **The map is the source when it is there.** An exact pin resolves to the RÚIAN address point and refines the row below the town the words bound (street, house number), never contradicting it. The remax header slot is NOT read; for remax pages without a pin the ruled map attribute stays. | New wave W5b after W5 (a pin → address point rung, tolerance calibrated against address points; June 2026 measured 99.2 % precision at 15 m). W4 shrinks to realitymix. |
 | Q9 | Worker is the only resolve runtime. | W2 as planned. |
 | Q10 | Praha's okres = 9999 under ČÚZK's own name. | W7 as planned. |
 | Q11 | One `obec_population` table keyed by RÚIAN code and year; the curated-city population becomes a view over it. | W8. |
@@ -57,6 +57,8 @@ On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-
 
 ### W5b: the pin refines within the words (added 2026-10-31)
 After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
+
+**As built 2026-11-02 (#2338; `resolver:v5.11`, migration 717; design and measurements: `w5b-pin-door.md`).** Ruling Q8 (a), 2026-11-02: what is certain gets a door. `bind.pin_door`: a flat or a house (`listings.category_main`), its exact pin inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing with the words' obec, street, every claimed část and PSČ, and nothing in the words a door cannot be checked against; the row gets that address point's keys (rung R5) and keeps the ad's own pin as its position. At 1 m a pin-named door agrees with a sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %); ≈ 40k rows move. **The operator retired the radius the same day: W6 becomes deletion only.** Migration 717 drops the view's pin sample (`pin_error_m`, `radius_cover`) and orders the containment probe by code (W5's deferral); the gauge loses `{p}/accuracy`. A changed `category_main` queues its re-resolve in the same statement (`claim_insert`). Net addition approved by the operator. Shadow binds it.
 
 ---
 
@@ -242,7 +244,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **Grain = `grade.grain_of(keys)`**, the one writer (`grade()`, `Grade`, `Binding.granularity`, `Verdict.granularity` and `coarser_of` deleted).
 - **Quarter = část obce only (Q1):** `MATCH_LEVELS = ("cast_obce", "momc")` and `composite.part_of` (a část itself, a KÚ the část its name spells, a MOMC nothing). MOMC stays a match key: the 1,607 remax "Praha N" rows still bind Praha. Správní obvod and ZSJ are no level. Part claims match like town names; a street keeps the claimed část when it has doors there (Q2).
 - **KÚ fix:** an address point with no coordinates takes its část's door KÚ (19405830).
-- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border).
+- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border). Done by W5b, migration 717.
 - **Shadow:** the `ids` export block is built, so the about 5.4k Praha rows that gain a quarter are judged; dispatch per slice (`wave-shadow.md`).
 - **Consumers:** labels lose "Praha 5, " on about 935 rows and 1,899 gain their část; the location ad can change where an ad's grain changes; the bazos map "±" grows to the town's reach.
 - **Acceptance** (before: 2026-10-31 16Z):
@@ -268,6 +270,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 Residual, named: about 10 register-point slivers (not pins) and about 300 ceskereality ads with only a pin (R7: the pin names the town, the words cannot judge it).
 
 ### W6: one honest radius (v5.11)
+**Retired by the operator's ruling of 2026-11-01: W6 becomes deletion only (no radius is built). The text below is what it replaces; W5b's migration 717 already dropped the pin sample and the gauge's `{p}/accuracy`.**
 Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos, 100 % for remax.
 - **New rule:** the radius is decided by how the point was made.
   - Address point: 10 m.
@@ -309,9 +312,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 
 ## Deferred or rejected (headline)
 - **Deferred:** retiring the legacy `admin_boundaries` table (its own track; after W7 both registries agree on Praha).
-- **Deferred:** a precise pin deciding the část through its KÚ (2,188 Praha rows). It reverses a ruling and adds without deleting; ask again after W5.
 - **Deferred:** a radius gate in comparables (an estimation methodology change).
-- **Deferred:** remax house numbers from index cards (a new surface; deletes nothing).
 - **Rejected:** a served MOMC level.
 - **Rejected as patchwork:** MOMC kept as a fallback in the quarter field.
 - **Rejected:** a DB CHECK for grain (a second spelling of the rule).

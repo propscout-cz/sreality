@@ -49,6 +49,11 @@ on:
         default: apply
         type: choice
         options: [apply, all]
+      all_blocks:
+        description: "Export every mover's blocks, ruled or not (W5b's door report needs them; more groups)"
+        required: false
+        default: false
+        type: boolean
       ids_sql:
         description: "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)"
         required: false
@@ -160,7 +165,8 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GROUP: ${{ inputs.group }}
-        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}"
+          ALL_BLOCKS: ${{ inputs.all_blocks && '--all-blocks' || '' }}
+        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}" $ALL_BLOCKS
 
       # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"

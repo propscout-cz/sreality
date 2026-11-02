@@ -124,6 +124,7 @@ from scraper.db import (
     _LISTING_COLUMN_PGTYPE,
     _PRESERVE_IF_NULL_COLUMNS,
 )
+from scraper.listing_write import resolve_requeue_cte
 from scraper.scraped_listing import ScrapedListing, _HASH_FIELDS
 from scripts.backfill_support import (
     _STATEMENT_TIMEOUT_SQL,
@@ -214,8 +215,8 @@ _UPDATE_SQL_TEMPLATE = """
         SET {sets}
         FROM fresh AS u
         WHERE l.id = u.id{cas}
-        RETURNING l.property_id
-    )
+        RETURNING l.property_id{moved}
+    ){requeue}
     INSERT INTO dirty_properties (property_id)
     SELECT DISTINCT property_id FROM updated WHERE property_id IS NOT NULL
     ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
@@ -314,7 +315,12 @@ def _update_sql(fields: tuple[str, ...]) -> str:
         f",\n            %({c})s::{_ARRAY_TYPE[_LISTING_COLUMN_PGTYPE[c]]}[]" for c in fields)
     casts += "".join(
         f",\n            %(was_{c})s::{_LISTING_COLUMN_PGTYPE[c]}[]" for c in fields)
+    types = "category_main" in fields
     return _UPDATE_SQL_TEMPLATE.format(
+        moved=(", l.id, u.category_main IS DISTINCT FROM u.was_category_main AS type_moved"
+               if types else ""),
+        requeue=(", " + resolve_requeue_cte("SELECT id FROM updated WHERE type_moved")
+                 if types else ""),
         casts=casts,
         cols="".join(f", {c}" for c in fields) + "".join(f", was_{c}" for c in fields),
         sets=",\n            ".join(f"{c} = u.{c}" for c in fields),

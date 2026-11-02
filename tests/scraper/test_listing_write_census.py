@@ -63,8 +63,8 @@ class Site:
 
 LEDGER: dict[str, Site] = {
     "scripts/reparse.py": Site(
-        1, "heal", "re-derives --fields from stored substrate, compare-and-set",
-        "same-statement"),
+        1, "heal", "re-derives --fields from stored substrate, compare-and-set; a moved "
+        "category_main also queues its re-resolve", "same-statement"),
     "toolkit/description_extraction.py": Site(
         2, "derived", "NULL-only fill of contract text/none cells (incl. the module docstring)",
         "same-statement"),

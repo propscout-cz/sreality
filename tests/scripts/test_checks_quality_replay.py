@@ -100,13 +100,11 @@
 #     from runs r cross join lateral jsonb_each(r.cells) e order by 1, 2, 3, 4;
 #
 # tests/fixtures/health_quality_location_view_now.csv (quality._LOCATION_COLUMNS), 2026-10-31
-# 13:09:55Z, 427 rows: location_quality_by_source exactly as the gauge's two statements read it,
+# 13:09:55Z, 401 rows: location_quality_by_source exactly as the gauge then read it, less its 26 pin-sample rows (W5b),
 # quantiles to 1 dp. Migration 698 was not yet applied, so its view body ran as written, in the
 # statement below. The resolver then running was resolver:v5.9 (#2194, deployed; its sweep had
 # enqueued 1,076,970 rows 2.6 min before, so most rows still read v5.8). The same session read the
-# registry: current ruian:2026-09-30, source date 09-30, nothing newer staged. The sample's property
-# join gained `p.is_active` after this export (review of #2221): a sampled ad is active, so its
-# property reads active but for the rollup's lag, and the sample rows stand.
+# registry: current ruian:2026-09-30, source date 09-30, nothing newer staged.
 #   select md5(t), t from (
 #     select string_agg(concat_ws(',', cohort, coalesce(source, ''), metric, coalesce(class, ''), n,
 #                                 coalesce(of_n::text, ''), coalesce(round(q50, 1)::text, ''),
@@ -651,10 +649,9 @@ def _swept() -> list[tuple[Any, ...]]:
 
 def _location_answers(rows: list[tuple[Any, ...]], at: _dt.datetime,
                       history: _History) -> dict[str, Any]:
-    """The gauge's reads: the view split on its literal cohort, the registry, its own last result."""
+    """The gauge's reads: the view, the registry, its own last result."""
     age = (at.date() - _REGISTRY_SOURCE_DAY).days
-    return {qu._LOCATION_STOCK_SQL: [r for r in rows if r[0] != "sample"],
-            qu._LOCATION_SAMPLE_SQL: [r for r in rows if r[0] == "sample"],
+    return {qu._LOCATION_STOCK_SQL: rows,
             qu._REGISTRY_LIVENESS_SQL: [("ruian:2026-09-30", age, None, None)],
             common.PREVIOUS_CELLS_SQL: history.previous}
 
@@ -851,7 +848,7 @@ def test_the_fixtures_hold_the_rows_and_totals_their_exports_read() -> None:
         "text_lag_runs_35d", "payload_now", "legacy_runs_35d")}
     assert counts == {"churn_28d": 261, "measure_view_now": 108, "measure_gaps_28d": 2_958,
                       "stock_medians_6w": 754, "legacy_medians_35d": 2_310,
-                      "location_view_now": 427,
+                      "location_view_now": 401,
                       "text_lane_28d": 29, "text_stock_now": 1, "text_lag_runs_35d": 96,
                       "payload_now": 3, "legacy_runs_35d": 1_047}
     gaps = _series(_GAPS, "at")
@@ -889,7 +886,7 @@ def test_the_reading_model_reproduces_each_days_read_counts() -> None:
 def test_every_check_emits_every_subject_on_every_tick_and_every_result_carries_cells() -> None:
     """An omitted subject strands its incident for 7 days: no replay ever drops one."""
     # The heal replay is left out: its view gains the gap series' cells when that starts (09-22).
-    for (_, results), size in ((_parsing(), 541), (_quality(), 231), (_location(), 61),
+    for (_, results), size in ((_parsing(), 541), (_quality(), 231), (_location(), 52),
                                (_text(), 2)):
         assert {frozenset(_cells(r)) for _, r in results} == {frozenset(_cells(results[0][1]))}
         assert len(_cells(results[0][1])) == size
@@ -1190,17 +1187,13 @@ def test_at_ship_the_gauges_problems_are_the_realitymix_floor_and_the_positions_
 
 def test_the_location_scorecard_at_ship_reads_what_the_export_holds() -> None:
     """W1's day one, mid-sweep: no ad with town-bearing evidence lacks a town; 27 page-withheld ads
-    and 21 published properties read Watch, as do two portals' radius cover (bezrealitky's 7 and
-    maxima's 11 sampled ads are under the 30 it needs) and the sweep's first reading."""
+    and 21 published properties read Watch, as does the sweep's first reading."""
     cells = _cells(_location_ship()[0][1])
     statuses = [c["status"] for c in cells.values()]
-    assert {st: statuses.count(st) for st in set(statuses)} == {"fail": 10, "warn": 6, "ok": 43,
-                                                                "unknown": 2}
+    assert {st: statuses.count(st) for st in set(statuses)} == {"fail": 10, "warn": 4, "ok": 38}
     assert {s: c["value"] for s, c in cells.items() if c["status"] == "warn"} == {
         "ceskereality/town_withheld": 26, "mmreality/town_withheld": 1, "served/town_withheld": 21,
-        "bazos/accuracy": 57.41, "sreality/accuracy": 87.93, "freshness/version": 393_248}
-    assert {s for s, c in cells.items() if c["status"] == "unknown"} == {
-        "bezrealitky/accuracy", "maxima/accuracy"}
+        "freshness/version": 393_248}
     assert {s: c["value"] for s, c in cells.items() if s.endswith("/town")} == {
         **{f"{p}/town": 0 for p in _fleet()}, "served/town": 0}
     assert cells["served/outside"]["value"] == 11_568

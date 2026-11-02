@@ -175,6 +175,8 @@ class AddressPoint:
     katastr_kod: int | None = None
     # `č.p.` or `č.ev.` — what `cislo_domovni` IS (D7). Only a č.p. is published as one.
     typ_so: str = "č.p."
+    # The MOMC the door lies in, which `bind.pin_door` checks an okres word naming one against.
+    momc_unit_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +291,10 @@ class RegistryView(Protocol):
     def in_czechia_polygon(self, lat: float, lon: float) -> bool | None:
         """Containment in the RÚIAN state polygon. `None` = not loaded, so no signal."""
 
+    def doors_near(self, lat: float, lon: float) -> Sequence[int]:
+        """The kód of the valid doors within `bind.PIN_DOOR_M`, at most TWO: the one asker
+        (`bind.pin_door`) only wants to know whether there is exactly one."""
+
 
 @dataclass(frozen=True, slots=True)
 class ResolverContext:
@@ -337,6 +343,11 @@ class Binding:
     relaxations: tuple[str, ...] = ()
     ambiguous: bool = False
     source_claim_ids: tuple[int, ...] = ()
+    # What `bind.pin_door` checks a door against: every část and MOMC the words named, kept by the
+    # binding or not, and whether they said something no door can be checked against.
+    words_part_ids: tuple[int, ...] = ()
+    words_momc_ids: tuple[int, ...] = ()
+    words_unchecked: bool = False
 
     @property
     def bound(self) -> bool:

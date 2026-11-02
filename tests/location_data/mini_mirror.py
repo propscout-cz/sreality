@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from location_data.name_index import normalize_name, split_qualifier
+from location_data.resolver.bind import PIN_DOOR_M
 from location_data.resolver.geo import haversine_m
 from location_data.resolver.resolve_db import _path_code
 from location_data.resolver.types import (
@@ -161,6 +162,11 @@ class MiniMirror:
             return None
         clat, clon, radius = self.cz_polygon
         return haversine_m(lat, lon, clat, clon) <= radius
+
+    def doors_near(self, lat: float, lon: float) -> list[int]:
+        """`_DOORS_NEAR_SQL` in python: at most two."""
+        return [p.kod_adm for p in self.points if p.lat is not None and p.lon is not None
+                and haversine_m(lat, lon, p.lat, p.lon) <= PIN_DOOR_M][:2]
 
     # ---- fixture helper, not part of the protocol
     def _unit_by_id(self, unit_id: int) -> AdminUnit | None:

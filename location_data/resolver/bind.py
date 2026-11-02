@@ -105,6 +105,16 @@ PIP_SLIVER_TOLERANCE_M = 250.0
 # registry point stays the position and GRADE caps the confidence.
 REGISTRY_PIN_CONFLICT_M = 300.0
 
+# THE DOOR A PIN NAMES (W5b, ruling Q8 (a), 2026-11-02): "what is certain gets a door". Only a flat or
+# a house, its pin within 1 m of the door: the measured line where a pin-named door agrees with a
+# sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %,
+# within noise). 5 m does not (94.5 %, 99.0 %).
+PIN_DOOR_M = 1.0
+PIN_DOOR_AD_TYPES = frozenset({"byt", "dum"})
+PIN_DOOR_RUNG = "R5"  # set after the ranking, so it has no score
+# The claims that state a door: `names_a_door` refuses on any of them.
+WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
+
 
 # Portal-declared labels that mean "this pin is not address-grade". The portal contract maps
 # its own vocabulary onto these; a label we do not know is NOT treated as blurred (cap,
@@ -364,7 +374,7 @@ def narrow_towns(
     ):
         if not keys or len(surviving) <= 1:
             continue
-        wanted = {u.code for key in keys for u in registry.admin_units_by_name(key, levels=(label,))}
+        wanted = {u.code for u in _units_named(keys, label, registry)}
         filtered = [u for u in surviving if getattr(u, attr) in wanted]
         if filtered:
             surviving = filtered
@@ -379,6 +389,19 @@ def narrow_towns(
         surviving = inside or [min(surviving, key=lambda u: (
             _town_distance(u, pin, registry), u.unit_id))]
     return surviving, applied
+
+
+def _units_named(keys: Sequence[str], level: str, registry: RegistryView) -> list[AdminUnit]:
+    return [u for key in keys for u in registry.admin_units_by_name(key, levels=(level,))]
+
+
+def _region_disagrees(town: AdminUnit, constraints: Constraints, registry: RegistryView) -> bool:
+    """An okres or kraj word the register holds at that level, and the town lies outside it. A word
+    it does not hold there ("Vysočina" as a kraj) is a spelling, not a disagreement."""
+    return any((wanted := {u.code for u in _units_named(keys, level, registry)})
+               and getattr(town, attr) not in wanted
+               for keys, attr, level in ((constraints.okres_keys, "okres_kod", "okres"),
+                                         (constraints.kraj_keys, "kraj_kod", "kraj")))
 
 
 def _admits(
@@ -591,6 +614,7 @@ def bind(
             if town in constraining_obec_kods and (claimed := part_of(unit, town, registry)):
                 said.append(_Part(claimed, _ids(constraints, "cast_obce_name"),
                                   ("obec_constrained",)))
+    part_claim_unmatched = bool(constraints.cast_obce_keys) and not said
     if towns.composite.part is not None:
         said.append(_Part(towns.composite.part, _ids(constraints, "obec_name"),
                           ("obec_constrained",)))
@@ -826,6 +850,20 @@ def bind(
             relaxations=top.relaxations,
             ambiguous=ambiguous,
             source_claim_ids=top.source_claim_ids,
+            words_part_ids=tuple(sorted({p.unit.unit_id for p in (*said, *found)})),
+            # An okres word that is really a MOMC ("Praha 5", the portals' old district).
+            words_momc_ids=tuple(sorted({
+                u.unit_id for u in _units_named(constraints.okres_keys, "momc", registry)})),
+            # A part claim that matched no část (a MOMC is none), a street line that bound nothing
+            # and names no part (`ambiguous_streets` too), a locality line the town was only
+            # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
+            # (the PSČ or a part claim bound it), an okres or kraj word the town is not in.
+            words_unchecked=(
+                part_claim_unmatched or towns.composite.bound
+                or (bool(constraints.obec_keys) and not towns.named)
+                or any(_region_disagrees(town, constraints, registry) for town in obec_units)
+                or (bool(constraints.street_line or place_line) and top.ulice_kod is None
+                    and line.named_part is None)),
         ),
         constraints,
     )
@@ -1035,7 +1073,7 @@ def read_declared_precision(claims: Sequence[Claim]) -> DeclaredPrecision:
 def pin_inside_bound_obec(
     binding: Binding, pin_claim: Claim | None, registry: RegistryView
 ) -> bool | None:
-    """The ONE containment question `place()` and CHECK both read: does the pin lie inside the
+    """The ONE containment question `pin_door`, `place()` and CHECK read: does the pin lie inside the
     obec the CLAIMS bound? None when it is not asked — no pin, no bound town (a region-only
     bind), or a town the pin itself established (R7/R8, where the comparison is circular). The
     drain pre-answers `containing_obec` for every claim coordinate in the slice, so this is one
@@ -1047,6 +1085,53 @@ def pin_inside_bound_obec(
     return covering is not None and covering.code == binding.obec_kod
 
 
+def names_a_door(stored: Sequence[Claim]) -> bool:
+    """The words state a door, bound or not: ANY stored claim of a door type, parsed or not, or a
+    digit in the street line ("12a" parses as nothing; "28. října" pays for it)."""
+    return any(c.claim_type in WORD_DOOR_CLAIM_TYPES
+               or (c.claim_type == "street_name" and any(ch.isdigit() for ch in c.value_text or ""))
+               for c in stored)
+
+
+def pin_door(
+    binding: Binding,
+    constraints: Constraints,
+    pin_claim: Claim | None,
+    *,
+    stored: Sequence[Claim],
+    ad_type: str | None,
+    declared: DeclaredPrecision,
+    pin_inside_bound_obec: bool | None,
+    registry: RegistryView,
+) -> Binding:
+    """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house, its exact pin inside
+    the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there, the words not disagreeing:
+    the door agrees with every word that can check it (obec, street, each část claimed, PSČ), and
+    what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
+    A refusal is silent; the words stand. The binding carries no point, so `place` keeps the ad's
+    own pin: two pins within 1 m of one door must not read as one exact pin to the engine."""
+    # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
+    if (ad_type not in PIN_DOOR_AD_TYPES or pin_claim is None or pin_claim.point is None
+            or declared.blurred or pin_inside_bound_obec is not True or binding.words_unchecked
+            or binding.target_kind not in ("street", "admin_unit") or names_a_door(stored)):
+        return binding
+    near = registry.doors_near(*pin_claim.point)
+    door = registry.address_point(near[0]) if len(near) == 1 else None
+    if (door is None or door.obec_kod != binding.obec_kod
+            or (binding.ulice_kod is not None and door.ulice_kod != binding.ulice_kod)
+            or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
+            or (binding.words_momc_ids and door.momc_unit_id not in binding.words_momc_ids)
+            or (constraints.psc is not None and door.psc != constraints.psc)):
+        return binding
+    return replace(
+        binding, target_kind="address_point", rung=PIN_DOOR_RUNG,
+        ruian_adm_kod=door.kod_adm, ulice_kod=door.ulice_kod, street_name=door.street_name,
+        cast_obce_unit_id=door.cast_obce_unit_id, lat=None, lon=None,
+        street_extent_m=None, street_katastr_kod=None,
+        source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),
+    )
+
+
 def place(
     binding: Binding,
     pin_claim: Claim | None,
@@ -1054,8 +1139,9 @@ def place(
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None = None,
 ) -> Position:
-    """The ONE precedence rule (W18): registry ADDRESS POINT > bound STREET point > portal pin >
-    FILL's unit point (an unplaced `Position` here). One truth (v5.10, ruling Q3): where the words
+    """The ONE precedence rule (W18): registry ADDRESS POINT the words named > bound STREET point >
+    portal pin (the door a pin names stands here, `pin_door`) > FILL's unit point (an unplaced
+    `Position` here). One truth (v5.10, ruling Q3): where the words
     bound the row, a pin may place it only inside the bound town (`pin_inside_bound_obec`, None =
     not asked) and never as an AREA marker; without words (R7/R8) it names its town and stays. A
     pin that may not place the row is still evidence the branches measure and CHECK flags. The

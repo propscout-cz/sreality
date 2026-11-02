@@ -418,7 +418,7 @@ def test_the_per_listing_reads_are_prefetched_once_per_slice():
     assert state["stats"].claimed == 5
     for needle in (
         "select distinct on (c.listing_id, c.claim_type) c.* from location_claims c",
-        "select id, source from listings where id = any(",
+        "select id, source, category_main from listings where id = any(",
     ):
         assert _count(state, needle) == 2, needle
     assert _count(state, "where c.listing_id = any(") == 2
@@ -494,7 +494,7 @@ def test_a_queued_listing_with_no_live_claims_gets_a_row_not_a_skip():
     """The queue row was deleted and the listing either kept a stale row or never got one —
     the 10,679 active orphans the 2026-09-11 audit measured. The row states "nothing to go
     on" so coverage can count it (rule 25)."""
-    slice_ = drain._Slice(claims={}, sources={4242: "remax"})
+    slice_ = drain._Slice(claims={}, sources={4242: ("remax", None)})
     item = drain._compute_one(4242, mm.context(), REGISTRY, slice_)
     assert item is not None
     assert item.listing_id == 4242 and item.source == "remax"
@@ -607,7 +607,7 @@ def test_the_cached_view_answers_every_question_the_protocol_declares():
     assert not missing, missing
 
 
-def test_the_protocol_is_twelve_questions():
+def test_the_protocol_is_thirteen_questions():
     """Fifteen query kinds became nine: three went with the engines they served, one with an
     unreachable rung, one with the epoch, and two folded into `admin_chain`. A question added
     back is a round trip per listing, and each of the three that were earns its one:
@@ -617,7 +617,8 @@ def test_the_protocol_is_twelve_questions():
     rule, v5.8's position) is the same derivation over a část obce's doors, asked ONLY for a
     row bound to a část that no pin placed or whose obec spans several KÚ, once per část per
     run — every other `katastr_kod` answer rides a read FILL already makes (the address
-    point, the street point, the chain)."""
+    point, the street point, the chain); `doors_near` (W5b) is the door an exact pin names,
+    one trip per slice."""
     from location_data.resolver.types import RegistryView
 
     declared = {
@@ -628,7 +629,7 @@ def test_the_protocol_is_twelve_questions():
         "address_point", "address_points_by_number", "streets_in_obec",
         "admin_units_by_name", "admin_chain", "admin_chain_by_code",
         "obec_codes_for_psc", "containing_obec", "in_czechia_polygon",
-        "nearest_obec_within", "street_point", "part_point",
+        "nearest_obec_within", "street_point", "part_point", "doors_near",
     }
     for gone in ("parcels", "distance_to_admin_boundary_m",
                  "cast_obce_for_point", "cast_obce_extent_m", "admin_unit",
@@ -754,9 +755,13 @@ class _BulkMirror:
         found = {i: self.inner.in_czechia_polygon(*c) for i, c in enumerate(coords)}
         return {i: value for i, value in found.items() if value is not None}
 
+    def doors_near_bulk(self, coords):
+        found = {i: tuple(self.inner.doors_near(*c)) for i, c in enumerate(coords)}
+        return {i: doors for i, doors in found.items() if doors}
+
 
 def _warm_claims():
-    """A PIN-positioned listing, which is the shape the warm exists for: the two point-keyed
+    """A PIN-positioned listing, which is the shape the warm exists for: the three point-keyed
     questions are asked of the pin, and the pin is a claim coordinate."""
     return [
         mm.claim(1, "obec_name", value_text="Praha"),
@@ -769,7 +774,7 @@ def _warm_claims():
 def _resolve_with(registry: Any) -> Any:
     return core.resolve(
         _warm_claims(), mm.context(registry), resolver_version=RESOLVER_VERSION,
-        registry_version=REGISTRY,
+        registry_version=REGISTRY, ad_type="byt",
     )
 
 
@@ -800,10 +805,13 @@ def test_warming_actually_serves_the_coordinate_keyed_questions():
     _resolve_with(resolve_db.CachedRegistryView(inner, cache))
     assert cache.asked_by_kind.get("in_czechia_polygon", 0) > 0
     assert cache.missed_by_kind.get("in_czechia_polygon", 0) == 0
+    assert cache.asked_by_kind.get("doors_near", 0) > 0
+    assert cache.missed_by_kind.get("doors_near", 0) == 0
     view = resolve_db.CachedRegistryView(inner, cache)
     before = inner.calls
     view.containing_obec(50.10102, 14.34804)
     view.in_czechia_polygon(50.10102, 14.34804)
+    view.doors_near(50.10102, 14.34804)
     assert inner.calls == before
 
 
@@ -832,6 +840,7 @@ def test_a_null_answer_is_warmed_too():
     calls = _CountingMirror()
     view = resolve_db.CachedRegistryView(calls, cache)
     assert view.containing_obec(0.0, 0.0) is None
+    assert view.doors_near(0.0, 0.0) == ()
     assert calls.calls == 0
 
 
@@ -874,7 +883,9 @@ def _enqueue_ctes() -> dict[str, str]:
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
     from location_data import claims_store, contracts
+    from scraper import listing_write
     return {
+        "listing_write.resolve_requeue_cte": listing_write.resolve_requeue_cte("SELECT 1 AS id"),
         "claims_store._WRITE_CLAIMS_SQL": claims_store._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
     }
@@ -888,6 +899,8 @@ def test_every_evidence_producer_bumps_the_queue_row_instead_of_skipping_it():
     for name, sql in _enqueue_ctes().items():
         flat = " ".join(sql.split()).lower()
         assert "insert into dirty_locations" in flat, name
+        selected = flat.split("insert into dirty_locations")[1].split("on conflict")[0]
+        assert "order by" in selected, f"{name}: queue rows lock in id order, or overlapping batches can deadlock"
         assert "on conflict (listing_id) do nothing" not in flat, name
         assert "on conflict (listing_id) do update" in flat, name
         clause = flat.split("on conflict (listing_id) do update")[1]
@@ -1220,7 +1233,7 @@ def test_workers_1_is_the_single_connection_path_statement_for_statement(monkeyp
         "select listing_id, attemp",
         # the prefetch on its own budget, restored before anything writes (W2-a6)
         "set local statement_timeout = '90s'",
-        "select id, listing_id, so", "select id, source from li",
+        "select id, listing_id, so", "select id, source, catego",
         "set local statement_timeout = '30s'",
         "insert into listing_locat", "delete from dirty_locatio",
         "set local statement_timeout = '30s'", "set local lock_timeout = '5s'",

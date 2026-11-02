@@ -7,11 +7,15 @@ engine e2e's synthetic cohort, so nothing here reaches a database.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gzip
+import hashlib
 import io
 import json
 import subprocess
 import sys
+import tempfile
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +24,7 @@ from typing import Any
 import pytest
 
 from autodedup import harness, shadow
+from autodedup.evaluate import RunView
 from autodedup.export import build_location
 from autodedup.settings import Settings
 from tests.autodedup.test_engine_e2e import (
@@ -28,6 +33,7 @@ from tests.autodedup.test_engine_e2e import (
     REPOST_A,
     REPOST_B,
     _listing,
+    _location,
     build_records,
 )
 
@@ -49,8 +55,8 @@ def _jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
     return path
 
 
-def _cohort(path: Path) -> Path:
-    records = build_records()
+def _cohort(path: Path, extra: tuple[dict[str, Any], ...] = ()) -> Path:
+    records = [*build_records(), *extra]
     home = next(r for r in records if r["t"] == "listing" and r["id"] == DUP_A)["location"]
     records += [_listing(i, "turnov", source=src, location=dict(home), disposition="2+1",
                          area_m2=55.0, floor=2, total_floors=4, price=4_200_000)
@@ -430,8 +436,9 @@ def test_the_recent_same_pairs_are_the_newest_rulings_since_the_date(tmp_path: P
 
 
 def _shadow(tmp_path: Path, positions: list[dict[str, Any]], labels: list[dict[str, Any]],
-            settings: Settings | None = None) -> tuple[int, dict[str, Any], str]:
-    base = _cohort(tmp_path / "base.jsonl.gz")
+            settings: Settings | None = None, extra: tuple[dict[str, Any], ...] = ()
+            ) -> tuple[int, dict[str, Any], str]:
+    base = _cohort(tmp_path / "base.jsonl.gz", extra)
     rulings = tmp_path / "labels"
     _jsonl(rulings / "operator_labels.jsonl", labels)
     _jsonl(rulings / "must_not_link.jsonl", [])
@@ -516,3 +523,209 @@ class _Conn:
 
     def close(self) -> None:
         return None
+
+
+# ------------------------------------------------------------------ the door report
+
+
+def _door(**over: Any) -> dict[str, Any]:
+    return {"street_key": "turnov|hluboka", "psc": "51101", "granularity": "address_point",
+            "granularity_rank": 80, "is_address_grain": True, "uncertainty_radius_m": 10.0, **over}
+
+
+def _arms(rows: dict[int, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]], settings: Settings,
+          pairs: dict[tuple[int, int], tuple[dict[str, Any], dict[str, Any]]] = {},  # noqa: B006
+          lists: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`door_report` over real fingerprints: id -> (the advert's fields, base door, candidate door)."""
+    arms, ids = [], sorted(rows)
+    for arm, name in ((1, "base"), (2, "candidate")):
+        path = Path(f"{tempfile.mkdtemp()}/{name}.jsonl.gz")
+        records = [{"t": "meta", "exported_at": "2026-09-16T10:00:00+00:00", "generator_version": "t",
+                    "blocks": [], "counts": {}, "params": {"catalog_df": 8}},
+                   *(_listing(i, "turnov", location=_location(**rows[i][arm]),
+                              **{"disposition": "2+1", "area_m2": 55.0, **rows[i][0]}) for i in ids)]
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(record) + "\n" for record in records)
+        data = harness.load(path)
+        run = RunView({key: value[arm - 1] for key, value in pairs.items() if value[arm - 1]}, {})
+        arms.append(shadow.Arm(run, data.listings, harness.fingerprints_of(data, settings)))
+    changed = {i for i in ids if rows[i][1] != rows[i][2]}
+    return shadow.door_report(*arms, lists or {"merge_gained": [], "merge_lost": []}, changed, settings)
+
+
+def test_the_door_report_names_new_addr_pairs_flips_and_two_doors_in_one_building():
+    same = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7", cast_obce_kod=9)
+    one = _door(ruian_adm_kod=702, house_number="9/1", house_number_cp="9", cast_obce_kod=9)
+    two = _door(ruian_adm_kod=703, house_number="9/3", house_number_cp="9", cast_obce_kod=9)
+    far = _door(ruian_adm_kod=704, house_number="9/5", house_number_cp="9", cast_obce_kod=8)
+    held = _door(ruian_adm_kod=705, house_number="11", house_number_cp="11", cast_obce_kod=9)
+    flip = {"zone": "band", "feats": {"same_house_number": [1.0, True]}}
+    door = _arms({1: ({}, {}, same), 2: ({}, {}, same), 3: ({}, {}, one), 4: ({}, {}, two),
+                  5: ({}, {}, far), 6: ({}, held, held), 7: ({}, held, held)}, Settings(),
+                 pairs={(1, 2): ({"zone": "band", "feats": {"same_house_number": [0.0, False]}}, flip)},
+                 lists={"merge_gained": [[1, 2]], "merge_lost": [[3, 4]]})
+    assert door["merge_lost"] == [[3, 4, "sreality|sreality", True]], "both gained část 9"
+    assert door["door_gainers"] == 5
+    assert door["same_house_number_to_1"] == [[1, 2, "band"]]
+    assert [1, 2, "band"] in door["addr_new"] and not door["cap_displaced"]
+    assert [6, 7, None] not in door["addr_new"], "both arms held that door: not new"
+    assert door["two_doors_one_building"] == [[3, 4, 702, 703, None]], "another část is no building"
+    assert door["merge_gained"] == [[1, 2]]
+
+
+def test_the_door_report_names_a_pair_the_new_addr_candidate_pushes_past_the_cap():
+    """Cap 1: B reached M in the base and now spends its one slot on A through `addr`; M spends
+    its own on A, so no side reaches the pair. (A, M) survives from M's side."""
+    door = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    report = _arms({1: ({}, {}, {}), 2: ({}, {}, door), 3: ({}, {}, door)},
+                   Settings(max_candidates_per_listing=1))
+    assert report["cap_displaced"] == [[1, 3, None, "sreality|sreality", False]]
+    assert [2, 3, None] in report["addr_new"]
+
+
+def test_the_door_report_names_new_and_gone_blockers():
+    """E242 and E272 fire off the door the wave gave; a blocker the base held and the move took away is `gone`."""
+    settings = Settings(d43_stored_house_number="guarded", d43_floor_sequential_address_split=True)
+    rent = {"category_type": "pronajem", "source": "sreality", "floor": 2, "price": 15_000,
+            "description": " ".join(f"Pronajmeme byt cislo {n} se slunecnym balkonem v klidne casti Turnova."
+                                    for n in range(12)),
+            "broker_key": "one", "broker_firm_id": 1}
+    other = {**rent, "floor": 3, "price": 19_000, "broker_key": "two", "broker_firm_id": 2,
+             "description": " ".join(f"Zahrada a vyhled {n} nedaleko nadrazi, kuchyn po rekonstrukci, sklep."
+                                     for n in range(12))}
+    door_a = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    door_b = _door(ruian_adm_kod=702, house_number="9", house_number_cp="9")
+    row = {"zone": "band", "feats": {}}
+    report = _arms({1: (rent, {}, door_a), 2: (other, {}, door_b)}, settings, pairs={(1, 2): (row, row)})
+    assert report["e242"]["new"] == [[1, 2, "band"]] and report["e242"]["candidate"] == 1
+    assert report["e272"]["new"] == [[1, 2, "band"]] and not report["e272"]["gone"]
+    undone = _arms({1: (rent, door_a, {}), 2: (other, door_b, {})}, settings, pairs={(1, 2): (row, row)})
+    assert undone["e242"]["gone"] == [[1, 2, "band"]] and undone["e272"]["gone"] == [[1, 2, "band"]]
+
+
+_FLAT = {"category_type": "pronajem", "source": "sreality", "floor": 2, "price": 15_000, "broker_key": "one",
+         "broker_firm_id": 1, "disposition": "2+1", "area_m2": 55.0,
+         "description": " ".join(f"Pronajmeme byt cislo {n} se slunecnym balkonem v klidne casti Turnova."
+                                 for n in range(12))}
+_OTHER_FLAT = {**_FLAT, "floor": 3, "price": 19_000, "broker_key": "two", "broker_firm_id": 2,
+               "description": " ".join(f"Zahrada a vyhled {n} nedaleko nadrazi, kuchyn po rekonstrukci, sklep."
+                                       for n in range(12))}
+
+
+def test_the_door_report_lists_a_row_whose_pin_key_moved_and_how_far():
+    on_street = _location(lat=50.5875, lon=15.1583)
+    on_pin = _location(lat=50.5885, lon=15.1583, ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    still = _location(ruian_adm_kod=702, house_number="9", house_number_cp="9")
+    report = _arms({1: ({}, on_street, on_pin), 2: ({}, _location(), still)}, Settings())
+    assert report["position_moved"]["count"] == 1
+    (listing, metres), = report["position_moved"]["listings"]
+    assert listing == 1 and metres == pytest.approx(111.2, abs=0.5)
+
+
+def test_the_entrance_path_of_e242_counts_under_the_live_settings():
+    """E271: one source, two agencies, one č.p. and two č.o., and one template over both. Off without the setting."""
+    bodies = {"description": _FLAT["description"]}
+    left = _door(ruian_adm_kod=701, house_number="7/1", house_number_cp="7")
+    right = _door(ruian_adm_kod=702, house_number="7/3", house_number_cp="7")
+    row = {"zone": "band", "feats": {}}
+    rows = {1: (_FLAT, {}, left), 2: ({**_OTHER_FLAT, **bodies}, {}, right)}
+    live = _arms(rows, harness.named_settings("w31"), pairs={(1, 2): (row, row)})
+    assert live["e242"]["new"] == [[1, 2, "band"]] and not live["e242"]["gone"]
+    off = _arms(rows, dataclasses.replace(harness.named_settings("w31"), d43_house_number_entrance="off"),
+                pairs={(1, 2): (row, row)})
+    assert not off["e242"]["new"]
+
+
+def test_the_door_report_reads_the_runs_settings_never_the_defaults(tmp_path: Path):
+    """`harness shadow` hands the report the scorer's settings, the ones both arms ran under. Two rented flats gain two
+    doors on one street, so both blockers can fire: under the live row's settings they do, under the defaults they
+    are off (`d43_stored_house_number`, `d43_floor_sequential_address_split`). A report falling back to the defaults
+    reads nothing here."""
+    live = harness.named_settings("w31")
+    assert (live.d43_stored_house_number, live.d43_floor_sequential_address_split,
+            live.d43_house_number_entrance) == ("guarded", True, "stored")
+    defaults = Settings()
+    assert defaults.d43_stored_house_number == "off" and not defaults.d43_floor_sequential_address_split
+    door = {"obec_kod": 577626, "obec_name": "Turnov", "cast_obce_kod": None, "cast_obce_name": None,
+            "granularity": "address_point", "granularity_rank": 80, "is_address_grain": True, "lat": 50.5875,
+            "lon": 15.1583, "uncertainty_radius_m": 10.0, "street_name": "Hluboká", "house_number_co": None,
+            "psc": "51101", "country_status": "cz"}
+    flats = (_listing(8001, "turnov", **_FLAT), _listing(8002, "turnov", **_OTHER_FLAT))
+    moved = [{**door, "listing_id": 8001, "house_number_cp": "7", "ruian_adm_kod": 701},
+             {**door, "listing_id": 8002, "house_number_cp": "9", "ruian_adm_kod": 702}]
+    (tmp_path / "live").mkdir()
+    (tmp_path / "off").mkdir()
+    _, verdict, _ = _shadow(tmp_path / "live", moved, [], settings=live, extra=flats)
+    assert [row[:2] for row in verdict["door"]["e242"]["new"]] == [[8001, 8002]]
+    assert [row[:2] for row in verdict["door"]["e272"]["new"]] == [[8001, 8002]]
+    _, off, _ = _shadow(tmp_path / "off", moved, [], settings=defaults, extra=flats)
+    assert not off["door"]["e242"]["new"] and not off["door"]["e272"]["new"]
+
+
+def test_harness_shadow_writes_the_door_report_and_it_never_decides(tmp_path: Path):
+    code, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
+    assert code == 0 and verdict["pass"]
+    assert set(verdict["door"]) >= {"e242", "e272", "same_house_number_to_1", "addr_new", "cap_displaced",
+                                    "merge_gained", "merge_lost", "two_doors_one_building"}
+    assert any(line.startswith("  door report (base -> candidate") for line in printed.splitlines())
+    assert "this gate is a sample: it says nothing about any block outside group 1/1 of scope apply" in printed
+
+
+def test_the_door_report_splits_a_block_key_and_marks_the_part_gained():
+    """A door's část moves `o<obec>` to `c<cast>`: the pair stops sharing `attr_dispo` and `attr_area`."""
+    part = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7", cast_obce_kod=9)
+    held = _location(cast_obce_kod=8)
+    row = {"zone": "band", "feats": {}}
+    report = _arms({1: ({}, {}, part), 2: ({"source": "idnes"}, {}, {}), 3: ({}, {}, {}), 4: ({}, held, held),
+                    5: ({}, held, held), 6: ({}, _location(cast_obce_kod=7), _location(cast_obce_kod=7))}, Settings(),
+                   pairs={(1, 2): (row, None), (2, 3): (row, row), (4, 5): (row, row), (5, 6): (row, row)},
+                   lists={"merge_gained": [], "merge_lost": [[1, 2]]})
+    assert report["block_key_split"] == {"count": 1, "pairs": [[1, 2, None, "idnes|sreality"]]}
+    assert report["merge_lost"] == [[1, 2, "idnes|sreality", True]]
+
+
+_MOVER = {"listing_id": 1, "source": "ceskereality", "old": {"obec_kod": 11}, "new": {"obec_kod": 11, "cast_obce_kod": 5}}
+
+
+def test_each_mover_counts_once_at_the_group_that_exports_its_stored_row():
+    """Old block town:11 in group 1, new block quarter:99 in group 2; an unquartered mover at the `ids` block."""
+    moved = {"listing_id": 2, "source": "idnes", "old": {"obec_kod": 11},
+             "new": {"obec_kod": PRAHA, "cast_obce_kod": 99}}
+    bare = {"listing_id": 3, "source": "remax", "old": {"obec_kod": PRAHA},
+            "new": {"obec_kod": PRAHA, "cast_obce_kod": 99}}
+    lost = {"listing_id": 4, "source": "idnes", "old": {"obec_kod": 77}, "new": {"obec_kod": 77}}
+    counts = shadow.movers_by_group([_MOVER, moved, bare, lost],
+                                    [["ids:3", "town:11"], ["quarter:99"]], {2})
+    assert counts[1]["movers"] == 3 and counts[1]["rental"] == 1 and 2 not in counts
+    assert counts[1]["part"]["ceskereality"] == 1 and counts[1]["sources"]["remax"] == 1
+    assert counts[None]["movers"] == 1
+
+
+def test_the_gate_sample_takes_stage_one_then_the_hash_order_and_states_its_cover():
+    rows = {i: {"movers": 10, "rental": 0, "sources": Counter(idnes=10), "part": Counter()} for i in range(1, 31)}
+    for i, n in ((7, 50), (8, 40), (9, 30), (10, 20), (11, 10)):
+        rows[i]["part"]["ceskereality"] = n
+    for i, n in ((7, 90), (20, 9), (21, 8), (22, 7), (23, 6)):
+        rows[i]["rental"] = n
+    sample = shadow.gate_sample(rows, 30)
+    assert sample["stage_1"] == [7, 8, 9, 10, 20, 21, 22]
+    order = sorted((i for i in range(1, 31) if i not in sample["stage_1"]),
+                   key=lambda i: hashlib.sha256(f"w5b-gate-{i}".encode()).hexdigest())
+    assert sample["stage_2"] == order[:12] and sample["remaining"] == 23
+    assert sample["covered"] == {"idnes": [190, 300]} and sample["covered_all"] == [190, 300]
+
+
+def test_a_refused_scoping_run_prints_the_groups_and_the_sample(monkeypatch, tmp_path, capsys):
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"listing_id": 1, "source": "ceskereality", "old": {"obec_kod": BEROUN},
+         "new": {"obec_kod": BEROUN, "cast_obce_kod": 5}},
+        {"listing_id": 2, "source": "idnes", "old": {"obec_kod": BRNO, "cast_obce_kod": 7},
+         "new": {"obec_kod": BRNO, "cast_obce_kod": 7}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([(2,)]))
+    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {block: 40_000 for block in blocks})
+    monkeypatch.setattr(shadow, "export_cohort", lambda *a, **k: pytest.fail("exported past the cap"))
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
+    out = capsys.readouterr().out
+    assert "[shadow] group 1/2: 1 movers, 1 rental; sources idnes=1; part-gaining -" in out
+    assert "[shadow] group 2/2: 1 movers, 0 rental; sources ceskereality=1; part-gaining ceskereality=1" in out
+    assert "[shadow] gate sample: stage 1 [2, 1]; stage 2 [] of the 0 remaining; covers 2 of 2 movers" in out

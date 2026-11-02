@@ -1347,6 +1347,14 @@
           ]
         },
         {
+          "name": "all_blocks",
+          "description": "Export every mover's blocks, ruled or not (W5b's door report needs them; more groups)",
+          "required": false,
+          "type": "boolean",
+          "default": "false",
+          "options": null
+        },
+        {
           "name": "ids_sql",
           "description": "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)",
           "required": false,

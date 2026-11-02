@@ -13,6 +13,7 @@ The comparison is on BYTES: the canonical serialization of the whole answer row.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
 from location_data.resolver import core, serialize
 from location_data.resolver.version import RESOLVER_VERSION
@@ -65,6 +66,15 @@ def test_each_of_the_three_version_inputs_changes_the_row():
     changed = _claims()
     changed[0] = mm.claim(1, "obec_name", value_text="Bílovec")
     assert _resolve(changed).claim_set_hash != _resolve().claim_set_hash
+
+
+def test_a_claimless_typed_ad_still_hashes_to_the_no_claims_sentinel():
+    """Migration 524's `has_claims` is `claim_set_hash <> sha256('[]')`: the ad type stays out of the hash, or a
+    claimless flat would flip from `active_no_claims` to `active_unresolved` on the pin audit."""
+    row = core.resolve([], mm.context(), resolver_version=RESOLVER_VERSION, registry_version=REGISTRY,
+                       listing_id=1, source="bazos", ad_type="byt")
+    assert row.claim_set_hash == hashlib.sha256(b"[]").hexdigest()
+    assert _resolve(ad_type="byt").claim_set_hash == _resolve(ad_type="komercni").claim_set_hash
 
 
 def test_a_naive_and_an_aware_observed_at_hash_the_same():
