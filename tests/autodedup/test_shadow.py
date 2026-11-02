@@ -554,14 +554,16 @@ def test_the_door_report_names_new_addr_pairs_flips_and_two_doors_in_one_buildin
     one = _door(ruian_adm_kod=702, house_number="9/1", house_number_cp="9", cast_obce_kod=9)
     two = _door(ruian_adm_kod=703, house_number="9/3", house_number_cp="9", cast_obce_kod=9)
     far = _door(ruian_adm_kod=704, house_number="9/5", house_number_cp="9", cast_obce_kod=8)
+    held = _door(ruian_adm_kod=705, house_number="11", house_number_cp="11", cast_obce_kod=9)
     flip = {"zone": "band", "feats": {"same_house_number": [1.0, True]}}
     door = _arms({1: ({}, {}, same), 2: ({}, {}, same), 3: ({}, {}, one), 4: ({}, {}, two),
-                  5: ({}, {}, far)}, Settings(),
+                  5: ({}, {}, far), 6: ({}, held, held), 7: ({}, held, held)}, Settings(),
                  pairs={(1, 2): ({"zone": "band", "feats": {"same_house_number": [0.0, False]}}, flip)},
                  lists={"merge_gained": [[1, 2]], "merge_lost": [[3, 4]]})
     assert door["door_gainers"] == 5
     assert door["same_house_number_to_1"] == [[1, 2, "band"]]
     assert [1, 2, "band"] in door["addr_new"] and not door["cap_displaced"]
+    assert [6, 7, None] not in door["addr_new"], "both arms held that door: not new"
     assert door["two_doors_one_building"] == [[3, 4, 702, 703, None]], "another část is no building"
     assert (door["merge_gained"], door["merge_lost"]) == ([[1, 2]], [[3, 4]])
 
