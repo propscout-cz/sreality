@@ -1,22 +1,22 @@
 #!/usr/bin/env node
-// Production smoke-check: logs into the live SPA as the dedicated admin test
-// account, confirms Browse renders, and opens+closes merge mode (the cards
-// header's "Sloučit…", ruling P10) without ever
-// touching a card checkbox — the mutating button (Merge) stays `disabled`
-// until >=2 cards are selected, so this script can
-// never trigger a production write. See CLAUDE.md "Autonomy and the safety
-// net" and the `prod-smoke-check-accounts-and-recipe` memory.
+// Production page check and smoke sweep. Signs in as the dedicated admin test account and only
+// ever reads: merge mode is opened and closed with no card ticked (Merge stays disabled below
+// two), and nothing is dragged, toggled or saved.
 //
-// Normal setup:     npx playwright install chromium   (once)
-//                    npm run smoke-check:prod
-// Restricted/no-sudo sandbox: see the memory above for the apt-get/dpkg-deb
-// workaround, then set SMOKE_CHECK_CHROMIUM_PATH to the extracted binary.
+//   node frontend/scripts/smoke-check.mjs                                  the default sweep
+//   node frontend/scripts/smoke-check.mjs --page <path> [--expect <text>]... [--absent <text>]...
+//     (--page repeats and replaces the sweep; each text binds to the --page before it)
 //
-// FIXTURE THIS SCRIPT DEPENDS ON (hydration sprint W0): the admin test account
-// must own a few pipeline cards. It owned none, so the board's hydration chain
-// short-circuited on an empty result and five of its six hops were never
-// exercised by any automated check — the class of regression this sprint is
-// about was structurally invisible. Recreate the fixture with:
+// Exit: 0 passed, 1 a check failed, 2 bad usage or no credentials (no browser started).
+// Setup, once: npx playwright install chromium (from frontend/).
+// Credentials: the environment, then this worktree's .env, then the main checkout's .env.
+// A one-off imports openSession() instead of copying the login; importing starts nothing.
+//
+// FIXTURES this script depends on, both on the admin test account (never name it here; a
+// missing fixture fails its check). Resolve the account from the address in the environment.
+//
+// 1. Pipeline cards. With none, the board's hydration chain short-circuits and five of its six
+//    hops go unexercised. The four properties are active, priced and carry photos.
 //
 //   insert into property_pipeline (property_id, stage_id, account_id, board_position)
 //   select v.pid,
@@ -28,379 +28,369 @@
 //   from (values (5,0),(6,0),(18,2),(28,3)) as v(pid, slot)
 //   on conflict (property_id, account_id) do nothing;
 //
-// with :acct = the admin test account (resolve it from account_members, don't
-// hardcode). The four properties are active, priced, and carry photos, so the
-// cover and broker enrichments have something real to fetch.
+// 2. A paused watchdog for the editor check. Its filter cannot match (price >= 2 and <= 1), so
+//    even a resume writes nothing. :'email' is $SMOKE_TEST_ADMIN_EMAIL.
+//
+//   insert into notification_subscriptions (id, name, filter_spec, is_active, account_id)
+//   select '5a0c3e00-0000-4000-8000-000000002231', 'smoke fixture (paused, never resume)',
+//          '{"category_type": "pronajem", "min_price_czk": 2, "max_price_czk": 1}'::jsonb,
+//          false, m.account_id
+//   from account_members m join auth.users u on u.id = m.user_id
+//   where u.email = :'email'
+//   on conflict (id) do nothing;
 
 import { chromium } from 'playwright';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../..');
-
-function loadRootEnv() {
-  try {
-    const text = readFileSync(path.join(REPO_ROOT, '.env'), 'utf8');
-    for (const line of text.split('\n')) {
-      const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
-    }
-  } catch {
-    // no root .env — fine as long as credentials are already in the
-    // environment (e.g. injected as CI secrets)
-  }
-}
-loadRootEnv();
-
-const BASE_URL = process.env.SMOKE_CHECK_BASE_URL || 'https://app.propscout.cz';
 const SHOT_DIR = path.join(__dirname, '.smoke-shots');
-mkdirSync(SHOT_DIR, { recursive: true });
 
-const email = process.env.SMOKE_TEST_ADMIN_EMAIL;
-const password = process.env.SMOKE_TEST_ADMIN_PASSWORD;
-if (!email || !password) {
-  console.error(
-    'Missing SMOKE_TEST_ADMIN_EMAIL / SMOKE_TEST_ADMIN_PASSWORD (repo-root .env or environment).'
-  );
-  process.exit(2);
-}
+export const FIXTURE_WATCHDOG_ID = '5a0c3e00-0000-4000-8000-000000002231';
+const FIXTURE_WATCHDOG_NAME = 'smoke fixture (paused, never resume)';
+
+const USAGE = 'usage: node frontend/scripts/smoke-check.mjs [--page <path> [--expect <text>]... [--absent <text>]...]...';
 
 /* Time-to-first-card on /pipeline. The board's own north-star target is one
  * round trip to interactive cards; this is the guardrail, not the goal. */
-const BUDGET_FIRST_CARD_MS = Number(process.env.SMOKE_BUDGET_FIRST_CARD_MS || 12000);
+const BUDGET_FIRST_CARD_MS = 12000;
 
-/* Per-route budgets. `baseline` is what this very script measured on
- * 2026-08-24 against production, after the W-1a/W-1b hotfixes and with the
- * smoke account's pipeline cards seeded — so a future reader can tell a
- * tightened budget from an invented one. Enforced numbers sit modestly above
- * the baseline: enough headroom for instance weather, tight enough that a
- * STRUCTURAL regression (a new waterfall level, a read that starts firing
- * per-card, a duplicated bootstrap) trips them.
+/* Per-route budgets. `baseline` is the last measurement. Ceilings sit modestly above it: headroom
+ * for instance weather, tight enough that a STRUCTURAL regression (a new waterfall level, a read
+ * that starts firing per-card, a duplicated bootstrap) trips them.
  *
- * These are RATCHETS, not targets. Every wave that removes requests lowers the
- * number it earned, in its own PR, with the new measurement quoted here. The
- * ratchet history:
- *   2026-08-24 W0  — first measurement, post-W-1a/W-1b, smoke cards seeded.
- *   2026-08-24 W2a — every route dropped 4. The entitlements x3 + plans x3
- *                    bootstrap collapsed to one of each (auth.tsx keys on
- *                    user.id now, not the session object) and the unread badge
- *                    is gated on its own nav entry: /collections 9->5,
- *                    /watchdog 10->6, /notifications 9->5, /brokers 11->7,
- *                    /browse 31->27, /pipeline 27->23. W1 shipped in between
- *                    and changes ORDER, not count — the board paints after 2
- *                    reads instead of waiting on all 6 (time-to-first-card
- *                    1,427ms -> 951ms measured live).
- *   2026-08-24 W2b — /browse 27->22, /pipeline 23->19. Every fetchAllRows call
- *                    site now requests count:'exact', so any exhaustive read
- *                    whose whole result fits on page 1 (most of them: curated
- *                    cities, index definitions, pipeline members, pipeline
- *                    board, collection membership, …) skips the old
- *                    terminating empty-page probe outright — that is most of
- *                    the drop, spread across many small reads rather than one
- *                    big one. /collections, /watchdog, /notifications,
- *                    /brokers are unchanged — this wave didn't touch them.
- *   2026-08-24 W5  — /pipeline 19->18. pipeline_board_public (migration 417)
- *                    moved the pipeline/property join server-side, so the
- *                    board's structural read is one request instead of two
- *                    sequential ones — the second used to wait on the
- *                    first's ids. Bigger win than the request count shows:
- *                    time-to-first-card measured 412ms live (was in the
- *                    1,000-1,700ms range across W1-W10a), since the second
- *                    request no longer serializes behind the first.
- *   2026-08-24 fix — /collections 16->10, /watchdog 18->12, /notifications
- *                    16->10, /brokers 18->12. These four never actually got
- *                    the ceilings W2a earned them: that ratchet PR (#1127)
- *                    shipped only its comment, because the script editing this
- *                    block aborted on a later assertion before writing the
- *                    file, and the commit message was trusted instead of the
- *                    diff. They sat at ~3x slack (measured /collections 5
- *                    against a ceiling of 16), so a doubling could have
- *                    regressed unseen. Corrected to what is measured today.
- *   2026-08-24 W6  — /pipeline 18->17. Migration 419 put primary_email /
- *                    primary_phone on listing_broker_public, so the board's
- *                    broker decoration reads identity AND contact in ONE call
- *                    instead of chaining GET /brokers?ids= behind
- *                    POST /brokers/by-listings for a contact pair the first
- *                    read's join had already touched (the second read was 207
- *                    execution + 436 planning buffers of pure duplication, plus
- *                    a second Railway floor, serialized because its broker_ids
- *                    came out of the first response). Listing detail lost the
- *                    same second call — not visible here, this sweep has no
- *                    /listing route. Measured live post-deploy: 17 req / 0.9s,
- *                    time-to-first-card 368ms.
- *   2026-09-22 U-COLL — /pipeline gains 2 requests on a COLD visit: the Kolekce
- *                    filter reads the collections list and the shared
- *                    collection-member map. Both keys are shared with Browse
- *                    and /collections, so a session that has been anywhere else
- *                    pays nothing. The ceiling stays 22 — this is a ratchet
- *                    file, so it moves DOWN on a measurement, never up to make
- *                    room; the `baseline` above is left at its last live
- *                    measurement rather than guessing 19 from a local build.
- *   2026-10-06 merge sprint W2b — /browse +1 (the note marks' one whole-set
- *                    read of property_notes_public), /pipeline +1 (the broker
- *                    line reads the cards' ads before their brokers, MS7).
- *                    Both stay under their ceilings; neither moves.
- * Still ahead: W9b appends columns to listings_public for the listing-detail
- * chain; W7a moves Browse + comparables onto the shared hydration layer.
+ * Ceilings are RATCHETS: a wave that removes requests lowers its number on a measurement, and
+ * none is ever raised to make room. History: `git log -p` on this file and the route table in
+ * roadmap/hydration-sprint.md § Baselines.
  *
- * Counting rule: only PostgREST + Railway API calls (see isAppDataRequest).
- * Routes are the operator's daily path plus the two that hid defects. */
+ * Counted: every request with an Authorization header (see visit). Routes are the operator's
+ * daily path plus the two that hid defects. */
 const ROUTE_BUDGETS = [
-  { path: '/browse',        baseline: '22 req / 4.9s', maxRequests: 27, maxMs: 20000 },
-  { path: '/pipeline',      baseline: '17 req / 0.9s', maxRequests: 22, maxMs: 15000 },
+  { path: '/browse',        baseline: '22 req / 4.9s', maxRequests: 27, maxMs: 20000, check: checkBrowse },
+  { path: '/pipeline',      baseline: '17 req / 0.9s', maxRequests: 22, maxMs: 15000, check: checkPipeline },
   { path: '/collections',   baseline: '5 req / 0.9s',  maxRequests: 10, maxMs: 12000 },
   { path: '/watchdog',      baseline: '6 req / 1.3s',  maxRequests: 12, maxMs: 12000 },
   { path: '/notifications', baseline: '5 req / 1.0s',  maxRequests: 10, maxMs: 12000 },
   { path: '/brokers',       baseline: '7 req / 1.6s',  maxRequests: 12, maxMs: 20000 },
 ];
-
-/* An "app data request" is a read of OUR data: PostgREST on the Supabase host
- * or the Railway API. Deliberately excludes static assets, fonts, R2 image
- * bytes and third-party basemap tiles — /browse fires ~66 OpenFreeMap tile
- * requests, which would swamp any budget and say nothing about our code. */
-function isAppDataRequest(url) {
-  if (/\/assets\/|\.(js|css|woff2?|png|jpe?g|svg|ico|webp)(\?|$)/i.test(url)) return false;
-  if (/openfreemap|tiles?\.|basemaps|fonts\.g/i.test(url)) return false;
-  if (/r2\.cloudflarestorage\.com|\/images\//i.test(url)) return false;
-  return /supabase\.co\/rest\/|supabase\.co\/auth\/|up\.railway\.app\//i.test(url);
-}
+const UNBUDGETED = { maxRequests: Infinity, maxMs: 30000 };
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const shortUrl = (u) => u.replace(/^https?:\/\//, '').split('?')[0].slice(0, 80);
 
-const consoleErrors = [];
-const pageErrors = [];
-const failedRequests = [];
+/* Page text reaches the log, so a credential or token must not survive the trip. */
+function scrub(text) {
+  let out = String(text).replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '<token>');
+  for (const secret of [process.env.SMOKE_TEST_ADMIN_EMAIL, process.env.SMOKE_TEST_ADMIN_PASSWORD]) {
+    if (secret) out = out.replaceAll(secret, '<credential>');
+  }
+  return out;
+}
+
 const steps = [];
 
 function step(name, ok, detail) {
-  steps.push({ name, ok, detail: detail || '' });
-  console.log(`${ok ? 'PASS' : 'FAIL'} — ${name}${detail ? ' :: ' + detail : ''}`);
+  steps.push({ name, ok });
+  console.log(scrub(`${ok ? 'PASS' : 'FAIL'} — ${name}${detail ? ' :: ' + detail : ''}`));
 }
 
-const launchOpts = { args: [] };
-if (process.env.SMOKE_CHECK_CHROMIUM_PATH) {
-  launchOpts.executablePath = process.env.SMOKE_CHECK_CHROMIUM_PATH;
-  launchOpts.args.push('--no-sandbox');
-}
-
-(async () => {
-  const browser = await chromium.launch(launchOpts);
-  const page = await browser.newPage();
-
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
-  });
-  page.on('pageerror', (err) => pageErrors.push(String(err)));
-  page.on('requestfailed', (req) => {
-    failedRequests.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText}`);
-  });
-
+/* process.loadEnvFile never overrides a variable already set, so the order is the precedence. */
+function loadEnvFiles() {
+  let mainCheckout = REPO_ROOT;
   try {
-    await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    step('load /login', true, page.url());
-    await page.screenshot({ path: path.join(SHOT_DIR, '01-login.png') });
+    const args = ['-C', REPO_ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir'];
+    mainCheckout = path.dirname(execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch {
+    /* no git here: the environment and this checkout's .env still count */
+  }
+  for (const dir of [REPO_ROOT, mainCheckout]) {
+    const file = path.join(dir, '.env');
+    if (existsSync(file)) process.loadEnvFile(file);
+  }
+}
 
+function credentials() {
+  loadEnvFiles();
+  const email = process.env.SMOKE_TEST_ADMIN_EMAIL;
+  const password = process.env.SMOKE_TEST_ADMIN_PASSWORD;
+  if (!email || !password) {
+    throw new Error('Missing SMOKE_TEST_ADMIN_EMAIL / SMOKE_TEST_ADMIN_PASSWORD (environment or .env).');
+  }
+  return { email, password };
+}
+
+/** A browser signed in to production: { page, visit(path, options), failedRequests, close() }. */
+export async function openSession() {
+  const { email, password } = credentials();
+  const baseUrl = process.env.SMOKE_CHECK_BASE_URL || 'https://app.propscout.cz';
+  mkdirSync(SHOT_DIR, { recursive: true });
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const failedRequests = [];
+    page.on('requestfailed', (req) => {
+      failedRequests.push(`${req.method()} ${shortUrl(req.url())} — ${req.failure()?.errorText}`);
+    });
+    await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.getByLabel('Email').fill(email);
     await page.getByLabel('Password').fill(password);
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-
     await page.waitForURL('**/browse', { timeout: 15000 });
-    step('login redirects to /browse', true, page.url());
+    const session = { page, baseUrl, failedRequests, shots: 0, close: () => browser.close() };
+    session.visit = (pagePath, options) => visit(session, pagePath, options);
+    return session;
+  } catch (err) {
+    await browser.close();
+    throw err;
+  }
+}
 
-    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-    await page.screenshot({ path: path.join(SHOT_DIR, '02-browse.png') });
+/* The ONE navigation after login, and the one failure policy. Returns what it found rather than
+ * throwing, so a caller reports every failure of a page at once. A missing entity behind a valid
+ * route keeps its title, so only an expected text can catch it. */
+async function visit(session, pagePath, { expect = [], absent = [], onLoaded } = {}) {
+  const { page, baseUrl } = session;
+  const url = new URL(pagePath, baseUrl);
+  const budget = ROUTE_BUDGETS.find((r) => r.path === url.pathname) ?? UNBUDGETED;
+  const failures = [];
 
-    const mergeModeBtn = page.getByRole('button', { name: 'Sloučit…', exact: true });
-    await mergeModeBtn.waitFor({ state: 'visible', timeout: 15000 });
-    step('Browse renders + "Sloučit…" (merge mode) button visible', true);
+  const onConsole = (msg) => {
+    if (msg.type() === 'error') failures.push(`console error: ${msg.text()}`);
+  };
+  const onPageError = (err) => failures.push(`page error: ${err}`);
 
-    /* --- Browse cards keep their carousels (W7a) ----------------------- *
-     * Card photos moved OFF the cards read into the shared hydration layer,
-     * which is exactly the change that could leave the grid rendering
-     * perfectly with every photo silently gone — the paint-path assertions
-     * above would all still pass. The photo counter is the honest probe: the
-     * carousel only draws "n / total" when it holds MORE THAN ONE image, so
-     * seeing it proves both that photos arrived and that the grid did not
-     * quietly regress to one-cover-per-card. Waited for rather than read
-     * immediately, because non-blocking is the point — the cards are on
-     * screen before this is. */
-    const photoCounter = page.locator('span', { hasText: /^\d+ \/ \d+$/ }).first();
-    let carouselOk = false;
-    let counterText = 'none';
-    try {
-      await photoCounter.waitFor({ state: 'visible', timeout: 20000 });
-      counterText = (await photoCounter.innerText()).trim();
-      /* "n / total" with total > 1. Matched by PARSING the total, not by a
-       * digit-class pattern: the first cut of this used /[2-9]\d*$/ and failed a
-       * perfectly good 16-photo carousel live, because 16 starts with a 1. */
-      const total = Number(/^\d+ \/ (\d+)$/.exec(counterText)?.[1] ?? 0);
-      carouselOk = total > 1;
-    } catch {
-      /* leave carouselOk false — reported below, not thrown */
-    }
-    step(
-      'Browse cards hydrate a multi-photo carousel',
-      carouselOk,
-      `photo counter: ${counterText}`,
-    );
+  /* An app request is one carrying an Authorization header: database, auth and API calls, on
+   * whatever host they move to, and never images or tiles. */
+  const requests = [];
+  const reads = [];
+  const onResponse = (res) => {
+    const req = res.request();
+    reads.push(req.headerValue('authorization').then((auth) => {
+      if (auth) requests.push({ method: req.method(), url: req.url(), status: res.status() });
+    }, () => {}));
+  };
 
-    /* --- listing photos actually DECODE (W7b) -------------------------- *
-     * The counter above is drawn from the photo ROWS, so it reads "1 / 7"
-     * just as happily when all seven <img>s are 403ing. W7b changes how the
-     * /images redirect signs its R2 target, and a wrong signature fails
-     * exactly there: perfect markup, correct counts, every photo broken.
-     * naturalWidth is the only probe that distinguishes them — it is > 0
-     * only once the browser has decoded real bytes. */
-    let decoded = 0;
-    let sampled = 0;
-    try {
-      await page.locator('img[src*="/images/"]').first().waitFor({
-        state: 'visible', timeout: 20000,
-      });
-      const shots = await page.locator('img[src*="/images/"]').all();
-      for (const img of shots.slice(0, 5)) {
-        sampled += 1;
-        if (await img.evaluate((el) => el.complete && el.naturalWidth > 0)) decoded += 1;
-      }
-    } catch {
-      /* leave decoded at 0 — reported below, not thrown */
-    }
-    step(
-      'listing photos load from R2 (presigned redirect resolves)',
-      sampled > 0 && decoded === sampled,
-      `${decoded}/${sampled} sampled <img> decoded`,
-    );
+  page.on('console', onConsole);
+  page.on('pageerror', onPageError);
+  page.on('response', onResponse);
+  const started = Date.now();
+  try {
+    const doc = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (doc && doc.status() >= 500) failures.push(`HTTP ${doc.status()} on the document`);
+    onLoaded?.(started);
+    await page.waitForLoadState('networkidle', { timeout: budget.maxMs + 15000 });
+  } catch (err) {
+    failures.push(`did not settle: ${err.message.split('\n')[0]}`);
+  }
+  const elapsedMs = Date.now() - started;
 
-    await mergeModeBtn.click();
-    step('clicked "Sloučit…" (local state only, no network call)', true);
+  const finalPath = new URL(page.url()).pathname;
+  if (finalPath !== url.pathname) {
+    failures.push(`redirected: asked for ${url.pathname}, landed on ${finalPath}`);
+  }
+  if ((await page.title()) === 'Not found') {
+    failures.push(`${url.pathname} is not a route: copy the pattern from the route table (frontend/src/lib/routes.ts), never guess`);
+  }
 
-    const mergeBtn = page.getByRole('button', { name: /^Merge($| \d)/ });
-    await mergeBtn.waitFor({ state: 'visible', timeout: 5000 });
-
-    const mergeDisabled = await mergeBtn.isDisabled();
-    step(
-      'mutating button disabled pre-selection (no cards clicked)',
-      mergeDisabled,
-      `merge disabled=${mergeDisabled}`
-    );
-
-    await page.screenshot({ path: path.join(SHOT_DIR, '03-merge-mode-active.png') });
-
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-    step('clicked "Cancel" — exited merge mode, zero cards ever touched', true);
-
-    await page.screenshot({ path: path.join(SHOT_DIR, '04-after-cancel.png') });
-
-    /* --- /pipeline: the board actually paints cards -------------------- *
-     * The smoke account owns seeded pipeline cards precisely so this path
-     * runs. Before that it owned none, so the board's hydration chain
-     * (rows -> properties -> covers -> brokers) short-circuited on an empty
-     * result and NOTHING here was ever exercised — a regression in it was
-     * invisible to this script by construction. Read-only: the page is
-     * loaded and inspected, never dragged (a drag is a production write). */
-    const tFirstCard = Date.now();
-    await page.goto(`${BASE_URL}/pipeline`, {
-      waitUntil: 'domcontentloaded', timeout: 30000,
+  /* Expected first: it waits for the paint, and only a painted page can prove a text absent. */
+  const visibleText = (text) => page.getByText(text).filter({ visible: true });
+  for (const text of expect) {
+    await visibleText(text).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {
+      failures.push(`expected text missing: "${text}"`);
     });
-    const cardLink = page.locator('a[href^="/property/"]').first();
-    await cardLink.waitFor({ state: 'visible', timeout: 30000 });
-    const firstCardMs = Date.now() - tFirstCard;
-    step(
-      'pipeline board paints a card',
-      true,
-      `first card visible in ${firstCardMs}ms`,
-    );
-    step(
-      `time-to-first-card under ${BUDGET_FIRST_CARD_MS}ms`,
-      firstCardMs <= BUDGET_FIRST_CARD_MS,
-      `${firstCardMs}ms`,
-    );
+  }
+  for (const text of absent) {
+    if ((await visibleText(text).count()) > 0) failures.push(`absent text present: "${text}"`);
+  }
 
-    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
-    const priced = await page
-      .locator('a[href^="/property/"]')
-      .filter({ hasText: /\d/ })
-      .count();
-    step('at least one card shows a price', priced >= 1, `${priced} priced cards`);
+  session.shots += 1;
+  const slug = url.pathname.replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '') || 'root';
+  const screenshot = path.join(SHOT_DIR, `${String(session.shots).padStart(2, '0')}-${slug}.png`);
+  await page.screenshot({ path: screenshot }).catch((err) => {
+    failures.push(`no screenshot: ${err.message.split('\n')[0]}`);
+  });
 
-    const columns = await page.locator('main ul[aria-label]').count() // one <ul aria-label={stage.label}> per stage column (pages/Pipeline.tsx);
-    step('stage columns rendered', columns >= 2, `${columns} columns`);
-    await page.screenshot({ path: path.join(SHOT_DIR, '05-pipeline.png') });
+  page.off('console', onConsole);
+  page.off('pageerror', onPageError);
+  page.off('response', onResponse);
+  await Promise.allSettled(reads);
 
-    /* --- per-route budget sweep ---------------------------------------- *
-     * One navigation per route, counting only APP data requests (PostgREST +
-     * the Railway API) — third-party basemap tiles and static assets are
-     * excluded, since 66 of /browse's 93 "requests" were OpenFreeMap tiles and
-     * counting them would drown the signal.
-     *
-     * Budgets are ~2x the 2026-08-24 baseline: loose enough not to flap on
-     * instance-load noise, tight enough to catch a STRUCTURAL regression — a
-     * new waterfall level, a read that starts firing per-card, or a duplicated
-     * bootstrap. The 5xx assertion is the sharp one: Browse's default view was
-     * answering HTTP 500 for weeks and no automated check noticed. */
-    for (const route of ROUTE_BUDGETS) {
-      const seen = [];
-      const onFinished = async (req) => {
-        if (!isAppDataRequest(req.url())) return;
-        let status = 0;
-        try {
-          const r = await req.response();
-          status = r ? r.status() : 0;
-        } catch { /* response never resolved; counted, status unknown */ }
-        seen.push({ url: req.url(), status });
-      };
-      page.on('requestfinished', onFinished);
-      const t0 = Date.now();
-      let navOk = true;
-      try {
-        await page.goto(`${BASE_URL}${route.path}`, {
-          waitUntil: 'networkidle', timeout: route.maxMs + 15000,
-        });
-      } catch {
-        navOk = false;
+  for (const r of requests.filter((x) => x.status >= 500)) {
+    failures.push(`${r.status} on ${shortUrl(r.url)}`);
+  }
+  if (requests.length > budget.maxRequests) {
+    failures.push(`over budget: ${requests.length} app requests, ceiling ${budget.maxRequests} (baseline ${budget.baseline})`);
+  }
+  if (elapsedMs > budget.maxMs) failures.push(`over budget: settled in ${elapsedMs}ms, ceiling ${budget.maxMs}ms`);
+
+  return { failures, requests, elapsedMs, screenshot };
+}
+
+function report(pagePath, { failures, requests, elapsedMs, screenshot }) {
+  step(pagePath, failures.length === 0, `${requests.length} app requests, ${elapsedMs}ms, ${path.basename(screenshot)}`);
+  for (const failure of failures) step(`${pagePath} — ${failure}`, false);
+}
+
+/** The Watchdog editor against the paused fixture: reads the Name input, never toggles or saves. */
+export async function checkWatchdogFixture(session, id = FIXTURE_WATCHDOG_ID) {
+  const result = await session.visit(`/watchdog/${id}/edit`);
+  const name = await session.page.getByRole('textbox', { name: 'Name' }).inputValue({ timeout: 5000 }).catch(() => null);
+  if (name !== FIXTURE_WATCHDOG_NAME) {
+    result.failures.push(`Name input holds ${JSON.stringify(name)}, not the fixture's name`);
+  }
+  for (const r of result.requests.filter((x) => WRITE_METHODS.has(x.method))) {
+    result.failures.push(`a write was sent: ${r.method} ${shortUrl(r.url)}`);
+  }
+  return result;
+}
+
+async function checkBrowse({ page }) {
+  const mergeModeBtn = page.getByRole('button', { name: 'Sloučit…', exact: true });
+  await mergeModeBtn.waitFor({ state: 'visible', timeout: 15000 });
+  step('Browse renders + "Sloučit…" (merge mode) button visible', true);
+
+  /* W7a moved card photos into the hydration layer, so the grid can render perfectly with every
+   * photo silently gone. The carousel draws "n / total" only when it holds MORE THAN ONE image,
+   * so the counter proves photos arrived. Waited for: the cards paint before it does. */
+  const photoCounter = page.locator('span', { hasText: /^\d+ \/ \d+$/ }).first();
+  let carouselOk = false;
+  let counterText = 'none';
+  try {
+    await photoCounter.waitFor({ state: 'visible', timeout: 20000 });
+    counterText = (await photoCounter.innerText()).trim();
+    /* Parsed, not a digit class: /[2-9]\d*$/ failed a good 16-photo carousel live. */
+    const total = Number(/^\d+ \/ (\d+)$/.exec(counterText)?.[1] ?? 0);
+    carouselOk = total > 1;
+  } catch { /* carouselOk stays false: reported below, not thrown */ }
+  step('Browse cards hydrate a multi-photo carousel', carouselOk, `photo counter: ${counterText}`);
+
+  /* The counter is drawn from the photo ROWS, so it reads "1 / 7" with all seven <img>s 403ing
+   * (W7b: a wrong R2 signature fails exactly there). naturalWidth is > 0 only once the browser
+   * has decoded real bytes. */
+  let decoded = 0;
+  let sampled = 0;
+  try {
+    await page.locator('img[src*="/images/"]').first().waitFor({ state: 'visible', timeout: 20000 });
+    const shots = await page.locator('img[src*="/images/"]').all();
+    for (const img of shots.slice(0, 5)) {
+      sampled += 1;
+      if (await img.evaluate((el) => el.complete && el.naturalWidth > 0)) decoded += 1;
+    }
+  } catch { /* decoded stays 0: reported below, not thrown */ }
+  step('listing photos load from R2 (presigned redirect resolves)', sampled > 0 && decoded === sampled, `${decoded}/${sampled} sampled <img> decoded`);
+
+  await mergeModeBtn.click();
+  const mergeBtn = page.getByRole('button', { name: /^Merge($| \d)/ });
+  await mergeBtn.waitFor({ state: 'visible', timeout: 5000 });
+  const mergeDisabled = await mergeBtn.isDisabled();
+  step('mutating button disabled pre-selection (no cards clicked)', mergeDisabled, `merge disabled=${mergeDisabled}`);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  step('exited merge mode, zero cards ever touched', true);
+}
+
+/* The smoke account owns seeded pipeline cards precisely so the board's hydration chain (rows ->
+ * properties -> covers -> brokers) runs. Read-only: loaded and inspected, never dragged. */
+async function checkPipeline({ page }, { firstCardMs }) {
+  step('pipeline board paints a card', firstCardMs !== null, `first card visible in ${firstCardMs}ms`);
+  step(`time-to-first-card under ${BUDGET_FIRST_CARD_MS}ms`, firstCardMs !== null && firstCardMs <= BUDGET_FIRST_CARD_MS, `${firstCardMs}ms`);
+  const priced = await page.locator('a[href^="/property/"]').filter({ hasText: /\d/ }).count();
+  step('at least one card shows a price', priced >= 1, `${priced} priced cards`);
+  // one <ul aria-label={stage.label}> per stage column (pages/Pipeline.tsx)
+  const columns = await page.locator('main ul[aria-label]').count();
+  step('stage columns rendered', columns >= 2, `${columns} columns`);
+}
+
+async function sweep(session) {
+  for (const route of ROUTE_BUDGETS) {
+    /* Started once the new document is in, or a card still on the old page would answer. */
+    let firstCard = null;
+    const onLoaded = route.path !== '/pipeline' ? undefined : (started) => {
+      firstCard = session.page.locator('a[href^="/property/"]').first()
+        .waitFor({ state: 'visible', timeout: 30000 })
+        .then(() => Date.now() - started, () => null);
+    };
+    report(route.path, await session.visit(route.path, { onLoaded }));
+    await route.check?.(session, { firstCardMs: await firstCard });
+  }
+  report('Watchdog editor (fixture)', await checkWatchdogFixture(session));
+}
+
+function parsePages(args) {
+  const text = { type: 'string', multiple: true };
+  const { tokens } = parseArgs({ args, options: { page: text, expect: text, absent: text }, tokens: true });
+  const pages = [];
+  for (const token of tokens) {
+    if (token.kind !== 'option') continue;
+    if (!token.value?.trim()) throw new Error(`--${token.name} needs a value`);
+    if (token.name === 'page') {
+      const offSite = new URL(token.value, 'https://check.invalid').origin !== 'https://check.invalid';
+      if (!token.value.startsWith('/') || offSite) throw new Error(`--page takes an in-app path: ${token.value}`);
+      pages.push({ path: token.value, expect: [], absent: [] });
+    } else if (pages.length === 0) {
+      throw new Error(`--${token.name} must follow a --page`);
+    } else {
+      pages.at(-1)[token.name].push(token.value);
+    }
+  }
+  const unproven = pages.find((p) => p.absent.length > 0 && p.expect.length === 0);
+  if (unproven) throw new Error(`${unproven.path}: --absent needs an --expect on the same page, or a blank page would pass`);
+  return pages;
+}
+
+async function main(args) {
+  let pages;
+  try {
+    pages = parsePages(args);
+    credentials();
+  } catch (err) {
+    console.error(`${err.message}\n${USAGE}`);
+    return 2;
+  }
+  rmSync(SHOT_DIR, { recursive: true, force: true });
+
+  let session;
+  try {
+    session = await openSession();
+    step('login redirects to /browse', true);
+    if (pages.length === 0) {
+      await sweep(session);
+    } else {
+      for (const { path: pagePath, expect, absent } of pages) {
+        report(pagePath, await session.visit(pagePath, { expect, absent }));
       }
-      const elapsed = Date.now() - t0;
-      // Let late in-flight responses land before unhooking.
-      await page.waitForTimeout(250);
-      page.off('requestfinished', onFinished);
-
-      const server5xx = seen.filter((r) => r.status >= 500);
-      step(
-        `${route.path} — no 5xx from app data requests`,
-        server5xx.length === 0,
-        server5xx.length
-          ? server5xx.map((r) => `${r.status} ${shortUrl(r.url)}`).join(' | ')
-          : `${seen.length} requests, all < 500`,
-      );
-      step(
-        `${route.path} — at most ${route.maxRequests} app data requests`,
-        seen.length <= route.maxRequests,
-        `${seen.length} (baseline ${route.baseline})`,
-      );
-      step(
-        `${route.path} — settles under ${route.maxMs}ms`,
-        navOk && elapsed <= route.maxMs,
-        `${elapsed}ms${navOk ? '' : ' (navigation timed out)'}`,
-      );
     }
   } catch (err) {
     step('UNEXPECTED FAILURE', false, String(err));
   } finally {
-    await browser.close();
+    await session?.close();
   }
 
-  console.log('\n--- console errors ---');
-  console.log(consoleErrors.length ? consoleErrors.join('\n') : '(none)');
-  console.log('\n--- page errors ---');
-  console.log(pageErrors.length ? pageErrors.join('\n') : '(none)');
-  console.log(
-    '\n--- failed requests (informational — SPA navigation commonly aborts in-flight map/count requests) ---'
-  );
-  console.log(failedRequests.length ? failedRequests.join('\n') : '(none)');
-
+  if (session?.failedRequests.length) {
+    console.log('\n--- failed requests (informational: navigation aborts in-flight map and count requests) ---');
+    console.log(scrub(session.failedRequests.join('\n')));
+  }
   const allPassed = steps.every((s) => s.ok);
-  console.log(`\n=== ${allPassed ? 'ALL STEPS PASSED' : 'SOME STEPS FAILED'} ===`);
-  process.exit(allPassed ? 0 : 1);
-})();
+  console.log(`\n=== ${allPassed ? 'ALL STEPS PASSED' : 'SOME STEPS FAILED'} (screenshots: ${SHOT_DIR}) ===`);
+  return allPassed ? 0 : 1;
+}
+
+/* By path, not import.meta.main or .filename: on a Node without them the guard reads undefined,
+ * and the script would exit 0 having checked nothing. */
+function isEntryPoint() {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
+  main(process.argv.slice(2)).then(process.exit, (err) => {
+    console.error(scrub(err));
+    process.exit(1);
+  });
+}

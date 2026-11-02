@@ -87,8 +87,8 @@ operator can watch, and work to completion.
   autonomous; destructive ones pause for confirmation + a backup).
 - **A merge is not a deploy.** After a PR merges to `main`, confirm Railway's rollout with
   `scripts/rollout_wait.sh <merge-sha>` (exit 0 = every service green; any other exit goes to
-  the operator). For frontend-visible changes, follow with a real-browser check against the
-  production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
+  the operator). For frontend-visible changes, follow with
+  `node frontend/scripts/smoke-check.mjs --page <path> --expect <text>` — read-only only; never drive a mutating action (merge/unmerge, delete,
   send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).
 ## Fetching live state (fetch, don't ask)
 
