@@ -1264,6 +1264,13 @@ each a `sreality`, and realtime-worker also the job runner `job-runner` (#2025).
 `<project> - <service>`. Since #2060 every setting they run with lives in
 `.railway/railway.ts`, Railway's infrastructure-as-code file. Config as Code (the old `railway*.json`) stops being read
 on 2026-12-01, and until then a file of that name would override the applied settings, so a guard test fails on one.
+- **Ids.** Project ids: `PROJECTS` in `.railway/railway.ts`. Service ids: API `sreality`
+  `79e65a88-1629-439e-a961-a815f83539de`; realtime-worker `sreality` `59c41eb8-f84f-4f9d-b0af-747fe04f04ce` and
+  `job-runner` `93f302f0-4a37-4c42-aae8-c1de07f7d7d7`; vite `sreality` `99dc269d-a82d-44a6-a32e-8829b0887baf`.
+- **What the read tools can and cannot say.** Request metrics (`http-requests`, `http-error-rate`,
+  `http-response-time`) match exact paths only: no prefix, wildcard or route pattern, so `/images` and
+  `/properties/{property_id}/notes` read 0 while both serve traffic, and a 0 speaks only for that literal path. Logs
+  (`get-logs`) cap at 500 entries per stream, so they show presence, not a count.
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
