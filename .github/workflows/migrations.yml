@@ -635,7 +635,7 @@ jobs:
       - name: New listings cannot be starved by refresh work (executed)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-        run: pytest tests/test_detail_queue_fairness_live.py -q
+        run: pytest tests/test_detail_queue_fairness_live.py tests/test_given_up_rearm_live.py -q
 
       # A lease the caller will not wait for must be refused WITHOUT moving the shared
       # frontier (2026-09-29: callers slept an hour behind it). The fake ledger only

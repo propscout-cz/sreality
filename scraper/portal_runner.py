@@ -297,6 +297,9 @@ def reconcile_sightings(
         "ENQUEUE source=%s%s new=%d changed=%d unchanged=%d enqueued=%d",
         source, label, len(new), len(changed), len(existing) - len(changed), enqueued,
     )
+    rearmed = db.rearm_sighted_given_up(conn, source, new) if conn is not None and new else 0
+    if rearmed:
+        LOG.info("REARM source=%s%s sighted_given_up=%d", source, label, rearmed)
     return {"found_new": len(new), "enqueued": enqueued}
 
 

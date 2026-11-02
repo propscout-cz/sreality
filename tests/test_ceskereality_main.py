@@ -35,6 +35,8 @@ from scraper.ceskereality_client import (
 )
 from scraper.portal import default_config
 
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
+
 
 def _page_html(
     total: int | None, ids: list[str], facets: tuple[str, ...] = (),

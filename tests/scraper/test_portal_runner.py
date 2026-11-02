@@ -260,6 +260,7 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
         lambda _c, _s, ids: {n: stored[n] for n in ids if n in stored})
     monkeypatch.setattr(portal_runner.db, "touch_listings_by_id", lambda _c, ids: len(ids))
     monkeypatch.setattr(portal_runner.db, "enqueue_detail", lambda _c, _s, entries: len(entries))
+    monkeypatch.setattr(portal_runner.db, "rearm_sighted_given_up", lambda _c, _s, _ids: 0)
     p = _ReconcilingPortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert [(c["listings_found_new"], c["listings_enqueued"]) for c in agg["by_category"]] == [
