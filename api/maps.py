@@ -175,7 +175,8 @@ SELECT id, level, code, name FROM chain
 # part unambiguous without a polygon. DISTINCT because the index stores several
 # NAME KINDS per entity (official, deaccented, qualifier-stripped, aliases —
 # migration 381): without it "Žižkov" comes back once per kind and reads as two
-# parts.
+# parts. The unit is read AT the index's version, not "open now": a load closes a re-parented
+# unit hours before it publishes, and until then the current index still names the closed row.
 _PART_LOOKUP_SQL = """
 SELECT DISTINCT u.code, u.name
   FROM ruian_name_index n
@@ -183,7 +184,7 @@ SELECT DISTINCT u.code, u.name
  WHERE n.registry_version_id = %(version)s
    AND n.name_norm = %(name_norm)s
    AND u.level = 'cast_obce'
-   AND u.valid_to IS NULL
+   AND %(version)s BETWEEN u.first_version_id AND u.last_version_id
    AND n.parent_obec_unit_id = %(obec_unit_id)s
  ORDER BY 1, 2
  LIMIT 8

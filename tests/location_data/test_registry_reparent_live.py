@@ -312,6 +312,34 @@ def test_a_mid_load_reader_finds_the_old_town_until_its_children_reopen(conn):
         RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART]})] == [(PART, PRAHA)]
 
 
+def test_a_part_pick_resolves_while_a_load_has_its_unit_closed(conn):
+    """The place filter asks the current version's index, which names the row the load closed
+    hours before it publishes. Read at that version the part still answers; the code is stable."""
+    from api.maps import _PART_LOOKUP_SQL
+
+    v1 = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, v1)
+    _old_shape_units(conn, stage)
+    ruian_load.upsert_units(conn, stage, v1, V1_DATE)
+    part_id, name = conn.execute(
+        "SELECT id, name FROM ruian_admin_units WHERE level = 'cast_obce' AND code = %s", (PART,),
+    ).fetchone()
+    obec_id = conn.execute(
+        "SELECT id FROM ruian_admin_units WHERE level = 'obec' AND code = %s", (PRAHA,),
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, "
+        "name_norm, name_kind, parent_obec_unit_id) VALUES ('cast_obce', %s, %s, %s, 'part', "
+        "'official', %s)", (part_id, v1, name, obec_id))
+    args = {"version": v1, "name_norm": "part", "obec_unit_id": obec_id}
+    assert [tuple(r) for r in conn.execute(_PART_LOOKUP_SQL, args)] == [(PART, name)]
+
+    v2 = _version(conn, 2, V2_DATE)
+    conn.execute("UPDATE ruian_admin_units SET valid_to = %s, last_version_id = %s WHERE id = %s",
+                 (V2_DATE, v2, part_id))
+    assert [tuple(r) for r in conn.execute(_PART_LOOKUP_SQL, args)] == [(PART, name)]
+
+
 def test_the_migration_retires_by_scd2_and_deletes_only_the_unread_relations(conn):
     """The statements as shipped, over rows the replay never saw: 718 is idempotent DDL."""
     version = _version(conn, 1, V1_DATE)
