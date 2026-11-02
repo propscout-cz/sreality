@@ -5257,8 +5257,10 @@ portal's payload or its own page, and every other stamp is class E outright.
   `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; GRADE caps such a row
   at `medium`). A Czech admin
   unit that BOUND at any level is itself a country determination, because the gazetteer it came out
-  of is the Czech one. **Foreign is a determination, never a default** — nothing bound and no foreign
-  signal is `undetermined`.
+  of is the Czech one. Against words naming another country only a bound TOWN stands (`country_conflict`):
+  a bare region (R9, so no word and no pin bound a town) yields, the row is foreign at its own pin, with
+  no Czech hierarchy (#2356: the store keeps a region word the page stopped stating, W3). **Foreign is a
+  determination, never a default** — nothing bound and no foreign signal is `undetermined`.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
 (`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT > bound STREET point > portal pin *inside the
