@@ -253,7 +253,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 ## Coding conventions
 
 - Type hints on every signature (CI's ruff ANN check enforces it outside tests and `autodedup.incremental.DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
-- No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
+- No comments unless the WHY is non-obvious; no multi-paragraph def/class docstrings.
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
@@ -264,12 +264,12 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
-Never commit secrets (`.env` is gitignored; gitleaks hooks: `git config core.hooksPath .githooks` once per clone).
+Never commit secrets (`.env` is gitignored; git hooks: `git config core.hooksPath .githooks` once per clone).
 API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full env-var / secrets reference:** the
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh`. Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
