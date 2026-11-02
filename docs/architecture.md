@@ -5055,8 +5055,7 @@ fetched again: our one detail fetch read the page while its location fields were
 index card never changed afterwards, so nothing ever re-enqueued them and the listing had no claims
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
-`scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
-after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
+`scraper/realtime_worker.py` ticks hourly (`LOCATION_REFETCH_TICK_SECONDS`, a constant), selects the active ads rule 25 calls town-less
 — `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
@@ -5065,17 +5064,25 @@ missed both). It keeps the ones whose newest stored page or payload is older tha
 `LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered today gets its second look on tomorrow's
 tick; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
 `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched first, into
-`listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. It enqueues and nothing else: the drain
+`listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. An ad the drain gave up on rests
+`delist_policy.RECHECK_THROTTLE` (24 h) unless a page or payload has landed since the give-up, read from
+the `given_up` row in `detail_queue_completions`: a failed fetch stores no page, so the 6 h clock never
+moves for it, and an hourly tick re-armed it straight after each give-up, five fetches an hour
+(2026-11-02, #2375: 26 ceskereality ads behind the Anubis challenge, 650 give-ups in 24 h, all
+`town_withheld`). They are throttled rather than stopped because a late-geocoding page is what this
+lane exists to catch; an operator's re-paste (`rearm_given_up`) and a nominating walk's re-arm stay unthrottled.
+It enqueues and nothing else: the drain
 re-fetches and rewrites the page, the archive appends it (every changed body: the 7-day per-listing
 floor W2a-7 put on `payloads.append_payload` discarded exactly this refetch and was removed
 2026-10-22), the fast intake lane mines it within a minute, the resolver answers.
 `enqueue_location_refetch` is its own writer rather than `enqueue_detail` because the two directions
 differ — `LEAST` on priority (a second look must never promote a row above the new listings the
-drain is fetching) and `given_up=false, attempts=0`, since the rows it most wants are exactly the
-ones the drain gave up on and no claim can see (rule #5). The bound is what makes it polite: bazos's
+drain is fetching) and `given_up=false`, restarting `attempts` only on a given-up row, since the rows it
+most wants are exactly the ones the drain gave up on and no claim can see (rule #5), while a row still in
+its five tries must keep its count or it would never give up. The bound is what makes it polite: bazos's
 share of that bucket is dead ads whose page answers with the category listing, which raises
 `ListingGoneError` and delists the row, so a portal carrying thousands of them drains over days
-instead of flooding one drain pass. A daily lane never reads as a dead one: the `jobs` check calls a
+instead of flooding one drain pass. A quiet lane never reads as a dead one: the `jobs` check calls a
 lane late only past max(3 × its interval, its interval + 2 × its last pass's duration, 15 min) since
 its last pass.
 

@@ -163,3 +163,115 @@ def test_claimed_rows_are_not_reclaimed_by_a_concurrent_drain(conn, source):
     assert len(first) == 100
     assert len(second) == 100
     assert not (first & second)
+
+
+# --- the location-refetch re-arm (#2375), on the real ledger and the real drain writers --------
+
+
+_MIN_AGE = 21600
+_CAP = 500
+
+
+def _seed_ad(conn: psycopg.Connection, source: str, nid: str) -> None:
+    conn.execute(
+        "INSERT INTO listings (source, source_id_native, source_url, raw_json, is_active) "
+        "VALUES (%s, %s, %s, '{}'::jsonb, true)",
+        (source, nid, f"https://x/{nid}"),
+    )
+    conn.execute(
+        "INSERT INTO portal_raw_pages (source, source_id_native, source_url, page_kind, html, http_status, fetched_at) "
+        "VALUES (%s, %s, %s, 'detail', '<html></html>', 200, now() - interval '2 days')",
+        (source, nid, f"https://x/{nid}"),
+    )
+
+
+@pytest.fixture()
+def townless_ad(conn: psycopg.Connection, source: str) -> Iterator[str]:
+    """An active ad with no location row and a page two days old: what the lane nominates."""
+    nid = f"{source}-ad"
+    _seed_ad(conn, source, nid)
+    yield nid
+    conn.execute("DELETE FROM portal_raw_pages WHERE source = %s", (source,))
+    conn.execute("DELETE FROM detail_queue_completions WHERE source = %s", (source,))
+    conn.execute("DELETE FROM listings WHERE source = %s", (source,))
+
+
+def _candidates(conn: psycopg.Connection, source: str, *, min_age: int = _MIN_AGE, cap: int = _CAP) -> list[str]:
+    rows = db.location_refetch_candidates(conn, min_age_seconds=min_age, cap_per_source=cap)
+    return [r["native_id"] for r in rows if r["source"] == source]
+
+
+def _tick(conn: psycopg.Connection, source: str) -> int:
+    """One pass of the lane: the candidates, then the enqueue."""
+    rows = db.location_refetch_candidates(conn, min_age_seconds=_MIN_AGE, cap_per_source=_CAP)
+    mine = [(r["native_id"], r["detail_ref"], r["price_czk"]) for r in rows if r["source"] == source]
+    return db.enqueue_location_refetch(conn, source, mine)
+
+
+def _fail_once(conn: psycopg.Connection, source: str, nid: str) -> None:
+    claimed = db.claim_detail_batch(conn, source, 10)
+    assert nid in [c[0] for c in claimed]
+    db.fail_detail(conn, source, [nid], "content-free page")
+
+
+def _queue_row(conn: psycopg.Connection, source: str, nid: str) -> tuple[int, bool, str | None]:
+    return conn.execute(
+        "SELECT attempts, given_up, last_error FROM listing_detail_queue WHERE source = %s AND native_id = %s",
+        (source, nid),
+    ).fetchone()
+
+
+def _give_up(conn: psycopg.Connection, source: str, nid: str) -> None:
+    assert _tick(conn, source) == 1
+    for _ in range(db.FAILURE_GIVE_UP_THRESHOLD):
+        _fail_once(conn, source, nid)
+
+
+def test_a_given_up_ad_rests_a_day_through_every_tick_and_stays_recorded(conn, source, townless_ad):
+    _give_up(conn, source, townless_ad)
+    for _ in range(3):
+        assert _tick(conn, source) == 0
+    # Rule 5: tracked, not dropped. The row, its count and its error all stand.
+    assert _queue_row(conn, source, townless_ad) == (db.FAILURE_GIVE_UP_THRESHOLD, True, "content-free page")
+    assert db.claim_detail_batch(conn, source, 10) == []
+
+
+def test_after_the_throttle_it_gets_one_more_cycle(conn, source, townless_ad):
+    _give_up(conn, source, townless_ad)
+    conn.execute(
+        "UPDATE detail_queue_completions SET completed_at = now() - interval '24 hours 1 minute' WHERE source = %s",
+        (source,),
+    )
+    assert _tick(conn, source) == 1
+    assert _queue_row(conn, source, townless_ad)[:2] == (0, False)
+
+
+def test_a_page_landing_after_the_give_up_is_new_evidence(conn, source, townless_ad):
+    _give_up(conn, source, townless_ad)
+    assert _candidates(conn, source, min_age=0) == []
+    conn.execute(
+        "UPDATE portal_raw_pages SET fetched_at = now() WHERE source = %s AND source_id_native = %s",
+        (source, townless_ad),
+    )
+    assert _candidates(conn, source, min_age=0) == [townless_ad]
+
+
+def test_a_row_still_in_its_tries_keeps_its_count_so_it_can_give_up(conn, source, townless_ad):
+    assert _tick(conn, source) == 1
+    _fail_once(conn, source, townless_ad)
+    _fail_once(conn, source, townless_ad)
+    assert _tick(conn, source) == 1
+    assert _queue_row(conn, source, townless_ad)[:2] == (2, False)
+
+
+def test_an_ad_at_rest_does_not_hold_the_cap_from_one_that_can_be_read(conn, source, townless_ad):
+    _give_up(conn, source, townless_ad)
+    other = f"{source}-other"
+    _seed_ad(conn, source, other)
+    # Younger than the ad at rest, which sorts first by its frozen clock without the throttle.
+    conn.execute(
+        "UPDATE portal_raw_pages SET fetched_at = now() - interval '1 day' WHERE source = %s AND source_id_native = %s",
+        (source, other),
+    )
+    assert _candidates(conn, source, cap=1) == [other]
+

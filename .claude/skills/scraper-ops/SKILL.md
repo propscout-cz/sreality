@@ -352,13 +352,12 @@ Per-lane notes:
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
-- **Location-refetch lane** (W8) — once a day (`LOCATION_REFETCH_INTERVAL_S` 86400, first tick 5 min
-  after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the active ads rule 25 calls town-less
+- **Location-refetch lane** (W8) — hourly (a constant tick) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
   whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,
-  oldest-fetched first. ceskereality/realitymix geocode AFTER publishing; the drain + intake lane do
-  the rest, and a bazos dead ad delists on the same fetch. Heartbeat
+  oldest-fetched first; an ad given up on rests `RECHECK_THROTTLE` (24 h) unless a page has landed since.
+  ceskereality/realitymix geocode AFTER publishing; the drain + intake lane do the rest, and a bazos dead ad delists on the same fetch. Heartbeat
   `details.location_refetch.last` = `{candidates, queued, sources:{src:{candidates,queued,backlog}},
   min_age_s, cap, seconds}`.
 - **Sold-comps lane** (sold-comps W2, migration 544) — registered sales from reas.cz (an external FACT
