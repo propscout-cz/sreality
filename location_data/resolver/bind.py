@@ -840,9 +840,11 @@ def bind(
             words_part_ids=tuple(sorted({p.unit.unit_id for p in (*said, *found)})),
             # A part claim that matched no část (a MOMC is none), a street line that bound nothing
             # and names no part (`ambiguous_streets` too), a locality line the town was only
-            # composed from ("Praha 4", "Praha 4 - Podolí"): nothing a door can be checked against.
+            # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
+            # (the PSČ or a part claim bound it): nothing a door can be checked against.
             words_unchecked=(
                 part_claim_unmatched or towns.composite.bound
+                or (bool(constraints.obec_keys) and not towns.named)
                 or (bool(constraints.street_line or place_line) and top.ulice_kod is None
                     and line.named_part is None)),
         ),

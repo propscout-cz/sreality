@@ -8,7 +8,7 @@
 
 `bind.pin_door` runs in `core` between `pin_inside_bound_obec` and `place`. It reads the ad type first and refines the row when all of these hold:
 - `listings.category_main` is `byt` or `dum` (`PIN_DOOR_AD_TYPES`; NULL gets no door);
-- the words bound a town, a street or a část (`target_kind` street or admin_unit, a town the pin did not establish);
+- the words bound a town, a street or a část (`target_kind` street or admin_unit; the pin-derived rungs R7/R8 refuse). A pin may still settle which town a shared name means (`narrow_towns`): the name matched, so the word bound;
 - the pin is exact (`declared.blurred` false, so area markers and W4's `estimated` are out; an undeclared pin counts, unlike `core`'s `pin_is_precise`) and inside the bound town;
 - exactly one valid RÚIAN door lies within `PIN_DOOR_M` (1 m) of it;
 - the door agrees with the words' obec and street, every část they claim and their PSČ;
@@ -26,6 +26,7 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 | A locality line the town was only composed from (`Praha 4`, `Praha 4 - Podolí`, `Praha - Vokovice`) | Closes a MOMC: its borders cross části and nothing here checks it |
 | A part claim that matched no část (a MOMC is none) | Nothing to check against |
 | A část the door is not in, at every rung | R2 takes the register's část and R3 carries none, so BIND keeps what the words claimed |
+| A town word the town did not come from: unknown, or out of reach, with the PSČ or a part claim binding the town | The door would stand against that word, though obec, část and PSČ agree. With no town word, the PSČ's or the part's town may still anchor a door |
 | A PSČ the door does not carry | `door.psc` is on the read FILL makes anyway. A claim the normalizer rejected states no PSČ and is not read |
 
 ## Why 1 m, and why flats and houses
@@ -41,12 +42,12 @@ The bar is how often two stated doors of one property agree. A pin-named door mu
 
 `resolve_db._SOURCES_BULK_SQL` reads `id, source, category_main`; `sources_bulk` and `_Slice.sources` hand (source, ad type) to `core.resolve(ad_type=…)`. `category_main` is the canonical vocabulary every portal writes (`byt`, `dum`, `pozemek`, `komercni`, `ostatni`; 2 NULLs among 395k active ads), not a place value, so rule 25's "listings carry no location value" and its claim-type ceiling stand. `doors_near` is asked only for a flat or a house, though `warm_points` still warms every claim coordinate.
 
-**A fourth input.** The purity scan does not mind: the core stays pure, and the type is an argument. But "the row is a pure function of its claims and the register" no longer holds alone, so `claim_set_hash` covers the type where there is one. The three stamps still pin the answer.
+**A fourth input.** The purity scan does not mind: the core stays pure, and the type is an argument. But "the row is a pure function of its claims and the register" no longer holds alone. The type is not in `claim_set_hash`: migration 524's `has_claims` reads that hash against `sha256('[]')`, so hashing a type would flip a claimless flat from `active_no_claims` to `active_unresolved`. So the three stamps name no ad type. Two rows stamped alike can differ by type, and what keeps a row current is the re-resolve queue below.
 
 **A type change queues the row.** A flat turned commercial must lose its door, so the statement that changes `category_main` also enqueues that listing into `dirty_locations`, bumped as a claim change is, in the same transaction. The reason is `claim_insert`, the queue's "this listing's evidence moved" (697 allows three values; no migration). It is one CTE, `listing_write.resolve_requeue_cte`, inside the upsert, so the hot path gains no round trip, only a join over the batch; only a row whose value moved queues, and a new row (no `prior`) never does. Against a row a resolver slice holds, the write waits for that slice as `claims_store` does; the drain takes no conflicting lock on `listings`, so no deadlock. The column's writers, read from the code on 2026-11-02:
 - `scraper/listing_write.py` `_upsert_sql`, the one `INSERT INTO listings`: covered;
 - `scripts/reparse.py` `_update_sql` when `--fields` names it: covered, the moved rows only;
-- no migration heal, trigger or other script writes it. `properties.category_main` (`recompute_property_stats`) and the sold table (`sold_db`) are other tables. A future bulk `UPDATE` outside these two would owe its own enqueue; the sweep is the backstop. The census cannot see a DB-side writer.
+- no migration heal, trigger or other script writes it. `properties.category_main` (`recompute_property_stats`) and the sold table (`sold_db`) are other tables. A future bulk `UPDATE` outside these two owes its own enqueue, because nothing else notices: the sweep (`_SWEEP_SQL`) compares only the resolver and registry versions, so such a row waits for the next version or registry bump. The census cannot see a DB-side writer.
 
 ## The registry read
 
@@ -84,7 +85,7 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
 
 ## Acceptance (W1 cells; read after `freshness/version` clears)
 
-**The fire count.** Read on production 2026-11-02 by SQL, not by the resolver, on 1 in 10 active flats and houses at street, quarter or obec grain with an exact pin, no door claim and no dispute: 7,371 candidates, 4,230 with one door within 1 m, 242 of those refused by the words (the part and locality checks compare names, so approximately), **3,988 fire**. So **≈ 40k rows gain a door**: flats ≈ 21.9k, houses ≈ 18.0k; from street ≈ 24.5k, quarter ≈ 8.1k, obec ≈ 7.3k. The read's rows were not all at v5.10. The shadow's mover count is the real figure.
+**The fire count.** Read on production 2026-11-02 by SQL, not by the resolver, on 1 in 10 active flats and houses at street, quarter or obec grain with an exact pin, no door claim and no dispute: 7,371 candidates, 4,230 with one door within 1 m, 242 of those refused by the words (the part and locality checks compare names, so approximately), **3,988 fire**. The town-word refusal added after review takes about 113 per 1 in 10 (≈ 1.1k rows, a name comparison): all of them were already inside that 242, because the read refused every town line that is not the row's town by name, so the figure stands. So **≈ 40k rows gain a door**: flats ≈ 21.9k, houses ≈ 18.0k; from street ≈ 24.5k, quarter ≈ 8.1k, obec ≈ 7.3k. The read's rows were not all at v5.10. The shadow's mover count is the real figure.
 
 | Measure | After |
 |---|---|

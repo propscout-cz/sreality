@@ -99,7 +99,8 @@ _LATEST_ORDER_BY = "ORDER BY s.scraped_at DESC, s.id DESC"
 def resolve_requeue_cte(moved_ids: str) -> str:
     """AD TYPE IS A RESOLVER INPUT (`bind.pin_door`), so a statement that changes `category_main`
     queues those listings, bumped as a claim change is (`claims_store`). `claim_insert` is the
-    queue's "this listing's evidence moved"; `moved_ids` selects exactly the rows that changed."""
+    queue's "this listing's evidence moved"; `moved_ids` selects exactly the rows that changed. Every
+    producer locks queue rows in id order, or two overlapping batches could deadlock."""
     return f"""requeued AS (
         INSERT INTO dirty_locations (listing_id, reason)
         SELECT id, 'claim_insert' FROM ({moved_ids}) moved

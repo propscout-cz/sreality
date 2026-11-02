@@ -7,8 +7,8 @@ on FIVE version inputs — `claim_set_hash`, `resolver_version`, `registry_versi
 `policy_version`, `collision_epoch_id` — because the policy tables and the pin-collision
 epoch were corpus-wide inputs a recompute had to be able to invalidate. Both are gone
 (policy is code, the collision engine is deleted), so the answer row carries THREE:
-`claim_set_hash` says the claims moved (or the ad's type, W5b's one input beside them),
-`resolver_version` says a rule moved, `registry_version` says the mirror moved. Those three are exactly what the drain's sweep
+`claim_set_hash` says the claims moved, `resolver_version` says a rule moved,
+`registry_version` says the mirror moved. Those three are exactly what the drain's sweep
 compares to decide a row is stale.
 
 Purity, mechanically: no wall clock (`as_of` is not even needed any more — nothing dates a
@@ -136,7 +136,7 @@ def resolve(
         country_status=verdict.country_status,
         disputed=verdict.disputed,
         resolver_version=resolver_version,
-        claim_set_hash=serialize.claim_set_hash(ordered, ad_type),
+        claim_set_hash=serialize.claim_set_hash(ordered),
         registry_version=registry_version,
     )
 

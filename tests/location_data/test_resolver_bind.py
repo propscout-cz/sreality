@@ -953,3 +953,33 @@ def test_a_door_the_words_bound_beats_the_door_at_the_pin(stated, rung):
     row = _resolve(claims)
     assert row.ruian_adm_kod == 21690279, "the words' door, 13 m from the pin"
     assert row.match_confidence == "exact", "the pin corroborates a door the words bound"
+
+
+@pytest.mark.parametrize("words", [
+    (mm.claim(1, "obec_name", value_text="Hory"), mm.claim(6, "psc", value_text="160 00")),
+    (mm.claim(1, "obec_name", value_text="Bílovec"), mm.claim(6, "psc", value_text="160 00")),
+    (mm.claim(1, "obec_name", value_text="Hory"), mm.claim(6, "psc", value_text="160 00"), _VOKOVICE),
+], ids=["unknown-town-psc", "town-out-of-reach-psc", "unknown-town-part-claim"])
+def test_a_town_word_that_bound_nothing_refuses(words):
+    """The town came from the PSČ or a part claim while the advert's own town word bound nothing:
+    a door there would stand against that word, though its obec, část and PSČ all agree."""
+    claims = _pinned("gps", _ON_DOOR, *words)
+    row = _resolve(claims)
+    assert (row.obec_name, row.ruian_adm_kod) == ("Praha", None)
+
+
+def test_without_a_town_word_the_psc_or_the_part_may_still_anchor_a_door():
+    """No town word to contradict: the PSČ's town and the part's town stand, and the door agrees."""
+    psc = mm.claim(6, "psc", value_text="160 00")
+    assert _resolve(_pinned("gps", _ON_DOOR, psc)).ruian_adm_kod == _VOKOVICE_DOOR
+    assert _resolve(_pinned("gps", _ON_DOOR, psc, _VOKOVICE)).ruian_adm_kod == _VOKOVICE_DOOR
+
+
+def test_a_pin_may_settle_a_town_name_two_towns_share():
+    """`narrow_towns`: the name matches both, and the pin says which. The word still bound, so the door stands."""
+    mirror = mm.default_mirror()
+    mirror.units.append(replace(next(u for u in mirror.units if u.code == 554782), unit_id=99, code=999001,
+                                path="k19.o3100.b999001"))
+    mirror.obec_polygons[999001] = (49.0, 16.0, 3000.0)
+    row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA), mirror)
+    assert (row.obec_kod, row.ruian_adm_kod) == (554782, _VOKOVICE_DOOR)

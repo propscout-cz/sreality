@@ -5265,10 +5265,10 @@ portal's payload or its own page, and every other stamp is class E outright.
 one door there, the words not disagreeing)** > bound STREET point > portal pin *inside the bound town* > FILL's
 entity point. The 1 m is where a pin-named door agrees with a sibling ad's as often as two stated doors do (flats
 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %). Same obec, street, claimed část and PSČ; words no door can be
-checked against refuse, silently. Such a door is never graded `exact`, since a pin cannot corroborate the door
+checked against, a town word that bound nothing among them, refuse silently. Such a door is never graded `exact`, since a pin cannot corroborate the door
 it named. Ad type (`listings.category_main`) is the resolver's one input beside the claims and the register:
-`claim_set_hash` covers it, and the statement that changes it queues the re-resolve (`claim_insert`, `listing_write`'s
-upsert and `reparse`, the column's two writers). The words bind the town (stated, or derived from finer words through
+it is outside `claim_set_hash` (the no-claims sentinel of migration 524), and the statement that changes it queues the
+re-resolve (`claim_insert`, `listing_write`'s upsert and `reparse`, the column's two writers). The words bind the town (stated, or derived from finer words through
 RÚIAN). A pin outside it, by the pip polygon and with no tolerance, is never the position, whatever the
 portal declares. A pin inside refines. A pin the portal declares an AREA marker (bazos "Přibližná
 lokalita", a postal-area point) never places a row the words bound. Without words the pin names its

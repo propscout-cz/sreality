@@ -899,6 +899,8 @@ def test_every_evidence_producer_bumps_the_queue_row_instead_of_skipping_it():
     for name, sql in _enqueue_ctes().items():
         flat = " ".join(sql.split()).lower()
         assert "insert into dirty_locations" in flat, name
+        selected = flat.split("insert into dirty_locations")[1].split("on conflict")[0]
+        assert "order by" in selected, f"{name}: queue rows lock in id order, or overlapping batches can deadlock"
         assert "on conflict (listing_id) do nothing" not in flat, name
         assert "on conflict (listing_id) do update" in flat, name
         clause = flat.split("on conflict (listing_id) do update")[1]
