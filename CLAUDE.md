@@ -268,7 +268,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh`. Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh`. Before you pick, work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
