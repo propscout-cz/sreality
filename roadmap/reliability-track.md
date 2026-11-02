@@ -1103,3 +1103,17 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
 - **Excluded:** the 20 autodedup decision modules (`incremental.DECISION_MODULES`; a byte edit moves the live engine
   digest), held equal to that tuple by `tests/test_ruff_config.py`. **Next:** lint them with the next real engine
   change; a second rule tier (B023, B904, PLE) is a ruling.
+
+## 2026-11-02 — drop migrations are probed for absence (#2237, R6a of #2207; shipped with this PR)
+
+- **`migration_drift`** now reads what a file drops as well as what it creates, in one probe statement: a still-present
+  drop is Watch ("Drop not applied: N of M dropped objects still exist; apply it once its last reader is live"), never
+  Problem, because destructive applies follow their deploy by design. Functions stay out (the probe matches by name).
+- **`apply_migration_receipt`** exits 1 on a still-present drop and closes with one notice line: "receipt OK: N
+  present, M dropped-absent", or UNVERIFIABLE. The hollow "0 objects" line is gone.
+- **The parser reads every clause of an ALTER TABLE**, so 590's many-clause re-add of 561's columns counts as a
+  re-creation. Over a full local replay of all 735 files, no expected-absent object exists.
+- **Today's window starts at 692**, past the spec's examples: drop-only 707 and 719 become measured, and 693, 697, 699
+  and 703 gain absence probes. 679, 686, 687, 688 and 689 have left the window; a read of production on 11-02 found
+  their drops, and every drop and create in the window, as expected.
+- **Deleted:** the duplicate drift suite in the harness tests (the platform checks' suite covers it).

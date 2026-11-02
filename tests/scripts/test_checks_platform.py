@@ -1111,9 +1111,39 @@ def test_migration_drift_reads_the_repository_checkout() -> None:
     assert (plat._MIGRATIONS_DIR / "620_health_liveness.sql").is_file()
 
 
+def _real_catalog(window: int, still_present: frozenset[str] = frozenset()) -> _Conn:
+    """A database that applied every real file: its creates exist, its drops are gone, bar the named."""
+    gone = {str(o) for m in load_migrations(plat._MIGRATIONS_DIR, newest=window) for o in m.dropped}
+    return _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
+        (k, i, f"{k}:{i}" not in gone or f"{k}:{i}" in still_present)
+        for k, i in zip(p["kinds"], p["idents"])]})
+
+
+@pytest.mark.parametrize(("subject", "still"), [
+    ("679_run_tables_browser_write_close.sql", "policy:building_runs.building_runs_tenant_insert"),
+    ("688_drop_filter_visibility.sql", "relation:filter_visibility"),
+    ("693_broker_count_book_drop.sql", "relation:broker_geo_options"),
+])
+def test_a_recent_drop_answered_still_present_is_a_watch_naming_it(subject: str, still: str) -> None:
+    """Window 0 reads the whole folder, so these files never slide out of the test as 444 once did."""
+    out = plat.check_migration_drift(_real_catalog(0, frozenset({still})), {"migration_drift_window": 0})
+    cells = _cells(out)
+    assert cells[subject]["status"] == "warn"
+    assert cells[subject]["message"].startswith("Drop not applied: 1 of ") and still in cells[subject]["message"]
+    assert [s for s, c in cells.items() if c["status"] not in ("ok", "unknown")] == [subject]
+
+
+def test_every_real_cell_is_ok_or_not_measured_when_the_drops_are_gone() -> None:
+    out = plat.check_migration_drift(_real_catalog(0), {"migration_drift_window": 0})
+    cells = _cells(out)
+    assert {c["status"] for c in cells.values()} == {"ok", "unknown"}
+    for measured in ("679_run_tables_browser_write_close.sql", "688_drop_filter_visibility.sql",
+                     "689_drop_portal_index_slices.sql", "707_location_w3_drop_fingerprint.sql"):
+        assert cells[measured]["status"] == "ok", "a drop-only file is measured now"
+
+
 def test_migration_drift_gives_every_file_of_the_checkouts_window_one_cell_on_its_own_clock() -> None:
-    conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
-        (k, i, True) for k, i in zip(p["kinds"], p["idents"])]})
+    conn = _real_catalog(T["migration_drift_window"])
     out = plat.check_migration_drift(conn, T)
     window = load_migrations(plat._MIGRATIONS_DIR, newest=T["migration_drift_window"])
     assert out["check_key"] == "migration_drift" and out["status"] == "ok" and out["value"] == 0
@@ -1213,9 +1243,98 @@ def test_the_window_holds_the_newest_files_only(drift_dir: Path) -> None:
     assert list(_cells(out)) == ["703_w6_function.sql", "704_w6_quoted.sql"]
 
 
-def test_with_no_migration_files_the_check_is_not_measured_and_sends_nothing(
+def _catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[str, str],
+             exists: frozenset[str] = frozenset()) -> tuple[dict[str, dict[str, Any]], _Conn]:
+    """The drift check's cells over `files`, in a database holding only the named idents."""
+    folder = tmp_path / "own_migrations"
+    folder.mkdir()
+    for name, sql in files.items():
+        (folder / name).write_text(sql, encoding="utf-8")
+    monkeypatch.setattr(plat, "_MIGRATIONS_DIR", folder)
+    conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
+        (k, i, i in exists) for k, i in zip(p["kinds"], p["idents"])]})
+    return _cells(plat.check_migration_drift(conn, {"migration_drift_window": 25})), conn
+
+
+_THREE_DROPS = {"700_drop.sql": ("drop table if exists public.gone_a;\n"
+                                 "drop index if exists gone_a_idx;\n"
+                                 "alter table kept drop column if exists gone_c;\n")}
+
+
+def test_a_done_drop_is_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _THREE_DROPS)[0]["700_drop.sql"]
+    assert cell["status"] == "ok" and cell["value"] == 0
+    assert "3 dropped objects are gone" in cell["message"]
+    assert cell["facts"] == {"objects": 0, "absent": 0, "dropped": 3, "still_present": 0}
+
+
+def test_a_still_present_drop_is_watch_with_the_counts_and_the_name(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _THREE_DROPS, frozenset({"kept.gone_c"}))[0]["700_drop.sql"]
+    assert cell["status"] == "warn" and cell["value"] == 1
+    assert ("Drop not applied: 1 of 3 dropped objects still exist; "
+            "apply it once its last reader is live") in cell["message"]
+    assert "column:kept.gone_c" in cell["message"]
+    assert cell["facts"]["first_still_present"] == "column:kept.gone_c"
+
+
+_CREATE_AND_DROP = {"700_swap.sql": ("create table if not exists public.fresh (id int);\n"
+                                     "create index if not exists fresh_idx on public.fresh (id);\n"
+                                     "drop table if exists public.stale;\n")}
+
+
+def test_absent_creates_plus_a_still_present_drop_is_a_problem(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _CREATE_AND_DROP, frozenset({"stale"}))[0]["700_swap.sql"]
+    assert cell["status"] == "fail" and cell["message"].startswith("Not applied")
+
+
+@pytest.mark.parametrize(("exists", "status", "says"), [
+    (frozenset({"public.fresh", "fresh_idx"}), "ok", "all 2 of its objects exist"),
+    (frozenset({"public.fresh", "fresh_idx", "stale"}), "warn", "Drop not applied: 1 of 1"),
+    (frozenset({"public.fresh"}), "warn", "Partly applied"),
+    (frozenset({"public.fresh", "stale"}), "warn", "Drop not applied: 1 of 1"),
+])
+def test_creates_and_drops_are_judged_together(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: frozenset[str], status: str, says: str) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _CREATE_AND_DROP, exists)[0]["700_swap.sql"]
+    assert cell["status"] == status and says in cell["message"]
+
+
+def test_a_data_only_file_stays_not_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cells, conn = _catalog(tmp_path, monkeypatch, {"700_data.sql": "update app_settings set value = 1;\n"})
+    assert cells["700_data.sql"]["status"] == "unknown" and conn.sent == []
+
+
+def test_a_policy_dropped_and_recreated_in_one_file_is_expected_present(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """613's shape: the rebuild leaves the policy there, so its presence alarms no one."""
+    files = {"700_rebuild.sql": ("drop policy if exists notes_read on notes;\n"
+                                 "create policy notes_read on notes for select using (true);\n")}
+    there = _catalog(tmp_path, monkeypatch, files, frozenset({"notes.notes_read"}))[0]["700_rebuild.sql"]
+    assert there["status"] == "ok" and there["facts"] == {"objects": 1, "absent": 0}
+
+
+def test_a_drop_recreated_by_a_later_file_expects_nothing_absent(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    files = {"001_drop.sql": "drop table if exists phoenix;\n", "002_make.sql": "create table phoenix (id int);\n"}
+    cells, _ = _catalog(tmp_path, monkeypatch, files, frozenset({"phoenix"}))
+    assert cells["001_drop.sql"]["status"] == "unknown"
+    assert cells["002_make.sql"]["status"] == "ok"
+
+
+def test_a_function_only_drop_gives_nothing_to_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe matches a function by name, so an overload left behind would read as a failed drop."""
+    cells, conn = _catalog(tmp_path, monkeypatch, {"700_fn.sql": "drop function if exists retired_fn(int);\n"})
+    assert cells["700_fn.sql"]["status"] == "unknown" and conn.sent == []
+
+
+@pytest.mark.parametrize("folder", ["missing", "empty"])
+def test_with_no_migration_files_the_check_is_not_measured_and_sends_nothing(
+        folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The worker image ships no migrations/ folder: zero files probed is zero verified."""
+    if folder == "empty":
+        (tmp_path / "migrations").mkdir()
     monkeypatch.setattr(plat, "_MIGRATIONS_DIR", tmp_path / "migrations")
     out, conn = _drift()
     assert out["status"] == "unknown" and out["value"] is None

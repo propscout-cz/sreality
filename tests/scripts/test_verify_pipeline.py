@@ -1,14 +1,13 @@
 """Hermetic tests for scripts.verify_pipeline — the registry and the harness that measures it.
 
 No DB: here we test the registry metadata, due selection, the registry projection, the pass's
-budget (deferral) and memo, the unmeasured paths, persistence, and migration_drift's cells. Each
+budget (deferral) and memo, the unmeasured paths and persistence. Each
 check's own rules are tested beside its module (tests/scripts/test_checks_*.py).
 """
 
 from __future__ import annotations
 
 import contextlib
-from collections import Counter
 import datetime as _dt
 import json
 import re
@@ -20,7 +19,7 @@ from pathlib import Path
 from scripts.checks import clock
 from scripts.checks import platform as platform_checks
 from scripts.checks.platform import check_migration_drift
-from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
+from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL
 from scripts.verify_pipeline import (
     CHECKS,
     THRESHOLDS,
@@ -29,7 +28,6 @@ from scripts.verify_pipeline import (
 )
 
 T = THRESHOLDS
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
 def _registered(*keys: str) -> list[Check]:
@@ -1406,158 +1404,6 @@ def test_no_measured_status_reds_the_run(monkeypatch: Any) -> None:
         _run_main(monkeypatch, ["--exit-nonzero-on-fail"], [_returning("a", "fail")])
 
 
-# --- migration_drift (scripts/checks/platform.py): merged is not applied ---------
-
-
-class _DriftConn:
-    """Returns a canned presence verdict per (kind, ident) probe."""
-
-    def __init__(self, present: dict[tuple[str, str], bool], default: bool = True) -> None:
-        self._present = present
-        self._default = default
-        self.probed: list[tuple[str, str]] = []
-
-    def transaction(self) -> "_DriftConn":
-        return self
-
-    def cursor(self) -> "_DriftConn":
-        return self
-
-    def __enter__(self) -> "_DriftConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        if sql.startswith("SET LOCAL statement_timeout"):
-            return
-        self.probed = list(zip(params["kinds"], params["idents"]))
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return [(k, i, self._present.get((k, i), self._default)) for k, i in self.probed]
-
-
-def _window() -> list[Any]:
-    return load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-
-
-def _file_cells(out: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {c["subject"]: c for c in out["details"]["cells"]}
-
-
-def _probeable(mig: Any) -> bool:
-    return any(SAFE_IDENT.match(o.ident) for o in mig.objects)
-
-
-def test_migration_drift_ok_when_everything_is_present() -> None:
-    """Wave 6 (D5): one cell per file of the window, OK ones included, so a file applied late
-    recovers on a measured OK and the all-applied state reads OK, never Not measured."""
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "ok" and out["value"] == 0
-    assert list(cells) == [m.filename for m in _window()]
-    assert conn.probed, "objects were probed"
-    probed = [m.filename for m in _window() if _probeable(m)]
-    assert probed and all(cells[f]["status"] == "ok" for f in probed)
-
-
-def test_migration_drift_fails_when_a_migration_is_wholly_absent() -> None:
-    """The 2026-08-25 signature: merged, never applied, so NONE of its objects
-    exist. Nothing else in the platform noticed for 29 hours.
-
-    The subject migration is DERIVED from the current window, like the
-    half-present test below, not hardcoded: this test used to pin migration 444's
-    `listings.discovered_at`, which silently stopped exercising the failure path
-    the moment 25 newer migrations pushed 444 out of `migration_drift_window` —
-    it then passed `default=True` for everything and asserted "fail" against an
-    all-present database, so it went red for the next PR to cross that boundary
-    rather than for any real drift.
-    """
-    migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-    # The target's objects must be DISJOINT from every other in-window migration's:
-    # two migrations may legitimately restate one object (468 and 471 both restate
-    # llm_calls' called_for CHECK), and marking a shared object absent fails BOTH,
-    # breaking the exactly-one assertion for a reason that is not drift.
-    target = next(
-        m for m in migs
-        if m.objects and all(SAFE_IDENT.match(o.ident) for o in m.objects)
-        and not any(
-            {(o.kind, o.ident) for o in m.objects} & {(o.kind, o.ident) for o in other.objects}
-            for other in migs if other is not m and other.objects))
-    conn = _DriftConn({(o.kind, o.ident): False for o in target.objects}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "fail"
-    assert out["value"] == 1
-    assert cells[target.filename]["status"] == "fail"
-    assert [f for f, c in cells.items() if c["status"] == "fail"] == [target.filename]
-
-
-def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
-    """Half-applied is ambiguous — a partial apply, or the parser mis-read the
-    file. Ambiguity warns; it must not page anyone at 3am."""
-    migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-    # The missing object must be declared by no other file in the window: a function that a later
-    # migration restates (health_liveness: 620, 621, 633, 655) would make those files fully absent.
-    declared = Counter((o.kind, o.ident) for m in migs for o in m.objects)
-    multi, gone = next((m, o) for m in migs if len(m.objects) >= 2
-                       for o in m.objects if declared[(o.kind, o.ident)] == 1)
-    conn = _DriftConn({(gone.kind, gone.ident): False}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "warn"
-    assert cells[multi.filename]["status"] == "warn"
-    assert not [f for f, c in cells.items() if c["status"] == "fail"]
-
-
-def test_migration_drift_reports_its_own_blind_spot(monkeypatch: Any) -> None:
-    """Migrations that only drop, grant, or update data declare nothing to probe. They must be
-    COUNTED and named, not silently treated as passing — the failure mode this sprint already
-    hit with a test that never ran: each is a Not measured cell saying so."""
-    from scripts.migration_objects import Migration, MigrationObject
-
-    window = [Migration(700, "700_grants_only.sql", []),
-              Migration(701, "701_a_table.sql", [MigrationObject("relation", "public.t")]),
-              Migration(702, "702_odd_ident.sql", [MigrationObject("relation", "no such ident!")])]
-    monkeypatch.setattr(platform_checks, "load_migrations", lambda *a, **k: window)
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert {f: c["status"] for f, c in cells.items()} == {
-        "700_grants_only.sql": "unknown", "701_a_table.sql": "ok", "702_odd_ident.sql": "unknown"}
-    assert "Unverifiable" in cells["700_grants_only.sql"]["message"]
-    assert out["status"] == "ok" and conn.probed == [("relation", "public.t")]
-
-
-@pytest.mark.parametrize("folder", ["missing", "empty"])
-def test_migration_drift_with_no_migration_files_is_not_measured(
-    folder: str, tmp_path: Path, monkeypatch: Any,
-) -> None:
-    """The worker image ships no migrations/ folder. Zero files probed is zero files
-    verified: it read `ok` ("All 0 checkable of the newest 0 migrations are present")."""
-    target = tmp_path / "migrations"
-    if folder == "empty":
-        target.mkdir()
-    monkeypatch.setattr(platform_checks, "_MIGRATIONS_DIR", target)
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert out["details"]["skipped"] == "no migration files on this host"
-    assert "Not measured" in out["message"]
-    assert conn.probed == [], "nothing to probe, so no statement is sent"
-
-
-def test_migration_drift_probes_only_safe_identifiers() -> None:
-    """to_regclass raises on a malformed identifier instead of returning NULL,
-    which would turn one odd migration into a crashed check."""
-    conn = _DriftConn({}, default=True)
-    check_migration_drift(conn, T)
-    for _kind, ident in conn.probed:
-        assert SAFE_IDENT.match(ident), ident
-
-
 def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
     from scripts import verify_pipeline as vp
 
@@ -1648,7 +1494,7 @@ def _unmeasured_results() -> list[dict[str, Any]]:
     sampled = _BoundConn({"": [(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")]})
     with mock.patch.object(platform_checks, "_MIGRATIONS_DIR",
                            Path("/no-such-checkout/migrations")):
-        no_migration_files = check_migration_drift(_DriftConn({}), T)
+        no_migration_files = check_migration_drift(_BoundConn(), T)
     return [
         *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled),
                                       _stub("uncelled", _uncelled)]),
