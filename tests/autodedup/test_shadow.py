@@ -677,8 +677,8 @@ def test_the_door_report_splits_a_block_key_and_marks_the_part_gained():
     held = _location(cast_obce_kod=8)
     row = {"zone": "band", "feats": {}}
     report = _arms({1: ({}, {}, part), 2: ({"source": "idnes"}, {}, {}), 3: ({}, {}, {}), 4: ({}, held, held),
-                    5: ({}, held, held)}, Settings(),
-                   pairs={(1, 2): (row, None), (2, 3): (row, row), (4, 5): (row, row)},
+                    5: ({}, held, held), 6: ({}, _location(cast_obce_kod=7), _location(cast_obce_kod=7))}, Settings(),
+                   pairs={(1, 2): (row, None), (2, 3): (row, row), (4, 5): (row, row), (5, 6): (row, row)},
                    lists={"merge_gained": [], "merge_lost": [[1, 2]]})
     assert report["block_key_split"] == {"count": 1, "pairs": [[1, 2, None, "idnes|sreality"]]}
     assert report["merge_lost"] == [[1, 2, "idnes|sreality", True]]
