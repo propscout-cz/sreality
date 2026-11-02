@@ -197,8 +197,7 @@ finish() {
 #       read-only, no window: install the pinned CLI, log in, plan all three projects and check each plan against
 #       its expected counts (0:0 unless named), scoped to <service> when one is named
 #   scripts/railway_iac_wizard.sh window <label> <adds> <destroys> <service>
-#       one window the merge coordinator runs: apply that project's pinned plan at the pull request head, merge at
-#       once, drift = 0 on main
+#       one window: apply that project's pinned plan at the pull request head, enqueue it at once, drift = 0 on main
 #   scripts/railway_iac_wizard.sh drift
 #       read-only, from a main checkout: does Railway still match main's .railway/railway.ts?
 #   scripts/railway_iac_wizard.sh runner-list
@@ -276,9 +275,9 @@ stop() {
   printf '\n  %s✗ STOP: %s%s\n' "$RED" "$1" "$RESET"
   note "Nothing else runs. Send the agent this message; the outputs are in $OUT."
   if [[ "$MODE" == window && "${BRAKE_ASKED:-0}" == 1 ]]; then
-    warn "Tell the merge coordinator the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
+    warn "The agent tells the engine session the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
   elif [[ "$MODE" == window ]]; then
-    warn "Tell the merge coordinator the window stopped here."
+    warn "The agent tells the engine session the window stopped here."
   fi
   exit 1
 }
@@ -446,7 +445,7 @@ checkout_is_pr_head() {
 
 window_gate() {
   local required=""
-  gate "Did the merge coordinator give its green light for THIS window? (a heads-up alone is not enough)"
+  gate "Has the agent told the engine session about THIS window? (a notice: it gives no go-ahead)"
   open_url "https://status.railway.com"
   gate "Does status.railway.com show no incident?"
   checkout_is_pr_head
@@ -585,7 +584,7 @@ mode_preflight() {
 }
 
 # window <label> <adds> <destroys> <service>: the plan is applied at the pull request head and the pull request
-# merges at once, so main declares nothing Railway lacks for longer than the merge takes.
+# enqueues at once, so main declares nothing Railway lacks for longer than the merge queue takes.
 mode_window() {
   local label="${1:-}" adds="${2:-}" destroys="${3:-}" service="${4:-}"
   if [[ -z "$label" || -z "${PROJECT_ID[$label]:-}" || ! "$adds" =~ ^[0-9]+$ || ! "$destroys" =~ ^[0-9]+$ \
@@ -601,14 +600,13 @@ mode_window() {
   ensure_cli
   ensure_login
   require_branch
-  # Everything that can fail on our side runs before the merge coordinator is asked for the brake, so a stop here
-  # wastes no brake.
+  # Everything that can fail on our side runs before the brake is set, so a stop here wastes no brake.
   window_gate
   pause
 
   stage "Brake"
   if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then
-    gate "Has the merge coordinator now set realtime_autodedup_interval_seconds to 0 (the brake)?"
+    gate "Has the agent, on your go, now set realtime_autodedup_interval_seconds to 0 (the brake)?"
     BRAKE_ASKED=1
     agent_reports "the autodedup_realtime lease in scheduled_jobs is clear (one SQL read)"
   elif [[ "$label" == worker ]]; then
@@ -652,8 +650,9 @@ request body's pre-merge checks; the deployment ids of $project's other services
   expect_no_drift "$label"
   pause
 
-  stage "Ready and merge, as one step"
-  say "The agent marks pull request #$PR_NUMBER ready; then merge it at once (or the merge coordinator does, on its light)."
+  stage "Ready and enqueue, as one step"
+  say "The agent marks pull request #$PR_NUMBER ready and enqueues it at once. The merge queue waits up to 5 minutes, then"
+  say "runs the required checks on the merged result; if a red check drops it, the agent fixes, pushes and enqueues again."
   open_url "$PR_URL"
   pause "Press Enter once the pull request is MERGED."
   local merge_sha slug i l s rc=3 contexts=()
@@ -716,9 +715,9 @@ and heartbeats)"
   finish
   say "Window done. Tell the agent to post the evidence (outputs in $OUT)."
   if [[ "$label" == worker ]]; then
-    say "Tell the merge coordinator: rollout done; it restores realtime_autodedup_interval_seconds."
+    say "Tell the agent: rollout done; it restores realtime_autodedup_interval_seconds and sends the engine session the merge SHA."
   else
-    say "Tell the merge coordinator: rollout done."
+    say "Tell the agent: rollout done; it sends the engine session the merge SHA."
   fi
 }
 

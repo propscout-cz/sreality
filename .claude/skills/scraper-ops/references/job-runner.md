@@ -193,19 +193,18 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
    github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
    watch `job/<name>` on Health. Green means asked, not done.
 
-## Runner-only operations outside the merge coordinator's windows (#2025-R2, ruled 2026-10-26)
+## Runner-only operations need no brake (#2025-R2, ruled 2026-10-26)
 
-The merge coordinator is a role (`docs/agents/issue-tracker.md` § Merging). Once W-1 has shown `sreality`'s
-deployment id unchanged by the job-runner apply, three kinds may run outside its windows: (a) an apply whose every
-change targets `service.job-runner`; (b) a Redeploy or Deploy Latest Commit of job-runner; (c) the gate-week drills
-below. Merges still wait for its light. Four conditions:
+Once W-1 has shown `sreality`'s deployment id unchanged by the job-runner apply, three kinds run with no autodedup
+brake: (a) an apply whose every change targets `service.job-runner`; (b) a Redeploy or Deploy Latest Commit of
+job-runner; (c) the gate-week drills below. Merges follow `docs/agents/issue-tracker.md` § Merging. Four conditions:
 1. The wizard's target check stays on. A change to shared or project-level variables, to the worker service or to the
-   API service books a window.
-2. Before drills C and D, the merge coordinator gets a one-line FYI with the time. No brake is needed.
-3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` needs the coordinator's
-   window, as merges do.
+   API service needs its own wizard window.
+2. Before drills C and D, the operator gives the engine session (§ Merging) a one-line FYI with the time.
+3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` tells the engine session
+   first, as merges do; it sets the brake if it must.
 4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and the
-   merge coordinator is told.
+   engine session is told.
 
 ## Runner drills (run for gate #2123 on 2026-11-01; every number and the exact SQL are on that ticket)
 

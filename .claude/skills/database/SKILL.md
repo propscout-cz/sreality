@@ -128,8 +128,8 @@ corresponding migration file silently breaks the codebase — future sessions or
 rebuilds will be missing the change. "Append-only" means **never rewrite migration
 history** (never edit an existing numbered file); it does **not** trap us into keeping
 dead schema — prune an unused table/column by writing a *new* forward migration that
-drops it (a destructive change — see the policy below). **Claim the next free number with the
-merge coordinator (`docs/agents/issue-tracker.md` § Merging) and confirm it at apply time** —
+drops it (a destructive change — see the policy below). **A number is claimed by being first
+on `main` (`docs/agents/issue-tracker.md` § Merging); re-check it at apply time** —
 parallel branches carry in-flight migrations; two genuine collisions
 already exist on disk (`276_browse_read_model.sql` / `276_listings_geo_cell_key.sql`,
 `277_browse_read_model_refresh.sql` / `277_candidates_archive_engine_columns.sql`) —

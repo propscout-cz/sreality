@@ -408,7 +408,7 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
 
 def test_a_runner_only_window_asks_no_brake() -> None:
     """#2025-R2 (a), ruled 2026-10-26: a change that targets only job-runner needs no autodedup brake, so
-    its window asks none (#2032's R2 references, W3's and W4's variables). The merge stays on the merge light."""
+    its window asks none (#2032's R2 references, W3's and W4's variables). The engine session is still told."""
     wizard = WIZARD.read_text(encoding="utf-8")
     assert re.search(r"^RUNNER=job-runner\b", wizard, re.M)
     window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
@@ -420,6 +420,19 @@ def test_a_runner_only_window_asks_no_brake() -> None:
     assert "#2025-R2" in runner_only and "$RUNNER" in runner_only and "BRAKE_ASKED" not in runner_only
     # A vite or API window skips the brake for its own reason, never the runner ruling's.
     assert "the worker's project" in otherwise and "#2025-R2" not in otherwise and "BRAKE_ASKED" not in otherwise
+
+
+def test_a_window_waits_on_no_coordinator_tells_the_engine_session_and_enqueues() -> None:
+    """Ruling 2026-11-02: every PR enqueues once CI is green, the engine session told first. The queue merges minutes
+    later, so the window waits for MERGED; the operator's apply stays the only way `.railway/` deploys."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    assert "coordinator" not in wizard and "green light" not in wizard and "merge it at once" not in wizard
+    gate = wizard.split("\nwindow_gate() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert "engine session" in gate.splitlines()[1]
+    window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert window.index('apply_pinned "$label"') < window.index("enqueues it") < window.index("MERGED")
+    finish = window.split("\n  finish\n", 1)[1]
+    assert finish.count("merge SHA") == 2 and finish.count("engine session") == 2
 
 
 def test_the_wizard_refuses_an_old_bash_before_its_first_associative_array() -> None:
