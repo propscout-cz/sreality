@@ -167,7 +167,7 @@ _ADDRESS_POINT_COLUMNS = """
        ap.kod_adm, ap.obec_unit_id, ap.obec_kod, ap.psc,
        ST_Y(ap.geom), ST_X(ap.geom), ap.ulice_kod, s.name_norm, s.name,
        ap.cislo_domovni, ap.cislo_orientacni, ap.znak_orientacniho,
-       ap.cast_obce_unit_id, ap.cast_obce_kod, ku.code, ap.typ_so"""
+       ap.cast_obce_unit_id, ap.cast_obce_kod, ku.code, ap.typ_so, ap.momc_unit_id"""
 
 # Every address-point read answers its KÚ in the SAME round trip — the drain's cost is round
 # trips, and FILL reads the bound point anyway. Binds the registry version FIRST.
@@ -638,7 +638,7 @@ def _address_point(row: Sequence[Any]) -> AddressPoint:
         ulice_kod=row[6], street_name_norm=row[7], street_name=row[8],
         cislo_domovni=row[9], cislo_orientacni=row[10], znak_orientacniho=row[11],
         cast_obce_unit_id=row[12], cast_obce_kod=row[13], katastr_kod=row[14],
-        typ_so=str(row[15]),
+        typ_so=str(row[15]), momc_unit_id=row[16],
     )
 
 

@@ -1006,3 +1006,24 @@ def test_a_region_word_the_bound_town_is_not_in_refuses(word):
 def test_a_region_word_that_agrees_or_names_no_register_unit_keeps_the_door(word):
     """A spelling is no disagreement: only a word the register holds, at that level, can disagree."""
     assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, word)).ruian_adm_kod == _VOKOVICE_DOOR
+
+
+def _praha_momc_mirror() -> mm.MiniMirror:
+    """A door in Praha 4, and the MOMC Praha 5 beside it."""
+    mirror = _door_mirror(AddressPoint(kod_adm=997, lat=_ELSEWHERE[0], lon=_ELSEWHERE[1], momc_unit_id=17,
+                                       **_PRAHA_DOOR))
+    mirror.units += [mm._unit(17, "momc", 500119, "Praha 4", "praha 4", "k19.o3100.b554782.m500119", parent=13),
+                     mm._unit(18, "momc", 539694, "Praha 5", "praha 5", "k19.o3100.b554782.m539694", parent=13)]
+    return mirror
+
+
+@pytest.mark.parametrize(("okres", "kod"), [("Praha 5", None), ("Praha 4", 997), ("PRAHA  4", 997), ("Praha", 997)],
+                         ids=["another-momc", "the-doors-momc", "spelled-otherwise", "no-momc-named"])
+def test_an_okres_word_naming_a_momc_checks_the_door(okres, kod):
+    words = (_PRAHA, mm.claim(7, "okres_name", value_text=okres))
+    assert _resolve(_pinned("gps", _ELSEWHERE, *words), _praha_momc_mirror()).ruian_adm_kod == kod
+
+
+def test_an_okres_word_naming_a_momc_refuses_a_door_outside_every_momc():
+    words = (_PRAHA, mm.claim(7, "okres_name", value_text="Praha 4"))
+    assert _resolve(_pinned("gps", _ON_DOOR, *words), _praha_momc_mirror()).ruian_adm_kod is None

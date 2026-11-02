@@ -27,7 +27,8 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 | A part claim that matched no část (a MOMC is none) | Nothing to check against |
 | A část the door is not in, at every rung | R2 takes the register's část and R3 carries none, so BIND keeps what the words claimed |
 | A town word the town did not come from: unknown, or out of reach, with the PSČ or a part claim binding the town | The door would stand against that word, though obec, část and PSČ agree. With no town word, the PSČ's or the part's town may still anchor a door |
-| An okres or kraj word the bound town is not in, read as `narrow_towns` reads it | The words disagree. A word the register does not hold at that level (`Praha 5` as an okres, `Vysočina` as a kraj) is a spelling and does not refuse. Measured 2026-11-02: 0 rows of the 4,230 lone doors (1 in 10) |
+| An okres or kraj word the bound town is not in, read as `narrow_towns` reads it | The words disagree. A word the register does not hold at that level (`Praha` as an okres, `Vysočina` as a kraj) is a spelling and does not refuse. Measured 2026-11-02: 0 rows of the 4,230 lone doors (1 in 10) |
+| An okres word naming a MOMC the door is not in (`Praha 5` on a Praha 4 door; a word naming the door's own MOMC keeps it) | The door's `momc_unit_id` rides the door read, no second lookup. Measured 2026-11-02: of 4,230 lone doors (1 in 10), 22 carry such a word, 11 on their own MOMC, 11 refused, ≈ 110 rows. A portal's `Praha N` can mean the wider správní obvod; such an ad loses a door, which costs nothing |
 | A PSČ the door does not carry | `door.psc` is on the read FILL makes anyway. A claim the normalizer rejected states no PSČ and is not read |
 
 ## Why 1 m, and why flats and houses

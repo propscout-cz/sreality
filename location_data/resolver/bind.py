@@ -374,7 +374,7 @@ def narrow_towns(
     ):
         if not keys or len(surviving) <= 1:
             continue
-        wanted = _region_codes(keys, label, registry)
+        wanted = {u.code for u in _units_named(keys, label, registry)}
         filtered = [u for u in surviving if getattr(u, attr) in wanted]
         if filtered:
             surviving = filtered
@@ -391,15 +391,15 @@ def narrow_towns(
     return surviving, applied
 
 
-def _region_codes(keys: Sequence[str], level: str, registry: RegistryView) -> set[int]:
-    return {u.code for key in keys for u in registry.admin_units_by_name(key, levels=(level,))}
+def _units_named(keys: Sequence[str], level: str, registry: RegistryView) -> list[AdminUnit]:
+    return [u for key in keys for u in registry.admin_units_by_name(key, levels=(level,))]
 
 
 def _region_disagrees(town: AdminUnit, constraints: Constraints, registry: RegistryView) -> bool:
     """An okres or kraj word the register holds at that level, and the town lies outside it. A word
-    it does not hold there ("Praha 5" as an okres, "Vysočina" as a kraj) is a spelling, not a
-    disagreement."""
-    return any((wanted := _region_codes(keys, level, registry)) and getattr(town, attr) not in wanted
+    it does not hold there ("Vysočina" as a kraj) is a spelling, not a disagreement."""
+    return any((wanted := {u.code for u in _units_named(keys, level, registry)})
+               and getattr(town, attr) not in wanted
                for keys, attr, level in ((constraints.okres_keys, "okres_kod", "okres"),
                                          (constraints.kraj_keys, "kraj_kod", "kraj")))
 
@@ -851,6 +851,9 @@ def bind(
             ambiguous=ambiguous,
             source_claim_ids=top.source_claim_ids,
             words_part_ids=tuple(sorted({p.unit.unit_id for p in (*said, *found)})),
+            # An okres word that is really a MOMC ("Praha 5", the portals' old district).
+            words_momc_ids=tuple(sorted({
+                u.unit_id for u in _units_named(constraints.okres_keys, "momc", registry)})),
             # A part claim that matched no část (a MOMC is none), a street line that bound nothing
             # and names no part (`ambiguous_streets` too), a locality line the town was only
             # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
@@ -1116,6 +1119,7 @@ def pin_door(
     if (door is None or door.obec_kod != binding.obec_kod
             or (binding.ulice_kod is not None and door.ulice_kod != binding.ulice_kod)
             or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
+            or (binding.words_momc_ids and door.momc_unit_id not in binding.words_momc_ids)
             or (constraints.psc is not None and door.psc != constraints.psc)):
         return binding
     return replace(
