@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.toolkit._parked_levels import _PARKED_CONDITION_LEVELS
 from toolkit import filter_compiler
 from toolkit import filter_registry as fr
 
@@ -365,12 +366,6 @@ def test_agent_find_comparables_relaxed_descriptions_come_from_registry() -> Non
     schema = tools["find_comparables_relaxed"].input_schema
     for fid in ("min_price_czk", "has_balcony", "category_main", "ownership"):
         assert schema["properties"][fid]["description"] == fr.description(fid)
-
-
-_PARKED_CONDITION_LEVELS = frozenset({
-    "building_condition_level_min", "building_condition_level_max",
-    "apartment_condition_level_min", "apartment_condition_level_max",
-})
 
 
 def test_the_parked_condition_levels_reach_no_surface() -> None:

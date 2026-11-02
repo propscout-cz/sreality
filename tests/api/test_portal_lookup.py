@@ -31,7 +31,7 @@ from api import portal_lookup as pl
 from api import schemas as s
 from api import tenant_pool
 from tests.api._script_conn import ScriptConn
-from tests.test_sql_placeholders import _invalid_placeholder
+from tests.sql_corpus import _invalid_placeholder
 from toolkit.measures import plot_area_sql
 
 _USER = uuid.uuid4()

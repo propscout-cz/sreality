@@ -35,8 +35,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests._read_contract import SCOPE_ARGS, _balanced_block, _builder_keys, _strip_ts_comments, _ts
+
 REPO = Path(__file__).resolve().parents[1]
-QUERIES_TS = REPO / "frontend" / "src" / "lib" / "queries.ts"
 MIGRATIONS = REPO / "migrations"
 
 # The one parameter browse_map_cells has on purpose and browse_stats_properties does not.
@@ -47,57 +48,7 @@ _MAP_ONLY_PARAMS = {"point_budget"}
 _STATS_ONLY_PARAMS = {"spec"}
 
 
-def _ts() -> str:
-    return QUERIES_TS.read_text(encoding="utf-8")
-
-
-def _balanced_block(src: str, open_at: int) -> str:
-    """The substring from `open_at` (which must index a `{`) to its matching `}`."""
-    assert src[open_at] == "{", src[open_at: open_at + 40]
-    depth, i = 0, open_at
-    while i < len(src):
-        if src[i] == "{":
-            depth += 1
-        elif src[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return src[open_at: i + 1]
-        i += 1
-    raise AssertionError("unbalanced braces in queries.ts")
-
-
-def _strip_ts_comments(src: str) -> str:
-    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", " ", src)
-
-
-def _builder_keys() -> set[str]:
-    """The snake_case keys `buildBrowseStatsArgs` puts on the wire, the prefilter
-    allowlists it reads off `pre` included."""
-    src = _ts()
-    at = src.index("export const buildBrowseStatsArgs")
-    block = _balanced_block(src, src.index("{", src.index("return {", at)))
-    body = _strip_ts_comments(block)
-    keys = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", body, flags=re.MULTILINE))
-    # The prefilter allowlists ride in from the ONE resolved object (`pre`), by name: a
-    # caller cannot hand the builder a hand-mapped subset any more.
-    for field in ("obecIds", "propertyIds"):
-        assert re.search(rf"\bpre\.{field}\b", body), (
-            f"buildBrowseStatsArgs no longer reads `pre.{field}` — that allowlist the "
-            "caller resolves over the network has stopped reaching the RPC."
-        )
-    assert len(keys) > 60, f"only parsed {len(keys)} builder keys — the parse broke"
-    # The curated-set scope arrives as a spread of the one scope builder (migration 629).
-    assert re.search(r"\.\.\.scopeArgs\(f\)", body), (
-        "buildBrowseStatsArgs no longer spreads scopeArgs(f) — the Stats and map cohorts "
-        "would ignore the tag / collection / pipeline scope the list honours."
-    )
-    return keys | SCOPE_ARGS
-
-
 SETSCOPE_TS = REPO / "frontend" / "src" / "lib" / "setScope.ts"
-SCOPE_ARGS = {f"{s}_{side}" for s in ("tags", "collections", "pipeline")
-              for side in ("set", "in", "out")}
 
 
 def _rpc_call_block(fn: str) -> str:
