@@ -1883,7 +1883,7 @@ def rearm_sighted_given_up(conn: psycopg.Connection, source: str, native_ids: Se
         cur.execute(
             "UPDATE listing_detail_queue SET given_up = false, attempts = 0, enqueued_at = now() "
             "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up "
-            "AND claimed_at IS NULL AND enqueued_at < now() - %s",
+            "AND claimed_at IS NULL AND enqueued_at < now() - %s::interval",
             (source, ids, delist_policy.RECHECK_THROTTLE),
         )
         return cur.rowcount or 0
