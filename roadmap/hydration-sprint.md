@@ -648,6 +648,12 @@ bytes excluded) and settle time, measured by `npm run smoke-check:prod`:
 | /notifications | 9 | 5 | 5 | 5 | 5 | 5 | server work is ~15 ms; the rest is transport |
 | /brokers | 11 | 7 | 7 | 7 | 7 | 7 | leaderboard is server-bound, see W10a |
 
+**Since 2026-11-02 (#2231) the count is every request with an Authorization header.** The old host
+list had missed the API since the 10-25 domain cutover, so this table's later readings cannot be
+compared with these. First reading, no ceiling moved: /browse 31–32 (over its 27), /pipeline 17,
+/collections 7, /watchdog 7, /notifications 7. Desktop /brokers has redirected to Browse's Makléři
+tab since 10-29, so that sweep row now fails as a redirect (13 requests, over its 12).
+
 **Request count is not the only ratchet, and W7a is where that shows.** Two of the three waves in
 this batch moved a number on this table; W7a moved none and is still the biggest structural change
 of the three. What it earned instead is a *behavioural* rail — the smoke check now asserts Browse

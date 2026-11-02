@@ -61,7 +61,7 @@ _LISTINGS_SQL = """
 """
 
 # The register's names for a picked code, as (street, obec, okres); the okres is the obec's
-# parent at that level (Praha's parent is its kraj, so it has none). No row: not current.
+# parent. No row: not current.
 _REGISTER_SQL: dict[str, str] = {
     "adresni_misto": "SELECT 1 FROM ruian_address_points WHERE kod_adm = %s AND valid_to IS NULL",
     "ulice": """

@@ -236,9 +236,9 @@ def test_a_part_with_no_doors_stands_at_its_towns_point_and_a_momc_is_no_part():
     a reach (v5.8). A claimed MOMC is a key, never the quarter (W5, ruling Q1): obec grain."""
     mirror = mm.default_mirror()
     mirror.units += [mm._unit(98, "cast_obce", 490999, "Prázdná", "prazdna",
-                              "k19.o3100.b554782.c490999", parent=13),
+                              "k19.o9999.b554782.c490999", parent=13),
                      mm._unit(99, "momc", 500178, "Praha 6", "praha 6",
-                              "k19.o3100.b554782.m500178", parent=13)]
+                              "k19.o9999.b554782.m500178", parent=13)]
     for part, kod, grain in (("Prázdná", 490999, "cast_obce_or_quarter"),
                              ("Praha 6", None, "obec")):
         resolution = _resolve([

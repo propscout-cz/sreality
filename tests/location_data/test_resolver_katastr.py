@@ -36,13 +36,13 @@ def _mirror() -> mm.MiniMirror:
     units = [
         *base.units,
         mm._unit(40, "katastralni_uzemi", VOKOVICE_KU, "Vokovice", "vokovice",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(41, "katastralni_uzemi", VELESLAVIN_KU, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(43, "cast_obce", 490211, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782.c490211", parent=13),
+                 "k19.o9999.b554782.c490211", parent=13),
         mm._unit(44, "cast_obce", 490999, "Prázdná", "prazdna",
-                 "k19.o3100.b554782.c490999", parent=13),
+                 "k19.o9999.b554782.c490999", parent=13),
     ]
     points = [
         replace(p, katastr_kod=VOKOVICE_KU) if p.ulice_kod == 101 else p

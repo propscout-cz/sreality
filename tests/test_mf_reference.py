@@ -146,10 +146,10 @@ def _unit(cur: Any, version: int, level: str, code: int, name: str,
           parent: int | None = None, valid_to: str | None = None) -> int:
     cur.execute(
         "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, "
-        "  display_path, valid_from, valid_to, first_version_id, last_version_id) "
-        "VALUES (%s, %s, %s, lower(%s), %s, %s::ltree, %s, '2020-01-01', %s, %s, %s) "
+        "  valid_from, valid_to, first_version_id, last_version_id) "
+        "VALUES (%s, %s, %s, lower(%s), %s, %s::ltree, '2020-01-01', %s, %s, %s) "
         "RETURNING id",
-        (level, code, name, name, parent, f"{level}_{code}", name, valid_to, version, version),
+        (level, code, name, name, parent, f"{level}_{code}", valid_to, version, version),
     )
     return int(cur.fetchone()[0])
 

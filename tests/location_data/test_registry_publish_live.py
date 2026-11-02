@@ -71,11 +71,10 @@ def _unit(conn, level: str, code: int, first: int, last: int,
           valid_to: datetime.date | None = None) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, display_path, "
+            "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, "
             "valid_from, valid_to, first_version_id, last_version_id) "
-            "VALUES (%s::ruian_level, %s, %s, %s, %s::ltree, %s, %s, %s, %s, %s) RETURNING id",
-            (level, code, str(code), str(code), f"t{code}", str(code), V1_DATE, valid_to,
-             first, last),
+            "VALUES (%s::ruian_level, %s, %s, %s, %s::ltree, %s, %s, %s, %s) RETURNING id",
+            (level, code, str(code), str(code), f"t{code}", V1_DATE, valid_to, first, last),
         )
         return int(cur.fetchone()[0])
 
@@ -149,7 +148,7 @@ def test_completeness_reports_members_without_both_rows_and_excuses_only_degener
                     "AND registry_version_id = %s AND purpose = 'pip'", (half, v2))
     _unit(conn, "katastralni_uzemi", 9_900_018, v1, v2)          # complete at v1 only
     rb.load_feature(conn, _feature("katastralni_uzemi", 9_900_018, 14.60, 50.10), ku, v1)
-    _unit(conn, "spravni_obvod", 9_900_019, v1, v2)              # not a publish level
+    _unit(conn, "momc", 9_900_019, v1, v2)                       # not a publish level
 
     assert rb.missing_geometry(conn, v2) == [
         ("katastralni_uzemi", 3, [9_900_016, 9_900_017, 9_900_018]),

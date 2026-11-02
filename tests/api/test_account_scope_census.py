@@ -55,6 +55,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+from tests.api._ast_census import _NESTED, _qualnames
+
 _API = pathlib.Path(__file__).resolve().parents[2] / "api"
 
 _SCOPE_PARAMS = frozenset({"account_id", "account_ids"})
@@ -121,23 +123,6 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
 }
 
 
-def _qualnames(tree: ast.Module) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
-    out: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = []
-
-    def walk(node: ast.AST, prefix: str) -> None:
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                name = f"{prefix}::{child.name}" if prefix else child.name
-                if not isinstance(child, ast.ClassDef):
-                    out.append((name, child))
-                walk(child, name)
-            else:
-                walk(child, prefix)
-
-    walk(tree, "")
-    return out
-
-
 def _api_modules() -> list[tuple[str, ast.Module]]:
     mods = []
     for path in sorted(_API.rglob("*.py")):
@@ -162,9 +147,6 @@ def _defaulted_params(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
         and isinstance(default, ast.Constant)
         and default.value is None
     ]
-
-
-_NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def _calls_resolver(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

@@ -8,37 +8,9 @@ portals that insert NULL there, which reads as "unattributed", not as a bug.
 from __future__ import annotations
 
 import re
-from typing import Any
 
+from tests._cursor_stub import _Conn
 from toolkit import brokers
-
-
-class _Cur:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.rows, self.seen = rows, []
-
-    def __enter__(self) -> "_Cur":
-        return self
-
-    def __exit__(self, *a: Any) -> bool:
-        return False
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.seen.append((sql, params))
-
-    def fetchall(self) -> list[dict[str, Any]]:
-        return list(self.rows)
-
-    def fetchone(self) -> dict[str, Any] | None:
-        return self.rows[0] if self.rows else None
-
-
-class _Conn:
-    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
-        self.cur = _Cur(rows or [])
-
-    def cursor(self, **kw: Any) -> _Cur:
-        return self.cur
 
 
 def test_listing_brokers_dedupes_and_skips_the_query_when_empty() -> None:

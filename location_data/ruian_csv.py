@@ -65,10 +65,6 @@ STRUKT_MEMBERS: dict[str, tuple[str, tuple[str, ...]]] = {
         "strukturovane-CSV/vazby-katastr-uzemi-cr.csv",
         ("ZSJ_KOD", "KATUZ_KOD", "OBEC_KOD"),
     ),
-    "pou": (
-        "strukturovane-CSV/vazby-orp-cr.csv",
-        ("POU_KOD", "ORP_KOD", "OKRES_KOD", "VUSC_KOD", "REGSOUDR_KOD", "STAT_KOD"),
-    ),
     "momc_statutarni": (
         "strukturovane-CSV/vazby-momc-statutarni-mesta.csv",
         ("MOMC_KOD", "OP_KOD", "OBEC_KOD", "POU_KOD", "ORP_KOD", "VUSC_KOD",

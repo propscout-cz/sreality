@@ -51,9 +51,9 @@ def added_lines(base: str) -> list[tuple[str, int, str]]:
 
 
 def exists_in_code(token: str) -> bool:
-    """A whole-word occurrence of token anywhere in the code trees."""
-    includes = [f"--include={g}" for g in CODE_GLOBS]
-    r = subprocess.run(["grep", "-rqw", *includes, "--", token, *CODE_TREES], capture_output=True)
+    """A whole-word occurrence of token anywhere in the code trees at the committed head."""
+    paths = [f"{tree}/{glob}" for tree in CODE_TREES for glob in CODE_GLOBS]
+    r = subprocess.run(["git", "grep", "-qw", "-e", token, "HEAD", "--", *paths], capture_output=True)
     return r.returncode == 0
 
 

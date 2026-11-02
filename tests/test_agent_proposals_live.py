@@ -339,8 +339,8 @@ def test_a_watchdogs_places_come_from_ruian_not_the_model(w: World) -> None:
     code = 554_782
     version = w.one("INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline) "
                     "VALUES (%s, 'baseline', '2026-09-01', '{}', 'test', 'test') RETURNING id", uuid.uuid4().hex)
-    w.svc.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, path, display_path, valid_from, first_version_id, "
-                  "last_version_id) VALUES ('obec', %s, 'Testov', 'testov', 'obec_554782', 'Testov', '2020-01-01', %s, %s)",
+    w.svc.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, first_version_id, "
+                  "last_version_id) VALUES ('obec', %s, 'Testov', 'testov', 'obec_554782', '2020-01-01', %s, %s)",
                   (code, version, version))
     real = w.one("SELECT name FROM ruian_place_names_public WHERE level = 'obec' AND code = %s", code)
     lie = {"name": "Praha 1 (hezky)", "level": "obec", "id": code}
