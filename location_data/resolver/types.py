@@ -375,7 +375,7 @@ class Position:
     # not. `street_point` is W18's: the centroid of a bound street's address points, which
     # outranks a pin that is blurred, absent, or off the street. A row keeps `none` only
     # when nothing Czech bound at all.
-    origin: str  # registry_point | pin_door | street_point | portal_pin | admin_centroid | none
+    origin: str  # registry_point | street_point | portal_pin | admin_centroid | none
     blurred: bool = False
     registry_pin_distance_m: float | None = None
     # The street reaches this far from `lat`/`lon` (W18) — the floor under the published

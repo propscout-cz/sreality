@@ -728,7 +728,8 @@ def test_an_exact_pin_names_the_one_door_inside_the_words(words, kod, ulice):
     row = _resolve(_pinned("gps", _ON_DOOR, *words))
     door = next(p for p in mm.default_mirror().points if p.kod_adm == kod)
     assert (row.ruian_adm_kod, row.ulice_kod, row.granularity) == (kod, ulice, "address_point")
-    assert (row.lat, row.lon) == (door.lat, door.lon), "the row stands on the door"
+    assert (row.lat, row.lon) == _ON_DOOR, "the door names the row; the row keeps the ad's own pin"
+    assert (row.lat, row.lon) != (door.lat, door.lon)
     assert (row.house_number_cp, row.house_number_co) == ("487", "40")
     assert (row.cast_obce_name, row.street_name) == ("Vokovice", "Nad Bořislavkou")
     assert row.uncertainty_radius_m == step_grade.RADIUS_M["address_point"]
@@ -759,17 +760,22 @@ def test_a_door_with_no_street_is_a_door():
     assert (row.granularity, row.house_number_cp) == ("address_point", "7")
 
 
-def test_the_origin_is_pin_door_and_only_the_refined_rung_has_it():
+def test_a_refined_row_keeps_the_ads_own_pin_and_the_door_only_names_it():
+    """Two pins within 1 m of one door must not meet as one `pin_key` in the engine (`same_exact_pin`, pin
+    population): the door gives the keys and the numbers, never the point."""
     claims = _pinned("gps", _ON_DOOR, _PRAHA)
     declared = step_bind.read_declared_precision(claims)
     binding = step_bind.pin_door(
         _bind(claims), step_bind.Constraints(), claims[1], stored=claims, ad_type="byt",
         declared=declared, pin_inside_bound_obec=True, registry=mm.default_mirror())
-    assert (binding.target_kind, binding.rung) == ("address_point", step_bind.PIN_DOOR_RUNG)
+    assert (binding.target_kind, binding.rung, binding.ruian_adm_kod) == (
+        "address_point", step_bind.PIN_DOOR_RUNG, _VOKOVICE_DOOR)
     assert claims[1].id in binding.source_claim_ids
     position = step_bind.place(binding, claims[1], pin_inside_bound_obec=True, declared=declared)
-    assert position.origin == "pin_door"
-    assert position.registry_pin_distance_m < step_bind.PIN_DOOR_M
+    assert (position.lat, position.lon, position.origin) == (*_ON_DOOR, "portal_pin")
+    other = _resolve(_pinned("gps", (50.100996, 14.347996), _PRAHA))
+    mine = _resolve(claims)
+    assert other.ruian_adm_kod == mine.ruian_adm_kod and (other.lat, other.lon) != (mine.lat, mine.lon)
 
 
 @pytest.mark.parametrize(("doors", "words", "pin", "grain"), [

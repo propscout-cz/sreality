@@ -135,7 +135,7 @@ from __future__ import annotations
 #      whose words bound a town (or a street or část) and named no door, its exact pin (not declared
 #      blurred) inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing
 #      with the words' obec, street, every část they claim and their PSČ. The row becomes that address
-#      point (rung R5) and stands on the door. Commercial, plots and other: no door from a pin. Two
+#      point (rung R5) and keeps the ad's own pin as its position. Commercial, plots and other: no door from a pin. Two
 #      doors, a door elsewhere, or words no door can be checked against (a street line that bound
 #      nothing, a digit in it, any door claim, a composed locality line, a part claim that matched no
 #      část) refine nothing. At 1 m a pin-named door agrees with a sibling ad's as often as two stated

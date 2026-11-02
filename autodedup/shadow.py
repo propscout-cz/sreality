@@ -21,20 +21,24 @@ import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, NamedTuple
+from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
 
 import psycopg
 
 from autodedup.apply_scope import SCOPE_SETTING, Member, Scope, scope_fields
 from autodedup.apply_sql import SETTING_SQL
-from autodedup.blocking import SPLIT_CITY_OBEC_KODS
+from autodedup.blocking import SPLIT_CITY_OBEC_KODS, BlockIndex
 from autodedup.cohort import ids_block, parse_blocks
-from autodedup.evaluate import DIFFERENT, RULINGS_FILES, SAME, read_rulings
+from autodedup.dataset import Listing
+from autodedup.evaluate import DIFFERENT, RULINGS_FILES, SAME, RunView, read_rulings
 from autodedup.export import ARTIFACT_NAME, build_location, fetch_block_ids, run_export
+from autodedup.fingerprint import Fingerprint
 from autodedup.incremental import GENERATION
+from autodedup.indistinguishable import _cp_of, _filed_apart, stored_house_number_conflict
 from autodedup.incremental_sql import RT_CALIBRATION_SCORER_SQL
 from autodedup.labels import PairKey, pair_key
 from autodedup.labels_lane import DEFAULT_GENERATION, run_labels
+from autodedup.settings import Settings
 
 POSITIONS_FILE: str = "positions.jsonl"
 MOVERS_FILE: str = "movers.jsonl"
@@ -369,6 +373,115 @@ def judge(report: dict[str, Any], done: Override, *, base_e111: dict[str, Any],
         "d83_touching_movers": {name: [row for row in lists[name]
                                        if row[0] in done.changed or row[1] in done.changed]
                                 for name in D83_EDGES},
+    }
+
+
+class Arm(NamedTuple):
+    """One arm of the gate: what `harness run` wrote, over which adverts and fingerprints."""
+
+    run: RunView
+    listings: Mapping[int, Listing]
+    fps: Mapping[int, Fingerprint]
+
+
+def _blockers(arm: Arm, changed: set[int], settings: Settings) -> tuple[dict[PairKey, Any], ...]:
+    """(E242, E272) over the stored rows touching a mover: the two door readings that can keep a
+    pair apart. E272 is `_filed_apart` on a pair stating two storeys, the case its excuse removal
+    can reach."""
+    e242: dict[PairKey, Any] = {}
+    e272: dict[PairKey, Any] = {}
+    for key, row in arm.run.rows.items():
+        if key[0] not in changed and key[1] not in changed:
+            continue
+        a, b = arm.listings[key[0]], arm.listings[key[1]]
+        if stored_house_number_conflict(a, b, settings) is not None:
+            e242[key] = row.get("zone")
+        if (a.floor is not None and b.floor is not None and a.floor != b.floor
+                and _filed_apart(a, b, settings)):
+            e272[key] = row.get("zone")
+    return e242, e272
+
+
+def _moved(base: dict[PairKey, Any], candidate: dict[PairKey, Any]) -> dict[str, Any]:
+    return {"base": len(base), "candidate": len(candidate),
+            "new": [[*key, candidate[key]] for key in sorted(set(candidate) - set(base))],
+            "gone": [[*key, base[key]] for key in sorted(set(base) - set(candidate))]}
+
+
+def _index(fps: Mapping[int, Fingerprint], settings: Settings) -> BlockIndex:
+    index = BlockIndex(settings)
+    for listing_id in sorted(fps):
+        index.add(fps[listing_id])
+    return index.finalize()
+
+
+def _addr_key(index: BlockIndex, fp: Fingerprint) -> Any:
+    return next((key for probe, key in index.index_keys(fp) if probe == "addr"), None)
+
+
+def _two_doors(a: Listing, b: Listing) -> tuple[int, int] | None:
+    """One building holding two different doors. The mirror has no building code, so č.p. + část
+    is the proxy (the cohort's `cast_obce_kod` is 1:1 with the unit id)."""
+    left, right = a.location, b.location
+    if (left.ruian_adm_kod and right.ruian_adm_kod and left.ruian_adm_kod != right.ruian_adm_kod
+            and left.cast_obce_kod and left.cast_obce_kod == right.cast_obce_kod
+            and _cp_of(left.house_number) and _cp_of(left.house_number) == _cp_of(right.house_number)):
+        return left.ruian_adm_kod, right.ruian_adm_kod
+    return None
+
+
+def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: set[int],
+                settings: Settings) -> dict[str, Any]:
+    """What a door does to the engine, base against candidate, with the pair ids. It never decides:
+    PASS stays `judge`'s. Blockers and `same_house_number` read the STORED rows, so a pair under the
+    store floor is not in them; retrieval (`addr_new`, `cap_displaced`, the two-door pairs) reads
+    every candidate pair, off the cohort pass's own `BlockIndex` in each arm."""
+    gained = {i for i in changed if base.listings[i].location.ruian_adm_kod is None
+              and candidate.listings[i].location.ruian_adm_kod is not None}
+    e242_base, e272_base = _blockers(base, changed, settings)
+    e242_candidate, e272_candidate = _blockers(candidate, changed, settings)
+    to_one = []
+    for key, row in sorted(candidate.run.rows.items()):
+        value, present = (row.get("feats") or {}).get("same_house_number", (0.0, False))
+        was = (base.run.rows.get(key, {}).get("feats") or {}).get("same_house_number", (0.0, False))
+        if present and value == 1.0 and not (was[1] and was[0] == 1.0):
+            to_one.append([*key, row.get("zone")])
+    index_base, index_candidate = _index(base.fps, settings), _index(candidate.fps, settings)
+    addr_base = {i: _addr_key(index_base, fp) for i, fp in base.fps.items()}
+    addr_new: set[PairKey] = set()
+    doors: dict[PairKey, tuple[int, int]] = {}
+    at_cap: dict[int, set[int]] = {}
+    for i, fp in candidate.fps.items():
+        found = index_candidate.candidates(fp)
+        if len(found) >= settings.max_candidates_per_listing:
+            at_cap[i] = set(found)
+        for other, probes in found.items():
+            key = pair_key(i, other)
+            if "addr" in probes and (addr_base.get(i) is None or addr_base[i] != addr_base.get(other)):
+                addr_new.add(key)
+            if (i in gained or other in gained) and key not in doors:
+                if (pair := _two_doors(candidate.listings[key[0]], candidate.listings[key[1]])):
+                    doors[key] = pair
+    displaced: list[list[Any]] = []
+    for i, found in sorted(at_cap.items()):
+        fp = candidate.fps[i]
+        for other in sorted(set(index_base.candidates(base.fps[i])) - found):
+            shared = set(index_candidate.probe_keys(fp)) & set(index_candidate.index_keys(candidate.fps[other]))
+            if (any(token not in index_candidate.exploded[probe] for probe, token in shared)
+                    and i not in index_candidate.candidates(candidate.fps[other])):
+                key = pair_key(i, other)
+                displaced.append([*key, base.run.rows.get(key, {}).get("zone")])
+    zone = lambda key: candidate.run.rows.get(key, {}).get("zone")  # noqa: E731
+    return {
+        "door_gainers": len(gained),
+        "e242": _moved(e242_base, e242_candidate),
+        "e272": _moved(e272_base, e272_candidate),
+        "same_house_number_to_1": to_one,
+        "addr_new": [[*key, zone(key)] for key in sorted(addr_new)],
+        "cap_displaced": displaced,
+        "merge_gained": list(lists["merge_gained"]),
+        "merge_lost": list(lists["merge_lost"]),
+        "two_doors_one_building": [[*key, *pair, zone(key)] for key, pair in sorted(doors.items())],
     }
 
 

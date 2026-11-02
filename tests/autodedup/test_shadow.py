@@ -12,6 +12,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from typing import Any
 import pytest
 
 from autodedup import harness, shadow
+from autodedup.evaluate import RunView
 from autodedup.export import build_location
 from autodedup.settings import Settings
 from tests.autodedup.test_engine_e2e import (
@@ -28,6 +30,7 @@ from tests.autodedup.test_engine_e2e import (
     REPOST_A,
     REPOST_B,
     _listing,
+    _location,
     build_records,
 )
 
@@ -516,3 +519,86 @@ class _Conn:
 
     def close(self) -> None:
         return None
+
+
+# ------------------------------------------------------------------ the door report
+
+
+def _door(**over: Any) -> dict[str, Any]:
+    return {"street_key": "turnov|hluboka", "psc": "51101", "granularity": "address_point",
+            "granularity_rank": 80, "is_address_grain": True, "uncertainty_radius_m": 10.0, **over}
+
+
+def _arms(rows: dict[int, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]], settings: Settings,
+          pairs: dict[tuple[int, int], tuple[dict[str, Any], dict[str, Any]]] = {},  # noqa: B006
+          lists: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`door_report` over real fingerprints: id -> (the advert's fields, base door, candidate door)."""
+    arms, ids = [], sorted(rows)
+    for arm, name in ((1, "base"), (2, "candidate")):
+        path = Path(f"{tempfile.mkdtemp()}/{name}.jsonl.gz")
+        records = [{"t": "meta", "exported_at": "2026-09-16T10:00:00+00:00", "generator_version": "t",
+                    "blocks": [], "counts": {}, "params": {"catalog_df": 8}},
+                   *(_listing(i, "turnov", location=_location(**rows[i][arm]),
+                              **{"disposition": "2+1", "area_m2": 55.0, **rows[i][0]}) for i in ids)]
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(record) + "\n" for record in records)
+        data = harness.load(path)
+        run = RunView({key: value[arm - 1] for key, value in pairs.items() if value[arm - 1]}, {})
+        arms.append(shadow.Arm(run, data.listings, harness.fingerprints_of(data, settings)))
+    changed = {i for i in ids if rows[i][1] != rows[i][2]}
+    return shadow.door_report(*arms, lists or {"merge_gained": [], "merge_lost": []}, changed, settings)
+
+
+def test_the_door_report_names_new_addr_pairs_flips_and_two_doors_in_one_building():
+    same = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7", cast_obce_kod=9)
+    one = _door(ruian_adm_kod=702, house_number="9/1", house_number_cp="9", cast_obce_kod=9)
+    two = _door(ruian_adm_kod=703, house_number="9/3", house_number_cp="9", cast_obce_kod=9)
+    far = _door(ruian_adm_kod=704, house_number="9/5", house_number_cp="9", cast_obce_kod=8)
+    flip = {"zone": "band", "feats": {"same_house_number": [1.0, True]}}
+    door = _arms({1: ({}, {}, same), 2: ({}, {}, same), 3: ({}, {}, one), 4: ({}, {}, two),
+                  5: ({}, {}, far)}, Settings(),
+                 pairs={(1, 2): ({"zone": "band", "feats": {"same_house_number": [0.0, False]}}, flip)},
+                 lists={"merge_gained": [[1, 2]], "merge_lost": [[3, 4]]})
+    assert door["door_gainers"] == 5
+    assert door["same_house_number_to_1"] == [[1, 2, "band"]]
+    assert [1, 2, "band"] in door["addr_new"] and not door["cap_displaced"]
+    assert door["two_doors_one_building"] == [[3, 4, 702, 703, None]], "another část is no building"
+    assert (door["merge_gained"], door["merge_lost"]) == ([[1, 2]], [[3, 4]])
+
+
+def test_the_door_report_names_a_pair_the_new_addr_candidate_pushes_past_the_cap():
+    """Cap 1: B reached M in the base and now spends its one slot on A through `addr`; M spends
+    its own on A, so no side reaches the pair. (A, M) survives from M's side."""
+    door = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    report = _arms({1: ({}, {}, {}), 2: ({}, {}, door), 3: ({}, {}, door)},
+                   Settings(max_candidates_per_listing=1))
+    assert [row[:2] for row in report["cap_displaced"]] == [[1, 3]]
+    assert [2, 3, None] in report["addr_new"]
+
+
+def test_the_door_report_names_new_and_gone_blockers():
+    """E242 and E272 fire off the door the wave gave; a blocker the base held and the move took away is `gone`."""
+    settings = Settings(d43_stored_house_number="guarded", d43_floor_sequential_address_split=True)
+    rent = {"category_type": "pronajem", "source": "sreality", "floor": 2, "price": 15_000,
+            "description": " ".join(f"Pronajmeme byt cislo {n} se slunecnym balkonem v klidne casti Turnova."
+                                    for n in range(12)),
+            "broker_key": "one", "broker_firm_id": 1}
+    other = {**rent, "floor": 3, "price": 19_000, "broker_key": "two", "broker_firm_id": 2,
+             "description": " ".join(f"Zahrada a vyhled {n} nedaleko nadrazi, kuchyn po rekonstrukci, sklep."
+                                     for n in range(12))}
+    door_a = _door(ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    door_b = _door(ruian_adm_kod=702, house_number="9", house_number_cp="9")
+    row = {"zone": "band", "feats": {}}
+    report = _arms({1: (rent, {}, door_a), 2: (other, {}, door_b)}, settings, pairs={(1, 2): (row, row)})
+    assert report["e242"]["new"] == [[1, 2, "band"]] and report["e242"]["candidate"] == 1
+    assert report["e272"]["new"] == [[1, 2, "band"]] and not report["e272"]["gone"]
+    undone = _arms({1: (rent, door_a, {}), 2: (other, door_b, {})}, settings, pairs={(1, 2): (row, row)})
+    assert undone["e242"]["gone"] == [[1, 2, "band"]] and undone["e272"]["gone"] == [[1, 2, "band"]]
+
+
+def test_harness_shadow_writes_the_door_report_and_it_never_decides(tmp_path: Path):
+    code, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
+    assert code == 0 and verdict["pass"]
+    assert set(verdict["door"]) >= {"e242", "e272", "same_house_number_to_1", "addr_new", "cap_displaced",
+                                    "merge_gained", "merge_lost", "two_doors_one_building"}
+    assert any(line.startswith("  door report (base -> candidate") for line in printed.splitlines())
