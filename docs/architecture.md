@@ -1264,6 +1264,13 @@ each a `sreality`, and realtime-worker also the job runner `job-runner` (#2025).
 `<project> - <service>`. Since #2060 every setting they run with lives in
 `.railway/railway.ts`, Railway's infrastructure-as-code file. Config as Code (the old `railway*.json`) stops being read
 on 2026-12-01, and until then a file of that name would override the applied settings, so a guard test fails on one.
+- **Ids.** Project ids: `PROJECTS` in `.railway/railway.ts`. Service ids: API `sreality`
+  `79e65a88-1629-439e-a961-a815f83539de`; realtime-worker `sreality` `59c41eb8-f84f-4f9d-b0af-747fe04f04ce` and
+  `job-runner` `93f302f0-4a37-4c42-aae8-c1de07f7d7d7`; vite `sreality` `99dc269d-a82d-44a6-a32e-8829b0887baf`.
+- **What the read tools can and cannot say.** Request metrics (`http-requests`, `http-error-rate`,
+  `http-response-time`) match exact paths only: no prefix, wildcard or route pattern, so `/images` and
+  `/properties/{property_id}/notes` read 0 while both serve traffic, and a 0 speaks only for that literal path. Logs
+  (`get-logs`) cap at 500 entries per stream, so they show presence, not a count.
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
@@ -1272,7 +1279,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   redeploys the API and the worker, which have no watch patterns (#1857).
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
-  row reading SUCCESS, not SKIPPED.
+  row reading SUCCESS, not SKIPPED. `scripts/rollout_wait.sh`, a merger's wait, prints each description so a skip
+  shows; its exit 0 means every status green, never that every service deployed.
 - **The wizard's modes** (#2025 deleted M0's one-shot `window1`/`window2`; their evidence is on #2060):
   - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
     CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
@@ -3797,7 +3805,7 @@ renumber.** Navigate by area:
     portal-stated `listings.condition`, and Browse shows no facet until a further ruling.
 
     **Amendment 2026-10-25 (ADR-0002, operator grill):** agents that RANK (the scout) may read the curated city indexes
-    under the user's login; no price estimate reads them, and the estimation agenda is unchanged.
+    under the user's login; no price estimate reads them, and the comparables agenda is unchanged.
 
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
     `property_pipeline` holds at most ONE card per property per account (PK
@@ -5257,8 +5265,10 @@ portal's payload or its own page, and every other stamp is class E outright.
   `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; GRADE caps such a row
   at `medium`). A Czech admin
   unit that BOUND at any level is itself a country determination, because the gazetteer it came out
-  of is the Czech one. **Foreign is a determination, never a default** — nothing bound and no foreign
-  signal is `undetermined`.
+  of is the Czech one. Against words naming another country only a bound TOWN stands (`country_conflict`):
+  a bare region (R9, so no word and no pin bound a town) yields, the row is foreign at its own pin, with
+  no Czech hierarchy (#2356: the store keeps a region word the page stopped stating, W3). **Foreign is a
+  determination, never a default** — nothing bound and no foreign signal is `undetermined`.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
 (`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT named by the words > **the door an exact pin names
@@ -5519,7 +5529,13 @@ points, streets, parcels, building objects, admin units and a typo-tolerant gaze
 merge → boundaries (the state SHP pack is the vintage's third archived artifact, a resume restores
 all three from R2; three geometries per unit — authoritative, subdivided pip, render — an unchanged
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
-member obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
+member okres, obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
+**Levels loaded = levels bound, served or used as match keys** (W7, `docs/design/location-quality/w7-registry.md`):
+stát, region soudržnosti, kraj, okres, obec, MOMC, část obce, KÚ. Správní obvod, ZSJ, ORP and POU were closed by
+SCD-2 (migration 718), never deleted; the loader never closes a unit it stops staging, so retiring a level is a
+migration. **An obec's okres is the one the state pack publishes on it** (`OBCE_P.OKRES_KOD`, a blocking
+`okres_partition` assertion), never the CSV chain's, which alone omits Praha: Praha's okres is ČÚZK's technical
+okres 9999, "území Hlavního města Prahy", read from the pack with no constant.
 Křovák S-JTSK → WGS84 is ONE audited 1 m PROJ conversion (`location_data/krovak.py`, golden-point
 test); the `location_town_coverage` gauge's `registry` cell reads Problem when the registry stops moving
 (no current version, a current one older than 40 d, or a load staged for more than 24 h:
@@ -5584,7 +5600,7 @@ per-listing statement gets, and cancelling it threw the whole batch away.
   claims and deleted the rows, and 384,500 answer rows with 135 towns had nothing that could
   re-enqueue them. Hence the re-entrant `DO UPDATE` and the `enqueued_at` fence.
 * **A fallback reading a column nobody writes is silent** — BIND's admin-centroid fallback read
-  `ruian_admin_units.definition_point`, which the loader has never written: 29 % of towned rows
+  `ruian_admin_units.definition_point` (dropped by W7), which the loader had never written: 29 % of towned rows
   (8,706 of 29,892) shipped with no position, which the map would have dropped.
 * **A slim of a live table is TWO migrations** — a merge deploys in minutes while a migration is
   applied by hand, so RELAX (drop the CHECKs/NOT NULLs/FKs the new write cannot satisfy) before the

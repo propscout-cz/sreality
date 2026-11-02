@@ -145,7 +145,7 @@ the pass locks and the watchdog in the skill's worker section. `worker_lane_stal
 10-02 while it did); a lane cell also judges lateness, a failing spell and flapping (`jobs`, below).
 
 **`migration_drift`** closes a different silent gap: it probes the live catalog for the objects
-the newest 25 migrations declare, so a migration merged but never applied is caught in one tick
+the newest 25 migrations declare or drop, so a migration merged but never applied is caught in one tick
 instead of the 29 h it took on 2026-08-25 (see the `database` skill). It cannot see a
 merged-but-unapplied migration that only redefines existing objects (the migration-438 class,
 issue #1855). Only the GitHub checkout has the files, so it stays on the canary for good, hourly
@@ -155,9 +155,16 @@ issue #1855). Only the GitHub checkout has the files, so it stays on the canary 
 (`MIGRATION_OBJECT_PROBE_SQL`, `SAFE_IDENT`) in `scripts/migration_objects.py`, shared with
 `scripts/apply_migration_receipt.py`. Since Health dashboard sprint wave 6 it emits a cell per migration file
 in its window (the newest 25), named by its filename: OK applied, Problem when the file's objects are wholly
-absent, Watch when some are, Not measured "unverifiable" when the file declares no object the probe can
-check (grants, drops, data updates). OK cells are included, so a fixed file's incident recovers on a
-measured OK instead of closing silently after 7 days.
+absent, Watch when some are or when a dropped one still exists ("Drop not applied: N of M dropped objects still
+exist; apply it once its last reader is live": destructive applies follow their deploy by design, so a gap is
+not a Problem), Not measured "unverifiable" when the file declares or drops nothing the probe can check
+(grants, function drops, data updates). OK cells are included, so a fixed file's incident recovers on a
+measured OK instead of closing silently after 7 days. Since #2237 the loader's `Migration.dropped` lists what is
+expected absent: tables, views, materialized views, indexes, sequences, columns and policies a file drops and
+neither it nor a later file re-creates. Functions stay out, because the probe matches by name and cannot tell
+overloads apart. One probe statement carries both lists. `scripts/apply_migration_receipt.py` reads one file (its
+drops minus its own creates), exits 1 on a still-present drop or a missing create, and closes with one notice
+line: "receipt OK: N present, M dropped-absent", or UNVERIFIABLE when nothing is probeable (exit 0).
 
 **Thresholds.** Every other check's thresholds live in one dict, `THRESHOLDS`
 (`scripts/verify_pipeline.py`), each entry with a one-line basis comment, passed to every check by

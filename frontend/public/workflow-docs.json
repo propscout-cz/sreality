@@ -134,91 +134,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
     },
     {
-      "filename": "backfill_unit_price_masquerade.yml",
-      "name": "Backfill unit-price masquerade (per-m² rate stored as price_czk)",
-      "description": "One-off, dispatch-only quarantine for the per-m² measure program's W2 heal. ceskereality, realitymix and bazos each render commercial and land offers at a RATE (\"100 Kč za m²/měsíc\", \"45 Kč / (za m²)\") and the pre-W1 parsers wrote that rate into `price_czk`, which every consumer reads as a total. Unlike the mmreality area damage this is NOT repairable — the true total was never on the page — so it is a QUARANTINE: `price_czk` goes to NULL and the convicting text is recorded in `raw_json.unit_price_quarantined_*`, reversible until the next refetch repopulates the price correctly through W1's parse-time rail. A row is quarantined ONLY when the portal's own price cell, re-read from already-staged state, carries the anchored per-area marker (CONFIRMATION, NEVER MAGNITUDE); rows whose cell cannot be read are left alone and counted as `unconfirmed`. bazos confirms nothing by design — its cell is a bare \"170 Kč\" and the m² basis lives only in prose — and stays wired to report that zero honestly. `price_czk` is in the content hash but this writes NO snapshot, on the same reasoning as the mmreality heal. The read is keyset-paginated and exhaustive; a pass that stopped early logs \"BACKFILL INCOMPLETE\" with a `--after` resume cursor, and silence means done.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source",
-          "description": "Limit to one portal (blank = all three)",
-          "required": false,
-          "type": "choice",
-          "default": "",
-          "options": [
-            "",
-            "ceskereality",
-            "realitymix",
-            "bazos"
-          ]
-        },
-        {
-          "name": "write",
-          "description": "Actually write. Left false, this only reports what would change.",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "limit",
-          "description": "Max listings examined this run (blank = the whole corpus)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "after",
-          "description": "Resume from this listings.id cursor (exclusive)",
-          "required": false,
-          "type": "string",
-          "default": "0",
-          "options": null
-        },
-        {
-          "name": "batch_size",
-          "description": "Rows per payload page (blank = the script's own default)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget in seconds (blank = no budget)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "verbose",
-          "description": "Log every individual quarantine (DEBUG)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "backfill-unit-price-masquerade",
-      "cancelInProgress": false,
-      "timeoutMinutes": 350,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_unit_price_masquerade.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_unit_price_masquerade.yml"
-    },
-    {
       "filename": "backup_before_drop.yml",
       "name": "Ops: back up what a destructive migration drops",
       "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: an artifact is not private storage and it expires. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
@@ -1338,7 +1253,7 @@
     {
       "filename": "location_registry_load.yml",
       "name": "Location: RÚIAN registry load",
-      "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
+      "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every okres, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
       "manual": true,
       "schedules": [
         {
@@ -1386,7 +1301,7 @@
     {
       "filename": "location_wave_shadow.yml",
       "name": "Ops: Location wave shadow (the engine gate)",
-      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6) runs its movers through the engine's harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
+      "description": "The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4, W5, W5b, W6, W7) runs its movers through the engine's harness before it deploys, here where the database and R2 credentials live. No production write: every statement runs in a READ ONLY transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like backup_before_drop.yml: a gate tool, not a scheduled lane, so it stays off the job runner.",
       "manual": true,
       "schedules": [],
       "onPush": false,

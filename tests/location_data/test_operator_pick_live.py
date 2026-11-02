@@ -59,9 +59,9 @@ def _mirror(conn: Any) -> None:
     ):
         units[key] = conn.execute(
             "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path,"
-            " display_path, valid_from, first_version_id, last_version_id) VALUES"
-            " (%s::ruian_level, %s, %s, %s, %s, %s::ltree, %s, '2020-01-01', %s, %s) RETURNING id",
-            (level, code, name, normalize_name(name), units.get(parent or ""), path, name,
+            " valid_from, first_version_id, last_version_id) VALUES"
+            " (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01', %s, %s) RETURNING id",
+            (level, code, name, normalize_name(name), units.get(parent or ""), path,
              version, version)).fetchone()[0]
         conn.execute(
             "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name,"

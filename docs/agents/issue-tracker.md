@@ -15,15 +15,7 @@ Issues and specs for this repo live as GitHub issues on `propscout-cz/sreality`.
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
-## Always pass `--json` to a view
-
-In this repo a plain `gh issue view <n>` or `gh pr view <n>` (with or without `--comments`) exits 1 and prints only a "Projects (classic) is being deprecated" GraphQL error: the default field set asks for `projectCards`, which GitHub no longer serves. Naming the fields with `--json` skips that query and works.
-
-`gh pr edit` fails the same way and changes nothing. If an edit exits 1 with that error, use the REST call instead:
-
-- **Add a label**: `gh api -X POST repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=<label>"`
-- **Remove a label**: `gh api -X DELETE repos/{owner}/{repo}/issues/<n>/labels/<label>`
-- **Edit a body**: `gh api -X PATCH repos/{owner}/{repo}/issues/<n> -F body=@<file>` (`pulls/<n>` for a PR)
+Use gh 2.103.3 or later from GitHub's repository; upgrade, do not work around.
 
 ## Pull requests as a triage surface
 
@@ -33,7 +25,7 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 - **Read a PR**: `gh pr view <number> --json number,title,body,state,labels,author,comments` and `gh pr diff <number>` for the diff.
 - **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
-- **Comment / label / close**: `gh pr comment`, the REST label calls above, `gh pr close`.
+- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label` / `--remove-label`, `gh pr close`.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42 --json number` and fall back to `gh issue view 42 --json number`.
 
@@ -63,10 +55,11 @@ Every session posts as the same GitHub account, so an assignee cannot tell sessi
 `main` takes merges only through GitHub's merge queue: it tests each PR merged onto the current `main` (the required checks' `merge_group` run) and merges one PR at a time, so nobody merges `main` into a branch to keep it current. Railway deploys every merge.
 
 - **Enqueue** a green PR with `gh pr ready <n>` (GitHub never merges a draft), then `gh pr merge <n>`. Run each `gh` write as its own command: inside a compound command it falls to the permission classifier. A check that goes red on the merged result drops the PR from the queue: fix, push, enqueue again.
+- **Reading `mergeStateStatus`** (`gh pr view <n> --json mergeStateStatus`): CLEAN is mergeable with the required checks green, and a draft can read it too. UNKNOWN: GitHub is still computing: read again. BEHIND is no reason to merge `main` in: the queue tests the PR on the current `main`.
 - **Engine-sensitive PRs enqueue only on the merge coordinator's light**: a PR that adds a migration or touches anything under `autodedup/` (`autodedup.incremental.DECISION_MODULES` included), the apply scope (`app_settings.autodedup_apply_scope`), `scraper/realtime_worker.py`, `scraper/job_lease.py`, `.railway/` or the worker's config. Ask for it ("green light #<n>": the PR number, its head SHA, what it touches). The coordinator sets the brake first if it must and says "enqueue"; after the merge it runs the carry and restores the brake. The coordinator is a role, not a name: the session that owns the autodedup engine. Its session name changes on every resume, so find it with `ListAgents` or ask the operator; never message a remembered name.
 - **A pre-merge step** (a purge, a migration applied ahead of the code) runs before you enqueue.
 - **Claim a migration number** with the coordinator before writing the file, and never apply a migration without telling it.
-- **After the merge**, confirm the deploy yourself (CLAUDE.md, "A merge is not a deploy": every service on the merge SHA); for an engine-sensitive PR, send the coordinator the merge SHA.
+- **After the merge**, confirm the deploy yourself: read the merge SHA with `gh pr view <n> --json mergeCommit`, then run `scripts/rollout_wait.sh <merge-sha>`. Exit 0 confirms it; any other exit goes to the operator. A success reading "No deployment needed" is a watch skip, not a deploy. For a merge that adds or removes a service, the IaC wizard's own wait decides. For an engine-sensitive PR, send the coordinator the merge SHA.
 - **If the permission check refuses the merge**, tell the operator in your own session. Never ask another session to merge for you.
 
 ## Post-merge gates are their own tickets
@@ -97,7 +90,7 @@ Comment the numbers, leave this open and open a fix ticket that blocks this one;
 - #<build>
 ```
 
-**Merging a build PR**: once the deploy is confirmed (CLAUDE.md, "A merge is not a deploy"), start the clock on each gate ticket the build ticket blocks, listed by `gh api repos/{owner}/{repo}/issues/<build>/dependencies/blocking -q '.[] | select(any(.labels[]; .name == "gate")) | .number'`: comment `Clock started: deployed <UTC>; due <UTC>. Baseline: <numbers>`, then date the title with `gh api -X PATCH repos/{owner}/{repo}/issues/<gate> -f title="…(due YYYY-MM-DD)"`.
+**Merging a build PR**: once the rollout wait exits 0 (§ Merging), start the clock on each gate ticket the build ticket blocks, listed by `gh api repos/{owner}/{repo}/issues/<build>/dependencies/blocking -q '.[] | select(any(.labels[]; .name == "gate")) | .number'`: comment `Clock started: deployed <UTC>; due <UTC>. Baseline: <numbers>`, then date the title with `gh issue edit <gate> --title "…(due YYYY-MM-DD)"`.
 
 **Owed gates**, soonest first: `gh issue list --label gate --state open --json number,title -q '.[] | "\((.title | capture("due (?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")).d // "not started")  #\(.number)  \(.title)"' | sort`
 

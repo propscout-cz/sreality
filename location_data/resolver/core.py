@@ -32,7 +32,7 @@ from location_data.resolver import grade as step_grade
 from location_data.resolver import normalize as step_normalize
 from location_data.resolver import serialize
 from location_data.resolver.composite import WHOLE_LEVELS
-from location_data.resolver.types import Claim, Resolution, ResolverContext
+from location_data.resolver.types import Binding, Claim, Resolution, ResolverContext
 
 
 def resolve(
@@ -105,6 +105,11 @@ def resolve(
         ordered, normalized, binding, filled, position,
         registry=ctx.registry, pin_claim=pin_claim, pin_inside_bound_obec=pin_inside_obec,
     )
+    if verdict.country_status == "foreign" and position.origin == "admin_centroid":
+        # FILL's point is the Czech region CHECK just refused. Words that bound no town leave
+        # the row where every foreign row stands: its own pin, if it has one.
+        position = step_bind.place(
+            Binding(target_kind="none", rung="none"), pin_claim, declared=declared)
     granularity = step_grade.grain_of(filled, verdict)
     czech = verdict.country_status == "cz"
 

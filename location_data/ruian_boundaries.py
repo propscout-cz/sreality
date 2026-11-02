@@ -22,7 +22,7 @@ sliver fallback exists to paper over. Do not repeat that: `render` never decides
 containment.
 
 The pack is also the name source for the levels the address CSVs carry no name for
-(stát, region soudržnosti, kraj, okres, ORP, POU, katastrální území), so this phase upgrades
+(stát, region soudržnosti, kraj, okres, katastrální území), so this phase upgrades
 the placeholder names the CSV loader wrote; the loader rebuilds the gazetteer once, after it
 — the gazetteer skips placeholder-named units.
 
@@ -49,6 +49,7 @@ closed" from the discrepancy INSERT and lost the SSL drop that caused it.
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import zipfile
 from collections.abc import Callable
@@ -109,27 +110,21 @@ class Layer:
 # distances per axis and `generalization_tolerance_m` could not honestly record either.
 # The figures below are the ones the current production loader effectively uses.
 #
-# Eight of the pack's 12 layers are mirror admin units, and these are they. The pack has NO
-# správní obvod layer: STU_P is 642 stavební úřady keyed by an office `ID` and PRARES_P is 93
-# katastrální pracoviště, and while both were mapped to `spravni_obvod` they wrote an office
-# polygon onto whichever Praha správní obvod shared its number (51, 60, 78 and 205, the last
-# renamed "Kutná Hora") and counted the other 731 as `skipped_no_unit` (run 36130715419).
-# VO_P (volební okrsky) and ZSJ_P are not mirror levels this load serves.
+# Six of the pack's 12 layers are mirror admin units, and these are they (W7: levels loaded =
+# levels bound, served or used as match keys).
 LAYERS: tuple[Layer, ...] = (
     Layer("STATY_P", "stat", 111.0, 1),
     Layer("REGION_P", "region_soudrznosti", 111.0, 8),
     Layer("VUSC_P", "kraj", 111.0, 14),
     Layer("OKRESY_P", "okres", 83.0),
-    Layer("ORP_P", "orp", 83.0),
-    Layer("POU_P", "pou", 55.0),
     Layer("OBCE_P", "obec", 55.0),
     Layer("KATUZE_P", "katastralni_uzemi", 22.0),
 )
 
 # The levels a version may not publish without: every member unit carries both a `pip` and
 # an `authoritative` row (`missing_geometry`). `stat` because the resolver's in-CZ test reads
-# its polygon at the pinned version; `spravni_obvod` is not one — see LAYERS.
-COMPLETE_LEVELS = ("stat", "obec", "katastralni_uzemi")
+# its polygon at the pinned version, `okres` because a region-only row stands on its point.
+COMPLETE_LEVELS = ("stat", "okres", "obec", "katastralni_uzemi")
 
 # A degenerate feature is skipped and counted, never fatal; the discrepancy rows are capped
 # so one broken layer cannot write a million rows.
@@ -342,6 +337,46 @@ SELECT g.unit_id, %(version_id)s, g.purpose, g.generalization_tolerance_m,
 """
 
 
+@dataclass(frozen=True, slots=True)
+class PackOkres:
+    """What ČÚZK's state pack publishes about the okres level: each obec's okres and every okres."""
+
+    obec: dict[int, int]
+    okresy: frozenset[int]
+
+
+def _attribute_codes(
+    pack: Path, token: str, *fields: tuple[str, ...],
+) -> list[tuple[int | None, ...]]:
+    """The named code fields of a layer's records, read straight from the zip member (no
+    geometry, no extraction). A missing layer or field stops the load: a ruling, never a NULL."""
+    with zipfile.ZipFile(pack) as zf:
+        member = max((i for i in zf.infolist() if token.lower() in i.filename.lower()
+                      and i.filename.lower().endswith(".dbf")),
+                     key=lambda i: i.file_size, default=None)
+        if member is None:
+            raise BoundarySchemaError(f"{pack.name}: no {token} attribute table")
+        table = io.BytesIO(zf.read(member))
+    with contextlib.closing(shapefile.Reader(dbf=table)) as reader:
+        present = [f[0] for f in reader.fields[1:]]
+        picked = [_pick_field(present, candidates) for candidates in fields]
+        if None in picked:
+            raise BoundarySchemaError(f"{token}: no {fields} in {present}")
+        return [tuple(int(r[f]) if r[f] not in (None, "") else None for f in picked)
+                for r in reader.iterRecords(fields=picked)]
+
+
+def pack_okres(pack: Path) -> PackOkres:
+    """The okres of every obec, as OBCE_P publishes it, and the codes OKRESY_P holds."""
+    return PackOkres(
+        obec={obec: okres
+              for obec, okres in _attribute_codes(pack, "OBCE_P", _CODE_FIELDS, ("OKRES_KOD",))
+              if obec is not None and okres is not None},
+        okresy=frozenset(code for code, in _attribute_codes(pack, "OKRESY_P", _CODE_FIELDS)
+                         if code is not None),
+    )
+
+
 def unit_id_for(conn: psycopg.Connection, level: str, code: int) -> int | None:
     return loader_db.scalar(
         conn,
@@ -362,19 +397,14 @@ def upgrade_name(cur: psycopg.Cursor, unit_id: int, name: str) -> bool:
     cursor opened here would still get but a second connection would not.
 
     Only ever touches a unit still named after its own code, so a real RÚIAN name can
-    never be overwritten by a DBF variant. Descendants keep their `display_path` until the
-    next baseline recomputes it — the code path (`path`) is unaffected either way.
+    never be overwritten by a DBF variant.
     """
     cur.execute(
         """
-        UPDATE ruian_admin_units u
-           SET name = %s, name_norm = %s,
-               display_path = coalesce(
-                   (SELECT p.display_path || ' / ' FROM ruian_admin_units p
-                     WHERE p.id = u.parent_id), '') || %s
+        UPDATE ruian_admin_units u SET name = %s, name_norm = %s
          WHERE u.id = %s AND u.name = u.code::text
         """,
-        (name, name_index.normalize_name(name), name, unit_id),
+        (name, name_index.normalize_name(name), unit_id),
     )
     return bool(cur.rowcount)
 
@@ -673,13 +703,15 @@ def load_pack(
 
 
 def dry_run(pack: Path) -> None:
-    """Read every layer and assert its feature count; write nothing."""
+    """Read every layer and assert its feature count, then prove the okres fields; write nothing."""
     extracted = _extract(pack)
     for layer in LAYERS:
         features, degenerate = read_layer(extracted, layer)
         assert_feature_counts(layer, features)
         LOG.info("BOUNDARY layer=%s level=%s features=%d degenerate=%d", layer.token,
                  layer.level, len(features), len(degenerate))
+    okres = pack_okres(pack)
+    LOG.info("BOUNDARY okres of %d obce, %d okresy", len(okres.obec), len(okres.okresy))
 
 
 # Membership is the version's, not "whatever is valid today": a unit is in version V when V

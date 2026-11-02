@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# A new worktree gets main's npm packages, per folder, when its lockfile matches what main has installed (#2230); any
+# other case prints the install command. Hard links, never symlinks: installing through a symlink empties main's install.
+# Editing a package file in place also edits main's copy, so build caches, which tools rewrite in place, stay behind.
+# An older branch gets nothing until it merges main: git reads this file from the checkout core.hooksPath names (a
+# relative value: the checkout running the command), whatever commit the new worktree starts from.
+# Always exits 0: a failing post-checkout hook fails `git worktree add` though the worktree exists.
+[[ "$1" =~ ^0+$ ]] || exit 0
+[[ "$(git rev-parse --absolute-git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]] || exit 0
+python3 - <<'PY' || echo "npm packages not set up: run npm ci in each folder that has a package-lock.json"
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+NPM_DOT_ENTRIES = {".bin", ".package-lock.json"}
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
+
+def non_optional(lockfile: Path) -> dict:
+    packages = json.loads(lockfile.read_text())["packages"]
+    return {
+        name: (entry["version"], entry.get("integrity"))
+        for name, entry in packages.items()
+        if name and not entry.get("optional")
+    }
+
+
+def copy_install(folder: Path, main: Path) -> str:
+    destination = folder / "node_modules"
+    if os.path.lexists(destination):
+        return "node_modules already exists, left as it is"
+    source = main / destination
+    if non_optional(folder / "package-lock.json") != non_optional(source / ".package-lock.json"):
+        raise ValueError("main's install differs from this lockfile")
+
+    def build_caches(directory: str, names: list[str]) -> list[str]:
+        if directory != os.fspath(source):
+            return []
+        return [name for name in names if name.startswith(".") and name not in NPM_DOT_ENTRIES]
+
+    partial = destination.with_name("node_modules.partial")
+    try:
+        shutil.copytree(source, partial, symlinks=True, copy_function=os.link, ignore=build_caches)
+        partial.rename(destination)
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
+    return "hard-linked main's npm packages, its lockfile matches"
+
+
+main = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").strip()).parent
+for name in git("ls-files", "-z", "--", ":(glob)**/package-lock.json").split("\0")[:-1]:
+    folder = Path(name).parent
+    try:
+        print(f"{folder}: {copy_install(folder, main)}")
+    except Exception as error:
+        print(f"{folder}: no packages copied ({str(error)[:200]}). Run: npm ci --prefix {Path.cwd() / folder}")
+PY
+exit 0

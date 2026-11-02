@@ -1,7 +1,7 @@
 name: "Ops: Location wave shadow (the engine gate)"
 
 # The location programme's standing gate: a wave that moves positions or quarter codes (W3, W4,
-# W5, W5b, W6) runs its movers through the engine's harness before it deploys, here where the
+# W5, W5b, W6, W7) runs its movers through the engine's harness before it deploys, here where the
 # database and R2 credentials live. No production write: every statement runs in a READ ONLY
 # transaction (`scraper.db.connect_read_only`), the cohort and rulings exports run in-process
 # with no `autodedup.iterations` row, and the harness reads no database. Dispatch-only, like
@@ -157,7 +157,8 @@ jobs:
       # gate on run 41220481918 (2,964 movers). Counting here asks one question of the file that exists.
       - name: Count the movers
         id: count
-        run: echo "movers=$(grep -c . shadow/movers.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+        # grep -c prints 0 AND exits 1 on no match: `|| echo 0` wrote a second line, an invalid output.
+        run: echo "movers=$(cat shadow/movers.jsonl 2>/dev/null | grep -c . || true)" >> "$GITHUB_OUTPUT"
 
       - name: "2: size, then this group's base cohort, rulings, live scorer (READ ONLY, no ledger row)"
         if: ${{ steps.count.outputs.movers != '0' }}

@@ -173,6 +173,14 @@ def _agenda_ids(*agendas: fr.Agenda) -> set[str]:
     return {f.id for a in agendas for f in fr.filters_for_agenda(a)}
 
 
+def test_no_two_agendas_declare_the_same_filters() -> None:
+    """An agenda is a surface with its own filter set; one that repeats another is a second name for it."""
+    by_filters: dict[frozenset[str], list[str]] = {}
+    for agenda in fr.Agenda:
+        by_filters.setdefault(frozenset(_agenda_ids(agenda)), []).append(str(agenda))
+    assert [names for names in by_filters.values() if len(names) > 1] == []
+
+
 def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     """ComparableFilters carries exactly the filters the cohort agendas declare, both
     ways: a field no agenda declares would raise at compile, and a declared filter
@@ -180,7 +188,7 @@ def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     from toolkit.comparables import ComparableFilters
 
     fields = {f.name for f in dc_fields(ComparableFilters)}
-    declared = _agenda_ids(fr.Agenda.COMPARABLES, fr.Agenda.ESTIMATION, fr.Agenda.VELOCITY)
+    declared = _agenda_ids(fr.Agenda.COMPARABLES, fr.Agenda.VELOCITY)
     assert fields == declared, (
         f"declared but not on ComparableFilters: {sorted(declared - fields)}; "
         f"on ComparableFilters but not declared: {sorted(fields - declared)}"
@@ -450,7 +458,6 @@ def test_mf_gross_yield_filter_registered():
         assert f.ui_control == fr.UiControl.RANGE_SLIDER
         assert f.agendas == frozenset({fr.Agenda.BROWSE, fr.Agenda.WATCHDOG})
         assert fr.Agenda.COMPARABLES not in f.agendas
-        assert fr.Agenda.ESTIMATION not in f.agendas
 
 
 def test_category_main_multiselect_split():
@@ -479,7 +486,6 @@ def test_category_main_multiselect_split():
     assert fr.Agenda.BROWSE not in scalar.agendas
     assert fr.Agenda.WATCHDOG not in scalar.agendas
     assert fr.Agenda.COMPARABLES in scalar.agendas
-    assert fr.Agenda.ESTIMATION in scalar.agendas
     # The two never co-occupy an agenda.
     assert scalar.agendas.isdisjoint(multi.agendas)
 
