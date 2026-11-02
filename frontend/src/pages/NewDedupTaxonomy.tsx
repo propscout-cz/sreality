@@ -353,8 +353,8 @@ export default function NewDedupTaxonomy() {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  // Before the paint: a passive effect would show the editor holding the last
-  // tag's draft, or none, until it ran.
+  // Before the paint: when the definition arrives, a passive effect would leave
+  // the editor on screen empty until it ran.
   useLayoutEffect(() => {
     if (loadedStamp.current === loadStamp) return;
     // Only within ONE tag: switching tags has already passed the discard

@@ -446,8 +446,8 @@ describe('<NewDedupTaxonomy>', () => {
 
   // --- editor --------------------------------------------------------------
 
-  it('never shows the form before it holds the tag\'s definition', async () => {
-    // A MutationObserver runs right after React commits, before a passive effect would.
+  it('first shows the form already holding the tag\'s definition', async () => {
+    // After a commit from a query resolving, a MutationObserver runs before a passive effect.
     const seen: string[] = [];
     const observer = new MutationObserver(() => {
       const means = screen.queryByLabelText<HTMLTextAreaElement>('means');
