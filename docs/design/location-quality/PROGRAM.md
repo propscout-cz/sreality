@@ -38,6 +38,7 @@ These replace any earlier text they contradict. Q numbers restart: they are the 
 | 11-01 | Finished = every gate ticket closed. The session runs migrations itself. W3's REINDEX is a small numbered migration after the body re-walk. W5 goes before W7. | Programme. |
 | 11-01 | Glossary terms: **RÚIAN door**, **Sreality Datasets** (#2345). E111 goes to the engine session (#2344). | Glossary, engine. |
 | 11-02 | **Q8 (a): an ad gets a door from its pin only if it is a flat or a house, its pin is exact and exactly one door lies within 1 m, and its words do not disagree.** "What is certain gets a door." | W5b rebuilt. |
+| 11-02 | **A městská část filters as the set of its části**, through the one code predicate and with no new location field; a část that straddles several counts for each it touches. Still no served MOMC level (Q1). | #2380. |
 | 11-02 | **The translation into RÚIAN is kept and made the standard.** This corrects Q12's "a view, no stored crosswalk" above. RÚIAN is the foundation, and any outside source translates into it. | W8 redesign, below. |
 | 11-02 | Q10a (a): one translation table now (source, the source's own key, RÚIAN level and code, how it was matched, when last confirmed), Sreality Datasets first. Other sources move onto it when next touched. | W8. |
 | 11-02 | Q10b (a): keep today's 6,258 Sreality rows and confirm or add from ads at each fetch. A row stays when ads end, so no town stops updating. | W8. Replaces design default D1. |

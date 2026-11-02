@@ -12,7 +12,9 @@ level the operator picked — kraj, okres, obec, část obce or ulice
 `{level, id, name, context}`: the picked level, the unit's RÚIAN code and its
 register name, and for a unit below the obec the register name of its obec.
 A pick the register cannot bind keeps its level with `id` null, and the SPA
-then makes NO chip and says why. It resolves against the RÚIAN mirror
+then makes NO chip and says why. A městská část binds to no chip of its own, as
+rows carry no such column: it answers `id` null plus `parts`, its části, and the SPA
+makes one část chip for each (ruling 2026-11-02, #2380). It resolves against the RÚIAN mirror
 (`ruian_admin_units` + `ruian_admin_unit_geometries`, migration 381), the
 register `listing_location` answers with, so chip and listing share one
 registry version.
@@ -25,6 +27,8 @@ for `cast_obce` or a street (`location_data/ruian_boundaries.LAYERS`), so:
     pick's NAME picks the unit of that chain, its type only breaks a tie
     (`_named_unit`);
   * cast_obce -> BY NAME against the mirror's name index, inside the PIP'd obec;
+  * momc -> BY NAME likewise, after a část of that name and in place of an obec
+    the name does not name; its části come from its doors (`_MOMC_PARTS_SQL`);
   * ulice -> BY NAME inside the PIP'd obec (`_bind_street`), then the border
     guard. An address pick binds the street its `regionalStructure` names;
   * adresni_misto (the address picker's flag only, W3b) -> that street's doors
@@ -40,6 +44,7 @@ import logging
 import re
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
@@ -191,6 +196,26 @@ SELECT DISTINCT u.code, u.name
 """
 
 
+# A městská část by name inside its obec: the part lookup, one level over, so the two read
+# their unit the same way however a load has it.
+_MOMC_LOOKUP_SQL = _PART_LOOKUP_SQL.replace("'cast_obce'", "'momc'")
+
+# THE PARTS OF A MĚSTSKÁ ČÁST are the části its doors stand in (ruling 2026-11-02, #2380): RÚIAN
+# draws it no polygon, and a část that straddles several counts for every one it touches, by
+# ruling; no band, no share. A load re-points doors in place while it closes and reopens the
+# units, so a door may hold either row of a unit: all of it joins on the stable CODE. The obec
+# arm is the read's only index (`momc_unit_id` has none): Praha's 135k doors, ~0.5 s, one pick.
+_MOMC_PARTS_SQL = """
+SELECT DISTINCT ON (c.code) c.code, c.name
+  FROM ruian_address_points ap
+  JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id
+ WHERE ap.valid_to IS NULL
+   AND ap.obec_unit_id IN (SELECT id FROM ruian_admin_units WHERE level = 'obec' AND code = %(obec_code)s)
+   AND ap.momc_unit_id IN (SELECT id FROM ruian_admin_units WHERE level = 'momc' AND code = %(momc_code)s)
+ ORDER BY c.code, c.last_version_id DESC
+"""
+
+
 # Not memoised: resolve is a low-frequency endpoint and a fresh registry load must
 # light up at once. A query error RAISES (a 500, which the SPA shows as "couldn't
 # verify"): read as "no registry" it would tell the operator RÚIAN has no such place.
@@ -250,6 +275,49 @@ def _lookup_part(
         return [(int(code), nm) for code, nm in cur.fetchall()]
 
 
+@dataclass(frozen=True)
+class _Momc:
+    """A městská část a pick named: no code of its own (rows carry none), only its části."""
+
+    name: str
+    parts: list[tuple[int, str]]
+
+
+def _momc_part_codes(conn: Any, *, momc_code: int, obec_code: int) -> list[tuple[int, str]]:
+    """(code, name) of every část the městská část's doors stand in, in name order."""
+    with conn.cursor() as cur:
+        cur.execute(_MOMC_PARTS_SQL, {"momc_code": momc_code, "obec_code": obec_code})
+        rows = [(int(code), nm) for code, nm in cur.fetchall()]
+    return sorted(rows, key=lambda row: normalize_match_key(row[1]))
+
+
+def _bind_momc(
+    conn: Any, *, version: int, name: str, obec_unit_id: int, obec_code: int,
+) -> _Momc | None:
+    """The one městská část of the obec this name means, with its části; else None."""
+    key = normalize_match_key(name)
+    if not key:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            _MOMC_LOOKUP_SQL,
+            {"version": version, "name_norm": key, "obec_unit_id": obec_unit_id},
+        )
+        matches = cur.fetchall()
+    if len({code for code, _nm in matches}) != 1:
+        if matches:
+            LOG.info("maps.resolve: %r names %d městské části of obec %s — refusing to guess",
+                     name, len(matches), obec_code)
+        return None
+    momc_code, momc_name = matches[0]
+    parts = _momc_part_codes(conn, momc_code=int(momc_code), obec_code=obec_code)
+    if not parts:
+        LOG.info("maps.resolve: městská část %r of obec %s has no část on any door — no code",
+                 momc_name, obec_code)
+        return None
+    return _Momc(name=momc_name, parts=parts)
+
+
 def _name_variants(name: str) -> list[str]:
     """The pick's name, then its last `-` / `,` delimited segment.
 
@@ -267,13 +335,13 @@ def _name_variants(name: str) -> list[str]:
 
 def _resolve_cast_obce(
     conn: Any, *, version: int, name: str, obec_unit_id: int, obec_code: int,
-) -> tuple[int, str] | None:
+) -> tuple[int, str] | _Momc | None:
     """A quarter pick, placed by NAME inside the PIP'd obec — or NOT placed.
 
-    `cast_obce` ONLY, never `momc`: the answer table stores `cast_obce_kod` and
-    has no městská-část column, so a momc code would be a chip that matches
-    nothing. That means "Praha 2" and "Brno-střed" (both momc) cannot resolve,
-    and neither can a Mapy neighbourhood the registry has never heard of.
+    A část is a chip. "Praha 2" and "Brno-střed" are městské části, which rows carry no
+    column for, so they answer as the set of their části (`_Momc`). A name is a část first
+    and a městská část second; its tail is read only after both miss the whole name, so a
+    whole-name "Brno-střed" never becomes a tail "střed".
 
     WHEN IT CANNOT BE PLACED, THE ANSWER IS "NO CODE", NOT "THE TOWN". Falling
     back to the containing obec would turn a saved "this quarter" filter into
@@ -295,6 +363,11 @@ def _resolve_cast_obce(
                 variant, len(codes), obec_code,
             )
             return None
+        momc = _bind_momc(
+            conn, version=version, name=variant, obec_unit_id=obec_unit_id, obec_code=obec_code,
+        )
+        if momc is not None:
+            return momc
     return None
 
 
@@ -438,7 +511,7 @@ def _resolve_address_point(
 # THE NAME RULE (D5). The point places the chain; the pick's NAME picks the unit in
 # it, and the Mapy type is a hint: its enum has no okres type, so an okres arrives
 # typed `regional.region`, and "Praha 2" typed `regional.municipality` (a městská
-# část no chip serves) names no unit of its chain. One named unit binds at ITS level;
+# část, `_resolve_admin` binds it) names no unit of its chain. One named unit binds at ITS level;
 # obec and okres "Jihlava" share a name, and then the typed level decides — or Mapy's
 # own "okres " prefix, which names the level outright.
 def _named_unit(
@@ -459,8 +532,8 @@ def _named_unit(
 def _resolve_admin(
     conn: Any, *, version: int, lat: float, lng: float, level: ChipLevel,
     name: str | None,
-) -> tuple[ChipLevel, tuple[int, str] | None, str | None]:
-    """(bound level, its unit's (code, register name) or None, obec name below the obec)."""
+) -> tuple[ChipLevel, tuple[int, str] | _Momc | None, str | None]:
+    """(bound level, its unit's (code, register name) or a městská část or None, obec name below the obec)."""
     chain = _containing_chain(conn, version=version, lat=lat, lng=lng)
     obec = chain.get("obec")
     if obec is None:
@@ -477,6 +550,13 @@ def _resolve_admin(
         )
         return level, None if street is None else (street.code, street.name), obec_name
     unit = _named_unit(chain, level, name or "")
+    if unit is None and level == "obec":
+        for variant in _name_variants(name or ""):
+            momc = _bind_momc(
+                conn, version=version, name=variant, obec_unit_id=obec_unit_id, obec_code=obec_code,
+            )
+            if momc is not None:
+                return "cast_obce", momc, obec_name
     if unit is None:
         LOG.info("maps.resolve: %s pick %r names no single unit of its chain — no code",
                  level, name)
@@ -495,7 +575,8 @@ def resolve(
     address_point: bool = False,
 ) -> dict[str, Any]:
     """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level.
-    With `address_point` (the address picker) an address pick answers its ONE door."""
+    With `address_point` (the address picker) an address pick answers its ONE door. A městská
+    část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips."""
     door = address_point and type_ == "regional.address"
     level = "adresni_misto" if door else _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
@@ -512,6 +593,9 @@ def resolve(
             conn, version=version, lat=lat, lng=lng, level=level,
             name=_street_of(type_, name, regional_structure),
         )
-    if unit is not None:
+    if isinstance(unit, _Momc):
+        out["name"] = unit.name
+        out["parts"] = [{"id": code, "name": nm} for code, nm in unit.parts]
+    elif unit is not None:
         out["id"], out["name"] = unit
     return out

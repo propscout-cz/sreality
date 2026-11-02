@@ -5424,7 +5424,14 @@ tested against ONE table, `tests/fixtures/district_chip_plan.json`.
 A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
 draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
-and the quarter or street is bound BY NAME inside the PIP'd obec. The street is indexed twice
+and the quarter or street is bound BY NAME inside the PIP'd obec. **A městská část is no level and no
+chip (ruling 2026-11-02, #2380):** `/maps/resolve` binds "Praha 6" or "Brno-střed" by name, after a část
+of that name, and answers no code plus `parts`, every část its doors stand in (`ruian_address_points`,
+joined on the unit's stable `code`, as a load re-points doors in place). The typeahead adds one
+ordinary `cast_obce` chip per part, so URLs, presets, the Watchdog, the RPCs and the rows gain nothing,
+and a saved filter keeps the set it was saved with. A část straddling several městské části counts for
+each it touches, by ruling; an ad holding no část in that town is not matched, as with any část chip.
+There is no chip for the whole městská část: it is removed or excluded part by part. The street is indexed twice
 (migration 605: `browse_list_ulice_idx` via the rebuild, `listing_location_ulice_kod_idx` for the
 feed lane) because without them one street read its whole category band and the feed seq-scanned
 `listing_location` for 4.97 s; `cast_obce` on the feed lane has the same shape and is not indexed.

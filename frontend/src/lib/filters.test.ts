@@ -44,6 +44,9 @@ import {
   countedWords,
   toSearchParams,
   watchdogNameSuggestion,
+  districtChipsToCsvParams,
+  parseDistrictChips,
+  type DistrictChip,
 } from './filters';
 import { districtsFilterClause } from './districtCodes';
 import { DEFAULT_SORT, parseSort, sortToParam } from './browseSort';
@@ -1137,5 +1140,25 @@ describe('mapAreaLabel', () => {
 
   it('names the circle by its radius and centre', () => {
     expect(mapAreaLabel({ lat: 50.08, lng: 14.42, radius_m: 1500 })).toBe('circle 1.5 km around 50.0800, 14.4200');
+  });
+});
+
+describe('a městská část picked as its části survives a reload', () => {
+  const parts: DistrictChip[] = [
+    { name: 'Bubeneč', context: 'Praha', level: 'cast_obce', id: 400301 },
+    { name: 'Dejvice', context: 'Praha', level: 'cast_obce', id: 400302 },
+  ];
+
+  it('round-trips through the URL unchanged', () => {
+    const csv = districtChipsToCsvParams(parts);
+    expect(parseDistrictChips(
+      csv.districts, csv.districts_ctx ?? null, csv.districts_excl ?? null,
+      csv.districts_lvl, csv.districts_id,
+    )).toEqual(parts);
+  });
+
+  it('round-trips through a stored preset unchanged', () => {
+    const stored = JSON.parse(JSON.stringify({ ...DEFAULT_FILTERS, districts: parts })) as ListingFilters;
+    expect(readPresetSpec(stored).filters.districts).toEqual(parts);
   });
 });
