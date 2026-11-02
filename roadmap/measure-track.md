@@ -544,9 +544,8 @@ Three actions remain, all requiring the operator; none of them is code.
    gate blocks it from the agent side, so it runs in the Supabase SQL editor. Not urgent —
    migration 428 IS applied, so the function is already unreachable from the perimeter
    (`anon` and `authenticated` both false).
-3. **Run the realitymix quarantine write:**
-   `gh workflow run backfill_unit_price_masquerade.yml -f source=realitymix -f write=true`.
-   Independent of 438 — it touches only `price_czk` and `raw_json`.
+3. **The realitymix quarantine write ran** (2026-11-01: 92,133 rows examined, 1,871 quarantined); #2018 then
+   deleted its workflow and script.
 
 Then re-check the per-basis p05/median/p95 from `properties_map_mv` and confirm mmreality
 dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area (job 7 and `properties_map_mv`
