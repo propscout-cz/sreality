@@ -85,7 +85,7 @@ jobs:
     # `@ts-expect-error` cases fail the BUILD if a basis-blind
     # fmtMeasuredPricePerM2 call ever starts compiling.
     runs-on: ubuntu-latest
-    # 4-vCPU public runners took about 4 min; a private repo's have 2.
+    # 4-vCPU public runners took 4 to 6 min; a private repo's have 2.
     timeout-minutes: 15
     defaults:
       run:

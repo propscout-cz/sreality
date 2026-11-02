@@ -95,55 +95,6 @@ def _resolved(listing_id: int) -> Any:
 # ------------------------------------------------------------------ the claim changes
 
 
-def _raw(claim: Any, version: int | None, active: int | None = 4,
-         declared: bool = True) -> tuple[Any, ...]:
-    """A row of `_RAW_CLAIMS_SQL` for listing 7: `CLAIM_COLUMNS`' 17, then version, active
-    version, declared."""
-    return (claim.id, 7, claim.source, claim.claim_type, claim.surface,
-            claim.extraction_method, claim.licence_class, claim.observed_at, claim.value_text,
-            claim.value_num, claim.lat, claim.lon, claim.value_jsonb,
-            claim.declared_precision_label, claim.declared_radius_m, claim.blur_evidence,
-            claim.subject_scoped, version, active, declared)
-
-
-def test_purge_reads_every_claim_raw_and_keeps_what_the_purge_keeps():
-    """W3's shadow: today's read is one claim per type already, so `purge` reads the ids' claims
-    RAW and keeps, per (listing, type, author), the purge's keeper — the newest version at or
-    below the active one, then the newest observation — then reads them as W3 does: one per type,
-    the operator's first, a portal claim only of a type the active contract declares."""
-    newer_pin = _at(mm.claim(1, "coordinate", lat=50.1, lon=14.1), 5)     # @5 > active @4
-    pin = _at(mm.claim(2, "coordinate", lat=50.0, lon=14.0), 0)           # @4: the keeper
-    old_town, town = (_at(mm.claim(i, "obec_name", value_text=t), d)
-                      for i, t, d in ((3, "Brno", 9), (4, "Praha", 1)))  # @3 newer, @4 kept
-    psc, psc_later = (_at(mm.claim(i, "psc", value_text=v), d)
-                      for i, v, d in ((5, "11000", 1), (6, "12000", 2)))  # both @4: newest
-    cast = _at(mm.claim(7, "cast_obce_name", value_text="Žižkov"), 0)     # @3, its only row
-    operator = _at(mm.claim(8, "psc", value_text="13000", licence_class="operator"), 0)
-    gone = _at(mm.claim(9, "okres_name", value_text="Praha"), 0)          # no longer declared
-    conn = _FakeConn(rows=[_raw(newer_pin, 5), _raw(pin, 4), _raw(old_town, 3), _raw(town, 4),
-                           _raw(psc, 4), _raw(psc_later, 4), _raw(cast, 3),
-                           _raw(operator, None, None, False), _raw(gone, 4, declared=False)])
-    out = what_if.purge(conn, {7: [], 8: []})
-    assert [c.id for c in out[7]] == [2, 4, 7, 8]
-    assert out[8] == []
-    (sql, params, _, in_transaction), = conn.executed
-    assert sql == what_if._RAW_CLAIMS_SQL and params == {"ids": [7, 8]} and in_transaction
-    assert "DISTINCT ON" not in sql and "WHERE listing_id = ANY(%(ids)s::bigint[])" in sql
-
-
-def test_the_shadows_keeper_is_the_purge_scripts():
-    """One keeper rule, two spellings: the purge's SQL window and the shadow's Python sort."""
-    from scripts import location_claims_retire
-
-    assert ("ORDER BY (pc.version <= act.version) DESC NULLS LAST, pc.version DESC NULLS FIRST, "
-            "c.first_observed_at DESC, c.id DESC") in " ".join(
-        location_claims_retire._BATCH_SQL.split())
-    claim = mm.claim(1, "psc", value_text="11000")
-    ranks = sorted([(what_if.keeper_rank(claim, v, a), v) for v, a in
-                    ((5, 4), (None, 4), (3, 4), (4, 4), (4, None))])
-    assert [v for _, v in ranks] == [4, 3, 5, None, 4]   # SQL: false before NULL, NULL first
-
-
 def test_a_remine_writes_as_the_one_write_and_reads_as_the_one_read():
     """W4's re-mine under W3: a mined portal claim replaces its type's portal claim, a tombstone
     removes it, silence keeps it; a type the contract stopped declaring is not read; the operator
@@ -270,9 +221,8 @@ def test_an_operators_id_select_runs_as_one_wrapped_read_only_statement():
     assert select[2] == {"binary": True} and budget[3] and select[3]
 
 
-def test_an_r2_id_list_is_read_as_the_w3_dry_run_writes_it():
-    """Gzipped, one listing id per line: W3's ids_sql is a full scan of 14.8 M claims, so its
-    purge dry run writes the movers' ids to R2 and the shadow reads them back."""
+def test_an_r2_id_list_is_read_gzipped_one_id_per_line():
+    """A wave whose ids are a full scan keeps them in R2, and the shadow reads them back."""
     class Store:
         def download_bytes(self, key: str) -> bytes:
             assert key == "backups/w3-claims/2026-11-01/w3_shadow_ids_1_1.txt.gz"

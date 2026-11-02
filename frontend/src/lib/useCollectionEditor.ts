@@ -32,9 +32,7 @@ export function useCollectionEditor(collection: Collection, { onDone, failed }: 
     mutationFn: () =>
       updateCollection(collection.id, {
         ...(nextName != null && { name: nextName }),
-        /* A cleared description goes as '' until #2208: PATCH /collections reads null
-         * as "not given" (coalesce), so null alone is refused and never clears it. */
-        ...(nextDescription != null && { description: nextDescription }),
+        ...(nextDescription != null && { description: nextDescription || null }),
       }),
     onSuccess: () => {
       setError(null);

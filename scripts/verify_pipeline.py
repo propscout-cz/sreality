@@ -384,8 +384,8 @@ THRESHOLDS: dict[str, Any] = {
     # Street share, (address + street) / Czech ads with a town by the rank table, judged on its Wilson
     # UPPER bound against the portal's floor, 0.9x its share on 10-31 rounded down (a 10 % relative
     # drop on n >= 5k is far past sampling noise, SE ~0.2 pp: a parser or contract regression).
-    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor.
-    # WATCH ONLY, never Problem, until the operator rules these floors (W1-b is unruled).
+    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor. Problem under it
+    # (ruling W1-b, 2026-11-01).
     "location_street_floor": {
         "bezrealitky": 0.62,   # 69.5 % on 10-31
         "sreality": 0.57,      # 64.1 %
@@ -399,7 +399,7 @@ THRESHOLDS: dict[str, Any] = {
     },
     # ...over at least 200 Czech ads with a town (maxima had 280 on 10-31).
     "location_street_floor_min_n": 200,
-    # The served properties' fleet street share, the same rule (Watch only too): 0.9x 49.0 % on 10-31.
+    # The served properties' fleet street share, the same rule: 0.9x 49.0 % on 10-31.
     "location_served_street_floor": 0.44,
     # Pin accuracy, Watch only until W6 ships the calibrated table: the Wilson LB of the sampled
     # below-address ads whose address point lies inside their own radius under 90 % (W6 targets
@@ -434,7 +434,7 @@ THRESHOLDS: dict[str, Any] = {
     # --- curation_sync (platform alarm, on the worker): does every curation change move the clock --
     # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
     # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
-    "CURATION_CLOCK_TRIGGERS": 12,
+    "CURATION_CLOCK_TRIGGERS": 14,
     # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
     # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
     # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
@@ -489,7 +489,7 @@ _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
 _PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
 # The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
 _NOTIFICATIONS_BUDGET_S = 5.0
-# The curation clock's two reads: twelve catalog rows and the board ledger's last day (~10 events), so 5 s. With it
+# The curation clock's two reads: fourteen catalog rows and the board ledger's last day (~10 events), so 5 s. With it
 # WORKER_ALARMS_DUE_AT_ONCE_S exceeds the worker's pass: the last alarm (parsing) defers one pass when every alarm is
 # due at once, the tested `defer_unfit` path (docs/design/curation-sync.md § 3.9).
 _CURATION_SYNC_BUDGET_S = 5.0

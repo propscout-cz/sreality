@@ -452,12 +452,7 @@ def test_the_routes_answer_a_spec_the_compiler_refuses_with_a_422(method, path, 
 
     written: list[str] = []
 
-    def never(*_a: Any, **_kw: Any) -> None:
-        raise AssertionError("a refused spec must not be written")
-
-    monkeypatch.setattr(nf, "create_subscription", never)
-    monkeypatch.setattr(nf, "update_subscription",
-                        lambda *_a, **kw: written.append(kw["name"]) or {"id": "s"})
+    # The refusal lives in the module, so every caller gets it; this connection would fail any statement reaching it.
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
     api_main.app.dependency_overrides[tenant_pool.require_account_id] = (
         lambda: UUID("11111111-1111-1111-1111-111111111111")
@@ -466,8 +461,6 @@ def test_the_routes_answer_a_spec_the_compiler_refuses_with_a_422(method, path, 
         client = TestClient(api_main.app)
         body = {"name": "x", "filter_spec": {"near_city_proximity": {"radius_km": 10,
                                                                      "index_rules": []}}}
-        if method == "put":
-            monkeypatch.setattr(nf, "update_subscription", never)
         res = getattr(client, method)(path, json=body)
         assert res.status_code == 422, res.text
         assert res.json()["detail"].startswith("filter_spec: near_city_proximity is retired")

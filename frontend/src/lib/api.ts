@@ -15,7 +15,7 @@
 
 import type { WaitlistResponse } from './waitlist';
 import type { AccountLimit, AgentRunOptions } from './agentRunOptions';
-import type { AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
+import type { AgentProposal, AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,
@@ -653,6 +653,14 @@ export const fetchAgentRuns = (): Promise<{ data: AgentRunRow[]; truncated: bool
 export const fetchAgentRun = (id: number): Promise<AgentRun> => request<AgentRun>(`/runs/${id}`);
 export const fetchAgentRunSteps = (id: number): Promise<{ data: AgentRunStep[] }> =>
   request<{ data: AgentRunStep[] }>(`/runs/${id}/steps`);
+export const fetchAgentRunFile = (runId: number, fileId: number): Promise<Blob> =>
+  requestBlob(`/runs/${runId}/files/${fileId}`);
+export const fetchAgentRunProposals = (id: number): Promise<{ data: AgentProposal[] }> =>
+  request<{ data: AgentProposal[] }>(`/runs/${id}/proposals`);
+export const applyAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/apply`, { method: 'POST' });
+export const undoAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/undo`, { method: 'POST' });
 export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status: AgentRunStatus; created: boolean }> =>
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>
@@ -839,10 +847,9 @@ export interface NewDedupCandidateStats {
   top_towns: NewDedupCandidateTownRow[];
   distribution: NewDedupCandidateDistributionRow[];
   funnel: NewDedupCandidateFunnelRow[];
-  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys, the same
-   * shape `location_audit_waterfall` writes hourly for the audit page. One row
-   * type for both readouts; the browser sums and subtracts nothing. Optional
-   * because a run generated before W16 has none. */
+  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys; the browser
+   * sums and subtracts nothing. Optional because a run generated before W16 has
+   * none. */
   waterfall?: WaterfallRow[];
   /* When the lane COUNTED those rows — the funnel re-reads `listings` live at the
    * end of a run, so this, and not the generation row's completed_at, is what the

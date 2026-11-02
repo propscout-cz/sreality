@@ -23,6 +23,16 @@ from fastapi import HTTPException
 from api import schemas as s
 from toolkit.property_identity import resolve_active_property_id
 
+def is_dismissed(conn: "psycopg.Connection", property_id: int, *, account_id: uuid.UUID) -> bool:
+    """Whether this account holds an active dismissal of the property."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM property_dismissals WHERE property_id = %s AND account_id = %s AND lifted_at IS NULL",
+            (property_id, account_id),
+        )
+        return cur.fetchone() is not None
+
+
 def dismiss(
     conn: "psycopg.Connection", body: s.DismissPropertyIn, *,
     account_id: uuid.UUID,

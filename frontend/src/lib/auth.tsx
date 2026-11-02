@@ -62,7 +62,7 @@ export function agendaVisible(
   return isAdmin || !isSupabaseConfigured() || agendas === null || agendas[agenda] === true;
 }
 
-/* The notifications gate: the bell, the feed's nav entry, the unread poll and
+/* The notifications gate: the bell, the feed's nav entry, the unread read and
  * push (lib/push `setPushGate`) all follow it. */
 export function notificationsVisible(
   isAdmin: boolean,

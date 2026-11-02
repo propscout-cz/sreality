@@ -32,7 +32,7 @@ Product code −884/+251 (net −633) against the brief's ≈ −765/+130; tests
 - Stale prose trued in place: `tests/test_location_w5_serve_resolved.py` (the menu test's docstring), `tests/test_location_steps_vocabulary.py` (the hidden-state test's docstring), `lib/healthChecks.ts` (lazy-only note), `api/main.py` (the router comment), `docs/design/health-dashboard.md` (the All-sources line), `docs/design/propscout-redesign.md` (the badge's as-built line).
 - The matrix shows a value on non-OK cells only (Health's `MatrixCell` rule, adopted on review to keep one verdict cell); every value stays in `CheckRow` below and in each cell's title.
 
-## Migration B (separate PR, ruling W1-c; apply ONLY after PR 2's frontend is deployed)
+## Migration B (built as migration 719, ruling W1-c, 2026-11-01; PROGRAM.md's W1 as-built)
 1. DROP TABLE location_audit_waterfall (9 rows, rewritten hourly; policy location_audit_waterfall_authenticated_read, unique index, grant); backup form: a receipt pasted into the PR instead of backup_before_drop.yml needs the operator's OK.
 2. DROP FUNCTION refresh_location_audit_waterfall(). 3. DROP FUNCTION refresh_location_pin_audit_mv() with the cron re-point (`cron.schedule('refresh-location-pin-audit', '25 * * * *', …select public.refresh_matview('location_pin_audit_mv'))`; chokepoint 578:48-95 stamps the artifact). 4. DROP FUNCTION location_pin_audit_summary(). 5. DELETE the derived_artifacts row location_audit_waterfall; update the location_pin_audit_mv row's producer.
 NOT dropped: location_pin_audit_mv + indexes (W6), pipeline_check_results history.

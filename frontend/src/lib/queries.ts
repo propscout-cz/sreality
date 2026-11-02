@@ -1826,6 +1826,8 @@ export const notificationKeys = {
   all: ['notifications'] as const,
   feed: (params: Record<string, unknown>) =>
     ['notifications', 'feed', params] as const,
+  /* Prefix of every filter's feed: a mark-seen paints the row in each of them. */
+  anyFeed: ['notifications', 'feed'] as const,
   unreadCount: ['notifications', 'unread-count'] as const,
 };
 

@@ -12,10 +12,10 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { markWatchdogDispatchSeen } from '@/lib/api';
+import { revalidateTables } from '@/lib/curationSync';
 import { dispatchTarget } from '@/lib/dispatchTarget';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { reportPushOpened } from '@/lib/push';
-import { notificationKeys } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
 
 export default function NotificationOpen() {
@@ -34,7 +34,7 @@ export default function NotificationOpen() {
     reportPushOpened(delivery);
     markWatchdogDispatchSeen(dispatchId)
       .then((row) => {
-        void qc.invalidateQueries({ queryKey: notificationKeys.all });
+        void revalidateTables(qc, ['notification_dispatches']);
         navigate(dispatchTarget(row), { replace: true });
       })
       .catch(() => navigate(ROUTES.notifications.build(), { replace: true }));

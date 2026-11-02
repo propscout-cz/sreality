@@ -390,9 +390,8 @@ duration in the refresh's own transaction. **CONCURRENTLY is valid inside a tran
 (the restriction people misremember is `CREATE INDEX CONCURRENTLY`'s); two producer comments
 claimed otherwise and drove the blocking design — never re-derive that claim from a comment.
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
-this for all matviews). Pre-578 SQL producers
-(`refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
-their pinned inline shapes; new SQL producers call the chokepoint.
+this for all matviews). The pre-578 blue-green `rebuild_browse_list()` keeps
+its pinned inline shape; new SQL producers call the chokepoint.
 
 **A `SECURITY DEFINER` gate in a view's WHERE is per-row ONLY when it is combined with a
 column predicate.** Three cases, don't conflate them:
@@ -480,7 +479,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   keyed upsert (`claims_store.write_claims`) writes only when a value changes, in place; the
   resolver reads one per type, operator first. A wrong contract is RETRACTED (DELETE + re-resolve
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
-  `location_claims_retire.yml` ran once more for W3's purge, deleted in PR-2. The live set is `location_claims`,
+  The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound

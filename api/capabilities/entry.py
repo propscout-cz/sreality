@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -69,3 +70,24 @@ class Entry:
     @property
     def input_schema(self) -> dict[str, Any]:
         return portable(self.args)
+
+
+@dataclass(frozen=True)
+class UndoCheck:
+    """Whether Undo can work now, in words the user reads: why not, or what it will leave behind."""
+
+    available: bool
+    says: str | None = None
+
+
+@dataclass(frozen=True)
+class WriteEntry(Entry):
+    """A write the user applies (ADR-0004): never called by a run. `handler` returns `data.answer`, what the user reads, and
+    `undo`, the record its inverse takes. `undo_check` and `undo` take that record and the Apply's stamp, the stamp every row
+    it wrote carries."""
+
+    draw: Callable[[Context, Any], dict[str, Any]]
+    undo_check: Callable[[Context, Mapping[str, Any], datetime], UndoCheck]
+    undo: Callable[[Context, Mapping[str, Any], datetime], None]
+    # Undo removes something rule 22 lets a surface remove only behind a confirm step.
+    undo_confirm: bool = False

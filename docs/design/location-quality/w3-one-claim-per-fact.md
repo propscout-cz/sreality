@@ -461,8 +461,7 @@ Rules: 7 tie rules → 0; 4 supersession paths → 2; 2 identities per row → 1
 
 ## 4. Migrations and the purge (as built)
 
-Two numbered files: **699** in PR-1, **702** in PR-2 (700 went to the waitlist table, 701 to curation; claimed 2026-10-31 17:00Z) (drafted below as text; append-only numbering, so
-PR-2 adds the file). Destructive steps are pre-approved by Q13, each with an R2 backup and a receipt.
+Two numbered files: **699** in PR-1, **707** in PR-2 (the numbers in between went to other work). Where this document says 702 it means 707. Destructive steps are pre-approved by Q13, each with an R2 backup and a receipt.
 Nothing here assumes migration 697 (W2's three-reason CHECK and `dirty_locations_claim` index): every
 reason W3 writes (`claim_insert`, `operator_edit`, `full_sweep`) is valid before and after it.
 
@@ -558,7 +557,7 @@ first. The three contract bumps declare the same claim types as their predecesso
 
 ### Step 6: migration 702 (PR-2, after one green intake tick on the new code)
 ```sql
--- 700_location_w3_drop_fingerprint.sql (PR-2; destructive, covered by the Step 1 backup)
+-- 707_location_w3_drop_fingerprint.sql (PR-2; destructive, covered by the Step 1 backup)
 set lock_timeout = '5s';
 drop index concurrently if exists location_claims_fingerprint;   -- 1,098 MB
 drop index concurrently if exists location_claims_ephemeral;     -- 0 rows; the class is never read

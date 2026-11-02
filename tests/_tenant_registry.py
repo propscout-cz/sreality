@@ -51,6 +51,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "agent_runs",
     "agent_run_steps",
     "agent_artifacts",
+    # Migration 712: what became of a run's proposals; browser roles SELECT only (BROWSER_WRITE_COLUMNS).
+    "agent_proposal_applies",
     # Migration 713: an account's own daily agent limit; browser roles SELECT only (BROWSER_WRITE_COLUMNS).
     "agent_account_limits",
 )
@@ -67,6 +69,8 @@ BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
     "agent_runs": frozenset(),
     "agent_run_steps": frozenset(),
     "agent_artifacts": frozenset(),
+    # Migration 712: only its definer functions write it, each refusing any login but the tenant pool's.
+    "agent_proposal_applies": frozenset(),
     # Migration 713: the service role writes it, PUT /runs/limit in api/routes/agent_runs.py, after the route's validation.
     "agent_account_limits": frozenset(),
 }
@@ -95,6 +99,8 @@ CLOCKED_TABLES: dict[str, str] = {
     "property_artifact_links": "links",
     "pipeline_shares": "shares",
     "collection_shares": "shares",
+    "notification_dispatches": "notifications",
+    "notification_subscriptions": "notifications",
 }
 
 # Every tenant table (and the per-account tables beside them) the clock deliberately does not count, with why. A new
@@ -105,10 +111,8 @@ NOT_CLOCKED: dict[str, str] = {
                        "bumps that row's family",
     "property_pipeline_events": "the board ledger, written only in the transaction of a property_pipeline change, "
                                 "which bumps board (the health check's board_bumps cell leans on exactly this)",
-    "notification_dispatches": "the rule-16 event table, not curation; the bell keeps its own polls (ruling Q1b)",
     "filter_presets": "presets are not curation (follow-up F5)",
     "filter_preset_groups": "preset groups are not curation (follow-up F5)",
-    "notification_subscriptions": "watchdogs are not curation (ruling Q1b, follow-up F5)",
     "estimation_runs": "estimation runs started elsewhere are out of scope (ruling Q1d, follow-up F5)",
     "estimation_cohort_entries": "a run's cohort, immutable with its run (rule 12; follow-up F5)",
     "estimation_trace_payloads": "a run's trace, immutable with its run (rule 12; follow-up F5)",
@@ -121,5 +125,6 @@ NOT_CLOCKED: dict[str, str] = {
     "agent_runs": "a run is not curation: it ends in proposals the user applies, each under its own table's clock",
     "agent_run_steps": "a run's diary, not curation",
     "agent_artifacts": "a run's files, not curation",
+    "agent_proposal_applies": "a run's marker, not curation: the write it records moves that table's clock",
     "agent_account_limits": "a spending setting read at claim time, not curation",
 }

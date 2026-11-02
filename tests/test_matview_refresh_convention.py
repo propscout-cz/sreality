@@ -9,11 +9,11 @@ names, refreshes CONCURRENTLY (plain only on first populate), skips an in-flight
 duplicate, and stamps derived_artifacts. These rails keep the class unrepresentable,
 offline, before a bypass ships.
 
-Pre-578 SQL producers (refresh_location_pin_audit_mv, the browse_list blue-green
-rebuild, refresh_llm_cost_rollups) keep their inline concurrent-refresh + stamp shapes —
-they are pinned by tests/test_derived_artifacts_stamping.py and were never the blocking
-class (refresh_health_matviews and the map's rebuild were two more, until migrations 643
-and 631 dropped them). New SQL producers should call the chokepoint.
+Pre-578 SQL producers (the browse_list blue-green rebuild, refresh_llm_cost_rollups) keep
+their inline concurrent-refresh + stamp shapes — they are pinned by
+tests/test_derived_artifacts_stamping.py and were never the blocking class
+(refresh_health_matviews, the map's rebuild and refresh_location_pin_audit_mv were three more,
+until migrations 643, 631 and 719 dropped them). New SQL producers should call the chokepoint.
 
 Every test states the mutation that makes it RED.
 """
@@ -120,3 +120,19 @@ def test_the_chokepoint_guards_before_it_refreshes():
         f"{latest.name}: expected EXECUTE revokes for public, anon and authenticated "
         f"(migration 287's default-ACL lesson), found {revokes}"
     )
+
+
+def test_the_pin_audit_cron_publishes_through_the_chokepoint():
+    """RED by: 719 dropping the old producer before the cron is re-pointed (the job would fail
+    every hour and the audit list would freeze), the budget leaving the command (migration
+    371's lesson), or the drop taking the matview the list still reads until W6."""
+    flat = " ".join(
+        _stripped(_MIGRATIONS / "719_location_audit_waterfall_drop.sql").lower().split()
+    )
+    repoint = flat.index("'refresh-location-pin-audit'")
+    assert "set statement_timeout='900s'; select public.refresh_matview('location_pin_audit_mv');" in flat
+    assert "raise notice 'pg_cron unavailable" in flat
+    assert repoint < flat.index("drop function if exists refresh_location_pin_audit_mv();")
+    assert "set producer = 'refresh_matview' where name = 'location_pin_audit_mv'" in flat
+    assert "drop table if exists location_audit_waterfall;" in flat
+    assert "drop materialized view" not in flat

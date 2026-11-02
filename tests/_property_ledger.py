@@ -11,7 +11,8 @@ over this fake opts into; `db.carried` then holds each ("merge", carrier name, s
 handed the seam, and `db.carries` each carry record row written (`RecordingCarrier.rows` is what a
 recording carrier hands back). The fixture also plans no curation (`curation_plan` answers []) and
 records each `route_curation` call in `db.routed` (left, routes, landed): the routing SQL runs
-live only. The fake also models the dispatch carrier's one UPDATE (re-point, mark the survivor's
+live only, and records each address-pick clear a detach asks for in `db.cleared` (the claim write
+runs live only). The fake also models the dispatch carrier's one UPDATE (re-point, mark the survivor's
 twin a duplicate); a test runs it for real with `keep_real`. `db.changed` and `db.browse` each id
 list the after-step (`properties_changed`) recomputed and patched into Browse."""
 
@@ -28,6 +29,7 @@ import toolkit.browse_read_model as brm
 import toolkit.property_identity as pi
 import toolkit.property_split as ps
 from autodedup import ui_sql as usql
+from location_data import operator_corrections
 from scraper.db import NEW_SINGLETONS_SQL
 from toolkit import property_carriers as carriers
 
@@ -121,6 +123,7 @@ class _Ledger:
         self.verdicts: list[dict[str, Any]] = []
         self.sets: list[dict[str, Any]] = []
         self.routed: list[tuple[int, tuple, dict[int, int]]] = []
+        self.cleared: list[list[int]] = []
         self.mnl: dict[tuple[int, int], tuple[str, str]] = {}
         self.clock = 0
         self.carried: list[tuple[str, str, Any]] = []
@@ -471,6 +474,8 @@ def ledger_carriers(monkeypatch: pytest.MonkeyPatch) -> None:
         RecordingCarrier(c.name) for c in carriers.PROPERTY_CARRIERS))
     monkeypatch.setattr(carriers, "curation_plan", lambda cur, **kw: [])
     monkeypatch.setattr(carriers, "route_curation", record_routes)
+    monkeypatch.setattr(operator_corrections, "clear",
+                        lambda db, ids: db.cleared.append(list(ids)) or 0)
 
 
 def keep_real(monkeypatch: pytest.MonkeyPatch, carrier: carriers.Carrier) -> None:

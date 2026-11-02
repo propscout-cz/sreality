@@ -420,3 +420,9 @@ def test_a_runner_only_window_asks_no_brake() -> None:
     assert "#2025-R2" in runner_only and "$RUNNER" in runner_only and "BRAKE_ASKED" not in runner_only
     # A vite or API window skips the brake for its own reason, never the runner ruling's.
     assert "the worker's project" in otherwise and "#2025-R2" not in otherwise and "BRAKE_ASKED" not in otherwise
+
+
+def test_the_wizard_refuses_an_old_bash_before_its_first_associative_array() -> None:
+    """RED by: macOS's bash 3.2 reading `declare -A` and dying on `vite: unbound variable`."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    assert wizard.index("BASH_VERSINFO") < wizard.index("declare -A")

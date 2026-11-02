@@ -47,18 +47,6 @@ class UpdateSubscriptionIn(BaseModel):
 # --- subscriptions --------------------------------------------------------
 
 
-def _refuse_unrenderable(spec: WatchdogFilterSpec | None) -> None:
-    """422 for a spec the matcher's one compiler refuses (a retired filter, an agenda violation):
-    stored, it would mute its watchdog every pass. The model's own refusals (a chip without a code)
-    are FastAPI's 422 before this runs; this is the same answer one layer further in."""
-    if spec is None:
-        return
-    try:
-        nf.check_filter_spec(spec)
-    except nf.SPEC_REJECTIONS as exc:
-        raise HTTPException(status_code=422, detail=f"filter_spec: {exc}") from exc
-
-
 @router.get("/subscriptions")
 def get_subscriptions(
     conn: tenant_pool.TenantConn,
@@ -74,7 +62,6 @@ def post_subscription(
     conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
-    _refuse_unrenderable(body.filter_spec)
     return nf.create_subscription(
         conn,
         name=body.name,
@@ -101,7 +88,6 @@ def put_subscription(
     body: UpdateSubscriptionIn,
     conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
-    _refuse_unrenderable(body.filter_spec)
     row = nf.update_subscription(
         conn,
         subscription_id,

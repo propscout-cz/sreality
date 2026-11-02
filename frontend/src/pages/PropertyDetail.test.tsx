@@ -498,6 +498,17 @@ describe('<PropertyDetail> tabs', () => {
       expect(screen.getByRole('link', { name: /Active/ })).toHaveAttribute('href', 'https://reality.idnes.cz/detail/x/'));
   });
 
+  it('offers the RÚIAN address picker on the address line to an admin, and to nobody else', async () => {
+    const plain = renderAt('/property/774');
+    await screen.findByText('Kolbenova, Praha 9');
+    expect(screen.queryByRole('button', { name: 'Opravit adresu (RÚIAN)' })).toBeNull();
+    plain.unmount();
+    vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: true } as ReturnType<typeof auth.useAuth>);
+    renderAt('/property/774');
+    const pencil = await screen.findByRole('button', { name: 'Opravit adresu (RÚIAN)' }, { timeout: 5000 });
+    expect(screen.getByText('Kolbenova, Praha 9')).toContainElement(pencil);
+  });
+
   it('offers the tags as a header button beside the collections', async () => {
     renderAt('/property/774');
     expect(await screen.findByRole('button', { name: 'Štítky' })).toBeInTheDocument();

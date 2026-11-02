@@ -30,8 +30,10 @@ export interface MapySuggestion {
 
 /* What `/maps/resolve` answers for a pick: ONE RÚIAN unit at the level picked.
  * `id` is its code, or null when the register cannot bind the pick; `level` is
- * null for a pick that names no level (a country). `name` is the register's name
- * of the unit, `context` the register name of its obec below the obec level. */
+ * null for a pick that names no level (a country), and `adresni_misto` for an
+ * address the address picker asked as a door (`addressPoint`). `name` is the
+ * register's name of the unit, `context` the register name of its obec below
+ * the obec level. */
 export interface LocationResolution {
   level: string | null;
   id: number | null;
@@ -65,8 +67,12 @@ export const fetchSuggest = async (
 };
 
 /* The request is strict (no nulls), so a pick without a position is refused here,
- * the same way a failed call is. */
-export const resolveSuggestion = (pick: MapySuggestion): Promise<LocationResolution> => {
+ * the same way a failed call is. `addressPoint` (the address picker only) binds an
+ * address to its one door; without it, Browse's request is unchanged. */
+export const resolveSuggestion = (
+  pick: MapySuggestion,
+  { addressPoint = false }: { addressPoint?: boolean } = {},
+): Promise<LocationResolution> => {
   if (!pick.position) return Promise.reject(new Error('suggestion has no position'));
   return apiPost<LocationResolution>('/maps/resolve', {
     lat: pick.position.lat,
@@ -77,6 +83,7 @@ export const resolveSuggestion = (pick: MapySuggestion): Promise<LocationResolut
      * `regional.street` entry). */
     name: pick.name,
     regional_structure: (pick.regionalStructure ?? []).map(({ name, type }) => ({ name, type })),
+    ...(addressPoint ? { address_point: true } : {}),
   });
 };
 
