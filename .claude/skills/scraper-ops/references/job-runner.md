@@ -202,7 +202,7 @@ job-runner; (c) the gate-week drills below. Merges follow `docs/agents/issue-tra
    API service needs its own wizard window.
 2. Before drills C and D, the operator gives the engine session (§ Merging) a one-line FYI with the time.
 3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` tells the engine session
-   first, as merges do; it sets the brake if it must.
+   first, as merges do. The brake has no named owner until the operator rules (§ Merging).
 4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and the
    engine session is told.
 
