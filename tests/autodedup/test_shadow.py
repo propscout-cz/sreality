@@ -7,6 +7,7 @@ engine e2e's synthetic cohort, so nothing here reaches a database.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gzip
 import io
 import json
@@ -52,8 +53,8 @@ def _jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
     return path
 
 
-def _cohort(path: Path) -> Path:
-    records = build_records()
+def _cohort(path: Path, extra: tuple[dict[str, Any], ...] = ()) -> Path:
+    records = [*build_records(), *extra]
     home = next(r for r in records if r["t"] == "listing" and r["id"] == DUP_A)["location"]
     records += [_listing(i, "turnov", source=src, location=dict(home), disposition="2+1",
                          area_m2=55.0, floor=2, total_floors=4, price=4_200_000)
@@ -433,8 +434,9 @@ def test_the_recent_same_pairs_are_the_newest_rulings_since_the_date(tmp_path: P
 
 
 def _shadow(tmp_path: Path, positions: list[dict[str, Any]], labels: list[dict[str, Any]],
-            settings: Settings | None = None) -> tuple[int, dict[str, Any], str]:
-    base = _cohort(tmp_path / "base.jsonl.gz")
+            settings: Settings | None = None, extra: tuple[dict[str, Any], ...] = ()
+            ) -> tuple[int, dict[str, Any], str]:
+    base = _cohort(tmp_path / "base.jsonl.gz", extra)
     rulings = tmp_path / "labels"
     _jsonl(rulings / "operator_labels.jsonl", labels)
     _jsonl(rulings / "must_not_link.jsonl", [])
@@ -598,9 +600,69 @@ def test_the_door_report_names_new_and_gone_blockers():
     assert undone["e242"]["gone"] == [[1, 2, "band"]] and undone["e272"]["gone"] == [[1, 2, "band"]]
 
 
+_FLAT = {"category_type": "pronajem", "source": "sreality", "floor": 2, "price": 15_000, "broker_key": "one",
+         "broker_firm_id": 1, "disposition": "2+1", "area_m2": 55.0,
+         "description": " ".join(f"Pronajmeme byt cislo {n} se slunecnym balkonem v klidne casti Turnova."
+                                 for n in range(12))}
+_OTHER_FLAT = {**_FLAT, "floor": 3, "price": 19_000, "broker_key": "two", "broker_firm_id": 2,
+               "description": " ".join(f"Zahrada a vyhled {n} nedaleko nadrazi, kuchyn po rekonstrukci, sklep."
+                                       for n in range(12))}
+
+
+def test_the_door_report_lists_a_row_whose_pin_key_moved_and_how_far():
+    on_street = _location(lat=50.5875, lon=15.1583)
+    on_pin = _location(lat=50.5885, lon=15.1583, ruian_adm_kod=701, house_number="7", house_number_cp="7")
+    still = _location(ruian_adm_kod=702, house_number="9", house_number_cp="9")
+    report = _arms({1: ({}, on_street, on_pin), 2: ({}, _location(), still)}, Settings())
+    assert report["position_moved"]["count"] == 1
+    (listing, metres), = report["position_moved"]["listings"]
+    assert listing == 1 and metres == pytest.approx(111.2, abs=0.5)
+
+
+def test_the_entrance_path_of_e242_counts_under_the_live_settings():
+    """E271: one source, two agencies, one č.p. and two č.o., and one template over both. Off without the setting."""
+    bodies = {"description": _FLAT["description"]}
+    left = _door(ruian_adm_kod=701, house_number="7/1", house_number_cp="7")
+    right = _door(ruian_adm_kod=702, house_number="7/3", house_number_cp="7")
+    row = {"zone": "band", "feats": {}}
+    rows = {1: (_FLAT, {}, left), 2: ({**_OTHER_FLAT, **bodies}, {}, right)}
+    live = _arms(rows, harness.named_settings("w31"), pairs={(1, 2): (row, row)})
+    assert live["e242"]["new"] == [[1, 2, "band"]] and not live["e242"]["gone"]
+    off = _arms(rows, dataclasses.replace(harness.named_settings("w31"), d43_house_number_entrance="off"),
+                pairs={(1, 2): (row, row)})
+    assert not off["e242"]["new"]
+
+
+def test_the_door_report_reads_the_runs_settings_never_the_defaults(tmp_path: Path):
+    """`harness shadow` hands the report the scorer's settings, the ones both arms ran under. Two rented flats gain two
+    doors on one street, so both blockers can fire: under the live row's settings they do, under the defaults they
+    are off (`d43_stored_house_number`, `d43_floor_sequential_address_split`). A report falling back to the defaults
+    reads nothing here."""
+    live = harness.named_settings("w31")
+    assert (live.d43_stored_house_number, live.d43_floor_sequential_address_split,
+            live.d43_house_number_entrance) == ("guarded", True, "stored")
+    defaults = Settings()
+    assert defaults.d43_stored_house_number == "off" and not defaults.d43_floor_sequential_address_split
+    door = {"obec_kod": 577626, "obec_name": "Turnov", "cast_obce_kod": None, "cast_obce_name": None,
+            "granularity": "address_point", "granularity_rank": 80, "is_address_grain": True, "lat": 50.5875,
+            "lon": 15.1583, "uncertainty_radius_m": 10.0, "street_name": "Hluboká", "house_number_co": None,
+            "psc": "51101", "country_status": "cz"}
+    flats = (_listing(8001, "turnov", **_FLAT), _listing(8002, "turnov", **_OTHER_FLAT))
+    moved = [{**door, "listing_id": 8001, "house_number_cp": "7", "ruian_adm_kod": 701},
+             {**door, "listing_id": 8002, "house_number_cp": "9", "ruian_adm_kod": 702}]
+    (tmp_path / "live").mkdir()
+    (tmp_path / "off").mkdir()
+    _, verdict, _ = _shadow(tmp_path / "live", moved, [], settings=live, extra=flats)
+    assert [row[:2] for row in verdict["door"]["e242"]["new"]] == [[8001, 8002]]
+    assert [row[:2] for row in verdict["door"]["e272"]["new"]] == [[8001, 8002]]
+    _, off, _ = _shadow(tmp_path / "off", moved, [], settings=defaults, extra=flats)
+    assert not off["door"]["e242"]["new"] and not off["door"]["e272"]["new"]
+
+
 def test_harness_shadow_writes_the_door_report_and_it_never_decides(tmp_path: Path):
     code, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
     assert code == 0 and verdict["pass"]
     assert set(verdict["door"]) >= {"e242", "e272", "same_house_number_to_1", "addr_new", "cap_displaced",
                                     "merge_gained", "merge_lost", "two_doors_one_building"}
     assert any(line.startswith("  door report (base -> candidate") for line in printed.splitlines())
+    assert "this gate says nothing about any block outside group 1/1 of scope apply" in printed

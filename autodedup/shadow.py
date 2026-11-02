@@ -32,7 +32,8 @@ from autodedup.cohort import ids_block, parse_blocks
 from autodedup.dataset import Listing
 from autodedup.evaluate import DIFFERENT, RULINGS_FILES, SAME, RunView, read_rulings
 from autodedup.export import ARTIFACT_NAME, build_location, fetch_block_ids, run_export
-from autodedup.fingerprint import Fingerprint
+from autodedup.features import haversine_m
+from autodedup.fingerprint import Fingerprint, pin_key_of
 from autodedup.incremental import GENERATION
 from autodedup.indistinguishable import _cp_of, _filed_apart, stored_house_number_conflict
 from autodedup.incremental_sql import RT_CALIBRATION_SCORER_SQL
@@ -408,6 +409,18 @@ def _moved(base: dict[PairKey, Any], candidate: dict[PairKey, Any]) -> dict[str,
             "gone": [[*key, base[key]] for key in sorted(set(base) - set(candidate))]}
 
 
+def _position_moved(base: Arm, candidate: Arm, changed: set[int]) -> dict[str, Any]:
+    """Movers whose `pin_key` changes, as `[listing_id, metres]`: a row BIND placed on its street's
+    point because its exact pin was off the street stands on that pin once the pin names a door."""
+    moved: list[list[Any]] = []
+    for i in sorted(changed):
+        was, now = base.listings[i].location, candidate.listings[i].location
+        if pin_key_of(was.lat, was.lon) != pin_key_of(now.lat, now.lon):
+            known = None not in (was.lat, was.lon, now.lat, now.lon)
+            moved.append([i, round(haversine_m(was.lat, was.lon, now.lat, now.lon), 1) if known else None])
+    return {"count": len(moved), "listings": moved}
+
+
 def _index(fps: Mapping[int, Fingerprint], settings: Settings) -> BlockIndex:
     index = BlockIndex(settings)
     for listing_id in sorted(fps):
@@ -474,6 +487,7 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
     zone = lambda key: candidate.run.rows.get(key, {}).get("zone")  # noqa: E731
     return {
         "door_gainers": len(gained),
+        "position_moved": _position_moved(base, candidate, changed),
         "e242": _moved(e242_base, e242_candidate),
         "e272": _moved(e272_base, e272_candidate),
         "same_house_number_to_1": to_one,

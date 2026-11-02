@@ -1033,3 +1033,15 @@ def test_an_okres_word_naming_a_momc_checks_the_door(okres, kod):
 def test_an_okres_word_naming_a_momc_refuses_a_door_outside_every_momc():
     words = (_PRAHA, mm.claim(7, "okres_name", value_text="Praha 4"))
     assert _resolve(_pinned("gps", _ON_DOOR, *words), _praha_momc_mirror()).ruian_adm_kod is None
+
+
+def test_an_off_street_pin_that_names_its_door_stands_on_that_pin_not_the_street_point():
+    """The one mover whose position changes (the shadow's `position_moved`): just past Jiráskova's farthest door, so
+    the street point held it and CHECK flagged it, and the pin is within 1 m of that door."""
+    pin = (50.410895, 14.912)
+    words = (mm.claim(1, "obec_name", value_text="Mladá Boleslav"), mm.claim(4, "street_name", value_text="Jiráskova"))
+    before = _resolve(_pinned("gps", pin, *words), ad_type="komercni")
+    assert (before.disputed, before.ruian_adm_kod) == ("pin_off_street", None)
+    assert (before.lat, before.lon) != pin
+    row = _resolve(_pinned("gps", pin, *words))
+    assert (row.lat, row.lon, row.ruian_adm_kod, row.disputed) == (*pin, 55000001, None)

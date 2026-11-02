@@ -916,6 +916,7 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     door = verdict["door"]
     print(f"  door report (base -> candidate, pair ids in shadow.json `door`): "
           f"{door['door_gainers']} ads gained a door"
+          f"  position moved {door['position_moved']['count']}"
           f"  E242 {door['e242']['base']} -> {door['e242']['candidate']}"
           f" (new {len(door['e242']['new'])}, gone {len(door['e242']['gone'])})"
           f"  E272 {door['e272']['base']} -> {door['e272']['candidate']}"
@@ -925,6 +926,8 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
           f"  displaced by the cap {len(door['cap_displaced'])}"
           f"  merge gained {len(door['merge_gained'])} lost {len(door['merge_lost'])}"
           f"  two doors in one building {len(door['two_doors_one_building'])}", file=out)
+    print(f"  this gate says nothing about any block outside group {verdict['group']} of scope "
+          f"{facts.get('scope', '?')}", file=out)
     print(f"wrote {root / shadow.SHADOW_FILE}", file=out)
     return 0 if verdict["pass"] else 1
 
