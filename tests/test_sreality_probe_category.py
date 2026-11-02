@@ -65,6 +65,7 @@ def _patch_probe(monkeypatch, client: _FakeProbeClient, *, existing: dict[int, d
         return len(e)
 
     monkeypatch.setattr(scraper_main.db, "enqueue_detail", _fake_enqueue)
+    monkeypatch.setattr(scraper_main.db, "rearm_sighted_given_up", lambda _conn, _source, _ids: 0)
     return calls
 
 

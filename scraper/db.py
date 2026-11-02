@@ -1100,14 +1100,15 @@ def enqueue_presence_checks(
         conn, source,
         [(nid, ref, price, QUEUE_PRIORITY_VERIFY) for nid, ref, price in batch],
     )
-    # A row the drain gave up on (5 failed fetches) is excluded from every claim
-    # and never re-armed by anything else, so a listing whose page erred five
-    # times once would stay active forever with no path to a check. Give a
-    # bounded number of them another five tries per walk, oldest first, and
-    # move them to the back of the line (enqueued_at = now()) so the same few
-    # cannot monopolise the budget walk after walk. Rows in the queue are not
-    # nominated above, so this is the only way a given-up row comes back
-    # (rule #5: tracked, not dropped).
+    # A row the drain gave up on (5 failed fetches) is excluded from every claim,
+    # so a listing whose page erred five times once would stay active forever with
+    # no path to a check. Give a bounded number of them another five tries per walk,
+    # oldest first, and move them to the back of the line (enqueued_at = now()) so
+    # the same few cannot monopolise the budget walk after walk. Rows in the queue
+    # are not nominated above, so this is an active listing's way back (rule #5:
+    # tracked, not dropped). Only an ACTIVE listing has a check owed: any other
+    # given-up row stays recorded, and an ad we hold nothing for comes back when the
+    # index sights it (rearm_sighted_given_up), not on every walk forever (#1851).
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1115,9 +1116,13 @@ def enqueue_presence_checks(
             SET given_up = false, attempts = 0, enqueued_at = now(),
                 priority = LEAST(q.priority, %(verify)s)
             WHERE (q.source, q.native_id) IN (
-                SELECT source, native_id FROM listing_detail_queue
-                WHERE source = %(source)s AND given_up = true AND claimed_at IS NULL
-                ORDER BY enqueued_at
+                SELECT g.source, g.native_id FROM listing_detail_queue g
+                WHERE g.source = %(source)s AND g.given_up = true AND g.claimed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM listings l
+                      WHERE l.source = g.source AND l.source_id_native = g.native_id
+                        AND l.is_active)
+                ORDER BY g.enqueued_at
                 LIMIT %(rearm)s
             )
             """,
@@ -1758,8 +1763,8 @@ QUEUE_PRIORITY_FAILURE = 2
 # enqueues at VERIFY) and the gap is kept so a presence check can never inherit a
 # slot something else sorted above.
 QUEUE_PRIORITY_VERIFY = -2
-# How many given-up queue rows each nominating scope with candidates re-arms,
-# source-wide (see enqueue_presence_checks): 50 x 5 attempts per such scope.
+# How many given-up queue rows of active listings each nominating scope with
+# candidates re-arms, source-wide (see enqueue_presence_checks): 50 x 5 attempts per such scope.
 PRESENCE_REARM_PER_WALK = 50
 # Share of each claim batch reserved for presence checks (see claim_detail_batch).
 QUEUE_VERIFY_RESERVE = 0.2
@@ -1862,6 +1867,24 @@ def rearm_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[s
             "priority = GREATEST(priority, %s) "
             "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up",
             (QUEUE_PRIORITY_NEW, source, ids),
+        )
+        return cur.rowcount or 0
+
+
+def rearm_sighted_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[str]) -> int:
+    """The index just listed these ads and we hold no listing for them: a row the drain gave
+    up on gets five more tries, so five bad fetches never lose an ad the portal still lists.
+    At most once per RECHECK_THROTTLE (the re-arm stamps enqueued_at, which enqueue_detail
+    keeps): an ad that keeps failing is sighted by every walk and probe (#1851)."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET given_up = false, attempts = 0, enqueued_at = now() "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up "
+            "AND claimed_at IS NULL AND enqueued_at < now() - %s::interval",
+            (source, ids, delist_policy.RECHECK_THROTTLE),
         )
         return cur.rowcount or 0
 

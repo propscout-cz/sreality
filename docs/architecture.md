@@ -1699,8 +1699,13 @@ renumber.** Navigate by area:
    reads gone keeps its row (accepted: nothing re-enqueues it, since the walk retries only
    failures still in the index). A given-up
    queue row is not dropped either: `enqueue_presence_checks` re-arms up to
-   `PRESENCE_REARM_PER_WALK` = 50 given-up rows per nominating scope, source-wide, at VERIFY
-   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
+   `PRESENCE_REARM_PER_WALK` = 50 given-up rows of ACTIVE listings per nominating scope,
+   source-wide, at VERIFY priority, since only an active listing has a page check owed. Any other
+   given-up row stays recorded and out of every claim; an ad we hold no listing for comes back when
+   the index sights it, at most once per `RECHECK_THROTTLE` (`reconcile_sightings` →
+   `db.rearm_sighted_given_up`, logged `REARM source=… sighted_given_up=N`; #1851: sreality 615387212, no listing, answered 409 through 1,035
+   failed fetches in 11 days and has since turned 404). Neither path reads the status a row failed
+   with, and a 409 stays a failed fetch, never a gone signal (rule #3). Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
    that parses to NO listing content (no price, no area, no params, no images, no description) is a
    failed fetch too, never a write: `portal_runner.content_free` turns such an item into an error
    before the flush (2026-10-31; ceskereality's anti-bot interstitial had been written into 51 live

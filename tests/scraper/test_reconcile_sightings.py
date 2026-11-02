@@ -85,8 +85,8 @@ def test_claimable_counts_all_sources_and_one() -> None:
 _CONN = object()
 
 
-def _patch_db(monkeypatch: pytest.MonkeyPatch, stored: dict[str, dict[str, Any]]) -> dict[str, list]:
-    calls: dict[str, list] = {"order": [], "touched": [], "entries": []}
+def _patch_db(monkeypatch: pytest.MonkeyPatch, stored: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    calls: dict[str, Any] = {"order": [], "touched": [], "entries": [], "rearm": [], "rearmed": 0}
 
     def summary(conn: Any, source: str, ids: list[str]) -> dict[str, dict[str, Any]]:
         calls["order"].append("index_summary_native")
@@ -102,9 +102,15 @@ def _patch_db(monkeypatch: pytest.MonkeyPatch, stored: dict[str, dict[str, Any]]
         calls["entries"].append(list(entries))
         return len(entries)
 
+    def rearm(conn: Any, source: str, ids: list[str]) -> int:
+        calls["order"].append("rearm_sighted_given_up")
+        calls["rearm"].append(list(ids))
+        return calls["rearmed"]
+
     monkeypatch.setattr(portal_runner.db, "index_summary_native", summary)
     monkeypatch.setattr(portal_runner.db, "touch_listings_by_id", touch)
     monkeypatch.setattr(portal_runner.db, "enqueue_detail", enqueue)
+    monkeypatch.setattr(portal_runner.db, "rearm_sighted_given_up", rearm)
     return calls
 
 
@@ -130,7 +136,8 @@ def test_touch_runs_before_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_db(monkeypatch, {"a": _row(1, 100)})
     portal_runner.reconcile_sightings(
         _CONN, "idnes", {"a": (None, 300), "z": (None, 1_000)}, min_change_pct=0.0)
-    assert calls["order"] == ["index_summary_native", "touch_listings_by_id", "enqueue_detail"]
+    assert calls["order"] == ["index_summary_native", "touch_listings_by_id", "enqueue_detail",
+                              "rearm_sighted_given_up"]
 
 
 def test_placeholder_price_reads_unchanged_against_stored_null(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,7 +208,8 @@ def test_dry_run_reads_and_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> No
     def boom(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("a dry run touched the database")
 
-    for name in ("index_summary_native", "touch_listings_by_id", "enqueue_detail"):
+    for name in ("index_summary_native", "touch_listings_by_id", "enqueue_detail",
+                 "rearm_sighted_given_up"):
         monkeypatch.setattr(portal_runner.db, name, boom)
     out = portal_runner.reconcile_sightings(
         None, "maxima", {"a": ("r", 1_000), "b": ("r", 2_000)}, min_change_pct=0.0)
@@ -213,6 +221,35 @@ def test_empty_sightings_make_no_db_call(monkeypatch: pytest.MonkeyPatch) -> Non
     out = portal_runner.reconcile_sightings(_CONN, "remax", {}, min_change_pct=0.0)
     assert calls["order"] == []
     assert out == {"found_new": 0, "enqueued": 0}
+
+
+def test_a_sighting_re_arms_only_ads_we_hold_no_listing_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A held ad has its own path back (the walk's re-arm); only `new` ids have none (#1851)."""
+    calls = _patch_db(monkeypatch, {"a": _row(1, 100), "b": _row(2, 100)})
+    portal_runner.reconcile_sightings(
+        _CONN, "remax", {"a": ("r", 100), "b": ("r", 200), "c": ("r", 50)}, min_change_pct=0.0)
+    assert calls["rearm"] == [["c"]]
+    assert calls["order"][-2:] == ["enqueue_detail", "rearm_sighted_given_up"]
+
+
+def test_a_sighting_with_no_new_id_re_arms_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_db(monkeypatch, {"a": _row(1, 100)})
+    portal_runner.reconcile_sightings(_CONN, "remax", {"a": ("r", 100)}, min_change_pct=0.0)
+    assert calls["rearm"] == []
+
+
+def test_rearm_line_only_when_a_row_came_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls = _patch_db(monkeypatch, {})
+    caplog.set_level(logging.INFO, logger="scraper.portal_runner")
+    portal_runner.reconcile_sightings(_CONN, "remax", {"c": ("r", 50)}, min_change_pct=0.0)
+    assert not [r for r in caplog.records if r.getMessage().startswith("REARM")]
+    calls["rearmed"] = 1
+    portal_runner.reconcile_sightings(
+        _CONN, "remax", {"c": ("r", 50)}, min_change_pct=0.0, label=" cm=byt ct=prodej")
+    assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("REARM")] == [
+        "REARM source=remax cm=byt ct=prodej sighted_given_up=1"]
 
 
 def test_enqueue_line_shape(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

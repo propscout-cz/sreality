@@ -293,6 +293,7 @@ def test_a_bounded_batch_of_given_up_rows_is_re_armed_each_walk():
     [params] = conn.rearmed
     assert params == {"source": "remax", "verify": db.QUEUE_PRIORITY_VERIFY, "rearm": db.PRESENCE_REARM_PER_WALK}
     sql = next(s for s, _ in conn.executed if "SET given_up = false" in s)
-    assert "given_up = true AND claimed_at IS NULL ORDER BY enqueued_at LIMIT %(rearm)s" in sql
+    assert "g.given_up = true AND g.claimed_at IS NULL" in sql
+    assert "ORDER BY g.enqueued_at LIMIT %(rearm)s" in sql
     assert "enqueued_at = now()" in sql
     assert 0 < db.PRESENCE_REARM_PER_WALK <= 100

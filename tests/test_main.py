@@ -21,6 +21,8 @@ from scraper.listing_write import WriteOutcome
 from scraper.portal import walk_is_complete
 from scraper.sreality_client import ListingGoneError
 
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
+
 _FIXTURES = Path(__file__).parent / "fixtures"
 
 
