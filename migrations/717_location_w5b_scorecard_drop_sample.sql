@@ -1,4 +1,4 @@
--- 717_location_w5b_scorecard_truth.sql -- W5b: the scorecard loses its radius reading.
+-- 717_location_w5b_scorecard_drop_sample.sql -- W5b: the scorecard loses its radius reading.
 --
 -- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8 (a); docs/design/location-quality/w5b-pin-door.md).
 -- The operator retired the radius on 2026-11-02 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,

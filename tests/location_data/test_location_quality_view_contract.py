@@ -23,7 +23,7 @@ from tests.location_data.test_location_schema_contracts import _statements, _val
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "migrations" / "717_location_w5b_scorecard_truth.sql"
+MIGRATION = ROOT / "migrations" / "717_location_w5b_scorecard_drop_sample.sql"
 VIEW = "public.location_quality_by_source"
 
 # The CTEs left inline, each with why: the three scalar lookups the planner runs once as InitPlans, and the two feeders

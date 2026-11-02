@@ -1298,7 +1298,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing with the words' obec, street,
   every claimed část and PSČ; words no door can be checked against refuse. The row becomes that address point (rung
   R5). About 40k rows gain a door. The radius is retired by the same day's ruling (W6 becomes deletion only): 717
-  drops the view's pin sample and orders the containment probe by code; the gauge loses `{p}/accuracy`. Prerequisites:
+  drops the view's pin sample and orders the containment probe by code; the gauge loses `{p}/accuracy`. A changed
+  `category_main` queues its re-resolve (`claim_insert`, same statement). Prerequisites:
   W5 swept, W4's realitymix@8 re-mine done. Rollout: shadow PASS on every group, apply 717, merge, W2's reconcile
   sweeps. Design: `docs/design/location-quality/w5b-pin-door.md`.
 - **W5 — resolver v5.10 — built 2026-10-31** (#2251; no migration; `resolver:v5.10`; merges after W3).

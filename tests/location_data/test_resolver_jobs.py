@@ -883,7 +883,9 @@ def _enqueue_ctes() -> dict[str, str]:
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
     from location_data import claims_store, contracts
+    from scraper import listing_write
     return {
+        "listing_write.resolve_requeue_cte": listing_write.resolve_requeue_cte("SELECT 1 AS id"),
         "claims_store._WRITE_CLAIMS_SQL": claims_store._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
     }

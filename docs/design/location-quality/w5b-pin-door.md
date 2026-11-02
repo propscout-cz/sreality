@@ -43,7 +43,10 @@ The bar is how often two stated doors of one property agree. A pin-named door mu
 
 **A fourth input.** The purity scan does not mind: the core stays pure, and the type is an argument. But "the row is a pure function of its claims and the register" no longer holds alone, so `claim_set_hash` covers the type where there is one. The three stamps still pin the answer.
 
-**A type change does not re-resolve the row.** The enqueue is claims-only: `dirty_locations` is written by `claims_store` when a claim's value changes, by the operator's edit, and by the sweep. A portal moving an ad from flat to commercial, with unchanged location claims, appends a snapshot and enqueues `dirty_properties` (rules 2, 20), and the resolver is not told. The row keeps its door until that ad's next claim change or the next sweep (a resolver bump, or the monthly registry label). Commercial to flat waits for its door the same way, which is harmless. The other direction breaks the ruling for that ad until the sweep. Read 2026-11-02 on 1 in 50 active sreality ads: 7 of 2,157 ever held two main categories, 1 of them across the flat-or-house line (a crude test; other portals not measured). Nothing is built for it, to keep the rule one rule; closing it would be one enqueue in the listing write.
+**A type change queues the row.** A flat turned commercial must lose its door, so the statement that changes `category_main` also enqueues that listing into `dirty_locations`, bumped as a claim change is, in the same transaction. The reason is `claim_insert`, the queue's "this listing's evidence moved" (697 allows three values; no migration). It is one CTE, `listing_write.resolve_requeue_cte`, inside the upsert, so the hot path gains no round trip, only a join over the batch; only a row whose value moved queues, and a new row (no `prior`) never does. Against a row a resolver slice holds, the write waits for that slice as `claims_store` does; the drain takes no conflicting lock on `listings`, so no deadlock. The column's writers, read from the code on 2026-11-02:
+- `scraper/listing_write.py` `_upsert_sql`, the one `INSERT INTO listings`: covered;
+- `scripts/reparse.py` `_update_sql` when `--fields` names it: covered, the moved rows only;
+- no migration heal, trigger or other script writes it. `properties.category_main` (`recompute_property_stats`) and the sold table (`sold_db`) are other tables. A future bulk `UPDATE` outside these two would owe its own enqueue; the sweep is the backstop. The census cannot see a DB-side writer.
 
 ## The registry read
 
@@ -89,10 +92,10 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
 | `{p}/street` | up by the quarter and obec movers |
 | `{p}/ku` | up (a door carries its KÚ) |
 | `{p}/outside` | no higher |
-| Pin-named doors on a non-flat, non-house ad, over 1 m from their pin, on another street than the bound one, or in another část than the claimed one | 0, but for an ad whose type moved since its last resolve |
+| Pin-named doors on a non-flat, non-house ad, over 1 m from their pin, on another street than the bound one, or in another část than the claimed one | 0, once the queue has drained |
 | Town cells, `disputed` mix | unchanged |
 | Shadow | PASS on every group |
 
 ## Ledger
 
-Rule 25 asks a location PR that adds more than it deletes to say why. The operator approved the net addition (2026-11-02): Q8 reverses W2-a's "a pin never yields a street" and adds a rung, a registry question and an input. The PR body carries the measured numbers.
+Rule 25 asks a location PR that adds more than it deletes to say why. The operator approved the net addition (2026-11-02): Q8 reverses W2-a's "a pin never yields a street" and adds a rung, a registry question, an input and its enqueue. The PR body carries the measured numbers.
