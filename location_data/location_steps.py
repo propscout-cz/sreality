@@ -26,7 +26,7 @@ frontend/src/lib/locationSteps.ts, because a better sentence must never cost a m
 A migration cannot import Python, so two SQL carriers hold these expressions VERBATIM:
 `refresh_location_audit_waterfall()` (pinned by tests/test_location_steps_vocabulary.py) and the
 location scorecard view `location_quality_by_source` (migration 717: the step flags,
-`town_missing_sql()`, `town_evidence_sql()` and `pin_truth_sql()`, pinned by
+`town_missing_sql()` and `town_evidence_sql()`, pinned by
 tests/location_data/test_location_quality_view_contract.py) — the same rail W5 uses to keep the
 serving surfaces on one rule.
 """
@@ -36,7 +36,6 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from location_data.claims_common import served_location_predicate
-from location_data.resolver.bind import WORD_DOOR_CLAIM_TYPES
 
 
 def obec_rank_floor_sql(alias: str = "gr") -> str:
@@ -114,30 +113,6 @@ def town_evidence_sql(listing_id: str = "b.id", claims: str = "ec") -> str:
         f" AND {claims}.subject_scoped IS NOT FALSE"
         f" AND ({claims}.claim_type <> 'coordinate' OR {claims}.value_geom IS NOT NULL))"
     )
-
-
-def word_door_sql(listing_id: str) -> str:
-    """The listing states a door (`bind.WORD_DOOR_CLAIM_TYPES`). Since W5b a pin names doors too, so
-    address grain is no truth: truth is a door the words named, and `bind.names_a_door` refuses a
-    pin on any such claim, so a door a pin named can never be one."""
-    types = ", ".join(f"'{t}'" for t in WORD_DOOR_CLAIM_TYPES)
-    return f"EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = {listing_id} AND w.claim_type IN ({types}))"
-
-
-def pin_truth_sql() -> str:
-    """W1's pin-accuracy rows (id % 10 = 0): each ad older than the listing edge, its truth a door
-    the words named, its own else its live property's location ad's (`own_door` says which)."""
-    return f"""select l.id, l.source, ll.geom, ll.uncertainty_radius_m, ll.obec_kod, d.own_door,
-         case when d.own_door then ll.geom when d.location_door then tl.geom end as truth,
-         case when d.own_door then ll.obec_kod when d.location_door then tl.obec_kod end as truth_obec
-    from listings l
-    join listing_location ll on ll.listing_id = l.id
-    left join properties p on p.id = l.property_id and p.status = 'active' and p.is_active
-    left join listing_location tl on tl.listing_id = p.location_listing_ref_id
-    cross join lateral (
-      select ll.granularity = 'address_point' and {word_door_sql("l.id")} as own_door,
-             tl.granularity = 'address_point' and {word_door_sql("tl.listing_id")} as location_door) d
-   where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 = 0"""
 
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:

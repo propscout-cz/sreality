@@ -18,6 +18,7 @@ from dataclasses import replace
 
 import pytest
 
+from location_data.contracts import CLAIM_TYPES
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core, normalize
 from location_data.resolver import grade as step_grade
@@ -34,10 +35,10 @@ def _bind(claims, *, mirror=None, pin_is_precise=False):
     return binding
 
 
-def _resolve(claims, mirror=None):
+def _resolve(claims, mirror=None, *, ad_type="byt"):
     return core.resolve(
         claims, mm.context(mirror), resolver_version=RESOLVER_VERSION,
-        registry_version="ruian:2026-07-31",
+        registry_version="ruian:2026-07-31", ad_type=ad_type,
     )
 
 
@@ -690,10 +691,10 @@ def test_one_truth_a_pin_abroad_never_places_a_row_the_words_bound():
     assert ask(replace(binding, rung="R7"), berlin, mm.default_mirror()) is None
 
 
-# ------------------------------------------- v5.11: the pin names its door (ruling Q8, W5b)
+# ------------------------------------- v5.11: what is certain gets a door (ruling Q8 (a), W5b)
 
 _VOKOVICE_DOOR = 21690278
-_ON_DOOR = (50.10102, 14.34804)                # 3.6 m from that door, 13 m from the next
+_ON_DOOR = (50.101004, 14.348004)              # 0.5 m from that door, 13 m from the next
 _PRAHA = mm.claim(1, "obec_name", value_text="Praha")
 _NAD_BORISLAVKOU = mm.claim(4, "street_name", value_text="Nad Bořislavkou")
 _VOKOVICE = mm.claim(5, "cast_obce_name", value_text="Vokovice")
@@ -735,6 +736,20 @@ def test_an_exact_pin_names_the_one_door_inside_the_words(words, kod, ulice):
     assert row.match_confidence != "exact", "a pin cannot corroborate the door it named"
 
 
+@pytest.mark.parametrize(("ad_type", "kod"), [
+    ("byt", _VOKOVICE_DOOR), ("dum", _VOKOVICE_DOOR), ("komercni", None), ("pozemek", None),
+    ("ostatni", None), (None, None)])
+def test_only_a_flat_or_a_house_gets_a_door_from_its_pin(ad_type, kod):
+    assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA), ad_type=ad_type).ruian_adm_kod == kod
+
+
+@pytest.mark.parametrize(("pin", "kod"), [
+    ((50.101008, 14.348), _VOKOVICE_DOOR), ((50.10101, 14.348), None), ((50.10102, 14.34804), None)],
+    ids=["0.9-m", "1.1-m", "3.6-m"])
+def test_the_pin_stands_within_one_metre_of_the_door(pin, kod):
+    assert _resolve(_pinned("gps", pin, _PRAHA)).ruian_adm_kod == kod
+
+
 def test_a_door_with_no_street_is_a_door():
     """A village č.p.: the row carries the code and no street, and is at address grain."""
     door = AddressPoint(kod_adm=990, lat=_ELSEWHERE[0], lon=_ELSEWHERE[1], cislo_domovni=7,
@@ -748,8 +763,8 @@ def test_the_origin_is_pin_door_and_only_the_refined_rung_has_it():
     claims = _pinned("gps", _ON_DOOR, _PRAHA)
     declared = step_bind.read_declared_precision(claims)
     binding = step_bind.pin_door(
-        _bind(claims), step_bind.Constraints(), claims[1], stored=claims, declared=declared,
-        pin_inside_bound_obec=True, registry=mm.default_mirror())
+        _bind(claims), step_bind.Constraints(), claims[1], stored=claims, ad_type="byt",
+        declared=declared, pin_inside_bound_obec=True, registry=mm.default_mirror())
     assert (binding.target_kind, binding.rung) == ("address_point", step_bind.PIN_DOOR_RUNG)
     assert claims[1].id in binding.source_claim_ids
     position = step_bind.place(binding, claims[1], pin_inside_bound_obec=True, declared=declared)
@@ -825,7 +840,7 @@ def test_without_words_a_pin_names_a_town_and_no_door():
 ], ids=["kod-missing-from-the-mirror", "kod-unparsed", "cp-claim", "cp-unparsed", "co-claim",
         "co-unparsed", "out-of-scope"])
 def test_a_door_the_words_named_stands_unbound_rather_than_contradicted(stated):
-    """ANY stored claim of a door type, parsed or not: the scorecard reads it as a word door."""
+    """ANY stored claim of a door type, parsed or not."""
     assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, stated)).ruian_adm_kod is None
 
 
@@ -840,7 +855,7 @@ def test_a_digit_in_the_street_line_is_a_door_the_words_named(line):
 
 
 def test_a_street_name_with_a_digit_pays_for_it():
-    """The cost of one rule, on the door's own street: 45 of 6,577 lone doors (1 in 10, 2026-11-01)."""
+    """The cost of one rule, on the door's own street."""
     mirror = _door_mirror(AddressPoint(kod_adm=996, lat=_ELSEWHERE[0], lon=_ELSEWHERE[1], ulice_kod=102,
                                        street_name_norm="28 rijna", street_name="28. října", **_PRAHA_DOOR))
     row = _resolve(_pinned("gps", _ELSEWHERE, _PRAHA, mm.claim(4, "street_name", value_text="28. října")), mirror)
@@ -916,6 +931,16 @@ def test_a_claimed_part_that_matched_no_unit_refuses():
 @pytest.mark.parametrize(("psc", "kod"), [("160 00", _VOKOVICE_DOOR), ("110 00", None)], ids=["same", "different"])
 def test_a_stated_psc_checks_the_door(psc, kod):
     assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, mm.claim(6, "psc", value_text=psc))).ruian_adm_kod == kod
+
+
+def test_the_door_types_are_exactly_the_claims_that_refuse_a_pin():
+    """Every claim type is asked, each holding text that parses as nothing, so an added type or an
+    added reading fails here. A street line's digit is the one other refusal."""
+    door_types = {"address_point_id", "house_number_cp", "house_number_co"}
+    assert set(step_bind.WORD_DOOR_CLAIM_TYPES) == door_types
+    for claim_type in CLAIM_TYPES:
+        refused = step_bind.names_a_door([mm.claim(1, claim_type, value_text="abc")])
+        assert refused == (claim_type in door_types), claim_type
 
 
 @pytest.mark.parametrize(("stated", "rung"), [

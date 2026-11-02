@@ -1,32 +1,23 @@
--- 717_location_w5b_scorecard_truth.sql -- W5b: the scorecard's truth is a door the WORDS named.
+-- 717_location_w5b_scorecard_truth.sql -- W5b: the scorecard loses its radius reading.
 --
--- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8; docs/design/location-quality/w5b-pin-door.md).
--- Resolver v5.11 lets an exact pin name its door, so about 66.7k rows reach address grain with no word behind them. Their
--- pin error is at most 5 m by construction: as truths (migration 698: `ll.granularity = 'address_point'`) they would
--- poison every pin-accuracy number and the q95 W6 calibrates on. Every address row of today carries a door claim, so
--- today's truths do not move.
+-- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8 (a); docs/design/location-quality/w5b-pin-door.md).
+-- The operator retired the radius on 2026-11-02 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,
+-- radius_cover) has no reader. And since resolver v5.11 a pin names doors, so that sample's truth (address grain) would
+-- count a door against the pin that named it.
 --
 -- WHAT. create or replace of the one view, migration 698's text but for:
---   (i)   smp = location_steps.pin_truth_sql(): truth = a door the words named (bind.WORD_DOOR_CLAIM_TYPES), the row's own
---         else its live property's location ad's;
---   (ii)  pin_error_m is GIVEN THE BIND (truth in the row's obec), classed lower(label), plus '+door' when exactly one
---         valid door lies within 5 m of the pin, its error then the door's. W6's radius key needs that split;
---   (iii) radius_cover: 'given_bind' (rows with a truth not standing on their own word-bound door, truth in the bound
---         obec) replaces 'below_address', which would drop every pin-named door from the population; 'wrong_town'
---         (truth in another obec, of rows with a truth) counts what given_bind sets aside;
---   (iv)  determinism, W5's deferral: the containment probe orders by code behind an OFFSET 0 fence, the same text as
---         resolve_db.CONTAINING_OBEC_SQL. Everything else (CTEs, branches, the `as materialized` list, grants) is 698's.
+--   (i)   the `sample` cohort is gone: the smp and pin CTEs and the pin_error_m and radius_cover branches. The door
+--         scorecard is the grain, KÚ and outside cells, which stand;
+--   (ii)  determinism, W5's deferral: the containment probe orders by code behind an OFFSET 0 fence, the same text as
+--         resolve_db.CONTAINING_OBEC_SQL (pinned by tests/location_data/test_location_quality_view_contract.py).
+-- The output columns stay, as create or replace requires; q90 and q95 now read NULL on every row.
 --
--- ONE DEFINITION. Each shared expression is rendered VERBATIM and pinned by
--- tests/location_data/test_location_quality_view_contract.py: location_steps (flags, town_missing_sql, town_evidence_sql,
--- pin_truth_sql), toolkit.publication.published_predicate('p'), resolve_db's CONTAINING_OBEC_SQL and _DOORS_NEAR_SQL.
---
--- GRANTS. service_role only, as 698: the browser never reads this view. PostGIS functions are unqualified (production
--- keeps PostGIS in `extensions`, CI replays it in `public`).
+-- GRANTS. service_role only, as 698. PostGIS functions are unqualified (production keeps PostGIS in `extensions`, CI
+-- replays it in `public`).
 --
 -- ADDITIVE: a view text, no row written. APPLY ORDER: immediately before the PR merges; between apply and deploy the old
--- gauge reads no below_address row, so the Watch-only accuracy cells read Not measured for minutes.
--- VERIFY: select class, sum(n), sum(of_n) from location_quality_by_source where cohort = 'sample' and metric = 'radius_cover' group by 1;
+-- gauge reads no sample row, so the Watch-only accuracy cells read Not measured for minutes.
+-- VERIFY: select cohort, metric, count(*) from location_quality_by_source group by 1, 2;  -- no sample cohort
 --         select has_table_privilege('authenticated', 'public.location_quality_by_source', 'select');  -- false
 
 set lock_timeout = '5s';
@@ -167,46 +158,7 @@ stock as materialized (
       ('grain',    'street',           a.g_street,                        a.g_address + a.g_street + a.g_quarter + a.g_obec),
       ('grain',    'quarter',          a.g_quarter,                       a.g_address + a.g_street + a.g_quarter + a.g_obec),
       ('grain',    'obec',             a.g_obec,                          a.g_address + a.g_street + a.g_quarter + a.g_obec)
-    ) v(metric, class, n, of_n)),
--- THE SAMPLE (pin accuracy): every tenth listing-cohort ad whose own row, or its live property's location ad (the
--- served cohort's property filter), stands on a door the WORDS named. A door a pin named is no truth (W5b, ruling Q8:
--- its pin error is at most 5 m by construction). location_steps.pin_truth_sql(), rendered verbatim.
-smp as materialized (
-  select l.id, l.source, ll.geom, ll.uncertainty_radius_m, ll.obec_kod, d.own_door,
-         case when d.own_door then ll.geom when d.location_door then tl.geom end as truth,
-         case when d.own_door then ll.obec_kod when d.location_door then tl.obec_kod end as truth_obec
-    from listings l
-    join listing_location ll on ll.listing_id = l.id
-    left join properties p on p.id = l.property_id and p.status = 'active' and p.is_active
-    left join listing_location tl on tl.listing_id = p.location_listing_ref_id
-    cross join lateral (
-      select ll.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co')) as own_door,
-             tl.granularity = 'address_point' and EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = tl.listing_id AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co')) as location_door) d
-   where l.is_active and l.first_seen_at < now() - interval '24 hours' and l.id % 10 = 0),
--- Pin error GIVEN THE BIND (a wrong bind is not hidden in a radius: radius_cover's wrong_town counts it), per way the
--- point is made: lower(label), plus '+door' when exactly one valid door lies within 5 m of the pin
--- (bind.PIN_DOOR_M, resolve_db._DOORS_NEAR_SQL's FROM ... LIMIT 2 block verbatim): the error of the door it names.
-pin as materialized (
-  select s.source,
-         st_distance(coalesce(door.geom, coord.value_geom)::geography, s.truth::geography) as err_m,
-         lower(coalesce((select pd.declared_precision_label from location_claims pd
-                          where pd.listing_id = s.id and pd.claim_type = 'precision_declaration'
-                          order by pd.first_observed_at desc, pd.id desc limit 1), 'undeclared'))
-           || case when door.geom is not null then '+door' else '' end as label
-    from smp s
-    cross join lateral (select cc.value_geom from location_claims cc
-                         where cc.listing_id = s.id and cc.claim_type = 'coordinate'
-                           and cc.value_geom is not null
-                         order by cc.first_observed_at desc, cc.id desc limit 1) coord
-    cross join lateral (
-      select case when count(*) = 1 then (array_agg(near.geom))[1] end as geom
-        from (select ap.geom
-      FROM ruian_address_points ap
-     WHERE ap.valid_to IS NULL
-       AND ap.geom && ST_Expand(coord.value_geom, 5.0 / 60000.0)
-       AND ST_DWithin(ap.geom::geography, coord.value_geom::geography, 5.0)
-     LIMIT 2) near) door
-   where s.truth is not null and s.obec_kod = s.truth_obec)
+    ) v(metric, class, n, of_n))
 select 'listing'::text as cohort, s.source, s.metric, s.class, s.n, s.of_n,
        null::numeric as q50, null::numeric as q90, null::numeric as q95, null::numeric as q100
   from stock s where s.cohort = 'listing'
@@ -224,26 +176,6 @@ union all
 select 'listing'::text, v.source, 'ku_gap', v.resolver_version, v.ku_gap_n, v.ku_scope_n, null, null, null, null
   from versions v
 union all
-select 'sample'::text, p.source, 'pin_error_m', p.label, count(*), null,
-       percentile_cont(0.5)  within group (order by p.err_m)::numeric,
-       percentile_cont(0.9)  within group (order by p.err_m)::numeric,
-       percentile_cont(0.95) within group (order by p.err_m)::numeric,
-       max(p.err_m)::numeric
-  from pin p group by p.source, p.label
-union all
-select 'sample'::text, s.source, 'radius_cover', 'given_bind',
-       count(*) filter (where st_distance(s.geom::geography, s.truth::geography) <= s.uncertainty_radius_m),
-       count(*), null, null, null, null
-  from smp s
- where s.truth is not null and s.geom is not null and not s.own_door and s.obec_kod = s.truth_obec
- group by s.source
-union all
-select 'sample'::text, s.source, 'radius_cover', 'wrong_town',
-       count(*) filter (where s.obec_kod <> s.truth_obec),
-       count(*), null, null, null, null
-  from smp s where s.truth is not null
- group by s.source
-union all
 select 'queue'::text, null::text, 'backlog_s',
        case when d.reason in ('claim_insert', 'operator_edit') then 'evidence' else 'backfill' end,
        count(*), count(*) filter (where d.attempts > 0),
@@ -254,7 +186,7 @@ select 'queue'::text, null::text, 'backlog_s',
  group by 4;
 
 comment on view public.location_quality_by_source is
-  'W1 (migrations 698, 717): the ONE definition of every location quality number, long shape, cohorts listing/served/sample/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
+  'W1 (migrations 698, 717): the ONE definition of every location quality number, long shape, cohorts listing/served/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
 
 -- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back.
 revoke all on public.location_quality_by_source from public, anon, authenticated;

@@ -780,19 +780,15 @@ def check_data_quality(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 # --- location_town_coverage (gauge): ONE location scorecard (W1, rulings Q3, Q6, Q7) ----------
 
 # location_quality_by_source (migration 717) defines every location quality number once, in a long
-# shape (cohort, source, metric, class, n of of_n, quantiles); this gauge only judges its rows. Two
-# statements: the invariants (cohorts listing, served and queue; 11.7 s warm on 10-31), then the pin
-# sample (0.7 s warm, 13 s on a cold location_claims), whose failure leaves only the accuracy cells
-# Not measured. Every UNION branch carries a literal cohort, so each statement prunes the other's.
+# shape (cohort, source, metric, class, n of of_n, quantiles); this gauge only judges its rows, read
+# in one statement (11.7 s warm on 10-31). The radius and its pin sample are retired (ruling
+# 2026-11-02).
 _LOCATION_COLUMNS = "cohort, source, metric, class, n, of_n, q50, q90, q95, q100"
-_LOCATION_STOCK_SQL = (f"select {_LOCATION_COLUMNS} from location_quality_by_source "
-                       "where cohort <> 'sample'")
-_LOCATION_SAMPLE_SQL = (f"select {_LOCATION_COLUMNS} from location_quality_by_source "
-                        "where cohort = 'sample'")
+_LOCATION_STOCK_SQL = f"select {_LOCATION_COLUMNS} from location_quality_by_source"
 
 # The view's (metric, class) vocabulary, closed (tests/location_data/
 # test_location_quality_view_contract.py pins it against the migration); '*' is an open class: a
-# resolver version, or a declared precision label.
+# resolver version.
 LOCATION_VIEW_VOCABULARY: tuple[tuple[str, str], ...] = (
     ("town", "ads"), ("town", "foreign"), ("town", "has_town"), ("town", "no_row"),
     ("town", "unresolved"), ("town", "withheld"), ("town", "hidden"),
@@ -802,13 +798,12 @@ LOCATION_VIEW_VOCABULARY: tuple[tuple[str, str], ...] = (
     ("disputed", "country_conflict"), ("disputed", "pin_outside_cz"),
     ("grain", "address"), ("grain", "street"), ("grain", "quarter"), ("grain", "obec"),
     ("version", "*"), ("registry_stale", "*"), ("ku_gap", "*"),
-    ("pin_error_m", "*"), ("radius_cover", "given_bind"), ("radius_cover", "wrong_town"),
     ("backlog_s", "evidence"), ("backlog_s", "backfill"),
 )
 _GRAINS = ("address", "street", "quarter", "obec")
 _DISPUTED = ("pin_outside_obec", "pin_off_street", "country_conflict", "pin_outside_cz")
-# A portal's six cells, in the order the page lists them.
-LOCATION_PORTAL_CELLS = ("town", "town_withheld", "ku", "outside", "street", "accuracy")
+# A portal's five cells, in the order the page lists them.
+LOCATION_PORTAL_CELLS = ("town", "town_withheld", "ku", "outside", "street")
 _LISTING = f"active ads first written more than {NEW_AD_H} h ago"
 _SERVED = "published properties (each at its location ad)"
 
@@ -979,42 +974,6 @@ def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | N
                   value=round(100 * hits / n, 2), unit="%", portal=portal, facts=facts)
 
 
-def _accuracy_cell(source: str, sample: _Card, unread: str | None,
-                   thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Pin accuracy on the deterministic sample: radius cover, Watch when its Wilson lower bound
-    is under the line, never Problem until W6 ships the calibrated table. Pin error per label."""
-    subject = f"{source}/accuracy"
-    if unread is not None:
-        return _unmeasured(subject, source, f"the pin sample was not read ({unread})", "%")
-    hits, n = _n(sample, "radius_cover", "given_bind"), _of(sample, "radius_cover", "given_bind")
-    pins = {label: {"n": int(row[0] or 0), "q50": _metres(row[2]), "q90": _metres(row[3]),
-                    "q95": _metres(row[4]), "max": _metres(row[5])}
-            for (metric, label), row in sorted(sample.items()) if metric == "pin_error_m"}
-    facts: dict[str, Any] = {"n": n, "pin_error_m": pins,
-                             "wrong_town": _n(sample, "radius_cover", "wrong_town"),
-                             "with_truth": _of(sample, "radius_cover", "wrong_town")}
-    min_n = int(thresholds["location_accuracy_min_n"])
-    if n:
-        facts.update(share=round(hits / n, 4), lower_bound=round(wilson_lower(hits, n) or 0.0, 4))
-    if n < min_n:
-        return _unmeasured(subject, source, f"{n:,} sampled ads not standing on their own "
-                           f"word-bound door, under the {min_n} this arm needs", "%", facts)
-    watch = float(thresholds["location_radius_cover_watch"])
-    errors = "; ".join(f"{label} q95 {p['q95']:,.0f} m (n {p['n']:,})" for label, p in pins.items()
-                       if p["q95"] is not None)
-    said = (f"{hits:,} of {n:,} sampled ads not standing on their own word-bound door hold it "
-            f"inside their own radius ({hits / n:.1%}; lower bound {facts['lower_bound']:.1%})"
-            + (f"; pin error {errors}" if errors else ""))
-    conditions = ([("warn", f"{said} (Watch under {watch:.0%} until W6 ships the calibrated "
-                            "table)")] if facts["lower_bound"] < watch else [])
-    return judged(subject, conditions, said, value=round(100 * hits / n, 2), unit="%",
-                  portal=source, facts=facts)
-
-
-def _metres(value: Any) -> float | None:
-    return None if value is None else round(float(value), 1)
-
-
 def _version_cell(listing: Mapping[str, _Card], previous: Mapping[str, Any]) -> dict[str, Any]:
     """Rows a re-resolve is owed: not at the code's RESOLVER_VERSION, or at it on a stale registry
     label (each counted once). Watch on the first reading, Problem when the previous one, 6 h
@@ -1077,19 +1036,17 @@ def _evidence_cell(queue: _Card, thresholds: dict[str, Any]) -> dict[str, Any]:
                   value=oldest, unit="min", facts=facts)
 
 
-def _portal_cells(source: str, card: _Card, sample: _Card, unread: str | None,
-                  thresholds: dict[str, Any]) -> list[dict[str, Any]]:
-    """A portal's six cells over the listing cohort; all Not measured with no ad past the edge."""
+def _portal_cells(source: str, card: _Card, thresholds: dict[str, Any]) -> list[dict[str, Any]]:
+    """A portal's five cells over the listing cohort; all Not measured with no ad past the edge."""
     if not _n(card, "town", "ads"):
         return [_unmeasured(f"{source}/{name}", source, f"no {_LISTING}",
-                            "%" if name in ("street", "accuracy") else "ads")
+                            "%" if name == "street" else "ads")
                 for name in LOCATION_PORTAL_CELLS]
     return [*_town_cells(source, source, card, _LISTING), _ku_cell(source, card),
             _outside_cell(f"{source}/outside", source, card, _LISTING),
             _street_cell(f"{source}/street", source, card,
                          thresholds["location_street_floor"].get(source),
-                         int(thresholds["location_street_floor_min_n"]), _LISTING),
-            _accuracy_cell(source, sample, unread, thresholds)]
+                         int(thresholds["location_street_floor_min_n"]), _LISTING)]
 
 
 def _registry_cell(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
@@ -1121,19 +1078,15 @@ def _registry_cell(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """The location scorecard: six cells per portal (town, town_withheld, ku, outside, street,
-    accuracy), four over the served properties, the registry and two freshness cells, every value
+    """The location scorecard: five cells per portal (town, town_withheld, ku, outside, street),
+    four over the served properties, the registry and two freshness cells, every value
     the count or share that colours it, read off location_quality_by_source."""
     at = now(conn)
     cards = _cards(fetchall(conn, _LOCATION_STOCK_SQL))
     registry = _registry_cell(conn, thresholds)
     previous = previous_cells(conn, _LOCATION)
-    try:
-        sample, unread = _cards(fetchall(conn, _LOCATION_SAMPLE_SQL)), None
-    except Exception as exc:  # noqa: BLE001 — an unread sample is Not measured, never a red
-        sample, unread = {}, oneline(exc, 160)
-    cells = [c for p in sorted(SOURCES) for c in _portal_cells(
-        p, cards.get(("listing", p), {}), sample.get(("sample", p), {}), unread, thresholds)]
+    cells = [c for p in sorted(SOURCES)
+             for c in _portal_cells(p, cards.get(("listing", p), {}), thresholds)]
     served = {s: cards[(c, s)] for c, s in sorted(k for k in cards
                                                   if k[0] == "served" and k[1] is not None)}
     fleet = _summed(list(served.values()))
@@ -1147,7 +1100,7 @@ def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[
                              if cohort == "listing" and s is not None}, previous),
               _evidence_cell(cards.get(("queue", None), {}), thresholds)]
     with_trends(conn, _LOCATION, cells, at)
-    return result(_LOCATION, cells, {"sample": unread} if unread is not None else {})
+    return result(_LOCATION, cells, {})
 
 
 # --- text_extraction (gauge): are new ads' descriptions read promptly ------------------------

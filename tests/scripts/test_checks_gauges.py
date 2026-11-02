@@ -47,7 +47,6 @@ T: dict[str, Any] = {
         "bezrealitky": 0.62, "sreality": 0.57, "realitymix": 0.52, "idnes": 0.45, "maxima": 0.45,
         "ceskereality": 0.38, "mmreality": 0.35, "bazos": 0.28, "remax": 0.04},
     "location_street_floor_min_n": 200, "location_served_street_floor": 0.44,
-    "location_radius_cover_watch": 0.90, "location_accuracy_min_n": 30,
     "location_evidence_backlog_max_min": 60, "text_extraction_flow_warn": 0.05,
     "text_extraction_flow_fail": 0.25, "text_extraction_flow_min_n": 30,
     "text_extraction_eta_warn_d": 14,
@@ -443,16 +442,6 @@ def _portal(source: str, *, ads: int = 50_000, foreign: int = 0, no_row: int = 0
     return rows
 
 
-def _sample(source: str, *, hits: int = 290, n: int = 300,
-            pins: dict[str, tuple[int, float]] | None = None) -> list[tuple[Any, ...]]:
-    """One source's sample rows: radius cover hits of n, and pin error per label (n, q95 m)."""
-    rows = [("sample", source, "radius_cover", "given_bind", hits, n, None, None, None, None)]
-    for label, (count, q95) in (pins or {"undeclared": (n, 40.0)}).items():
-        rows.append(("sample", source, "pin_error_m", label, count, None, Decimal("5.5"),
-                     Decimal(str(q95 / 2)), Decimal(str(q95)), Decimal(str(q95 * 3))))
-    return rows
-
-
 def _queue(evidence: tuple[int, int, float, float] | None = None,
            backfill: tuple[int, int, float, float] | None = None) -> list[tuple[Any, ...]]:
     """The resolve queue's rows: (count, retrying, median s, oldest s) per class."""
@@ -477,22 +466,18 @@ def _stock(*rows: list[tuple[Any, ...]], served: bool = True) -> list[tuple[Any,
 
 
 def _location_conn(stock: list[tuple[Any, ...]] | None = None,
-                   sample: list[tuple[Any, ...]] | BaseException | None = None,
                    registry: tuple[Any, ...] | None = _REGISTRY,
                    previous: list[dict[str, Any]] | None = None) -> _Conn:
     return _Conn({qc._LOCATION_STOCK_SQL: _stock() if stock is None else stock,
-                  qc._LOCATION_SAMPLE_SQL: ([r for p in _LIVE for r in _sample(p)]
-                                           if sample is None else sample),
                   qc._REGISTRY_LIVENESS_SQL: [] if registry is None else [registry],
                   common.PREVIOUS_CELLS_SQL: [] if previous is None else [
                       (_NOW - _dt.timedelta(hours=6), previous)]}, now=_NOW)
 
 
 def _location(stock: list[tuple[Any, ...]] | None = None,
-              sample: list[tuple[Any, ...]] | BaseException | None = None,
               registry: tuple[Any, ...] | None = _REGISTRY,
               previous: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], _Conn]:
-    conn = _location_conn(stock, sample, registry, previous)
+    conn = _location_conn(stock, registry, previous)
     return qc.check_location_town_coverage(conn, T), conn
 
 
@@ -502,29 +487,27 @@ _SUBJECTS = ([f"{p}/{name}" for p in sorted(SOURCES) for name in qc.LOCATION_POR
 
 
 def test_the_scorecard_emits_one_stable_subject_list_and_web_reads_not_measured() -> None:
-    """67 cells on every pass, whatever the rows hold: six per portal, four served, the registry,
-    two freshness. web has no ad past the edge, so its six read Not measured."""
+    """57 cells on every pass, whatever the rows hold: five per portal, four served, the registry,
+    two freshness. web has no ad past the edge, so its five read Not measured."""
     out, conn = _location()
     cells = _cells(out)
-    assert [c["subject"] for c in out["details"]["cells"]] == _SUBJECTS and len(_SUBJECTS) == 67
+    assert [c["subject"] for c in out["details"]["cells"]] == _SUBJECTS and len(_SUBJECTS) == 57
     assert {cells[f"web/{n}"]["status"] for n in qc.LOCATION_PORTAL_CELLS} == {"unknown"}
     assert cells["web/town"]["message"] == ("Not measured: no active ads first written more than "
                                             "24 h ago")
     assert {c["status"] for s, c in cells.items() if not s.startswith("web/")} == {"ok"}
     assert out["status"] == "ok" and not out["details"].get("not_measured")
-    empty, _ = _location(stock=[], sample=[])
+    empty, _ = _location(stock=[])
     assert [c["subject"] for c in empty["details"]["cells"]] == _SUBJECTS
     assert conn.sent and all(armed for _, _, armed in conn.sent)
 
 
-def test_the_gauge_reads_the_view_in_two_statements_split_on_the_literal_cohort() -> None:
+def test_the_gauge_reads_the_whole_view_in_one_statement() -> None:
     _, conn = _location()
     sent = [s for s, _, _ in conn.sent]
-    assert sent.index(qc._LOCATION_STOCK_SQL) < sent.index(qc._LOCATION_SAMPLE_SQL)
-    assert qc._LOCATION_STOCK_SQL.endswith("from location_quality_by_source where cohort <> 'sample'")
-    assert qc._LOCATION_SAMPLE_SQL.endswith("from location_quality_by_source where cohort = 'sample'")
+    assert qc._LOCATION_STOCK_SQL.endswith("from location_quality_by_source")
     assert {s for s in sent} == {common.CLOCK_SQL, qc._LOCATION_STOCK_SQL, qc._REGISTRY_LIVENESS_SQL,
-                                 common.PREVIOUS_CELLS_SQL, qc._LOCATION_SAMPLE_SQL, common.TREND_SQL}
+                                 common.PREVIOUS_CELLS_SQL, common.TREND_SQL}
 
 
 def test_every_count_cell_reads_the_count_that_colours_it() -> None:
@@ -575,26 +558,6 @@ def test_page_withheld_is_watch_and_never_problem(withheld: int) -> None:
     cell = _cells(out)["mmreality/town_withheld"]
     assert (cell["status"], cell["value"]) == ("warn", withheld)
     assert _cells(out)["mmreality/town"]["status"] == "ok" and out["status"] == "warn"
-
-
-@pytest.mark.parametrize("hits, n, status", [
-    (290, 300, "ok"), (102, 116, "warn"), (0, 500, "warn"), (213, 373, "warn"), (7, 7, "unknown"),
-    (29, 29, "unknown")])
-def test_accuracy_is_watch_on_its_lower_bound_and_never_problem(hits: int, n: int,
-                                                               status: str) -> None:
-    sample = [r for p in _LIVE if p != "sreality" for r in _sample(p)]
-    sample += _sample("sreality", hits=hits, n=n, pins={"gps": (40, 108.0), "street": (30, 713.0)})
-    sample = [*sample, ("sample", "sreality", "radius_cover", "wrong_town", 2, n + 2, None, None, None, None)]
-    cell = _cells(_location(sample=sample)[0])["sreality/accuracy"]
-    assert (cell["facts"]["wrong_town"], cell["facts"]["with_truth"]) == (2, n + 2)
-    assert cell["status"] == status
-    assert cell["facts"]["pin_error_m"] == {
-        "gps": {"n": 40, "q50": 5.5, "q90": 54.0, "q95": 108.0, "max": 324.0},
-        "street": {"n": 30, "q50": 5.5, "q90": 356.5, "q95": 713.0, "max": 2139.0}}
-    if status != "unknown":
-        assert cell["value"] == round(100 * hits / n, 2) and cell["unit"] == "%"
-        assert cell["facts"]["lower_bound"] == round(wilson_lower(hits, n), 4)
-        assert "gps q95 108 m (n 40); street q95 713 m (n 30)" in cell["message"]
 
 
 @pytest.mark.parametrize("share, n, status", [
@@ -655,20 +618,7 @@ def test_evidence_waiting_past_an_hour_is_a_problem_and_backfill_a_fact(oldest_s
     assert (quiet["freshness/evidence"]["status"], quiet["freshness/evidence"]["value"]) == ("ok", 0.0)
 
 
-def test_a_sample_that_times_out_leaves_only_the_accuracy_cells_not_measured() -> None:
-    """The pin sample is the second statement: its timeout costs the accuracy cells, never a red,
-    and every other cell reads exactly what it reads with the sample."""
-    read, _ = _location()
-    timed_out, conn = _location(sample=RuntimeError("canceling statement due to statement timeout"))
-    cells, before = _cells(timed_out), _cells(read)
-    assert {s for s, c in cells.items() if c["status"] != before[s]["status"]} == {
-        f"{p}/accuracy" for p in _LIVE}
-    assert cells["bazos/accuracy"]["message"] == (
-        "Not measured: the pin sample was not read (canceling statement due to statement timeout)")
-    assert timed_out["details"]["not_measured"] == {
-        "sample": "canceling statement due to statement timeout"}
-    assert timed_out["status"] == "ok"
-    assert common.TREND_SQL in [s for s, _, _ in conn.sent], "the trends still read"
+
 
 
 @pytest.mark.parametrize("registry, status, said", [

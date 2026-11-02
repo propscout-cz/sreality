@@ -1293,15 +1293,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
   keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve
   the current pin. Design: `docs/design/location-quality/w3-one-claim-per-fact.md`.
-- **W5b — resolver v5.11, the pin names its door — built 2026-11-01** (#2338; migration 717, apply
-  immediately before the merge; `resolver:v5.11`; merges after W5). Ruling Q8: where the words bound a town,
-  street or část and named no door, an exact pin inside the bound town names the one RÚIAN door within 5 m,
-  agreeing with the words' obec, street, every claimed část and PSČ; words no door can be checked against refuse.
-  The row becomes that address point (rung R5). About 61k rows gain a door.
-  The scorecard's truth becomes a door the WORDS named; `pin_error_m` gains `+door`, `radius_cover` becomes
-  `given_bind` + `wrong_town`; the containment probe orders by code (W5's deferral). Prerequisites: W5 swept,
-  W4's realitymix@8 re-mine done. Rollout: shadow PASS on every group, apply 717, merge, W2's reconcile sweeps.
-  Design: `docs/design/location-quality/w5b-pin-door.md`.
+- **W5b — resolver v5.11, what is certain gets a door — rebuilt 2026-11-02** (#2338; migration 717, apply
+  immediately before the merge; `resolver:v5.11`; merges after W5). Ruling Q8 (a): a flat or a house, its exact pin
+  inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing with the words' obec, street,
+  every claimed část and PSČ; words no door can be checked against refuse. The row becomes that address point (rung
+  R5). About 40k rows gain a door. The radius is retired by the same day's ruling (W6 becomes deletion only): 717
+  drops the view's pin sample and orders the containment probe by code; the gauge loses `{p}/accuracy`. Prerequisites:
+  W5 swept, W4's realitymix@8 re-mine done. Rollout: shadow PASS on every group, apply 717, merge, W2's reconcile
+  sweeps. Design: `docs/design/location-quality/w5b-pin-door.md`.
 - **W5 — resolver v5.10 — built 2026-10-31** (#2251; no migration; `resolver:v5.10`; merges after W3).
   One truth (ruling Q3): where the words bound the row a pin is its position only inside the bound obec's
   pip polygon (no tolerance) and never when the portal declares an area marker (bazos

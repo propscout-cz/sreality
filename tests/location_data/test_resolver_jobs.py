@@ -418,7 +418,7 @@ def test_the_per_listing_reads_are_prefetched_once_per_slice():
     assert state["stats"].claimed == 5
     for needle in (
         "select distinct on (c.listing_id, c.claim_type) c.* from location_claims c",
-        "select id, source from listings where id = any(",
+        "select id, source, category_main from listings where id = any(",
     ):
         assert _count(state, needle) == 2, needle
     assert _count(state, "where c.listing_id = any(") == 2
@@ -494,7 +494,7 @@ def test_a_queued_listing_with_no_live_claims_gets_a_row_not_a_skip():
     """The queue row was deleted and the listing either kept a stale row or never got one —
     the 10,679 active orphans the 2026-09-11 audit measured. The row states "nothing to go
     on" so coverage can count it (rule 25)."""
-    slice_ = drain._Slice(claims={}, sources={4242: "remax"})
+    slice_ = drain._Slice(claims={}, sources={4242: ("remax", None)})
     item = drain._compute_one(4242, mm.context(), REGISTRY, slice_)
     assert item is not None
     assert item.listing_id == 4242 and item.source == "remax"
@@ -774,7 +774,7 @@ def _warm_claims():
 def _resolve_with(registry: Any) -> Any:
     return core.resolve(
         _warm_claims(), mm.context(registry), resolver_version=RESOLVER_VERSION,
-        registry_version=REGISTRY,
+        registry_version=REGISTRY, ad_type="byt",
     )
 
 
@@ -1229,7 +1229,7 @@ def test_workers_1_is_the_single_connection_path_statement_for_statement(monkeyp
         "select listing_id, attemp",
         # the prefetch on its own budget, restored before anything writes (W2-a6)
         "set local statement_timeout = '90s'",
-        "select id, listing_id, so", "select id, source from li",
+        "select id, listing_id, so", "select id, source, catego",
         "set local statement_timeout = '30s'",
         "insert into listing_locat", "delete from dirty_locatio",
         "set local statement_timeout = '30s'", "set local lock_timeout = '5s'",

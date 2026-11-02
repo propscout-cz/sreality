@@ -5261,12 +5261,14 @@ portal's payload or its own page, and every other stamp is class E outright.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
 (`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT named by the words > **the door an exact pin names
-inside the words (`bind.pin_door`, v5.11, ruling Q8: ≤ 5 m, exactly one door, same obec, street, claimed část
-and PSČ; words no door can be checked against refuse)** >
-bound STREET point > portal pin *inside the bound town* > FILL's entity point. The 5 m is calibrated against
-the words' doors: the lone door is theirs 97.7 % of the time (96.5 % on sibling truths; two word-bound doors of
-one property agree 97.1 %). Two doors, or a door elsewhere, refine nothing, silently; such a door is never
-graded `exact`, since a pin cannot corroborate the door it named. The words bind the town (stated, or derived from finer words through
+(`bind.pin_door`, v5.11, ruling Q8 (a): what is certain gets a door: a flat or a house, its pin within 1 m of the
+one door there, the words not disagreeing)** > bound STREET point > portal pin *inside the bound town* > FILL's
+entity point. The 1 m is where a pin-named door agrees with a sibling ad's as often as two stated doors do (flats
+96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %). Same obec, street, claimed část and PSČ; words no door can be
+checked against refuse, silently. Such a door is never graded `exact`, since a pin cannot corroborate the door
+it named. Ad type (`listings.category_main`) is the resolver's one input beside the claims and the register:
+`claim_set_hash` covers it, and a type change alone does not re-resolve the row (it waits for a claim change or
+the sweep). The words bind the town (stated, or derived from finer words through
 RÚIAN). A pin outside it, by the pip polygon and with no tolerance, is never the position, whatever the
 portal declares. A pin inside refines. A pin the portal declares an AREA marker (bazos "Přibližná
 lokalita", a postal-area point) never places a row the words bound. Without words the pin names its
@@ -5363,9 +5365,7 @@ Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7
 `{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
 zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
 the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
-operator rules the floors, W1-b), `{portal}/accuracy`
-(radius cover on the `id % 10 = 0` sample given the bind, the truth a door the WORDS named, never one a pin
-named; Watch only until W6), the same town, outside and street cells
+operator rules the floors, W1-b), the same town, outside and street cells
 over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
 `freshness/evidence` (the oldest claim or operator edit waiting for its resolve, Problem past 60 min). As

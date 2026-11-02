@@ -120,7 +120,7 @@ _CLAIMS_SQL = _claims_sql("c.listing_id = %s", "id")
 # `id`, which is what `core.resolve` re-sorts on anyway.
 _CLAIMS_BULK_SQL = _claims_sql("c.listing_id = ANY(%s::bigint[])", "listing_id, id")
 
-_SOURCES_BULK_SQL = "SELECT id, source FROM listings WHERE id = ANY(%s::bigint[])"
+_SOURCES_BULK_SQL = "SELECT id, source, category_main FROM listings WHERE id = ANY(%s::bigint[])"
 
 # ------------------------------------------------------------------ the registry reads
 
@@ -587,14 +587,16 @@ def load_claims_bulk(
     return out
 
 
-def sources_bulk(conn: psycopg.Connection, listing_ids: Sequence[int]) -> dict[int, str]:
-    """`listings.source` for a whole slice — the one fact a claimless listing cannot read
-    off a claim, because it has none."""
+def sources_bulk(
+    conn: psycopg.Connection, listing_ids: Sequence[int]
+) -> dict[int, tuple[str, str | None]]:
+    """`listings.source` for a whole slice — the one fact a claimless listing cannot read off a
+    claim, because it has none — and `category_main`, the ad type `bind.pin_door` limits to."""
     if not listing_ids:
         return {}
     with conn.cursor() as cur:
         cur.execute(_SOURCES_BULK_SQL, (list(listing_ids),))
-        return {int(r[0]): str(r[1]) for r in cur.fetchall()}
+        return {int(r[0]): (str(r[1]), r[2]) for r in cur.fetchall()}
 
 
 def _admin_unit(

@@ -105,12 +105,14 @@ PIP_SLIVER_TOLERANCE_M = 250.0
 # registry point stays the position and GRADE caps the confidence.
 REGISTRY_PIN_CONFLICT_M = 300.0
 
-# THE DOOR A PIN NAMES (W5b, ruling Q8), calibrated 2026-10-31 on W1's truth sample: the lone door
-# within 5 m is the words' own door 97.7 % of the time (96.5 % against a sibling ad's), where two
-# word-bound doors of one property agree 97.1 %; 10 m falls to 93.4 % on sibling truths and buys 2 %.
-PIN_DOOR_M = 5.0
+# THE DOOR A PIN NAMES (W5b, ruling Q8 (a), 2026-11-02): "what is certain gets a door". Only a flat or
+# a house, its pin within 1 m of the door: the measured line where a pin-named door agrees with a
+# sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %,
+# within noise). 5 m does not (94.5 %, 99.0 %).
+PIN_DOOR_M = 1.0
+PIN_DOOR_AD_TYPES = frozenset({"byt", "dum"})
 PIN_DOOR_RUNG = "R5"  # set after the ranking, so it has no score
-# The claims that state a door. `names_a_door` refuses on them, the scorecard's truth rests on them.
+# The claims that state a door: `names_a_door` refuses on any of them.
 WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
 
 
@@ -1078,19 +1080,19 @@ def pin_door(
     pin_claim: Claim | None,
     *,
     stored: Sequence[Claim],
+    ad_type: str | None,
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None,
     registry: RegistryView,
 ) -> Binding:
-    """THE MAP IS THE SOURCE WHEN IT IS THERE (W5b, ruling Q8): where the words bound a town, a
-    část or a street and named no door, an exact pin inside the bound town names the ONE RÚIAN
-    door within `PIN_DOOR_M` of it, when that door agrees with every word that can check it (obec,
-    street, each část claimed, PSČ). It never contradicts the words, so what no door can be checked
-    against refuses too (`names_a_door`, `Binding.words_unchecked`): a lost refinement costs
-    nothing. Refusals are silent; the words stand."""
+    """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house, its exact pin inside
+    the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there, the words not disagreeing:
+    the door agrees with every word that can check it (obec, street, each část claimed, PSČ), and
+    what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
+    A refusal is silent; the words stand."""
     # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
-    if (pin_claim is None or pin_claim.point is None or declared.blurred
-            or pin_inside_bound_obec is not True or binding.words_unchecked
+    if (ad_type not in PIN_DOOR_AD_TYPES or pin_claim is None or pin_claim.point is None
+            or declared.blurred or pin_inside_bound_obec is not True or binding.words_unchecked
             or binding.target_kind not in ("street", "admin_unit") or names_a_door(stored)):
         return binding
     near = registry.doors_near(*pin_claim.point)

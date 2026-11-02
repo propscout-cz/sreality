@@ -7,8 +7,8 @@ on FIVE version inputs — `claim_set_hash`, `resolver_version`, `registry_versi
 `policy_version`, `collision_epoch_id` — because the policy tables and the pin-collision
 epoch were corpus-wide inputs a recompute had to be able to invalidate. Both are gone
 (policy is code, the collision engine is deleted), so the answer row carries THREE:
-`claim_set_hash` says the claims moved, `resolver_version` says a rule moved,
-`registry_version` says the mirror moved. Those three are exactly what the drain's sweep
+`claim_set_hash` says the claims moved (or the ad's type, W5b's one input beside them),
+`resolver_version` says a rule moved, `registry_version` says the mirror moved. Those three are exactly what the drain's sweep
 compares to decide a row is stale.
 
 Purity, mechanically: no wall clock (`as_of` is not even needed any more — nothing dates a
@@ -43,6 +43,7 @@ def resolve(
     registry_version: str,
     listing_id: int | None = None,
     source: str | None = None,
+    ad_type: str | None = None,
 ) -> Resolution:
     ordered = sorted(claims, key=lambda c: c.id)
     listing_id = ordered[0].listing_id if ordered else int(listing_id or 0)
@@ -84,7 +85,7 @@ def resolve(
     # (v5.11), `place()` lets a pin place the row only there (v5.10), CHECK records that it disagreed.
     pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
     binding = step_bind.pin_door(
-        binding, constraints, pin_claim, stored=ordered, declared=declared,
+        binding, constraints, pin_claim, stored=ordered, ad_type=ad_type, declared=declared,
         pin_inside_bound_obec=pin_inside_obec, registry=ctx.registry)
     position = step_bind.place(
         binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)
@@ -135,7 +136,7 @@ def resolve(
         country_status=verdict.country_status,
         disputed=verdict.disputed,
         resolver_version=resolver_version,
-        claim_set_hash=serialize.claim_set_hash(ordered),
+        claim_set_hash=serialize.claim_set_hash(ordered, ad_type),
         registry_version=registry_version,
     )
 

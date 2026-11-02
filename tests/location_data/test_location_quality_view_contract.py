@@ -3,10 +3,8 @@
 Static over the migration text, like test_location_schema_contracts.py: no database, so it runs in every lane. A
 migration cannot import Python, so each shared definition the view carries VERBATIM is pinned here against the module
 that spells it (location_steps' flags, town-missing set and evidence probe; the publication rule; NEW_AD_H), and the
-view's (metric, class) vocabulary against the gauge's closed tuple. Two plan facts are rails too: every CTE but the
-scalars and the single-use feeders is `as materialized` (inlined, the text ran 34.8 s on production against 11.7 s),
-and every UNION branch carries a literal cohort and no window function, so the gauge's two statements each prune the
-other's branches (a window function in a branch blocks the qual's pushdown: measured with EXPLAIN on 2026-10-31).
+view's (metric, class) vocabulary against the gauge's closed tuple. A plan fact is a rail too: every CTE but the
+scalars and the single-use feeders is `as materialized` (inlined, the text ran 34.8 s on production against 11.7 s).
 """
 
 from __future__ import annotations
@@ -17,12 +15,9 @@ from pathlib import Path
 
 from location_data import location_steps as ls
 from location_data.claims_common import served_location_predicate
-from location_data.contracts import CLAIM_TYPES
-from location_data.resolver import bind as step_bind
 from location_data.resolver import resolve_db
 from scripts.checks import quality as qc
 from scripts.checks.common import NEW_AD_H
-from tests.location_data import mini_mirror as mm
 from tests.location_data.test_location_schema_contracts import _clean as _location_corpus
 from tests.location_data.test_location_schema_contracts import _statements, _values_rows
 from toolkit import publication
@@ -40,7 +35,7 @@ INLINE = {
     "degenerate_ku_obce": "a feeder read once, by `versions`",
     "cohort_rows": "a feeder read once, by `b`",
 }
-COHORTS = {"listing", "served", "sample", "queue"}
+COHORTS = {"listing", "served", "queue"}
 # The view's four grain classes as its `agg` FILTERs spell them after `b.has_town and b.country_status = 'cz' and`.
 GRAIN_FILTERS = {
     "address": "b.is_address_grain",
@@ -113,15 +108,14 @@ def test_every_cte_but_the_scalars_and_the_single_use_feeders_is_materialized() 
     body = _view_body()
     for name in ("degenerate_ku_obce", "cohort_rows"):
         assert len(re.findall(rf"\b{name}\b", body)) == 2, f"{name} is read more than once: materialize it"
-    assert {"b", "agg", "townless", "outside", "versions", "stock", "smp", "pin"} <= set(ctes)
+    assert {"b", "agg", "townless", "outside", "versions", "stock"} <= set(ctes)
 
 
-def test_every_union_branch_carries_a_literal_cohort_and_no_window_function() -> None:
+def test_every_union_branch_carries_a_literal_cohort() -> None:
     branches = _branches()
     cohorts = [re.match(r"select '(\w+)'::text\b", b) for b in branches]
     assert all(cohorts), [b[:60] for b, m in zip(branches, cohorts) if not m]
     assert {m.group(1) for m in cohorts if m} == COHORTS
-    assert not [b[:60] for b in branches if re.search(r"\bover\s*\(", b)], "a window blocks the cohort pushdown"
 
 
 def test_the_columns_are_the_ones_the_gauge_reads() -> None:
@@ -139,12 +133,12 @@ def test_no_grain_is_compared_by_enum_order() -> None:
     assert "location_granularity_rank" in _ctes()["obec_rank"][1]
 
 
-def test_the_listing_cohort_and_the_sample_start_where_publishing_ends() -> None:
+def test_the_listing_cohort_starts_where_publishing_ends() -> None:
     """NEW_AD_H is the one edge between publishing's new ads and this scorecard; the only other interval is the
     publication cap."""
     code = _squeeze(_code())
     edge = f"l.is_active and l.first_seen_at < now() - interval '{NEW_AD_H} hours'"
-    assert code.count(_squeeze(edge)) == 2, "the listing cohort and the sample"
+    assert code.count(_squeeze(edge)) == 1, "the listing cohort"
     hours = set(re.findall(r"interval '(\d+) hours'", code))
     assert hours == {str(NEW_AD_H), re.search(r"\d+", publication.CAP_SQL).group(0)}
 
@@ -199,52 +193,6 @@ def test_outside_probes_with_the_one_containing_obec_statement() -> None:
     assert _squeeze("OFFSET 0) o ORDER BY o.code LIMIT 1") in _squeeze(block), "a border point replays"
     rendered = block.replace("%s", "(select id from cur)").replace(resolve_db._PT, "b.geom")
     assert _squeeze(rendered) in _squeeze(_ctes()["outside"][1])
-
-
-def test_the_sample_is_the_pin_truth_fragment_rendered_verbatim() -> None:
-    """W5b: the truth is a door the WORDS named, one fragment."""
-    assert _squeeze(ls.pin_truth_sql()) == _squeeze(_ctes()["smp"][1])
-    assert _squeeze(ls.word_door_sql("l.id")) in _squeeze(_ctes()["smp"][1])
-
-
-# Written out, so an addition to either side fails: the view's list, or what the resolver refuses on.
-_WORD_DOOR_TYPES = {"address_point_id", "house_number_cp", "house_number_co"}
-
-
-def test_the_word_doors_are_exactly_the_claims_the_resolver_refuses_a_pin_on() -> None:
-    """The rail: a door a pin named can never be a truth. Every claim type is asked, each holding text that parses as
-    nothing: a type refuses a pin iff the view reads it as a word door. A stated street line is the resolver's alone,
-    so its digit test is a one-way widening (`bind.names_a_door`)."""
-    assert set(step_bind.WORD_DOOR_CLAIM_TYPES) == _WORD_DOOR_TYPES
-    listed = re.search(r"w\.claim_type in \(([^)]*)\)", _squeeze(_ctes()["smp"][1])).group(1)
-    assert {t.strip(" '") for t in listed.split(",")} == _WORD_DOOR_TYPES
-    for claim_type in CLAIM_TYPES:
-        refused = step_bind.names_a_door([mm.claim(1, claim_type, value_text="abc")])
-        assert refused == (claim_type in _WORD_DOOR_TYPES), claim_type
-
-
-def test_a_pin_is_judged_by_the_door_it_would_name_given_the_bind() -> None:
-    """The door probe is resolve_db._DOORS_NEAR_SQL's FROM ... LIMIT 2 block, verbatim but for its point; '+door' marks
-    exactly one door; a truth in another obec is no pin's error."""
-    sql = resolve_db._DOORS_NEAR_SQL
-    block = sql[sql.index("FROM ruian_address_points ap"):sql.index("LIMIT 2") + len("LIMIT 2")]
-    assert str(step_bind.PIN_DOOR_M) in block
-    pin = _squeeze(_ctes()["pin"][1])
-    assert _squeeze(block.replace(resolve_db._PT, "coord.value_geom")) in pin
-    assert "case when count(*) = 1 then (array_agg(near.geom))[1] end as geom" in pin
-    assert "st_distance(coalesce(door.geom, coord.value_geom)::geography, s.truth::geography) as err_m" in pin
-    assert "|| case when door.geom is not null then '+door' else '' end as label" in pin
-    assert "where s.truth is not null and s.obec_kod = s.truth_obec" in pin
-
-
-def test_radius_cover_judges_the_rows_not_on_their_own_door_and_counts_the_wrong_town() -> None:
-    branches = {re.search(r"'radius_cover', '(\w+)'", b).group(1): _squeeze(b)
-                for b in _branches() if "'radius_cover'" in b}
-    assert set(branches) == {"given_bind", "wrong_town"}
-    assert ("where s.truth is not null and s.geom is not null and not s.own_door "
-            "and s.obec_kod = s.truth_obec") in branches["given_bind"]
-    assert "count(*) filter (where s.obec_kod <> s.truth_obec)" in branches["wrong_town"]
-    assert "from smp s where s.truth is not null group by s.source" in branches["wrong_town"]
 
 
 def _check_disputed_classes() -> set[str]:
@@ -363,7 +311,7 @@ def test_the_location_quality_page_renders_the_registered_check() -> None:
     assert {arm for arm, _ in bars} == {"street", "outside"}, bars
     card = {("town", "ads"): (100, 0), ("outside", "position"): (1, 90),
             ("grain", "address"): (60, 90), ("grain", "street"): (10, 0)}
-    cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, {}, "not read", THRESHOLDS)}
+    cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, THRESHOLDS)}
     for arm, fact in bars:
         assert arm in qc.LOCATION_PORTAL_CELLS, f"the gauge emits no {arm!r} arm"
         assert fact in cells[f"bazos/{arm}"]["facts"], f"bazos/{arm} writes no {fact!r} fact"

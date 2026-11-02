@@ -67,6 +67,13 @@ def test_each_of_the_three_version_inputs_changes_the_row():
     assert _resolve(changed).claim_set_hash != _resolve().claim_set_hash
 
 
+def test_the_ad_type_moves_the_stamp_so_the_three_still_pin_the_row():
+    """The one input beside the claims (W5b, `bind.pin_door`): `claim_set_hash` covers it, so two
+    rows stamped alike are the same answer; no ad type hashes as the claims alone did."""
+    assert _resolve(ad_type="byt").claim_set_hash != _resolve(ad_type="komercni").claim_set_hash
+    assert _resolve().claim_set_hash == serialize.claim_set_hash(_claims())
+
+
 def test_a_naive_and_an_aware_observed_at_hash_the_same():
     """`datetime.timestamp()` on a naive value silently applies the HOST's timezone, so the
     same claims would hash differently on two machines. `serialize._plain` reads a naive

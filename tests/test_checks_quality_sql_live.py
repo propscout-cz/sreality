@@ -73,7 +73,6 @@ _PRAGUE = ZoneInfo("Europe/Prague")
 # ids per seed call, so no two calls collide.
 _SREALITY_IDS = itertools.count(9_600_000_000, 10_000)
 # Listing ids the scorecard's sample reads by their last digit (id % 10 = 0), far above any the sequence hands out.
-_SAMPLE_IDS = itertools.count(9_700_000_000, 10)
 _KEYS = (q._PARSING, q._DATA_QUALITY, q._LOCATION, q._TEXT)
 _MODEL = "w6-live-model"
 # Made-up RÚIAN codes no ad carries: two towns and a KÚ of each.
@@ -92,7 +91,6 @@ _SENT = {
     "_CHURN_SQL": "test_churn_counts_second_and_later_snapshots_per_portal_and_day_beside_its_active_ads",
     "_URL_SQL": "test_data_quality_reads_the_ship_time_red_off_the_view_and_skips_land",
     "_LOCATION_STOCK_SQL": "test_the_scorecard_splits_the_townless_by_evidence_past_the_listing_edge",
-    "_LOCATION_SAMPLE_SQL": "test_the_sample_takes_its_truth_from_a_door_the_words_named_and_its_pin_from_the_newest_coordinate",
     "_REGISTRY_LIVENESS_SQL": "test_the_registry_cell_reads_the_current_versions_age_and_a_newer_one_left_staged",
 }
 
@@ -183,14 +181,6 @@ class _Seed:
             "  from listings l where l.id = %(id)s",
             {"seen": seen_s, "type": claim_type, "lng": lng, "lat": lat, "scoped": scoped, "label": label,
              "id": listing_id})
-
-    def ad_with_id(self, source: str, tail: int) -> int:
-        """One active ad first written 48 h ago whose id ends in `tail` (the sample reads id % 10 = 0); not sreality,
-        whose rows need a sreality_id."""
-        return int(self.conn.execute(
-            "insert into listings (id, source, source_id_native, raw_json, is_active, first_seen_at) "
-            "values (%s, %s, %s, '{}'::jsonb, true, now() - interval '48 hours') returning id",
-            (next(_SAMPLE_IDS) + tail, source, f"w6-{uuid.uuid4().hex}")).fetchone()[0])
 
     def property(self, location: int, *, canonical: int | None = None, members: list[int] | None = None,
                  settled: bool = True, status: str = "active") -> int:
@@ -802,67 +792,21 @@ def test_served_reads_published_properties_at_their_location_ad(seed: _Seed) -> 
 
 
 @live
-def test_the_sample_takes_its_truth_from_a_door_the_words_named_and_its_pin_from_the_newest_coordinate(seed: _Seed) -> None:
-    """Every tenth listing-cohort ad (id % 10 = 0) whose own row, or its property's location ad, stands on a door the
-    WORDS named: the pin error is the coordinate claim's distance to it (one per ad since W3's key), per the declared
-    label ('undeclared' when none); radius cover asks, off the row's own door, whether the truth lies inside its radius."""
-    seed.no_registry()
-    seed.version("current", age_d=19, current=True)
-    street_ad, truth_ad, point_ad, unsampled = (seed.ad_with_id("idnes", tail) for tail in (0, 1, 0, 5))
-    seed.located(truth_ad, granularity="address_point", obec=_TOWN)                       # (14.42, 50.08)
-    seed.claim(truth_ad, "house_number_cp")
-    seed.located(street_ad, granularity="street", obec=_TOWN, lat=50.08045, radius=100)   # ~50 m north
-    seed.property(truth_ad, canonical=street_ad, members=[street_ad])
-    seed.claim(street_ad, "coordinate", lat=50.0809, seen_s=60)                           # ~100 m north of truth
-    seed.claim(street_ad, "precision_declaration", label="street")
-    seed.located(point_ad, granularity="address_point", obec=_TOWN, lng=14.43)
-    seed.claim(point_ad, "address_point_id")
-    seed.claim(point_ad, "coordinate", lng=14.43014)                                      # ~10 m east
-    seed.located(unsampled, granularity="address_point", obec=_TOWN)
-    seed.claim(unsampled, "house_number_co")
-    seed.claim(unsampled, "coordinate", lat=50.2)
-
-    sample = _view_rows(seed.conn, q._LOCATION_SAMPLE_SQL)[("sample", "idnes")]
-    pins = {label: row for (metric, label), row in sample.items() if metric == "pin_error_m"}
-    assert set(pins) == {"street", "undeclared"} and pins["street"][0] == pins["undeclared"][0] == 1
-    assert float(pins["street"][2]) == pytest.approx(100.0, abs=2.0)
-    assert float(pins["undeclared"][2]) == pytest.approx(10.0, abs=1.0)
-    assert sample[("radius_cover", "given_bind")][:2] == (1, 1), "the own door is not judged against itself"
-    assert sample[("radius_cover", "wrong_town")][:2] == (0, 2)
-    assert not [k for k in _view_rows(seed.conn, q._LOCATION_STOCK_SQL) if k[0] == "sample"]
-
-
-@live
-def test_a_door_a_pin_named_is_no_truth_and_is_judged_as_a_door_given_the_bind(seed: _Seed) -> None:
-    """W5b: an address-grain row with no door claim is judged, never a truth. Its pin within 5 m of exactly one door
-    classes '+door' and errs by that door; a truth in another obec is `wrong_town` and no pin's error."""
-    seed.no_registry()
-    version = seed.version("current", age_d=19, current=True)
-    named, words_ad, far, far_truth, alone = (seed.ad_with_id("idnes", tail) for tail in (0, 1, 0, 1, 0))
-    seed.located(words_ad, granularity="address_point", obec=_TOWN)                       # the truth (14.42, 50.08)
-    seed.claim(words_ad, "house_number_cp")
-    seed.located(named, granularity="address_point", obec=_TOWN, lat=50.0802, radius=10)  # a pin-named door, 22 m off
-    seed.claim(named, "coordinate", lat=50.0802)
-    seed.property(words_ad, members=[named])
+def test_the_view_holds_no_sample_and_the_resolver_reads_its_door_and_ad_type(seed: _Seed) -> None:
+    """W5b: the radius reading is gone from the view; `doors_near` and `sources_bulk` run on the real schema (a door within
+    1 m of the point answers, one 2 m off does not), and the ad type comes back beside the source."""
+    version = seed.version("door", age_d=19)
     seed.conn.execute(
         "insert into ruian_address_points (kod_adm, obec_unit_id, obec_kod, psc, geom, plati_od, first_version_id, "
         "  last_version_id) values (99991, %s, %s, '16000', ST_SetSRID(ST_MakePoint(14.42, 50.0802), 4326), "
         "  current_date, %s, %s)", (seed.unit("obec", _TOWN, version), _TOWN, version, version))
-    assert resolve_db.SqlRegistryView(seed.conn, version).doors_near(50.0802, 14.42) == (99991,)
-    seed.located(alone, granularity="address_point", obec=_TOWN, lat=50.09)               # no truth at all
-    seed.claim(alone, "coordinate", lat=50.09)
-    seed.located(far_truth, granularity="address_point", obec=_TOWN + 1)
-    seed.claim(far_truth, "house_number_cp")
-    seed.located(far, granularity="obec", obec=_TOWN)
-    seed.claim(far, "coordinate", lat=50.0802)
-    seed.property(far_truth, members=[far])
-
-    sample = _view_rows(seed.conn, q._LOCATION_SAMPLE_SQL)[("sample", "idnes")]
-    pins = {label: row for (metric, label), row in sample.items() if metric == "pin_error_m"}
-    assert set(pins) == {"undeclared+door"}, pins
-    assert pins["undeclared+door"][0] == 1 and float(pins["undeclared+door"][2]) == pytest.approx(22.2, abs=1.0)
-    assert sample[("radius_cover", "given_bind")][:2] == (0, 1), "22 m off, a 10 m radius"
-    assert sample[("radius_cover", "wrong_town")][:2] == (1, 2)
+    view = resolve_db.SqlRegistryView(seed.conn, version)
+    assert view.doors_near(50.0802, 14.42) == (99991,)
+    assert view.doors_near(50.08022, 14.42) == ()
+    ad = seed.ads("idnes", seen_h=48)[0]
+    seed.conn.execute("update listings set category_main = 'dum' where id = %s", (ad,))
+    assert resolve_db.sources_bulk(seed.conn, [ad]) == {ad: ("idnes", "dum")}
+    assert not [k for k in _view_rows(seed.conn, q._LOCATION_STOCK_SQL) if k[0] == "sample"]
 
 
 @live
@@ -932,19 +876,6 @@ def test_the_scorecard_starts_exactly_where_publishings_visible_day_ends(seed: _
     assert pub._WINDOW_H == NEW_AD_H
     assert visible == {(True, "no_property"): 2, (False, "no_property"): 1}    # the day; the 72-h widening
     assert listing[("town", "ads")][0] == 2
-
-
-@live
-def test_each_statement_prunes_the_other_cohorts_branches(seed: _Seed) -> None:
-    """Every UNION branch carries a literal cohort, so the planner drops the other statement's branches outright (a
-    window function in a branch would block that pushdown and run the 13-s cold sample inside the invariants' read)."""
-    def plan(sql: str) -> str:
-        return "\n".join(row[0] for row in seed.conn.execute(f"explain (costs off) {sql}").fetchall())
-
-    assert plan(q._LOCATION_STOCK_SQL).count("One-Time Filter: false") == 3          # pin error, two radius covers
-    sample = plan(q._LOCATION_SAMPLE_SQL)
-    assert sample.count("One-Time Filter: false") == 1                                  # the queue's aggregate
-    assert "CTE Scan on stock" not in sample and "CTE Scan on versions" not in sample   # so `b` is never built
 
 
 @live

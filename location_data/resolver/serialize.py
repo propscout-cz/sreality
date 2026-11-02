@@ -68,8 +68,9 @@ def _plain(value: Any) -> Any:
     raise TypeError(f"no canonical form for {type(value).__name__}")
 
 
-def claim_set_hash(claims: Sequence[Any]) -> str:
-    """A stable hash over the consumed claims. Ids are included: the resolution names them
+def claim_set_hash(claims: Sequence[Any], ad_type: str | None = None) -> str:
+    """A stable hash over the consumed claims, and the ad's type where it has one (`bind.pin_door`
+    reads it), so the stamp still pins the answer. Ids are included: the resolution names them
     in `input_claim_ids`, so two different claim rows carrying the same value are two
     different inputs and must not collide."""
     payload = [
@@ -83,7 +84,7 @@ def claim_set_hash(claims: Sequence[Any]) -> str:
         }
         for claim in sorted(claims, key=lambda c: c.id)
     ]
-    return digest(payload)
+    return digest(payload if ad_type is None else [ad_type, payload])
 
 
 def _claim_value(claim: Any) -> Any:
