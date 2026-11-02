@@ -61,6 +61,7 @@ Every session posts as the same GitHub account, so an assignee cannot tell sessi
 - **Claim a migration number** with the coordinator before writing the file, and never apply a migration without telling it.
 - **After the merge**, confirm the deploy yourself: read the merge SHA with `gh pr view <n> --json mergeCommit`, then run `scripts/rollout_wait.sh <merge-sha>`. Exit 0 confirms it; any other exit goes to the operator. A success reading "No deployment needed" is a watch skip, not a deploy. For a merge that adds or removes a service, the IaC wizard's own wait decides. For an engine-sensitive PR, send the coordinator the merge SHA.
 - **If the permission check refuses the merge**, tell the operator in your own session. Never ask another session to merge for you.
+- **The coordinator's checks** (next migration number, light check, deploy status, engine reading, lane log filter): `scripts/coordinator/README.md`.
 
 ## Post-merge gates are their own tickets
 

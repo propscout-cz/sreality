@@ -35,6 +35,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 # Every executed-SQL constant and execute() site lives under these (verified);
 # migrations/ is *.sql applied by CI, tests/ are fakes, frontend/ is TS.
 RUNTIME_DIRS = ("scraper", "toolkit", "api", "scripts", "location_data", "autodedup")
+# A statement a person pastes into production instead of the code running it.
+PASTED_SQL_FILES = ("scripts/coordinator/engine_reading.sql",)
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,9 @@ def discover(*, include_inline: bool = True, resolve_imports: bool = False) -> l
                     and isinstance(node.args[0].value, str)
                 ):
                     add(SqlItem(f"{rel}:{node.lineno}", None, node.args[0].value, "inline"))
+
+    for rel in PASTED_SQL_FILES:
+        add(SqlItem(rel, None, (_ROOT / rel).read_text(encoding="utf-8"), "const"))
 
     if resolve_imports:
         for path in sorted(composed_modules):
