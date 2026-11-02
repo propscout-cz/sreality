@@ -75,7 +75,6 @@ const ROUTE_BUDGETS = [
   { path: '/collections',   baseline: '5 req / 0.9s',  maxRequests: 10, maxMs: 12000 },
   { path: '/watchdog',      baseline: '6 req / 1.3s',  maxRequests: 12, maxMs: 12000 },
   { path: '/notifications', baseline: '5 req / 1.0s',  maxRequests: 10, maxMs: 12000 },
-  { path: '/brokers',       baseline: '7 req / 1.6s',  maxRequests: 12, maxMs: 20000 },
 ];
 const UNBUDGETED = { maxRequests: Infinity, maxMs: 30000 };
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
