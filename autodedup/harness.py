@@ -925,9 +925,10 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
           f"  new addr pairs {len(door['addr_new'])}"
           f"  displaced by the cap {len(door['cap_displaced'])}"
           f"  merge gained {len(door['merge_gained'])} lost {len(door['merge_lost'])}"
+          f"  block key split {door['block_key_split']['count']}"
           f"  two doors in one building {len(door['two_doors_one_building'])}", file=out)
-    print(f"  this gate says nothing about any block outside group {verdict['group']} of scope "
-          f"{facts.get('scope', '?')}", file=out)
+    print(f"  this gate is a sample: it says nothing about any block outside group "
+          f"{verdict['group']} of scope {facts.get('scope', '?')}", file=out)
     print(f"wrote {root / shadow.SHADOW_FILE}", file=out)
     return 0 if verdict["pass"] else 1
 

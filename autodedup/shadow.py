@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import sys
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
@@ -35,7 +37,12 @@ from autodedup.export import ARTIFACT_NAME, build_location, fetch_block_ids, run
 from autodedup.features import haversine_m
 from autodedup.fingerprint import Fingerprint, pin_key_of
 from autodedup.incremental import GENERATION
-from autodedup.indistinguishable import _cp_of, _filed_apart, stored_house_number_conflict
+from autodedup.indistinguishable import (
+    RENTAL_TYPE,
+    _cp_of,
+    _filed_apart,
+    stored_house_number_conflict,
+)
 from autodedup.incremental_sql import RT_CALIBRATION_SCORER_SQL
 from autodedup.labels import PairKey, pair_key
 from autodedup.labels_lane import DEFAULT_GENERATION, run_labels
@@ -249,6 +256,77 @@ def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int |
     return None
 
 
+_CATEGORY_TYPE_SQL = "SELECT id FROM listings WHERE id = ANY(%s::bigint[]) AND category_type = %s"
+
+
+def _gained_part(mover: dict[str, Any]) -> bool:
+    old, new = mover.get("old") or {}, mover.get("new") or {}
+    return old.get("cast_obce_kod") is None and new.get("cast_obce_kod") is not None
+
+
+def movers_by_group(movers: Iterable[dict[str, Any]], groups: list[list[str]],
+                    rentals: set[int]) -> dict[int | None, dict[str, Any]]:
+    """Each mover counted once, at the group that exports its stored row: its OLD block's, else
+    (unquartered) the `ids` block's. A new block elsewhere holds only its counterparts. `None` = no
+    kept block exports it. `rentals`: the movers whose `category_type` is `pronajem`."""
+    at = {block: i for i, chunk in enumerate(groups, 1) for block in chunk}
+    listed = next((i for block, i in at.items() if block.startswith("ids:")), None)
+    out: dict[int | None, dict[str, Any]] = {}
+    for mover in movers:
+        group = at.get(side_block(mover.get("old")), listed if _unquartered(mover) else None)
+        row = out.setdefault(group, {"movers": 0, "rental": 0, "sources": Counter(),
+                                     "part": Counter()})
+        source = mover.get("source") or "?"
+        row["movers"] += 1
+        row["sources"][source] += 1
+        row["part"][source] += _gained_part(mover)
+        row["rental"] += mover.get("listing_id") in rentals
+    return out
+
+
+def gate_sample(counts: Mapping[int | None, Mapping[str, Any]], groups: int,
+                part_source: str = "ceskereality", salt: str = "w5b-gate-",
+                per_kind: int = 4, ranked: int = 12) -> dict[str, Any]:
+    """W5b's sampled gate: the groups holding the most `part_source` movers gaining a část and the
+    most rental movers (ties to the lowest group), then the rest by sha256(salt + group number)."""
+    def top(score: Callable[[Mapping[str, Any]], int]) -> list[int]:
+        scored = [(score(row), i) for i, row in counts.items() if i is not None and score(row) > 0]
+        return [i for _, i in sorted(scored, key=lambda item: (-item[0], item[1]))[:per_kind]]
+
+    first = list(dict.fromkeys([*top(lambda row: row["part"][part_source]),
+                                *top(lambda row: row["rental"])]))
+    rest = sorted((i for i in range(1, groups + 1) if i not in first),
+                  key=lambda i: hashlib.sha256(f"{salt}{i}".encode()).hexdigest())
+    chosen = {*first, *rest[:ranked]}
+    total: Counter[str] = Counter()
+    held: Counter[str] = Counter()
+    for i, row in counts.items():
+        total.update(row["sources"])
+        if i in chosen:
+            held.update(row["sources"])
+    return {"stage_1": first, "stage_2": rest[:ranked], "remaining": len(rest),
+            "covered": {source: [held[source], n] for source, n in sorted(total.items())},
+            "covered_all": [sum(held.values()), sum(total.values())]}
+
+
+def _print_groups(movers: list[dict[str, Any]], groups: list[list[str]], rentals: set[int]) -> None:
+    """The per-group counts a sampled gate picks from, and the sample itself. `i/n` holds exactly
+    these blocks: `chunks` cuts the sorted keys, whatever the ad counts read."""
+    counts = movers_by_group(movers, groups, rentals)
+    for i in range(1, len(groups) + 1):
+        row = counts.get(i) or {"movers": 0, "rental": 0, "sources": {}, "part": {}}
+        spell = lambda items: " ".join(f"{k}={v}" for k, v in sorted(items.items()) if v)  # noqa: E731
+        print(f"[shadow] group {i}/{len(groups)}: {row['movers']} movers, {row['rental']} rental; "
+              f"sources {spell(row['sources']) or '-'}; part-gaining {spell(row['part']) or '-'}")
+    if None in counts:
+        print(f"[shadow] {counts[None]['movers']} movers in no kept block")
+    sample = gate_sample(counts, len(groups))
+    print(f"[shadow] gate sample: stage 1 {sample['stage_1']}; stage 2 {sample['stage_2']} of the "
+          f"{sample['remaining']} remaining; covers {sample['covered_all'][0]} of "
+          f"{sample['covered_all'][1]} movers: "
+          + " ".join(f"{source}={held}/{n}" for source, (held, n) in sample["covered"].items()))
+
+
 def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
     """The movers another group exports (by the old block, or the `ids` block an unquartered one
     rides): not judged here, and not unjudged."""
@@ -443,6 +521,21 @@ def _two_doors(a: Listing, b: Listing) -> tuple[int, int] | None:
     return None
 
 
+def _block_key_split(base: Arm, candidate: Arm) -> dict[str, Any]:
+    """Pairs with a stored decision in either arm that one `block_key` (the engine's `block_key_of`,
+    on each fingerprint) held in the base and two in the candidate: `attr_dispo` and `attr_area` key
+    on it. Zone = the candidate's, None when the pair is gone there."""
+    from autodedup.harness import source_pair
+
+    pairs = []
+    for key in sorted(set(base.run.rows) | set(candidate.run.rows)):
+        now = candidate.fps[key[0]], candidate.fps[key[1]]
+        if (base.fps[key[0]].block_key == base.fps[key[1]].block_key
+                and now[0].block_key != now[1].block_key):
+            pairs.append([*key, candidate.run.rows.get(key, {}).get("zone"), source_pair(*now)])
+    return {"count": len(pairs), "pairs": pairs}
+
+
 def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: set[int],
                 settings: Settings) -> dict[str, Any]:
     """What a door does to the engine, base against candidate, with the pair ids. It never decides:
@@ -451,6 +544,16 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
     every candidate pair, off the cohort pass's own `BlockIndex` in each arm."""
     gained = {i for i in changed if base.listings[i].location.ruian_adm_kod is None
               and candidate.listings[i].location.ruian_adm_kod is not None}
+    part_gained = {i for i in changed if base.listings[i].location.cast_obce_kod is None
+                   and candidate.listings[i].location.cast_obce_kod is not None}
+
+    def tagged(key: PairKey) -> list[Any]:
+        """The pair's source pair, and whether a mover in it gained a část."""
+        from autodedup.harness import source_pair
+
+        return [source_pair(candidate.fps[key[0]], candidate.fps[key[1]]),
+                key[0] in part_gained or key[1] in part_gained]
+
     e242_base, e272_base = _blockers(base, changed, settings)
     e242_candidate, e272_candidate = _blockers(candidate, changed, settings)
     to_one = []
@@ -483,7 +586,7 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
             if (any(token not in index_candidate.exploded[probe] for probe, token in shared)
                     and i not in index_candidate.candidates(candidate.fps[other])):
                 key = pair_key(i, other)
-                displaced.append([*key, base.run.rows.get(key, {}).get("zone")])
+                displaced.append([*key, base.run.rows.get(key, {}).get("zone"), *tagged(key)])
     zone = lambda key: candidate.run.rows.get(key, {}).get("zone")  # noqa: E731
     return {
         "door_gainers": len(gained),
@@ -494,7 +597,8 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
         "addr_new": [[*key, zone(key)] for key in sorted(addr_new)],
         "cap_displaced": displaced,
         "merge_gained": list(lists["merge_gained"]),
-        "merge_lost": list(lists["merge_lost"]),
+        "merge_lost": [[*pair, *tagged(tuple(pair))] for pair in lists["merge_lost"]],
+        "block_key_split": _block_key_split(base, candidate),
         "two_doors_one_building": [[*key, *pair, zone(key)] for key, pair in sorted(doors.items())],
     }
 
@@ -556,6 +660,14 @@ def main(argv: list[str] | None = None) -> int:
                   else "narrow the ids or raise --max-ads")
         print(f"[shadow] REFUSED: group {index}/{count} is over --max-blocks {args.max_blocks} "
               f"or --max-ads {args.max_ads}; {advice}", file=sys.stderr)
+        if needed:
+            conn = db.connect_read_only()
+            try:
+                ids = [int(m["listing_id"]) for m in movers if m.get("listing_id") is not None]
+                _, rows = read(conn, _CATEGORY_TYPE_SQL, (ids, RENTAL_TYPE))
+            finally:
+                conn.close()
+            _print_groups(movers, chunks(sizes, needed), {int(row[0]) for row in rows})
         return 2
     summary = export_cohort(db.connect_read_only, shadow_dir, chunk)
     (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),

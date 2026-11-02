@@ -31,6 +31,8 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 | An okres word naming a MOMC the door is not in (`Praha 5` on a Praha 4 door; a word naming the door's own MOMC keeps it) | The door's `momc_unit_id` rides the door read, no second lookup. Measured 2026-11-02: of 4,230 lone doors (1 in 10), 22 carry such a word, 11 on their own MOMC, 11 refused, ≈ 110 rows. A portal's `Praha N` can mean the wider správní obvod; such an ad loses a door, which costs nothing |
 | A PSČ the door does not carry | `door.psc` is on the read FILL makes anyway. A claim the normalizer rejected states no PSČ and is not read |
 
+**Why ceskereality gains části.** Its contract declares no část: its words are the town, the okres and rarely a street. Of the scoping run's 2,405 ceskereality movers gaining one (2,311 at obec grain, 94 at street grain), a 1-in-12 id sample of 213 held no `cast_obce_name` claim, a town word equal to the row's town on all 213, no KÚ word, and 7 street claims naming no část. So the door names a část where the words were silent, and none disagrees with a stated one. On 30 sampled non-main-part ads the page title and locality name the door's část on none. On the 21 of them whose title states a street, the door's street is that street. The door's část is the town's main část by name on 1,428 of the 2,405 and another on 977.
+
 ## Why 1 m, and why flats and houses
 
 The bar is how often two stated doors of one property agree. A pin-named door must agree with a sibling ad's stated door as often (production, 2026-11-02, the operator's measurement):
@@ -85,7 +87,13 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
 
    **Scope.** `scope=apply`, `all_blocks=true`, nothing outside the apply scope. The gate result says nothing about blocks outside it, and the run prints so.
 
-   **Size stop.** The engine owner gets the printed group count (`groups needed under the caps`) before the first full dispatch. Up to 12 groups run one at a time. Over 12, or a block that does not fit the caps, waits for the engine owner.
+   **The gate is a sample of at most 20 of the 63 groups** (engine owner, 2026-11-02; scoping run 41465914419: 18,482 ids, 17,950 movers, 1,819 blocks, 443,435 ads, 63 groups needed under the caps). The refused scoping run prints every group's counts and the picks, reproducible by re-running step 2 with `positions_run_id`:
+   - **Stage 1:** up to 4 groups holding the most ceskereality movers that gain a část, plus up to 4 groups holding the most rental movers (`listings.category_type = 'pronajem'`). A stage 1 fail stops the gate and goes to the operator.
+   - **Stage 2:** the remaining groups ranked by `sha256("w5b-gate-" + group number)`, the first 12, one at a time.
+
+   **What it does and does not say.** The result states that it is a sample. Stage 2 covers about 22 % of the remaining groups. If it finds nothing harmful, roughly a dozen independent harmful pairs in those groups could still be missed at about 5 % ((1 − 0.22)^12), and more if they cluster, because a group is one contiguous run of block keys. `addr_new` and `cap_displaced` are seen only inside the groups run. The result states the share of the 17,950 movers covered, per source, from the run's `gate sample` line. Without the rental picks, which need that re-run, the 4 ceskereality groups and 12 by hash hold 5,167 of 17,950 (28.8 %): ceskereality 1,125 of 3,524, idnes 2,575 of 9,217, realitymix 830 of 3,114, mmreality 429 of 1,446, remax 155 of 464, sreality 47 of 173, bezrealitky 6 of 12. A rental pick replaces any hash pick it overlaps.
+
+   **Group counts** (`[shadow] group i/n: …`, printed when step 2 is REFUSED): movers, rental movers, movers per source, part-gaining movers per source. A mover counts once, at the group that exports its stored row: its old block's, else (unquartered) the `ids` block's; a new block in another group holds only its counterparts. `chunks` cuts the sorted block keys, so a dispatched `i/63` holds exactly those blocks. A block that does not fit the caps waits for the engine owner.
 
    **Guard.** If `e242` and `e272` read 0 for both `base` and `new` in every group, that is not a pass: the report is tested on a real pair first.
 
@@ -97,8 +105,9 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
    - `e242`, `e272`: `base` and `candidate` counts, `new` and `gone` as `[lo, hi, zone]`. Stored rows touching a mover. E242 is `stored_house_number_conflict`; E272 is `_filed_apart` on a pair stating two storeys.
    - `same_house_number_to_1`: `[lo, hi, zone]`, stored rows now reading 1 that did not.
    - `addr_new`: `[lo, hi, zone]`, candidate pairs the `addr` probe now reaches. Zone null = under the store floor.
-   - `cap_displaced`: `[lo, hi, base zone]`, base pairs still sharing a key that neither side retrieves now, because a side sits at the fan-out cap (60).
-   - `merge_gained`, `merge_lost`: `[lo, hi]`, merge-zone rows, `evaluate --base`'s own lists.
+   - `cap_displaced`: `[lo, hi, base zone, source pair, část gained]`, base pairs still sharing a key that neither side retrieves now, because a side sits at the fan-out cap (60). `část gained` is true when a mover in the pair gained one.
+   - `merge_gained`: `[lo, hi]`; `merge_lost`: `[lo, hi, source pair, část gained]`. Merge-zone rows, `evaluate --base`'s own lists.
+   - `block_key_split`: `count`, and `pairs` as `[lo, hi, zone, source pair]`: pairs with a stored decision in either arm that shared a `block_key` in the base and not in the candidate, read off the fingerprints (`block_key_of`). A door's část moves a row from `o<obec>` to `c<cast>`, and `attr_dispo` and `attr_area` key on it. Zone is the candidate's, null when the pair is gone there.
    - `two_doors_one_building`: `[lo, hi, door, door, zone]`, a door-gaining pair on two different doors with one č.p. and one část. That is the building proxy, since the mirror holds no building code.
 
    Both blockers read the settings the arms ran under: `harness.cmd_shadow` builds them from `scorer.json` (the live `autodedup.rt_calibration` row: `d43_stored_house_number` guarded, `d43_floor_sequential_address_split` true, `d43_house_number_entrance` stored, as `autodedup/settings/w31.json`) and passes them to `door_report`. Under the `Settings` defaults both are off.
