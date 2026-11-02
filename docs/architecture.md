@@ -3805,7 +3805,7 @@ renumber.** Navigate by area:
     portal-stated `listings.condition`, and Browse shows no facet until a further ruling.
 
     **Amendment 2026-10-25 (ADR-0002, operator grill):** agents that RANK (the scout) may read the curated city indexes
-    under the user's login; no price estimate reads them, and the estimation agenda is unchanged.
+    under the user's login; no price estimate reads them, and the comparables agenda is unchanged.
 
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
     `property_pipeline` holds at most ONE card per property per account (PK

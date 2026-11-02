@@ -97,16 +97,14 @@ def test_the_agenda_gate_excludes_city_quality_from_estimation():
 
     This assertion did not exist before W5 — deleting the gate turned nothing red.
 
-    RED by: adding Agenda.COMPARABLES or Agenda.ESTIMATION to the city_index_rules
-    FilterDef.
+    RED by: adding Agenda.COMPARABLES to the city_index_rules FilterDef.
     """
-    for agenda in (fr.Agenda.COMPARABLES, fr.Agenda.ESTIMATION):
-        ids = {f.id for f in fr.filters_for_agenda(agenda)}
-        leaked = ids.intersection(_CITY_QUALITY)
-        assert not leaked, (
-            f"rule 17: {sorted(leaked)} reachable from the {agenda} agenda — an estimate "
-            "would depend on a city_index_* revision"
-        )
+    ids = {f.id for f in fr.filters_for_agenda(fr.Agenda.COMPARABLES)}
+    leaked = ids.intersection(_CITY_QUALITY)
+    assert not leaked, (
+        f"rule 17: {sorted(leaked)} reachable from the comparables agenda — an estimate "
+        "would depend on a city_index_* revision"
+    )
 
 
 # --- the one predicate -----------------------------------------------------

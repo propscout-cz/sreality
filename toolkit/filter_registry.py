@@ -48,7 +48,6 @@ class Agenda(StrEnum):
     BROWSE = "browse"             # frontend Browse sidebar
     WATCHDOG = "watchdog"         # WatchdogFilterSpec + matcher
     COMPARABLES = "comparables"   # toolkit.find_comparables_* + agent tools
-    ESTIMATION = "estimation"     # CreateEstimationIn
     VELOCITY = "velocity"         # compute_market_velocity
     SOLD = "sold"                 # ListingDetail sold-comps block (sold_comparables)
 
@@ -607,7 +606,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 100, "max": 10000},
             unit="m",
         ),
@@ -626,7 +625,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 0.05, "max": 0.6, "step": 0.05},
             unit="%",
         ),
@@ -643,7 +642,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"enum": ["exact", "loose", "any"]},
             enum_values=DISPOSITION_MATCH_OPTIONS,
         ),
@@ -661,7 +660,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 0, "max": 20},
         ),
         FilterDef(
@@ -677,7 +676,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 1, "max": 365},
             unit="days",
         ),
@@ -723,7 +722,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_STATUS,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"enum": ["active", "delisted", "all"]},
             enum_values=LIFECYCLE_OPTIONS,
         ),
@@ -812,7 +811,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -827,7 +826,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -844,7 +843,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.BOOLEAN,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
         ),
         FilterDef(
             id="last_seen_min_days",
@@ -858,7 +857,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -874,7 +873,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -891,7 +890,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -907,7 +906,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -1125,7 +1124,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             enum_values=BUILDING_TYPE_OPTIONS,
         ),
         FilterDef(
@@ -1166,7 +1165,7 @@ def _build_registry() -> dict[str, FilterDef]:
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
             agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY,
+                Agenda.COMPARABLES, Agenda.VELOCITY,
                 Agenda.BROWSE, Agenda.WATCHDOG,
             }),
             enum_values=ENERGY_RATING_OPTIONS,
@@ -1952,7 +1951,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_STATUS,
             ui_control=UiControl.BOOLEAN,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
         ),
     ]
 
