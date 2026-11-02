@@ -374,7 +374,7 @@ def narrow_towns(
     ):
         if not keys or len(surviving) <= 1:
             continue
-        wanted = {u.code for key in keys for u in registry.admin_units_by_name(key, levels=(label,))}
+        wanted = _region_codes(keys, label, registry)
         filtered = [u for u in surviving if getattr(u, attr) in wanted]
         if filtered:
             surviving = filtered
@@ -389,6 +389,19 @@ def narrow_towns(
         surviving = inside or [min(surviving, key=lambda u: (
             _town_distance(u, pin, registry), u.unit_id))]
     return surviving, applied
+
+
+def _region_codes(keys: Sequence[str], level: str, registry: RegistryView) -> set[int]:
+    return {u.code for key in keys for u in registry.admin_units_by_name(key, levels=(level,))}
+
+
+def _region_disagrees(town: AdminUnit, constraints: Constraints, registry: RegistryView) -> bool:
+    """An okres or kraj word the register holds at that level, and the town lies outside it. A word
+    it does not hold there ("Praha 5" as an okres, "Vysočina" as a kraj) is a spelling, not a
+    disagreement."""
+    return any((wanted := _region_codes(keys, level, registry)) and getattr(town, attr) not in wanted
+               for keys, attr, level in ((constraints.okres_keys, "okres_kod", "okres"),
+                                         (constraints.kraj_keys, "kraj_kod", "kraj")))
 
 
 def _admits(
@@ -841,10 +854,11 @@ def bind(
             # A part claim that matched no část (a MOMC is none), a street line that bound nothing
             # and names no part (`ambiguous_streets` too), a locality line the town was only
             # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
-            # (the PSČ or a part claim bound it): nothing a door can be checked against.
+            # (the PSČ or a part claim bound it), an okres or kraj word the town is not in.
             words_unchecked=(
                 part_claim_unmatched or towns.composite.bound
                 or (bool(constraints.obec_keys) and not towns.named)
+                or any(_region_disagrees(town, constraints, registry) for town in obec_units)
                 or (bool(constraints.street_line or place_line) and top.ulice_kod is None
                     and line.named_part is None)),
         ),

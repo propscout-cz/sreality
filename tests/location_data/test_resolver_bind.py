@@ -983,3 +983,26 @@ def test_a_pin_may_settle_a_town_name_two_towns_share():
     mirror.obec_polygons[999001] = (49.0, 16.0, 3000.0)
     row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA), mirror)
     assert (row.obec_kod, row.ruian_adm_kod) == (554782, _VOKOVICE_DOOR)
+
+
+@pytest.mark.parametrize("word", [
+    mm.claim(7, "okres_name", value_text="Liberec"),
+    mm.claim(7, "kraj_name", value_text="Liberecký kraj"),
+], ids=["okres", "kraj"])
+def test_a_region_word_the_bound_town_is_not_in_refuses(word):
+    """A single bound town: `narrow_towns` never read these words, so the door stood against them."""
+    row = _resolve(_pinned("gps", _ON_DOOR, _PRAHA, word))
+    assert (row.obec_name, row.ruian_adm_kod) == ("Praha", None)
+
+
+@pytest.mark.parametrize("word", [
+    mm.claim(7, "okres_name", value_text="Hlavní město Praha"),
+    mm.claim(7, "kraj_name", value_text="Hlavní město Praha"),
+    mm.claim(7, "kraj_name", value_text="HLAVNÍ  MĚSTO  PRAHA"),
+    mm.claim(7, "okres_name", value_text="Praha 5"),
+    mm.claim(7, "kraj_name", value_text="Praha"),
+], ids=["okres-agrees", "kraj-agrees", "spelled-otherwise", "okres-the-register-does-not-hold",
+        "kraj-the-register-does-not-hold"])
+def test_a_region_word_that_agrees_or_names_no_register_unit_keeps_the_door(word):
+    """A spelling is no disagreement: only a word the register holds, at that level, can disagree."""
+    assert _resolve(_pinned("gps", _ON_DOOR, _PRAHA, word)).ruian_adm_kod == _VOKOVICE_DOOR
