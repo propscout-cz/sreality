@@ -123,8 +123,8 @@ CREATE INDEX IF NOT EXISTS {streets}_pk ON {streets} (code);
 
 # The mirror columns compared to decide "did this address point change?".
 _AP_COLUMNS = (
-    "obec_unit_id", "obec_kod", "cast_obce_unit_id", "cast_obce_kod", "street_id", "ulice_kod",
-    "typ_so", "cislo_domovni", "cislo_orientacni", "znak_orientacniho", "psc",
+    "obec_unit_id", "obec_kod", "momc_unit_id", "cast_obce_unit_id", "cast_obce_kod", "street_id",
+    "ulice_kod", "typ_so", "cislo_domovni", "cislo_orientacni", "znak_orientacniho", "psc",
     "krovak_y_positive", "krovak_x_positive", "geom", "plati_od",
 )
 
@@ -799,7 +799,7 @@ def upsert_streets(conn: psycopg.Connection, stage: Staging, version_id: int,
 def _resolved_source(stage: Staging) -> str:
     return f"""
         SELECT a.kod_adm,
-               ob.id AS obec_unit_id, a.obec_kod,
+               ob.id AS obec_unit_id, a.obec_kod, mo.id AS momc_unit_id,
                co.id AS cast_obce_unit_id, a.cobce_kod AS cast_obce_kod,
                st.id AS street_id, a.ulice_kod,
                a.typ_so, a.cislo_domovni, a.cislo_orientacni,
@@ -811,6 +811,8 @@ def _resolved_source(stage: Staging) -> str:
           FROM {stage.adr} a
           JOIN ruian_admin_units ob
             ON ob.valid_to IS NULL AND ob.level = 'obec' AND ob.code = a.obec_kod
+     LEFT JOIN ruian_admin_units mo
+            ON mo.valid_to IS NULL AND mo.level = 'momc' AND mo.code = a.momc_kod
      LEFT JOIN ruian_admin_units co
             ON co.valid_to IS NULL AND co.level = 'cast_obce' AND co.code = a.cobce_kod
      LEFT JOIN ruian_streets st

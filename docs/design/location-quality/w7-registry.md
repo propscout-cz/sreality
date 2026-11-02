@@ -26,7 +26,7 @@ when RÚIAN 3.4.1 abolished 3100 (2022) and is the only product that omits it.
   `spravni_obvod`. 0 such rows outside Praha. W5 ends this.
 - **No reader, re-checked on main at 699a8e206** (repo: `location_data`, `api`, `toolkit`, `scraper`,
   `autodedup`, `scripts`, `frontend/src`, the extension; live `pg_proc`, `pg_views`, `pg_depend`): none for
-  the four levels, for `orp_of`/`pou_of`/`momc_in_so`, or for the six columns. `listing_location` has no
+  the four levels, for `orp_of`/`pou_of`/`momc_in_so`, or for the dropped columns. `listing_location` has no
   `orp_kod`/`pou_kod` since W2-b, and no live unit hangs under a retired level.
 
 | retiring | live units | also |
@@ -36,10 +36,10 @@ when RÚIAN 3.4.1 abolished 3100 (2022) and is the only product that omits it.
 | `orp` | 206 | 368 name-index rows a version; `orp_of` 18,774 relation rows; 33,238 geometry rows |
 | `pou` | 393 | 723 name-index rows a version; `pou_of` 18,774 relation rows; 43,792 geometry rows |
 
-24,225 units of 58,904 (41 %). `momc_in_so` holds 282 rows. Six dead columns: `ruian_admin_units.nuts_lau` (0
+24,225 units of 58,904 (41 %). `momc_in_so` holds 282 rows. Five dead columns: `ruian_admin_units.nuts_lau` (0
 non-null), `definition_point` (0 non-null; the one read was `coalesce(u.definition_point, gp.pt)`, which
-never fired), `has_polygon`, `display_path` (written, never read); `ruian_address_points.praha_obvod_unit_id`,
-`momc_unit_id` (the change log keeps both in its before/after JSON).
+never fired), `has_polygon`, `display_path` (written, never read); `ruian_address_points.praha_obvod_unit_id`
+(the change log keeps it in its before/after JSON). `momc_unit_id` stays: W5b's door check reads it.
 
 ## What changed
 - `ruian_boundaries.pack_okres(pack)` reads `OBCE_P.dbf` and `OKRESY_P.dbf` straight from the zip member (no
@@ -111,9 +111,9 @@ one resumes from its checkpoints and keeps its old tree. Registry liveness goes 
    `gh workflow run location_wave_shadow.yml --ref feature/location-w7-registry-read-levels -f wave=w7-registry -f claims=none -f scope=apply -f ids_sql="SELECT ll.listing_id FROM listing_location ll WHERE ll.obec_kod = 554782 ORDER BY ll.listing_id LIMIT 5000"`
 2. Merge. Confirm the worker and api rollout: `gh api repos/propscout-cz/sreality/commits/<sha>/status`.
 3. Back up, read the receipt:
-   `gh workflow run backup_before_drop.yml -f label=w7-registry -f targets="ruian_admin_units:id,display_path,has_polygon ruian_address_points:kod_adm,praha_obvod_unit_id,momc_unit_id ruian_admin_unit_relations"`
-4. Apply 718 through the MCP (a tripped 5 s lock timeout: apply again). Verify: 0 live units at the four levels, 24,225
-   with `retired_at`, 37,830 relation rows gone, the six columns gone.
+   `gh workflow run backup_before_drop.yml -f label=w7-registry -f targets="ruian_admin_units:id,display_path,has_polygon ruian_address_points:kod_adm,praha_obvod_unit_id ruian_admin_unit_relations"`
+4. Apply 718 through `apply_migration.yml`, because the MCP declines a file with a DROP or DELETE (a tripped 5 s lock timeout: apply again). Verify: 0 live units at the four levels, 24,225
+   with `retired_at`, 37,830 relation rows gone, the five columns gone.
 5. **Wait until no full sweep is queued:** `select count(*) from dirty_locations where reason = 'full_sweep'` = 0. See the
    window below.
 6. `gh workflow enable location_registry_load.yml`, then `gh workflow run location_registry_load.yml -f vintage=20261031 -f dry_run=true`
@@ -144,7 +144,7 @@ Praha: 0 movers, which holds only once W5's sweep has drained, because a row sti
 3. `browse_stats_properties` with `rows => ['okres']` has a cell keyed 9999 named "území Hlavního města Prahy" (about 23.8k); "vyřazeno" falls by the same; kraj pivot counts unchanged.
 4. Mirror: 77 live okresy; obec 554782's parent is okres 9999, path `t1.g19.k19.o9999.b554782`; 0 live obce whose parent is a kraj; okres 9999 has pip, authoritative and render rows at the new version; `row_counts.boundary_skipped_no_unit = 0`, `okres_csv_disagreements = 0`.
 5. 0 live units at the four levels, 24,225 with `retired_at`; the new version's name index holds 0 rows for them; 0 `momc_in_so`/`orp_of`/`pou_of` rows.
-6. `information_schema.columns` returns 0 for the six columns; index `ruian_admin_units_defpoint` gone.
+6. `information_schema.columns` returns 0 for the five columns; index `ruian_admin_units_defpoint` gone.
 7. 0 non-Praha `listing_location` rows change okres in the sweep.
 8. Every row carries the new `registry_version`.
 

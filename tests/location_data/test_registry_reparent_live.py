@@ -360,7 +360,6 @@ def test_the_dropped_columns_are_gone_and_their_index_with_them(conn):
         "SELECT count(*) FROM information_schema.columns WHERE table_name = ANY(%s) "
         "AND column_name = ANY(%s)",
         (["ruian_admin_units", "ruian_address_points"],
-         ["nuts_lau", "definition_point", "has_polygon", "display_path", "praha_obvod_unit_id",
-          "momc_unit_id"]),
+         ["nuts_lau", "definition_point", "has_polygon", "display_path", "praha_obvod_unit_id"]),
     ).fetchone() == (0,)
     assert conn.execute("SELECT to_regclass('ruian_admin_units_defpoint')").fetchone() == (None,)

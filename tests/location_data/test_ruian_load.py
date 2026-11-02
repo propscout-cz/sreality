@@ -85,7 +85,7 @@ def test_the_loader_stages_only_the_levels_the_platform_reads():
 
 @pytest.mark.parametrize("gone", [
     "definition_point", "display_path", "has_polygon", "nuts_lau",
-    "praha_obvod_unit_id", "momc_unit_id",
+    "praha_obvod_unit_id",
 ])
 def test_no_code_names_a_dropped_mirror_column(gone):
     """Migration 718 dropped them; a reader or writer left behind breaks at the first call."""
