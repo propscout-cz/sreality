@@ -2,33 +2,28 @@
 
 Two readouts asked the same first questions in different words: the NEW DEDUP candidates
 funnel ("Known to the location engine", "Placed precisely enough to name a town") and the
-location audit page's waterfall, which asked the same two questions in Czech.
-Step 2 was the SAME set under two names; step 3 was two different sets under two names, and
-the candidates side's single "lost 99,889" silently added three unlike things together —
-judged-but-not-located (~53 k), abroad (45.6 k, which is an ANSWER) and a Czech point with no
-town (~900).
+location audit page's waterfall (deleted in W1, migration 719), which asked the same two
+questions in Czech. Step 2 was the SAME set under two names; step 3 was two different sets under
+two names, and the candidates side's single "lost 99,889" silently added three unlike things
+together — judged-but-not-located (~53 k), abroad (45.6 k, which is an ANSWER) and a Czech point
+with no town (~900).
 
-So: one definition per step, spelled here once and RENDERED into every producer.
+So: one definition per step, spelled here once and RENDERED into every reader.
 
 * `step_flags_sql()` — the four booleans the chain is cut with. `located` is the consumer
   rule imported from `claims_common` and never retyped; `has_town` carries dedup's obec rank
   floor, applied by RANK through `location_granularity_rank` and never by enum order
   (tests/toolkit/test_dedup_candidates_sql.py forbids the enum comparison).
-* `step_counts_sql()` — the six shared counts, so the funnel and the audit producer aggregate
-  with one expression each.
-* `AUDIT_STEPS` / `RUN_STEPS` — the step keys in order and each key's shape. `located_town` is
-  a SPLIT of `located` on the audit page (whose subject is the hidden set) and a CHAIN step on
-  a candidate run (whose subject is pairing): same key, same predicate, same wording — only
-  the role differs, and the role is declared here rather than in a component.
+* `step_counts_sql()` — the six shared counts, so the funnel aggregates with one expression each.
+* `RUN_STEPS` — a candidate run's step keys in order and each key's shape, declared here rather
+  than in a component.
 
 NO WORDING LIVES HERE. A step's Czech and English labels live in exactly one file,
 frontend/src/lib/locationSteps.ts, because a better sentence must never cost a migration.
-A migration cannot import Python, so two SQL carriers hold these expressions VERBATIM:
-`refresh_location_audit_waterfall()` (pinned by tests/test_location_steps_vocabulary.py) and the
-location scorecard view `location_quality_by_source` (migration 698: the step flags,
-`town_missing_sql()` and `town_evidence_sql()`, pinned by
-tests/location_data/test_location_quality_view_contract.py) — the same rail W5 uses to keep the
-serving surfaces on one rule.
+A migration cannot import Python, so the location scorecard view `location_quality_by_source`
+(migration 698: the step flags, `town_missing_sql()` and `town_evidence_sql()`) holds these
+expressions VERBATIM, pinned by tests/location_data/test_location_quality_view_contract.py — the
+same rail W5 uses to keep the serving surfaces on one rule.
 """
 
 from __future__ import annotations
@@ -117,7 +112,7 @@ def town_evidence_sql(listing_id: str = "b.id", claims: str = "ec") -> str:
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:
     """The FILTER expression behind each shared count, without the `count(*)` around it —
-    what tests/test_location_steps_vocabulary.py pins into both producers."""
+    what tests/test_location_steps_vocabulary.py pins into the funnel."""
     return {
         "with_verdict": f"{flags}.has_verdict",
         "located": f"{flags}.located",
@@ -129,8 +124,7 @@ def shared_count_filters(flags: str = "b") -> dict[str, str]:
 
 def step_counts_sql(flags: str = "b", *, total_as: str = "all_listings") -> str:
     """The six shared counts as one SELECT-list fragment. `total_as` names the first column
-    only: the candidates funnel has always called its base `listings` and the audit relation
-    calls it `all_listings`; they are the same count."""
+    only: the candidates funnel has always called its `all_listings` base `listings`."""
     parts = [f"count(*) as {total_as}"]
     parts += [
         f"count(*) filter (where {expr}) as {name}"
@@ -141,8 +135,7 @@ def step_counts_sql(flags: str = "b", *, total_as: str = "all_listings") -> str:
 
 class StepShape(NamedTuple):
     """Where a step sits in a chain. `kind`: 'chain' narrows the step above it and carries a
-    loss; 'split' partitions its `parent_key` exactly and carries none; 'deduction' is a set
-    carved out of the chain — calling it a loss would double-count it down the column."""
+    loss; 'split' is a part of its `parent_key` and carries none."""
 
     step_no: int
     sub_no: int
@@ -150,23 +143,9 @@ class StepShape(NamedTuple):
     parent_key: str | None
 
 
-# The audit page's chain (migrations 523/524/526): every listing → judged → located, with the
-# hidden set deducted from the whole database and read against it.
-AUDIT_STEPS: dict[str, StepShape] = {
-    "all_listings": StepShape(1, 0, "chain", None),
-    "with_verdict": StepShape(2, 0, "chain", None),
-    "located": StepShape(3, 0, "chain", None),
-    "located_town": StepShape(3, 1, "split", "located"),
-    "located_foreign": StepShape(3, 2, "split", "located"),
-    "located_no_town": StepShape(3, 3, "split", "located"),
-    "hidden": StepShape(4, 0, "deduction", "all_listings"),
-    "hidden_unresolved": StepShape(4, 1, "split", "hidden"),
-    "hidden_pending": StepShape(4, 2, "split", "hidden"),
-}
-
-# A candidate run's chain. Same six keys down to the town, then the two dedup-only steps. The
-# town is a CHAIN step here because pairing is what the page is about — and its loss is
-# EXACTLY the two splits above it, which is the whole point of stamping them.
+# A candidate run's chain: six keys down to the town, then the two dedup-only steps. The town is
+# a CHAIN step because pairing is what the page is about — and its loss is EXACTLY the two splits
+# above it, which is the whole point of stamping them.
 RUN_STEPS: dict[str, StepShape] = {
     "all_listings": StepShape(1, 0, "chain", None),
     "with_verdict": StepShape(2, 0, "chain", None),
@@ -178,11 +157,14 @@ RUN_STEPS: dict[str, StepShape] = {
     "paired": StepShape(6, 0, "chain", None),
 }
 
-# The keys BOTH readouts carry, in chain order — the shared vocabulary itself.
+# The chain down to the town, in order: the keys every run stamps and every drill-down serves.
 SHARED_STEP_KEYS: tuple[str, ...] = (
     "all_listings", "with_verdict", "located",
     "located_town", "located_foreign", "located_no_town",
 )
 
-# Every key either side names; frontend/src/lib/locationSteps.ts must word all of them.
-STEP_KEYS: tuple[str, ...] = tuple(dict.fromkeys((*AUDIT_STEPS, *RUN_STEPS)))
+# The audit list's two states (`location_pin_audit_mv.state`): the page's filter names, no chain step.
+LIST_STATE_KEYS: tuple[str, ...] = ("hidden_unresolved", "hidden_pending")
+
+# Every key a surface names; frontend/src/lib/locationSteps.ts must word all of them.
+STEP_KEYS: tuple[str, ...] = (*RUN_STEPS, *LIST_STATE_KEYS)

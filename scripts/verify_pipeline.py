@@ -384,8 +384,8 @@ THRESHOLDS: dict[str, Any] = {
     # Street share, (address + street) / Czech ads with a town by the rank table, judged on its Wilson
     # UPPER bound against the portal's floor, 0.9x its share on 10-31 rounded down (a 10 % relative
     # drop on n >= 5k is far past sampling noise, SE ~0.2 pp: a parser or contract regression).
-    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor.
-    # WATCH ONLY, never Problem, until the operator rules these floors (W1-b is unruled).
+    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor. Problem under it
+    # (ruling W1-b, 2026-11-01).
     "location_street_floor": {
         "bezrealitky": 0.62,   # 69.5 % on 10-31
         "sreality": 0.57,      # 64.1 %
@@ -399,7 +399,7 @@ THRESHOLDS: dict[str, Any] = {
     },
     # ...over at least 200 Czech ads with a town (maxima had 280 on 10-31).
     "location_street_floor_min_n": 200,
-    # The served properties' fleet street share, the same rule (Watch only too): 0.9x 49.0 % on 10-31.
+    # The served properties' fleet street share, the same rule: 0.9x 49.0 % on 10-31.
     "location_served_street_floor": 0.44,
     # Pin accuracy, Watch only until W6 ships the calibrated table: the Wilson LB of the sampled
     # below-address ads whose address point lies inside their own radius under 90 % (W6 targets
