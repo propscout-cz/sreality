@@ -338,7 +338,7 @@ _BRNO = [
     (9004, "stat", 1, "Česká republika"),
 ]
 _OSTRAVA = [
-    (5650, "obec", 554821, "Ostrava"),
+    (3218, "obec", 554821, "Ostrava"),
     (9802, "okres", 3807, "Ostrava-město"),
     (9803, "kraj", 132, "Moravskoslezský kraj"),
     (9004, "stat", 1, "Česká republika"),
@@ -551,14 +551,14 @@ def test_a_prague_district_typed_as_a_municipality_answers_its_parts(client):
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
     body = _resolve(client, pick, [
         *_MIRROR_PRESENT, _chain(pick, _PRAHA),
-        _momc("praha 2", 3214, (500119, "Praha 2")),
-        _momc_doors(500119, 554782, (490229, "Vinohrady"), (400301, "Nové Město"), (490010, "Nusle")),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782, (490229, "Vinohrady"), (490148, "Nové Město"), (490156, "Nusle")),
     ])
     assert body == {
         "level": "cast_obce", "id": None, "name": "Praha 2", "context": "Praha",
         "parts": [
-            {"id": 400301, "name": "Nové Město"},
-            {"id": 490010, "name": "Nusle"},
+            {"id": 490148, "name": "Nové Město"},
+            {"id": 490156, "name": "Nusle"},
             {"id": 490229, "name": "Vinohrady"},
         ],
     }
@@ -667,11 +667,11 @@ def test_a_mestska_cast_typed_as_a_part_answers_its_parts(client):
         *_MIRROR_PRESENT, _chain(pick, _BRNO),
         _parts("brno stred", 5498),
         _momc("brno stred", 5498, (550973, "Brno-střed")),
-        _momc_doors(550973, 582786, (411744, "Staré Brno"), (411701, "Město Brno")),
+        _momc_doors(550973, 582786, (411591, "Staré Brno"), (411582, "Brno-město")),
     ])
     assert body == {
         "level": "cast_obce", "id": None, "name": "Brno-střed", "context": "Brno",
-        "parts": [{"id": 411701, "name": "Město Brno"}, {"id": 411744, "name": "Staré Brno"}],
+        "parts": [{"id": 411582, "name": "Brno-město"}, {"id": 411591, "name": "Staré Brno"}],
     }
 
 
@@ -680,11 +680,11 @@ def test_a_part_of_that_name_stays_the_part_a_saved_pick_always_was(client):
     pick = {**_PART_SUGGESTION, "name": "Ostrava-Poruba", "lat": 49.83, "lng": 18.17}
     body = _resolve(client, pick, [
         *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
-        _parts("ostrava poruba", 5650),
-        _momc("ostrava poruba", 5650),
-        _parts("poruba", 5650, (413003, "Poruba")),
+        _parts("ostrava poruba", 3218),
+        _momc("ostrava poruba", 3218),
+        _parts("poruba", 3218, (414085, "Poruba")),
     ])
-    assert body == {"level": "cast_obce", "id": 413003, "name": "Poruba", "context": "Ostrava"}
+    assert body == {"level": "cast_obce", "id": 414085, "name": "Poruba", "context": "Ostrava"}
 
 
 def test_a_mestska_cast_binds_on_the_tail_of_the_name_too(client):
@@ -692,12 +692,12 @@ def test_a_mestska_cast_binds_on_the_tail_of_the_name_too(client):
             "type": "regional.municipality"}
     body = _resolve(client, pick, [
         *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
-        _momc("ostrava marianske hory a hulvaky", 5650),
-        _momc("marianske hory a hulvaky", 5650, (545805, "Mariánské Hory a Hulváky")),
-        _momc_doors(545805, 554821, (413101, "Hulváky"), (413102, "Mariánské Hory")),
+        _momc("ostrava marianske hory a hulvaky", 3218),
+        _momc("marianske hory a hulvaky", 3218, (554286, "Mariánské Hory a Hulváky")),
+        _momc_doors(554286, 554821, (414115, "Hulváky"), (414107, "Mariánské Hory")),
     ])
     assert body["name"] == "Mariánské Hory a Hulváky"
-    assert [p["id"] for p in body["parts"]] == [413101, 413102]
+    assert [p["id"] for p in body["parts"]] == [414115, 414107]
 
 
 def test_a_mestska_cast_with_no_doors_binds_nothing(client):
@@ -705,8 +705,8 @@ def test_a_mestska_cast_with_no_doors_binds_nothing(client):
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
     body = _resolve(client, pick, [
         *_MIRROR_PRESENT, _chain(pick, _PRAHA),
-        _momc("praha 2", 3214, (500119, "Praha 2")),
-        _momc_doors(500119, 554782),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782),
     ])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
 
@@ -715,7 +715,7 @@ def test_a_name_meaning_two_mestske_casti_is_refused_rather_than_guessed(client)
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
     body = _resolve(client, pick, [
         *_MIRROR_PRESENT, _chain(pick, _PRAHA),
-        _momc("praha 2", 3214, (500119, "Praha 2"), (500120, "Praha 2")),
+        _momc("praha 2", 3214, (500089, "Praha 2"), (500120, "Praha 2")),
     ])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
 
