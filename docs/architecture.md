@@ -1272,7 +1272,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   redeploys the API and the worker, which have no watch patterns (#1857).
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
-  row reading SUCCESS, not SKIPPED.
+  row reading SUCCESS, not SKIPPED. `scripts/rollout_wait.sh`, a merger's wait, prints each description so a skip
+  shows; its exit 0 means every status green, never that every service deployed.
 - **The wizard's modes** (#2025 deleted M0's one-shot `window1`/`window2`; their evidence is on #2060):
   - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
     CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
