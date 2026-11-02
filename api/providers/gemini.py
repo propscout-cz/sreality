@@ -221,15 +221,12 @@ def _schema_for_gemini(node: Any) -> Any:
 
 
 def _tool_to_gemini(tool: ToolSchema) -> Any:
-    # google.genai.types.FunctionDeclaration accepts a JSON Schema dict
-    # via `parameters` — same shape Anthropic uses as `input_schema`, minus
-    # the keys Gemini's OpenAPI subset rejects (_schema_for_gemini).
     # Late import to avoid module-level dependency.
     from google.genai import types
     return types.FunctionDeclaration(
         name=tool.name,
         description=tool.description,
-        parameters=_schema_for_gemini(tool.input_schema),
+        parameters_json_schema=tool.input_schema,
     )
 
 
