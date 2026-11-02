@@ -5194,24 +5194,25 @@ portal's payload or its own page, and every other stamp is class E outright.
   INFERRED rather than named (a PSČ lookup, a reverse geocode, the sliver, a bare region) contribute
   no agreeing field, so they cannot grade above `low`. **A COMPOSITE LOCALITY NAME IS BOUND AGAINST
   THE REGISTER** (`composite.py`, W9, operator ruling 2026-09-14): when the line names no obec, the
-  whole string is matched first at obec / část obce / MOMC / správní obvod — so "Frýdek-Místek" stays
-  a town and "Praha-Řeporyje" binds the městská část and resolves up to Praha — and only if nothing
-  matches whole is it split on the portals' separators, a token naming an obec (or a uniquely named
-  part) anchoring the rest INSIDE that town, which is what makes "Praha 4 - Podolí" publish Praha and
+  whole string is matched first at obec / část obce / MOMC — so "Frýdek-Místek" stays a town and
+  "Praha-Řeporyje" anchors Praha (a MOMC anchors its town and is never the quarter; the quarter is a
+  část obce, ruling Q1, W5) — and only if nothing matches whole is it split on the portals'
+  separators, a token naming an obec (or a uniquely named part) anchoring the rest INSIDE that town, which is what makes "Praha 4 - Podolí" publish Praha and
   Praha's own Podolí rather than the village of that name in okres Brno-venkov. It fails CLOSED: an
   ambiguous name with nothing to anchor it, or a line that matches an okres or a kraj ("Brno-venkov"),
   binds nothing and the row stays unresolved. The readers no longer interpret a locality at all — the
   `statutory_city_obec` regex over eight hand-typed city names and its `address_part_cast_obce` mirror
   are deleted, the claim carries the portal's line verbatim, and both names on the answer row are the
-  register's own spelling. **A STREET IS BOUND THE SAME WAY** (`composite.resolve_street`,
-  W18; v5.6): every street claim is matched EXACTLY against `ruian_streets` inside the anchoring obec,
+  register's own spelling. A part claim matches like a town name; `composite.part_of` decides what a
+  match binds: a část, the část a KÚ's name spells, never a MOMC (W5). **A STREET IS BOUND THE SAME
+  WAY** (`composite.resolve_street`, W18; v5.6): every street claim is matched EXACTLY against `ruian_streets` inside the anchoring obec,
   in two tiers — a full-name match wins outright, the type-word-tolerant fold only when nothing matched
   exactly — with **both keys** (the register keeps `náměstí`/`třída`/`nábřeží` in `name_norm` while S1
   parses them off, so both are folded both ways — worth 215 titles) and **not a place** (a claim naming
-  the anchoring obec or a část obce inside it is never a street — 76 register streets across 20 obce are
-  spelled exactly like a část obce of their own town) — since v5.7 such a line, or one S1 refused as a
-  place, IS the one část it names (`street_names_part`), and against a claimed part naming another, no
-  part at all (a claimed part of another level stands). It fails CLOSED on two distinct street codes —
+  the anchoring obec or a část obce or MOMC inside it is never a street — 76 register streets across 20
+  obce are spelled exactly like a část obce of their own town) — since v5.7 such a line, or one S1
+  refused as a place, IS the one část it names (`street_names_part`), and against a claimed part
+  naming another, no part at all. It fails CLOSED on two distinct street codes —
   except (v5.7) among accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) the one with a door in
   the listing's one bound část (`street_part_tiebreak`), with no part bound the one a claim WITH
   diacritics is spelled like (per claim; the two contradicting is no street) — and a bound street
@@ -5227,55 +5228,55 @@ portal's payload or its own page, and every other stamp is class E outright.
   that state included the hallucination class the rule exists to stop; so is a house number (v5.5):
   only a bound `č.p.` point publishes one, and only psč still falls back to a claim, preserve-if-null.
   A street bound in a town the advert's town field names takes the část obce all its doors lie in
-  (Q3), else none. Only an operator correction outranks the registry. It also fills
-  **the position: the portal pin when admissible — and not DECLARED blurred outside the town the claims
-  bound (v5.9) — else the finest bound unit's point on surface** — the boundary's stored
+  (Q3), else the claimed část where it has doors (Q2, W5), else none. Only an operator correction outranks the registry. It also fills
+  **the position: the portal pin where `bind.place` lets it place the row (v5.10) — else the finest
+  bound unit's point on surface** — the boundary's stored
   inscribed-circle centre, inside the polygon where `ST_Centroid` need not be, read off the same
   chain rather than as a tenth registry question. RÚIAN draws no polygon for a část obce, so since
   v5.8 a bound část stands at the centroid of its own valid doors (`part_point`, the street's
   derivation, which also answers its KÚ by the door rule) — before, it climbed to its town's point,
   and 23,618 active quarter-level ads stood there, Prague's in Vinohrady. Otherwise FILL WALKS the
-  chain to the first unit with a point (a městský obvod has none either; a street placed the row in
-  BIND already); it refuses `stat` and `region soudržnosti`, whose point would place a listing at the
+  chain to the first unit with a point (a street placed the row in BIND already); it refuses `stat` and `region soudržnosti`, whose point would place a listing at the
   centre of the country. Grade and confidence are untouched — the LEVEL is what says how coarse a
   position is — the radius is floored by the placed-on entity's reach (the část's farthest door, the
   polygon's `containment_radius_m`: Praha 17.6 km where the `obec` constant says 1 km), and
-  FILL's point never causes a dispute (a row FILL places because a declared-blurred pin was set aside,
-  v5.9, still carries that pin's `pin_outside_obec`). Foreign and undetermined rows bind no Czech unit, so they
+  FILL's point never causes a dispute (a row whose pin was set aside keeps its `pin_outside_obec`). Foreign and undetermined rows bind no Czech unit, so they
   keep `geom NULL` by construction.
 * **GRADE** (`grade.py`) is two tables: `match_confidence` from how many INDEPENDENT fields agreed
   with the bound entity (`exact` an address point the pin corroborates, `high` ≥ 2 fields, `medium`
   one, `low` a tie-break or nothing), and `uncertainty_radius_m` from a per-level constant dict
   carrying migration 383's own v1 numbers — floored by the STREET's extent when a street placed the
   row (W18), and by the část's or the unit's reach when FILL did (v5.8), so a radius can never
-  understate the thing the position came off. A portal's declared
-  precision reaches the confidence and never the grain (see the position ladder below).
+  understate the thing the position came off. The grain is the row's finest key (`grain_of`, see
+  below).
 * **CHECK** (`check.py`) decides the country and whether the row disagrees with itself. `disputed` is
-  ONE nullable text column whose value IS the reason: `pin_outside_obec` (where an EXACT or UNDECLARED
-  pin IS the position it is kept and the grain drops to `obec`; a DECLARED blurred pin outside the town
-  is set aside since v5.9 and the grain stays the bind's; a register-placed row keeps its grain; asked
+  ONE nullable text column whose value IS the reason: `pin_outside_obec` (since v5.10 such a pin is
+  never the position, so the flag is the words/pin disagreement and CHECK writes no grain; asked
   only when the town came from a CLAIM, since on BIND's pin-derived rungs the comparison is circular),
   `pin_outside_cz`, `country_conflict`, and
-  `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; the granularity does
-  NOT drop, because the address identity is the half that bound to the register and the coordinate is
-  the half that lost, and GRADE caps such a row at `medium`). A Czech admin
+  `pin_off_street` (W18 — an EXACT pin overridden by the street it cannot be on; GRADE caps such a row
+  at `medium`). A Czech admin
   unit that BOUND at any level is itself a country determination, because the gazetteer it came out
   of is the Czech one. **Foreign is a determination, never a default** — nothing bound and no foreign
   signal is `undetermined`.
 
-**WHERE THE ROW IS PLACED IS ONE LADDER** (`bind.place`, W18), and every rung of it is the register's
-before it is a portal's:
-
-    registry ADDRESS POINT  >  bound STREET point  >  portal pin  >  FILL's unit point
-                                                      (the pin rung yields to FILL's point when
-                                                       DECLARED blurred and outside the bound obec, v5.9)
+**WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
+(`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT > bound STREET point > portal pin *inside the
+bound town* > FILL's entity point. The words bind the town (stated, or derived from finer words through
+RÚIAN). A pin outside it, by the pip polygon and with no tolerance, is never the position, whatever the
+portal declares. A pin inside refines. A pin the portal declares an AREA marker (bazos "Přibližná
+lokalita", a postal-area point) never places a row the words bound. Without words the pin names its
+town (R7/R8) and stays. The pin stays evidence: CHECK records `pin_outside_obec`, the scorecard's count
+of word/pin disagreements. The costs Q3 accepts: a homonym town bound without a PSČ, or a town the text
+reader misread, places the row at the wrong town's point; autodedup sees the moved ads stacked on town
+and část points (re-decided lazily, never forced).
 
 `ruian_streets` carries no geometry, so a bound street's point is DERIVED — the centroid of its valid
 address points, with an EXTENT that reaches the FARTHEST of them (all but 4 of the 83,451 live streets
 have at least one live address point; the other four simply have no point, which the code answers with
 `None` rather than a guess). Half the bounding-box diagonal was the first cut of that extent and it
 excluded a real address point on 65 % of streets — a door of the street reading as off it. The street beats the pin in
-exactly three states: there is no pin; the pin is DECLARED blurred or approximate (bazos stamps every
+exactly three states: there is no pin that may place the row; the pin is DECLARED blurred or approximate (bazos stamps every
 one of its pins "Přibližná lokalita", so a street the ad NAMES is strictly better evidence than a
 coordinate the portal itself calls fuzzy); or the pin lies farther than `max(REGISTRY_PIN_CONFLICT_M,
 the street's extent)` from the centroid. **A pin that loses the position is not thrown away as
@@ -5287,26 +5288,6 @@ point — Jiráskova in Mladá Boleslav spans 1,727 m, and a flat 300 m rule wou
 disagreement. An EXACT pin that loses is the one case that IS a disagreement and is stamped
 `pin_off_street`; an exact pin that agrees keeps the position, as the finer of two true answers.
 
-**The pin rung has one exception since v5.9 (operator ruling 2026-10-30, "the words decide"): a pin the
-portal DECLARES blurred that lies OUTSIDE the obec the claims bound is not a position at all — FILL's point
-beats it.** bazos places every advert on a postal-area point — one Kolín pin carried 143 active ads from 34
-obce, and 12,543 active bazos rows said one town and drew another, 8.8 km off at r = 1 km (19509113:
-Jestřabí Lhota, drawn in Kolín). ONE containment read (`bind.pin_inside_bound_obec`, asked by `core`, read by
-`place()` and CHECK; never on the pin-derived rungs R7/R8, where the town came from the pin) decides it:
-`place()` leaves such a row unplaced, so FILL stands it at the named entity's own point — a bound část's
-doors, else the obec's point — with the level's radius floored by that entity's reach (v5.8). The pin stays
-EVIDENCE and `pin_outside_obec` is still recorded; the grain stays the bind's (~2.9k of the moved bazos rows
-bound a část and now publish the quarter grain). Every blur-declared label counts: bazos
-`approximate_location`, idnes `no_exact_address`, sreality `street`/`ward`/`quarter`/`municipality`/
-`not_address`, mmreality `regional`, maxima `Circle`/`LineString`, realitymix `estimated`; a blurred pin
-outside every Czech obec is set aside the same way and CHECK then records `pin_outside_cz` or
-`country_conflict`. An EXACT or UNDECLARED pin outside the town keeps the position as before (the only
-position there is), at `obec` grain and flagged: which half is wrong there is not ruled. The costs the
-ruling accepts, by name: a homonym town bound without a PSČ, or a bazos town the text reader misread, now
-places the row at the wrong town's point; there is no boundary tolerance, so a blurred pin just across the
-town line moves to the town's point; autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
-town and část points (re-decided lazily, never forced).
-
 **A WAVE THAT MOVES POSITIONS IS SHADOWED THROUGH THE ENGINE BEFORE IT DEPLOYS** (the location programme's
 standing gate, W3/W4/W5/W5b/W6; `docs/design/location-quality/wave-shadow.md`). The engine reads every
 position field through `COHORT_LOCATION_SQL` and `export.build_location`, in the export and the live lane
@@ -5314,25 +5295,18 @@ alike, so the seam is the cohort artifact and `DECISION_MODULES` never change fo
 production write (every statement in a READ ONLY transaction on `db.connect_read_only()`):
 `location_data.what_if` re-resolves an id list with the wave's resolver and claim change (`none`, W4's
 `remine` under the bumped contract) over `drain.recompute`, the dry run's read path, and
-writes the movers; `autodedup.shadow` sizes their old and new blocks (capped) and exports them, the rulings
+writes the movers; `autodedup.shadow` sizes their old and new blocks (capped; a split-city mover with no
+quarter rides one `ids` block with every ad a ruling or its property ties to it) and exports them, the rulings
 and the live scorer in-process (no `autodedup.iterations` row); `harness shadow` rewrites the movers'
 blocks, runs base and candidate under the live scorer and the operator's links, and passes only when E111
 is clean and no ruled pair moved against its ruling. D83 edges touching a mover are printed, never judged.
 
-**THE GRANULARITY IS THE BIND'S, AND A PORTAL'S DECLARED PRECISION REACHES ONLY THE CONFIDENCE.** A
-portal declaring "Přibližná lokalita" is saying its COORDINATE is fuzzy; it is not saying the ad named
-no street, and it cannot un-say what RÚIAN holds about the street the ad named. W18 deleted the
-`DECLARED_CAP` ladder outright rather than narrowing it: keying the cap on the elected POSITION was
-wrong twice over (it published a bazos row with `street_name` + `ulice_kod`, the position on the
-street's centroid and `granularity='obec'` at 1 km, and it INVERTED the two labels that were then capped
-but not blurred — idnes' `no_exact_address`, 66,165 listings, and sreality's `not_address`, 13,176, both
-blur-declared by their contracts since W1-c — because
-a pin AGREEING with the bound street stayed the position and was capped while one CONTRADICTING it lost
-the position and was not), and keying it on the PIN-DERIVED rungs instead was correct and INERT: R7/R8
-already grade `obec` and every cap value is at or coarser than that, so the table could not change an
-answer on any input. What a declaration still does is rank the pin against a blurred sibling, cap the
-confidence at `medium` — a blurred pin is a weak witness however good the bind is — and, since v5.9, set
-aside a pin that lies outside the bound obec (the grain still stays the bind's).
+**THE GRAIN IS THE ROW'S FINEST KEY; A DECLARATION REACHES ONLY THE CONFIDENCE.** One writer,
+`grade.grain_of`, off the keys FILL wrote (W5); CHECK writes none. W18 deleted the `DECLARED_CAP`
+ladder: keyed on the elected position it graded a pin agreeing with the bound street coarser than one
+contradicting it (idnes' `no_exact_address`, sreality's `not_address`), and keyed on the pin-derived
+rungs it changed no answer. A declaration still ranks the pin, caps the confidence at `medium`, and as
+an area marker keeps a pin from placing a row the words bound.
 
 It is a **pure function**: no wall clock, no network, no randomness, enforced by an AST scan, so a
 row replays byte-identically from its inputs and the three version ids stamped on it
@@ -5384,8 +5358,8 @@ and `{portal}/town` is RED until zero; one holding none is PAGE-WITHHELD, `{port
 Watch (the page names no town). Beside them, fixed lines from day one (ruling Q7): `{portal}/ku` (below),
 `{portal}/outside` (a position CHECK flagged that the bound town's pip polygon does not cover, red until
 zero, ruling Q3), `{portal}/street` (the one street share, (address + street) / Czech ads with a town by
-the rank table, Watch when its Wilson upper bound is under the portal's fixed floor; never Problem until the
-operator rules the floors, W1-b), `{portal}/accuracy`
+the rank table, Problem when its Wilson upper bound is under the portal's fixed floor, ruling W1-b),
+`{portal}/accuracy`
 (radius cover on the `id % 10 = 0` sample, Watch only until W6), the same town, outside and street cells
 over the PUBLISHED properties at their location ad (`served/*`), `registry`, `freshness/version` (rows
 behind `RESOLVER_VERSION` or on a stale registry label: Watch, Problem on a second reading) and
@@ -5650,59 +5624,29 @@ exists, nothing queued, no newer evidence, still no location) is the issue, and 
 buckets refine that half alone. The page toggles between the two and defaults to `unresolved`.
 Measured at the split: 11 pending, 44,370 unresolved. (W1, ruling Q7, deleted the nav badge that
 counted `unresolved`: 99 % of its 12,272 were delisted ads with no claims.)
-**W14 (migration 523) made the page read against the whole database, and W15 (migration 524)
-simplified the chain to the one rule; W1 (ruling Q7) deleted the page's waterfall panel, and the table
-and its producer leave with a separate drop migration (ruling W1-c).** The operator's complaint was that the audit set was a number
-with nothing to measure it by. `location_audit_waterfall` is the chain — **9 rows** since W15,
-rewritten hourly by the SAME `refresh_location_pin_audit_mv()` run, after the matview so the last
-step's split reads the relation the page lists: every listing in the database (841,428) → **judged**
-(the lane has a stored verdict for it; the loss is the listings it has never reached) → **located**
-(a point, or the determination that it is abroad — split into with-an-obec / foreign / a Czech point
-with no obec) → **hidden**, the complement of `located` over the WHOLE database, split into
-`unresolved` and `pending`, which is the set this page lists and is read as a share of 841 k rather
-than 100 % of itself. W14 shipped it as 14 rows with a served / not-served fork; retiring the served
-set removed the fork, and the hidden set grew from 12,068 to ~80 k because the ~68 k delisted rows it
-used to exclude are now findings. The one cut is `SERVED_LOCATION_PREDICATE`, rendered verbatim
-(pinned by `tests/test_location_w14_audit_waterfall.py`, the W5 rail's shape) — one statement, one
-snapshot, no new column on `listings`, and the client renders `n` / `lost` / `share_pct` without
-recomputing any of them. Rows are `chain` (the funnel, `lost` = the previous step's count minus its
-own), `deduction` (a set carved out: the hidden set) or `split` (sub-rows that partition their
-parent); the migration proves the arithmetic laws at apply time. Cost: 19.3 s on top of the hourly
-refresh's 900 s budget.
-**W16 (migration 526) makes it ONE vocabulary with the NEW DEDUP candidates funnel.** The two
-readouts asked the same first questions in different words, and at one step with genuinely different
-rules: the funnel's "Known to the location engine" read as *answered* while it was byte-for-byte this
-chain's `with_verdict` (*judged*), and its town step was cut with NO consumer rule — so its single
-"lost 99,889" silently added three unlike things together (≈53,374 judged-but-not-located, 45,619
-**abroad — an ANSWER, which this chain has always booked as a split INSIDE `located`**, and ≈895 a
-Czech point with no town). The four booleans are now rendered from
-`location_data/location_steps.py`, which also declares the step keys, their order and each key's
-shape for BOTH chains: `located_town` is a **split** of `located` here (this page's subject is the
-hidden set) and a **chain step** on a candidate run (that page's subject is pairing) — same key, same
-predicate, same wording, the role declared in one place. Two consequences. `has_town` gained dedup's
-obec RANK floor, so this page's town number IS the number dedup can block on (measured 2026-09-14: 0
-rows of movement), and `located_no_town` stays the plain complement so the three splits keep
-partitioning `located` by construction. And `label_cs` was **dropped**: wording moved to
-`frontend/src/lib/locationSteps.ts`, one file holding Czech and English for every key, so a better
-sentence costs no migration and a step cannot be renamed on one page only — and, one level down,
-the hidden set's two states carried ONE Czech name across the waterfall split, the filter pill,
-the header total and the note (since W1 only the filter pill: `STATE_LABEL` in `LocationPinAudit.tsx`). Two operational constraints ride with the drop, both in 526's header:
-the column is made NULLABLE **before** the producer is replaced and dropped only **after**, so the
-:25 cron cannot land between two statements and fail; and the migration is applied only once the
-merge commit's Railway `vite` rollout is green, because the bundle on `main` still selects
-`label_cs` and PostgREST answers 400 for a column the table no longer publishes. A candidate run stamps the
-same keys into `candidate_generations.stats.waterfall` with the losses and shares already computed by
-the lane, so the two readouts can now differ only by SCOPE (a run may be narrowed to active listings)
-and by TIME (a run is frozen; this relation refreshes hourly) — and the candidates page prints both
-next to its chain. The cross-surface rail is `tests/test_location_steps_vocabulary.py`.
+**The audit waterfall is gone (W14, W15 and W16 built it; W1 dropped it).** `location_audit_waterfall`
+(migrations 523/524/526) was the chain behind this page: every listing → judged → located → hidden.
+W1 (ruling Q7) folded its numbers into the `{portal}/town` facts and deleted the panel; migration 719
+(ruling W1-c) dropped the table, its producer, `location_pin_audit_summary()` and
+`refresh_location_pin_audit_mv()`. **W16's ONE vocabulary outlives it.** The NEW DEDUP candidates funnel
+once called *judged* "Known to the location engine", and cut its town step with no consumer rule, so
+its single "lost 99,889" silently added three unlike things together (≈53,374
+judged-but-not-located, 45,619 **abroad, an ANSWER**, ≈895 a Czech point with no town). The four
+booleans are rendered from `location_data/location_steps.py`, which also declares a run's step keys,
+their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
+the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
+English for every key, so a better sentence costs no migration and a step cannot be renamed on one
+page only; the hidden set's two states carry ONE Czech name (`STATE_LABEL` in `LocationPinAudit.tsx`).
+A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
+shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
 `quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
 the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
 `location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
 sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
-row (~80 k) and not once per listing. Refreshed hourly by pg_cron
-(`refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
+row (~80 k) and not once per listing. Refreshed hourly by pg_cron through `refresh_matview` (since
+719; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
 the cron command** — migration 371's rule, or the refresh would silently die at the 120 s database
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
