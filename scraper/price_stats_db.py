@@ -147,7 +147,9 @@ def localities_ordered(
 
 def confirm_translation(conn: psycopg.Connection) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
     """Run CONFIRM_TRANSLATION_SQL: (rows confirmed, rows added, disputed (key, town) pairs)."""
-    with conn.cursor() as cur:
+    # It reads every active sreality payload: 20-40 s warm, about 90 s cold, against the role's 2 min.
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute("select set_config('statement_timeout', '10min', true)")
         cur.execute(CONFIRM_TRANSLATION_SQL)
         confirmed, added, disputed = cur.fetchone()
     return confirmed, added or [], disputed or []
