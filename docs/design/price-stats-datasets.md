@@ -84,8 +84,6 @@ Required CI secrets: `SREALITY_LOGIN_EMAIL`, `SREALITY_LOGIN_PASSWORD`.
   `ownership`, `usable_area_from/to`, `distance`) + `name`, `slug`, `description`,
   `is_active`, `created_at/by`. A dataset always covers **both** prodej (1) and
   pronájem (2); category_type is not stored on the dataset.
-- `price_stat_localities` — the old resolved-entity cache, read by nothing since
-  migration 723; dropped in W8-4 with the entity columns.
 - `price_stat_observations` — latest-wins fact table, keyed by RÚIAN town code
   (migration 723): PK `(dataset_id, obec_id, category_type_cb, year, month)`. Columns:
   `price`, `advert_count`, `active_count`, `new_count`, `deleted_count`,
@@ -118,8 +116,11 @@ the real cause of the "values jumping 50%" the old scraper hit.
 - Reads → public views/RPCs.
 - Frontend `/datasets` route: dataset picker, per-city analysis table
   (sale CAGR / rent CAGR / gross yield), and a MapLibre map with two obec
-  choropleth layers (rent-growth p.a., sale-growth p.a.) reusing the existing
-  `admin_boundaries_public` + city-overlay paint pattern.
+  choropleth layers (rent-growth p.a., sale-growth p.a.) over
+  `price_stat_choropleth_public`, each town drawn by its RÚIAN render polygon
+  (`ruian_unit_render`, migration 727); the city picker is the register's
+  kraj/okres/obec tree with `obec_population` (`price_stat_obce_picker_public`,
+  migration 725).
 - Ingestion → `.github/workflows/scrape_price_stats.yml` (manual + weekly),
   walking ONE queue of (dataset, obec) stalest first across the active datasets
   (never-scraped first) × {prodej, pronájem} until its time budget; a run that

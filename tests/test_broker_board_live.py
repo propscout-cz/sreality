@@ -14,7 +14,7 @@ import pytest
 
 from api.broker_board import MIXED_CATEGORY, OUTCOME_SELECTED, BoardArgs, board
 from scripts.recompute_property_stats import properties_changed
-from tests._live_property import REQUIRED_DB, _advert, _property
+from tests._live_property import REQUIRED_DB, _advert, _mirror_unit, _property
 from tests.test_location_ad_readers_live import _placed
 from toolkit import brokers
 from toolkit.measures import wilson_lower
@@ -159,8 +159,7 @@ def test_a_brokers_own_numbers_are_the_boards_over_every_category(cur: Any, seed
     """Ruling 4: the dossier, search and Outreach read the broker's book, which over every category is the unfiltered
     board's count, any status and active (every seed is served); by region (a property without one counts only in the
     totals) and by category; a firm counts the brokers its filter selects."""
-    cur.execute("INSERT INTO admin_boundaries (id, level, name, geom) VALUES (999102, 'kraj', 'Lp kraj', "
-                "ST_Multi(ST_MakeEnvelope(15, 49.5, 15.1, 49.6, 4326))::geography)")
+    _mirror_unit(cur, "kraj", 999102, "Lp kraj", (15, 49.5, 15.1, 49.6))
     cur.execute("SELECT property_id FROM broker_book WHERE broker_id = %s", (seeded["C"],))
     c_pids = [r[0] for r in cur.fetchall()]
     cur.execute("UPDATE listing_location SET kraj_kod = 999102 WHERE listing_id IN "

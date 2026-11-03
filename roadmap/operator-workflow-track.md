@@ -709,7 +709,7 @@ Vertical ordering the operator controls, plus two data signals on the card.
 - **Civic index strip** — four fixed cells (celkové hodnocení, přírůstek obyvatel,
   stěhování mladých, nabídka práce) underscored by a 2px rule in the shared
   city-index scale's band colour, repeating the column header's motif at card
-  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id`, an
+  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id` (`obec_kod` since 726), an
   integer equi-join that reproduces the SQL predicate's `ST_Covers` arm (all 206
   curated cities have a boundary, so its radius arm is dead). No migration.
   ~52% of properties resolve to a curated city; the rest render no strip.

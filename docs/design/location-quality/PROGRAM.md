@@ -314,7 +314,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 | fetch-failure rule | per-portal challenge guards (gone signals stay per portal) |
 
 ## Deferred or rejected (headline)
-- **Deferred:** retiring the legacy `admin_boundaries` table (its own track; after W7 both registries agree on Praha).
+- **Deferred:** retiring the legacy `admin_boundaries` table (dropped 729, W8-4) (its own track; after W7 both registries agree on Praha).
 - **Deferred:** a precise pin deciding the část through its KÚ (2,188 Praha rows). It reverses a ruling and adds without deleting; ask again after W5.
 - **Deferred:** a radius gate in comparables (an estimation methodology change).
 - **Deferred:** remax house numbers from index cards (a new surface; deletes nothing).
@@ -359,7 +359,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 | 2,823 multi-pin, 136 towns, 86 streets | 2,289, 104, 50; all are portal edits over time |
 | #2102 open | closed 10-30 21:10Z. #1792 still open; #1634 also drops has_polygon |
 | ZSJ binds unmapped | ZSJ can never bind (0 name-index entries) |
-| ČÚZK publishes no Praha okres | the SHP pack and admin_boundaries carry 9999 |
+| ČÚZK publishes no Praha okres | the SHP pack and admin_boundaries (dropped 729) carry 9999 |
 
 ## Corrections to this plan (review, 22Z)
 | Plan said | Measured or read |

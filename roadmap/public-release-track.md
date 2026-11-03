@@ -397,7 +397,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      / pipeline-bookmark for signed-in extension users — all three were 404'ing because
      `resolve_active_property_ids`' walk over `properties` returned zero rows under RLS
      deny-all (found while shipping this, not yet reported by the operator). `list_estimation_runs`
-     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` left
+     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` (dropped 729) left
      un-policied until a tenant-conn consumer needs it (Wave 3 matcher). Live regression:
      `test_a5_properties_readable_listings_still_deny_all`.
    - ~~**W1-3 (async job lane + periodic zombie sweep — Amendment A10)**~~ — **SHIPPED,

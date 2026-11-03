@@ -335,13 +335,25 @@ def test_the_diff_is_drawn_from_our_data_with_the_models_words_apart(w: World) -
     assert note["before"] == ["0 notes you can read on this property."]
 
 
-def test_a_watchdogs_places_come_from_ruian_not_the_model(w: World) -> None:
+@pytest.fixture()
+def testov(w: World) -> Iterator[int]:
+    """Obec 554782 named Testov, committed (the run reads it on its own connection) and deleted after: a unit left
+    behind collides with a later lane seeding the same code (#2362's CI)."""
     code = 554_782
     version = w.one("INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline) "
                     "VALUES (%s, 'baseline', '2026-09-01', '{}', 'test', 'test') RETURNING id", uuid.uuid4().hex)
     w.svc.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, first_version_id, "
                   "last_version_id) VALUES ('obec', %s, 'Testov', 'testov', 'obec_554782', '2020-01-01', %s, %s)",
                   (code, version, version))
+    try:
+        yield code
+    finally:
+        w.svc.execute("DELETE FROM ruian_admin_units WHERE first_version_id = %s", (version,))
+        w.svc.execute("DELETE FROM registry_versions WHERE id = %s", (version,))
+
+
+def test_a_watchdogs_places_come_from_ruian_not_the_model(w: World, testov: int) -> None:
+    code = testov
     real = w.one("SELECT name FROM ruian_place_names_public WHERE level = 'obec' AND code = %s", code)
     lie = {"name": "Praha 1 (hezky)", "level": "obec", "id": code}
     run_id = w.run(_watchdog(districts=[lie], max_price_czk=6_000_000))

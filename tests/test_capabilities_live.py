@@ -35,6 +35,7 @@ from tests._live_property import (
     REQUIRED_DB,
     _advert,
     _collection,
+    _mirror_unit,
     _property,
     _recompute,
     _snapshot,
@@ -421,9 +422,8 @@ def _watched(cur: Any, spec: dict[str, Any], ids: dict[str, int]) -> set[str]:
 def _city_rule(cur: Any) -> list[dict[str, Any]]:
     """Town A as a curated city whose made-up index is 8: the rule `>= 6` selects it, and only it."""
     index = f"lp_{uuid.uuid4().hex[:8]}"
-    cur.execute("INSERT INTO admin_boundaries (id, level, name, geom) VALUES (%s, 'obec', 'Lp A', "
-                "ST_Multi(ST_MakeEnvelope(12.2, 48.8, 12.5, 49.1, 4326))::geography)", (_TOWN_A,))
-    cur.execute("INSERT INTO curated_cities (name, kraj_name, centroid, admin_boundary_id) VALUES "
+    _mirror_unit(cur, "obec", _TOWN_A, "Lp A", (12.2, 48.8, 12.5, 49.1))
+    cur.execute("INSERT INTO curated_cities (name, kraj_name, centroid, obec_kod) VALUES "
                 "(%s, 'Lp', ST_SetSRID(ST_MakePoint(12.35, 48.95), 4326)::geography, %s) RETURNING id",
                 (index, _TOWN_A))
     city = cur.fetchone()[0]

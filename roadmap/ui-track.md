@@ -650,12 +650,12 @@ End-to-end browser flow over the U1b backend.
 
 ### browse-2: Region search + box plots (done)
 - Mapy.cz suggest / resolve proxy endpoints (`api/maps.py`) — bearer-
-  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware
+  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware (dropped 729)
   polygon resolution that auto-degrades to point + radius when the
   table is missing or empty.
 - Region page rebuilt around a single `LocationSearchBox`: typing a
   street address, neighbourhood, or kraj returns ranked Mapy.cz
-  suggestions and resolves to either a polygon (when admin_boundaries
+  suggestions and resolves to either a polygon (when admin_boundaries (dropped 729)
   ships) or a point + radius. Browse-1's district / radius pickers
   remain reachable under an "Advanced" disclosure for legacy
   bookmarks and direct radius drag-and-drop.

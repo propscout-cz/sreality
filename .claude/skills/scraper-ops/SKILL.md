@@ -362,7 +362,7 @@ Per-lane notes:
   min_age_s, cap, seconds}`.
 - **Sold-comps lane** (sold-comps W2, migration 544) — registered sales from reas.cz (an external FACT
   feed, NOT a tenth portal) for ≤5 obec cells a pass: towns where the deal pipeline holds a live card AND
-  the obec has an `admin_boundaries` polygon (an unboxable cell writes no ledger row, so it would sit at
+  the obec has a `ruian_unit_render` polygon (an unboxable cell writes no ledger row, so it would sit at
   the queue's head for ever), stalest first, minus cells whose newest `sold_transaction_fetches` row is
   `ok` within 35 d or `failed` within 6 h. Ships **DARK** behind ONE integer,
   `realtime_sold_comps_interval_seconds` (seeded 0, editable on /settings) — cadence AND kill switch, no

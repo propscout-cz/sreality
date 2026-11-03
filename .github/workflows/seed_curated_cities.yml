@@ -3,16 +3,9 @@ name: "Data: seed curated cities"
 # One-shot workflow that geocodes the cities in
 # data/obce_v_datech_2025.csv via Mapy.cz, then writes them into
 # curated_cities + city_index_definitions + city_index_revisions +
-# city_index_values (+ city_population from data/csu_population.json
-# when present).
-#
-# Population source: the official ČSÚ DataStat export "Počet obyvatel
-# v obcích k 1. 1.". Download the JSON from
-# https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02 and commit it
-# to data/csu_population.json; the seed parses that JSON-stat file,
-# matches each municipality to a curated city by (name, kraj), and
-# upserts city_population. A legacy data/csu_population_2024.csv is
-# still read as a fallback when the JSON is absent.
+# city_index_values. A new city is bound to the RÚIAN town under its
+# centroid; its population is that town's, loaded by
+# load_obec_population.yml.
 #
 # The geocoded coordinates land in data/curated_cities_geocoded.json
 # and are committed back to the branch so subsequent reruns are

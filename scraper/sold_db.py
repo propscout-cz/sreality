@@ -39,12 +39,12 @@ _SOLD_STORE_PRESENT_SQL = """
        AND to_regclass('public.sold_transaction_fetches') IS NOT NULL
 """
 
-# The cell box. `admin_boundaries.id` IS the ČÚZK/RÚIAN code of the unit (migration
-# 017's header: `sreality_id` is the separate bridge into sreality's own id space),
-# so it joins directly to `listing_location.obec_kod` and to reas's `municipalityId`.
-# The envelope is taken FIRST and the margin applied to that rectangle: buffering a
-# 50 m-simplified obec multipolygon would cost thousands of vertices for the same
-# four numbers. `geom` is geography, so the margin is metres without a projection.
+# The cell box: the town's RÚIAN render polygon at the current registry version
+# (`ruian_unit_render`, migration 725), by the RÚIAN code that `listing_location.obec_kod`
+# and reas's `municipalityId` both carry. The envelope is taken FIRST and the margin
+# applied to that rectangle: buffering a 55 m-simplified obec multipolygon would cost
+# thousands of vertices for the same four numbers. The envelope is cast to geography,
+# so the margin is metres without a projection.
 _OBEC_CELL_BOX_SQL = """
     SELECT ST_YMin(cell.box), ST_XMin(cell.box),
            ST_YMax(cell.box), ST_XMax(cell.box),
@@ -52,12 +52,12 @@ _OBEC_CELL_BOX_SQL = """
     FROM (
         SELECT ST_Envelope(
                    ST_Buffer(
-                       ST_Envelope(ab.geom::geometry)::geography,
+                       ST_Envelope(r.geom)::geography,
                        %(margin_m)s::double precision
                    )::geometry
                ) AS box
-        FROM admin_boundaries ab
-        WHERE ab.level = 'obec' AND ab.id = %(obec_kod)s
+        FROM ruian_unit_render r
+        WHERE r.level = 'obec' AND r.code = %(obec_kod)s
     ) cell
 """
 
@@ -72,11 +72,11 @@ _OBEC_CELL_BOX_SQL = """
 # ledger is append-only, so "the cell's state" is its last row and nothing else. A
 # cell that has never been looked at sorts first.
 #
-# The `admin_boundaries` join is not decoration. A cell with no polygon has no box,
+# The `ruian_unit_render` join is not decoration. A cell with no polygon has no box,
 # so a fetch can only skip it — and a skip writes no ledger row, which leaves
 # `fetched_at` NULL, which sorts that cell FIRST again on the very next pass. One
-# obec missing from the boundary ingest would hold a slot of the cap for ever. A
-# cell that cannot be boxed is not work, so it is never offered.
+# obec the register cannot draw would hold a slot of the cap for ever. A cell that
+# cannot be boxed is not work, so it is never offered.
 _SOLD_COMP_CELLS_SQL = """
     WITH cells AS (
         SELECT DISTINCT ll.obec_kod AS obec_kod
@@ -85,8 +85,8 @@ _SOLD_COMP_CELLS_SQL = """
           ON ps.account_id = pp.account_id AND ps.id = pp.stage_id
         JOIN properties p ON p.id = pp.property_id
         JOIN listing_location ll ON ll.listing_id = p.location_listing_ref_id
-        JOIN admin_boundaries ab
-          ON ab.level = 'obec' AND ab.id = ll.obec_kod
+        JOIN ruian_unit_render r
+          ON r.level = 'obec' AND r.code = ll.obec_kod
         WHERE p.status = 'active'
           AND p.is_active
           AND p.category_main IN ('byt', 'dum')

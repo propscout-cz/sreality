@@ -1702,10 +1702,10 @@ def _build_registry() -> dict[str, FilterDef]:
             default=None,
             description=(
                 "Lower bound on the population of the listing's OWN "
-                "municipality (`home_obec_pop >= N`, ČSÚ population of the "
-                "obec whose polygon contains the listing). Precomputed by "
-                "recompute_city_proximity (migration 142) for every listing "
-                "country-wide — not just the 206 curated cities."
+                "municipality (`home_obec_pop >= N`, the latest ČSÚ population "
+                "of the obec its location ad is bound to, `obec_population`). "
+                "Precomputed by recompute_city_proximity (migrations 142, 726) "
+                "for every listing country-wide — not just the 206 curated cities."
             ),
             category=CATEGORY_CITY_QUALITY,
             # Plain paired number inputs, not a 0–1.5M slider: the range is

@@ -843,7 +843,7 @@ def test_an_unmapped_kraj_keeps_an_over_ceiling_child_at_the_ceiling(
     assert complete is False
 
 
-# RÚIAN (admin_boundaries), 2026-10-13: okresy per kraj.
+# RÚIAN register, 2026-10-13: okresy per kraj.
 _RUIAN_OKRES_COUNT = {
     "stredocesky-kraj": 12, "jihocesky-kraj": 7, "plzensky-kraj": 7,
     "karlovarsky-kraj": 3, "ustecky-kraj": 7, "liberecky-kraj": 4,

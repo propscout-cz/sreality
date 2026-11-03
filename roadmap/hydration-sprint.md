@@ -167,11 +167,11 @@ Four corollaries, because the evidence did not support one rule for everything:
   every call — including every operator drag of the `[from,to]` window — even though a
   municipality's boundary polygon never changes. Measured live on the largest dataset
   (4,044 obce): **5.86 MB of GeoJSON re-sent on every window change**, matching the
-  parked memory note exactly. Split into `price_stat_growth_shapes(dataset_id)`
+  parked memory note exactly. Split into `price_stat_growth_shapes(dataset_id)` (dropped 728)
   (geometry only, keyed on dataset_id alone — obec universe = every obec that has EVER
   had an observation for the dataset, ignoring the window, since a shape has to cover
   any window the operator might pick) and the unchanged `price_stat_growth()` numbers
-  with `geojson` dropped (the join to `admin_boundaries_public` becomes an `exists`
+  with `geojson` dropped (the join to `admin_boundaries_public` (dropped 729) becomes an `exists`
   check — same obec filter, zero geometry computed). `DROP FUNCTION` + `CREATE
   FUNCTION` (return columns changed, not `CREATE OR REPLACE`-compatible) with explicit
   re-grants matching the live ACL exactly (`authenticated` only, `anon` dark — this
@@ -706,7 +706,7 @@ Fixed in the audit PR:
   fully correct table with nothing saying why. Pre-W10b the polygons rode in the numbers
   response, so a populated table implied a populated map. Both consumers now surface it.
 - **The shapes RPC was recomputed in full per page.** PostgREST wraps an RPC in LIMIT/OFFSET,
-  so `price_stat_growth_shapes(14)` re-ran its whole body for each of 5 pages: measured
+  so `price_stat_growth_shapes(14)` (dropped 728) re-ran its whole body for each of 5 pages: measured
   **1.4 s / 10,199 buffers per page**, re-aggregating all 180,506 observation rows every time —
   and since W2b the last four fire in parallel, i.e. four concurrent 1.4 s statements against
   an 8 s `statement_timeout`. `fetchGrowthShapes` now reads the already-materialized
@@ -1150,7 +1150,7 @@ allowlist of **84k–262k listing ids** for every practical threshold, so it thr
 timeout toast for an overflow toast. **The feature was broken, not merely slow.**
 
 **This is a KEY CHANGE, not a re-expression** — recorded plainly because the design's own
-language obscured it. The live predicate never touched `admin_boundary_id`; it keyed
+language obscured it. The live predicate never touched `admin_boundary_id` (renamed `obec_kod` by 726); it keyed
 `curated_cities.id` against `browse_list.home_city_id`. "One SQL function owning the same
 rule evaluation" is true of the *rules* and false of the *membership test*.
 
@@ -1631,9 +1631,9 @@ One line each: flag · trigger · evidence needed to close · filing wave.
   Praha ×3. **NOT "stale corrections"** — a genuine data defect · **trigger:** any work on
   `recompute_home_city` or the RÚIAN boundary set · **evidence:** which of the two columns is
   wrong per case · filed W5.
-- **`NOT NULL` on `curated_cities.admin_boundary_id`** is not shippable as designed: it breaks
+- **`NOT NULL` on `curated_cities.admin_boundary_id`** (shipped as `obec_kod` by 726) is not shippable as designed: it breaks
   `scripts/seed_curated_cities.py` (INSERTs without the column, fills it in a later pass) and
-  `scripts/ingest_boundaries.py` (whose `wipe_table` depends on the FK's `ON DELETE SET NULL`).
+  `scripts/ingest_boundaries.py` (deleted in W8-4; whose `wipe_table` depends on the FK's `ON DELETE SET NULL`).
   Enforcement ships instead as the migration's DO block + the live rail · **trigger:** an
   `ingest_boundaries` restructure to load-into-staging + swap · filed W5.
 - **W7b's drops: `listings_with_city_quality()`, `properties.home_city_id`,

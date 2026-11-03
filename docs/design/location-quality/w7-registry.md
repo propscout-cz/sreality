@@ -87,7 +87,7 @@ keyed by unit id (Praha, 112 KÚ, okres 9999).
   through `town:554782`. `contains()` answers okres 9999 → obec Praha by construction. Its docstring "Praha is
   no okres" (`autodedup/incremental_scope.py`) goes stale: fix it with the next edit to that file.
 - **Resolver confidence: unchanged.** Portal okres claims ("Praha", "Praha N", "Hlavní město Praha") do not match
-  ČÚZK's name, as today. **Legacy `admin_boundaries`** already says 9999; both registries now agree, which W8 needs.
+  ČÚZK's name, as today. **Legacy `admin_boundaries`** (dropped 729) already says 9999; both registries now agree, which W8 needs.
 - **The 463 Praha rows (199 active, 264 inactive) are W5's, not W7's.** W5 merged first, so `MATCH_LEVELS` holds no SO and
   they go to obec grain on W5's sweep. W7 gives no row a MOMC code.
 

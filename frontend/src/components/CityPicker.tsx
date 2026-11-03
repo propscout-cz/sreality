@@ -2,7 +2,7 @@
  * checkboxes (check a kraj → all its eligible obce) + indeterminate states, and
  * min/max population bounds that constrain which obce are eligible. Modal over
  * the dataset form. Returns the selected obec_ids + the population bounds.
- * Civic-archive tokens. Only obce with a sreality_id are offered (scrapeable).
+ * Civic-archive tokens. The tree is the RÚIAN register's (every live obec).
  *
  * The modal itself is <Dialog> (components/Dialog.tsx). What this file used to
  * hand-roll was the emptiest version of the thirteen: a `fixed inset-0` div

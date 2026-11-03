@@ -643,7 +643,7 @@ describe('<PropertyDetail> section cards', () => {
 
 /* Ruling P19 (2026-10-27): off the pipeline card, the city-index strip "stays on
    the property page". Přehled shows it for the property's town (its obec code, the
-   curated city's admin_boundary_id), last in the right column; a town that is not a
+   curated city's obec_kod), last in the right column; a town that is not a
    curated city shows nothing, never a placeholder. */
 describe('<PropertyDetail> Přehled: the town\'s city indexes (P19)', () => {
   const def = (index_name: string): queries.CityIndexDefinition => ({
@@ -661,12 +661,9 @@ describe('<PropertyDetail> Přehled: the town\'s city indexes (P19)', () => {
     city_id: 5,
     name: 'Beroun',
     kraj_name: 'Středočeský kraj',
-    lat: 49.9,
-    lng: 14.07,
-    default_radius_m: 5000,
     population: 19_000,
     population_as_of_year: 2024,
-    admin_boundary_id: 531057,
+    obec_kod: 531057,
   };
   const VALUES: queries.CityIndexValue[] = DEFS.map((d, i) => ({ city_id: 5, index_name: d.index_name, value: 6 + i }));
 

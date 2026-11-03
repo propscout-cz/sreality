@@ -409,7 +409,7 @@ def put_condition_scoring_regions(
             (
                 _CONDITION_REGIONS_SETTING,
                 json.dumps(enabled),
-                "admin_boundaries ids (level=kraj) a manually dispatched "
+                "RÚIAN kraj codes a manually dispatched "
                 "condition-scoring run drains (parked: no schedule)",
                 "settings_ui",
             ),
@@ -420,7 +420,7 @@ def put_condition_scoring_regions(
 def _fetch_kraje(conn: "psycopg.Connection") -> list[tuple[int, str]]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, name FROM admin_boundaries "
+            "SELECT code, name FROM ruian_place_names_public "
             "WHERE level = 'kraj' ORDER BY name"
         )
         return [(r[0], r[1]) for r in cur.fetchall()]
@@ -497,7 +497,7 @@ def put_clip_tagging_regions(
             (
                 _CLIP_REGIONS_SETTING,
                 json.dumps(priority),
-                "admin_boundaries ids (level=kraj) the scheduled CLIP tagging "
+                "RÚIAN kraj codes the scheduled CLIP tagging "
                 "drains before the global sweep",
                 "settings_ui",
             ),

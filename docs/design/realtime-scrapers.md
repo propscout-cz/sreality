@@ -334,14 +334,14 @@ one `app_settings` integer, `realtime_sold_comps_interval_seconds`, seeded 0 by 
   fail-safe reason, sharpened here: a settings blip must not spend another site's bandwidth.
 - **The work-list is a query, not a queue** (`sold_db.sold_comp_cells`): obec cells of properties
   holding ANY account's pipeline card at a non-terminal, non-archived stage, active, `byt`/`dum`,
-  with a resolved point AND an `admin_boundaries` polygon, minus the cells whose NEWEST ledger row
+  with a resolved point AND a `ruian_unit_render` polygon, minus the cells whose NEWEST ledger row
   is `ok` within 35 days or `failed` within 6 hours; stalest first, 5 cells a pass. The source
   republishes a transfer ~30 days after the sale, so 35 days is not a guess — asking sooner cannot
   find anything new. The boundary join is the one clause that is about the QUEUE rather than the
   work: an unboxable cell can only be skipped, a skip writes no ledger row, and `NULLS FIRST` would
   then hand back the same starved cell at the head of every pass for ever.
 - **The cell is the unit, and the ledger is the run record.** The box is the obec's
-  `admin_boundaries` envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
+  RÚIAN render polygon's envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
   largest radius). `sold_fetch.fetch_cell` NEVER raises: ok, failed or skipped, every attempt that
   has a box ends as a `sold_transaction_fetches` row — a cell that failed silently would be
   indistinguishable from a cell that holds no sales. And an `ok` row says what it COVERED: a walk

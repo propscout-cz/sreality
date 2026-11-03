@@ -53,11 +53,6 @@ _PREPARABLE = {"SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "TABLE"
 # (origin-substring, sql-substring) pair with a documented reason. Keep tiny.
 _ALLOWLIST: list[tuple[str, str, str]] = [
     (
-        "load_obec_population",
-        "_obec_pop",
-        "references a session-local TEMP TABLE created earlier in the same script",
-    ),
-    (
         "backfill_listing_surrogate_id.py",
         "listing_id_backfill_map",
         "a runtime-only mapping table the script CREATEs at execution time to "

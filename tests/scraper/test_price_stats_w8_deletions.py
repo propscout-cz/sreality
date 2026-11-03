@@ -1,6 +1,6 @@
 """W8-2 (#2362): the price-stats town resolution is gone. The fetch reads `ruian_translation`, so nothing resolves a
-town by name, by suggest or by point in polygon any more, and nothing new reads `price_stat_localities` (dropped in
-W8-4)."""
+town by name, by suggest or by point in polygon any more (that the old locality table is not named again:
+tests/test_admin_boundaries_unread.py)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ import yaml
 from scraper import price_stats_client, price_stats_db, price_stats_main, price_stats_parser
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-RUNTIME = ("scraper", "toolkit", "api", "scripts", "location_data", "autodedup", "frontend/src", "chrome-extension/src")
 
 
 @pytest.mark.parametrize(("module", "name"), [
@@ -43,14 +42,3 @@ def test_the_city_list_and_the_resolve_mode_are_gone() -> None:
     mode = yaml.safe_load(workflow.read_text())[True]["workflow_dispatch"]["inputs"]["mode"]
     assert mode["options"] == ["probe", "full"]
     assert "--resolve-only" not in workflow.read_text()
-
-
-def test_no_runtime_code_reads_price_stat_localities() -> None:
-    hits = [
-        f"{p.relative_to(ROOT)}"
-        for d in RUNTIME if (ROOT / d).is_dir()
-        for p in (ROOT / d).rglob("*")
-        if p.suffix in {".py", ".ts", ".tsx", ".sql", ".yml"} and "node_modules" not in p.parts
-        and "price_stat_localities" in p.read_text(encoding="utf-8", errors="ignore")
-    ]
-    assert hits == []

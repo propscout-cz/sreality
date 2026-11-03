@@ -468,9 +468,8 @@ export function FilterSidebar({
 /* Phase QUAL — population-data status hint                                   */
 /*                                                                            */
 /* The `min_city_population` / `max_city_population` filters compare against  */
-/* the latest `city_population.population` reading. When `city_population` is */
-/* empty (the seed loaded the indexes but the population CSV was missing /    */
-/* the Wikidata fetcher hasn't run yet), every city's `c.population` resolves */
+/* the latest `obec_population` reading (migration 725). When it is empty     */
+/* (the population load has not run), every city's `c.population` resolves   */
 /* to NULL, so a `min ≥ 1` predicate excludes everything — counter-intuitive  */
 /* enough that the operator filed it as a bug. This banner detects the empty- */
 /* population state via a one-row count query and tells the operator how to  */
@@ -517,9 +516,7 @@ export function CityPopulationHint() {
         <strong className="text-[var(--color-copper)]">Pop. data nejsou nahraná</strong>
         {' '}({data.withPop}/{data.total} měst). Filtr min/max populace bude
         vždy 0 výsledků. Spusť workflow{' '}
-        <em className="font-mono not-italic">Refresh city populations from Wikidata</em>
-        {' '}a poté{' '}
-        <em className="font-mono not-italic">Seed curated cities</em>.
+        <em className="font-mono not-italic">Jobs: load obec population (manual)</em>.
       </p>
     </div>
   );

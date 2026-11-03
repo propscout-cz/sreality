@@ -177,7 +177,7 @@ UNGATED: dict[str, Ungated] = {
         "A write-only maintenance function returning void; EXECUTE revoked from every browser role.",
         dropped_in="502_location_w2b_drop_old_projection.sql"),
     "sold_coverage": Ungated(
-        "function", "reachable", ("545_sold_comps_read_surface.sql",),
+        "function", "reachable", ("545_sold_comps_read_surface.sql", "725_location_w8_readers_on_mirror.sql"),
         "The operator's listing page says when we last looked there. SECURITY DEFINER and narrow: a point in, four "
         "facts about the one municipality containing it out; never a cell list, a bbox, `error` or `pages`, so it "
         "cannot be walked to enumerate which towns are being worked."),
