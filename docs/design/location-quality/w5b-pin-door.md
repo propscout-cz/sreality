@@ -100,6 +100,9 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
    **The pass rule.** Rulings broken 0 and new E111 0, as `harness shadow` exits (0 = pass). Then the engine owner reads `shadow.json`'s `door` in every group: `e242.new`, `e272.new`, `merge_gained`, `merge_lost`, all of them, or a random 60 per kind if there are more. Any loss or new blocker on a pair that reads as one property fails. Any gain that reads as different fails. A fail goes to the operator.
 
    **Reading `door`** (`autodedup.shadow.door_report`, base against candidate, one per group; it never sets PASS):
+   - `state` and `started_at`, beside `door`: `judged`, or `nothing_exported`, a valid zero with `pass` null and `crossing_pairs.zero` naming why. Step 2 writes that `shadow.json`, since step 3 is skipped. A failed piece has none.
+   - `piece`: `first`, `last`, `blocks`: the span of block keys this group judged, also in the log, so coverage can be confirmed.
+   - `crossing_pairs`: `movers`, `pairs`, `by_zone`: the live store's pairs (`autodedup.pairs`, generation `rt`) a mover of this cohort holds with an ad outside it. A run pairs only the ads it was given, so no arm can judge these; the engine owner reads the number before calling a group read. Step 2 reads them, bounded by the piece's mover ids, and step 3 reports them. Null = not read.
    - `door_gainers`: ads with no door in the base and one in the candidate.
    - `position_moved`: `count`, and `listings` as `[listing_id, metres]`: movers whose `pin_key` changed.
    - `e242`, `e272`: `base` and `candidate` counts, `new` and `gone` as `[lo, hi, zone]`. Stored rows touching a mover. E242 is `stored_house_number_conflict`; E272 is `_filed_apart` on a pair stating two storeys.

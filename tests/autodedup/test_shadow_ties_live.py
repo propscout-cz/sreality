@@ -27,3 +27,14 @@ def test_a_must_not_link_partner_and_an_operator_merge_ride_with_the_mover(cur: 
                 "member_sides, member_property_ids) values (%s, now(), %s, %s, %s)",
                 (uuid.uuid4(), [mover, merged], [0, 1], [pid, pid]))
     assert shadow.tied_ads(cur.connection, [mover]) == sorted({mover, sibling, partner, merged})
+
+
+def test_crossing_pairs_read_the_live_store_by_the_movers_ids(cur: Any) -> None:
+    """Both index arms run on the real schema: a mover as `listing_lo` and as `listing_hi`, an ad inside the cohort out."""
+    pid = _property(cur)
+    outside_lo, mover, inside, outside_hi = sorted(_advert(cur, pid, source="idnes") for _ in range(4))
+    for lo, hi, zone in ((outside_lo, mover, "band"), (mover, outside_hi, "merge"), (mover, inside, "merge")):
+        cur.execute("insert into autodedup.pairs (generation, listing_lo, listing_hi, probes, zone) "
+                    "values ('rt', %s, %s, '{addr}', %s)", (lo, hi, zone))
+    out = shadow.crossing_pairs(cur.connection, [mover], {mover, inside})
+    assert out == {"movers": 1, "pairs": 2, "by_zone": {"merge": 1, "band": 1, "reject": 0}}

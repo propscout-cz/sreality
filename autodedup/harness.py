@@ -21,6 +21,7 @@ import gzip
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -854,6 +855,7 @@ def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
 
 def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     """A location wave's shadow: base vs movers, live scorer, `evaluate --base`; 0 = PASS."""
+    started_at = datetime.now(timezone.utc).isoformat()
     scorer = json.loads(Path(args.scorer).read_text(encoding="utf-8"))
     settings = Settings.from_dict(scorer["settings"])
     model = model_of_version(scorer.get("model_version"))
@@ -890,6 +892,10 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
         *(shadow.Arm(run, data.listings, fingerprints_of(data, settings))
           for data, run in arms.values()),
         report["d83"]["lists"], done.changed, settings)
+    verdict["door"]["piece"] = shadow.piece_span(group)
+    verdict["door"]["crossing_pairs"] = group.get("crossing_pairs")
+    verdict["state"] = "judged"
+    verdict["started_at"] = group.get("started_at") or started_at
     (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
                                            encoding="utf-8")
     facts, e111 = verdict["run"], verdict["e111"]
@@ -927,6 +933,12 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
           f"  merge gained {len(door['merge_gained'])} lost {len(door['merge_lost'])}"
           f"  block key split {door['block_key_split']['count']}"
           f"  two doors in one building {len(door['two_doors_one_building'])}", file=out)
+    piece, crossing = door["piece"], door["crossing_pairs"]
+    print(f"  piece {piece['first']} .. {piece['last']}, {piece['blocks']} blocks"
+          f"  started {verdict['started_at']}", file=out)
+    print("  crossing pairs not read" if crossing is None else
+          f"  crossing pairs {crossing['movers']} movers, {crossing['pairs']} pairs ("
+          + ", ".join(f"{zone} {n}" for zone, n in crossing["by_zone"].items()) + ")", file=out)
     print(f"  this gate is a sample: it says nothing about any block outside group "
           f"{verdict['group']} of scope {facts.get('scope', '?')}", file=out)
     print(f"wrote {root / shadow.SHADOW_FILE}", file=out)

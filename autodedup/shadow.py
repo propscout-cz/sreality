@@ -22,6 +22,7 @@ import json
 import sys
 from collections import Counter
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
 
@@ -257,6 +258,38 @@ def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int |
 
 
 _CATEGORY_TYPE_SQL = "SELECT id FROM listings WHERE id = ANY(%s::bigint[]) AND category_type = %s"
+
+
+# Both arms ride an index (`autodedup_pairs_pkey`, `autodedup_pairs_gen_hi_idx`): never a scan.
+_CROSSING_SQL = """
+select p.listing_lo, p.listing_hi, p.zone from autodedup.pairs p
+ where p.generation = %(generation)s::text and p.listing_lo = any(%(ids)s::bigint[])
+union all
+select p.listing_lo, p.listing_hi, p.zone from autodedup.pairs p
+ where p.generation = %(generation)s::text and p.listing_hi = any(%(ids)s::bigint[])
+   and not p.listing_lo = any(%(ids)s::bigint[])
+"""
+
+
+def _cohort_ids(artifact: Path) -> set[int]:
+    with gzip.open(artifact, "rt", encoding="utf-8") as handle:
+        return {record["id"] for record in map(json.loads, handle) if record.get("t") == "listing"}
+
+
+def crossing_pairs(conn: psycopg.Connection, mover_ids: Iterable[int], cohort: set[int]) -> dict[str, Any]:
+    """The live store's pairs a mover of this cohort holds with an ad outside it. A run only ever
+    pairs the ads it was given, so step 3's rows cannot show them, and a split cannot judge them."""
+    zones = Counter({"merge": 0, "band": 0, "reject": 0})
+    ids = sorted(set(mover_ids) & cohort)
+    if not ids:
+        return {"movers": 0, "pairs": 0, "by_zone": dict(zones)}
+    _, rows = read(conn, _CROSSING_SQL, {"generation": GENERATION, "ids": ids})
+    movers: set[int] = set()
+    for lo, hi, zone in rows:
+        if lo not in cohort or hi not in cohort:
+            movers.update({lo, hi} & cohort)
+            zones[str(zone)] += 1
+    return {"movers": len(movers), "pairs": sum(zones.values()), "by_zone": dict(zones)}
 
 
 def _gained_part(mover: dict[str, Any]) -> bool:
@@ -536,6 +569,15 @@ def _block_key_split(base: Arm, candidate: Arm) -> dict[str, Any]:
     return {"count": len(pairs), "pairs": pairs}
 
 
+def piece_span(group: Mapping[str, Any]) -> dict[str, Any]:
+    """The first and last block key this group judged, and how many, so coverage can be confirmed.
+    An `ids` block's key lists its ads, so it reads as `ids`."""
+    blocks = [block.partition(":")[0] if block.startswith("ids:") else block
+              for block in group.get("blocks") or ()]
+    return {"first": blocks[0] if blocks else None, "last": blocks[-1] if blocks else None,
+            "blocks": len(blocks)}
+
+
 def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: set[int],
                 settings: Settings) -> dict[str, Any]:
     """What a door does to the engine, base against candidate, with the pair ids. It never decides:
@@ -615,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from scraper import db
 
+    started_at = datetime.now(timezone.utc).isoformat()
     shadow_dir = Path(args.shadow_dir)
     movers = _jsonl(shadow_dir / MOVERS_FILE)
     conn = db.connect_read_only()
@@ -647,11 +690,20 @@ def main(argv: list[str] | None = None) -> int:
     record = {"group": f"{index}/{count}", "blocks": chunk, "ads": ads,
               "all_blocks": len(sizes), "all_ads": sum(sizes.values()),
               "blocks_skipped_no_ruling": no_ruling, "unjudgeable": sorted(blind),
-              "rulings_filter": ruled is not None}
+              "rulings_filter": ruled is not None, "started_at": started_at}
     if not chunk:
-        # An empty list would export the trial cohort (`cohort.parse_blocks("")`): never.
+        # An empty list would export the trial cohort (`cohort.parse_blocks("")`): never. Step 3 is
+        # skipped, so this piece's result is written here: a valid zero, marked; a failed piece has
+        # no `shadow.json`.
         (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),
                                              encoding="utf-8")
+        zero = {"movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0},
+                "zero": "no_ruling_in_blocks" if ruled is not None else "no_block_in_piece"}
+        (shadow_dir / "judge").mkdir(parents=True, exist_ok=True)
+        (shadow_dir / "judge" / SHADOW_FILE).write_text(json.dumps(
+            {"state": "nothing_exported", "pass": None, "group": record["group"], "started_at": started_at,
+             "door": {"crossing_pairs": zero, "piece": piece_span(record)}},
+            indent=1, sort_keys=True), encoding="utf-8")
         print(f"[shadow] group {index}/{count} holds no block a ruling is inside: nothing in it "
               "can fail, nothing exported", flush=True)
         return 0
@@ -670,6 +722,13 @@ def main(argv: list[str] | None = None) -> int:
             _print_groups(movers, chunks(sizes, needed), {int(row[0]) for row in rows})
         return 2
     summary = export_cohort(db.connect_read_only, shadow_dir, chunk)
+    conn = db.connect_read_only()
+    try:
+        record["crossing_pairs"] = crossing_pairs(
+            conn, (int(m["listing_id"]) for m in movers if m.get("listing_id") is not None),
+            _cohort_ids(shadow_dir / "base" / ARTIFACT_NAME))
+    finally:
+        conn.close()
     (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),
                                          encoding="utf-8")
     print(json.dumps(summary, indent=1, sort_keys=True))

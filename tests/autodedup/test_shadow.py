@@ -49,6 +49,12 @@ FAR = {"listing_id": DUP_B, "obec_kod": PRAHA, "obec_name": "Praha", "cast_obce_
        "ruian_adm_kod": None, "country_status": "cz"}
 
 
+@pytest.fixture(autouse=True)
+def _no_artifact_after_a_stubbed_export(monkeypatch):
+    """The export is stubbed across this file, so no artifact exists for the crossing read to open."""
+    monkeypatch.setattr(shadow, "_cohort_ids", lambda path: set())
+
+
 def _jsonl(path: Path, rows: list[dict[str, Any]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -729,3 +735,92 @@ def test_a_refused_scoping_run_prints_the_groups_and_the_sample(monkeypatch, tmp
     assert "[shadow] group 1/2: 1 movers, 1 rental; sources idnes=1; part-gaining -" in out
     assert "[shadow] group 2/2: 1 movers, 0 rental; sources ceskereality=1; part-gaining ceskereality=1" in out
     assert "[shadow] gate sample: stage 1 [2, 1]; stage 2 [] of the 0 remaining; covers 2 of 2 movers" in out
+
+
+def test_the_door_log_names_the_pieces_first_and_last_block_and_their_count(tmp_path: Path):
+    """Coverage is confirmed from the log: a split piece prints the span of block keys it judged."""
+    (tmp_path / "w").mkdir()
+    (tmp_path / "w" / shadow.GROUP_FILE).write_text(json.dumps(
+        {"group": "2/9", "blocks": ["town:531057", "town:577626", "town:584"]}), encoding="utf-8")
+    _, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
+    assert verdict["door"]["piece"] == {"first": "town:531057", "last": "town:584", "blocks": 3}
+    assert "  piece town:531057 .. town:584, 3 blocks" in printed
+
+
+def test_the_door_log_shortens_an_ids_block_to_its_key():
+    assert shadow.piece_span({"blocks": ["ids:1+2+3", "town:7"]}) == {"first": "ids", "last": "town:7", "blocks": 2}
+    assert shadow.piece_span({}) == {"first": None, "last": None, "blocks": 0}
+
+
+# ------------------------------------------------------------------ crossing pairs and a piece's state
+
+
+_REAL_COHORT_IDS = shadow._cohort_ids
+
+
+def test_crossing_pairs_are_the_stored_pairs_a_mover_holds_outside_the_cohort():
+    """Read off the live store by the piece's mover ids, both index arms; a pair inside the cohort is judged, so it
+    does not count, and a mover outside the cohort is another piece's."""
+    conn = _Conn([(1, 900, "merge"), (1, 901, "band"), (2, 902, "band"), (800, 1, "reject"), (1, 3, "merge")])
+    out = shadow.crossing_pairs(conn, [1, 2, 7], {1, 2, 3})
+    assert out == {"movers": 2, "pairs": 4, "by_zone": {"merge": 1, "band": 2, "reject": 1}}
+    sql, params, in_transaction = conn.executed[-1]
+    assert in_transaction and sorted(params["ids"]) == [1, 2], "bounded by the movers in this cohort"
+    flat = " ".join(sql.split()).lower()
+    assert "p.listing_lo = any(%(ids)s::bigint[])" in flat and "p.listing_hi = any(%(ids)s::bigint[])" in flat
+    idle = _Conn([])
+    assert shadow.crossing_pairs(idle, [7], {1}) == {"movers": 0, "pairs": 0,
+                                                     "by_zone": {"merge": 0, "band": 0, "reject": 0}}
+    assert not idle.executed, "no mover in the cohort, no read"
+
+
+def test_the_gate_reports_what_step_two_read_and_when_the_run_started(tmp_path: Path):
+    (tmp_path / "w").mkdir()
+    crossing = {"movers": 2, "pairs": 5, "by_zone": {"merge": 1, "band": 3, "reject": 1}}
+    (tmp_path / "w" / shadow.GROUP_FILE).write_text(json.dumps(
+        {"group": "2/9", "blocks": ["town:531057"], "crossing_pairs": crossing,
+         "started_at": "2026-11-03T08:00:00+00:00"}), encoding="utf-8")
+    _, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
+    assert verdict["state"] == "judged" and verdict["started_at"] == "2026-11-03T08:00:00+00:00"
+    assert verdict["door"]["crossing_pairs"] == crossing
+    assert "crossing pairs 2 movers, 5 pairs (merge 1, band 3, reject 1)" in printed
+    assert "started 2026-11-03T08:00:00+00:00" in printed
+
+
+def test_a_gate_with_no_crossing_read_says_so_rather_than_zero(tmp_path: Path):
+    _, verdict, printed = _shadow(tmp_path, [FAR], [_same(DUP_A, DUP_B)])
+    assert verdict["door"]["crossing_pairs"] is None and "crossing pairs not read" in printed
+    assert verdict["started_at"]
+
+
+def test_a_piece_with_no_ruling_writes_a_marked_zero_a_failed_piece_never_has(monkeypatch, tmp_path: Path):
+    """Step 3 is skipped when nothing is exported, so step 2 writes the piece's result: a failed piece has no
+    `shadow.json` at all."""
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [{"listing_id": 1, "old": {"obec_kod": 1}, "new": {"obec_kod": 1}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([]))
+    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {b: 10 for b in blocks})
+    monkeypatch.setattr(shadow, "ruled_blocks", lambda conn: set())
+    monkeypatch.setattr(shadow, "export_cohort", lambda *a, **k: pytest.fail("exported nothing to export"))
+    assert shadow.main([str(tmp_path)]) == 0
+    verdict = json.loads((tmp_path / "judge" / shadow.SHADOW_FILE).read_text(encoding="utf-8"))
+    assert verdict["state"] == "nothing_exported" and verdict["pass"] is None and verdict["started_at"]
+    assert verdict["door"]["crossing_pairs"] == {
+        "movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0}, "zero": "no_ruling_in_blocks"}
+    assert verdict["door"]["piece"]["blocks"] == 0
+
+
+def test_an_exported_piece_records_its_crossing_pairs_and_start_for_the_gate(monkeypatch, tmp_path: Path):
+    _jsonl(tmp_path / shadow.MOVERS_FILE, [
+        {"listing_id": 1, "source": "idnes", "old": {"obec_kod": 2}, "new": {"obec_kod": 2}}])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([(1, 900, "band")]))
+    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {b: 10 for b in blocks})
+    monkeypatch.setattr(shadow, "export_cohort", lambda *a, **k: {})
+    monkeypatch.setattr(shadow, "_cohort_ids", lambda path: {1})
+    assert shadow.main([str(tmp_path), "--all-blocks"]) == 0
+    group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
+    assert group["crossing_pairs"] == {"movers": 1, "pairs": 1, "by_zone": {"merge": 0, "band": 1, "reject": 0}}
+    assert group["started_at"]
+
+
+def test_the_cohort_ids_are_the_artifacts_listings(tmp_path: Path):
+    assert _REAL_COHORT_IDS(_cohort(tmp_path / "c.jsonl.gz")) >= {DUP_A, DUP_B, TWIN_A}
