@@ -440,16 +440,10 @@ _LEASE_TTL_S = _LOCK_STALE_MIN * 60
 # Both describe the row only, for whichever writer creates it first.
 _LEASE_CADENCE = "30 seconds"
 _LEASE_RUNNER = "railway-realtime-worker"
-# The cutover (#2108): code from before this lease moved takes only the row of migration 192, so this code takes
-# that row FIRST and then the new one, each waiting up to its own bound, and gives them back in reverse, so the two
-# cannot deadlock. `_try_acquire_lock`, `_acquire_lock_blocking`, `_heartbeat_lock`, `_release_lock*` and
-# `_LOCK_POLL_SECONDS` go in #2273, once gate #2111 passes.
-_LOCK_POLL_SECONDS = 10
 # > the stale window, so the full sweep always outwaits a dead holder rather than
 # aborting RED with no work done. Raised with _LOCK_STALE_MIN — the two are one
-# decision. Each row waits up to this bound in turn. The attribution budget
-# (--max-seconds) is anchored at process start, so a long wait eats attribution time
-# rather than extending the job.
+# decision. The attribution budget (--max-seconds) is anchored at process start,
+# so a long wait eats attribution time rather than extending the job.
 _LOCK_WAIT_MAX_SECONDS = 1260
 
 # Minimum share of the full sweep's wall-clock budget reserved for the firm-link
@@ -460,94 +454,11 @@ _LOCK_WAIT_MAX_SECONDS = 1260
 _FIRM_LINK_MIN_SECONDS = 300
 
 
-def _try_acquire_lock(conn: Any, holder: str, mode: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE broker_resolution_lock SET holder=%(h)s, mode=%(m)s, acquired_at=now(), "
-            "heartbeat_at=now() WHERE id=1 AND (holder IS NULL OR "
-            "heartbeat_at < now() - make_interval(mins => %(stale)s))",
-            {"h": holder, "m": mode, "stale": _LOCK_STALE_MIN})
-        return cur.rowcount == 1
-
-
-def _acquire_lock_blocking(conn: Any, holder: str, mode: str, deadline_s: float) -> bool:
-    while not _try_acquire_lock(conn, holder, mode):
-        if time.monotonic() > deadline_s:
-            return False
-        time.sleep(_LOCK_POLL_SECONDS)
-    return True
-
-
-def _heartbeat_lock(conn: Any, holder: str) -> None:
-    """Refresh our own lock row, pushing the staleness window out one TTL.
-
-    Raises when the holder-guarded CAS misses ZERO rows: that means our heartbeat
-    went stale and another run took the lock over, so continuing would resolve
-    concurrently against a holder that thinks it is alone. Fail loud instead —
-    RuntimeError is not an OperationalError, so db.run_resilient re-raises it
-    immediately rather than replaying into the race, and _release_lock's own CAS
-    guard stops us clearing the new holder's lock on the way out.
-    """
-    with conn.cursor() as cur:
-        cur.execute("UPDATE broker_resolution_lock SET heartbeat_at=now() WHERE id=1 AND holder=%(h)s",
-                    {"h": holder})
-        if cur.rowcount != 1:
-            raise RuntimeError(
-                "broker resolution lock lost mid-run (heartbeat went stale and another "
-                "run re-claimed it) — aborting rather than resolving concurrently")
-
-
-def _release_lock_cas(conn: Any, holder: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute("UPDATE broker_resolution_lock SET holder=NULL WHERE id=1 AND holder=%(h)s",
-                    {"h": holder})
-
-
-def _release_lock(conn: Any, holder: str,
-                  reconnect: Callable[[], Any] | None = None) -> None:
-    """Best-effort release, with ONE reconnect fallback. The caller runs this from a
-    `finally:`, so a raise here replaces the real failure with a crash-during-cleanup
-    (2026-08-10 23:10: an SSL drop mid-rollup surfaced as `the connection is closed`
-    raised by THIS function's cursor open, burying the original error). Correctness
-    never depended on the release landing — the CAS guard plus the lock's staleness
-    TTL are what make takeover safe.
-
-    The fallback exists because the handle the lease holds can be a DEAD socket even
-    when the process still has a healthy path to the DB: it is the connection the lease
-    was taken on, which run_resilient closed if a phase reconnected. One fresh connection, one holder-guarded CAS, close it again — the
-    CAS makes the release safe from any connection."""
-    exc: BaseException | None = None
-    try:
-        _release_lock_cas(conn, holder)
-        return
-    except Exception as e:  # noqa: BLE001 - best-effort; the staleness TTL is the real guarantee
-        exc = e
-    if reconnect is not None:
-        fresh: Any = None
-        try:
-            fresh = reconnect()
-            _release_lock_cas(fresh, holder)
-            return
-        except Exception as e:  # noqa: BLE001 - still best-effort
-            exc = e
-        finally:
-            if fresh is not None:
-                try:
-                    fresh.close()
-                except Exception:  # noqa: BLE001
-                    pass
-    # exc_info=exc, not True: we are outside the except block here, so sys.exc_info()
-    # would be empty and the traceback lost — which is the whole complaint.
-    LOG.warning("RESOLVE: lock release failed (holder=%s) — self-heals via the %d-min "
-                "staleness TTL", holder, _LOCK_STALE_MIN, exc_info=exc)
-
-
 def _renew_lock(conn: Any, hold: job_lease.Hold) -> None:
-    """Renews both rows between transactions; a lost lease raises an error run_resilient does not replay."""
+    """Renews the lease between transactions; a lost lease raises an error run_resilient does not replay."""
     if not job_lease.renew(conn, hold):
         raise job_lease.LeaseLost("broker resolution lease lost mid-run (it lapsed or another run took it) — "
                                   "aborting rather than resolving concurrently")
-    _heartbeat_lock(conn, hold.holder)
 
 
 def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
@@ -562,21 +473,10 @@ def _resolution_lease(
     reconnect: Callable[[], Any] = db.connect,
 ) -> Iterator[job_lease.Hold | None]:
     """Yields this run's hold on the resolution lease, or None when another run holds it (past `wait_s`) or it is
-    paused. The cutover row comes first and goes last."""
-    holder = f"{mode}:{job_lease.holder_id()}"
-    if wait_s:
-        acquired = _acquire_lock_blocking(conn, holder, mode, time.monotonic() + wait_s)
-    else:
-        acquired = _try_acquire_lock(conn, holder, mode)
-    if not acquired:
-        yield None
-        return
-    try:
-        with job_lease.held(conn, BROKER_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
-                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s, connect=reconnect) as hold:
-            yield hold
-    finally:
-        _release_lock(conn, holder, reconnect)
+    paused."""
+    with job_lease.held(conn, BROKER_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER, ttl_s=_LEASE_TTL_S,
+                        holder=f"{mode}:{job_lease.holder_id()}", wait_s=wait_s, connect=reconnect) as hold:
+        yield hold
 
 
 def _attribute(conn: Any, sel: str, params: dict[str, Any], hold: job_lease.Hold | None = None) -> None:
