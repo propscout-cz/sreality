@@ -1624,7 +1624,7 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
             in " ".join(MIGRATION_561.read_text().split()))
     # Both notification producers read the one canonical-ad fragment (notifications W2a).
     assert "ps.scraped_at > p.repr_since" in nf._CANONICAL_PRICE_STEPS
-    assert nf._MONITOR_PRICE_SQL.startswith(f"WITH {nf._CANONICAL_PRICE_STEPS}")
+    assert f"{nf._CANONICAL_PRICE_STEPS} INSERT" in nf._MONITOR_PRICE_SQL
 
 
 def test_a_property_with_no_ads_is_reset_to_no_ads_once():
