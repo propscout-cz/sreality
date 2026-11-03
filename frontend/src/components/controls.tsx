@@ -294,6 +294,7 @@ export function PickButton({
   negative = false,
   className = '',
   ariaLabel,
+  title,
   disabled = false,
 }: {
   on: boolean;
@@ -303,6 +304,7 @@ export function PickButton({
   negative?: boolean;
   className?: string;
   ariaLabel?: string;
+  title?: string;
   disabled?: boolean;
 }) {
   const onClasses = negative
@@ -325,6 +327,7 @@ export function PickButton({
       disabled={disabled}
       aria-pressed={on}
       aria-label={ariaLabel}
+      title={title}
       className={[
         'px-2 py-1.5 text-xs rounded-[var(--radius-sm)] border transition-colors',
         disabled ? disabledClasses : on ? onClasses : offClasses,

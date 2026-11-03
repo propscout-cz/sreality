@@ -21,12 +21,15 @@ import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation } from '@tanstack/react-query';
 import { ApiError, createWatchdogSubscription } from '@/lib/api';
+import { DEFAULT_NOTIFY_KINDS } from '@/lib/changeKinds';
 import {
   filtersToWatchdogSpec,
   watchdogNameSuggestion,
   type ListingFilters,
 } from '@/lib/filters';
 import Dialog from '@/components/Dialog';
+import NotifyKindsPicker from '@/components/NotifyKindsPicker';
+import type { WatchdogKind } from '@/lib/types';
 
 export const MAP_AREA_LABEL = 'Include the current map area in this watchdog';
 
@@ -39,8 +42,10 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
   const navigate = useNavigate();
   const [name, setName] = useState(() => watchdogNameSuggestion(filters));
   const [withMapArea, setWithMapArea] = useState(true);
+  const [kinds, setKinds] = useState<WatchdogKind[]>(DEFAULT_NOTIFY_KINDS);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
+  const kindsId = useId();
 
   /* The viewport box is offered; a circle always rides along (filtersToWatchdogSpec). */
   const offersMapArea = filters.bounds != null;
@@ -62,6 +67,7 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
         name: watchdogName,
         filter_spec: spec,
         is_active: true,
+        notify_kinds: kinds,
       }),
     onSuccess: () => {
       navigate(ROUTES.watchdog.build());
@@ -69,9 +75,9 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
   });
 
   const trimmed = name.trim();
+  const canCreate = trimmed.length > 0 && kinds.length > 0 && !createMut.isPending;
   const submit = () => {
-    if (trimmed.length === 0 || createMut.isPending) return;
-    createMut.mutate(trimmed);
+    if (canCreate) createMut.mutate(trimmed);
   };
 
   const errMsg =
@@ -98,8 +104,8 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
         Save these filters as a watchdog
       </h2>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-        You'll get a notification the moment a freshly scraped listing matches
-        this filter set.
+        You'll be notified about the properties these filters match, for the
+        events you pick.
       </p>
 
       <label className="mt-4 block">
@@ -118,6 +124,16 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
           className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink)] focus-visible:border-[var(--color-copper)]"
         />
       </label>
+
+      <div className="mt-3">
+        <span
+          id={kindsId}
+          className="block mb-1 text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]"
+        >
+          Notify me about
+        </span>
+        <NotifyKindsPicker value={kinds} onChange={setKinds} labelledBy={kindsId} />
+      </div>
 
       {offersMapArea ? (
         <button
@@ -148,8 +164,8 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
             <span className="text-[var(--color-ink)]">
               {unsupported.join(', ')}
             </span>
-            . A watchdog fires on brand-new listings, so date / status filters
-            don't apply.
+            . A watchdog tells you what happens from now on, so date / status
+            filters don't apply.
           </p>
         </div>
       ) : null}
@@ -169,7 +185,7 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
         <button
           type="button"
           onClick={submit}
-          disabled={trimmed.length === 0 || createMut.isPending}
+          disabled={!canCreate}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
           {createMut.isPending ? 'Creating…' : 'Create watchdog'}

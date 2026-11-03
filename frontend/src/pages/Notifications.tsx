@@ -41,11 +41,11 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
+import { CHANGE_META } from '@/lib/changeKinds';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
-  DispatchChangeKind,
   NotificationSourceKind,
   WatchdogDispatch,
   WatchdogSeenFilter,
@@ -58,20 +58,6 @@ const noop = () => {};
 
 /* dispatchTarget's answer for a row with nothing to open: the feed itself. */
 const FEED = ROUTES.notifications.build();
-
-/* change_kind → label + the colour of its leading dot (only design tokens that
- * are known to exist; the chip itself stays neutral). */
-const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = {
-  new:               { label: 'New match',         dot: 'var(--color-copper)' },
-  price_drop:        { label: 'Price drop',        dot: 'var(--color-sage)' },
-  price_rise:        { label: 'Price rise',        dot: 'var(--color-brick)' },
-  inactive:          { label: 'Delisted',          dot: 'var(--color-ink-4)' },
-  reactivated:       { label: 'Relisted',          dot: 'var(--color-copper)' },
-  new_source:        { label: 'New source',        dot: 'var(--color-copper)' },
-  shared_collection: { label: 'Shared collection', dot: 'var(--color-ink-3)' },
-  shared_dashboard:  { label: 'Shared dashboard',  dot: 'var(--color-ink-3)' },
-  shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
-};
 
 /* The two filters each pick one: the one joined bar (SegmentedBar), in the phone
  * tone inside the phone frame (chosen = ink on the inset well, never copper). */

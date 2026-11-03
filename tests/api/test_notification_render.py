@@ -33,7 +33,7 @@ def test_every_check_value_has_one_label_and_every_label_one_value() -> None:
 
 
 def test_the_bells_english_map_has_the_same_keys() -> None:
-    src = (REPO / "frontend" / "src" / "pages" / "Notifications.tsx").read_text(encoding="utf-8")
+    src = (REPO / "frontend" / "src" / "lib" / "changeKinds.ts").read_text(encoding="utf-8")
     block = src.split("const CHANGE_META", 1)[1].split("};", 1)[0]
     assert set(re.findall(r"^\s*(\w+):\s*\{\s*label:", block, re.MULTILINE)) == set(nr.TITLES)
 

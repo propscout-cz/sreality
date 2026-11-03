@@ -1071,6 +1071,8 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /* The property events this watchdog tells, once each in WATCHDOG_KINDS order (migration 720). */
+  notify_kinds: WatchdogKind[];
   dispatch_count: number;
 }
 
@@ -1153,6 +1155,12 @@ export type DispatchChangeKind =
   | 'shared_collection'
   | 'shared_dashboard'
   | 'shared_pipeline';
+
+/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
+export type WatchdogKind = Extract<
+  DispatchChangeKind,
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
 
 export interface WatchdogDispatch {
   id: string;
