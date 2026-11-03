@@ -152,14 +152,12 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
   typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
-- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops, bar a
-  stamp: a known file that `rent_map_cells` serves stamps it current with no refresh, so a quiet
-  month never reads on Health as a dead job, #2318) +
+- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE) +
   `rent_map_values` + `rent_map_adjustments` (migration 132, history kept).
   `api.rent_map.insert_revision` parses (stdlib `zipfile`+`xml.etree`), COPYs, re-renders the
   map's choropleth (reference overlay `rent_map`, VK1–4 variants; a refused guard keeps the revision
-  and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; every caller of the
-  measure sees the new revision at that REFRESH, nothing to recompute. Fed by the monthly
+  and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; readers see the
+  new revision at that REFRESH. A re-fetch of the served file only stamps it (#2318). Fed by the monthly
   `rent_map` runner job (it re-renders `rent_map` last) and the Settings upload / "Fetch latest
   now" (`POST /admin/rent-map/*`). Sheet sanity check:
   Litoměřice older 3+1, 68 m², +výtah +balkon +garáž → 291 Kč/m² → 19 788 Kč.
