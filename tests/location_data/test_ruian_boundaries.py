@@ -3,12 +3,16 @@ carry-forward, and the completeness read that gates publish."""
 
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 import psycopg
 import pytest
+import shapefile
 
 from location_data import ruian_boundaries as rb
+from location_data import ruian_load
 
 
 def _feature(level: str, code: int) -> rb.BoundaryFeature:
@@ -42,18 +46,66 @@ def test_every_layer_is_a_distinct_mirror_level():
     assert len(levels) == len(set(levels))
     assert set(rb.COMPLETE_LEVELS) <= set(levels)
     # the state polygon is the resolver's in-CZ test at the pinned version
-    assert set(rb.COMPLETE_LEVELS) == {"stat", "obec", "katastralni_uzemi"}
+    assert set(rb.COMPLETE_LEVELS) == {"stat", "okres", "obec", "katastralni_uzemi"}
 
 
-def test_the_office_layers_are_not_spravni_obvod():
-    """STU_P (stavební úřady, keyed by an office ID) and PRARES_P (katastrální pracoviště)
-    are not správní obvody. Mapped to that level they wrote an office polygon onto every
-    Praha správní obvod sharing its number — 51, 60, 78 and 205, the last renamed
-    "Kutná Hora" — and 731 `skipped_no_unit`. The pack has no správní obvod layer."""
-    tokens = {layer.token for layer in rb.LAYERS}
-    assert not tokens & {"STU_P", "PRARES_P", "VO_P", "ZSJ_P"}
-    assert "spravni_obvod" not in {layer.level for layer in rb.LAYERS}
-    assert "spravni_obvod" not in rb.COMPLETE_LEVELS
+def test_every_layer_loads_a_level_the_loader_stages():
+    """A layer whose level the loader does not stage would only count `skipped_no_unit` (W7's
+    rule: levels loaded = levels bound, served or used as match keys)."""
+    assert {layer.level for layer in rb.LAYERS} <= set(ruian_load.LEVEL_ORDER)
+
+
+def _dbf(fields: dict[str, list[object]]) -> bytes:
+    """One attribute table: a numeric field per column, one record per row."""
+    out = io.BytesIO()
+    writer = shapefile.Writer(dbf=out)
+    for name in fields:
+        writer.field(name, "N", 10, 0)
+    for values in zip(*fields.values(), strict=True):
+        writer.record(*values)
+    writer.close()
+    return out.getvalue()
+
+
+def _okres_pack(path: Path, obce: dict[str, list[object]], okresy: list[object]) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("1/OBCE_P.dbf", _dbf(obce))
+        zf.writestr("1/OKRESY_P.dbf", _dbf({"KOD": okresy}))
+    return path
+
+
+def test_the_pack_gives_every_obec_its_okres_and_praha_the_technical_one(tmp_path: Path):
+    pack = _okres_pack(
+        tmp_path / "1.zip",
+        {"KOD": [554782, 563889, 500011], "OKRES_KOD": [9999, 3505, None]},
+        [9999, 3505],
+    )
+    got = rb.pack_okres(pack)
+    assert got.obec == {554782: 9999, 563889: 3505}  # a blank okres is absent, for the assertion
+    assert got.okresy == {9999, 3505}
+
+
+def test_a_pack_without_the_okres_field_stops_the_load(tmp_path: Path):
+    pack = _okres_pack(tmp_path / "1.zip", {"KOD": [554782], "VUSC_KOD": [19]}, [9999])
+    with pytest.raises(rb.BoundarySchemaError, match="OKRES_KOD"):
+        rb.pack_okres(pack)
+
+
+def test_a_pack_without_the_layer_stops_the_load(tmp_path: Path):
+    path = tmp_path / "1.zip"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("1/OKRESY_P.dbf", _dbf({"KOD": [9999]}))
+    with pytest.raises(rb.BoundarySchemaError, match="OBCE_P"):
+        rb.pack_okres(path)
+
+
+def test_the_dry_run_proves_the_okres_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    pack = _okres_pack(tmp_path / "1.zip", {"KOD": [554782], "VUSC_KOD": [19]}, [9999])
+    monkeypatch.setattr(rb, "_extract", lambda _: tmp_path)
+    monkeypatch.setattr(rb, "read_layer", lambda _, __: ([], []))
+    monkeypatch.setattr(rb, "assert_feature_counts", lambda *_: None)
+    with pytest.raises(rb.BoundarySchemaError, match="OKRES_KOD"):
+        rb.dry_run(pack)
 
 
 def test_render_tolerances_are_finer_for_smaller_units():
@@ -174,7 +226,7 @@ class _Conn:
 def test_a_changed_unit_is_derived_three_geometries_and_nothing_else():
     """No carry source (a new unit, or a boundary that moved): authoritative, render and
     pip are derived. No DELETE — a unit only gets here with nothing committed for this
-    version — and no `has_polygon` write (the column goes; nothing read it)."""
+    version."""
     conn = _Conn(7)  # unit_id_for -> 7; the carry probe finds nothing equal
     layer = next(x for x in rb.LAYERS if x.token == "OBCE_P")
     how, upgraded = rb.load_feature(conn, _feature("obec", 554782), layer, 3)
@@ -182,7 +234,6 @@ def test_a_changed_unit_is_derived_three_geometries_and_nothing_else():
     statements = conn.statements()
     assert sum("INSERT INTO ruian_admin_unit_geometries" in s for s in statements) == 3
     assert not any(s.startswith("DELETE") for s in statements)
-    assert not any("has_polygon" in s for s in statements)
 
 
 def test_an_unchanged_unit_carries_its_authoritative_row_and_recuts_the_rest():
@@ -437,7 +488,7 @@ def test_missing_geometry_binds_the_complete_levels_and_shapes_its_answer():
     conn = _Conn(rows=[("katastralni_uzemi", 2, [600016, 600024])])
     assert rb.missing_geometry(conn, 3) == [("katastralni_uzemi", 2, [600016, 600024])]
     _, params = conn.executed[-1]
-    assert params == {"levels": ["stat", "obec", "katastralni_uzemi"], "version_id": 3}
+    assert params == {"levels": ["stat", "okres", "obec", "katastralni_uzemi"], "version_id": 3}
 
 
 def test_pick_field_is_case_insensitive_and_ordered():

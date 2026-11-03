@@ -1,7 +1,7 @@
 # Location data quality programme
 
 **Status: APPROVED 2026-10-31 (operator rulings below). Build runs wave by wave; this file is the as-built record.**
-Tickets: W0 #2210 (gate #2211, PR #2212); v5.9 #2192 (gate #2193, PR #2194). Later waves file their tickets when they start.
+Tickets: W0 #2210 (gate #2211, PR #2212); v5.9 #2192 (gate #2193, PR #2194); W3b #2247. Later waves file their tickets when they start.
 Origin: the operator's follow-up on the location refactoring sprint (2026-10-30), eight read-only investigations, a synthesis and an adversarial review; the plan as reviewed follows, then the rulings that amend it.
 
 ## Rulings 2026-10-31 (amend the plan below; where they differ, the ruling wins)
@@ -25,6 +25,32 @@ Origin: the operator's follow-up on the location refactoring sprint (2026-10-30)
 | Q14 | Order: W0 → W1 → W2 → W7 → W8 → W4 → W3 → W3b → W5 → W5b → W6. | Sequencing. |
 | — | **The legacy `admin_boundaries` table is retired and removed entirely; its eleven consumers are rebuilt on the RÚIAN mirror; cleanup is a deliverable.** It is the same ČÚZK RÚIAN boundary pack loaded in May 2026 by a simpler script, so "pre-mirror RÚIAN table" is the honest name. Only `population` (ČSÚ) and the sreality locality crosswalk were not RÚIAN data. | New wave W8 after W7 (Praha's okres must exist in the mirror first; brokers and the Datasets tree read parents). |
 
+### Rulings of 2026-11-01 and 2026-11-02
+
+These replace any earlier text they contradict. Q numbers restart: they are the questions of that grill, not the table above.
+
+| Date | Ruling | Effect |
+|---|---|---|
+| 11-01 | Hold the 11-01 RÚIAN load; dispatch vintage 2026-10-31 with W7's loader after merge. ORP and POU retire. | W7. Net addition under rule 25 approved. |
+| 11-01 | W5b's net addition under rule 25 approved. W3b's `clear` runs on splits and engine undos, as built. | W5b, W3b. |
+| 11-01 | **Retire the radius.** A pin is exact or it is the centre of the RÚIAN unit we hold, marked inaccurate. This replaces "measured radius" in the north star. | W6 becomes deletion only. Removal order is on #2344. |
+| 11-01 | Street floors at 0.9 are Problem. Drop the audit waterfall, and delete the denominator script. | W1 finish, #2346. |
+| 11-01 | Finished = every gate ticket closed. The session runs migrations itself. W3's REINDEX is a small numbered migration after the body re-walk. W5 goes before W7. | Programme. |
+| 11-01 | Glossary terms: **RÚIAN door**, **Sreality Datasets** (#2345). E111 goes to the engine session (#2344). | Glossary, engine. |
+| 11-02 | **Q8 (a): an ad gets a door from its pin only if it is a flat or a house, its pin is exact and exactly one door lies within 1 m, and its words do not disagree.** "What is certain gets a door." | W5b rebuilt. |
+| 11-02 | **A městská část filters as the set of its části**, through the one code predicate and with no new location field; a část that straddles several counts for each it touches. Still no served MOMC level (Q1). | #2380. |
+| 11-02 | **The translation into RÚIAN is kept and made the standard.** This corrects Q12's "a view, no stored crosswalk" above. RÚIAN is the foundation, and any outside source translates into it. | W8 redesign, below. |
+| 11-02 | Q10a (a): one translation table now (source, the source's own key, RÚIAN level and code, how it was matched, when last confirmed), Sreality Datasets first. Other sources move onto it when next touched. | W8. |
+| 11-02 | Q10b (a): keep today's 6,258 Sreality rows and confirm or add from ads at each fetch. A row stays when ads end, so no town stops updating. | W8. Replaces design default D1. |
+| 11-02 | Q10c (a): names stay the matching tool in `ruian_name_index`, because a name needs context and 1,635 of 6,258 town names are shared. The translation table records each result, whatever matched it. | W8. |
+| 11-02 | Q10d (a): W8's defaults D3 to D8 stand, and the series route becomes `/cities/{obec_id}/series`. | W8. |
+| 11-02 | Q13 (a): this programme's PRs enter the merge queue without a coordinator light, once CI and the gate pass, after telling the engine session about anything it reads. Other PRs keep the rule in `docs/agents/issue-tracker.md`. | Programme. Record: #2254. |
+| 11-02 | Q7: accept the merges W5b loses when a door gains a část and splits a block key. The engine session's next version fixes it so the next dedup pass resolves them. | W5b. Engine fix #2379 rides #2056. |
+| 11-02 | Q2: the pin audit page and its matview go only once the operator has a new, current view of the database's location data quality, which replaces them. That view's line count does not count against rule 25. | W6. |
+| 11-02 | Q3: an ad below address level that stands on a portal pin keeps its pin and reads as approximate. The audit view shows this with enough breakdown to see it. | W6 stays deletion only, plus the view. |
+| 11-02 | Q4: clear the end month on Sreality Datasets 9, 11, 13 and 14 (each was stored as 2026-06 by the creation form). | Done 11-02. |
+| 11-03 | W5b stage 1 (A, via the engine session): accept stage 1's losses (16 pair-level merges of 15,609; at cluster level only the Putimská mill changes, and only as a proposed split). The engine fixes ride #2056. This is not a merge order for #2339, and the Okružní pair 18579817×18734646 stays unjudged. | W5b stage 2 runs. A new loss class goes to the engine session first. |
+
 ### W8: one registry (added 2026-10-31)
 Consumers of `admin_boundaries` and what each takes from the mirror instead: brokers leaderboard and count book (migrations 580, 609: parents and names → `ruian_admin_units` chain); Datasets page and price statistics (obec → okres tree → the chain; sreality locality id → a view over current sreality ads' payload ids and their `listing_location.obec_kod`); sold comparables (`sold_db`, `sold_fetch`: the obec polygon envelope → `ruian_admin_unit_geometries` render geometry); map overlays (kraje outline, rent-map choropleth, migration 601 → render geometry); city proximity and curated city indexes (migrations 636, 674: polygon + population → geometry + `obec_population`); admin pages for CLIP tagging and condition scoring (kraj list → the mirror). `curated_cities.admin_boundary_id` is renamed to the RÚIAN code it already holds.
 
@@ -32,6 +58,8 @@ Consumers of `admin_boundaries` and what each takes from the mirror instead: bro
 
 ### W3b: the address picker (added 2026-10-31)
 On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-matched picker: the place typeahead the chips use, extended to streets and house numbers (address points). The pick is written as one operator claim per current ad of the property (an `address_point_id`, `street_name` or `obec_name` claim with licence `operator`); operator outranks portal under W3's one precedence rule. Later-attached ads resolve from their own words. The Location Quality inspector form and its route are deleted.
+
+**As built 2026-10-31 (#2247; design and measurements: `w3b-address-picker.md`).** No migration, table, view, index, claim type or design token. A pick writes all four picker types (`address_point_id`, `street_name`, `obec_name`, `okres_name`) on every ad, the register's names for the picked level and tombstones for the rest, so a re-pick replaces the operator's statement and "Vrátit údaje z inzerátů" (`pick: null`) is four tombstones per ad. `/maps/resolve` gained the `address_point` flag (one door within 300 m of the pick, else no code). Rulings taken as defaults: R1 = (b), a detach clears the pick on the ads it moved. Named limits: L1 a portal PSČ or kód ADM can defeat a street or obec pick (`held: false`), L2 the portal pin stays evidence, L3 část/okres/kraj picks wait for W5. Deleted: `toolkit/location_quality.py`, `/location/listing/*`, the inspector and correction form, the old submit and its 8-type list. Owed before the merge: about 20 real Mapy address picks on production to confirm the 300 m slack picks one door.
 
 ### W5b: the pin refines within the words (added 2026-10-31)
 After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
@@ -101,9 +129,9 @@ Each wave below replaces several local rules with one rule.
 | W2 | Resolve lane: one order, one trigger, one runtime | dirty_locations (CHECK 8→3, index swap, 13.2k no-op rows a day) | issue 9 | a workflow, a cron, a flag, 3 knobs and a sweep arm out; about 20 lines in | M |
 | W3 | Claim store: one current claim per fact | location_claims 14.77 M → about 5.95 M rows, −1 column, −2 indexes | cascade points; stale values | about −700 lines; 7 tie rules → 0; 4 supersession paths → 2 (the upsert and explicit retract) | L |
 | W4 | realitymix + remax contracts | none | issues 5, 6 | contract changes net negative, 1 regex in | S |
-| W5 | Resolver v5.10: one ladder, one matcher, one grain, one containment test | quarter field holds one level | issues 2, 3; cascade points | about 8 special cases out; about 15 lines plus one registry distance read and one match-key list in | M |
+| W5 | Resolver v5.10: one ladder, one matcher, one grain, one containment test | quarter field holds one level | issues 2, 3; cascade points | 6 special cases out; one match-key list and the shadow's `ids` block in (no distance read, Q3) | M |
 | W6 | Radius v5.11: CE95 for pins, reach for register placements | −declared_radius_m, −match_confidence, −sentinel | issue 4 | hand table and two fields out; generated table, script and one standing recalibration in | M |
-| W7 | RÚIAN loader: full partitions, read levels only | −2 levels, 23,626 units retired, −6 columns | Praha okres, mirror defects | negative | S |
+| W7 | RÚIAN loader: full partitions, read levels only | −4 levels, 24,225 units retired, −6 columns | Praha okres, mirror defects | negative | S |
 
 **Sequencing.**
 - Merge #2194 (v5.9) first, with its hand rollout for the last time.
@@ -111,7 +139,7 @@ Each wave below replaces several local rules with one rule.
 - The RÚIAN vintage is due 11-01 (GH cron '0 10 1 * *', throttled). If it publishes before W2 lands, it also needs today's hand full-resolve.
 - W0 runs beside W1 on the scraper track.
 - W3 and W4 can swap if W3 waits on its destructive gate. W5 depends on W3 only for code overlap in bind.py, so it can go first if W3's gate waits.
-- **Standing gate for W3, W4, W5 and W6:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
+- **Standing gate for W3, W4, W5, W6 and W7:** Praha (town 554782 and its 112 quarter blocks), Pardubice, Liberec and 30 okresy are inside the live autodedup apply scope. Every wave that moves positions or quarter codes therefore runs one shadow autodedup generation before deploy, judged on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold); how: `docs/design/location-quality/wave-shadow.md`. DECISION_MODULES stay untouched.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
@@ -154,13 +182,16 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - **Migration 698**, `location_quality_by_source`: additive, service_role only, `security_invoker`; long shape (cohort, source, metric, class, n, of_n, q50, q90, q95, q100) over the cohorts listing, served, sample and queue. The shared fragments are rendered verbatim and pinned by `tests/location_data/test_location_quality_view_contract.py`: `location_steps`' step flags, `town_missing_sql()` and the new `town_evidence_sql()`, the publication rule, and the containment probe of `resolve_db.CONTAINING_OBEC_SQL`. Every CTE but three scalars and two single-use feeders is `as materialized` (34.8 s inlined, 11.7 s materialized), and every UNION branch carries a literal cohort and no window function, so the gauge's two statements each prune the other's branches. **Apply 698 BEFORE the merge:** the worker reads it with no fallback.
   - **Outside** is strict containment by the pip polygon (ruling Q3), not the 250 m tolerance this section's plan names; asked where CHECK flagged the elected pin.
   - **67 cells**, not about 55, and not all Watch-only (ruling Q7): per portal `town` (unresolved, Problem), `town_withheld` (Watch), `ku` (Problem), `outside` (Problem), `street` and `accuracy`; `served/town`, `served/town_withheld`, `served/outside`, `served/street`; `registry`; `freshness/version` (Watch, Problem on a second reading 6 h on); `freshness/evidence` (Problem past 60 min). Label "Location quality", key kept.
-  - **Open, W1-b:** the per-portal street floors (0.9x the 10-31 share) are unruled, so `street` and `served/street` are Watch only until the operator rules. `accuracy` is Watch only until W6.
+  - **W1-b, ruled 2026-11-01:** `street` and `served/street` go Problem under the per-portal floors (0.9x the 10-31 share). `accuracy` is Watch only until W6.
   - **Day one** (the 10-31 13:09Z export, mid v5.9 sweep): 10 Problem (every portal's `outside` and `served/outside`: 11,568 published properties, bazos 10,459), 6 Watch (ceskereality 26 and mmreality 1 page-withheld, 21 served; bazos and sreality radius cover; the sweep's first version reading), 0 unresolved. `sreality/ku` opens once the sweep reaches 19405830.
 - **As built (2026-10-31, ticket #2218, PR 2; the frontend half, no migration; record: `w1-page-reads-cells.md`):**
   - The Location Quality page reads the `location_town_coverage` row through Health's own `HEALTH_QUERY` (a `select` on the same cache entry), so the two pages show identical numbers by construction and Acknowledge works on both. It draws the measured line, a portal × arm matrix in the gauge's order (no per-key table in TS), the fleet strip, the selected portal's grain and disputed-class bars from the cells' facts, and Health's own `CheckRow`; it holds no threshold.
   - Deleted: `/location/quality/summary` and `/location/quality/source/{source}`, `toolkit/location_quality.py`'s aggregates, the page's overview panels, both browser thresholds and its All sources table, the audit waterfall's reader and panel, the pin-audit summary RPC's reader (matrix, state totals, split) and the `!AUDIT POLOH` nav badge. The audit list stays (until W6); its one number is the exact count of the filtered list.
   - Ledger against the brief's ≈ −765/+130: product code −884/+251 (net −633), tests −449/+224 (net −225). Watch: first-visit JS 328,004 / 330,000 B gzip.
-  - **Next:** migration B (the waterfall table, its producer, the summary function and `refresh_location_pin_audit_mv()` dropped, the cron re-pointed) follows ruling W1-c; it is destructive and awaits the operator's yes. Apply it only after PR 2's frontend is deployed.
+- **As built (2026-11-01, ticket #2218, W1 finish; rulings W1-b, W1-c, W1-d):**
+  - Street floors are red, as above.
+  - **Migration 719** (W1-c, destructive): `location_audit_waterfall`, its producer, `location_pin_audit_summary()` and `refresh_location_pin_audit_mv()` dropped, the cron re-pointed at `refresh_matview`, the artifact row gone. `location_pin_audit_mv` stays until W6. `location_steps.AUDIT_STEPS`, the `hidden` wording entry and the `deduction` row kind left with it.
+  - **W1-d:** `scripts/location_archive_denominator.py` and its test deleted; nothing called it.
 
 ### W2: one queue discipline, one trigger, one runtime
 - **Queue order:** the drain claims by `(reason = 'full_sweep'), enqueued_at, listing_id`, so fresh evidence always beats backfill. The sweep enqueues active ads first. The EXPLAIN rail must show that the new index still serves the `next_eligible_at <= now()` filter.
@@ -212,30 +243,35 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **As built 2026-10-31 (PR #2220, ticket #2219, gate #2222; contract only, no migration, no resolver bump):** realitymix@8's `rm.det.agency_est_flag` reads `div#map` alone (3,622 of the 3,656 rows declared today had both nodes blank; verified on 112 pages: fires on exactly the 46 hidden ones, moves no pin). The dead C6 `odbl` licence branch is deleted (−145/+120 outside fixtures). **remax v7 is NOT built: ruling Q8 (the header slot is not read).** Acceptance corrected to ≤ 110 outside (68 undeclared agency pins and 6 placeholders stay until W5), 0 declared outside, 0 off-grid declared, declared pinned rows inside 7.4k–19,527. Merge order: after W2 is live; rollout = `gh workflow run location_claims_intake.yml --ref main` by hand (~102k bodies, ~1 h); rollback entry-scoped (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never whole-version. The standing shadow gate runs through #2225 (wave shadow) before the re-mine.
 
 ### W5: resolver v5.10
-- **Quarter = část obce only.** MOMC, správní obvod and ZSJ stop being levels a row can be bound to.
-  - MOMC stays a match-key level that anchors its town. 1,432 remax listings (review) state their town as "Praha N", a MOMC name, and bind obec Praha only through it.
-  - So there are two lists: bindable part levels (část) and match-key levels (část, MOMC).
-  - Part claims use the town ladder's finest-first matcher.
-- **Grain = grain_of(keys).** CHECK stops writing grain.
-- **Street quarter:** a street keeps the claimed část when the street has doors there (+12,441 rows).
-- **Position:** one containment test for every pin, with the 250 m tolerance. CHECK no longer flags `pin_outside_obec` within that tolerance. The test needs one new registry read (distance to the bound obec) in the registry view, the SQL, the CI mini mirror and the drain's pre-answer.
-- **Determinism:** `ORDER BY u.code` makes the containing-obec query deterministic.
-- **KÚ fix:** the door rule answers the KÚ for an address point that has no coordinates.
-- **Consumers:**
-  - Labels lose "Praha 5, " or "Brno-střed, " on about 960 rows, in Browse and in the extension header.
-  - The location ad can change on properties whose ads change grain.
-  - Autodedup's split-city rule keeps an ad with a known quarter inside that quarter, so its candidates change for about 6k Praha rows that gain a quarter and about 2.1k MOMC-coded rows. The standing shadow gate applies.
-- **Acceptance:**
+**As built** (#2251; design and measurements: `w5-resolver-v5-10.md`). `RESOLVER_VERSION = "resolver:v5.10"`; W2's reconcile sweeps on deploy, no migration, no hand step.
+- **Position (Q3, one truth):** `bind.place`'s `may_place`. Where the words bound the row, a pin is its position only inside the bound obec's pip polygon (strict: no tolerance, so no registry distance read) and never when the portal declares an area marker (`AREA_MARKER_LABELS`: the `approximate_location` bazos already emits on all 52,185 active pins, so no contract bump). Without words (R7/R8) the pin names its town. v5.9's declared-blurred exception is deleted; CHECK keeps `pin_outside_obec` as evidence and loses its coarsening.
+- **Grain = `grade.grain_of(keys)`**, the one writer (`grade()`, `Grade`, `Binding.granularity`, `Verdict.granularity` and `coarser_of` deleted).
+- **Quarter = část obce only (Q1):** `MATCH_LEVELS = ("cast_obce", "momc")` and `composite.part_of` (a část itself, a KÚ the část its name spells, a MOMC nothing). MOMC stays a match key: the 1,607 remax "Praha N" rows still bind Praha. Správní obvod and ZSJ are no level. Part claims match like town names; a street keeps the claimed část when it has doors there (Q2).
+- **KÚ fix:** an address point with no coordinates takes its část's door KÚ (19405830).
+- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border).
+- **Shadow:** the `ids` export block is built, so the about 5.4k Praha rows that gain a quarter are judged; dispatch per slice (`wave-shadow.md`).
+- **Consumers:** labels lose "Praha 5, " on about 935 rows and 1,899 gain their část; the location ad can change where an ad's grain changes; the bazos map "±" grows to the town's reach.
+- **Acceptance** (before: 2026-10-31 16Z):
 
 | Measure | Before | After |
 |---|---|---|
-| Grain differs from keys | about 745 after v5.9 | 0 |
-| Street rows without a část | 18,832 | ≤ 6,400 |
-| MOMC codes in cast_obce_kod | 2,855 | 0 |
+| `listing/{p}/outside` (strict, Q3) | 1,359 | register slivers only: bazos ≤ 6, ceskereality ≤ 3, bezrealitky ≤ 1 |
+| `served/{p}/outside` | 1,105 | the same residual |
+| Position is a pin outside the bound obec | 1,353 | 0 |
+| bazos words-bound rows on their pin | 23,297 | 0 |
+| Grain differs from the finest key | 736 | 0 |
+| MOMC codes in `cast_obce_kod` | 2,834 | 0 |
 | Wrong-MČ rows | 518 | 0 |
-| Outside cell (tolerant test) | about 1,342 non-bazos after v5.9 | 0 |
-| Praha with no quarter | 9,339 | ≤ 4,800 |
-| location_town_coverage | as before | no redder; the 1,432 remax "Praha N" rows still bind Praha by name |
+| Quarter grain with no část code (SO ties) | 200 | 0 |
+| Street rows without a část | 18,724 | ≤ 6,400 |
+| Praha with no quarter | 9,308 | ≤ 4,800 |
+| remax "Praha N" bound to Praha | 1,607 | 1,607 (about 1,600 with a část) |
+| `sreality/ku` | 1 | 0 |
+| `location_town_coverage` | W1 reading | no redder |
+| `disputed/pin_outside_obec` | design §0 | about the same (evidence stays) |
+| Shadow gate | — | PASS on every slice |
+
+Residual, named: about 10 register-point slivers (not pins) and about 300 ceskereality ads with only a pin (R7: the pin names the town, the words cannot judge it).
 
 ### W6: one honest radius (v5.11)
 Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos, 100 % for remax.
@@ -256,9 +292,10 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 - **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
 
 ### W7: registry
-- **Praha's okres:** obec Praha and ORP 19 take okres 9999 from ČÚZK's own SHP pack. A load assertion guards the value; reading each obec's okres from OBCE_P would remove the constant altogether.
-- **Retired:** the conflated obvod/správní-obvod level (including a Praha unit named "Kutná Hora"), 23,604 ZSJ units that can never bind, 6 unread columns, and the contradictory CI Praha trees.
-- **Rollout:** rides the next vintage load (the 11-01 vintage if W7 is ready, else 12-01 or a dispatch), and W2 sweeps the corpus by itself.
+- **Praha's okres:** obec Praha takes okres 9999 from ČÚZK's own SHP pack, as every obec takes its okres from OBCE_P: no constant, and a blocking load assertion.
+- **Retired:** the conflated obvod/správní-obvod level (including a Praha unit named "Kutná Hora"), 23,604 ZSJ units that can never bind, ORP and POU (ruling 2026-11-01), 3 relations, 6 unread columns, and the contradictory CI Praha trees.
+- **Rollout:** ruling 2026-11-01: the 11-01 load was held, and vintage 2026-10-31 is dispatched after the merge and the migration, once no full sweep is queued; W2 then sweeps the corpus by itself.
+- **As built (2026-11-01, ticket #2342, migration 718; design and rollout: `w7-registry.md`):** the loader staged 12 levels and now stages 8; `pack_okres` + `okres_partition` + the okres completeness gate; ORP_P and POU_P out of the load; the first production SCD-2 close is driven end to end by `test_registry_reparent_live.py`. Destructive under Q13: backup, deploy, then migration, then the load. W5 merged first, so W7 moves no resolver answer; its shadow expects 0 movers once W5's sweep has drained (`w7-registry.md`).
 - **Acceptance:** 0 active Praha rows with okres NULL (from 50,766), and a Praha cell in okres pivots.
 
 ## Unification
@@ -288,7 +325,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 - **Rejected:** a cross-portal placeholder-pin list. idnes' two Brno placeholder points lie inside Brno, so the containment rule cannot replace them and they stay contract-local.
 
 ## Not covered (named, not built)
-- **Qualifier scoring:** an obec R4 with two qualifiers (55) beats a claimed part R4 (50). This is unmeasured. W5's one matcher may change it, so measure it before W5 or defer it explicitly.
+- **Qualifier scoring:** an obec R4 with two qualifiers (55) beats a claimed part R4 (50). This is unmeasured. **Deferred explicitly by W5** (2026-10-31): v5.10 changes no score (design § 10).
 - **KÚ below address grain:** 162,791 obec-grain and 54,379 street-grain rows have no KÚ (all rows). W1 shows coverage by grain. Most of the gap is structural: multi-KÚ streets and towns. W5's část lending closes it where a část lies in one KÚ.
 - **Issue 2 residue:** 10,408 town-only rows on the obec point (idnes 9,352) are structural, because the source withholds finer location. The row already says so honestly (obec grain, open ring, reach radius). No action.
 

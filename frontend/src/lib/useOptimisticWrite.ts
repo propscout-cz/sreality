@@ -1,7 +1,7 @@
 /* The one optimistic write (rule #22's write policy) — the deal pipeline,
  * dismissals, the border-case flag, the autodedup verdict overlay, the admin
- * toggles, the training-set marks, the preset reorder and the exam-review
- * edits all go through this hook.
+ * toggles, the training-set marks, the preset reorder, the exam-review edits
+ * and Apply and Undo on a run's proposals all go through this hook.
  *
  *   hold  →  patch  →  write  →  (failed? roll back)  →  revalidate + release
  *

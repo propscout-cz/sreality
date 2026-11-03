@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, Literal, NamedTuple
@@ -27,7 +27,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from api import dependencies
-from api.agents import cassette, claims, loop, terminator
+from api.agents import agent_files, cassette, claims, loop, terminator
 from api.agents.definition import SKILLS_DIR, Definition, DefinitionError, InputError, load
 from api.capabilities import registry
 from api.capabilities.truncate import encode
@@ -184,9 +184,19 @@ UPDATE agent_runs SET definition_sha = %(definition_sha)s, tool_set_sha = %(tool
 _FINISH = f"""
 UPDATE agent_runs
    SET status = %(status)s, stop_reason = %(stop_reason)s, error = %(error)s, result_markdown = %(result_markdown)s,
-       cited_property_ids = %(cited_property_ids)s, files = %(files)s, proposals = %(proposals)s, output = %(output)s,
+       cited_property_ids = %(cited_property_ids)s, proposals = %(proposals)s, output = %(output)s,
        lease_until = NULL, finished_at = now(), cost_usd = {_LEDGER_COST}
  WHERE {_HELD}"""
+
+# The diary's line for this file, when this attempt fetched it: a rerun of a name leaves two, and the last is what it holds.
+_ARTIFACT = """
+INSERT INTO agent_artifacts (account_id, run_id, step_attempt, step_n, kind, name, size_bytes, sha256, storage_key)
+SELECT %(account)s, %(run)s, step.attempt, step.n, %(kind)s, %(name)s, %(size)s, %(sha)s, %(key)s
+  FROM (SELECT 1) one
+  LEFT JOIN LATERAL (SELECT attempt, n FROM agent_run_steps
+                      WHERE run_id = %(run)s AND attempt = %(attempt)s AND kind = 'file'
+                        AND payload #>> '{output,sha256}' = %(sha)s
+                      ORDER BY n DESC LIMIT 1) step ON true"""
 
 # One transition for every interruption: a cancel asked for wins, then the second interruption fails the run.
 _INTERRUPT = f"""
@@ -444,19 +454,24 @@ def _recorder(conn: psycopg.Connection, run: _Claimed, stop: threading.Event) ->
 
 
 def _finish(conn: psycopg.Connection, run: _Claimed, status: Literal["succeeded", "failed", "cancelled"], *,
-            stop_reason: str | None = None, error: str | None = None, answer: terminator.Answer | None = None
-            ) -> WorkState:
+            stop_reason: str | None = None, error: str | None = None, answer: terminator.Answer | None = None,
+            stored: Sequence[agent_files.StoredFile] = ()) -> WorkState:
+    """The verdict and the files' rows land together under the held lease, so a run shows only the attempt that finished."""
     fields = {
         "status": status, "stop_reason": stop_reason, "error": error,
         "result_markdown": _storable(answer.markdown) if answer else None,
         "cited_property_ids": list(answer.cited_property_ids) if answer else [],
-        # Names only: the bytes are #2073's to store, and the diary holds each file's facts.
-        "files": [_no_nul(file.name) for file in answer.files] if answer else [],
         "proposals": Jsonb(_storable(answer.proposed_actions) if answer else []),
         "output": Jsonb(_storable(answer.output)) if answer and answer.output is not None else None,
     }
-    written = conn.execute(_FINISH, {**fields, **run.held})
-    return status if written.rowcount else "lost"
+    with conn.transaction():
+        if not conn.execute(_FINISH, {**fields, **run.held}).rowcount:
+            return "lost"
+        for file in stored:
+            conn.execute(_ARTIFACT, {"account": run.account_id, "run": run.id, "attempt": run.attempts,
+                                     "kind": file.media_type, "name": _no_nul(file.name), "size": file.size_bytes,
+                                     "sha": file.sha256, "key": file.storage_key})
+    return status
 
 
 def _release(conn: psycopg.Connection, run: _Claimed) -> WorkState:
@@ -501,7 +516,9 @@ def _execute(conn: psycopg.Connection, run: _Claimed, providers: Mapping[str, Co
     if outcome.answer is None:
         return _finish(conn, run, "failed", stop_reason=outcome.stop_reason,
                        error=f"the run ended without an accepted answer: {outcome.stop_reason}")
-    return _finish(conn, run, "succeeded", stop_reason=outcome.stop_reason, answer=outcome.answer)
+    stored = agent_files.store_files(outcome.answer.files, target=agent_files.store(), account_id=run.account_id,
+                                     run_id=run.id, attempt=run.attempts)
+    return _finish(conn, run, "succeeded", stop_reason=outcome.stop_reason, answer=outcome.answer, stored=stored)
 
 
 def work_once(*, stop: threading.Event, providers: Mapping[str, CompletionProvider] | None = None,
@@ -509,6 +526,7 @@ def work_once(*, stop: threading.Event, providers: Mapping[str, CompletionProvid
     """Claim the oldest queued run whose account is under its running cap and its daily limit, and run it to its end, its release or a lost lease.
     The caller's SIGTERM handler sets `stop`; the run stops at its next step and goes back on the queue."""
     with connect() as conn:
+        agent_files.sweep(conn)  # ahead of the brake, which stops spending: a deleted account's bytes must not wait for it
         settings = _settings(conn)
         if settings.get(BRAKE) is not True:
             return Worked("dark")

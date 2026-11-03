@@ -71,8 +71,6 @@ LEDGER: dict[str, Site] = {
     "scripts/heal_bazos_floor_zero.py": Site(
         1, "heal", "floor 0 -> re-read or NULL on bazos/web flats naming another storey, "
         "compare-and-set", "same-statement"),
-    "scripts/backfill_unit_price_masquerade.py": Site(
-        1, "heal", "price_czk -> NULL + raw_json quarantine keys via ||", "separate-statement"),
     "scripts/reextract.py": Site(
         1, "heal", "raw_json.broker via jsonb_set", "sweep:daily broker sweep"),
     "scripts/backfill_idnes_brokers.py": Site(

@@ -103,9 +103,9 @@ def test_our_own_coords_stamp_is_not_the_portals_declared_precision():
 def test_the_chain_comes_from_the_join_not_from_geometry():
     resolution = _resolve(_address_claims())
     assert (resolution.obec_kod, resolution.obec_name) == (554782, "Praha")
-    assert (resolution.okres_kod, resolution.kraj_kod) == (3100, 19)
+    assert (resolution.okres_kod, resolution.kraj_kod) == (9999, 19)
     assert (resolution.okres_name, resolution.kraj_name) == (
-        "Hlavní město Praha", "Hlavní město Praha"
+        "území Hlavního města Prahy", "Hlavní město Praha"
     )
 
 
@@ -122,7 +122,7 @@ def test_the_quarter_lands_on_a_name_bound_row_too():
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
     ])
     assert (resolution.cast_obce_kod, resolution.cast_obce_name) == (490067, "Vokovice")
-    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 3100, 19)
+    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 9999, 19)
 
 
 def test_a_street_match_carries_the_whole_chain():
@@ -332,11 +332,15 @@ def test_a_street_in_the_named_town_carries_the_registers_part_not_the_adverts()
     assert resolution.house_number_cp is None
 
 
-def test_a_street_across_parts_or_in_a_town_the_advert_does_not_name_carries_no_part():
-    """Fail closed: RÚIAN draws no část polygon, so a street across two parts gets none; a
-    town only the PSČ and a part-of-town claim supplied, or a typo'd street (R3), lends none."""
-    for resolution in (_stefanikova((71, 409871), (72, 409847)),
-                       _stefanikova((71, 409871), town=False),
+def test_a_street_keeps_the_claimed_part_only_where_it_has_doors():
+    """Q2 (W5): RÚIAN draws no část polygon, so a street across two parts keeps the advert's
+    Třebeš because the street has doors there; in a town only the PSČ and the part claim
+    supplied, the same; a street whose doors are all elsewhere, or a typo'd one (R3), lends
+    none."""
+    across = _stefanikova((71, 409871), (72, 409847))
+    unnamed = _stefanikova((72, 409847), town=False)
+    assert across.cast_obce_kod == unnamed.cast_obce_kod == 409847
+    for resolution in (_stefanikova((71, 409871), town=False),
                        _stefanikova((71, 409871), street="Štefánikovva")):
         assert (resolution.street_name, resolution.cast_obce_kod) == ("Štefánikova", None)
 

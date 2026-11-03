@@ -91,7 +91,7 @@ def test_a_tenant_tool_without_a_signed_in_caller_is_forbidden_before_any_connec
     assert _error("probe", {}).code is ToolErrorCode.FORBIDDEN
 
 
-@pytest.mark.parametrize("effect, method", [(Effect.READ, "GET"), (Effect.WRITE, "POST")])
+@pytest.mark.parametrize("effect, method", [(Effect.READ, "GET"), (Effect.CODE, "POST")])
 def test_a_tenant_tool_runs_in_the_callers_own_transaction_never_acting_as_anyone(
     probe: Any, monkeypatch: pytest.MonkeyPatch, effect: Effect, method: str,
 ) -> None:
@@ -238,9 +238,18 @@ def test_a_tenant_result_refused_for_its_size_rolls_the_transaction_back(probe: 
             raise
     monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", fake_transaction)
     monkeypatch.setattr(truncate, "RESULT_BUDGET", 100)
-    probe(lambda ctx, a: {"data": "x" * 500}, tenancy=Tenancy.TENANT, effect=Effect.WRITE)
+    probe(lambda ctx, a: {"data": "x" * 500}, tenancy=Tenancy.TENANT, effect=Effect.READ)
     err = _error("probe", {}, Caller(market=ScriptConn([]), claims={"sub": "a"}))
     assert (err.code, states) == (ToolErrorCode.RESULT_TOO_LARGE, ["rolled back"])
+
+
+def test_a_write_has_no_path_through_call_so_nothing_a_run_holds_can_reach_it(probe: Any) -> None:
+    def wrote(ctx: Any, args: Any) -> dict[str, Any]:
+        raise AssertionError("a write ran")
+
+    probe(wrote, tenancy=Tenancy.TENANT, effect=Effect.WRITE)
+    err = _error("probe", {}, Caller(market=ScriptConn([]), claims={"sub": "a"}))
+    assert err.code is ToolErrorCode.FORBIDDEN
 
 
 def test_a_result_that_is_no_envelope_is_internal(probe: Any) -> None:

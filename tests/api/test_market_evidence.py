@@ -8,10 +8,7 @@ arm announces it cannot apply, the port of the page's registered-sales summary a
 
 from __future__ import annotations
 
-import contextlib
 import re
-from datetime import date, datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +17,10 @@ import pytest
 from api import market_evidence as me
 from api import property_read as pr
 from api.capabilities import registry
-from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
 from tests.api._script_conn import ScriptConn
-from tests.api.test_capabilities_census import _dicts
-from tests.api.test_stats_pivot_census import registry_key_map
-from tests.test_browse_map_read_contract import _balanced_block, _strip_ts_comments
+from tests._read_contract import _balanced_block, _strip_ts_comments, registry_key_map
+from tests.api._tool_fixtures import PAYLOAD, POINT, SEEN, TOTAL, _dicts, _sale, evidence_run, evidence_script
 from toolkit import stats_registry as sr
 from toolkit.measures import (
     BASIS_MIXED,
@@ -38,8 +33,6 @@ from toolkit.measures import (
 )
 
 LIB = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
-POINT = {"point": {"lat": 50.08, "lng": 14.42}, "category_main": "byt", "category_type": "prodej"}
-SEEN = datetime(2026, 10, 20, 8, 0, tzinfo=timezone.utc)
 
 
 def _const(file: str, name: str) -> str:
@@ -115,69 +108,12 @@ def test_a_point_states_both_categories_and_null_means_every_one() -> None:
 
 # --- the statements and the envelope ----------------------------------------------------------------------------
 
-def _proxy_row(pid: int, ppm2: float | None = 100_000.0, basis: str | None = SALE_CAPITAL_CZK_M2) -> tuple[Any, ...]:
-    facts = {"property_id": pid, "category_main": "byt", "category_type": "prodej", "price_czk": 6_000_000,
-             "area_m2": Decimal("60"), "price_per_m2": None if ppm2 is None else Decimal(str(ppm2)),
-             "price_per_m2_basis": basis, "tom_days": 30, "last_seen_at": SEEN, "disposition": "2+kk",
-             "condition": "dobry", "building_type": "cihla"}
-    return (*(facts[c] for c in me.PROXY_COLUMNS), 120.5)
-
-
-def _sale(n: int, area: float | None = 60.0, ppm2: float | None = 90_000.0, kind: str = "byt",
-          basis: str | None = SALE_CAPITAL_CZK_M2) -> tuple[Any, ...]:
-    facts = {"source": "reas", "source_record_id": f"r{n}", "sold_at": date(2026, 8, 1), "category_main": kind,
-             "price_czk": 5_000_000, "area_m2": None if area is None else Decimal(str(area)),
-             "price_per_m2": None if ppm2 is None else Decimal(str(ppm2)), "price_per_m2_basis": basis,
-             "disposition": "2+kk", "address_text": "Nusle", "distance_m": 10.0 * n, "sold_age_days": 90,
-             "fetched_at": SEEN}
-    return tuple(facts[c] for c in me.REGISTERED_COLUMNS)
-
-
-TOTAL = {"keys": [], "col": None, "n": 6, "mean": 98_000.0, "median": 97_000.0, "p10": 80_000.0, "p25": 90_000.0,
-         "p75": 105_000.0, "p90": 110_000.0, "small": None}
-PAYLOAD = {"spec": {"rows": [], "cols": [], "measure": "ppm2"}, "filtered": 7, "sample": 6, "excluded": 1,
-           "category_main": "byt", "category_type": "prodej", "status": "inactive", "basis": SALE_CAPITAL_CZK_M2,
-           "min_n": 5, "refused": None, "places": [], "cells": [TOTAL]}
-COVERAGE = (554782, "Praha", SEEN, 120, 400, False, SEEN, "ok")
-PROPERTY = tuple({"property_id": 7, "lat": 50.07, "lng": 14.43, "category_main": "dum",
-                  "category_type": "prodej"}.get(c) for c in pr.PROPERTY_COLS)
-
-
-def _script(proxy: list[tuple[Any, ...]] | None = None, cohort: list[int] = (11, 12, 13, 14, 15, 16, 17),
-            sales: list[tuple[Any, ...]] | None = None, payload: dict[str, Any] = PAYLOAD,
-            prop: tuple[Any, ...] = PROPERTY) -> ScriptConn:
-    return ScriptConn([
-        (lambda sql: sql.startswith("SELECT property_id FROM listings_public"), [(7,)]),
-        (lambda sql: sql.startswith("WITH RECURSIVE chain"), [(7, 7)]),
-        (lambda sql: "from properties_public" in sql, [prop]),
-        (lambda sql: sql.startswith("SELECT l.property_id, l.category_main"),
-         [_proxy_row(i) for i in (11, 12)] if proxy is None else proxy),
-        (lambda sql: sql.startswith("SELECT l.property_id FROM browse_list"), [(i,) for i in cohort]),
-        (lambda sql: sql.startswith("SELECT public.browse_stats_properties("), [(payload,)]),
-        (lambda sql: "FROM public.sold_comparables(" in sql, [_sale(i) for i in range(6)] if sales is None else sales),
-        (lambda sql: "FROM public.sold_coverage(" in sql, [COVERAGE]),
-    ])
-
-
-def _run(args: dict[str, Any], conn: ScriptConn | None = None) -> tuple[dict[str, Any], list[tuple[str, Any]]]:
-    conn = conn or _script()
-
-    @contextlib.contextmanager
-    def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:
-        assert (act_as, method) == (None, "GET")
-        yield conn
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(registry.tenant_pool, "tenant_transaction", own)
-        out = registry.call(Caller(market=ScriptConn([]), claims={"sub": "a"}), "market_evidence", args)
-    return out, conn.executed
-
-
 def _statement(executed: list[tuple[str, Any]], start: str) -> tuple[str, Any]:
     return next((sql, params) for sql, params in executed if sql.startswith(start) or start in sql)
 
 
 def test_every_row_and_summary_is_labelled_and_every_per_m2_figure_has_its_basis() -> None:
-    out, _ = _run(POINT)
+    out, _ = evidence_run(POINT)
     data = out["data"]
     assert [r["evidence"] for r in data["proxy"]] == ["proxy"] * 2
     assert [r["evidence"] for r in data["registered"]] == ["registered"] * 6
@@ -189,7 +125,7 @@ def test_every_row_and_summary_is_labelled_and_every_per_m2_figure_has_its_basis
 
 
 def test_the_proxy_arm_is_the_sold_lens_over_browses_cohort_round_the_subject() -> None:
-    out, executed = _run({**POINT, "radius_m": 800, "dispositions": ["2+kk"], "min_area_m2": 40,
+    out, executed = evidence_run({**POINT, "radius_m": 800, "dispositions": ["2+kk"], "min_area_m2": 40,
                           "condition_match": ["novostavba"], "building_material": ["panel"],
                           "last_seen_max_days": 30, "limit": 3})
     rows, params = _statement(executed, "SELECT l.property_id, l.category_main")
@@ -220,12 +156,12 @@ def test_the_proxy_arm_is_the_sold_lens_over_browses_cohort_round_the_subject() 
 
 def test_a_held_subject_stands_at_its_property_and_leaves_its_own_property_out() -> None:
     """Decision 13; an unset category takes the property's own (a house), an explicit null stays every category."""
-    out, executed = _run({"listing_id": 70})
+    out, executed = evidence_run({"listing_id": 70})
     rows, params = _statement(executed, "SELECT l.property_id, l.category_main")
     assert "l.property_id <> %(subject_property_id)s" in rows and params["subject_property_id"] == 7
     assert (params["subject_lat"], params["subject_lng"], params["category_main_in"]) == (50.07, 14.43, "dum")
     assert out["metadata"]["subject"] == {"property_id": 7, "lat": 50.07, "lng": 14.43}
-    _, wide = _run({"property_id": 7, "category_main": None})
+    _, wide = evidence_run({"property_id": 7, "category_main": None})
     assert "category_main_in" not in _statement(wide, "SELECT l.property_id, l.category_main")[1]
 
 
@@ -234,9 +170,9 @@ def test_a_held_subject_stands_at_its_property_and_leaves_its_own_property_out()
     (None, ToolErrorCode.NOT_FOUND),
 ])
 def test_a_held_subject_with_no_place_is_refused_and_an_unknown_one_not_found(prop: Any, code: ToolErrorCode) -> None:
-    conn = _script(prop=prop) if prop else ScriptConn([])
+    conn = evidence_script(prop=prop) if prop else ScriptConn([])
     with pytest.raises(ToolError) as info:
-        _run({"property_id": 7}, conn)
+        evidence_run({"property_id": 7}, conn)
     assert info.value.code is code
 
 
@@ -244,7 +180,7 @@ def test_a_held_subject_with_no_place_is_refused_and_an_unknown_one_not_found(pr
                                         {"category_main": "pozemek", "category_type": None}])
 def test_registered_sales_are_flats_and_houses_for_sale_and_any_other_ask_empties_the_arm(
         categories: dict[str, Any]) -> None:
-    out, executed = _run({**POINT, **categories})
+    out, executed = evidence_run({**POINT, **categories})
     assert not [sql for sql, _ in executed if "sold_" in sql]
     assert out["data"]["registered"] == [] and out["metadata"]["registered_refused"]
     assert out["metadata"]["registered_radius_m"] is None
@@ -252,13 +188,13 @@ def test_registered_sales_are_flats_and_houses_for_sale_and_any_other_ask_emptie
 
 
 def test_every_category_reads_both_kinds_of_registered_sale() -> None:
-    _, executed = _run({**POINT, "category_main": None, "category_type": None})
+    _, executed = evidence_run({**POINT, "category_main": None, "category_type": None})
     sql, params = _statement(executed, "FROM public.sold_comparables(")
     assert "category_main" not in params and "WHERE true ORDER BY" in sql
 
 
 def test_the_registered_arm_reads_the_pages_sales_nearest_first_with_its_own_filters() -> None:
-    out, executed = _run({**POINT, "radius_m": 3000, "dispositions": ["2+kk", "3+kk"], "max_area_m2": 80,
+    out, executed = evidence_run({**POINT, "radius_m": 3000, "dispositions": ["2+kk", "3+kk"], "max_area_m2": 80,
                           "max_sold_age_days": 365})
     sql, params = _statement(executed, "FROM public.sold_comparables(")
     assert sql.startswith("SELECT " + ", ".join(f"l.{c}" for c in me.REGISTERED_COLUMNS) + " FROM public."
@@ -276,14 +212,14 @@ def test_the_registered_arm_reads_the_pages_sales_nearest_first_with_its_own_fil
 
 def test_the_registered_arm_reads_no_further_than_its_sales_are_fetched_and_says_so() -> None:
     """scraper/sold_db.MAX_READ_RADIUS_M: the margin the fetcher covers round every town; the proxy reads the circle."""
-    out, executed = _run({**POINT, "radius_m": 8000})
+    out, executed = evidence_run({**POINT, "radius_m": 8000})
     assert _statement(executed, "FROM public.sold_comparables(")[1]["radius_m"] == 5000
     assert _statement(executed, "SELECT l.property_id, l.category_main")[1]["circle_radius_m"] == 8000
     assert out["metadata"]["registered_radius_m"] == 5000
 
 
 def test_more_than_the_pages_cap_is_said_and_the_rows_are_the_nearest_few() -> None:
-    out, _ = _run({**POINT, "limit": 4}, _script(sales=[_sale(i) for i in range(me.SOLD_COMPS_LIMIT + 1)]))
+    out, _ = evidence_run({**POINT, "limit": 4}, evidence_script(sales=[_sale(i) for i in range(me.SOLD_COMPS_LIMIT + 1)]))
     summary = out["data"]["registered_summary"]
     assert (summary["sales"], summary["more"], summary["n"]) == (me.SOLD_COMPS_LIMIT, True, me.SOLD_COMPS_LIMIT)
     assert [r["source_record_id"] for r in out["data"]["registered"]] == ["r0", "r1", "r2", "r3"]
@@ -291,25 +227,25 @@ def test_more_than_the_pages_cap_is_said_and_the_rows_are_the_nearest_few() -> N
 
 
 def test_a_filter_an_arm_cannot_apply_is_announced_never_dropped() -> None:
-    out, _ = _run({**POINT, "condition_match": ["novostavba"], "building_material": ["panel"],
+    out, _ = evidence_run({**POINT, "condition_match": ["novostavba"], "building_material": ["panel"],
                    "last_seen_max_days": 30, "max_sold_age_days": 365, "dispositions": ["2+kk"]})
     assert out["metadata"]["unapplied"] == {"registered": ["condition_match", "building_material", "last_seen_max_days"],
                                             "proxy": ["max_sold_age_days"]}
-    assert _run(POINT)[0]["metadata"]["unapplied"] == {"registered": [], "proxy": []}
+    assert evidence_run(POINT)[0]["metadata"]["unapplied"] == {"registered": [], "proxy": []}
 
 
 def test_the_window_and_its_reason_are_echoed() -> None:
-    out, executed = _run({**POINT, "tom_days_max": 120, "window_reason": "luxury villas sell slowly"})
+    out, executed = evidence_run({**POINT, "tom_days_max": 120, "window_reason": "luxury villas sell slowly"})
     assert out["metadata"]["window"] == {"tom_days_min": 2, "tom_days_max": 120, "default": False,
                                          "reason": "luxury villas sell slowly"}
     assert _statement(executed, "SELECT l.property_id, l.category_main")[1]["tom_days_max"] == 120
-    assert _run(POINT)[0]["metadata"]["window"]["default"] is True
+    assert evidence_run(POINT)[0]["metadata"]["window"]["default"] is True
 
 
 def test_an_empty_proxy_cohort_is_the_dashboards_empty_answer() -> None:
     empty = {**PAYLOAD, "filtered": 0, "sample": 0, "excluded": 0, "status": None, "basis": None,
              "refused": "empty", "cells": []}
-    out, executed = _run(POINT, _script(proxy=[], cohort=[], payload=empty))
+    out, executed = evidence_run(POINT, evidence_script(proxy=[], cohort=[], payload=empty))
     assert _statement(executed, "SELECT public.browse_stats_properties(")[1]["property_ids_filter"] == []
     summary = out["data"]["proxy_summary"]
     assert (summary["refused"], summary["median"], summary[PPM2_BASIS_KEY]) == ("empty", None, BASIS_UNKNOWN)

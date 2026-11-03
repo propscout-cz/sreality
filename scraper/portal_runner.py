@@ -100,6 +100,12 @@ class DrainItem:
 
 CONTENT_FREE_ERROR = "content-free page: no price, area, params, images or description"
 
+# A walk that fetched this many pages and collected no ad was not served the index: an anti-bot
+# page, a redesign, a dead proxy. Keyed on what it COLLECTED, never on a declared count, because a
+# challenge page can echo the site's own "N ads" meta text (ceskereality, 2026-11). 30 days of
+# scrape_runs (2026-11-02): only that outage's 8 walks; every healthy 100+ page walk collected 1,681+.
+EMPTY_WALK_MIN_PAGES = 100
+
 
 def content_free(payload: Any) -> bool:
     """A parsed detail that states NOTHING about the ad is not the ad's page.
@@ -297,6 +303,9 @@ def reconcile_sightings(
         "ENQUEUE source=%s%s new=%d changed=%d unchanged=%d enqueued=%d",
         source, label, len(new), len(changed), len(existing) - len(changed), enqueued,
     )
+    rearmed = db.rearm_sighted_given_up(conn, source, new) if conn is not None and new else 0
+    if rearmed:
+        LOG.info("REARM source=%s%s sighted_given_up=%d", source, label, rearmed)
     return {"found_new": len(new), "enqueued": enqueued}
 
 
@@ -770,12 +779,14 @@ def run_index_walk(
         if conn is not None:
             conn.close()
 
+    empty_walk = total_index == 0 and total_pages >= EMPTY_WALK_MIN_PAGES
+    errors = failed_categories + int(empty_walk)
     LOG.info(
         "RUN done pages=%d enqueued=%d to_verify=%d deferred=%d errors=%d",
         total_pages, total_enqueued,
         sum(c["listings_to_verify"] for c in category_aggregates),
         sum(c["verify_deferred"] for c in category_aggregates),
-        failed_categories,
+        errors,
     )
     scrape_agg: dict[str, Any] = {
         "index_pages":          total_pages,
@@ -784,20 +795,27 @@ def run_index_walk(
         "listings_updated":     0,
         "listings_inactive":    sum(c["listings_inactive"] for c in category_aggregates),
         "images_discovered":    0,
-        "errors":               failed_categories,
+        "errors":               errors,
         "by_category":          category_aggregates,
     }
     # Every unit this run attempted failed -> the portal is fully blocked
     # (e.g. a WAF 403s the runner's egress). Fail loudly so the workflow goes
     # red instead of recording a green zero-listing run; a partial failure
     # stays rc=0 with errors>0 in the aggregate.
-    rc = 1 if unit_entries and unit_failures == unit_entries else 0
-    if rc != 0:
+    all_failed = bool(unit_entries) and unit_failures == unit_entries
+    if all_failed:
         LOG.error(
             "INDEX every category failed (%d/%d); failing the run",
             unit_failures, unit_entries,
         )
-    return (rc, scrape_agg)
+    # The same block arriving as HTTP 200s. Only the exit changes: nomination already ran above,
+    # on each unit's own reached_end (rule #3). The CHECK shape makes this the run's reason line.
+    if empty_walk:
+        LOG.error(
+            "CHECK empty_walk status=fail: %s collected 0 ads from %d pages; failing the run",
+            portal.source, total_pages,
+        )
+    return (1 if all_failed or empty_walk else 0, scrape_agg)
 
 
 def run_index_probe(

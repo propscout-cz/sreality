@@ -80,12 +80,15 @@ The runner's own stop decides before the exit code.
 | stopped at `timeout_s`, whatever it exited | `timeout` | retry: backoff floored at `timeout_s` |
 | exit 0 | `ok` | next slot |
 | exit 75 | `ok` | now + 60 s |
-| deploy stop, fence, refused renewal | `interrupted` | now (DB-heavy too) |
+| deploy stop, fence | `interrupted` | now (DB-heavy too) |
 | any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
-| lease lapsed (runner crash) | `lost` | now, then backoff on a second loss in a row |
+| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row |
 
-A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run never
-moves `due_at` (its exit 75 pulls it to 60 s at most); a request that also took a due slot advances it.
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run's
+release never moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to
+it; a request that also took a due slot advances it. **A `lost` request does move it** (#2317, the reaper cannot tell):
+a `lost` `map_overlays` request schedules a live run at the next 22:00Z, so read `due_at` after every `map_overlays`
+request and never start one between 20:00 and 22:00Z.
 
 ## Reading `job_runs`
 
@@ -137,8 +140,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
   `registry_at`. Applied after #2025 PR-2 deployed, 682 first joins each live row, and each one an older image
   retired under an hour ago (a blink), at its first run (main's register had re-stamped it at every boot); apply it
   before PR-2's first deploy, whichever merges first.
-- **The clock** is the last ok run since `registry_at`, else the first *scheduled* run since (`requested_by IS NULL`)
-  minus C, else the first slot minus C, and a pause that lapsed restarts it. Never a request run. Known edge: a run
+- **The clock** is the last ok run since `registry_at` (a request's included), else the first *scheduled* run since
+  (`requested_by IS NULL`) minus C, else the first slot minus C, and a pause that lapsed restarts it. Known edge: a run
   that served a request and took its due slot keeps `requested_by` (`job_runs` has no due slot), so a
   never-succeeded job whose first run was one reads late up to one cycle later, never earlier.
 - **The cause** is the latest `failed`/`timeout`/`lost` run's: `lost: the replica holding it stopped renewing its
@@ -165,7 +168,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200)
   and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
   budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
-  keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 21-30 s of 1200;
+  keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 2-9 s of 1200;
   rent_map and map_overlays carry no self-budget), and so is W5's clip (`--max-seconds 1500` against 3300: a full
   run, with its last chunk and its exit, ends by about 1600 s, under the 2200 s line).
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
@@ -180,7 +183,11 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
 2. Leave "Use workflow from" on `main`.
 3. Type the job's name as Health shows it after `job/` (e.g. `map_overlays`); anything but `a-z`, `0-9` and `_` is
    refused before Python runs. Optional args, e.g. `--dry-run` (quote a value with spaces; an unmatched quote is
-   refused before Python runs, nothing filed); they override the job's own flags unchecked.
+   refused before Python runs, nothing filed); they override the job's own flags unchecked. **A blank Args box on
+   `map_overlays` starts a LIVE full run that replaces production tiles** about 6 s after filing, a pause does not stop
+   it and the summary line does not show args. An agent files it as `gh workflow run run_job.yml --ref main -f
+   job=map_overlays -f args=--dry-run` and reads `job_runs.args` at once. If it reads NULL with `requested_by` set,
+   Redeploy at once: a pure request keeps `due_at`, so nothing re-claims it.
 4. **Run workflow**.
 5. Open the run and read its one summary line: `request filed for <job>`, or why not (`<job> runs on
    github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
@@ -200,23 +207,26 @@ below. Merges still wait for its light. Four conditions:
 4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and the
    merge coordinator is told.
 
-## W2-gate drills (PROGRAM W2; the gate ticket after #2025's move PR has the exact lines)
+## Runner drills (run for gate #2123 on 2026-11-01; every number and the exact SQL are on that ticket)
 
-A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE deployment → ⋯ → Redeploy. Never Restart
-(no doc says it honours the drain), never an older deployment (its boot retires the newer registry's rows).
-- **A. Request run** (#2026's "Jobs: run now" form): `map_overlays --dry-run` and `rent_map` (live) each end `ok`
-  with `requested_by` set, `peak_rss_mb` under its declaration (1024, 512), and `due_at` unchanged.
-- **B. Pause with expiry:** `runner-pause stale_images <a :20 slot + 10 min> drill`; no claim while paused; that slot
-  is claimed once the pause lapses (`stale_images`, not `rent_map`, whose grid is 30 days).
-- **C. Deploy cut of a request** (the merge coordinator gets a one-line FYI with the time first, #2025-R2): Redeploy
-  during a `map_overlays --dry-run` request; the run closes `interrupted` (exit 143 or −15) within 250 s of the
-  SIGTERM and is not filed again. It also measures click-to-SIGTERM.
-- **D. Re-claim** (the same FYI to the merge coordinator first): a Redeploy timed so its SIGTERM lands inside a
-  due-slot `stale_images` run; the next run's `started_at` is ≤ 60 s after the cut run's `ended_at`. Retry at a later
-  slot if the cut misses.
-- **E. Self-fence** (in W2's gate, ruled #2025-R1: it moves to W3's gate only if drill A's `map_overlays --dry-run`
-  runs under 60 s, since a renewal must then fall inside the run): during a `map_overlays --dry-run` request longer
-  than 60 s, with the operator's explicit OK at drill time for its two production UPDATEs, the agent sets that row's
-  `lease_expires_at` to the past; expect `RUN kill … why=fence` at the holder's next refused renewal (≤ 60 s), the run
-  closed `lost`, and no second holder while its child lived. Restore the row's `due_at`, then one clean `--dry-run`
-  request.
+A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE deployment → ⋯ → Redeploy, or the Railway
+tool's `redeploy` with that deployment's id. Never Restart (no doc says it honours the drain), never an older deployment
+(its boot retires the newer registry's rows). A Redeploy reuses the build: SIGTERM comes 37-39 s after `createdAt`, and
+the new replicas boot about 4 s before it. Measure from the time inside the `STOP` message: Railway's record time lags
+up to about 10 s. One drill at a time, with no other request run open.
+- **A. Request run:** `map_overlays --dry-run` (150 s, 392 MB) and `rent_map` live (33 s, 268 MB) each end `ok` with
+  `requested_by` set, under their declarations (1024, 512), `due_at` unchanged. A bare `ok` does not prove the flood
+  source's egress (zero `REVISED unknown` lines does), and MF is reached only by `rent_map`.
+- **B. Pause with expiry:** pause `stale_images` until a :20 slot + 10 min: no claim while paused, and that same slot is
+  claimed at the lapse (4.6 s after it), not skipped.
+- **C. Deploy cut of a request:** Redeploy during a `map_overlays --dry-run` request. It closes `interrupted` (exit −15)
+  0.2 s after the SIGTERM and is not filed again.
+- **D. Re-claim:** aim at `clip`, whose run lasts long enough (`stale_images` lasts 2-9 s), on a slot between 09:00 and
+  15:59Z: create the deployment 20 s before the slot, for a SIGTERM at slot + 17 s. It closed `interrupted` (exit 143) 4.9 s
+  after the SIGTERM, and a new replica re-claimed it 4.1 s later (limit 60 s).
+- **E. Self-fence:** six writes, each one guarded on the ticket. Pause the row 14 days, so a moved `due_at` cannot start a
+  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap, then restore `due_at` (the reaper
+  overwrites an earlier restore). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat
+  entry does not prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
+  `LEASE lost`, never `LEASE race lost`. The gate's overlap query cannot see a second holder here, because the reaper sets
+  `ended_at` before the child dies: compare started_at with the kill line.

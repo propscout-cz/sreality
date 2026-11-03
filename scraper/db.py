@@ -1100,14 +1100,15 @@ def enqueue_presence_checks(
         conn, source,
         [(nid, ref, price, QUEUE_PRIORITY_VERIFY) for nid, ref, price in batch],
     )
-    # A row the drain gave up on (5 failed fetches) is excluded from every claim
-    # and never re-armed by anything else, so a listing whose page erred five
-    # times once would stay active forever with no path to a check. Give a
-    # bounded number of them another five tries per walk, oldest first, and
-    # move them to the back of the line (enqueued_at = now()) so the same few
-    # cannot monopolise the budget walk after walk. Rows in the queue are not
-    # nominated above, so this is the only way a given-up row comes back
-    # (rule #5: tracked, not dropped).
+    # A row the drain gave up on (5 failed fetches) is excluded from every claim,
+    # so a listing whose page erred five times once would stay active forever with
+    # no path to a check. Give a bounded number of them another five tries per walk,
+    # oldest first, and move them to the back of the line (enqueued_at = now()) so
+    # the same few cannot monopolise the budget walk after walk. Rows in the queue
+    # are not nominated above, so this is an active listing's way back (rule #5:
+    # tracked, not dropped). Only an ACTIVE listing has a check owed: any other
+    # given-up row stays recorded, and an ad we hold nothing for comes back when the
+    # index sights it (rearm_sighted_given_up), not on every walk forever (#1851).
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1115,9 +1116,13 @@ def enqueue_presence_checks(
             SET given_up = false, attempts = 0, enqueued_at = now(),
                 priority = LEAST(q.priority, %(verify)s)
             WHERE (q.source, q.native_id) IN (
-                SELECT source, native_id FROM listing_detail_queue
-                WHERE source = %(source)s AND given_up = true AND claimed_at IS NULL
-                ORDER BY enqueued_at
+                SELECT g.source, g.native_id FROM listing_detail_queue g
+                WHERE g.source = %(source)s AND g.given_up = true AND g.claimed_at IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM listings l
+                      WHERE l.source = g.source AND l.source_id_native = g.native_id
+                        AND l.is_active)
+                ORDER BY g.enqueued_at
                 LIMIT %(rearm)s
             )
             """,
@@ -1758,8 +1763,8 @@ QUEUE_PRIORITY_FAILURE = 2
 # enqueues at VERIFY) and the gap is kept so a presence check can never inherit a
 # slot something else sorted above.
 QUEUE_PRIORITY_VERIFY = -2
-# How many given-up queue rows each nominating scope with candidates re-arms,
-# source-wide (see enqueue_presence_checks): 50 x 5 attempts per such scope.
+# How many given-up queue rows of active listings each nominating scope with
+# candidates re-arms, source-wide (see enqueue_presence_checks): 50 x 5 attempts per such scope.
 PRESENCE_REARM_PER_WALK = 50
 # Share of each claim batch reserved for presence checks (see claim_detail_batch).
 QUEUE_VERIFY_RESERVE = 0.2
@@ -1866,6 +1871,24 @@ def rearm_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[s
         return cur.rowcount or 0
 
 
+def rearm_sighted_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[str]) -> int:
+    """The index just listed these ads and we hold no listing for them: a row the drain gave
+    up on gets five more tries, so five bad fetches never lose an ad the portal still lists.
+    At most once per RECHECK_THROTTLE (the re-arm stamps enqueued_at, which enqueue_detail
+    keeps): an ad that keeps failing is sighted by every walk and probe (#1851)."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET given_up = false, attempts = 0, enqueued_at = now() "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up "
+            "AND claimed_at IS NULL AND enqueued_at < now() - %s::interval",
+            (source, ids, delist_policy.RECHECK_THROTTLE),
+        )
+        return cur.rowcount or 0
+
+
 def raise_unclaimed_priority(
     conn: psycopg.Connection, source: str, native_ids: Sequence[str], priority: int,
 ) -> int:
@@ -1937,6 +1960,14 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 # only be re-read at the same empty moment; six hours is well past the portals'
 # geocoding lag and it means a row discovered today gets its second look on
 # tomorrow's tick rather than in a fortnight.
+#
+# A failed fetch stores no page, so that clock never moves for an ad whose page
+# keeps failing: the hourly tick re-armed it straight after each give-up, five
+# fetches an hour (2026-11-02: 26 ceskereality ads, 650 give-ups in 24 h, #2375).
+# So an ad the drain gave up on rests delist_policy.RECHECK_THROTTLE, one cycle a
+# day, unless a page or payload has landed since the give-up. Out of this set, not
+# just out of the enqueue: it is the oldest by that frozen clock, and would hold
+# the per-portal cap from ads that can still be read.
 _LOCATION_REFETCH_CANDIDATES_SQL = """
 WITH cand AS (
     SELECT l.source,
@@ -1971,6 +2002,17 @@ old AS (
            count(*) OVER (PARTITION BY c.source) AS source_total
     FROM cand c
     WHERE c.last_fetch_at < now() - make_interval(secs => %(min_age)s::double precision)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM listing_detail_queue q
+          JOIN detail_queue_completions dc
+            ON dc.source = q.source AND dc.native_id = q.native_id
+          WHERE q.source = c.source AND q.native_id = c.source_id_native
+            AND q.given_up
+            AND dc.outcome = 'given_up'
+            AND dc.completed_at > now() - make_interval(secs => %(throttle)s::double precision)
+            AND dc.completed_at >= c.last_fetch_at
+      )
 )
 SELECT source, source_id_native, source_url, price_czk, last_fetch_at, source_total
 FROM old
@@ -1985,13 +2027,17 @@ def location_refetch_candidates(
     min_age_seconds: int,
     cap_per_source: int,
 ) -> list[dict[str, Any]]:
-    """Active ads with no town whose page is old enough to re-read, oldest-fetched
-    first, at most `cap_per_source` per portal. `source_total` carries the UNCAPPED
-    per-portal backlog, so a capped tick still says how much is left for tomorrow."""
+    """Active ads with no town whose page is old enough to re-read and that the drain has not
+    just given up on, oldest-fetched first, at most `cap_per_source` per portal. `source_total`
+    carries the UNCAPPED per-portal backlog, so a capped tick still says how much is left."""
     with conn.cursor() as cur:
         cur.execute(
             _LOCATION_REFETCH_CANDIDATES_SQL,
-            {"min_age": float(min_age_seconds), "cap": int(cap_per_source)},
+            {
+                "min_age": float(min_age_seconds),
+                "cap": int(cap_per_source),
+                "throttle": delist_policy.RECHECK_THROTTLE.total_seconds(),
+            },
         )
         rows = cur.fetchall()
     return [
@@ -2021,8 +2067,10 @@ def enqueue_location_refetch(
     (LEAST), and the rows it most wants are precisely the ones the drain gave up
     on after five failures — invisible to every claim until something re-arms
     them, exactly as `enqueue_presence_checks` re-arms its own (rule #5:
-    tracked, not dropped). `enqueued_at` is left alone so the oldest wait still
-    sorts first inside the verify class; a claimed row is never disturbed.
+    tracked, not dropped). `location_refetch_candidates` spaces those re-arms. A row
+    still in its five tries keeps its count, or an hourly tick would mean it never
+    gives up. `enqueued_at` is left alone so the oldest wait still sorts first inside
+    the verify class; a claimed row is never disturbed.
     """
     rows = list(entries)
     if not rows:
@@ -2048,7 +2096,8 @@ def enqueue_location_refetch(
                     priority        = LEAST(listing_detail_queue.priority,
                                             EXCLUDED.priority),
                     given_up        = false,
-                    attempts        = 0
+                    attempts        = CASE WHEN listing_detail_queue.given_up THEN 0
+                                           ELSE listing_detail_queue.attempts END
                 WHERE listing_detail_queue.claimed_at IS NULL
                 """,
                 {

@@ -62,10 +62,6 @@ LOCATION_BATCH_WORKFLOWS = (
     # stored page body, so it carries what the four deleted lanes carried — a corpus scan,
     # an R2 fan-out and the claim writes in one transaction.
     "location_claims_intake.yml",
-    # W6-a: a 9.5 M-row DELETE over `location_claims` and its seven indexes, plus a
-    # multi-GB `\copy` of the same rows ahead of it. Dispatch-only, but while it runs
-    # it is the heaviest thing in the subsystem.
-    "location_claims_retire.yml",
 )
 OUTER_GROUP = "location-batch"
 
@@ -649,20 +645,8 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-if command -v jq >/dev/null 2>&1; then
-  printf '%s' "$payload" | jq -r "$filter"
-else
-  # No jq: emit every id in the payload and let the fixture be the filter. The tests that
-  # need the filter ITSELF applied are skipped in this environment.
-  printf '%s' "$payload" | python3 -c 'import json,sys
-for run in json.load(sys.stdin):
-    print(run["databaseId"])'
-fi
+printf '%s' "$payload" | jq -r "$filter"
 """
-
-NEEDS_JQ = pytest.mark.skipif(
-    shutil.which("jq") is None,
-    reason="the stub applies gh's jq filter with jq; GitHub runners have it")
 
 
 def _runs(*rows: tuple[int, str] | tuple[int, str, str]) -> str:
@@ -708,6 +692,7 @@ def _run_chain(tmp_path: Path, summary: dict | str, *, waiting: str = "[]",
     done = subprocess.run(["bash", "-e", str(script)], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
+    assert "jq:" not in done.stderr, done.stderr
     dispatched = [line for line in calls.read_text(encoding="utf-8").splitlines()
                   if line.startswith("workflow run")]
     return done.stdout, dispatched
@@ -785,7 +770,6 @@ def test_the_chain_yields_to_a_run_already_waiting_in_the_group(tmp_path: Path):
     assert "chain yields" in out
 
 
-@NEEDS_JQ
 def test_a_scheduled_tick_of_a_permanent_member_still_stops_the_chain(tmp_path: Path):
     """The exception is ONE workflow wide. The intake's own cron tick is a `schedule` run
     that really is queued on `location-batch` — the run the chain exists to let through."""
@@ -815,7 +799,6 @@ def test_this_run_is_not_mistaken_for_a_second_intake(tmp_path: Path):
     assert len(dispatched) == 1
 
 
-@NEEDS_JQ
 def test_the_running_query_excludes_only_this_run_not_finished_ones(tmp_path: Path):
     """The two halves of that filter, together: `in_progress` selects, `grep -v` drops this
     run, and a COMPLETED sibling must survive neither — it is neither in progress nor this
@@ -836,7 +819,6 @@ def test_a_summary_the_chain_cannot_read_chains_nothing(tmp_path: Path):
     assert "chain ends" in out
 
 
-@NEEDS_JQ
 def test_the_waiting_query_sees_a_queued_sibling_among_finished_runs(tmp_path: Path):
     """gh's own filter, applied to gh's own shape. The list a real query returns is mostly
     COMPLETED runs; a filter that let those through would make the chain yield for ever, and
@@ -847,3 +829,17 @@ def test_the_waiting_query_sees_a_queued_sibling_among_finished_runs(tmp_path: P
 
     assert dispatched == []
     assert "chain yields" in out and "4242" in out
+
+
+def test_a_missing_jq_fails_the_chain_tests_instead_of_passing_unfiltered(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The chain's `| head -1` swallows the stub's exit code, so without this a jq that never
+    ran reads as "nothing waiting" and every test expecting a dispatch passes unfiltered."""
+    tools = tmp_path / "tools-without-jq"
+    tools.mkdir()
+    for tool in ("bash", "env", "grep", "head", "python3", "sed", "tail", "tr"):
+        (tools / tool).symlink_to(shutil.which(tool))
+    monkeypatch.setenv("PATH", str(tools))
+
+    with pytest.raises(AssertionError, match="jq:"):
+        _run_chain(tmp_path, BACKLOG, running=_runs((77, "in_progress")), run_id="77")

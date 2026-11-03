@@ -86,10 +86,9 @@ operator can watch, and work to completion.
 - **Database changes** have their own gate (the `database` skill: additive migrations are
   autonomous; destructive ones pause for confirmation + a backup).
 - **A merge is not a deploy.** After a PR merges to `main`, confirm Railway's rollout with
-  `gh api repos/{owner}/{repo}/commits/<sha>/status` — Railway posts a per-service commit
-  status (`<project> - <service>`), each with `state` + a live URL, no Railway token
-  needed. For frontend-visible changes, follow with a real-browser check against the
-  production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
+  `scripts/rollout_wait.sh <merge-sha>` (exit 0 = every service green; any other exit goes to
+  the operator). For frontend-visible changes, follow with
+  `node frontend/scripts/smoke-check.mjs --page <path> --expect <text>` — read-only only; never drive a mutating action (merge/unmerge, delete,
   send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).
 ## Fetching live state (fetch, don't ask)
 
@@ -212,7 +211,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal, re-attribution, broker re-point) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); the worker's maintenance lane (`run_incremental_pass`, 30 s)
     attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
-    the reconcile backstop. Both take the `property_maintenance` lease row, so they never overlap. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
+    the reconcile backstop. Both hold the `property_maintenance` job_lease row, never overlapping. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`
     adapter + a config row (`PortalConfig`/`PortalLimits` = its politeness); shared code grows NO new portal-name
@@ -243,17 +242,17 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     a green run) and `FilterDef.basis`. Full rationale: `docs/architecture.md` § rule 23.
 24. **Folded into 25** (kept so the citations don't break — rules are never renumbered).
 25. **Location: one store, one claim shape, one label, one code predicate; a location PR that adds more than it
-    deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY store of a listing's location (`listings`/
-    `properties` hold none, a property one pointer, rule 15; no serving flag or granularity floor): a place read joins `ll on ll.listing_id =
-    l.id`, casting `ll.geom::geography` for metres (uncast = DEGREES). Only `claims_intake` and `operator_corrections` write `location_claims`, both
-    via one keyed upsert (one claim per listing, type, author; the operator outranks the portal); ONE resolver writes `listing_location`; ≤ TWELVE claim types, ≤ 1 contract entry each, `obec_name` mandatory;
+    deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY location store (`listings`/
+    `properties` hold none, a property one pointer; no serving flag or grain floor): a place read joins `ll on ll.listing_id =
+    l.id`, casting `ll.geom::geography` for metres (uncast: DEGREES). Only `claims_intake` and `operator_corrections` write `location_claims`,
+    via one keyed upsert (one claim per listing, type, author; operator beats portal); ONE resolver writes `listing_location` (quarter = část; grain = finest key; position inside the words' town); ≤ TWELVE claim types, ≤ 1 contract entry each, `obec_name` mandatory;
     every display is `location_display_label`, every place filter `<level>_id = any(codes)`. Browse/map/watchdog/dedup serve a listing only
     if resolved or determined foreign, by ONE predicate (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every
-    served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a default); a field is added only by operator ruling or a measured slowdown, only to `browse_list` (architecture.md § rule 25, § Location data).
+    served listing has a row, every active Czech listing has a town** (unresolved red until zero, page-withheld Watch; foreign is determined, not a default); a field is added only by operator ruling or measured slowdown, only to `browse_list` (architecture § rule 25, § Location data).
 ## Coding conventions
 
 - Type hints on every signature (CI's ruff ANN check enforces it outside tests and `autodedup.incremental.DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
-- No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
+- No comments unless the WHY is non-obvious; no multi-paragraph def/class docstrings.
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
@@ -264,12 +263,12 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
-Never commit secrets (`.env` is gitignored; gitleaks hooks: `git config core.hooksPath .githooks` once per clone).
+Never commit secrets (`.env` is gitignored; git hooks: `git config core.hooksPath .githooks` once per clone).
 API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full env-var / secrets reference:** the
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh`. Before you pick, work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now

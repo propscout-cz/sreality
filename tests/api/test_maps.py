@@ -14,7 +14,11 @@ from api import dependencies as deps
 from api import main as api_main
 from api import http_json, maps
 from location_data.name_index import normalize_street_name
-from location_data.resolver.resolve_db import _STREET_POINT_SQL, _STREETS_IN_OBEC_SQL
+from location_data.resolver.resolve_db import (
+    _ADDRESS_POINTS_BY_NUMBER_SQL,
+    _STREET_POINT_SQL,
+    _STREETS_IN_OBEC_SQL,
+)
 
 
 # Mirrors Mapy.cz's actual /v1/suggest shape: `label` is the result-class
@@ -278,8 +282,9 @@ def _override_conn(scripted: list[_Expect]) -> _FakeConn:
 #   1. the mirror probe + the current registry version (`_registry_version`);
 #   2. the containing-obec PIP + its parent chain (`_chain`): the resolver's own
 #      CONTAINING_OBEC_SQL, ONE point in its arrays, at the current version;
-# then, for a část obce, one name-index read per name variant (`_parts`), and for
-# a street the ONE register read `SqlRegistryView.streets_in_obec` issues
+# then, for a část obce, one name-index read per name variant (`_parts`), each miss
+# followed by the městská část's own (`_momc`) and, once one binds, the door read of
+# its části (`_momc_doors`); and for a street the ONE register read `SqlRegistryView.streets_in_obec` issues
 # (`_streets_of`) and, once a street binds, its `street_point` read (`_point_of`).
 #
 # Codes, names, chains and street points are REAL register rows (ruian_admin_units,
@@ -326,6 +331,18 @@ _OSTROVACICE = [
     (9503, "kraj", 116, "Jihomoravský kraj"),
     (9004, "stat", 1, "Česká republika"),
 ]
+_BRNO = [
+    (5498, "obec", 582786, "Brno"),
+    (9702, "okres", 3702, "Brno-město"),
+    (9703, "kraj", 116, "Jihomoravský kraj"),
+    (9004, "stat", 1, "Česká republika"),
+]
+_OSTRAVA = [
+    (3218, "obec", 554821, "Ostrava"),
+    (9802, "okres", 3807, "Ostrava-město"),
+    (9803, "kraj", 132, "Moravskoslezský kraj"),
+    (9004, "stat", 1, "Česká republika"),
+]
 _HRADEC = [
     (4398, "obec", 569810, "Hradec Králové"),
     (9603, "kraj", 86, "Královéhradecký kraj"),
@@ -346,6 +363,20 @@ def _parts(name_norm: str, obec_unit_id: int, *rows: tuple) -> _Expect:
         maps._PART_LOOKUP_SQL,
         {"version": _VERSION, "name_norm": name_norm, "obec_unit_id": obec_unit_id},
         list(rows),
+    )
+
+
+def _momc(name_norm: str, obec_unit_id: int, *rows: tuple) -> _Expect:
+    return _Expect(
+        maps._MOMC_LOOKUP_SQL,
+        {"version": _VERSION, "name_norm": name_norm, "obec_unit_id": obec_unit_id},
+        list(rows),
+    )
+
+
+def _momc_doors(momc_code: int, obec_code: int, *rows: tuple) -> _Expect:
+    return _Expect(
+        maps._MOMC_PARTS_SQL, {"momc_code": momc_code, "obec_code": obec_code}, list(rows),
     )
 
 
@@ -513,13 +544,32 @@ def test_an_okres_pick_that_does_not_name_its_okres_binds_nothing(client):
     assert body == {"level": "okres", **_NO_CODE, "context": None}
 
 
-def test_a_prague_district_typed_as_a_municipality_binds_nothing(client, caplog):
-    """Mapy types "Praha 2" `regional.municipality` (the shape `_MOCK_SUGGEST`
-    mirrors); it is a městská část, which no chip serves, and no unit of Praha's
-    chain has its name — the point alone would bind ALL of Praha."""
+def test_a_prague_district_typed_as_a_municipality_answers_its_parts(client):
+    """Mapy types "Praha 2" `regional.municipality` (the shape `_MOCK_SUGGEST` mirrors); no
+    unit of Praha's chain has its name, and the point alone would bind ALL of Praha. It is a
+    městská část: the answer is the set of its části, with no code of its own."""
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782, (490229, "Vinohrady"), (490148, "Nové Město"), (490156, "Nusle")),
+    ])
+    assert body == {
+        "level": "cast_obce", "id": None, "name": "Praha 2", "context": "Praha",
+        "parts": [
+            {"id": 490148, "name": "Nové Město"},
+            {"id": 490156, "name": "Nusle"},
+            {"id": 490229, "name": "Vinohrady"},
+        ],
+    }
+
+
+def test_a_municipality_naming_no_unit_and_no_mestska_cast_binds_nothing(client, caplog):
+    pick = {"name": "Praha 99", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
     with caplog.at_level("INFO", logger="api.maps"):
-        body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
+        body = _resolve(client, pick, [
+            *_MIRROR_PRESENT, _chain(pick, _PRAHA), _momc("praha 99", 3214),
+        ])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
     assert len([r for r in caplog.records if "no code" in r.getMessage()]) == 1
 
@@ -527,7 +577,7 @@ def test_a_prague_district_typed_as_a_municipality_binds_nothing(client, caplog)
 def test_a_municipality_whose_point_lies_in_another_obec_binds_nothing(client):
     """A town's point that PIPs over a border would otherwise bind the neighbour."""
     pick = {**_OBEC_SUGGESTION, "name": "Pardubice"}
-    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _JIHLAVA)])
+    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _JIHLAVA), _momc("pardubice", 9001)])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
 
 
@@ -591,6 +641,7 @@ def test_resolve_composite_quarter_name_retries_on_its_last_segment(client):
         *_MIRROR_PRESENT,
         _chain(pick, _HRADEC),
         _parts("hradec kralove trebes", 4398),
+        _momc("hradec kralove trebes", 4398),
         _parts("trebes", 4398, (409847, "Třebeš")),
     ])
     assert body == {
@@ -599,14 +650,89 @@ def test_resolve_composite_quarter_name_retries_on_its_last_segment(client):
 
 
 def test_an_unplaceable_quarter_gets_NO_CODE_never_the_whole_town(client):
-    """"Praha 2" is a městská část (`momc`), which the answer table has no column
-    for. Falling back to the containing obec would turn "this quarter" into
-    "this whole city" — in a watchdog, a mail about every listing in Prague."""
-    pick = {**_PART_SUGGESTION, "name": "Praha 2"}
+    """Neither a část nor a městská část of Praha. Falling back to the containing obec would
+    turn "this quarter" into "this whole city" — in a watchdog, a mail about every listing."""
+    pick = {**_PART_SUGGESTION, "name": "Holešovičky"}
     body = _resolve(client, pick, [
-        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _parts("praha 2", 3214),
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _parts("holesovicky", 3214), _momc("holesovicky", 3214),
     ])
     assert body == {"level": "cast_obce", **_NO_CODE, "context": "Praha"}
+
+
+def test_a_mestska_cast_typed_as_a_part_answers_its_parts(client):
+    """Brno-střed is no část of Brno. The exact městská část is read BEFORE the name's tail,
+    so "střed" is never asked for."""
+    pick = {**_PART_SUGGESTION, "name": "Brno-střed", "lat": 49.19, "lng": 16.6}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _BRNO),
+        _parts("brno stred", 5498),
+        _momc("brno stred", 5498, (550973, "Brno-střed")),
+        _momc_doors(550973, 582786, (411591, "Staré Brno"), (411582, "Brno-město")),
+    ])
+    assert body == {
+        "level": "cast_obce", "id": None, "name": "Brno-střed", "context": "Brno",
+        "parts": [{"id": 411582, "name": "Brno-město"}, {"id": 411591, "name": "Staré Brno"}],
+    }
+
+
+def test_a_part_of_that_name_stays_the_part_a_saved_pick_always_was(client):
+    """"Ostrava-Poruba": the tail names a část, as it did before; no městská část overrides."""
+    pick = {**_PART_SUGGESTION, "name": "Ostrava-Poruba", "lat": 49.83, "lng": 18.17}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
+        _parts("ostrava poruba", 3218),
+        _momc("ostrava poruba", 3218),
+        _parts("poruba", 3218, (414085, "Poruba")),
+    ])
+    assert body == {"level": "cast_obce", "id": 414085, "name": "Poruba", "context": "Ostrava"}
+
+
+def test_a_mestska_cast_binds_on_the_tail_of_the_name_too(client):
+    pick = {"name": "Ostrava-Mariánské Hory a Hulváky", "lat": 49.83, "lng": 18.26,
+            "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
+        _momc("ostrava marianske hory a hulvaky", 3218),
+        _momc("marianske hory a hulvaky", 3218, (554286, "Mariánské Hory a Hulváky")),
+        _momc_doors(554286, 554821, (414115, "Hulváky"), (414107, "Mariánské Hory")),
+    ])
+    assert body["name"] == "Mariánské Hory a Hulváky"
+    assert [p["id"] for p in body["parts"]] == [414115, 414107]
+
+
+def test_a_mestska_cast_with_no_doors_binds_nothing(client):
+    """A mirror with no doors for it has no set to offer: no code, never an empty chip list."""
+    pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782),
+    ])
+    assert body == {"level": "obec", **_NO_CODE, "context": None}
+
+
+def test_a_name_meaning_two_mestske_casti_is_refused_rather_than_guessed(client):
+    pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2"), (500120, "Praha 2")),
+    ])
+    assert body == {"level": "obec", **_NO_CODE, "context": None}
+
+
+def test_a_pick_that_binds_one_unit_answers_no_parts(client):
+    """The shape every other pick has always had."""
+    body = _resolve(client, _PART_SUGGESTION, [
+        *_MIRROR_PRESENT, _chain(_PART_SUGGESTION, _PRAHA),
+        _parts("vinohrady", 3214, (490229, "Vinohrady")),
+    ])
+    assert "parts" not in body
+
+
+def test_the_mestska_cast_lookup_is_the_part_lookup_at_its_level():
+    """One statement at two levels: whichever way a part is read at its version, so is this."""
+    assert maps._MOMC_LOOKUP_SQL == maps._PART_LOOKUP_SQL.replace("'cast_obce'", "'momc'")
+    assert "u.level = 'momc'" in maps._MOMC_LOOKUP_SQL
 
 
 def test_an_ambiguous_quarter_name_is_refused_rather_than_guessed(client):
@@ -799,6 +925,118 @@ def test_an_address_without_a_street_entry_binds_nothing(client):
     )
     assert body == _unbound("Pardubice")
     assert _STREETS_IN_OBEC_SQL not in executed
+
+
+# ---------------- the address picker's door (W3b: `address_point`) ----------------
+# Door rows are `_ADDRESS_POINT_COLUMNS` as `SqlRegistryView` reads them; kódy ADM are stand-ins.
+
+_TYNSKA_DOOR = (50.088368, 14.422374)
+
+
+def _door(kod: int, at: tuple[float, float], street: _Row | None, cp: int, co: int | None = None,
+          znak: str | None = None) -> tuple:
+    return (kod, 3214, street.obec if street else 583600, "11000", at[0], at[1],
+            street.code if street else None, normalize_street_name(street.name) if street else None,
+            street.name if street else None, cp, co, znak, None, None, None, "č.p.")
+
+
+def _doors(obec: int, street: _Row | None, cp: int, co: int | None, *rows: tuple) -> _Expect:
+    norm = normalize_street_name(street.name) if street else None
+    return _Expect(_ADDRESS_POINTS_BY_NUMBER_SQL,
+                   (_VERSION, obec, norm, norm, cp, cp, None, co, co, None, None), list(rows))
+
+
+def _label(kod: int, text: str) -> _Expect:
+    return _Expect(maps._DOOR_LABEL_SQL, (kod,), (text,))
+
+
+def _address(number: str, street: str | None, at: tuple[float, float], town: str = "Praha"
+             ) -> dict[str, Any]:
+    entries = [{"name": number, "type": "regional.address"}]
+    if street is not None:
+        entries.append({"name": street, "type": "regional.street"})
+    entries.append({"name": town, "type": "regional.municipality"})
+    return {"name": f"{street or town} {number}", "type": "regional.address", "lat": at[0],
+            "lng": at[1], "regional_structure": entries, "address_point": True}
+
+
+def test_an_address_pick_binds_its_one_door_on_its_bound_street(client):
+    """The street binds as the chip does, then ONE keyed read of its doors of that number."""
+    pick = _address("610/7", "Týnská ulička", _TYNSKA_DOOR)
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA),
+        _doors(554782, TYNSKA_ULICKA, 610, 7, _door(21717001, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7)),
+        _label(21717001, "Týnská ulička 610/7, Praha"),
+    ])
+    assert body == {"level": "adresni_misto", "id": 21717001,
+                    "name": "Týnská ulička 610/7, Praha", "context": None}
+
+
+def test_an_orientation_letter_picks_its_own_door(client):
+    """610/7 and 610/7a are two doors of one house: the pick's letter chooses (the
+    `another-letter` case below is the refusal)."""
+    pick = _address("610/7a", "Týnská ulička", _TYNSKA_DOOR)
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA),
+        _doors(554782, TYNSKA_ULICKA, 610, 7,
+               _door(21717001, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7),
+               _door(21717002, (50.0884, 14.4224), TYNSKA_ULICKA, 610, 7, znak="a")),
+        _label(21717002, "Týnská ulička 610/7a, Praha"),
+    ])
+    assert (body["id"], body["name"]) == (21717002, "Týnská ulička 610/7a, Praha")
+
+
+def test_a_village_address_binds_by_obec_and_number_inside_the_slack(client):
+    at = (49.1902, 16.4201)
+    pick = _address("12", None, at, town="Ostrovačice")
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTROVACICE),
+        _doors(583600, None, 12, None, _door(21800001, (49.1905, 16.4204), None, 12)),
+        _label(21800001, "Ostrovačice"),
+    ])
+    assert (body["level"], body["id"]) == ("adresni_misto", 21800001)
+
+
+@pytest.mark.parametrize("doors", [
+    pytest.param((_door(1, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7),
+                  _door(2, (50.0886, 14.4226), TYNSKA_ULICKA, 610, 7)), id="two-in-the-slack"),
+    pytest.param((_door(1, (50.0920, 14.4224), TYNSKA_ULICKA, 610, 7),), id="one-400m-off"),
+    pytest.param((_door(1, _TYNSKA_DOOR, TYNSKA_ULICKA, 610, 7, znak="a"),), id="another-letter"),
+    pytest.param((), id="none"),
+])
+def test_anything_but_one_door_near_the_pick_binds_nothing(client, doors):
+    pick = _address("610/7", "Týnská ulička", _TYNSKA_DOOR)
+    body, executed = _resolve_logged(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        _point_of(TYNSKA_ULICKA), _doors(554782, TYNSKA_ULICKA, 610, 7, *doors),
+    ])
+    assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
+    assert maps._DOOR_LABEL_SQL not in executed
+
+
+def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client):
+    """Never widened to the whole obec: an unbound street is no door."""
+    pick = _address("12", "Nová", _TYNSKA_DOOR)
+    body, executed = _resolve_logged(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+    ])
+    assert body["id"] is None and _ADDRESS_POINTS_BY_NUMBER_SQL not in executed
+
+
+def test_an_address_without_a_number_reads_nothing_past_its_town(client):
+    pick = {**_address("x", "Týnská ulička", _TYNSKA_DOOR),
+            "regional_structure": [{"name": "Týnská ulička", "type": "regional.street"}]}
+    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
+    assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
+
+
+def test_the_flag_changes_nothing_but_an_address_pick(client):
+    """Browse never sets it; a street pick with it is still its street."""
+    pick = {**_street_pick("Na Rybníčkách", NA_RYBNICKACH), "address_point": True}
+    body = _street_resolve(client, pick, _PARDUBICE, _STREETS_PARDUBICE, NA_RYBNICKACH)
+    assert body == _bound(NA_RYBNICKACH, "Pardubice")
 
 
 def test_a_malformed_request_is_a_422_not_a_500(client):

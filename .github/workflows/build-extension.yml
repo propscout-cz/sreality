@@ -5,6 +5,8 @@ name: "CI: build Chrome extension"
 #                           "Load unpacked" install has the fixed dev ID
 #   chrome-extension-store  the store package (release/package.ts): no `key`, no
 #                           source maps, checked against release/allowed.ts
+# then runs the side-panel harness (e2e/sidepanel.mjs) on that dist/ and uploads
+# its screenshots + check list as extension-e2e-shots whenever it ran, pass or fail.
 # The store-package step runs on every pull request, so a PR that adds a
 # permission, a portal site or a host permission fails here until
 # chrome-extension/release/allowed.ts says so too.
@@ -98,3 +100,17 @@ jobs:
           path: chrome-extension/store
           if-no-files-found: error
           retention-days: 30
+      # After both uploads, so a red harness fails the job without withholding the bundle.
+      - name: Install headless Chromium (side-panel harness)
+        run: npx playwright-core install --with-deps chromium-headless-shell
+      - name: Side-panel harness (e2e/sidepanel.mjs on the dist/ just built)
+        id: e2e
+        run: npm run e2e
+      - name: Upload harness screenshots
+        if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension-e2e-shots
+          path: chrome-extension/e2e-shots
+          if-no-files-found: warn
+          retention-days: 14

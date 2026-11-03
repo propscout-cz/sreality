@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests._read_contract import _select_cols
 from tests.test_location_w3_projection import _columns, _sql
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,14 +18,6 @@ _CREATES = re.compile(r"create\s+(?:or\s+replace\s+)?view\s+(?:public\.)?propert
 
 _CREATES_SOURCES = re.compile(
     r"create\s+(?:or\s+replace\s+)?view\s+(?:public\.)?property_sources_public\b", re.I)
-
-
-def _select_cols(const: str) -> list[str]:
-    src = (ROOT / "frontend" / "src" / "lib" / "queries.ts").read_text(encoding="utf-8")
-    m = re.search(rf"\bconst {const}\s*=(.*?);\n", src, re.DOTALL)
-    assert m, f"{const} not found in frontend/src/lib/queries.ts"
-    joined = "".join(re.findall(r"'([^']*)'", m.group(1)))
-    return [c.split(":")[-1] for c in joined.split(",") if c]  # `alias:column`
 
 
 def _latest_view(creates: re.Pattern[str], view: str) -> tuple[str, set[str]]:

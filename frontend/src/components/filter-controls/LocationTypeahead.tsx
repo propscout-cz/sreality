@@ -10,14 +10,18 @@
  * the picked level (kraj, okres, obec, část obce, ulice — an address is its
  * street) with the register's name, and the pick becomes the chip
  * `{name, context, level, id}` that every surface tests as
- * `<level>_id = any(codes)` (lib/districtCodes). A pick the server cannot
- * bind to one unit adds NO chip and says why under the input; no Mapy string is
+ * `<level>_id = any(codes)` (lib/districtCodes). A městská část has no code: its
+ * pick adds one ordinary část chip per part (ruling 2026-11-02, #2380), so a URL, a preset and a
+ * watchdog hold nothing new and keep the set they were saved with. A pick the server
+ * cannot bind to one unit adds NO chip and says why under the input; no Mapy string is
  * ever stored. INCLUDE chips OR'd, then AND NOT-(OR of EXCLUDE chips); the per-chip
  * `−`/`+` button toggles `excluded`. The same component renders on every surface
  * with a location box.
  *
  * onPick fires once per pick, before it resolves, so the Browse map can fly to
- * the picked place — also for a pick that adds no chip. */
+ * the picked place — also for a pick that adds no chip. The suggest read
+ * (`usePlaceSuggest`) and its list (`SuggestPanel`) are shared with the
+ * property page's address picker (location W3b). */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -43,22 +47,57 @@ const PICK_NOTICE = {
   country: "A country can't be used as a filter",
   failed: "Couldn't verify this place — try again",
   duplicate: 'Already selected',
+  expanded: (name: string, count: number) =>
+    `${name} added as its ${count} ${count === 1 ? 'part' : 'parts'}`,
 } as const;
 
 const sameChip = (a: DistrictChip, b: DistrictChip): boolean =>
   districtChipKey(a) === districtChipKey(b);
 
-/* The chip a resolve answer makes, or why it makes none. `res` null = the
+/* The chips a resolve answer makes, or why it makes none. `res` null = the
  * resolve call threw, which says nothing about the place. */
-const chipFromResolve = (
+const chipsFromResolve = (
   pick: MapySuggestion,
   res: LocationResolution | null,
-): DistrictChip | string => {
+): DistrictChip[] | string => {
   if (res == null) return PICK_NOTICE.failed;
   if (res.level == null && pick.type === 'regional.country') return PICK_NOTICE.country;
-  const chip = { name: res.name, context: res.context, level: res.level, id: res.id };
-  return isDistrictChip(chip) ? chip : PICK_NOTICE.refused(pick.name);
+  const units = res.parts ?? [res];
+  const chips = units
+    .map((u) => ({ name: u.name, context: res.context, level: res.level, id: u.id }))
+    .filter(isDistrictChip);
+  return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(pick.name);
 };
+
+/* The Mapy suggest read behind a place box: the typed query, debounced, and its answer. */
+export function usePlaceSuggest() {
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query.trim()), QUERY_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
+  const suggestQ = useQuery({
+    queryKey: ['maps', 'suggest', debounced],
+    queryFn: ({ signal }) => fetchSuggest(debounced, signal),
+    enabled: debounced.length >= MIN_QUERY_LEN,
+    staleTime: 60_000,
+    retry: false,
+  });
+  return {
+    query,
+    setQuery,
+    reset: () => {
+      setQuery('');
+      setDebounced('');
+    },
+    matches: suggestQ.data ?? [],
+    isLoading: suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN,
+    tooShort: debounced.length > 0 && debounced.length < MIN_QUERY_LEN,
+    notConfigured:
+      suggestQ.error instanceof Error && suggestQ.error.message === SUGGEST_NOT_CONFIGURED,
+  };
+}
 
 export function LocationTypeahead({
   label,
@@ -94,17 +133,12 @@ export function LocationTypeahead({
     };
   }, []);
 
-  const [query, setQuery] = useState('');
-  const [debounced, setDebounced] = useState('');
+  const suggest = usePlaceSuggest();
+  const { notConfigured } = suggest;
   const [open, setOpen] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; done?: boolean } | null>(null);
   const [pending, setPending] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(query.trim()), QUERY_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [query]);
 
   useEffect(() => {
     if (!open) return;
@@ -114,18 +148,6 @@ export function LocationTypeahead({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
-
-  const suggestQ = useQuery({
-    queryKey: ['maps', 'suggest', debounced],
-    queryFn: ({ signal }) => fetchSuggest(debounced, signal),
-    enabled: debounced.length >= MIN_QUERY_LEN,
-    staleTime: 60_000,
-    retry: false,
-  });
-
-  const notConfigured =
-    suggestQ.error instanceof Error &&
-    suggestQ.error.message === SUGGEST_NOT_CONFIGURED;
 
   const emit = (next: ReadonlyArray<DistrictChip>) => {
     latest.current = next;
@@ -137,17 +159,24 @@ export function LocationTypeahead({
    * nothing (an excluded chip stays excluded). */
   const add = async (s: MapySuggestion) => {
     onPick?.(s);
-    setQuery('');
-    setDebounced('');
+    suggest.reset();
     setNotice(null);
     setPending((n) => n + 1);
     const res = await resolveSuggestion(s).catch(() => null);
     if (!alive.current) return;
     setPending((n) => n - 1);
-    const chip = chipFromResolve(s, res);
-    if (typeof chip === 'string') setNotice(chip);
-    else if (latest.current.some((c) => sameChip(c, chip))) setNotice(PICK_NOTICE.duplicate);
-    else emit([...latest.current, chip]);
+    const chips = chipsFromResolve(s, res);
+    if (typeof chips === 'string') {
+      setNotice({ text: chips });
+      return;
+    }
+    const fresh = chips.filter((chip) => !latest.current.some((c) => sameChip(c, chip)));
+    if (fresh.length === 0) {
+      setNotice({ text: PICK_NOTICE.duplicate });
+      return;
+    }
+    emit([...latest.current, ...fresh]);
+    if (res?.parts) setNotice({ text: PICK_NOTICE.expanded(res.name ?? s.name, chips.length), done: true });
   };
 
   const remove = (chip: DistrictChip) => {
@@ -162,18 +191,15 @@ export function LocationTypeahead({
     );
   };
 
-  const isLoading = suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN;
-  const tooShort = debounced.length > 0 && debounced.length < MIN_QUERY_LEN;
-
   return (
     <div aria-busy={pending > 0}>
       <div ref={ref} className="relative">
         <input
           type="text"
           aria-label={label}
-          value={query}
+          value={suggest.query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            suggest.setQuery(e.target.value);
             setNotice(null);
             setOpen(true);
           }}
@@ -186,9 +212,9 @@ export function LocationTypeahead({
         />
         {open && !notConfigured && (
           <SuggestPanel
-            isLoading={isLoading}
-            tooShort={tooShort}
-            matches={suggestQ.data ?? []}
+            isLoading={suggest.isLoading}
+            tooShort={suggest.tooShort}
+            matches={suggest.matches}
             onPick={add}
           />
         )}
@@ -198,9 +224,13 @@ export function LocationTypeahead({
       <p
         role="status"
         aria-live="polite"
-        className={notice ? 'mt-1 text-[0.7rem] text-[var(--color-brick)]' : 'sr-only'}
+        className={
+          notice
+            ? `mt-1 text-[0.7rem] ${notice.done ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-brick)]'}`
+            : 'sr-only'
+        }
       >
-        {notice}
+        {notice?.text}
       </p>
 
       {notConfigured && (
@@ -266,7 +296,7 @@ export function LocationTypeahead({
   );
 }
 
-function SuggestPanel({
+export function SuggestPanel({
   isLoading,
   tooShort,
   matches,

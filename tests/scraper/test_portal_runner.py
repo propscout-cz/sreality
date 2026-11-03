@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from scraper import delist_policy, portal_factory, portal_runner, stop
 from scraper.portal import deadline_reached
 from scraper.portal_runner import DrainItem
+from scripts.failure_signature import reason_line
 
 
 class _Conn:
@@ -260,6 +261,7 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
         lambda _c, _s, ids: {n: stored[n] for n in ids if n in stored})
     monkeypatch.setattr(portal_runner.db, "touch_listings_by_id", lambda _c, ids: len(ids))
     monkeypatch.setattr(portal_runner.db, "enqueue_detail", lambda _c, _s, entries: len(entries))
+    monkeypatch.setattr(portal_runner.db, "rearm_sighted_given_up", lambda _c, _s, _ids: 0)
     p = _ReconcilingPortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert [(c["listings_found_new"], c["listings_enqueued"]) for c in agg["by_category"]] == [
@@ -1687,3 +1689,62 @@ def test_a_clean_phase_keeps_its_own_return_code(monkeypatch):
     _PhaseRecorder(monkeypatch)
     assert portal_runner.run_phase(_FakePortal(), "index", lambda portal, dry_run, **kw: (1, {}), False) == 1
 
+
+# --- a walk that collected nothing --------------------------------------------
+
+
+class _EmptyWalkPortal(_FakePortal):
+    """Every category fetched `pages` pages and collected `ids`; the portal still declares a count,
+    as a challenge page echoing the site's meta text does."""
+
+    def __init__(self, *, pages: int, ids: set[str] | None = None, **kw: Any) -> None:
+        super().__init__(categories=["A"], result_size=867, **kw)
+        self._pages = pages
+        self._ids = ids or set()
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        return (set(self._ids), {}, self._result_size, self._pages, self._reached_end)
+
+
+def test_a_walk_of_100_pages_collecting_nothing_fails_despite_its_declared_count(monkeypatch, caplog):
+    cap = _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=False), dry_run=False)
+    assert (rc, agg["errors"], agg["index_pages"]) == (1, 1, 100)
+    assert agg["by_category"][0]["sreality_result_size"] == 867
+    # Rule #3 is untouched: the walk did not reach the end, so it nominates nothing.
+    assert cap["candidates"] == [] and cap["queued"] == []
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
+    assert not agg["by_category"][0]["walk_reached_end"]
+    # The cell's reason line names the fault, not "exit code 1".
+    line = next(r.getMessage() for r in caplog.records if "empty_walk" in r.getMessage())
+    assert reason_line(f"2026-11-02 06:35:16,344 ERROR scraper.portal_runner {line}\n##[error]exit 1").endswith(
+        "CHECK empty_walk status=fail: fake collected 0 ads from 100 pages; failing the run")
+
+
+@pytest.mark.parametrize(("pages", "ids"), [(99, set()), (100, {"a"}), (0, set())])
+def test_a_small_empty_walk_or_one_that_collected_an_ad_stays_a_success(monkeypatch, pages, ids):
+    _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=pages, ids=ids), dry_run=False)
+    assert (rc, agg["errors"]) == (0, 0)
+
+
+def test_an_empty_walk_claiming_the_end_reads_red_and_still_nominates_nothing(monkeypatch):
+    """The runner's own guard already refuses an empty seen set (it would nominate the whole scope)."""
+    cap = _nominations(monkeypatch)
+    rc, _agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=True), dry_run=False)
+    assert rc == 1
+    assert cap["queued"] == []
+
+
+def test_the_finished_empty_walk_still_finalizes_its_run(monkeypatch):
+    """It completed, so `ended_at` is stamped and the crash path stays out of it; only the exit is red."""
+    finalized: list[dict[str, Any]] = []
+    monkeypatch.setattr(portal_runner, "_finalize_run", lambda run_id, agg, drain=False: finalized.append(agg))
+    monkeypatch.setattr(portal_runner, "_record_run_crash", lambda *a, **k: pytest.fail("not a crash"))
+    monkeypatch.setattr(portal_runner.db, "connect", lambda *a, **k: _Conn())
+    monkeypatch.setattr(portal_runner.db, "scrape_run_start", lambda *a, **k: 1)
+    _nominations(monkeypatch)
+    rc = portal_runner.run_phase(
+        _EmptyWalkPortal(pages=149, reached_end=False), "index", portal_runner.run_index_walk, False)
+    assert rc == 1
+    assert finalized[0]["errors"] == 1

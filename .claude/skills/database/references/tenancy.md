@@ -220,7 +220,8 @@ never reset, never rendered.
   account then present all seven families at 1; a later account gains a family's row on its first bump (signup
   bumps `board` and `collections`).
 - **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
-  `search_path = ''`) runs on twelve `<table>_curation_clock` constraint triggers, `AFTER INSERT OR UPDATE OR DELETE
+  `search_path = ''`) runs on fourteen `<table>_curation_clock` constraint triggers (696's twelve, 715's two on the
+  notification tables, family `notifications`, own-only), `AFTER INSERT OR UPDATE OR DELETE
   … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
   `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
   bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
@@ -304,9 +305,9 @@ never reset, never rendered.
   refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
   re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
   `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
-  twelve; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
+  fourteen; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
   (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
-- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, definer bump, invoker audience until 709, the grants,
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, fourteen since 715's own `$post$`, definer bump, invoker audience until 709, the grants,
   the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
   the objects live, so the apply's exit status, the census and the health alarm are the gates);
   `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
@@ -530,11 +531,18 @@ join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come fr
 (shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
 (`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
 (shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
-another account's id is a 404 before the service role opens. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
+another account's id is a 404 before the service role opens. Apply and Undo (`/runs/{id}/proposals/{i}/*`, #2072) stay on the
+`TenantConn` for everything: the curation write under its own RLS, naming the RUN's account (shape 3's explicit predicate, not the
+oldest membership), and the marker in `agent_proposal_applies` (`authenticated` SELECT only, the `curation_clock` idiom) through
+migration 712's definers, each refusing any `session_user` but `tenant_pool`, so PostgREST's `authenticator` cannot call them. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
 browser write) follows: `PUT /runs/limit` takes the gate's account (the body names none) and writes on the service role after the
 route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
 definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row
 cascades with the account; the account's `llm_calls` rows stay (704: no foreign key) and count only towards the platform ceiling.
+A run's files (`GET /runs/{id}/files/{file}`, #2073) read `agent_artifacts` on the tenant connection, and only that row's key
+reaches the store: a foreign id and a missing one are the same 404, and no path is an input. The bucket `agent-files` is private
+with no policy on `storage.objects`, so no browser role, the owner's included, reads an object at Storage (714). An account's
+deletion cascades the rows; the worker's hourly `agent_files.sweep` then removes every object older than an hour that no row names.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's

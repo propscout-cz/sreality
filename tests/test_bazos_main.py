@@ -16,6 +16,8 @@ from scraper.bazos_main import BazosPortal
 from scraper.portal_base import ListingGoneError
 from scraper.portal_runner import DrainItem
 
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
+
 
 class _Conn:
     def __enter__(self) -> "_Conn":

@@ -13,7 +13,7 @@ name: "Ops: back up what a destructive migration drops"
 #   gh workflow run backup_before_drop.yml -f label=retired-claims -f artifacts="34773464850:retired-claims-backup"
 #
 # Migration 575 (the MF legacy columns):
-#   gh workflow run backup_before_drop.yml -f label=mf-legacy-columns -f targets="listings:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent properties:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent ruian_admin_units:id,has_polygon"
+#   gh workflow run backup_before_drop.yml -f label=mf-legacy-columns -f targets="listings:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent properties:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent"
 
 on:
   workflow_dispatch:

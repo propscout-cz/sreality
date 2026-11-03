@@ -132,7 +132,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `unconfigured` and touches nothing. Steps fan_out / claim / send are its
              `portal_errors` cells, recorded by exception class only: an endpoint is a
              secret and never reaches the heartbeat or the log.
-- heartbeat: every 30s, upsert this worker's beat + per-lane fields into
+- heartbeat: every 30s, upsert this worker's beat, per-lane fields and the commit it
+             runs (`version`) into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
              boot, seeded from the previous row, so a deploy resets no counter. It
@@ -2480,7 +2481,8 @@ def _beat_sync(state: dict[str, Any]) -> None:
                 cur.execute(_HEARTBEAT_SQL, {
                     "worker": WORKER_NAME,
                     "started_at": state["started_at"],
-                    "details": Jsonb(_lane_snapshot(state["lanes"])),
+                    "details": Jsonb({**_lane_snapshot(state["lanes"]),
+                                      "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA")}),
                 })
         finally:
             with contextlib.suppress(Exception):

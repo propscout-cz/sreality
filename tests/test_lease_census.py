@@ -1,6 +1,6 @@
 """One singleton-lease module: lease compare-and-set text lives in scraper/job_lease.py and in no new file.
-The hand-written leases left (LEGACY) each re-solve take, renew, fence and release their own way; this census
-fails CI on a fourth. It matches write shapes: SQL that sets or compares a holder, the bare `expires_at` /
+A hand-written lease re-solves take, renew, fence and release its own way; LEGACY is empty, so this census
+fails CI on any. It matches write shapes: SQL that sets or compares a holder, the bare `expires_at` /
 `heartbeat_at` staleness tests, a session advisory lock in Python. A work-queue claim (`FOR UPDATE SKIP LOCKED`), a
 transaction advisory lock, and a reader, view, COMMENT or log line naming job_lease's columns do not match.
 Blind spot: a lease spelled otherwise passes.
@@ -36,14 +36,7 @@ class Ledgered(NamedTuple):
     owner: str
 
 
-LEGACY: dict[str, Ledgered] = {
-    "scripts/recompute_property_stats.py": Ledgered(
-        "S1 property_maintenance_lease (mig 279): the cutover row beside the job_lease row (rule 20)",
-        "#2267 drops it once gate #2110 passes"),
-    "scripts/resolve_brokers.py": Ledgered(
-        "S2 broker_resolution_lock (mig 192): the cutover row beside the job_lease row",
-        "#2273 drops it once gate #2111 passes"),
-}
+LEGACY: dict[str, Ledgered] = {}
 
 
 def _source_files(root: Path) -> list[Path]:

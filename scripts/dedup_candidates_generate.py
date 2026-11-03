@@ -302,11 +302,9 @@ def _sum(rows: Sequence[dict[str, Any]], key: str) -> int:
 def waterfall_rows(funnel: Sequence[dict[str, Any]],
                    paired_by_type: Sequence[dict[str, Any]] | None,
                    *, partial: bool) -> list[dict[str, Any]]:
-    """The run's chain in the SHARED step vocabulary (W16, location_data/location_steps.py):
-    the same keys, the same order and the same three row kinds the audit page's
-    `location_audit_waterfall` writes hourly. The two readouts can now differ only by SCOPE
-    (a run can be narrowed to active listings) and by TIME (a run is frozen, the audit page
-    refreshes hourly) — which is why both are printed next to the chain.
+    """The run's chain in the SHARED step vocabulary (W16, location_data/location_steps.py).
+    Its SCOPE (a run can be narrowed to active listings) and TIME (a run is frozen) are printed
+    next to the chain.
 
     THE ARITHMETIC HAPPENS HERE, ONCE. `lost` is the previous CHAIN row's count minus this
     one's; a split partitions its parent and carries none; `share_pct` is out of every

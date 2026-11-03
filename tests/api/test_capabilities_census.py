@@ -19,21 +19,24 @@ from api.capabilities import registry
 from api.capabilities.entry import Caller, Effect, Entry, Tenancy
 from api.capabilities.schema import PORTABLE_KEYWORDS, nodes, portable
 from tests.api._script_conn import ScriptConn
+from tests.api._tool_fixtures import (
+    POINT,
+    _broker,
+    _dicts,
+    _distinct,
+    _identity_fields,
+    _walk,
+    evidence_run,
+    head,
+    is_board,
+    run,
+    script,
+)
+from tests.toolkit._parked_levels import _PARKED_CONDITION_LEVELS
 from toolkit import filter_registry as fr
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRIES = dict(registry.ENTRIES)
-
-
-def _walk(schema: dict[str, Any], path: str = "") -> list[tuple[str, dict[str, Any]]]:
-    """Every (dotted name, property schema) at any depth."""
-    out = []
-    for name, sub in (schema.get("properties") or {}).items():
-        out.append((f"{path}{name}", sub))
-        out += _walk(sub, f"{path}{name}.")
-        if isinstance(sub.get("items"), dict):
-            out += _walk(sub["items"], f"{path}{name}[].")
-    return out
 
 
 # --- 1. declarations --------------------------------------------------------------------------------------------
@@ -72,20 +75,6 @@ def test_no_write_or_code_tool_is_a_market_tool() -> None:
 
 
 # --- 2-3. no identity in any input schema -----------------------------------------------------------------------
-
-_IDENTITY_TOKENS = {"account", "user", "acting", "act", "owner", "principal", "tenant", "member", "email", "login"}
-_IDENTITY_NAMES = {"sub", "role", "uid"}
-
-
-def _identity_fields(schema: dict[str, Any]) -> list[str]:
-    hits = []
-    for dotted, _ in _walk(schema):
-        name = dotted.rsplit(".", 1)[-1].removesuffix("[]")
-        tokens = {t.removesuffix("s") for t in name.split("_")} | set(name.split("_"))
-        if tokens & _IDENTITY_TOKENS or name in _IDENTITY_NAMES:
-            hits.append(dotted)
-    return hits
-
 
 def test_the_identity_walker_sees_identity_at_any_depth_and_nothing_else() -> None:
     class Owner(BaseModel):
@@ -150,7 +139,6 @@ def test_a_field_that_takes_null_says_so_because_null_is_not_omission() -> None:
 
 def test_no_tool_offers_a_parked_condition_level() -> None:
     """Rule 14: condition scoring is parked, so no surface reads its levels."""
-    from tests.toolkit.test_filter_registry import _PARKED_CONDITION_LEVELS
     for name, entry in ENTRIES.items():
         names = {dotted.rsplit(".", 1)[-1] for dotted, _ in _walk(entry.input_schema)}
         assert not names & _PARKED_CONDITION_LEVELS, name
@@ -214,21 +202,7 @@ def _baseline(entry: Entry) -> dict[str, Any]:
     return args
 
 
-def _distinct(prop: dict[str, Any], current: Any) -> Any:
-    """A valid value for `prop` that is not `current`; a composite is built from its own properties."""
-    if prop.get("type") == "array":
-        return [_distinct(prop["items"], None)]
-    if prop.get("type") == "object":
-        return {k: _distinct(sub, None) for k, sub in prop["properties"].items()}
-    if "enum" in prop:
-        return next(v for v in prop["enum"] if v != current)
-    floor = prop.get("minimum", 0)
-    return {"integer": floor + 7, "number": floor + 0.37, "boolean": not current, "string": "x"}[prop["type"]]
-
-
 def _statements(name: str, args: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
-    from tests.api.test_broker_board import head, is_board  # that module reads this one's _distinct
-
     # The broker board reads its statement's one totals row by name.
     conn = ScriptConn([_VELOCITY_SUBJECT, _COUNT, (is_board, [head()]), _PIVOT])
 
@@ -337,21 +311,12 @@ def test_no_tool_reader_reads_a_relation_dark_under_the_users_login(module: str)
     assert _DARK_UNDER_LOGIN.findall("select 1 from listings l join listing_snapshots s on true")
 
 
-def _dicts(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [d for v in value for d in _dicts(v)]
-    if not isinstance(value, dict):
-        return []
-    return [value] + [d for v in value.values() for d in _dicts(v)]
-
-
 def test_the_relation_pattern_sees_what_it_bans() -> None:
     assert _FORBIDDEN_RELATIONS.findall("from curated_cities_matching(x) join city_index_values v on listing_location")
 
 
 @pytest.mark.parametrize("name", ["get_property_dossier", "get_property_brokers", "get_my_property_context"])
 def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis(name: str) -> None:
-    from tests.api.test_property_read import _broker, run, script
     from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
     out = run(name, {"property_ids": [7, 9]}, script(brokers=[_broker(71, 1), _broker(81, 3)]))
     rows = _dicts(out["data"])
@@ -366,9 +331,8 @@ def test_a_property_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_
 
 def test_an_achieved_price_read_returns_no_forbidden_key_at_any_depth_and_every_per_m2_figure_its_basis() -> None:
     """#2064: the prices achieved label every per-m² figure, row and summary alike, with its basis."""
-    from tests.api.test_market_evidence import POINT, _run
     from toolkit.measures import PPM2_BASES, PPM2_BASIS_KEY, PPM2_VALUE_KEY
-    rows = _dicts(_run(POINT)[0]["data"])
+    rows = _dicts(evidence_run(POINT)[0]["data"])
     assert not {k for d in rows for k in d} & forbidden_columns()
     priced = [d for d in rows if any(d.get(k) is not None for k in (PPM2_VALUE_KEY, "median_price_per_m2", "median"))]
     assert len(priced) >= 4 and all(d.get(PPM2_BASIS_KEY) in PPM2_BASES for d in priced)

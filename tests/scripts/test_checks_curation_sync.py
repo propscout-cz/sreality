@@ -17,12 +17,12 @@ from scripts.checks.common import PREVIOUS_CELLS_SQL
 from scripts.verify_pipeline import CHECKS, THRESHOLDS
 from tests.scripts.test_checks_platform import _NOW, _Conn
 
-T = {"CURATION_CLOCK_TRIGGERS": 12, "CURATION_CLOCK_QUIET_H": 24, "CURATION_CLOCK_LOAD_PCT": 5.0}
+T = {"CURATION_CLOCK_TRIGGERS": 14, "CURATION_CLOCK_QUIET_H": 24, "CURATION_CLOCK_LOAD_PCT": 5.0}
 _RESET = _dt.datetime(2026, 8, 11, 5, 34, tzinfo=_dt.timezone.utc)
 _NO_PGSS = pg_errors.UndefinedTable('relation "pg_stat_statements" does not exist')
 
 
-def _answers(*, armed: int = 12, found: int = 12, off: list[str] | None = None,
+def _answers(*, armed: int = 14, found: int = 14, off: list[str] | None = None,
              bumps: Any = (0, 0, None, 9), statements: Any = _NO_PGSS, masked: int = 0,
              previous: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The clock's two reads; pg_stat_statements absent unless `statements` = (calls, clock_ms, all_ms, reset), with
@@ -58,7 +58,7 @@ def test_twelve_armed_triggers_and_every_event_bumped_are_two_ok_cells_on_the_ch
     out = plat.check_curation_sync(conn, T)
     assert out["status"] == "ok" and out["check_key"] == "curation_sync"
     assert _cells(out) == {
-        "triggers": ("ok", "all 12 curation-clock triggers are enabled and deferred"),
+        "triggers": ("ok", "all 14 curation-clock triggers are enabled and deferred"),
         "board_bumps": ("ok", "every one of the 9 card events of the last 24 h bumped its account's board clock"),
     }
     assert all(armed for _sql, _params, armed in conn.sent), "every statement under SET LOCAL statement_timeout"
@@ -68,12 +68,12 @@ def test_twelve_armed_triggers_and_every_event_bumped_are_two_ok_cells_on_the_ch
 
 
 def test_a_disabled_or_missing_trigger_is_a_problem_naming_the_table() -> None:
-    out = plat.check_curation_sync(_Conn(_answers(armed=11, found=12, off=["tags"])), T)
+    out = plat.check_curation_sync(_Conn(_answers(armed=13, found=14, off=["tags"])), T)
     status, message = _cells(out)["triggers"]
     assert out["status"] == "fail" and status == "fail"
-    assert message.startswith("11 of 12 curation-clock triggers are enabled and deferred (12 found; off on tags)")
+    assert message.startswith("13 of 14 curation-clock triggers are enabled and deferred (14 found; off on tags)")
     [facts] = [c["facts"] for c in out["details"]["cells"] if c["subject"] == "triggers"]
-    assert facts == {"expected": 12, "armed": 11, "found": 12, "off": ["tags"]}
+    assert facts == {"expected": 14, "armed": 13, "found": 14, "off": ["tags"]}
     missing = plat.check_curation_sync(_Conn(_answers(armed=0, found=0)), T)
     assert _cells(missing)["triggers"][0] == "fail", "no trigger at all (696 not applied) is a Problem"
 

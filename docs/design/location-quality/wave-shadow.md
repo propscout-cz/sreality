@@ -2,7 +2,7 @@
 
 Gate (PROGRAM.md, "Standing gate"): every wave that moves positions or quarter codes runs one shadow
 engine generation before it deploys, judged on the rulings ledger inside the affected blocks (the 413
-post-2026-10-27 `same` pairs must hold). Binds W3, W4, W5, W5b and W6. No production write, no engine
+post-2026-10-27 `same` pairs must hold). Binds W3, W4, W5, W5b, W6 and W7. No production write, no engine
 pause, `DECISION_MODULES` untouched.
 
 ## The seam
@@ -41,13 +41,7 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
      claim of a type still outranks. Re-mined claims get ids above every stored one (`NEW_CLAIM_ID`), as
      an insert would. A stored page that would not re-mine (not fetched, refused, scope incomplete) keeps
      today's claims and is counted failed, so the run exits 1.
-   - `purge` (W3): today's read is already one claim per type once W3 lands, so `what_if.purge` reads
-     every stored claim of the ids RAW (`_RAW_CLAIMS_SQL`: each claim's contract version, the portal's
-     active version, whether the active contract declares its type), keeps per (listing, claim type,
-     licence class) the purge's keeper (`keeper_rank`: newest version <= active, then the newest
-     observation, then the id; the same order as `scripts/location_claims_retire.py`, which a DB-lane
-     test holds to the purge's result), then applies the one read (`what_if.one_read`).
-
+   (`purge`, W3's shadow of its own keeper rule, went with the purge in W3's PR-2, migration 707.)
    (`what_if.restate`, the pre-W3 version-window read in Python, was deleted with W3, #2223.)
 
    A **mover** is a listing whose new row differs from `COHORT_LOCATION_SQL`'s row today in any field
@@ -57,8 +51,11 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    `drain.StoredRow`, by name: `town`, `part`, `moved_300m`, `granularity`, `old>new`, `movers`). Exit 1
    when a page or a re-mine failed: a partial shadow is re-run, never judged.
 2. **Size, then export**: `python3 -m autodedup.shadow <dir>`. Blocks = each mover's old and new block at
-   E300's grain (`blocks_for`: the quarter in Praha, Brno and Ostrava, the town elsewhere; a split-city side
-   with no quarter would export the whole city, so it is left out and counted). It prints every block with
+   E300's grain (`blocks_for`: the quarter in Praha, Brno and Ostrava, the town elsewhere). A mover with a
+   split-city side and no quarter (its candidates are the whole city) rides ONE `ids` block (W5,
+   `ids:<id>+<id>…`, exported as listed) with every ad a ruling the judge reads (pair or group verdict,
+   must-not-link, operator merge) or its property ties to it (`tied_ads`), so both arms hold the mover
+   and its ruled counterparts. It prints every block with
    its ad count first (`block_sizes`, the export's own selection) and the fewest groups that fit the caps.
    **Only the blocks a ruling is inside are kept** (default; `--all-blocks` opts out): one read-only
    statement (`RULED_BLOCKS_SQL`) maps every advert the rulings name (pair verdicts, cluster verdicts'
@@ -88,10 +85,10 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    already inside a family is today's state, printed as `E111 base N / candidate M, new K` with the pairs
    in `shadow.json` (run 41213246616's FAIL was that standing state). A ruling newly honoured is
    reported, not failed. **PARTIAL** labels a verdict whenever `limit` cut the ids or a mover sat in no
-   exported block (`movers in cohort M of N`); it is still judged. A mover whose old block another group
-   exports counts as in another group, never unjudged. The 413-style recent `same` rulings (newest word
-   `same`, written since `--recent-since`, default 2026-10-27) are counted apart: judged, held, broken,
-   apart in both, unjudged (an ad outside the cohort: printed, never a fail). D83 edges
+   exported block (`movers in cohort M of N`); it is still judged. A mover whose old block (or `ids`
+   block) another group exports counts as in another group, never unjudged. The 413-style recent `same`
+   rulings (newest word `same`, written since `--recent-since`, default 2026-10-27) are counted apart:
+   judged, held, broken, apart in both, unjudged (an ad outside the cohort: printed, never a fail). D83 edges
    (`merge_gained/lost`, `copairs_gained/lost`) touching a mover are printed for the operator (`--show`,
    all in `shadow.json`), never a fail: positions moving legitimately changes candidates.
 
@@ -116,13 +113,7 @@ candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
 
 **A wave whose ids are a full scan** reads them from R2 instead: the ids_r2_key input (`what_if
 --ids-r2-key`) fetches a gzipped list, one listing id per line, with step 1's `R2_*` credentials
-(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`. W3: dispatch the purge
-dry run, which writes `backups/w3-claims/<UTC date>/w3_shadow_ids_<run>_<attempt>.txt.gz`; read the key
-from its log; dispatch the shadow:
-```bash
-gh workflow run location_wave_shadow.yml --ref <the W3 ref> -f wave=w3 -f claims=purge \
-    -f scope=apply -f group=1/1 -f ids_r2_key=backups/w3-claims/<date>/w3_shadow_ids_<run>_<attempt>.txt.gz
-```
+(`payloads.open_store`), ignores ids_sql, and records the key in `what_if.json`.
 
 **A wave too wide for one runner** runs in block groups over ONE set of positions:
 1. Dispatch with `group=1/1`. Step 1 computes the positions; step 2 prints every block with its ad count
@@ -134,7 +125,10 @@ gh workflow run location_wave_shadow.yml --ref <the W3 ref> -f wave=w3 -f claims
 gh workflow run location_wave_shadow.yml --ref main -f wave=w4-g2 -f group=2/3 \
     -f positions_run_id=<run id of the 1/1 dispatch>
 ``` `--ref` decides the resolver: W4 changes only a contract, so
-`main`; W5, W5b and W6 dispatch from their own branch once it has merged `main`.
+`main`; W5, W5b, W6 and W7 dispatch from their own branch once it has merged `main`.
+W7 changes no resolver answer (W5 went first), so its `ids_sql` samples Praha, `SELECT ll.listing_id FROM
+listing_location ll WHERE ll.obec_kod = 554782 ORDER BY ll.listing_id LIMIT 5000`, after W5's sweep has drained, and
+expects 0 movers. Its okres 9999 is no mover: the shadow reads today's registry, and `COHORT_LOCATION_SQL` carries no okres.
 
 By hand, with `SUPABASE_DB_URL` and (for `remine`) the `R2_*` variables:
 ```bash
@@ -153,9 +147,10 @@ python3 -m autodedup.shadow shadow/w4
 python3 -m autodedup.harness shadow shadow/w4/base/cohort.jsonl.gz shadow/w4/positions.jsonl \
     shadow/w4/labels --scorer shadow/w4/scorer.json --out shadow/w4/judge
 ```
-W3: `--claims purge`; W5, W5b, W6: `--claims none` from the wave's branch. A block costs what its town does
-(Pardubice: 7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be
-167k ads, about 2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
+W5, W5b, W6: `--claims none` from the wave's branch (W5, #2251: `scope=apply`, slice by slice with the
+ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice). A block costs what its town does (Pardubice:
+7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about
+2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
 
 ## Rulings taken (defaults; the operator may override)
 - "Approved-split sessions" (named nowhere in the repo) := the rulings ledger inside the affected blocks
@@ -169,9 +164,7 @@ W3: `--claims purge`; W5, W5b, W6: `--claims none` from the wave's branch. A blo
 - Moves reach the live store lazily (re-decided, never forced): the shadow shows the eventual state.
 - Cohorts are per block: a mover's candidates in other blocks (an unknown-quarter ad of a split city,
   location-free probes such as photos and text) are outside the cohort.
-- A mover whose OLD side is in no exported block (no row today, or a split-city row with no quarter) is in
-  neither arm and makes the verdict PARTIAL. W5's about 6k Praha rows that gain a quarter fall here:
-  covering them needs an id-grain export block (owed before W5's shadow, not built).
+- A mover with no row today is in neither arm and makes the verdict PARTIAL.
 - `--scope apply` judges membership on today's location: a mover entering the scope from outside is not
   selected.
 - `remine` leaves the text lane's reading claims as they are (no stored reading is re-read); realitymix

@@ -1,10 +1,42 @@
 #!/usr/bin/env bash
-# Secret scan of every commit this push sends that no remote holds yet, rebased and cherry-picked ones included, a merge
-# by what it changed beyond the automatic merge (#2035).
+# Refuses what the docs-budget CI job would fail (#2235), then the secret scan of every commit this push sends that no
+# remote holds yet, rebased and cherry-picked ones included, a merge by what it changed beyond the automatic merge (#2035).
 set -euo pipefail
 tips=()
 while read -r _ local_sha _ _; do
   [[ "$local_sha" =~ ^0+$ ]] || tips+=("$local_sha")  # an all-zero sha deletes a branch: nothing to send
 done
 (( ${#tips[@]} )) || exit 0
-exec "$(git rev-parse --show-toplevel)/scripts/gitleaks.sh" git --log-opts="--remerge-diff ${tips[*]} --not --remotes"
+
+# The budget reads the working tree, so it judges a push only where that tree is what is being sent. Nothing environmental
+# ever blocks here: a hook that blocks gets skipped, and the secret scan with it.
+skip() { echo "docs budget skipped: $*"; }
+top=$(git rev-parse --show-toplevel)
+runner="$top/.github/scripts/docs-check.sh"
+head=$(git rev-parse -q --verify HEAD || true)
+if [[ " ${tips[*]} " != *" $head "* ]]; then
+  skip "this push does not send the checked-out head"
+elif [[ ! -x "$runner" ]]; then
+  skip "this branch has no $(basename "$runner")"
+elif [[ -n "$(git status --porcelain -- CLAUDE.md ROADMAP.md .claude/skills .github/scripts 2>/dev/null)" ]]; then
+  skip "uncommitted edits under the docs it reads"
+else
+  rc=0
+  out=$("$runner" 2>&1) || rc=$?
+  case "$rc" in
+    0) [[ -z "$out" ]] || echo "$out" ;;
+    1)
+      echo "$out"
+      echo "Push refused by the docs budget: nothing was pushed."
+      echo "To recover: git fetch origin main, fix the file and amend the commit, then push again."
+      echo "Skipping this hook (--no-verify) also skips the secret scan."
+      exit 1
+      ;;
+    *)
+      first="${out%%$'\n'*}"
+      skip "exit ${rc}: ${first#::error::}"
+      ;;
+  esac
+fi
+
+exec "$top/scripts/gitleaks.sh" git --log-opts="--remerge-diff ${tips[*]} --not --remotes"

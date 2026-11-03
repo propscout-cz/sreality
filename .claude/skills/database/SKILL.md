@@ -106,8 +106,7 @@ did within minutes, hence migration 279).
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
   it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
-  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
-  ledgers the older copies (`property_maintenance_lease`, `broker_resolution_lock`, until #2267/#2273).
+  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
@@ -175,15 +174,13 @@ crash killed the batch before its counters were written. Order the two so the sc
 never behind the code: apply, verify with a SELECT, then merge.
 
 `verify_pipeline`'s **`migration_drift`** check (2026-08-27) now catches the gap within one
-hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
-migrations declare — tables, views, indexes, functions, added columns, added constraints,
-policies — parsed by `scripts/migration_objects.py`. It deliberately does NOT read
+hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for what the newest 25
+migrations declare or drop, parsed by `scripts/migration_objects.py`. It deliberately does NOT read
 `supabase_migrations.schema_migrations`: that ledger's `name` is whatever the applier passed,
 so it matches the repo filename sometimes (`444_listings_discovered_at`) and not others
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
-with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
-grant or update data declare nothing probeable and read Not measured ("unverifiable") rather than
-passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
+with no repo file at all. The catalog cannot lie; the ledger can. A still-present drop is Watch and fails the apply receipt; grants, data and
+function drops read Not measured ("unverifiable"), never passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
 re-signed or rewritten function (590, 597), like a dropped-and-recreated policy (613), reads present before it is applied: prove those with
 their own `$post$` block and a call with the new arguments.
 
@@ -390,9 +387,8 @@ duration in the refresh's own transaction. **CONCURRENTLY is valid inside a tran
 (the restriction people misremember is `CREATE INDEX CONCURRENTLY`'s); two producer comments
 claimed otherwise and drove the blocking design — never re-derive that claim from a comment.
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
-this for all matviews). Pre-578 SQL producers
-(`refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
-their pinned inline shapes; new SQL producers call the chokepoint.
+this for all matviews). The pre-578 blue-green `rebuild_browse_list()` keeps
+its pinned inline shape; new SQL producers call the chokepoint.
 
 **A `SECURITY DEFINER` gate in a view's WHERE is per-row ONLY when it is combined with a
 column predicate.** Three cases, don't conflate them:
@@ -480,7 +476,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   keyed upsert (`claims_store.write_claims`) writes only when a value changes, in place; the
   resolver reads one per type, operator first. A wrong contract is RETRACTED (DELETE + re-resolve
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
-  `location_claims_retire.yml` ran once more for W3's purge, deleted in PR-2. The live set is `location_claims`,
+  The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound

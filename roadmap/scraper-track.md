@@ -67,8 +67,9 @@ Independent of the analytical, UI, and map tracks.
   Scrapers page's portal posture still reads it) and `delist_flip_refusals`, still written by
   `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
   removes the writer first).
-- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 (DONE 2026-11-02: the
+  walk re-arms only active listings, an unheld ad returns on a sighting at most once per 24 h) a sreality ad that
+  answered HTTP 409 (615387212) was given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
   PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
   bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
@@ -601,8 +602,7 @@ Independent of the analytical, UI, and map tracks.
   `written_unseen=0`, every `CHECK` row opens as a live detail page (all ceskereality/
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or
   price dropped — content, since the HTML parsers' key set is fixed) and erroring + given-up is
-  negligible (else first make the `enqueue_presence_checks` re-arm skip inactive listings — it
-  re-arms given-up rows forever, #1851). Finish every pass within 7 days: the "already read as gone" skip
+  negligible (the `enqueue_presence_checks` re-arm skips inactive listings since #1851). Finish every pass within 7 days: the "already read as gone" skip
   and the readout read `detail_queue_completions` (7-day retention); a later pass only re-fetches.
 
 ### mmreality: ten per-type indexes, proved against the portal's own count (2026-09-06, done)

@@ -25,7 +25,7 @@ from fastapi import HTTPException
 from api import schemas as s
 from api import shares
 from api.dismissals import lift_dismissals_of_live_deals
-from toolkit.property_identity import resolve_active_property_id
+from toolkit.property_identity import merged_since, resolve_active_property_id
 
 
 def list_stages(conn: "psycopg.Connection") -> dict[str, Any]:
@@ -329,6 +329,49 @@ def remove_card(
             (property_id, from_stage_id, account_id),
         )
     return {"removed": True}
+
+
+def added_card_undo_refusal(
+    conn: "psycopg.Connection", property_id: int, applied_at: datetime, *,
+    account_id: uuid.UUID,
+) -> str | None:
+    """Why Undo may not take back the card a proposal added at the entry stage, in the user's words, or None. Rule 22 keeps
+    every other removal a deliberate one: Undo is only for THAT card, untouched, still at the entry stage. A merge may have
+    folded the user's own card into it (`toolkit.pipeline_identity`), so a merged property's card is never taken."""
+    if merged_since(conn, [property_id], applied_at):
+        return "This property has been merged with another since, so Undo can't tell the agent's card from yours."
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pp.added_at, pp.entered_stage_at, pp.updated_at, ps.is_entry "
+            "FROM property_pipeline pp JOIN pipeline_stages ps ON ps.id = pp.stage_id "
+            "WHERE pp.property_id = %s AND pp.account_id = %s",
+            (property_id, account_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return "You already took this card off your board."
+    added_at, entered_stage_at, updated_at, is_entry = row
+    if added_at != applied_at:
+        return "This card is not the one the agent added, so Undo leaves it to you."
+    if not is_entry or entered_stage_at != applied_at or updated_at != applied_at:
+        return "You moved this card, so it is your deal now; close it into a final stage if you don't want it."
+    return None
+
+
+def undo_added_card(
+    conn: "psycopg.Connection", property_id: int, applied_at: datetime, *,
+    account_id: uuid.UUID,
+) -> None:
+    """Take back the card a proposal added, or 409 with why not; the row lock stops a move landing between the two."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM property_pipeline WHERE property_id = %s AND account_id = %s FOR UPDATE",
+            (property_id, account_id),
+        )
+    refusal = added_card_undo_refusal(conn, property_id, applied_at, account_id=account_id)
+    if refusal is not None:
+        raise HTTPException(409, refusal)
+    remove_card(conn, property_id, account_id=account_id)
 
 
 def move_card(

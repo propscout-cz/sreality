@@ -711,15 +711,9 @@ _LEASE_TTL_S = 900
 # Both describe the row only, for whichever writer creates it first.
 _LEASE_CADENCE = "30 seconds"
 _LEASE_RUNNER = "railway-realtime-worker"
-# The cutover (#2107): code from before this lease moved takes only the row of migration 279, so this code takes
-# that row FIRST and then the new one, each waiting up to its own bound, and gives them back in reverse, so the two
-# cannot deadlock. `_TRY_LEASE_SQL`,
-# `_RELEASE_LEASE_SQL`, `_LEASE_TTL`, `_try_lease`, `_wait_lease` and `_release_lease*` go in #2267, once gate #2110 passes.
-_LEASE_TTL = "15 minutes"
-_LEASE_RETRY_SECONDS = 10.0
 # A dispatched sweep that cannot get the lease within this budget fails RED
 # instead of burning its whole job retrying (observed 2026-08-06: a 30-min run
-# spent 100% of its budget in _wait_lease against a dead holder's 3h grant).
+# spent 100% of its budget waiting on a dead holder's 3h grant).
 # Every holder now renews a 15-min TTL, so 20 min of waiting means something
 # is genuinely wrong, not merely slow.
 _MAX_LEASE_WAIT_SECONDS = 1200.0
@@ -771,34 +765,14 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # INSIDE the retried op (main()'s `renewed`) rather than once per loop iteration.
 _BATCH_RESILIENT_ATTEMPTS = 2
 
-_TRY_LEASE_SQL = """
-    UPDATE property_maintenance_lease
-       SET holder = %(holder)s, expires_at = now() + %(lease)s::interval
-     WHERE id = 1
-       AND (holder IS NULL OR expires_at < now() OR holder = %(holder)s)
-    RETURNING 1
-"""
-
-_RELEASE_LEASE_SQL = """
-    UPDATE property_maintenance_lease
-       SET holder = NULL, expires_at = NULL
-     WHERE id = 1 AND holder = %(holder)s
-"""
-
 
 def _new_holder(kind: str) -> str:
     return f"{kind}:{job_lease.holder_id()}"
 
 
-def _try_lease(conn: Any, holder: str, lease: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(_TRY_LEASE_SQL, {"holder": holder, "lease": lease})
-        return cur.fetchone() is not None
-
-
 def _renew_lease(conn: Any, hold: job_lease.Hold) -> None:
     """Heartbeat between transactions; raises if it misses: the lease lapsed mid-work, this process stalled >15 min."""
-    if not (job_lease.renew(conn, hold) and _try_lease(conn, hold.holder, _LEASE_TTL)):
+    if not job_lease.renew(conn, hold):
         raise job_lease.LeaseLost(
             "maintenance lease lost mid-work (it lapsed or another writer took "
             "it) — aborting rather than recomputing concurrently"
@@ -811,90 +785,18 @@ def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
         job_lease.fence(conn, hold)
 
 
-def _wait_lease(
-    conn: Any, holder: str, lease: str,
-    max_wait_seconds: float = _MAX_LEASE_WAIT_SECONDS,
-) -> None:
-    # Wall-clock anchored: the CAS round trips themselves can be slow exactly
-    # when this path runs (degraded DB), and counting only the sleeps would
-    # let the wait silently outgrow the job budget.
-    entered = time.monotonic()
-    while not _try_lease(conn, holder, lease):
-        waited = time.monotonic() - entered
-        if waited >= max_wait_seconds:
-            raise RuntimeError(
-                f"maintenance lease still held after {waited:.0f}s of waiting — "
-                "failing RED instead of burning the job budget; every holder "
-                "renews a 15-min TTL, so this indicates a real fault"
-            )
-        LOG.info("MAINTENANCE lease held by another writer; retrying in %.0fs",
-                 _LEASE_RETRY_SECONDS)
-        time.sleep(_LEASE_RETRY_SECONDS)
-
-
-def _release_lease_cas(conn: Any, holder: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(_RELEASE_LEASE_SQL, {"holder": holder})
-
-
-def _release_lease(conn: Any, holder: str,
-                   reconnect: Callable[[], Any] | None = None) -> None:
-    """Best-effort release, with ONE reconnect fallback. Callers run this from a
-    `finally:`, so a raise here (a dead connection makes even `conn.cursor()` throw)
-    would replace the real failure with a crash-during-cleanup. The lease's
-    correctness never rested on the release landing: the holder-guarded CAS plus the
-    short renewed TTL are the guarantee, and a missed release costs at most one TTL
-    of frozen maintenance.
-
-    The fallback covers the case `step`'s `nonlocal conn` narrows but cannot remove:
-    when run_resilient exhausts its budget on a DROPPED connection it closes both the
-    original and its replacement, so there is no live handle left to release on. One
-    fresh connection, one holder-guarded CAS, close it again."""
-    exc: BaseException | None = None
-    try:
-        _release_lease_cas(conn, holder)
-        return
-    except Exception as e:  # noqa: BLE001 - best-effort; the TTL is the real guarantee
-        exc = e
-    if reconnect is not None:
-        fresh: Any = None
-        try:
-            fresh = reconnect()
-            _release_lease_cas(fresh, holder)
-            return
-        except Exception as e:  # noqa: BLE001 - still best-effort
-            exc = e
-        finally:
-            if fresh is not None:
-                try:
-                    fresh.close()
-                except Exception:  # noqa: BLE001
-                    pass
-    # exc_info=exc, not True: we are outside the except block here, so sys.exc_info()
-    # would be empty and the traceback lost.
-    LOG.warning("MAINTENANCE: lease release failed (holder=%s) — self-heals when "
-                "the %s TTL expires", holder, _LEASE_TTL, exc_info=exc)
-
-
 @contextmanager
 def _maintenance_lease(
     conn: Any, kind: str, *, wait_s: float = 0.0,
     reconnect: Callable[[], Any] | None = None,
 ) -> Iterator[job_lease.Hold | None]:
     """Yields this writer's hold on the maintenance lease, or None when another
-    writer holds it (past `wait_s`) or it is paused. The cutover row comes first and goes last."""
-    holder = _new_holder(kind)
-    if not wait_s and not _try_lease(conn, holder, _LEASE_TTL):
-        yield None
-        return
-    try:
-        if wait_s:
-            _wait_lease(conn, holder, _LEASE_TTL, wait_s)
-        with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
-                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s) as hold:
-            yield hold
-    finally:
-        _release_lease(conn, holder, reconnect)
+    writer holds it (past `wait_s`) or it is paused. A release on a dead `conn` falls
+    back to `reconnect` when given, else to `held`'s own one-attempt connection."""
+    fallback = {} if reconnect is None else {"connect": reconnect}
+    with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
+                        ttl_s=_LEASE_TTL_S, holder=_new_holder(kind), wait_s=wait_s, **fallback) as hold:
+        yield hold
 
 
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:

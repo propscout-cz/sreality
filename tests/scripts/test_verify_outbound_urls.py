@@ -484,6 +484,13 @@ def test_the_check_judges_what_its_budget_reached_once_that_is_half_the_draw(
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
     monkeypatch.setattr(mod.egress, "safe_session", _slow_portal(clock, timeouts, answer_s=3.0))
+    # The shuffle follows the ISO week, and in some weeks the budget reaches every portal.
+    class _Week37(_dt.datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> _dt.datetime:
+            return _dt.datetime(2026, 9, 7, tzinfo=tz)
+
+    monkeypatch.setattr(mod._dt, "datetime", _Week37)
     out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
     run = _cells(out)["sample"]["facts"]
     drawn = 3 * len(run["codes"]) + len(mod.CRAWLER_SOURCES)

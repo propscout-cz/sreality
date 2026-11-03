@@ -654,6 +654,21 @@ def test_heartbeat_upserts_latest_wins_row(monkeypatch):
     assert params["details"].obj["probe"]["last"] == {"portals": 4}
 
 
+def test_the_beat_records_the_commit_beside_every_lane(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(rw.db, "connect", lambda **_: conn)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
+    state = rw._new_state()
+    rw._record_pass(state, "probe", {"portals": 4})
+    rw._beat_sync(state)
+    details = conn.calls[0][1]["details"].obj
+    assert details["version"] == "abc123"
+    assert details["probe"]["last"] == {"portals": 4}
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA")
+    rw._beat_sync(state)
+    assert conn.calls[-1][1]["details"].obj["version"] is None
+
+
 def test_the_heartbeat_lane_records_its_own_pass(monkeypatch):
     """No pseudo-lane: the heartbeat's entry has every lane's shape, and the next beat says so."""
     conn = _FakeConn()

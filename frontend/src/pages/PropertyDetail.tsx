@@ -102,6 +102,8 @@ const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMos
 /* Opens through the neighbourhood tile's own opener, which reads the Stats chunk. */
 const ExploreAreaButton = lazyChunk(() => import('@/components/listing-detail/ExploreAreaButton'));
 const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
+/* Admin only (location W3b): nobody else downloads it. */
+const AddressPicker = lazyChunk(() => import('@/components/listing-detail/AddressPicker'));
 /* The tag assign list rides in with it (scripts/bundle-budget.mjs). */
 const TagsToggle = lazyChunk(() => import('@/components/listing-detail/TagsToggle'));
 const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
@@ -273,6 +275,7 @@ export default function PropertyDetail() {
 
   // The open tab, from the address. Above the early returns (#310).
   const [tab, setTab] = usePropertyTab(property?.id ?? null);
+  const { isAdmin } = useAuth();
 
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
@@ -345,7 +348,16 @@ export default function PropertyDetail() {
           />
         </Suspense>
         <div className="min-w-0 space-y-5">
-          <PropertyIdentity listing={property} priceNote={priceNote} statusHref={statusHref} />
+          <PropertyIdentity
+            listing={property}
+            priceNote={priceNote}
+            statusHref={statusHref}
+            addressAction={isAdmin ? (
+              <Suspense fallback={null}>
+                <AddressPicker propertyId={propertyId} label={property.display_label} adCount={sources.length} />
+              </Suspense>
+            ) : undefined}
+          />
           <LocationMap
             listing={property}
             heightClass="h-[170px]"

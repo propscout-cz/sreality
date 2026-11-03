@@ -16,7 +16,7 @@ it (`api/`). They do not apply to the scraper.
 
 1. **Tools return facts, not opinions.** No "recommended price", no "this looks like a good
    deal." Tools return data + provenance. Reasoning happens at the agent layer.
-2. **Standard envelope on every tool's return value** (hand-built per module, no shared constructor; `property_identity` / `location_quality` still omit `data_freshness`):
+2. **Standard envelope on every tool's return value** (hand-built per module, no shared constructor; `property_identity` still omits `data_freshness`):
    ```python
    {
      "data": ...,
@@ -170,8 +170,8 @@ it (`api/`). They do not apply to the scraper.
     provider, registry tools, limits, input/output JSON Schema; body + `references/` = its instructions.
     `api/agents/` loads it (CI loads every folder), runs it in the one loop (caps, an output bound per call, a
     journal; `code: true`: `skills/README.md` § Code) and ends it on `submit_result`, checked against its own tool results; `scripts/agent_run.py`
-    runs one locally; `executor.py` queues them, `/runs*` serve them. Only the estimator still reads `skills` (Settings,
-    `PUT /admin/skills/{name}`, `skills_history`) until #2078, under the same checks.
+    runs one; `executor.py` queues them, `/runs*` serve them and proposals (tool-registry § Writes). Only the estimator reads `skills` (Settings,
+    `PUT /admin/skills/{name}`, `skills_history`) until #2078.
 11. **LLM provider is pluggable; `llm_calls.provider` records which backend served each call.**
     `api/providers/` defines a `CompletionProvider` Protocol with neutral message / tool /
     completion types (a tool loop sends `Completion.reply` back: the provider's own blocks in order, an
@@ -351,9 +351,8 @@ Database:
   gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
   worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
   ever calls `connect_session()`.
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
-  compatibility; the v1 scraper connects to Postgres directly and does not need them.
-  (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (`sb_secret_...`, **not** a JWT): scrapers
+  don't read them; the key is `api/agents/agent_files.py`'s (secrets inventory). **On the
   Railway API service, `SUPABASE_URL` is now load-bearing**, not just forward-compatible:
   `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs (its only verifier;
   `SUPABASE_JWT_SECRET` is read by nothing since 2026-10-13 and can be deleted from Railway).

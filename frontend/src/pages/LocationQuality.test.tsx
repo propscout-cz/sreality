@@ -2,41 +2,26 @@
  *
  * The scorecard is the `location_town_coverage` row of the Health page's own read (W1, ruling Q7:
  * nothing measured twice), so the read is mocked where Health's is (`pgRead`) and the page must
- * share Health's cache entry. The rail pins the ACCESSIBLE NAME of each bare control: the inspector
- * query box, the correction form it opens, and the page's source scope; and no control sits inside
- * another. Every `/location/*` wrapper is mocked.
+ * share Health's cache entry. The rail pins the ACCESSIBLE NAME of the page's source scope, and
+ * that no control sits inside another. W3b deleted the inspector: the page calls no `/location/*`.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('@/lib/pgRead', async (orig) => ({ ...(await orig<typeof import('@/lib/pgRead')>()), pgRead: vi.fn() }));
-vi.mock('@/lib/api', async (orig) => ({ ...(await orig<typeof import('@/lib/api')>()), apiGet: vi.fn() }));
-vi.mock('../lib/locationQuality', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../lib/locationQuality')>();
-  return {
-    ...actual,
-    fetchInspector: vi.fn(),
-    fetchInspectorByNative: vi.fn(),
-    submitCorrection: vi.fn(),
-  };
-});
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()), apiGet: vi.fn(), apiPost: vi.fn(),
+}));
 
 import LocationQuality from './LocationQuality';
 import * as lq from '../lib/locationQuality';
-import type { Inspector } from '../lib/locationQuality';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiPost } from '@/lib/api';
 import { HEALTH_QUERY, type HealthCell, type HealthRow, type Status } from '@/lib/healthChecks';
 import { pgRead } from '@/lib/pgRead';
 import { expectNoNestedInteractive } from '@/test/a11y';
-
-const inspector: Inspector = {
-  listing_id: 42,
-  projection: { street_name: 'Krátká', house_number_cp: '3', obec_name: 'Brno' },
-  claims: [],
-};
 
 const at = new Date(Date.now() - 30 * 60_000).toISOString();
 const cell = (subject: string, portal: string | null, status: Status, over: Partial<HealthCell> = {}): HealthCell => ({
@@ -81,7 +66,6 @@ function renderPage(qc = new QueryClient({ defaultOptions: { queries: { retry: f
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(pgRead).mockResolvedValue({ data: [stored()], count: null });
-  vi.mocked(lq.fetchInspector).mockResolvedValue({ data: inspector });
 });
 
 describe('LocationQuality scorecard', () => {
@@ -132,15 +116,24 @@ describe('LocationQuality scorecard', () => {
     expect('fetchCorpusSummary' in lq).toBe(false);
   });
 
+  it('has no inspector and calls no /location/listing: the address picker replaced it (W3b)', async () => {
+    renderPage();
+    await screen.findByTestId('location-matrix-bazos');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull();
+    const paths = [...vi.mocked(apiGet).mock.calls, ...vi.mocked(apiPost).mock.calls].map(([path]) => String(path));
+    expect(paths.filter((path) => path.startsWith('/location/'))).toEqual([]);
+    expect('fetchInspector' in lq || 'submitCorrection' in lq).toBe(false);
+  });
+
   it("uses the HEALTH_QUERY key: Health's cache entry is the page's", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(HEALTH_QUERY.queryKey, [stored()]);
     renderPage(qc);
     expect(await screen.findByTestId('location-matrix-bazos')).toHaveTextContent(/12,263/);
     expect(pgRead).not.toHaveBeenCalled();
-    /* The one read besides the (idle) inspector's. */
-    const keys = qc.getQueryCache().getAll().map((q) => q.queryKey);
-    expect(keys.filter((k) => k[1] !== 'inspector')).toEqual([HEALTH_QUERY.queryKey]);
+    /* The page's one read. */
+    expect(qc.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([HEALTH_QUERY.queryKey]);
   });
 
   it('says an empty read is an empty read, never all clear', async () => {
@@ -157,36 +150,9 @@ describe('LocationQuality accessible names', () => {
     expect(screen.getByRole('combobox', { name: 'Source' })).toHaveValue('bezrealitky');
   });
 
-  it('names the inspector query box, and the correction form it opens', async () => {
+  it('puts no control inside another', async () => {
     renderPage();
-    const query = await screen.findByRole('textbox', { name: 'Listing or native id' });
-    fireEvent.change(query, { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
-
-    const correct = await screen.findByRole('button', { name: 'Correct' });
-    const form = within(correct.closest('form') as HTMLElement);
-    await waitFor(() => {
-      expect(form.getByRole('combobox', { name: 'Claim type' })).toBeInTheDocument();
-    });
-    expect(form.getByRole('textbox', { name: 'Corrected value' })).toBeInTheDocument();
-    expect(form.getByRole('textbox', { name: 'Note' })).toBeInTheDocument();
     await screen.findByTestId('location-matrix-bazos');
     expectNoNestedInteractive(document.body);
-  });
-
-  /* Section cards (C7): inside the inspector card the correction form is an L3 group,
-     never a small-caps title on a box of its own. */
-  it('heads the correction form as an L3 group, with no box of its own', async () => {
-    renderPage();
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Listing or native id' }), { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
-
-    const title = await screen.findByRole('heading', { level: 3, name: 'Operator correction' });
-    expect(title).toHaveClass('text-sm', 'font-semibold');
-    expect(title).not.toHaveClass('uppercase');
-    const group = title.parentElement!.parentElement!;
-    expect(group).toContainElement(screen.getByRole('button', { name: 'Correct' }));
-    expect(group).not.toHaveClass('rounded-[var(--radius-sm)]');
-    expect(group.className).not.toMatch(/\bborder-\[var\(--color-rule-soft\)\] px-3/);
   });
 });
