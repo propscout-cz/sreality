@@ -1,20 +1,16 @@
 -- 723_location_w8_price_stats_obec_key.sql -- W8-2 (#2362): the price-stat rows are keyed by RÚIAN town code.
--- Observations, no-data markers and metrics carry obec_id, backfilled from price_stat_localities (one town per key,
--- 0 orphans, 592,805 observations giving 592,805 distinct new keys on 11-02); the primary keys move onto it, the 2
--- foreign keys into price_stat_localities go, so does the metrics index the new key duplicates, and the entity
--- columns become nullable (dropped in W8-4 with the table). The three public views lose the entity columns and take locality_name from the mirror
--- (ruian_place_names_public); obec_id and every other column stay, so price_stat_growth, price_stat_series and
--- price_stat_growth_shapes read them unchanged. Grants as before: authenticated SELECT, anon nothing, owner rights.
--- DESTRUCTIVE (PK swaps, FK drops). Before applying:
---   1. gh workflow run backup_before_drop.yml -f label=w8-2-price-stats -f targets="price_stat_observations price_stat_city_metrics price_stat_locality_no_data price_stat_localities"
---      and read the receipt back;
---   2. gh workflow disable scrape_price_stats.yml, and confirm no run is in flight: the deployed scraper writes by
---      the old key and fails against this schema;
---   3. apply 722 and record the parity checks.
--- Then apply through apply_migration.yml BEFORE the merge. The deployed API and SPA keep working until the deploy:
--- their reads name only columns this keeps. One transaction: a lock_timeout trip rolls it all back; rerun as is.
+-- Observations and no-data markers get obec_id from price_stat_localities (one town per key, 0 orphans, 592,805
+-- observations = 592,805 new keys on 11-02); the 3 primary keys move onto obec_id; the 2 FKs into
+-- price_stat_localities and the metrics index the new key duplicates go; the entity columns become nullable (W8-4
+-- drops them). The 3 public views lose the entity columns and take locality_name from the mirror; every other
+-- column stays, so price_stat_growth/series/growth_shapes read them unchanged. Grants: authenticated SELECT only.
+-- DESTRUCTIVE. First: gh workflow run backup_before_drop.yml -f label=w8-2-price-stats -f targets="price_stat_observations
+-- price_stat_city_metrics price_stat_locality_no_data price_stat_localities", receipt read back; gh workflow disable
+-- scrape_price_stats.yml with no run in flight (the deployed scraper writes by the old key and fails here); 722 and
+-- its parity. Then apply_migration.yml BEFORE the merge: the deployed API and SPA read only columns this keeps.
+-- One transaction: a lock_timeout trip rolls it all back; rerun as is.
 -- VERIFY: select count(*), count(distinct (dataset_id, obec_id, category_type_cb, year, month))
---           from price_stat_observations;  -- 592,805 twice (plus rows fetched since 11-02)
+--           from price_stat_observations;  -- equal, 592,805 plus rows fetched since 11-02
 
 begin;
 set local lock_timeout = '5s';
