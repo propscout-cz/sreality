@@ -118,8 +118,11 @@ the real cause of the "values jumping 50%" the old scraper hit.
 - Reads → public views/RPCs.
 - Frontend `/datasets` route: dataset picker, per-city analysis table
   (sale CAGR / rent CAGR / gross yield), and a MapLibre map with two obec
-  choropleth layers (rent-growth p.a., sale-growth p.a.) reusing the existing
-  `admin_boundaries_public` + city-overlay paint pattern.
+  choropleth layers (rent-growth p.a., sale-growth p.a.) over
+  `price_stat_choropleth_public`, each town drawn by its RÚIAN render polygon
+  (`ruian_unit_render`, migration 727); the city picker is the register's
+  kraj/okres/obec tree with `obec_population` (`price_stat_obce_picker_public`,
+  migration 725).
 - Ingestion → `.github/workflows/scrape_price_stats.yml` (manual + weekly),
   walking ONE queue of (dataset, obec) stalest first across the active datasets
   (never-scraped first) × {prodej, pronájem} until its time budget; a run that

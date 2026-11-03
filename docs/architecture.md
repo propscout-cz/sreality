@@ -544,14 +544,13 @@ source. `mapPointerPublishedAt` (= `soldAt` + 27–31 days) is the only correct 
 sale is a state change on an arbitrarily old ad record, so the freshest sale the feed can show is
 ~30 days old.
 **The fetch unit is a municipality CELL, and the deal pipeline is what makes a cell worth fetching.**
-The box is the obec's `admin_boundaries` envelope widened by `sold_db.MAX_READ_RADIUS_M` (5,000 m —
-the read surface's largest radius, so any subject inside the obec is covered out to its full radius
-by construction, with no second fetch). `admin_boundaries.id` IS the ČÚZK/RÚIAN code of the unit
-(migration 017; `sreality_id` is the separate bridge into sreality's own id space), so it joins
-directly to `listing_location.obec_kod` and to the source's `municipalityId` — three spellings of one
-number. The work-list (`sold_db.sold_comp_cells`) is a QUERY, not a queue: the obec cells of
+The box is the envelope of the obec's RÚIAN render polygon (`ruian_unit_render`, migration 725: the
+current registry version) widened by `sold_db.MAX_READ_RADIUS_M` (5,000 m — the read surface's largest
+radius, so any subject inside the obec is covered out to its full radius by construction, with no
+second fetch). The unit is looked up by its RÚIAN code, which `listing_location.obec_kod` and the
+source's `municipalityId` both carry — three spellings of one number. The work-list (`sold_db.sold_comp_cells`) is a QUERY, not a queue: the obec cells of
 properties carrying ANY account's pipeline card at a non-terminal, non-archived stage, active,
-`byt`/`dum`, with a resolved point, **and an `admin_boundaries` polygon** — DISTINCT over accounts,
+`byt`/`dum`, with a resolved point, **and a `ruian_unit_render` polygon** — DISTINCT over accounts,
 minus the cells whose NEWEST `sold_transaction_fetches` row is `ok` within 35 days or `failed` within
 6 hours. That last join is load-bearing: a cell with no polygon cannot be boxed, so a fetch can only
 skip it, a skip writes no ledger row, and `ORDER BY fetched_at NULLS FIRST` would then re-offer it
@@ -584,9 +583,9 @@ where some account holds a live deal-pipeline card, so the set of fetched cells 
 tenant state, not market data — `sold_transaction_fetches` is registered in
 `tests/_admin_gate_registry.py::ADMIN_ONLY_RELATIONS`. Its one reader is
 `sold_coverage(p_lat, p_lng)`, SECURITY DEFINER and scoped to the MUNICIPALITY containing the point,
-resolved through the same `admin_boundaries` obec polygon W2 builds the cell from: the cell is that
-polygon's envelope expanded by 5 km, so overlapping boxes would otherwise answer with whichever town
-happened to be walked last. It returns that obec's name, its newest successful fetch (`fetched_at`,
+resolved through the register's lossless `pip` pieces of that obec at the current version (W8-3,
+migration 725): the cell is its render polygon's envelope expanded by 5 km, so overlapping boxes would
+otherwise answer with whichever town happened to be walked last. It returns that obec's name, its newest successful fetch (`fetched_at`,
 `record_count`, `source_total`) and its newest attempt of ANY status, so the surface can separate
 four answers — never looked, tried and FAILED (our outage, not operator inaction), looked and found
 nothing, looked and hold N. A radius control, a filter panel and a "no registered sale matches these
@@ -642,8 +641,8 @@ indicative, ignoring flood defences (Karlín shows as Q100 although the city pro
 only locally, bands nested so overlaps render darker. The selection is one URL knob (`layers=`, a
 sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.layers`); the Browse/Explore map, the listing-detail header map and the comparables map mount the
 same hook and chip control. The MF rent choropleth is the `rent_map` section (one layer, the four VK
-size categories as variants; an SQL source over `admin_boundaries` × the latest `rent_map_values`
-revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
+size categories as variants; an SQL source over the RÚIAN mirror's render polygons × the latest
+`rent_map_values` revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
 transaction; a refused guard keeps the revision and the previous tiles) and by the monthly `rent_map`
 job's last step (`scripts/fetch_rent_map.py`); migration 601 drops `rent_map_choropleth_public`,
 `rent_map_kraje_public` and the `rent_map_choropleth` matview it replaced.
@@ -2098,7 +2097,8 @@ renumber.** Navigate by area:
     the shown price. The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
-    The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
+    The city figures follow the LOCATION advert (since 636): `near_*` its point, `home_obec_pop`
+    the latest `obec_population` of its bound town (`ll.obec_kod`, since 726):
     the rollup clears `city_proximity_computed_at` when the location advert changes, and the
     hourly `recompute_city_proximity` (pg_cron job `recompute-city-proximity` since 674; the full
     rebuild, `scripts/recompute_city_proximity.py --full`, ends the population load and the
@@ -3103,8 +3103,9 @@ renumber.** Navigate by area:
     fixed cards and the LLM box-plot annotations (summarize-1, deleted with them; migration 627
     drops their cache table and settings).
 17. **City-quality indexes are a normalized, operator-curated time series.** `curated_cities`
-    + `city_index_revisions` + `city_index_values` + `city_index_definitions` +
-    `city_population` (migration 078 onward) store per-city indexes long-form, so a new index
+    + `city_index_revisions` + `city_index_values` + `city_index_definitions` (migration 078
+    onward) store per-city indexes long-form, and a city's population is `obec_population`'s for
+    its town (migration 726), so a new index
     on next upload needs no migration; each upload appends a `source_revision` and the latest
     is the default query target. On the Watchdog, population and `near_*` compile as plain
     bounds and `city_index_rules` as one hook in `toolkit/filter_compiler`. Browse resolves
@@ -3114,7 +3115,7 @@ renumber.** Navigate by area:
     deliberately never sees them, preserving deterministic estimate semantics. **Curated-city
     *membership* (which city, if any, a property falls in) resolves through ONE SQL function,
     `curated_cities_matching()` (migration 436), to an `obec_id` allowlist** — `curated_cities
-    .admin_boundary_id` already IS the obec's RÚIAN code, so membership is equality on a code
+    .obec_kod` IS the obec's RÚIAN code (migration 726), so membership is equality on a code
     every consumer already carries, and `browse_stats_properties`, the compiler's
     `city_index_rules` hook and the SPA prefilter cannot drift on the containment test the way they once did (one evaluated
     radius-only and silently disagreed with the other two's boundary-aware version on
@@ -5517,10 +5518,9 @@ entirely for 3.5 h with no run row and no log line. A starved job looks exactly 
 
 **WHAT REMAINS OUTSIDE THE STORE, AND WHY.**
 
-* `admin_boundaries` — price stats, the rent-map choropleth (not the MF calc, since 565) and city
-  proximity read its geometry and population. Its LOCATION role died with trigger 289; re-keying
-  those three onto `ruian_admin_unit_geometries` is a later wave. `curated_cities.admin_boundary_id`
-  is an FK to it, and already the RÚIAN obec code.
+* `admin_boundaries` — the pre-mirror copy of the same RÚIAN pack. Since W8-3 (#2362, migrations
+  725-728) nothing reads it: every polygon is `ruian_unit_render` and every population
+  `obec_population`; W8-4 drops it with its loader.
 * `portal_raw_pages` / `portal_raw_payloads` — the preservation substrate, and the intake's second
   source; not a location path (`tests/test_portal_raw_pages_guard.py` fails CI on any DROP naming
   it). With it `listings.raw_json`, the content-hash substrate (rule 2) and the resolver's evidence,

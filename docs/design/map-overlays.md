@@ -93,10 +93,12 @@ locally; bands are nested (Q5 ⊂ Q20 ⊂ Q100 to within 0.2 %), so overlaps ren
 zone can leak outside Q100; nothing is mapped for pluvial flooding; binding information comes only
 from the water authority. Resolve layers BY NAME from `?f=json`, never by numeric id.
 
-### Kraj borders — ČÚZK RÚIAN via our `admin_boundaries` (level = 'kraj', already in the database)
+### Kraj borders — ČÚZK RÚIAN via our mirror (`ruian_unit_render`, level = 'kraj')
 
-SQL source: `ST_Boundary` of each kraj polygon (shared borders are drawn twice today as well; no
-regression). Re-rendered at the end of `ingest_boundaries.yml`.
+SQL source: `ST_Boundary` of each kraj's render polygon at the current registry version (W8-3,
+migration 725; shared borders are drawn twice today as well; no regression), dated by that version's
+`source_date`. Re-rendered by the quarterly `map_overlays` job (and, until W8-4 deletes it, at the end
+of `ingest_boundaries.yml`).
 
 ### Universities — IPR Praha ÚAP `Hosted/FSV_CUR_OV_SKOLYVS_B` (CC BY) + MŠMT F21 (verified live 2026-10-16)
 
@@ -377,7 +379,8 @@ URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy
 Section `rent_map` (label "Cenová mapa nájemného", 7–12, attribution "Ministerstvo financí ČR –
 Cenová mapa nájemného"), layer `rent_map` with `scale = {prop: 'vk1', stops: RENT_RAMP, null_color,
 unit: 'rent_per_m2'}` and `variants = [{key:'vk1', label:'1+kk, 1+1', prop:'vk1'} … vk4]`; SqlSource
-= `admin_boundaries` × latest `rent_map_values` revision (the matview's query). The monthly `rent_map`
+= the mirror's render polygon (`ruian_unit_render`, the MF's `ku` read as `katastralni_uzemi`; W8-3) ×
+latest `rent_map_values` revision (the matview's query). The monthly `rent_map`
 job (`scripts/fetch_rent_map.py`) re-renders the section after an ingest. The SPA deletes `fetchRentMapChoropleth`, `RentMapPolygon`,
 `toRentFC`, `rentPopupHtml`, the `rent-map` source/layers/effects/handlers, `RentMapControls`,
 `showRentMap`/`rentVk` (URL `rentmap`/`rentvk` read as legacy → `rent_map:vkN`). Migration 601 drops

@@ -1345,6 +1345,16 @@ component is slimmed twice — each wave rewrites one component and slims its st
   metrics are keyed by `obec_id`; the series route is `/cities/{obec_id}/series`. Deleted: the suggest/PiP/by-name
   resolution, the cities file, `--resolve-only` and the workflow's `resolve` mode. **Next:** backup, workflow disabled,
   722, parity (§8 step 3), 723, merge, re-enable, dispatch dataset 9.
+- **W8-3 — every reader onto the RÚIAN mirror — built 2026-11-03, not rolled out** (#2362 §8; rulings Q11, Q12b, Q13;
+  defaults D3-D8; migrations 725 additive, 726 and 727 destructive, 728 destructive after the deploy; none applied).
+  One polygon read, `ruian_unit_render` (current version, by `(level, code)`), and one population store,
+  `obec_population` (by code and year). Moved: broker footprint and the admin kraj list (register names), the Datasets
+  picker, choropleth and growth RPC, sold comps (cell box, work list, `sold_coverage` by pip), the kraje and rent-map
+  overlays, city proximity (`home_obec_pop` = the bound town's population), curated cities (`obec_kod`, Hodonín
+  relinked to 586021), the population loader and the seed's insert-time bind. Deleted: the growth-shape RPC and its
+  SPA fallback, the curated circle fallback, the seed's population and relink paths, `csu_population`'s by-name half,
+  the picker's `sreality_id` in the SPA. A rail (`tests/test_admin_boundaries_unread.py`) proves nothing reads
+  `admin_boundaries`. **Next:** backup, 725, 726, 727, parity, merge, 728, overlays re-rendered; then W8-4.
 - **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
   `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
   address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within

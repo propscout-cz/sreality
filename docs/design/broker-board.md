@@ -89,7 +89,7 @@ cohort, and said on the tab: the account lenses and market growth are not applie
 **A broker's own numbers are its book, `toolkit/brokers.BROKER_COUNTS_SQL`**: `properties` = the book's rows of the
 broker, `active_properties` = those with one of its ads still running (a live ad makes its property live). The board
 reads the same book inside a Browse cohort. Read by name search (its order), the dossier (`GET /brokers/{id}`, plus
-`footprint` over the book's properties Browse serves: by region, `admin_boundaries` on `browse_list.region_id`, a
+`footprint` over the book's properties Browse serves: by region, `ruian_place_names_public` on `browse_list.region_id`, a
 property without one or not yet published counted only in the totals, and by category and deal type), the merge review
 and Outreach's draft facts. Not joined to `browse_list` for the totals: name search for `ov` (7,200 matches) took 2.7 s
 that way on production and 163 ms on the book alone (2026-10-29); 0.18 % of live book rows are not yet in Browse. A firm chip counts the active

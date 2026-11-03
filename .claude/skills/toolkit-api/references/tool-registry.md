@@ -130,7 +130,7 @@ The census holds them to it: every column allowlist (`SEARCH_COLUMNS`, `curation
 `property_read.*_COLS`, `market_evidence`'s two) is disjoint from `forbidden_columns()`, derived from the registry
 (rule 14's retired levels, rule 17's city-quality columns), and names no broker; `api/property_search.py`,
 `api/property_read.py` and `api/market_evidence.py` name none of the relations those values are stored in
-(`curated_cities*`, `city_index_*`, `city_population`, `listing_condition_scores`, `listing_broker_public`,
+(`curated_cities*`, `city_index_*`, `obec_population`, `listing_condition_scores`, `listing_broker_public`,
 `listing_location`), nor one that reads as nothing under the login (base `listings`, `canonical_advert`, …);
 `api/stats_pivot.py` is held to that last pattern only, since it resolves the city rules through
 `curated_cities_matching`, as Browse does. The read models they do read (`browse_list_visible`, `properties_public`)
