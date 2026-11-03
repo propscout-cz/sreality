@@ -749,7 +749,7 @@ jobs:
         run: pytest tests/scraper/test_job_lease_live.py -q
 
       # #2107, EXECUTED: the maintenance lane and the daily sweep through their real entry points on committed sessions:
-      # one holder at a time, on the new scheduled_jobs row alone and on migration 279's row alone (the deploy overlap).
+      # one holder at a time on the scheduled_jobs row, the one row they take since #2267.
       - name: The maintenance lane and the daily sweep never overlap (#2107)
         timeout-minutes: 5
         env:

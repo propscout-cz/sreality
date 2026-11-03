@@ -3681,8 +3681,7 @@ renumber.** Navigate by area:
     `scraper/job_lease.py` with the mode in its holder prefix (`incremental:` / `full:`): one 15-minute TTL
     renewed every batch/slice, each write transaction ending in the commit fence, so a killed job freezes
     maintenance for minutes, not hours, and a pass whose lease lapsed cannot commit beside the next holder.
-    Until gate #2110 passes every writer also takes migration 279's row, first, because merged code meets a
-    still-running older worker; #2267 drops that acquire. (There is no scheduled dedup job any more — the automatic decision
+    (There is no scheduled dedup job any more — the automatic decision
     layer was removed in the 2026-08 cutoff, rule #15.) The
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
     that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
