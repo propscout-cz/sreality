@@ -63,13 +63,15 @@ _COLLECTION_PROJECTION = (
     "    'account_id', s.recipient_account_id, "
     f"    'email', {shares.party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
     "  '[]'::json) "
-    " FROM collection_shares s WHERE s.collection_id = c.id) AS shared_with"
+    " FROM collection_shares s WHERE s.collection_id = c.id) AS shared_with, "
+    "c.notify_kinds"
 )
 
+# `{kinds}` is %s, or DEFAULT when the body leaves notify_kinds out (migration 720's column default).
 _CREATE_COLLECTION_SQL = (
     "INSERT INTO collections AS c "
-    "  (name, description, monitoring_enabled, account_id) "
-    "VALUES (%s, %s, %s, %s) "
+    "  (name, description, monitoring_enabled, account_id, notify_kinds) "
+    "VALUES (%s, %s, %s, %s, {kinds}) "
     f"RETURNING {_COLLECTION_PROJECTION}"
 )
 
@@ -81,6 +83,7 @@ _UPDATE_COLLECTION_SQL = (
     "  name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END, "
     "  description = CASE WHEN %s::boolean THEN %s::text ELSE c.description END, "
     "  monitoring_enabled = coalesce(%s, c.monitoring_enabled), "
+    "  notify_kinds = coalesce(%s::text[], c.notify_kinds), "
     "  updated_at = now() "
     f"WHERE c.id = %s RETURNING {_COLLECTION_PROJECTION}"
 )
@@ -97,9 +100,10 @@ def create_collection(
     # WITH CHECK closed. Same shape as create_note.
     try:
         with conn.transaction(), conn.cursor() as cur:
+            kinds = (body.notify_kinds,) if body.notify_kinds is not None else ()
             cur.execute(
-                _CREATE_COLLECTION_SQL,
-                (body.name, body.description, body.monitoring_enabled, account_id),
+                _CREATE_COLLECTION_SQL.replace("{kinds}", "%s" if kinds else "DEFAULT"),
+                (body.name, body.description, body.monitoring_enabled, account_id, *kinds),
             )
             row = cur.fetchone()
     except psycopg.errors.UniqueViolation:
@@ -183,14 +187,15 @@ def update_collection(
     body: s.UpdateCollectionIn,
 ) -> dict[str, Any]:
     set_description = "description" in body.model_fields_set
-    if body.name is None and body.monitoring_enabled is None and not set_description:
+    if body.name is None and body.monitoring_enabled is None and body.notify_kinds is None and not set_description:
         raise HTTPException(422, "nothing to update")
     try:
         # The UPDATE is the ownership gate (rowcount 0 -> 404); an HTTPException raised inside
         # the transaction rolls it back, so a refused system rename writes nothing.
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_UPDATE_COLLECTION_SQL,
-                        (body.name, set_description, body.description, body.monitoring_enabled, collection_id))
+                        (body.name, set_description, body.description, body.monitoring_enabled, body.notify_kinds,
+                         collection_id))
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(404, "collection not found")
@@ -363,7 +368,8 @@ def undo_new_collection(
 
 
 def refuse_monitoring_while_acting(act_as: uuid.UUID | None, monitoring_set: bool) -> None:
-    """403 when a delegate sets the owner's collection monitoring: its alerts are the owner's (spec §3.8)."""
+    """403 when a delegate sets the owner's collection monitoring or the events it tells: its alerts are the
+    owner's (spec §3.8)."""
     if act_as is not None and monitoring_set:
         raise HTTPException(403, "collection monitoring is the owner's own setting")
 
@@ -843,6 +849,7 @@ def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
         "is_system":          bool(row[7]),
         "owner_email":        row[8],
         "shared_with":        list(row[9]),
+        "notify_kinds":       list(row[10]),
     }
 
 

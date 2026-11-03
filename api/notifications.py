@@ -57,18 +57,21 @@ LOG = logging.getLogger(__name__)
 SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
-# The six property events the producers detect, in the order a watchdog stores the ones it tells
-# (migration 720, `notify_kinds`). A collection tells every kind but 'new': a property it holds is
-# never new to it.
+# The six property events the producers detect, in the order a watchdog or a collection stores the
+# ones it tells (migration 720, `notify_kinds` on each). A collection chooses from every kind but
+# 'new': a property it holds is never new to it.
 WatchdogKind = Literal["new", "price_drop", "price_rise", "inactive", "reactivated", "new_source"]
 WATCHDOG_KINDS: tuple[str, ...] = get_args(WatchdogKind)
+CollectionKind = Literal["price_drop", "price_rise", "inactive", "reactivated", "new_source"]
+COLLECTION_KINDS: tuple[str, ...] = get_args(CollectionKind)
 PRICE_KINDS = ("price_drop", "price_rise")
 LIFECYCLE_KINDS = ("inactive", "reactivated", "new_source")
 
 
 def normalize_notify_kinds(kinds: list[str]) -> list[str]:
-    """The kinds as a watchdog stores them: each once, in WATCHDOG_KINDS order. Refused when empty, and
-    'reactivated' without 'inactive': Back on the market answers a Left the market the same watchdog told."""
+    """The kinds as a watchdog or collection stores them: each once, in WATCHDOG_KINDS order. Refused when
+    empty, and 'reactivated' without 'inactive': Back on the market answers a Left the market the same
+    source told."""
     out = [k for k in WATCHDOG_KINDS if k in kinds]
     if not out:
         raise ValueError("choose at least one event to be notified about")
@@ -78,6 +81,7 @@ def normalize_notify_kinds(kinds: list[str]) -> list[str]:
 
 
 NotifyKinds = Annotated[list[WatchdogKind], AfterValidator(normalize_notify_kinds)]
+CollectionNotifyKinds = Annotated[list[CollectionKind], AfterValidator(normalize_notify_kinds)]
 
 # ONE event identity (program § 3.2, migration 653): the columns of notification_dispatches_identity_uq
 # in index order, NULLS NOT DISTINCT over the rows that are not a marked repeat. Every producer INSERT
@@ -975,7 +979,8 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
 # one thing whichever producer tells it. It reads its events `e` off the market (the canonical
 # ad's price steps, the recent delistings, the ads that brought a new portal), never off a cohort,
 # and a `_Source` says who is told: `join` gives each event row `e` its `m` (source_id, listing_id
-# — the canonical advert — and since), so a detector fires only for a change after `since` and a
+# — the canonical advert —, since and kinds), so a detector fires only for a change after `since`,
+# of a kind in `kinds` (migration 720: what that watchdog or collection is set to tell), and a
 # change that predates the watching never notifies. Detection never consults dismissals;
 # VISIBLE_SQL hides a dismissed property's alerts at read time.
 
@@ -989,10 +994,12 @@ class _Source:
     scope: str   # this statement's own dispatches, on notification_dispatches
 
 
-# A collection with monitoring_enabled tells each property it holds, from the later of when it was
-# added (collection_properties.added_at) and when the collection last had monitoring turned on
-# (collections.monitoring_enabled_at, migration 230). status='active' skips merged-away properties.
-# Set-based: one statement serves every monitored collection.
+# A collection with monitoring_enabled tells each property it holds the kinds it is set to
+# (collections.notify_kinds, migration 720), from the later of when it was added
+# (collection_properties.added_at) and when the collection last started telling
+# (collections.monitoring_enabled_at: monitoring switched on or its kinds changed, migrations 230
+# and 720). status='active' skips merged-away properties. Set-based: one statement serves every
+# monitored collection.
 _MONITOR = _Source(
     kind="collection_monitor",
     column="collection_id",
@@ -1000,7 +1007,8 @@ _MONITOR = _Source(
         "members AS ("
         "  SELECT cp.collection_id AS source_id, p.id AS property_id, "
         "         p.repr_listing_ref_id AS listing_id, "
-        "         greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) AS since "
+        "         greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) AS since, "
+        "         c.notify_kinds AS kinds "
         "  FROM collection_properties cp "
         "  JOIN collections c ON c.id = cp.collection_id AND c.monitoring_enabled = true "
         "  JOIN properties p ON p.id = cp.property_id AND p.status = 'active' "
@@ -1015,7 +1023,8 @@ _MONITOR = _Source(
     scope="source_kind = 'collection_monitor'",
 )
 # A watchdog tells each published property its spec matches NOW (`{where}`, rule 16) from when it
-# last started (`active_since`); one statement per watchdog. `l` is properties_public. The spec joins
+# last started (`active_since`), the kinds the step passes it (`%(kinds)s`: those of its own
+# `notify_kinds` that the statement detects); one statement per watchdog. `l` is properties_public. The spec joins
 # the event directly, so the planner tests it per event by the property's id and pushes `since` into
 # the event's own index; behind a CTE of matching properties it scanned the whole cohort once per
 # price step instead (a broad watchdog timed out, 2026-11-03).
@@ -1026,7 +1035,7 @@ _WATCHDOG = _Source(
     join=(
         "JOIN properties_public l ON l.property_id = e.property_id AND {where} "
         "CROSS JOIN LATERAL (SELECT %(subscription_id)s::uuid AS source_id, l.listing_id, "
-        "                           %(active_since)s::timestamptz AS since) m"
+        "                           %(active_since)s::timestamptz AS since, %(kinds)s::text[] AS kinds) m"
     ),
     scope="source_kind = 'watchdog' AND subscription_id = %(subscription_id)s::uuid",
 )
@@ -1050,7 +1059,7 @@ _STEP_KIND = "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'p
 
 
 def _price_sql(src: _Source) -> str:
-    """'Price drop' / 'Price rise': a canonical-ad step after `since`, of a kind in `%(kinds)s`.
+    """'Price drop' / 'Price rise': a canonical-ad step after `since`, of a kind the source tells.
     event_ref = the step's snapshot id, so a property that keeps dropping fires once per real cut
     and a re-scan of the window is idempotent."""
     return (
@@ -1061,7 +1070,7 @@ def _price_sql(src: _Source) -> str:
         f"SELECT m.source_id, '{src.kind}', e.property_id, e.listing_id, {_STEP_KIND}, "
         "       e.price_czk, e.prev_price_czk, e.snapshot_id::text "
         f"FROM canonical_steps e {src.join} "
-        f"WHERE e.scraped_at > m.since AND {_STEP_KIND} = ANY(%(kinds)s) "
+        f"WHERE e.scraped_at > m.since AND {_STEP_KIND} = ANY(m.kinds) "
         f"{ON_EVENT_CONFLICT}"
     )
 
@@ -1086,7 +1095,7 @@ def _inactive_sql(src: _Source) -> str:
         f"SELECT m.source_id, '{src.kind}', e.property_id, m.listing_id, 'inactive', "
         "       floor(extract(epoch FROM e.inactive_at))::bigint::text "
         f"FROM gone e {src.join} "
-        "WHERE e.inactive_at > m.since "
+        "WHERE e.inactive_at > m.since AND 'inactive' = ANY(m.kinds) "
         f"{ON_EVENT_CONFLICT}"
     )
 
@@ -1115,7 +1124,7 @@ def _reactivated_sql(src: _Source) -> str:
         "JOIN properties p ON p.id = e.property_id AND p.is_active = true "
         "     AND p.last_seen_at > now() - %(monitor_window)s::interval "
         f"     AND p.last_seen_at > e.told_at {src.join} "
-        "WHERE m.source_id = e.told_source AND e.told_at > m.since "
+        "WHERE m.source_id = e.told_source AND e.told_at > m.since AND 'reactivated' = ANY(m.kinds) "
         "  AND NOT EXISTS ("
         "    SELECT 1 FROM notification_dispatches r "
         f"    WHERE r.source_kind = '{src.kind}' AND r.{src.column} = e.told_source "
@@ -1154,7 +1163,7 @@ def _new_source_sql(src: _Source) -> str:
         f"SELECT m.source_id, '{src.kind}', e.property_id, e.listing_id, 'new_source', "
         "       e.listing_id::text "
         f"FROM intro e {src.join} "
-        "WHERE e.first_seen_at > m.since "
+        "WHERE e.first_seen_at > m.since AND 'new_source' = ANY(m.kinds) "
         f"{ON_EVENT_CONFLICT}"
     )
 
@@ -1181,8 +1190,8 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
     - Watchdog: one `price_drop` / `price_rise` per (live watchdog telling that kind x matching
       property x step after its `active_since`). The spec matches the property's CURRENT state
       through `_build_match_clauses` (rule 16).
-    - Collection monitor: both kinds per (monitored collection x member property x step after
-      `monitor_since`), set-based across every monitored collection.
+    - Collection monitor: the kinds each collection tells, per (monitored collection x member
+      property x step after `monitor_since`), set-based across every monitored collection.
     """
     params: dict[str, Any] = {"price_window": PRICE_WINDOW}
     subs = _live_watchdogs(conn, PRICE_KINDS)
@@ -1193,7 +1202,7 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
             {**params, "active_since": active_since, "kinds": [k for k in kinds if k in PRICE_KINDS]},
             label="change matcher",
         )
-    collection_inserted = _commit_one(conn, _MONITOR_PRICE_SQL, {**params, "kinds": list(PRICE_KINDS)})
+    collection_inserted = _commit_one(conn, _MONITOR_PRICE_SQL, params)
     tally.inserted += collection_inserted
     return {**tally.stats("changes_inserted"),
             "collection_changes_inserted": collection_inserted}
@@ -1204,9 +1213,9 @@ def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
     (`reactivated`) and 'New portal' (`new_source`, a sibling listing appeared on another portal), one detector per kind
     for both producers; the price kinds are step price (`match_changes_once`).
 
-    The collection monitor tells all three for every monitored property, set-based (one INSERT per
-    kind across ALL monitored collections), so a property in N monitored collections fires N times:
-    monitoring is per collection by design. A watchdog tells the ones it is set to, one INSERT per
+    The collection monitor tells each monitored property the ones its collection is set to,
+    set-based (one INSERT per kind across ALL monitored collections), so a property in N monitored
+    collections fires up to N times: monitoring is per collection by design. A watchdog tells the ones it is set to, one INSERT per
     kind over the properties its spec matches now. Each dispatch carries its source and a per-event
     `event_ref`, so re-runs over an overlapping window are idempotent and a 2nd real change is its
     own event.
@@ -1227,7 +1236,7 @@ def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
     for sub_id, raw_spec, active_since, kinds in subs:
         _insert_per_watchdog(
             conn, tally, sub_id, raw_spec, [sql for kind, sql in _WATCHDOG_LIFECYCLE if kind in kinds],
-            {**params, "active_since": active_since}, label="lifecycle matcher",
+            {**params, "active_since": active_since, "kinds": list(kinds)}, label="lifecycle matcher",
         )
     tally.inserted += collection_inserted
     return {**tally.stats("events_inserted"), "monitored_collections": monitored,

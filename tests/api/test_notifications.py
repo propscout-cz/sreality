@@ -576,6 +576,7 @@ from typing import Any
 from uuid import UUID
 
 from api.notifications import (
+    COLLECTION_KINDS,
     WATCHDOG_KINDS,
     get_unread_count,
     mark_all_seen,
@@ -861,7 +862,10 @@ def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     assert "'cm:'" not in joined                   # no key grammar since W3
     assert joined.count(ON_EVENT_CONFLICT) == 4
     assert "'broker_change'" not in joined          # reserved, no clean signal yet
-    assert inserts[-1][1]["kinds"] == ["price_drop", "price_rise"], "a collection tells both"
+    # Each collection tells the kinds it is set to (migration 720), read off its own row: no
+    # statement passes the monitor a kind list.
+    assert all("kinds" not in params for _, params in inserts)
+    assert all("c.notify_kinds AS kinds" in sql for sql, _ in inserts)
 
 
 def test_new_source_names_one_introducing_ad_on_every_pass() -> None:
@@ -900,19 +904,25 @@ def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str
     assert "g.inactive_at > now() - %(monitor_window)s::interval" in sql["INACTIVE"]
     assert "WHERE m.source_id = e.told_source AND e.told_at > m.since" in sql["REACTIVATED"]
     assert "WHERE e.first_seen_at > m.since" in sql["NEW_SOURCE"]
+    # Each fires only for a kind its source tells (migration 720), from the one `m.kinds`.
+    assert "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'price_rise' END = ANY(m.kinds)" \
+        in sql["PRICE"]
+    for name, kind in (("INACTIVE", "inactive"), ("REACTIVATED", "reactivated"), ("NEW_SOURCE", "new_source")):
+        assert f"AND '{kind}' = ANY(m.kinds)" in sql[name], name
     src = getattr(nf, f"_{source}")
     for name, render in (("PRICE", nf._price_sql), ("INACTIVE", nf._inactive_sql),
                          ("REACTIVATED", nf._reactivated_sql), ("NEW_SOURCE", nf._new_source_sql)):
         assert getattr(nf, f"_{source}_{name}_SQL") == render(src), name
     if source == "MONITOR":
-        anchor = "greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) AS since"
+        anchor = "greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) AS since, " \
+                 "c.notify_kinds AS kinds"
         assert all(anchor in s for s in sql.values())
     else:
         # The spec joins each event directly (`{where}` on properties_public), never behind a CTE of
         # matching properties: that plan scanned a broad watchdog's cohort once per price step.
         for s in sql.values():
             assert "JOIN properties_public l ON l.property_id = e.property_id AND {where} " in s
-            assert "%(active_since)s::timestamptz AS since" in s and "members" not in s
+            assert "%(active_since)s::timestamptz AS since, %(kinds)s::text[] AS kinds" in s and "members" not in s
 
 
 def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
@@ -940,6 +950,8 @@ def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
     assert "'inactive'" in lifecycle[0] and "'reactivated'" in lifecycle[1]
     assert not any("'new_source'" in s for s in lifecycle)
     assert all(p["active_since"] == since and p["subscription_id"] == str(lister) for _, p in watchdog)
+    assert [p["kinds"] for s, p in watchdog if "canonical_steps" not in s] == [
+        ["price_rise", "inactive", "reactivated"]] * 2
 
 
 def test_the_kinds_a_watchdog_stores_are_one_ordered_set() -> None:
@@ -969,6 +981,18 @@ def test_migration_720_checks_what_the_api_refuses() -> None:
     assert "('inactive' = any(notify_kinds) or not 'reactivated' = any(notify_kinds))" in sql
     assert "or new.notify_kinds is distinct from old.notify_kinds then new.active_since := now();" in sql
     assert "before insert or update of is_active, filter_spec, notify_kinds" in sql
+    # A collection: the same three rules over every kind but 'new', all five by default (what each
+    # told before), and a kinds change while watching restarts it as switching it on does.
+    collection = sql.split("alter table public.collections", 1)[1]
+    assert ("add column if not exists notify_kinds text[] not null default array['price_drop', 'price_rise', "
+            "'inactive', 'reactivated', 'new_source']") in collection
+    allowed = collection.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"'(\w+)'", allowed)) == COLLECTION_KINDS == WATCHDOG_KINDS[1:]
+    assert "cardinality(notify_kinds) > 0" in collection
+    assert "('inactive' = any(notify_kinds) or not 'reactivated' = any(notify_kinds))" in collection
+    assert ("if NEW.monitoring_enabled and (TG_OP = 'INSERT' or OLD.monitoring_enabled is distinct from true "
+            "or NEW.notify_kinds is distinct from OLD.notify_kinds) then NEW.monitoring_enabled_at := now();") \
+        in collection
 
 
 @pytest.mark.parametrize(("body", "detail"), [
@@ -1524,15 +1548,16 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     kind = "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'price_rise' END"
     for sql, params in (watchdog, collection):
         assert f"{fragment} INSERT" in sql
-        assert f"WHERE e.scraped_at > m.since AND {kind} = ANY(%(kinds)s)" in sql
+        assert f"WHERE e.scraped_at > m.since AND {kind} = ANY(m.kinds)" in sql
         assert params["price_window"] == "7 days"
         assert sql.endswith(ON_EVENT_CONFLICT)
     sql, params = watchdog
     assert params["kinds"] == ["price_drop"], "the default tells drops only"
     assert params["active_since"] == since and params["category_type"] == "pronajem"
     assert "FROM canonical_steps e JOIN properties_public l ON l.property_id = e.property_id AND " in sql
+    assert "%(kinds)s::text[] AS kinds) m" in sql
     sql, params = collection
-    assert params["kinds"] == ["price_drop", "price_rise"]
+    assert "kinds" not in params, "a collection's kinds are its own column"
     assert "FROM canonical_steps e JOIN members m ON m.property_id = e.property_id" in sql
 
 

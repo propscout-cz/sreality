@@ -1053,7 +1053,7 @@ def post_create_collection(
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled or body.notify_kinds is not None)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1079,7 +1079,8 @@ def patch_collection(
     conn: tenant_pool.TenantConn,
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
+    curation.refuse_monitoring_while_acting(
+        act_as, body.monitoring_enabled is not None or body.notify_kinds is not None)
     return curation.update_collection(conn, collection_id, body)
 
 

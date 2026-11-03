@@ -1,7 +1,8 @@
 """Migration 720, executed: a watchdog keeps the kinds it tells. The CHECK refuses what the API refuses, a
 kinds edit restarts the watchdog, and the producers tell a watchdog exactly the kinds it is set to: Left the market
 then Back on the market, a price rise, a new portal, each on a published property its spec matches, and nothing to a
-watchdog left on the default. Runs in CI's migrations job (`TEST_DATABASE_URL`); every test rolls back (a
+watchdog left on the default. A watched collection likewise: its own CHECK, a kinds edit while watching restarts it,
+and it is told only the kinds it keeps. Runs in CI's migrations job (`TEST_DATABASE_URL`); every test rolls back (a
 producer's per-statement transaction is a savepoint inside the test's)."""
 
 from __future__ import annotations
@@ -129,3 +130,78 @@ def test_a_watchdog_set_to_new_sources_is_told_the_portal_that_joined(cur: Any) 
 
     nf.match_lifecycle_once(cur.connection)
     assert _told(cur, pid) == [(sources, "new_source", str(joined))]
+
+
+def _watched(cur: Any, acc: Any, pid: int, kinds: list[str] | None) -> int:
+    """A watched collection holding `pid`, watching and holding it since long ago."""
+    from tests._live_property import _collection
+
+    cid = _collection(cur, acc)
+    cur.execute("UPDATE collections SET monitoring_enabled = true, notify_kinds = coalesce(%s::text[], notify_kinds) "
+                "WHERE id = %s", (kinds, cid))
+    cur.execute("UPDATE collections SET monitoring_enabled_at = %s WHERE id = %s", (_AGED, cid))
+    cur.execute("INSERT INTO collection_properties (collection_id, property_id, added_at) VALUES (%s, %s, %s)",
+                (cid, pid, _AGED))
+    return cid
+
+
+def test_a_collection_checks_its_kinds_and_an_edit_while_watching_restarts_it(cur: Any) -> None:
+    from tests._live_property import _collection
+
+    cid = _collection(cur, _account(cur))
+    cur.execute("SELECT notify_kinds FROM collections WHERE id = %s", (cid,))
+    assert cur.fetchone()[0] == ["price_drop", "price_rise", "inactive", "reactivated", "new_source"], \
+        "the default is what every watched collection told before 720"
+    for bad in ([], ["new"], ["sold"], ["reactivated"], ["price_drop", "reactivated"]):
+        cur.execute("SAVEPOINT kinds")
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute("UPDATE collections SET notify_kinds = %s WHERE id = %s", (bad, cid))
+        cur.execute("ROLLBACK TO SAVEPOINT kinds")
+    # Not watching: an edit stamps nothing, so switching monitoring on later is still the start.
+    cur.execute("UPDATE collections SET notify_kinds = %s WHERE id = %s RETURNING monitoring_enabled_at",
+                (["price_drop"], cid))
+    assert cur.fetchone()[0] is None
+    cur.execute("UPDATE collections SET monitoring_enabled = true WHERE id = %s", (cid,))
+    for kinds, restarts in ((["price_drop"], False), (["price_drop", "inactive"], True)):
+        cur.execute("UPDATE collections SET monitoring_enabled_at = %s WHERE id = %s", (_AGED, cid))
+        cur.execute("UPDATE collections SET notify_kinds = %s WHERE id = %s", (kinds, cid))
+        cur.execute("SELECT monitoring_enabled_at = now() FROM collections WHERE id = %s", (cid,))
+        assert cur.fetchone()[0] is restarts, kinds
+
+
+def test_a_collection_set_to_price_rises_is_told_a_rise_and_not_a_drop(cur: Any) -> None:
+    from api import notifications as nf
+
+    acc = _account(cur)
+    pid = _property(cur)
+    lid = _advert(cur, pid, source="bezrealitky", price=5_100_000)
+    _served(cur, pid, lid)
+    cur.execute("UPDATE properties SET repr_since = '-infinity' WHERE id = %s", (pid,))
+    rises, every = _watched(cur, acc, pid, ["price_rise"]), _watched(cur, acc, pid, None)
+    _snapshot(cur, lid, 5_000_000, hours_ago=30)
+    up = _snapshot(cur, lid, 5_200_000, hours_ago=2)
+    down = _snapshot(cur, lid, 5_100_000, hours_ago=1)
+
+    nf.match_changes_once(cur.connection)
+    cur.execute("SELECT collection_id, change_kind, event_ref FROM notification_dispatches "
+                "WHERE property_id = %s ORDER BY collection_id, event_ref", (pid,))
+    assert sorted(cur.fetchall()) == sorted([(rises, "price_rise", str(up)), (every, "price_rise", str(up)),
+                                             (every, "price_drop", str(down))])
+
+
+def test_a_collection_that_left_out_new_portal_is_not_told_one(cur: Any) -> None:
+    from api import notifications as nf
+
+    acc = _account(cur)
+    now = datetime.now(timezone.utc)
+    pid = _property(cur)
+    first = _advert(cur, pid, source="sreality", first_seen_at=now - timedelta(days=20))
+    joined = _advert(cur, pid, source="bezrealitky", first_seen_at=now - timedelta(days=1))
+    _served(cur, pid, first)
+    quiet, every = _watched(cur, acc, pid, ["price_drop"]), _watched(cur, acc, pid, None)
+
+    stats = nf.match_lifecycle_once(cur.connection)
+    assert stats["monitored_collections"] >= 2
+    cur.execute("SELECT collection_id, change_kind, event_ref FROM notification_dispatches WHERE property_id = %s",
+                (pid,))
+    assert cur.fetchall() == [(every, "new_source", str(joined))], f"collection {quiet} tells price drops only"
