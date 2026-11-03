@@ -1147,7 +1147,7 @@ def main(argv: list[str] | None = None) -> int:
             LOG.error("RUN done failed=%s", ",".join(failed))
             return 1
         # Only a run over EVERY section refreshes the whole store, so only that run stamps it:
-        # a kraje-only step after a boundaries ingest must not hide a dead quarterly job.
+        # a one-section run by hand must not hide a dead quarterly job.
         if not args.dry_run and keys == list(SOURCES):
             stamp_derived_artifact(conn, "map_overlay_tiles", rows=count_tiles(conn),
                                    duration_ms=int((time.monotonic() - started) * 1000))

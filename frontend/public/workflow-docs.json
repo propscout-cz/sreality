@@ -976,59 +976,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
     },
     {
-      "filename": "ingest_boundaries.yml",
-      "name": "Data: ingest admin boundaries",
-      "description": "Loads ČÚZK RÚIAN administrative-unit polygons (kraj / okres / obec / KÚ) into the admin_boundaries table. Manual-only; boundaries change rarely (a few municipal mergers / cadastral re-alignments per year), so there is no cron. Re-run when ČÚZK publishes a notable update or when the operator wants to bring in newly-created units.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source_url",
-          "description": "RÚIAN SHP zip URL (from ČÚZK ATOM feed)",
-          "required": true,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "levels",
-          "description": "Levels to load (comma-separated). Default: all four.",
-          "required": false,
-          "type": "string",
-          "default": "kraj,okres,obec,ku",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Parse and validate only; do not write to DB.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "no_truncate",
-          "description": "Skip TRUNCATE; upsert into existing rows instead.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 30,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ingest_boundaries.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
-    },
-    {
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",

@@ -56,7 +56,7 @@ export const priceStatsKeys = {
   latestRun: (id: number) => ['price_stat_latest_run', id] as const,
   growth: (id: number, from: string | null, to: string | null) =>
     ['price_stat_growth', id, from, to] as const,
-  growthShapes: (id: number) => ['price_stat_growth_shapes', id] as const,
+  growthShapes: (id: number) => ['price_stat_choropleth_shapes', id] as const,
   obecTree: ['price_stat_obce_tree'] as const,
   noData: (id: number) => ['price_stat_no_data', id] as const,
   noDataCount: (id: number) => ['price_stat_no_data_count', id] as const,

@@ -1255,7 +1255,7 @@ def test_a_clean_full_run_exits_zero_and_stamps_the_store_wide_tile_count(
 
 
 def test_a_partial_run_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ingest_boundaries' `--sections kraje` step must not mark metro + flood fresh."""
+    """A `--sections kraje` run by hand must not mark metro + flood fresh."""
     seen: list[str] = []
     stamps: list[str] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))

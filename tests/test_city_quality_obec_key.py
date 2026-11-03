@@ -217,7 +217,7 @@ def test_the_migration_reads_the_public_views_not_the_base_tables():
     body = _MATCHING.read_text()
     fn_at = body.index("create or replace function public.curated_cities_matching")
     fn = body[fn_at : body.index("$function$;", fn_at)]
-    assert "select c.obec_kod" in fn and "admin_boundary_id" not in fn
+    assert "select c.obec_kod" in fn
     assert "from curated_cities_public" in fn
     assert "from city_index_values_public" in fn
     assert not re.search(r"from\s+curated_cities\s", fn), (

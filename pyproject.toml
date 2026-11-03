@@ -66,8 +66,8 @@ api = [
   # would be a second, partial implementation of a standard; jsonschema is the reference one.
   "jsonschema>=4.18",
 ]
-# Used only by scripts/ingest_boundaries.py; kept out of the default
-# install so the scraper / API images stay slim. Pure-Python combo
+# Used only by the RÚIAN boundary loader (location_data/ruian_boundaries.py); kept
+# out of the default install so the scraper / API images stay slim. Pure-Python combo
 # (pyshp + shapely + pyproj) intentionally avoids geopandas / GDAL —
 # we only need to read shapefiles, reproject EPSG:5514 -> EPSG:4326,
 # and simplify polygons.
