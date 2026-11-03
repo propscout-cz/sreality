@@ -40,9 +40,6 @@ LEGACY: dict[str, Ledgered] = {
     "scripts/recompute_property_stats.py": Ledgered(
         "S1 property_maintenance_lease (mig 279): the cutover row beside the job_lease row (rule 20)",
         "#2267 drops it once gate #2110 passes"),
-    "scripts/resolve_brokers.py": Ledgered(
-        "S2 broker_resolution_lock (mig 192): the cutover row beside the job_lease row",
-        "#2273 drops it once gate #2111 passes"),
 }
 
 
