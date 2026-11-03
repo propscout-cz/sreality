@@ -1,9 +1,9 @@
 """Database I/O for price-stats datasets (psycopg, transaction pooler).
 
-Dataset/locality reads, locality resolution cache (with the obec PIP join),
-run bookkeeping, per-month observation upserts, and the derived-metric
-recompute that feeds the analysis tab + map choropleth. Pure SQL only — the
-CAGR/yield math lives in `scraper.price_stats_metrics`.
+Dataset reads, the towns and keys a run fetches (`ruian_translation`, #2362), run
+bookkeeping, per-month observation upserts, and the derived-metric recompute that
+feeds the analysis tab + map choropleth, all keyed by RÚIAN town code. Pure SQL
+only — the CAGR/yield math lives in `scraper.price_stats_metrics`.
 """
 
 from __future__ import annotations
@@ -29,6 +29,77 @@ _DATASET_COLS = (
     "is_active, start_ym, end_ym, obec_ids"
 )
 
+# The key each town is fetched under: a key matched from ads feeds the fetch only when its town has no other row.
+FETCH_KEYS_SQL = """
+select distinct on (ruian_code) ruian_code as obec_id, source_key
+  from ruian_translation
+ where source = 'sreality_municipality' and ruian_level = 'obec'
+ order by ruian_code, matched_by = 'ad_bound_obec', source_key::bigint
+"""
+
+# Active sreality ads confirm the rows they agree with and add an id no row holds once its ads name one town; a
+# stored row stands, so an ad naming another town changes nothing and is reported (#2362 §4-5).
+CONFIRM_TRANSLATION_SQL = """
+with ads as (
+  select l.raw_json #>> '{locality,municipality_id}' source_key, ll.obec_kod code, count(*) ads
+    from listings l join listing_location ll on ll.listing_id = l.id
+   where l.source = 'sreality' and l.is_active and ll.obec_kod is not null
+     and l.raw_json #>> '{locality,municipality_id}' ~ '^[0-9]+$'
+   group by 1, 2
+), stored as (
+  select source_key, ruian_code from ruian_translation
+   where source = 'sreality_municipality' and ruian_level = 'obec'
+), confirmed as (
+  update ruian_translation t set last_confirmed_at = now()
+    from ads a
+   where t.source = 'sreality_municipality' and t.ruian_level = 'obec'
+     and t.source_key = a.source_key and t.ruian_code = a.code
+  returning 1
+), added as (
+  insert into ruian_translation
+  select 'sreality_municipality', a.source_key, 'obec', min(a.code), 'ad_bound_obec', now()
+    from ads a
+   where not exists (select 1 from stored s where s.source_key = a.source_key)
+   group by a.source_key having count(*) = 1
+  returning source_key, ruian_code
+)
+select (select count(*) from confirmed) confirmed,
+       (select jsonb_agg(added) from added) added,
+       (select jsonb_agg(d) from (
+          select a.source_key, s.ruian_code stored, a.code, a.ads
+            from ads a left join stored s using (source_key)
+           where s.ruian_code <> a.code
+              or (s.source_key is null and exists
+                   (select 1 from ads b where b.source_key = a.source_key and b.code <> a.code))) d) disputed
+"""
+
+COVERAGE_REMAINING_SQL = f"""
+SELECT count(*)
+  FROM ({FETCH_KEYS_SQL}) k
+ WHERE (%(ids)s::bigint[] IS NULL OR k.obec_id = ANY(%(ids)s::bigint[]))
+   AND NOT EXISTS (SELECT 1 FROM price_stat_observations o
+                    WHERE o.dataset_id = %(did)s AND o.obec_id = k.obec_id)
+   AND NOT EXISTS (SELECT 1 FROM price_stat_locality_no_data nd
+                    WHERE nd.dataset_id = %(did)s AND nd.obec_id = k.obec_id)
+"""
+
+LOCALITIES_ORDERED_SQL = f"""
+SELECT k.obec_id, k.source_key, coalesce(n.name, k.obec_id::text) AS name,
+       coalesce(o.mf, nd.checked_at) AS last_fetched_at
+  FROM ({FETCH_KEYS_SQL}) k
+  LEFT JOIN ruian_place_names_public n ON n.level = 'obec' AND n.code = k.obec_id
+  LEFT JOIN (
+    SELECT obec_id, max(fetched_at) AS mf
+      FROM price_stat_observations
+     WHERE dataset_id = %(did)s
+     GROUP BY obec_id
+  ) o ON o.obec_id = k.obec_id
+  LEFT JOIN price_stat_locality_no_data nd ON nd.dataset_id = %(did)s AND nd.obec_id = k.obec_id
+ WHERE (%(obec_ids)s::bigint[] IS NULL OR k.obec_id = ANY(%(obec_ids)s::bigint[]))
+   AND (nd.checked_at IS NULL OR nd.checked_at < now() - make_interval(days => %(ttl)s))
+ ORDER BY coalesce(o.mf, nd.checked_at) ASC NULLS FIRST, name
+"""
+
 
 def load_active_datasets(conn: psycopg.Connection) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
@@ -48,174 +119,16 @@ def get_dataset(conn: psycopg.Connection, dataset_id: int) -> dict[str, Any] | N
         return cur.fetchone()
 
 
-def upsert_locality(conn: psycopg.Connection, loc: dict[str, Any]) -> None:
-    """Cache a resolved entity; set geom + PIP-resolve its RÚIAN obec_id.
-
-    obec_id is found by point-in-polygon against admin_boundaries (level='obec')
-    — sreality's municipality ids don't map to RÚIAN codes, but the coordinate
-    does. NULL where the point falls outside any CZ obec polygon.
-    """
-    lat, lon = loc.get("lat"), loc.get("lon")
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO price_stat_localities (
-                entity_type, entity_id, name, municipality_id,
-                municipality_seo_name, district, district_id, district_seo_name,
-                region, region_id, region_seo_name, lat, lon, geom, obec_id,
-                resolved_at
-            ) VALUES (
-                %(entity_type)s, %(entity_id)s, %(name)s, %(municipality_id)s,
-                %(municipality_seo_name)s, %(district)s, %(district_id)s,
-                %(district_seo_name)s, %(region)s, %(region_id)s,
-                %(region_seo_name)s, %(lat)s, %(lon)s,
-                CASE WHEN %(lon)s IS NULL THEN NULL
-                     ELSE ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326)::geography
-                END,
-                CASE WHEN %(lon)s IS NULL THEN NULL ELSE (
-                    SELECT b.id FROM admin_boundaries b
-                     WHERE b.level = 'obec'
-                       AND ST_Contains(b.geom::geometry,
-                           ST_SetSRID(ST_MakePoint(%(lon)s, %(lat)s), 4326))
-                     LIMIT 1
-                ) END,
-                now()
-            )
-            ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-                name = EXCLUDED.name,
-                municipality_id = EXCLUDED.municipality_id,
-                municipality_seo_name = EXCLUDED.municipality_seo_name,
-                district = EXCLUDED.district,
-                district_id = EXCLUDED.district_id,
-                district_seo_name = EXCLUDED.district_seo_name,
-                region = EXCLUDED.region,
-                region_id = EXCLUDED.region_id,
-                region_seo_name = EXCLUDED.region_seo_name,
-                lat = EXCLUDED.lat,
-                lon = EXCLUDED.lon,
-                geom = EXCLUDED.geom,
-                obec_id = EXCLUDED.obec_id,
-                resolved_at = now()
-            """,
-            {**loc, "lat": lat, "lon": lon},
-        )
-
-
-def list_localities(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT entity_type, entity_id, name, obec_id "
-            "FROM price_stat_localities ORDER BY name"
-        )
-        return cur.fetchall()
-
-
-def resolve_obce(conn: psycopg.Connection, obec_ids: list[int]) -> int:
-    """Cache localities for selected obce straight from admin_boundaries.
-
-    admin_boundaries.sreality_id (obec level) IS the sreality municipality
-    entity_id, so a selected obec maps to a sreality entity with no
-    localities/suggest call. The entity coordinate is the obec centroid; obec_id
-    is set directly (no PIP). Obce without a sreality_id are skipped (not
-    scrapeable).
-
-    Several RÚIAN obce can share one sreality_id (sreality's municipality grain
-    is coarser), which would make the INSERT touch the same (muni, sreality_id)
-    twice and raise CardinalityViolation. DISTINCT ON (sreality_id) collapses
-    those, keeping the largest-population obec as the representative obec_id.
-    """
-    if not obec_ids:
-        return 0
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO price_stat_localities (
-                entity_type, entity_id, name, lat, lon, geom, obec_id, resolved_at
-            )
-            SELECT 'muni', b.sreality_id, b.name,
-                   ST_Y(ST_Centroid(b.geom::geometry)),
-                   ST_X(ST_Centroid(b.geom::geometry)),
-                   ST_Centroid(b.geom::geometry)::geography, b.id, now()
-              FROM (
-                SELECT DISTINCT ON (sreality_id) id, name, sreality_id, geom
-                  FROM admin_boundaries
-                 WHERE id = ANY(%s) AND level = 'obec' AND sreality_id IS NOT NULL
-                 ORDER BY sreality_id, population DESC NULLS LAST, id
-              ) b
-            ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-                name = EXCLUDED.name, obec_id = EXCLUDED.obec_id,
-                lat = EXCLUDED.lat, lon = EXCLUDED.lon, geom = EXCLUDED.geom,
-                resolved_at = now()
-            """,
-            (obec_ids,),
-        )
-        return cur.rowcount
-
-
-def unresolved_obec_names(conn: psycopg.Connection, obec_ids: list[int]) -> list[str]:
-    """Names of selected obce not yet mapped to a sreality entity.
-
-    These have no admin_boundaries.sreality_id (so resolve_obce skipped them)
-    and no price_stat_localities row keyed on their obec_id yet. The scraper
-    resolves them by NAME via localities/suggest; upsert_locality then
-    PIP-places each from the suggest coordinates. Biggest obce first so a
-    budget-bounded first pass prioritises the ones most likely to have data.
-    """
-    if not obec_ids:
-        return []
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.name
-              FROM admin_boundaries b
-             WHERE b.id = ANY(%s) AND b.level = 'obec'
-               AND NOT EXISTS (
-                 SELECT 1 FROM price_stat_localities l WHERE l.obec_id = b.id
-               )
-             ORDER BY b.population DESC NULLS LAST
-            """,
-            (obec_ids,),
-        )
-        return [r[0] for r in cur.fetchall()]
-
-
 def coverage_remaining(
     conn: psycopg.Connection, dataset_id: int, obec_ids: list[int] | None
 ) -> int:
-    """Localities (selected, or all) the dataset hasn't scraped yet — those with
+    """Towns (selected, or all) the dataset hasn't scraped yet — those with
     NEITHER an observation NOR a no-data marker. > 0 means a coverage pass is
     still incomplete; the workflow chains one more run only when a run shrank
     this count (periodic refresh is the weekly schedule's job)."""
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT count(*)
-              FROM price_stat_localities l
-             WHERE (%(ids)s IS NULL OR l.obec_id = ANY(%(ids)s))
-               AND NOT EXISTS (
-                 SELECT 1 FROM price_stat_observations o
-                  WHERE o.dataset_id = %(did)s
-                    AND o.entity_type = l.entity_type AND o.entity_id = l.entity_id)
-               AND NOT EXISTS (
-                 SELECT 1 FROM price_stat_locality_no_data nd
-                  WHERE nd.dataset_id = %(did)s
-                    AND nd.entity_type = l.entity_type AND nd.entity_id = l.entity_id)
-            """,
-            {"did": dataset_id, "ids": obec_ids},
-        )
+        cur.execute(COVERAGE_REMAINING_SQL, {"did": dataset_id, "ids": obec_ids})
         return cur.fetchone()[0]
-
-
-def localities_for_obec_ids(
-    conn: psycopg.Connection, obec_ids: list[int]
-) -> list[dict[str, Any]]:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT entity_type, entity_id, name, obec_id "
-            "FROM price_stat_localities WHERE obec_id = ANY(%s) ORDER BY name",
-            (obec_ids,),
-        )
-        return cur.fetchall()
 
 
 def localities_ordered(
@@ -225,73 +138,55 @@ def localities_ordered(
     *,
     no_data_ttl_days: int = 60,
 ) -> list[dict[str, Any]]:
-    """Localities for a dataset run, STALEST first.
+    """Towns for a dataset run with the key each is fetched under, STALEST first.
 
-    Ordered by each locality's most-recent observation for THIS dataset
+    Ordered by each town's most-recent observation for THIS dataset
     (never-scraped first, then oldest). A time-budgeted / partial run thus
-    always advances the cities that need it most, so full coverage is reached
-    across runs (and then refreshes oldest-first) rather than re-doing city 1
-    every run. `obec_ids` None = the global resolved set. Each row carries its
+    always advances the towns that need it most, so full coverage is reached
+    across runs (and then refreshes oldest-first) rather than re-doing town 1
+    every run. `obec_ids` None = every translated town. Each row carries its
     `last_fetched_at` — the last fetch, else the last empty check, NULL only for a
-    locality never scraped — which orders the queue across datasets.
+    town never scraped — which orders the queue across datasets. The name is the
+    mirror's; a code the mirror no longer serves keeps being fetched.
 
-    Localities the scraper recently checked and found EMPTY (a
+    Towns the scraper recently checked and found EMPTY (a
     price_stat_locality_no_data marker within `no_data_ttl_days`) are skipped,
     so the budget isn't spent re-scanning the dataless tail every run; they fall
     back in for re-verification once the marker ages past the TTL.
     """
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            SELECT l.entity_type, l.entity_id, l.name, l.obec_id,
-                   coalesce(o.mf, nd.checked_at) AS last_fetched_at
-              FROM price_stat_localities l
-              LEFT JOIN (
-                SELECT entity_type, entity_id, max(fetched_at) AS mf
-                  FROM price_stat_observations
-                 WHERE dataset_id = %(did)s
-                 GROUP BY entity_type, entity_id
-              ) o USING (entity_type, entity_id)
-              LEFT JOIN price_stat_locality_no_data nd
-                     ON nd.dataset_id = %(did)s
-                    AND nd.entity_type = l.entity_type
-                    AND nd.entity_id = l.entity_id
-             WHERE (%(obec_ids)s IS NULL OR l.obec_id = ANY(%(obec_ids)s))
-               AND (nd.checked_at IS NULL
-                    OR nd.checked_at < now() - make_interval(days => %(ttl)s))
-             ORDER BY coalesce(o.mf, nd.checked_at) ASC NULLS FIRST, l.name
-            """,
-            {"did": dataset_id, "obec_ids": obec_ids, "ttl": no_data_ttl_days},
-        )
+        cur.execute(LOCALITIES_ORDERED_SQL, {"did": dataset_id, "obec_ids": obec_ids, "ttl": no_data_ttl_days})
         return cur.fetchall()
 
 
-def record_no_data(
-    conn: psycopg.Connection, dataset_id: int, entity_type: str, entity_id: int
-) -> None:
-    """Mark a (dataset, locality) as checked-and-empty (no prodej/pronájem data)."""
+def confirm_translation(conn: psycopg.Connection) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run CONFIRM_TRANSLATION_SQL: (rows confirmed, rows added, disputed (key, town) pairs)."""
+    with conn.cursor() as cur:
+        cur.execute(CONFIRM_TRANSLATION_SQL)
+        confirmed, added, disputed = cur.fetchone()
+    return confirmed, added or [], disputed or []
+
+
+def record_no_data(conn: psycopg.Connection, dataset_id: int, obec_id: int) -> None:
+    """Mark a (dataset, town) as checked-and-empty (no prodej/pronájem data)."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO price_stat_locality_no_data
-                   (dataset_id, entity_type, entity_id, checked_at)
-            VALUES (%s, %s, %s, now())
-            ON CONFLICT (dataset_id, entity_type, entity_id)
+            INSERT INTO price_stat_locality_no_data (dataset_id, obec_id, checked_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (dataset_id, obec_id)
             DO UPDATE SET checked_at = excluded.checked_at
             """,
-            (dataset_id, entity_type, entity_id),
+            (dataset_id, obec_id),
         )
 
 
-def clear_no_data(
-    conn: psycopg.Connection, dataset_id: int, entity_type: str, entity_id: int
-) -> None:
-    """Drop the empty-marker for a locality that now yields data."""
+def clear_no_data(conn: psycopg.Connection, dataset_id: int, obec_id: int) -> None:
+    """Drop the empty-marker for a town that now yields data."""
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM price_stat_locality_no_data"
-            " WHERE dataset_id = %s AND entity_type = %s AND entity_id = %s",
-            (dataset_id, entity_type, entity_id),
+            "DELETE FROM price_stat_locality_no_data WHERE dataset_id = %s AND obec_id = %s",
+            (dataset_id, obec_id),
         )
 
 
@@ -307,16 +202,6 @@ def sweep_stale_runs(conn: psycopg.Connection, *, older_than_min: int = 90) -> i
             (older_than_min,),
         )
         return cur.rowcount
-
-
-def locality_exists(conn: psycopg.Connection, entity_type: str, entity_id: int) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM price_stat_localities "
-            "WHERE entity_type = %s AND entity_id = %s",
-            (entity_type, entity_id),
-        )
-        return cur.fetchone() is not None
 
 
 def start_run(
@@ -364,20 +249,18 @@ def upsert_observations(
     conn: psycopg.Connection,
     *,
     dataset_id: int,
-    entity_type: str,
-    entity_id: int,
+    obec_id: int,
     category_type_cb: int,
     months: list[dict[str, Any]],
-    run_id: int,
+    run_id: int | None,
 ) -> int:
-    """Latest-wins upsert of one (dataset, locality, category) monthly series."""
+    """Latest-wins upsert of one (dataset, town, category) monthly series."""
     if not months:
         return 0
     rows = [
         (
-            dataset_id, entity_type, entity_id, category_type_cb,
-            m["year"], m["month"], m.get("price"), m.get("active_count"),
-            m.get("new_count"), m.get("deleted_count"), run_id,
+            dataset_id, obec_id, category_type_cb, m["year"], m["month"], m.get("price"),
+            m.get("active_count"), m.get("new_count"), m.get("deleted_count"), run_id,
         )
         for m in months
     ]
@@ -385,12 +268,10 @@ def upsert_observations(
         cur.executemany(
             """
             INSERT INTO price_stat_observations (
-                dataset_id, entity_type, entity_id, category_type_cb, year,
-                month, price, active_count, new_count, deleted_count, run_id,
-                fetched_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-            ON CONFLICT (dataset_id, entity_type, entity_id, category_type_cb,
-                         year, month) DO UPDATE SET
+                dataset_id, obec_id, category_type_cb, year, month, price,
+                active_count, new_count, deleted_count, run_id, fetched_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            ON CONFLICT (dataset_id, obec_id, category_type_cb, year, month) DO UPDATE SET
                 price = EXCLUDED.price,
                 active_count = EXCLUDED.active_count,
                 new_count = EXCLUDED.new_count,
@@ -409,32 +290,24 @@ def recompute_metrics(
     """Recompute price_stat_city_metrics for a dataset from its observations."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT o.entity_type, o.entity_id, l.obec_id, o.category_type_cb, "
-            "o.year, o.month, o.price, o.active_count "
-            "FROM price_stat_observations o "
-            "JOIN price_stat_localities l "
-            "  ON l.entity_type = o.entity_type AND l.entity_id = o.entity_id "
-            "WHERE o.dataset_id = %s "
-            "ORDER BY o.entity_type, o.entity_id, o.year, o.month",
+            "SELECT obec_id, category_type_cb, year, month, price, active_count "
+            "FROM price_stat_observations WHERE dataset_id = %s "
+            "ORDER BY obec_id, year, month",
             (dataset_id,),
         )
         obs = cur.fetchall()
 
-    grouped: dict[tuple[str, int], dict[str, Any]] = {}
+    grouped: dict[int, dict[str, list[dict[str, Any]]]] = {}
     for r in obs:
-        key = (r["entity_type"], r["entity_id"])
-        g = grouped.setdefault(
-            key, {"obec_id": r["obec_id"], "sale": [], "rent": []}
-        )
-        bucket = "sale" if r["category_type_cb"] == 1 else "rent"
-        g[bucket].append(r)
+        g = grouped.setdefault(r["obec_id"], {"sale": [], "rent": []})
+        g["sale" if r["category_type_cb"] == 1 else "rent"].append(r)
 
     rows: list[tuple[Any, ...]] = []
-    for (entity_type, entity_id), g in grouped.items():
+    for obec_id, g in grouped.items():
         m = compute_city_metrics(g["sale"], g["rent"], window_years=window_years)
         rows.append(
             (
-                dataset_id, entity_type, entity_id, g["obec_id"], m["window_years"],
+                dataset_id, obec_id, m["window_years"],
                 m["sale_latest_price"], m["sale_latest_ym"], m["sale_cagr_pct"],
                 m["sale_months"], m["sale_min_active"], m["rent_latest_price"],
                 m["rent_latest_ym"], m["rent_cagr_pct"], m["rent_months"],
@@ -451,13 +324,12 @@ def recompute_metrics(
             cur.executemany(
                 """
                 INSERT INTO price_stat_city_metrics (
-                    dataset_id, entity_type, entity_id, obec_id, window_years,
+                    dataset_id, obec_id, window_years,
                     sale_latest_price, sale_latest_ym, sale_cagr_pct,
                     sale_months, sale_min_active, rent_latest_price,
                     rent_latest_ym, rent_cagr_pct, rent_months, rent_min_active,
                     gross_yield_pct, computed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                          %s, %s, now())
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 """,
                 rows,
             )

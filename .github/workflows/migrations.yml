@@ -925,6 +925,17 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py tests/test_publication_settle_live.py -q
 
+      # Location W8-2 (migrations 722, 723): the price-stats fetch takes one key per town from ruian_translation,
+      # an ad-matched key only when its town has no other row; active ads confirm or add keys and never move a
+      # stored row; rows are written and read by town code and named by the mirror. Which key a DISTINCT ON keeps
+      # and which rows a data-modifying CTE touches are executed answers, not SQL shapes.
+      - name: Price stats fetch by the translation table (migrations 722, 723)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/scraper/test_price_stats_translation_live.py -q
+
       # City proximity runs on pg_cron (migration 674): the function raises no NOTICE (one inside a pg_cron
       # command blocks the launcher, 658), holds its advisory lock to the end of its transaction, is closed to
       # browser roles, and the script's batched full rebuild recomputes every placeable property.
