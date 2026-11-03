@@ -310,8 +310,8 @@ RETURNING job_name
 # failure too. `due_at` moves only for this deployment's names, so an old replica never reschedules a newer one's row.
 # `pure`: a request whose row was not due yet when it started took no slot (the run's started_at is its claim's now(),
 # and the claim leaves due_at as it was), so its loss keeps the schedule, as its release would (#2317), and a slot that
-# came due while it ran stays due. A request on a paused row that was already due counts as having taken its slot: its
-# due_at moves on, never earlier.
+# came due while it ran stays due. The pause can change mid-run, so it is not read: a request on a paused row that was
+# already due counts as having taken its slot, and its due_at moves on, never earlier.
 _REAP_LOST_SQL = f"""
 WITH lapsed AS MATERIALIZED (
   SELECT r.id, r.job_name, r.holder, r.requested_by IS NOT NULL AND j.due_at > r.started_at AS pure
