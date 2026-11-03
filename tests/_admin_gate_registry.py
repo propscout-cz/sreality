@@ -102,6 +102,9 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # The push device registry and its delivery ledger (migration 654).
     "push_subscriptions",
     "notification_deliveries",
+    # The notification email's settings, whose unsubscribe tokens are credentials, and its send ledger (migration 724).
+    "account_notification_email",
+    "notification_email_sends",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",

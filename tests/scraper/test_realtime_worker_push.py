@@ -1,5 +1,5 @@
 """The realtime worker's `push` lane (notifications push W4, PROGRAM.md § 3.3), hermetic: a constant 15 s tick between
-the notifications lane and the heartbeat; the brake (no VAPID_PRIVATE_KEY: `unconfigured`, no connection); an
+the notifications lane and the email lane; the brake (no VAPID_PRIVATE_KEY: `unconfigured`, no connection); an
 unreadable key as its own cell; a pass on one connection whose steps are `lane/push/<step>` cells; and a
 ConnectionError driven through the whole lane leaving no push.apple.com anywhere in the heartbeat or the log."""
 
@@ -53,12 +53,12 @@ def _run(state: dict[str, Any] | None = None) -> dict[str, Any]:
     return state
 
 
-def test_the_push_lane_ticks_on_a_constant_between_notifications_and_heartbeat() -> None:
+def test_the_push_lane_ticks_on_a_constant_between_notifications_and_email() -> None:
     lane = inspect.getsource(rw._amain).split('("push"', 1)[1].split(")),", 1)[0]
     assert "lambda: PUSH_TICK_SECONDS" in lane and "default_interval=PUSH_TICK_SECONDS" in lane
     assert rw.PUSH_TICK_SECONDS == 15.0
     at = rw.LANES.index("push")
-    assert rw.LANES[at - 1:at + 2] == ("notifications", "push", "heartbeat")
+    assert rw.LANES[at - 1:at + 2] == ("notifications", "push", "email")
     assert "app_settings" not in inspect.getsource(rw._push_sync)
     assert "- push:" in rw.__doc__
     assert rw.PUSH_STEPS == ("key", "fan_out", "claim", "send")

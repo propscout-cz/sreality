@@ -634,7 +634,7 @@ Four changes, each closing one link:
   `in_flight_s` keeps counting from that pass's start (a skip otherwise reads like a quick pass),
   so the jobs check's lane cell reads Watch past 1,200 s in flight and Problem past 1,800 s.
 - **The heartbeat is the executor's canary.** It stays on the default executor every lane shares,
-  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the sixteen `LANES` hold at most one each in normal
+  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the seventeen `LANES` hold at most one each in normal
   running), so anything that fills it (leaked threads from the lanes without a pass lock, say)
   stops the beats. Those threads share two glibc malloc arenas (`MALLOC_ARENA_MAX=2`, E949). A
   beat connects once with a 10 s timeout, so a slow connect cannot outlast the watchdog's bound

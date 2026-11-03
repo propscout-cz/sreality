@@ -7,6 +7,7 @@ import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
 import { useScheme, useTheme } from '@/lib/theme';
+import NotificationEmail from './NotificationEmail';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
 
@@ -73,7 +74,7 @@ export default function AccountMenu() {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 top-[calc(100%+4px)] z-30 w-[15.5rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
+          className="absolute right-0 top-[calc(100%+4px)] z-30 w-[19rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
         >
           <div className="px-3 py-1.5 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] truncate">
             Signed in as {label}
@@ -114,6 +115,7 @@ export default function AccountMenu() {
               onChange={setMode}
             />
           </div>
+          <NotificationEmail tone="desktop" />
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
           {runOptions?.start.allowed && (
             <button

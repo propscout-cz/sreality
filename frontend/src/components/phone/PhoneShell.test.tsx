@@ -3,8 +3,9 @@
  * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the six areas
  * (W1's four, Odkaz and Prohlídky), a page outside the tab roots gets a back affordance,
  * the header's bell carries the unread count to Notifications (W5a, ruling R4),
- * and the account sheet holds this iPhone's push switch (W5b), the way to the
- * desktop view and, for an admin, the phone's one way to Health. */
+ * and the account sheet holds this iPhone's push switch (W5b), the account's
+ * notification email (email PR 4), the way to the desktop view and, for an
+ * admin, the phone's one way to Health. */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,6 +26,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
+  notificationEmail: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -49,6 +51,7 @@ beforeEach(() => {
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
+  vi.mocked(api.notificationEmail).mockImplementation(async (mode) => ({ mode: mode ?? 'daily' }));
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,
@@ -172,6 +175,25 @@ describe('phone frame', () => {
     expect(within(sheet).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Měď', 'Kobalt', 'Grafit']);
     expect(within(sheet).getByRole('radiogroup', { name: 'Barevné schéma' })).toBeInTheDocument();
     document.documentElement.removeAttribute('data-theme');
+  });
+
+  /* The account's notification email (docs/design/email/PROGRAM.md PR 4) beside the
+   * push switch: the phone-tone joined bar, the account's choice lit once read, a pick written. */
+  it('sets the account\'s notification email on the phone-tone joined bar', async () => {
+    setNarrow(true);
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    const group = await within(sheet).findByRole('group', { name: 'E-mailová upozornění' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Vypnuto', 'Denní přehled', 'Okamžitě']);
+    expect(group).toHaveClass('w-full', 'border', 'border-[var(--color-rule-strong)]');
+    await waitFor(() => expect(buttons[1]).toHaveAttribute('aria-pressed', 'true'));
+    vi.mocked(api.notificationEmail).mockImplementation(async () => ({ mode: 'off' }));
+    await userEvent.click(buttons[0]);
+    expect(api.notificationEmail).toHaveBeenCalledWith('off');
+    await waitFor(() => expect(buttons[0]).toHaveAttribute('aria-pressed', 'true'));
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'false');
   });
 
   /* The phone has no Admin menu, and system alerts never reach the bell (ruling

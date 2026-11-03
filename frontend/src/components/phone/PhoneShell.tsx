@@ -35,6 +35,7 @@ import {
 import { ROUTES } from '@/lib/routes';
 import { COLOR_SCHEMES, THEME_MODES, type ThemeMode } from '@/lib/appearance';
 import { useScheme, useTheme } from '@/lib/theme';
+import NotificationEmail from '@/components/NotificationEmail';
 import SchemeSwatch from '@/components/SchemeSwatch';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
@@ -321,6 +322,8 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
           <SegmentedBar tone="phone" fill label="Vzhled" options={THEMES} value={mode} onChange={setMode} />
         </div>
       </div>
+      {/* The account's notification email, beside this iPhone's push switch. */}
+      <NotificationEmail tone="phone" />
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
         {notifications && <PushSwitch />}
         {/* The phone has no Admin menu, and system alerts never reach the bell

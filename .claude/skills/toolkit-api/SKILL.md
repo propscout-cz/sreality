@@ -439,11 +439,11 @@ API service:
   `NOTIFICATIONS_MATCHER_DISABLED` in W2b, with no alias (the old name, if still set anywhere, does
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
-Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
+Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push and email (the worker's `email` lane). W1 (2026-10-21) deleted
 the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so
 `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
 `OUTBOX_DRAIN_DISABLED` are dead (remove from Railway). Push links absolutely from each device's own origin.
-- `RESEND_API_KEY` (API): waitlist email; `references/secrets-inventory.md`.
+- `RESEND_API_KEY`, one key per service: API (waitlist email), worker (`email` lane; unset = its brake); `references/secrets-inventory.md`.
 - `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
   (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
   the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →

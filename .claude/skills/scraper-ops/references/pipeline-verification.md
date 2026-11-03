@@ -875,20 +875,37 @@ lane (notifications push W4: `key` / `fan_out` / `claim` / `send`, each error th
 name only — `send` reads "N of M devices failed: <classes>" — because a push endpoint is a secret
 capability URL and a psycopg or requests message can carry one; a transport retry is no error, the
 `notifications` check judges outcomes; `last.deadline_stopped` = the pass reached its 90 s claim budget and
-left the remaining devices to their lease, `last.stopped` = the shutdown did): Problem once its
+left the remaining devices to their lease, `last.stopped` = the shutdown did), and inside the email lane (email PR 4:
+`settings` / `select` / `send`, `send` reading "N of M accounts failed: <reasons>", a failed send's reason its HTTP
+kind and status, `status_429`, or a raised step's class, never an address): Problem once its
 `failing_since` is older than max(3 × the lane's interval, 15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
 stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
 `worker_lane_stall` read OK.
 
+**The push and email passes** (moved here from the skill's lane notes). *Push*
+(`api/push_delivery.deliver_once`, every 15 s): fan-out (VISIBLE unseen events ≤ 24 h × the account's live devices
+registered before each; a share past one per sharer a day = `skipped/capped`), a claim (≤ 10 devices, 2-min lease =
+`next_attempt_at`, SKIP LOCKED, < 5 attempts), re-check (seen | hidden | stale | device_ended), ONE push per device
+(coalesced: "N nových upozornění", `/notifications?d=`), finalized right after its POST (sent | gone: the device ends |
+429: the device is held, `hold_until`, the rows keep their attempt | retry 2ⁿ min | failed). *Email*
+(`api/notification_email.deliver_once`, every 60 s, `docs/design/email/PROGRAM.md` PR 4): the missing
+`account_notification_email` rows first (every account with a member; no row reads as `daily`), then ≤ 50 candidate
+accounts, each claimed under its settings row's lock (`FOR UPDATE`): a daily is one `notification_email_sends` row per
+account and Prague day, claimed from 07:00 (`last.daily_open`), a check with nothing to say kept `empty` (the day is
+spent), a `failed` one claimed again after 15 min, three claims in all; an instant is claimed only when a VISIBLE unseen
+event waits and no row of the account is under 15 min old. The email lists the events after the account's last claim
+that did not fail, ≤ 24 h back, ≤ 50 lines, and goes 0.6 s after the previous one (Resend's 2 requests a second); the
+row ends `sent` (Resend's id), `empty` or `failed` (`reason`); one left `sending` by a death counts as sent.
+
 **What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
 lane from the module constant `LANES` — `probe`, `drain`, `images`, `maintenance`,
 `broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
-`sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `push`, `heartbeat` — seeds each with `interval_s`
+`sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `push`, `email`, `heartbeat` — seeds each with `interval_s`
 None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports
 the worker to learn the list (the jobs check mirrors it as `scripts/checks/platform.WORKER_LANES`, a test pins the two). `_lane_loop` writes `interval_s` on every wake, the idle branch
 included, so an off lane reads off, not absent. Per lane: `interval_s`, `passes`, `failed_passes`,
 `last_pass_at`, `last_duration_s`, `started_at`, `in_flight_s`, `last`, `failing_since`,
-`last_error` (at most 300 characters) and, on the probe, drain, notifications and push lanes,
+`last_error` (at most 300 characters) and, on the probe, drain, notifications, push and email lanes,
 `portal_errors` (`{portal or step: {failing_since, last_error}}`); `last_failure_at` is gone. A pass fails exactly where it
 failed before — a raise (`last_error` = `<Type>: <message>`), the 1,800 s timeout (`pass exceeded
 1800 s`), `text_extract`'s `fatal`, autodedup's refusal — and nothing new counts as a failure:

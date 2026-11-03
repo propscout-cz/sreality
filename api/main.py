@@ -80,6 +80,7 @@ from api.routes.autodedup import router as autodedup_router
 from api.routes.location_corrections import router as location_corrections_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
+from api.routes.notification_email import router as notification_email_router
 from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
@@ -260,6 +261,10 @@ app.include_router(notifications_router)
 # open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
 # for) on the service role, opened in the handler after that gate (api/routes/push.py).
 app.include_router(push_router)
+# /account/notification-email (the account's email choice: the caller's own account, never acted for, on the
+# service role) and /notifications/email/unsubscribe (every notification email's off link, open by design: the
+# token is the credential), api/routes/notification_email.py.
+app.include_router(notification_email_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the

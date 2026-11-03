@@ -1,7 +1,7 @@
 # Email: password reset, the waitlist, notifications
 
 > **Status: APPROVED 2026-10-31 (operator, in one interview). PR 1 done 2026-11-01 (a reset email delivered through
-> Resend); PR 2 in progress.** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
+> Resend); PR 2 and PR 4 built (PR 4 2026-11-03).** Every wave's PR updates the docs and skills it changes and `roadmap/public-release-track.md`.
 
 **Terms.** Sign-up, waitlist entry, waitlist invitation and introductory price are defined in `GLOSSARY.md`.
 
@@ -66,6 +66,19 @@ nobody can register unchecked at any moment.
 and an email has no device, so the schema is settled here. The worker needs its own key, since its lanes run on a
 separate Railway service. Updates rule 16 and the `CLAUDE.md` scope line, which still call email inactive. Comes last
 because nobody can receive it until accounts exist.
+
+*Built 2026-11-03.* The ledger is a per-account SEND ledger, `notification_email_sends` (migration 724), one row per
+email, not `notification_deliveries`: an email covers many events and has no device. The setting is
+`account_notification_email` (no row = Denní přehled), set by `GET`/`PUT /account/notification-email` (the caller's
+own account, never acted for) and switched off by the email's one-click link (`/notifications/email/unsubscribe`, on
+the account's own token). The worker's `email` lane (`api/notification_email.py`, every 60 s, dark without the worker's
+`RESEND_API_KEY`, a sending-only key for `mail.propscout.cz` named `propscout-worker`) claims under the settings row's
+lock: a daily email once per Prague day from 07:00, a check with nothing to say kept `empty`, a failure claimed again
+after 15 minutes, three claims in all; an instant one when an event waits and no claim of the account is under 15
+minutes old. An email lists the VISIBLE unseen events after the account's last claim that did not fail, never more than
+24 hours back, at most 50 lines, newest first, each in the push's words. A process that dies mid-send leaves the row
+`sending`, counted as sent: an email can be lost, never doubled. It and the waitlist confirmation share one
+left-aligned frame (`api/email_layout.py`).
 
 ## 4. Copy
 

@@ -2931,7 +2931,18 @@ renumber.** Navigate by area:
     Czech renderer (`api/notification_render.py`, by `change_kind`, from the frozen prices and the place
     label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
     `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
-    SQL, never logged, never in an error. **A SECOND producer is live (Sprint C):
+    SQL, never logged, never in an error. **Email is the second external channel** (2026-11, migration 724,
+    `docs/design/email/PROGRAM.md` PR 4), with a ledger of its own, `notification_email_sends`: ONE row per
+    email, never per event, because an email covers many events and has no device. Each account's
+    `account_notification_email.mode` decides (`off | daily | instant`; no row = `daily`). The worker's `email`
+    lane (60 s; brake: no `RESEND_API_KEY` on the worker) claims under the settings row's lock, appending a
+    `sending` row whose `covered_until` is the claim's clock: an email lists the VISIBLE unseen events after
+    the account's last claim that did not fail, never more than a day back, each line the same renderer's.
+    A daily is unique per account and Prague day (from 07:00; nothing to say is kept `empty`, so the day is
+    spent; a failure is claimed again after 15 min, three claims in all); an instant waits 15 min after any
+    claim. A row left `sending` counts as sent: an email is lost rather than doubled. It goes to the oldest
+    member's sign-in address, with a one-click off link (RFC 8058) on the account's `unsubscribe_token`.
+    **A SECOND producer is live (Sprint C):
     the collection monitor (`match_monitored_collections_once`, its price half in `match_changes_once`,
     both on the lane's 300 s clock over a 7-day window) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`

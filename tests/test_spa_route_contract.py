@@ -14,8 +14,9 @@ Deliberately narrow. It pins ONLY the patterns actually emitted across a
 boundary — verified by reading the emitter, not assumed:
   /listing/:source/:nativeId   chrome-extension
   /collections                 chrome-extension (the save checklist's "Spravovat kolekce")
-  /n/:dispatchId               the push lane (api/push_delivery.py): one event's push, `?d=` its delivery
-  /notifications               the push lane: a coalesced push, `?d=` its first delivery
+  /n/:dispatchId               the push lane (api/push_delivery.py): one event's push, `?d=` its delivery;
+                               the email lane (api/notification_email.py): each line of an email, no `?d=`
+  /notifications               the push lane: a coalesced push, `?d=` its first delivery; an email's button
 Widening it past what actually crosses the boundary would make it a second full
 route table to maintain, which is the failure mode it exists to prevent: every
 CROSS_TERRITORY entry must be BUILT off `${APP_BASE_URL}` somewhere in
@@ -132,6 +133,21 @@ def _push_links() -> dict[str, str]:
 def test_the_push_lane_builds_the_routes_it_pins() -> None:
     for key, built in _push_links().items():
         assert _pattern_to_regex(PUSH_EMITTED[key]).match(built), (key, built)
+
+
+def test_the_email_lane_links_the_same_two_routes() -> None:
+    """Each line of a notification email opens its event at /n/{dispatch} (no `?d=`: an email has no delivery to
+    report) and its button the feed: the two routes a push opens, from api/notification_email.py's APP_ORIGIN."""
+    import uuid
+
+    from api import notification_email as ne
+
+    email = ne.compose("daily", [{"id": "7f1c2e9a-0000-4000-8000-000000000001", "change_kind": "new"}], {"new": 1},
+                       uuid.uuid4())
+    paths = {u[len(ne.APP_ORIGIN):] for u in re.findall(re.escape(ne.APP_ORIGIN) + r"/[^\s\"<]*", email.html)}
+    assert paths == {"/n/7f1c2e9a-0000-4000-8000-000000000001", "/notifications"}, paths
+    assert _pattern_to_regex(PUSH_EMITTED["notificationOpen"]).match("/n/7f1c2e9a-0000-4000-8000-000000000001")
+    assert PUSH_EMITTED["notifications"] in paths
 
 
 def test_the_registry_declares_every_route_a_push_opens() -> None:

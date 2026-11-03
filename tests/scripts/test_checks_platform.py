@@ -596,11 +596,11 @@ def test_a_registered_lane_missing_from_the_heartbeat_is_watch_then_a_problem() 
     producers' one clock since the API's matcher went. Once is Watch (this worker's health lane can read its
     predecessor's row before its own first beat); missing at the previous measurement too is a
     Problem. The heartbeat lane has no cell, missing or not."""
-    old = {lane: _lane() for lane in plat.WORKER_LANES if lane not in ("notifications", "push", "heartbeat")}
+    old = {lane: _lane() for lane in plat.WORKER_LANES if lane not in ("notifications", "push", "email", "heartbeat")}
     out, _ = _jobs(lanes=old, whole=False)
     cells = _cells(out)
     assert {s: c["status"] for s, c in cells.items() if c["facts"].get("missing")} == {
-        "lane/notifications": "warn", "lane/push": "warn"}
+        "lane/notifications": "warn", "lane/push": "warn", "lane/email": "warn"}
     assert cells["lane/notifications"]["message"] == (
         "missing: the heartbeat has no entry for it, so the beat is from an older process beating "
         "beside this one (a deploy overlap)")
