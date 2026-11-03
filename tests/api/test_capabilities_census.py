@@ -285,7 +285,7 @@ def test_no_tool_column_allowlist_names_a_forbidden_column_or_a_broker(columns: 
 # Where a parked level, a city index, a broker or a listing's own stored place lives (the place reaches a reader only
 # through the read models' location-ad columns, rule 25); the reader modules name none of them.
 _FORBIDDEN_RELATIONS = re.compile(
-    r"\b(curated_cities\w*|city_index_\w+|city_population|listing_condition_scores|listing_broker_public|"
+    r"\b(curated_cities\w*|city_index_\w+|obec_population|listing_condition_scores|listing_broker_public|"
     r"listing_location)\b")
 
 

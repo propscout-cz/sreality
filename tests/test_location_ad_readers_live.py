@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute
+from tests._live_property import REQUIRED_DB, _advert, _mirror_unit, _property, _recompute
 from toolkit.publication import CAP_SQL
 
 pytestmark = REQUIRED_DB
@@ -50,12 +50,10 @@ def _stamped(cur: Any, pid: int) -> Any:
 
 
 def _town(cur: Any, code: int, name: str, centre: tuple[float, float], population: int) -> None:
-    """An obec: a 0.1° square around `centre`."""
+    """An obec of the register: a 0.1° square around `centre`, and its population."""
     lng, lat = centre
-    cur.execute(
-        "INSERT INTO admin_boundaries (id, level, name, geom, population) VALUES (%s, 'obec', %s, "
-        "ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326))::geography, %s)",
-        (code, name, lng - 0.05, lat - 0.05, lng + 0.05, lat + 0.05, population))
+    _mirror_unit(cur, "obec", code, name, (lng - 0.05, lat - 0.05, lng + 0.05, lat + 0.05))
+    cur.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, 2026, %s)", (code, population))
 
 
 def _ring_and_point(cur: Any) -> tuple[int, int, int]:
@@ -122,8 +120,8 @@ def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_alwa
 
 def test_city_proximity_is_computed_at_the_location_ads_point(cur: Any) -> None:
     """The canonical ad stands in Brno, the location ad in Praha: the home town is Praha's."""
-    _town(cur, 9_990_001, "Brno (test)", (16.60, 49.19), 380_000)
-    _town(cur, 9_990_002, "Praha (test)", (14.46, 50.05), 1_300_000)
+    _town(cur, 582786, "Brno (test)", (16.60, 49.19), 380_000)
+    _town(cur, PRAHA, "Praha (test)", (14.46, 50.05), 1_300_000)
     pid = _property(cur)
     ring = _advert(cur, pid, source="idnes")
     point = _advert(cur, pid, source="idnes", active=False)
