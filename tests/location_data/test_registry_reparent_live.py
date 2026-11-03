@@ -249,6 +249,8 @@ def test_the_readers_answer_once_after_the_first_close(conn):
                  "WHERE level = 'okres' AND code = %s",
                  (okres_name, name_index.normalize_name(okres_name), PRAHA_OKRES))
     name_index.rebuild(conn, m.v2)
+    kinds = {k for (k,) in conn.execute("SELECT DISTINCT entity_kind::text FROM ruian_name_index")}
+    assert "obec" in kinds and kinds <= set(name_index._UNIT_LEVELS)  # no street row (W8, #2362)
     view = resolve_db.SqlRegistryView(conn, m.v2)
 
     _, praha = _unit(conn, "obec", PRAHA)
