@@ -1339,6 +1339,12 @@ component is slimmed twice — each wave rewrites one component and slims its st
   units retired by SCD-2) and 6 of the pack's layers; 3 relations and 6 unread columns go; one Praha tree in CI. **Next:** the
   shadow, merge, backup, migration, then `location_registry_load.yml` re-enabled and vintage 20261031 dispatched once no
   full sweep is queued. Acceptance from 49,900 active Praha rows with okres NULL (179,398 all) and a Praha cell in okres pivots.
+- **W8-2 — the translation table and the price-stats re-key — built 2026-11-03, not rolled out** (#2362 §2-5, §8; rulings
+  Q10a-d; migrations 722 additive, 723 destructive, neither applied). `ruian_translation` holds the 6,258 sreality keys;
+  each price-stats run confirms or adds keys from active ads and never moves a stored row; observations, no-data and
+  metrics are keyed by `obec_id`; the series route is `/cities/{obec_id}/series`. Deleted: the suggest/PiP/by-name
+  resolution, the cities file, `--resolve-only` and the workflow's `resolve` mode. **Next:** backup, workflow disabled,
+  722, parity (§8 step 3), 723, merge, re-enable, dispatch dataset 9.
 - **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
   `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
   address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
