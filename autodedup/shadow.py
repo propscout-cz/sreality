@@ -282,14 +282,18 @@ def crossing_pairs(conn: psycopg.Connection, mover_ids: Iterable[int], cohort: s
     zones = Counter({"merge": 0, "band": 0, "reject": 0})
     ids = sorted(set(mover_ids) & cohort)
     if not ids:
-        return {"movers": 0, "pairs": 0, "by_zone": dict(zones)}
+        return {"movers": 0, "pairs": 0, "by_zone": dict(zones), "merge_pairs": []}
     _, rows = read(conn, _CROSSING_SQL, {"generation": GENERATION, "ids": ids})
     movers: set[int] = set()
+    merge_pairs: list[list[int]] = []
     for lo, hi, zone in rows:
         if lo not in cohort or hi not in cohort:
             movers.update({lo, hi} & cohort)
             zones[str(zone)] += 1
-    return {"movers": len(movers), "pairs": sum(zones.values()), "by_zone": dict(zones)}
+            if zone == "merge":
+                merge_pairs.append([lo, hi])
+    return {"movers": len(movers), "pairs": sum(zones.values()), "by_zone": dict(zones),
+            "merge_pairs": sorted(merge_pairs)}
 
 
 def _gained_part(mover: dict[str, Any]) -> bool:
@@ -697,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
         # no `shadow.json`.
         (shadow_dir / GROUP_FILE).write_text(json.dumps(record, indent=1, sort_keys=True),
                                              encoding="utf-8")
-        zero = {"movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0},
+        zero = {"movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0}, "merge_pairs": [],
                 "zero": "no_ruling_in_blocks" if ruled is not None else "no_block_in_piece"}
         (shadow_dir / "judge").mkdir(parents=True, exist_ok=True)
         (shadow_dir / "judge" / SHADOW_FILE).write_text(json.dumps(

@@ -763,14 +763,17 @@ def test_crossing_pairs_are_the_stored_pairs_a_mover_holds_outside_the_cohort():
     does not count, and a mover outside the cohort is another piece's."""
     conn = _Conn([(1, 900, "merge"), (1, 901, "band"), (2, 902, "band"), (800, 1, "reject"), (1, 3, "merge")])
     out = shadow.crossing_pairs(conn, [1, 2, 7], {1, 2, 3})
-    assert out == {"movers": 2, "pairs": 4, "by_zone": {"merge": 1, "band": 2, "reject": 1}}
+    assert out["movers"] == 2 and out["pairs"] == 4
+    assert out["by_zone"] == {"merge": 1, "band": 2, "reject": 1}
+    assert out["merge_pairs"] == [[1, 900]]
     sql, params, in_transaction = conn.executed[-1]
     assert in_transaction and sorted(params["ids"]) == [1, 2], "bounded by the movers in this cohort"
     flat = " ".join(sql.split()).lower()
     assert "p.listing_lo = any(%(ids)s::bigint[])" in flat and "p.listing_hi = any(%(ids)s::bigint[])" in flat
     idle = _Conn([])
     assert shadow.crossing_pairs(idle, [7], {1}) == {"movers": 0, "pairs": 0,
-                                                     "by_zone": {"merge": 0, "band": 0, "reject": 0}}
+                                                     "by_zone": {"merge": 0, "band": 0, "reject": 0},
+                                                     "merge_pairs": []}
     assert not idle.executed, "no mover in the cohort, no read"
 
 
@@ -805,7 +808,8 @@ def test_a_piece_with_no_ruling_writes_a_marked_zero_a_failed_piece_never_has(mo
     verdict = json.loads((tmp_path / "judge" / shadow.SHADOW_FILE).read_text(encoding="utf-8"))
     assert verdict["state"] == "nothing_exported" and verdict["pass"] is None and verdict["started_at"]
     assert verdict["door"]["crossing_pairs"] == {
-        "movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0}, "zero": "no_ruling_in_blocks"}
+        "movers": 0, "pairs": 0, "by_zone": {"merge": 0, "band": 0, "reject": 0}, "merge_pairs": [],
+        "zero": "no_ruling_in_blocks"}
     assert verdict["door"]["piece"]["blocks"] == 0
 
 
@@ -818,7 +822,8 @@ def test_an_exported_piece_records_its_crossing_pairs_and_start_for_the_gate(mon
     monkeypatch.setattr(shadow, "_cohort_ids", lambda path: {1})
     assert shadow.main([str(tmp_path), "--all-blocks"]) == 0
     group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
-    assert group["crossing_pairs"] == {"movers": 1, "pairs": 1, "by_zone": {"merge": 0, "band": 1, "reject": 0}}
+    assert group["crossing_pairs"] == {"movers": 1, "pairs": 1, "by_zone": {"merge": 0, "band": 1, "reject": 0},
+                                       "merge_pairs": []}
     assert group["started_at"]
 
 
