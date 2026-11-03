@@ -855,9 +855,11 @@ def test_a_dissolve_cuts_overlaps_against_earlier_rows_then_subdivides_each_piec
 
 
 def test_the_kraje_source_draws_each_kraj_boundary_in_3857() -> None:
+    """W8 (ruling Q12b): the register's render polygons at the current version, dated by that version."""
     text = _compact(mod.KRAJE_SQL)
-    assert "st_transform(st_boundary(b.geom::geometry),3857)" in text
-    assert "whereb.level='kraj'" in text
+    assert "st_transform(st_boundary(r.geom),3857)" in text
+    assert "fromruian_unit_renderrwherer.level='kraj'" in text
+    assert _compact(mod.KRAJE_REVISED_SQL) == "selectsource_datefromregistry_versionswhereis_current"
 
 
 def test_the_rent_map_source_is_the_old_matviews_query_without_its_geojson() -> None:
@@ -865,15 +867,17 @@ def test_the_rent_map_source_is_the_old_matviews_query_without_its_geojson() -> 
     boundary at the level the MF priced it (obec or KÚ), the four VK rents pivoted into flat
     props, NULLs stripped so an unpriced VK paints as null_color; the geometry stays geometry."""
     text = _compact(mod.RENT_MAP_SQL)
-    assert text.startswith("selectb.id::textassource_id,")
-    assert ("jsonb_strip_nulls(jsonb_build_object('name',b.name,'kraj',min(v.kraj),"
-            "'level',b.level,") in text
+    assert text.startswith("selectv.ruian_code::textassource_id,")
+    assert ("jsonb_strip_nulls(jsonb_build_object('name',r.name,'kraj',v.kraj,'level',v.level,"
+            "'vk1',v.vk1,'vk2',v.vk2,'vk3',v.vk3,'vk4',v.vk4))asprops") in text
     for vk in range(1, 5):
-        assert f"'vk{vk}',max(v.ref_rent_per_m2)filter(wherev.vk={vk})" in text
-    assert "st_transform(b.geom::geometry,3857)asgeom" in text
-    assert "joinadmin_boundariesbonb.id=v.ruian_codeandb.level=v.level" in text
-    assert "wherev.source_revision=(selectmax(source_revision)fromrent_map_revisions)" in text
-    assert text.endswith("groupbyb.id")
+        assert f"max(ref_rent_per_m2)filter(wherevk={vk})asvk{vk}" in text
+    assert "st_transform(r.geom,3857)asgeom" in text
+    # W8 (ruling Q12b): the polygon is the register's, at the level the MF priced it.
+    assert ("joinruian_unit_renderronr.code=v.ruian_codeandr.level=(casev.levelwhen'ku'then'katastralni_uzemi'"
+            "elsev.levelend)::ruian_level") in text
+    assert "wheresource_revision=(selectmax(source_revision)fromrent_map_revisions)" in text
+    assert "groupbyruian_code,level" in text
     assert "geojson" not in text and "novostavba" not in text
 
 
@@ -1144,7 +1148,7 @@ def test_the_database_only_render_keeps_the_datum_check(offline: None) -> None:
 
 
 def test_the_database_only_render_refuses_an_empty_first_render(offline: None) -> None:
-    """A join that finds no boundary (an empty admin_boundaries) must not publish an empty map."""
+    """A join that finds no boundary (an empty register) must not publish an empty map."""
     conn = _FakeConn()
     with pytest.raises(mod.Refused, match="0 features against 0"):
         mod.render_sql_section(conn, "rent_map")

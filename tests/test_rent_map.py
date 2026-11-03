@@ -50,7 +50,7 @@ def test_parses_all_territories(parsed):
     assert parsed.source_date == date(2026, 5, 15)
 
 
-def test_level_split_matches_admin_boundaries(parsed):
+def test_level_split_matches_the_register(parsed):
     levels = {v.ruian_code: v.level for v in parsed.values}
     assert sum(1 for lv in levels.values() if lv == "ku") == 1582
     assert sum(1 for lv in levels.values() if lv == "obec") == 6048

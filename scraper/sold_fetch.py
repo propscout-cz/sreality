@@ -9,7 +9,7 @@ returns a status; the one thing it cannot do is raise into the worker lane, beca
 a cell that failed silently is indistinguishable from a cell that holds no sales.
 The one attempt that writes nothing — an obec with no boundary polygon, which has no
 box to key the row on — is unreachable from the lane by construction: the work-list
-joins `admin_boundaries`, so an unboxable cell is never offered as work. It stays
+joins `ruian_unit_render`, so an unboxable cell is never offered as work. It stays
 reachable from the CLI, where the operator names the obec.
 
 AND AN `ok` ROW SAYS WHAT IT COVERED. A walk the page cap or a non-advancing
@@ -130,7 +130,7 @@ def fetch_cell(
         box = sold_db.obec_cell_box(conn, obec_kod)
         if box is None:
             # No polygon, so no cell and no box to key a ledger row on. The lane
-            # cannot get here (its work-list joins `admin_boundaries`); the CLI can,
+            # cannot get here (its work-list joins `ruian_unit_render`); the CLI can,
             # because there the operator names the obec.
             return _result(obec_kod, "skipped", started,
                            error="obec has no boundary polygon")

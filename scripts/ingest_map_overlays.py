@@ -189,32 +189,40 @@ select (select count(*)
 
 SELECT_SOURCE_SQL = "select s.source_id, s.props, st_asgeojson(s.geom) from ({source}) s"
 
+# Reference geometry from the RÚIAN mirror (ruling Q12b): the current version's render polygons
+# (ruian_unit_render, migration 725), dated by that version.
 KRAJE_SQL = """
-select b.id::text as source_id,
-       jsonb_build_object('class', 'kraj', 'name', b.name) as props,
-       st_transform(st_boundary(b.geom::geometry), 3857) as geom
-  from admin_boundaries b
- where b.level = 'kraj'
+select r.code::text as source_id,
+       jsonb_build_object('class', 'kraj', 'name', r.name) as props,
+       st_transform(st_boundary(r.geom), 3857) as geom
+  from ruian_unit_render r
+ where r.level = 'kraj'
 """
 
-KRAJE_REVISED_SQL = "select max(ingested_at)::date from admin_boundaries where level = 'kraj'"
+KRAJE_REVISED_SQL = "select source_date from registry_versions where is_current"
 
 # The MF rent choropleth: migration 132's rent_map_choropleth without its GeoJSON column. One
-# feature per priced obec / KÚ with the latest revision's reference rent per size category;
-# a category the MF leaves unpriced is absent from props and paints as the scale's null_color.
+# feature per priced obec / KÚ with the latest revision's reference rent per size category,
+# drawn by the register's polygon at the level the MF priced it (the MF's 'ku' is the
+# register's 'katastralni_uzemi'); a category the MF leaves unpriced is absent from props and
+# paints as the scale's null_color.
 RENT_MAP_SQL = """
-select b.id::text as source_id,
+select v.ruian_code::text as source_id,
        jsonb_strip_nulls(jsonb_build_object(
-           'name', b.name, 'kraj', min(v.kraj), 'level', b.level,
-           'vk1', max(v.ref_rent_per_m2) filter (where v.vk = 1),
-           'vk2', max(v.ref_rent_per_m2) filter (where v.vk = 2),
-           'vk3', max(v.ref_rent_per_m2) filter (where v.vk = 3),
-           'vk4', max(v.ref_rent_per_m2) filter (where v.vk = 4))) as props,
-       st_transform(b.geom::geometry, 3857) as geom
-  from rent_map_values v
-  join admin_boundaries b on b.id = v.ruian_code and b.level = v.level
- where v.source_revision = (select max(source_revision) from rent_map_revisions)
- group by b.id
+           'name', r.name, 'kraj', v.kraj, 'level', v.level,
+           'vk1', v.vk1, 'vk2', v.vk2, 'vk3', v.vk3, 'vk4', v.vk4)) as props,
+       st_transform(r.geom, 3857) as geom
+  from (select ruian_code, level, min(kraj) as kraj,
+               max(ref_rent_per_m2) filter (where vk = 1) as vk1,
+               max(ref_rent_per_m2) filter (where vk = 2) as vk2,
+               max(ref_rent_per_m2) filter (where vk = 3) as vk3,
+               max(ref_rent_per_m2) filter (where vk = 4) as vk4
+          from rent_map_values
+         where source_revision = (select max(source_revision) from rent_map_revisions)
+         group by ruian_code, level) v
+  join ruian_unit_render r
+    on r.code = v.ruian_code
+   and r.level = (case v.level when 'ku' then 'katastralni_uzemi' else v.level end)::ruian_level
 """
 
 # The source date of the revision RENT_MAP_SQL draws (the latest), not the newest date on

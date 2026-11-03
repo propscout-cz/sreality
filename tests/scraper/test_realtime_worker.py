@@ -2451,7 +2451,7 @@ def test_a_failed_cell_is_counted_and_never_stops_the_tick(
 
 def test_a_cell_that_could_not_be_boxed_never_reads_as_a_quiet_pass(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # The work-list's admin_boundaries join means the lane should never see one; if
+    # The work-list's ruian_unit_render join means the lane should never see one; if
     # it ever does, `skipped` is the only place it can show, because a skip writes
     # no ledger row either.
     _patch_sold_comps(monkeypatch, [1], results=[

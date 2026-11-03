@@ -40,7 +40,7 @@ class _Cursor:
 
     def execute(self, sql: str, params: Any = ()) -> None:
         s = " ".join(sql.split()).lower()
-        if s.startswith("select id, name from admin_boundaries"):
+        if s == "select code, name from ruian_place_names_public where level = 'kraj' order by name":
             self._rows = list(_KRAJE)
             self._last = None
         elif s.startswith(

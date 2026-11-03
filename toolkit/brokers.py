@@ -261,14 +261,15 @@ _BROKER_SQL = ("p.broker_id, p.display_name, p.primary_email, p.primary_phone, p
                "p.firm_is_franchise, p.source_count, p.distinct_source_count, p.first_seen_at, p.last_seen_at, n.* "
                f"FROM brokers_public p CROSS JOIN {BROKER_COUNTS_SQL}")
 # The numbers by region and by category, over the book's properties Browse serves (a property without a region,
-# foreign, or not yet published counts only in the totals).
+# foreign, or not yet published counts only in the totals). A region is named by the RÚIAN register.
 _FOOTPRINT_SQL = f"""
-    SELECT grouping(l.region_id) = 0 AS by_region, l.region_id AS geo_id, ab.name, l.category_main, l.category_type,
+    SELECT grouping(l.region_id) = 0 AS by_region, l.region_id AS geo_id, k.name, l.category_main, l.category_type,
            {_COUNTS}
-    FROM broker_book b JOIN browse_list l USING (property_id) LEFT JOIN admin_boundaries ab ON ab.id = l.region_id
+    FROM broker_book b JOIN browse_list l USING (property_id)
+    LEFT JOIN ruian_place_names_public k ON k.level = 'kraj' AND k.code = l.region_id
     WHERE b.broker_id = %(broker_id)s
-    GROUP BY GROUPING SETS ((l.region_id, ab.name), (l.category_main, l.category_type))
-    ORDER BY active_properties DESC, properties DESC, ab.name, l.category_main, l.category_type
+    GROUP BY GROUPING SETS ((l.region_id, k.name), (l.category_main, l.category_type))
+    ORDER BY active_properties DESC, properties DESC, k.name, l.category_main, l.category_type
 """
 
 

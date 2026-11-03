@@ -10,8 +10,8 @@ matcher and the broker board (Browse's own cohort) — tests a chip the same way
 plain equality, per level, nothing else, over FIVE code columns: `region_id`,
 `okres_id`, `obec_id`, `cast_obce_id` (migration 503) and `ulice_id`, the RÚIAN
 street code (584). `listing_location` answers every listing with those codes,
-and `admin_boundaries.id` IS the RÚIAN code (migrations 083/141), so a chip and a
-listing come from one register.
+and a chip carries the RÚIAN code `/maps/resolve` read from the mirror, so a chip
+and a listing come from one register.
 
 WHAT YOU PICK IS WHAT YOU FILTER. A chip is exactly one unit at the level the
 operator picked; a street chip filters at its street, never its town. A městská
