@@ -868,7 +868,7 @@ failing rule; the other lanes' `last.errors` count per-item failures inside comp
 
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
 `portal_errors`, and so does a step failing inside the notifications lane (notifications W2a:
-`portal_errors` keyed by step, `watchdog_new` / `price` / `monitor`, so the cell is
+`portal_errors` keyed by step, `watchdog_new` / `price` / `lifecycle`, so the cell is
 `lane/notifications/<step>` with the step as its `portal`; red iff a statement raised, never for a
 stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`), and inside the push
 lane (notifications push W4: `key` / `fan_out` / `claim` / `send`, each error the exception's CLASS

@@ -1022,7 +1022,7 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
                                "subscriptions_failed": 0, "changes_inserted": 0,
                                "collection_changes_inserted": 0},
-        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+        "match_lifecycle_once": {"monitored_collections": 2, "events_inserted": 1},
     }}
 
     def fake(name: str) -> Any:
@@ -1064,7 +1064,7 @@ def test_the_lanes_steps_bind_to_the_real_producers() -> None:
     binding them keeps a rename from leaving the lane calling nothing."""
     from api import notifications
 
-    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "lifecycle"]
     for name in rw.NOTIFICATIONS_STEPS.values():
         inspect.signature(getattr(notifications, name)).bind(None)
 
@@ -1083,7 +1083,7 @@ def test_a_notifications_pass_runs_each_step_on_its_own_connection(
     lane = state["lanes"]["notifications"]
     assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
     assert lane["portal_errors"] == {}
-    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "price", "lifecycle"}
     assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
     Jsonb(rw._lane_snapshot(state["lanes"]))
 
@@ -1107,7 +1107,7 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     assert set(errors) == {"watchdog_new", "price"}
     assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
     assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
-    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "lifecycle"}
 
     now = datetime.fromisoformat(errors["price"]["failing_since"])
     cells = platform._portal_cells("notifications", lane, {}, 900.0, now)

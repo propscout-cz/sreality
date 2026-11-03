@@ -36,12 +36,14 @@ class CreateSubscriptionIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     filter_spec: WatchdogFilterSpec
     is_active: bool = True
+    notify_kinds: nf.NotifyKinds | None = None
 
 
 class UpdateSubscriptionIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     filter_spec: WatchdogFilterSpec | None = None
     is_active: bool | None = None
+    notify_kinds: nf.NotifyKinds | None = None
 
 
 # --- subscriptions --------------------------------------------------------
@@ -67,6 +69,7 @@ def post_subscription(
         name=body.name,
         filter_spec=body.filter_spec,
         is_active=body.is_active,
+        notify_kinds=body.notify_kinds,
         account_id=account_id,
     )
 
@@ -94,6 +97,7 @@ def put_subscription(
         name=body.name,
         filter_spec=body.filter_spec,
         is_active=body.is_active,
+        notify_kinds=body.notify_kinds,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="subscription not found")
