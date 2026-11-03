@@ -2315,7 +2315,7 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
 }
 
 /* ----- condition scoring: per-kraj enablement ------------------------------
- * GET returns every kraj (admin_boundaries level='kraj') with its enabled
+ * GET returns every kraj (the RÚIAN register's kraj codes) with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
  * same payload. Condition scoring is parked (rule 14): its workflows are

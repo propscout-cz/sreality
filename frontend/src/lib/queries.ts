@@ -1537,19 +1537,13 @@ export interface CuratedCity {
   city_id: number;
   name: string;
   kraj_name: string;
-  lat: number;
-  lng: number;
-  default_radius_m: number;
+  /* The latest ČSÚ year of obec_population for obec_kod (migration 726). */
   population: number | null;
   population_as_of_year: number | null;
-  /* The RÚIAN obec this curated city was matched to (migration 081), or null
-   * when the name match failed. The view has always exposed it and
-   * fetchCuratedCities has always `select('*')`-ed it — it was simply absent
-   * from this type. It is the join key that lets a property carry its city's
-   * indexes without a PostGIS round-trip: `properties.obec_id =
-   * curated_cities.admin_boundary_id`. All 206 curated cities have one, so the
-   * centroid+radius fallback arm in the SQL predicates is currently dead. */
-  admin_boundary_id: number | null;
+  /* The RÚIAN town code of the city (curated_cities.obec_kod, migration 726;
+   * never null). It is the join key that lets a property carry the indexes of
+   * its city without a PostGIS round-trip: `properties.obec_id = obec_kod`. */
+  obec_kod: number;
 }
 
 export interface CityIndexDefinition {
@@ -1639,7 +1633,8 @@ export interface CityPolygon {
 export const fetchCuratedCityPolygons = async (
   { signal }: PgReadOptions = {},
 ): Promise<CityPolygon[]> => {
-  /* One simplified municipality boundary per curated city (205 rows).
+  /* One simplified municipality boundary per curated city (206 rows), the
+   * RÚIAN render polygon of its town (migration 726).
    * `geojson` is the raw ST_AsGeoJSON string the map JSON.parses into a
    * Feature geometry. Fetched once and cached (staleTime: Infinity), and only
    * when the map tab is active. */

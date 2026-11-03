@@ -1074,12 +1074,9 @@ describe('<Pipeline> board', () => {
       city_id: 1,
       name: 'Praha',
       kraj_name: 'Hlavní město Praha',
-      lat: 50.08,
-      lng: 14.43,
-      default_radius_m: 10_000,
       population: 1_300_000,
       population_as_of_year: 2024,
-      admin_boundary_id: 554782,
+      obec_kod: 554782,
     } as CuratedCity;
     const def = {
       index_name: 'celkove_hodnoceni',

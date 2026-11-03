@@ -12,7 +12,7 @@
  * `district_code_plan` there return the same object, and
  * `tests/fixtures/district_chip_plan.json` is the table both are tested against.
  * `browse_list.obec_id` / `okres_id` / `region_id` ARE RÚIAN codes
- * (`admin_boundaries.id` IS the code); `cast_obce_id` (migration 503) and
+ * (the codes of `listing_location`); `cast_obce_id` (migration 503) and
  * `ulice_id` (migration 584) are the two finer levels. */
 
 import type { DistrictChip } from './filters';

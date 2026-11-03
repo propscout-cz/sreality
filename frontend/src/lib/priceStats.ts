@@ -110,37 +110,22 @@ export const fetchGrowth = async (
 };
 
 /* The window-invariant half of the growth choropleth: one polygon per obec
- * that has ever had an observation in this dataset, keyed on dataset_id
+ * the dataset's run computed metrics for (price_stat_choropleth, each town
+ * drawn by its RÚIAN render polygon, migration 727), keyed on dataset_id
  * alone. Fetched once and cached forever (staleTime: Infinity in the
  * consuming useQuery) — every window change re-fetches fetchGrowth's numbers
- * only and re-joins them to this already-cached shape set client-side. */
+ * only and re-joins them to this already-cached shape set client-side. A
+ * dataset whose first run has not ended draws no shapes yet. */
 export interface PriceStatGrowthShape {
   obec_id: number;
   geojson: string;
 }
 
-export const fetchGrowthShapes = async (
+export const fetchGrowthShapes = (
   datasetId: number,
   { signal }: PgReadOptions = {},
-): Promise<PriceStatGrowthShape[]> => {
-  /* Prefer the already-materialized polygons. `price_stat_choropleth` is
-   * written by the dataset run and holds the identical obec set — verified
-   * live across all 12 datasets (43/43, 831/831, 3,296/3,296, 4,044/4,044,
-   * and 0/0 for the ones with no run yet) — so this is a substitution, not an
-   * approximation.
-   *
-   * WHY it matters: `price_stat_growth_shapes` is an RPC, and fetchAllRows
-   * pages it. PostgREST appends LIMIT/OFFSET around the function call, so the
-   * whole body re-runs for EVERY page — measured 1.4s and 10,199 buffers per
-   * page on dataset 14, re-aggregating all 180,506 observation rows each time,
-   * five times per load (and since W2b the last four fire in parallel, so
-   * that is four concurrent 1.4s statements against an 8s statement_timeout).
-   * The table read is a plain indexed scan of the same rows.
-   *
-   * The RPC stays as the fallback: a dataset whose run has not written its
-   * choropleth yet must still draw, and the RPC derives the shapes from
-   * observations directly. */
-  const materialized = await fetchAllRows<PriceStatGrowthShape>({
+): Promise<PriceStatGrowthShape[]> =>
+  fetchAllRows<PriceStatGrowthShape>({
     relation: 'price_stat_choropleth_public',
     build: () =>
       supabase
@@ -152,18 +137,6 @@ export const fetchGrowthShapes = async (
     expectMax: 100_000,
     signal,
   });
-  if (materialized.length > 0) return materialized;
-
-  return await fetchAllRows<PriceStatGrowthShape>({
-    relation: 'price_stat_growth_shapes',
-    build: () =>
-      supabase.rpc('price_stat_growth_shapes', { p_dataset_id: datasetId }, { count: 'exact' }),
-    orderBy: [{ column: 'obec_id' }],
-    key: ['obec_id'],
-    expectMax: 100_000,
-    signal,
-  });
-};
 
 /* Per-obec monthly sale + rent price for the map hover-chart
  * (price_stat_series RPC). The frontend derives the metric's variable. */
@@ -195,21 +168,20 @@ export interface ObecNode {
   name: string;
   parent_id: number | null;
   population: number | null;
-  sreality_id: number | null;
 }
 
 export const fetchObecTree = async (
   { signal }: PgReadOptions = {},
 ): Promise<ObecNode[]> => {
-  /* 6,349 rows (every kraj/okres/obec) — an incomplete tree silently hides
-   * municipalities from the picker. Names collide (same-name obce), hence the
-   * id tiebreak. */
+  /* 6,349 rows (every live kraj/okres/obec of the RÚIAN register, migration
+   * 725) — an incomplete tree silently hides municipalities from the picker.
+   * Names collide (same-name obce), hence the id tiebreak. */
   return await fetchAllRows<ObecNode>({
     relation: 'price_stat_obce_picker_public',
     build: () =>
       supabase
         .from('price_stat_obce_picker_public')
-        .select('id,level,name,parent_id,population,sreality_id', { count: 'exact' }),
+        .select('id,level,name,parent_id,population', { count: 'exact' }),
     orderBy: [{ column: 'name' }, { column: 'id' }],
     key: ['id'],
     expectMax: 100_000,

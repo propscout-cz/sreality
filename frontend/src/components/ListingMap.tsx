@@ -85,15 +85,6 @@ const viewBounds = (map: maplibregl.Map): MapBounds => {
   return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
 
-/* Fallback shape for a curated city that has no municipality boundary
- * (every city has one today, but a future operator upload might add one
- * before its admin_boundary link is backfilled). */
-const circlePolygonGeom = (
-  lat: number,
-  lng: number,
-  radiusM: number,
-): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
-
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
 
 /* The listing layers a click hits first, whatever lies under them. */
@@ -1211,9 +1202,9 @@ export default function ListingMap({
    * by-index, the boundary polygons, or the underlying data. The shared
    * `interpolate` paint expression reads `properties.value`, so a change
    * of colorByIndex is implemented as a fresh setData with new values +
-   * labels. Geometry is the municipality boundary (JSON.parsed from the
-   * ST_AsGeoJSON string), falling back to a radius circle if a city has
-   * no boundary. */
+   * labels. Geometry is the RÚIAN render polygon of the town (JSON.parsed
+   * from the ST_AsGeoJSON string); a city the register cannot draw is not
+   * drawn. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
@@ -1230,7 +1221,7 @@ export default function ListingMap({
      * that case (or when no index is selected) so no figure is drawn. */
     const fc: CityFC = {
       type: 'FeatureCollection',
-      features: list.map((c) => {
+      features: list.flatMap((c) => {
         let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null;
         const raw = polys.get(c.city_id);
         if (raw) {
@@ -1243,9 +1234,7 @@ export default function ListingMap({
             geometry = null;
           }
         }
-        if (!geometry) {
-          geometry = circlePolygonGeom(c.lat, c.lng, c.default_radius_m);
-        }
+        if (!geometry) return [];
         const v = idxVals.get(c.city_id);
         const hasReading = typeof v === 'number' && Number.isFinite(v);
         /* Below the operator's min threshold → treat as "no reading" so
@@ -1267,8 +1256,8 @@ export default function ListingMap({
         const value = norm ?? -1;
         const valueLabel =
           colorByIndex && passesMin ? (v as number).toFixed(1) : '';
-        return {
-          type: 'Feature',
+        return [{
+          type: 'Feature' as const,
           id: c.city_id,
           geometry,
           properties: {
@@ -1280,7 +1269,7 @@ export default function ListingMap({
             value_label: valueLabel,
             popup_html: cityPopupHtml(c, allDefs, allVals, colorByIndex ?? null),
           },
-        };
+        }];
       }),
     };
     src.setData(fc);
