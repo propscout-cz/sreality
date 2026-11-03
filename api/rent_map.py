@@ -116,8 +116,10 @@ def insert_revision(
             if served:
                 scraper_db.stamp_derived_artifact(conn, "rent_map_cells")
             else:
-                LOG.warning("rent map: rev %s is not the revision rent_map_cells serves; "
-                            "rent_map_cells not stamped", known)
+                LOG.warning("rent map: rev %s is not the revision rent_map_cells serves: either an older file "
+                            "MF offers again, or the latest revision whose ingest refresh was skipped (another "
+                            "refresh in flight), leaving the cells on an older one; rent_map_cells not stamped",
+                            known)
             return RevisionOutcome(None, None)
 
         cur.execute(

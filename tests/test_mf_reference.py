@@ -541,14 +541,14 @@ def test_a_quiet_month_stamps_the_cells_current_and_an_older_file_does_not(conn)
         old = _one(conn, stamp_sql)
         (revisions,) = _one(conn, revisions_sql)
 
-        def known(sha: str) -> int | None:
+        def reingest(sha: str) -> int | None:
             return insert_revision(conn, ParsedRentMap(values=[], adjustments=[], source_date=None),
                                    source_filename="mf-test.xlsx", file_sha256=sha,
                                    source_date=None, uploaded_by=None).revision
 
-        assert known("mf-test-stale") is None
+        assert reingest("mf-test-stale") is None
         assert _one(conn, stamp_sql) == old
-        assert known("mf-test-latest") is None
+        assert reingest("mf-test-latest") is None
         stamped, through, rows, duration_ms = _one(conn, stamp_sql)
         assert stamped > old[0] and through > old[1]
         assert (rows, duration_ms) == (4242, 77)

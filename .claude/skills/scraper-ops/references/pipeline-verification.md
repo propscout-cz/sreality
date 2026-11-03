@@ -913,7 +913,7 @@ whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELI
 exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
 `is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
-`*/15`) except `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
+`*/15`) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
 38 h on a daily cron, so with the slack it reads Problem at 56 h, the retired `property_maintenance`
 sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every

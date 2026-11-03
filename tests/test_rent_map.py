@@ -317,8 +317,9 @@ def test_a_quiet_month_stamps_the_cells_current_and_re_renders_nothing(seams):
 
 
 def test_a_known_file_the_cells_do_not_serve_stamps_nothing(seams, caplog):
-    """A known file that is not the served revision (MF re-offering an older file) proves
-    nothing about the cells, so the cell keeps ageing and the log says why."""
+    """A known file that is not the served revision (an older file MF offers again, or the
+    latest revision whose ingest refresh was skipped) proves nothing about the cells, so the
+    cell keeps ageing and the log says why."""
     conn = _IngestConn(existing=(1, False))
     seams(conn)
     with caplog.at_level(logging.WARNING, logger="rent_map"):
