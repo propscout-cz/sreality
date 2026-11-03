@@ -1201,15 +1201,14 @@ def get_price_stat_city_metrics(
     return price_stats_module.dataset_city_metrics(conn, dataset_id)
 
 
-@app.get("/price-stats/datasets/{dataset_id}/cities/{entity_type}/{entity_id}/series")
+@app.get("/price-stats/datasets/{dataset_id}/cities/{obec_id}/series")
 def get_price_stat_city_series(
     dataset_id: int,
-    entity_type: str,
-    entity_id: int,
+    obec_id: int,
     conn: Any = Depends(deps.get_db_conn),
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
-    return price_stats_module.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+    return price_stats_module.dataset_city_series(conn, dataset_id, obec_id)
 
 
 # --- curation (cont.): notes, artifact links, attachments, tags -----------

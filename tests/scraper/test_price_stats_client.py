@@ -57,17 +57,6 @@ def test_month_windows_single_chunk():
     assert _month_windows((2024, 3), (2024, 8), 24) == [("2024-03", "2024-08")]
 
 
-def test_suggest_municipality_parses_response():
-    payload = {"results": [
-        {"userData": {"source": "muni", "id": 3412, "municipality": "Kolín",
-                      "latitude": 50.0, "longitude": 15.2}},
-    ]}
-    c = _client([FakeResponse(payload)])
-    match = c.suggest_municipality("Kolín")
-    assert match["entity_id"] == 3412
-    assert c._session.gets[0]["params"]["phrase"] == "Kolín"
-
-
 def test_fetch_window_401_raises_auth_expired():
     c = _client([FakeResponse({}, status_code=401)])
     with pytest.raises(AuthExpiredError):

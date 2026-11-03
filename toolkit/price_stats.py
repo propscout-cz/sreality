@@ -97,8 +97,7 @@ def dataset_summary(
 def _distinct_city_count(conn: "psycopg.Connection", dataset_id: int) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT count(DISTINCT (entity_type, entity_id)) "
-            "FROM price_stat_observations WHERE dataset_id = %s",
+            "SELECT count(DISTINCT obec_id) FROM price_stat_observations WHERE dataset_id = %s",
             (dataset_id,),
         )
         return int(cur.fetchone()[0])
@@ -122,16 +121,16 @@ def dataset_city_metrics(
 
 
 def dataset_city_series(
-    conn: "psycopg.Connection", dataset_id: int, entity_type: str, entity_id: int
+    conn: "psycopg.Connection", dataset_id: int, obec_id: int
 ) -> dict[str, Any]:
-    """One city's monthly series for both categories (chart drill-down)."""
+    """One town's monthly series for both categories (chart drill-down), by RÚIAN town code."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT category_type_cb, year, month, price, active_count, "
             "new_count, deleted_count FROM price_stat_observations "
-            "WHERE dataset_id = %s AND entity_type = %s AND entity_id = %s "
+            "WHERE dataset_id = %s AND obec_id = %s "
             "ORDER BY year, month",
-            (dataset_id, entity_type, entity_id),
+            (dataset_id, obec_id),
         )
         rows = cur.fetchall()
     data = {
@@ -140,7 +139,7 @@ def dataset_city_series(
     }
     return _envelope(
         "dataset_city_series", data,
-        {"dataset_id": dataset_id, "entity_type": entity_type, "entity_id": entity_id},
+        {"dataset_id": dataset_id, "obec_id": obec_id},
         len(rows), _freshness(conn, dataset_id),
     )
 

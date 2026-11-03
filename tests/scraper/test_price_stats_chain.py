@@ -20,7 +20,7 @@ UTC = dt.timezone.utc
 
 
 def _loc(name: str, last: dt.datetime | None, entity_id: int = 1) -> dict[str, Any]:
-    return {"entity_type": "muni", "entity_id": entity_id, "name": name, "obec_id": None, "last_fetched_at": last}
+    return {"obec_id": 500_000 + entity_id, "source_key": str(entity_id), "name": name, "last_fetched_at": last}
 
 
 def _run(dataset_id: int, *locs: dict[str, Any]) -> pm.DatasetRun:
@@ -129,20 +129,19 @@ def _patch_main(monkeypatch: pytest.MonkeyPatch, remaining: list[int], events: l
     monkeypatch.setattr(pm.db, "sweep_stale_runs", lambda _c: 0)
     monkeypatch.setattr(pm, "get_session_cookies", lambda: {})
     monkeypatch.setattr(pm, "PriceStatsClient", lambda **_kw: _Client())
-    monkeypatch.setattr(pm, "_load_city_names", lambda _p: [])
-    monkeypatch.setattr(pm, "resolve_localities", lambda *_a, **_k: 0)
+    monkeypatch.setattr(pm, "confirm_translation", lambda _c: events.append("confirm"))
     monkeypatch.setattr(pm.db, "load_active_datasets", lambda _c: [{"id": 1, "obec_ids": None},
                                                                     {"id": 2, "obec_ids": [5]}])
 
     def localities(*_a: Any, **_k: Any) -> list[dict[str, Any]]:
-        events.append("resolve")
+        events.append("list")
         return [_loc("Aš", None)]
 
     def coverage(*_a: Any) -> int:
         events.append("count")
         return next(counts)
 
-    monkeypatch.setattr(pm, "_dataset_localities", localities)
+    monkeypatch.setattr(pm.db, "localities_ordered", localities)
     monkeypatch.setattr(pm, "run_queue", lambda *_a, **_k: events.append("run") or True)
     monkeypatch.setattr(pm.db, "refresh_choropleth", lambda _c: None)
     monkeypatch.setattr(pm.db, "coverage_remaining", coverage)
@@ -162,8 +161,15 @@ def test_main_chains_only_on_progress_with_more_remaining(
     _patch_main(monkeypatch, [before, 0, after, 0], events)  # two datasets, counted before and after
     assert pm.main([]) == 0
     assert out.read_text() == f"chain={'1' if chain else '0'}\n"
-    # Counted after every dataset's localities resolve: a newly resolved locality is not progress.
-    assert events == ["resolve", "resolve", "count", "count", "run", "count", "count"]
+    # Counted after the keys are confirmed and every dataset's towns listed: a newly added town is not progress.
+    assert events == ["confirm", "list", "list", "count", "count", "run", "count", "count"]
+
+
+def test_a_dry_run_neither_confirms_nor_adds_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    _patch_main(monkeypatch, [], events)
+    assert pm.main(["--dry-run"]) == 0
+    assert events == ["list", "list", "run"]
 
 
 def _chain_step() -> dict[str, Any]:

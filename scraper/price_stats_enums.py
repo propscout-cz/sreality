@@ -79,12 +79,8 @@ LABELS_CS: dict[str, dict[str, str]] = {
     "ownership": {"1": "Osobní", "2": "Družstevní", "3": "Státní/obecní"},
 }
 
-# entity_type values returned as `source` by localities/suggest. Municipality
-# grain (the dataset default) is "muni".
+# estate_prices' entity_type for a town (a ruian_translation 'sreality_municipality' key).
 ENTITY_MUNICIPALITY = "muni"
-ENTITY_DISTRICT = "dist"
-ENTITY_REGION = "regi"
-ENTITY_QUARTER = "quar"
 
 
 def label_for(field: str, code: object) -> str | None:

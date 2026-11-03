@@ -2104,7 +2104,7 @@
     {
       "filename": "scrape_price_stats.yml",
       "name": "Scraping: Sreality price stats (ceny-nemovitosti, weekly + manual)",
-      "description": "Ingests the aggregate market statistics sreality publishes at /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables. For each active dataset (one named filter set) × tracked municipality × {prodej, pronájem} it fetches the per-month series from the login-gated estate_prices JSON API, then recomputes the per-city derived metrics (CAGR growth, gross yield) + refreshes the map choropleth. Design: docs/design/price-stats-datasets.md.",
+      "description": "Ingests the aggregate market statistics sreality publishes at /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables. For each active dataset (one named filter set) × town in ruian_translation × {prodej, pronájem} it fetches the per-month series from the login-gated estate_prices JSON API, then recomputes the per-city derived metrics (CAGR growth, gross yield) + refreshes the map choropleth. Design: docs/design/price-stats-datasets.md.",
       "manual": true,
       "schedules": [
         {
@@ -2118,13 +2118,12 @@
       "inputs": [
         {
           "name": "mode",
-          "description": "probe (test auth) | resolve (refresh localities) | full",
+          "description": "probe (test auth) | full",
           "required": true,
           "type": "choice",
           "default": "full",
           "options": [
             "probe",
-            "resolve",
             "full"
           ]
         },
