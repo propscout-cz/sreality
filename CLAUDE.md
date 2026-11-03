@@ -191,8 +191,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     marks a duplicate, never deletes; a deleted watchdog is retired. Feed, badge and push read `VISIBLE_SQL` (`REACHABLE_SQL` minus a 'new' a merge
     withdrew); only a tap by id reads `REACHABLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries`
     (§ rule 16 in `docs/architecture.md`).
-17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
-    + `obec_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
+17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`;
+    population from ČSÚ in `obec_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`). Every
     property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`), inside the merge

@@ -83,7 +83,7 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   cells — (m,t)/(m,'*')/('*',t)/('*','*') per geo — plus a national `cz` level, so
   every fast-path shape reads a precomputed exact cell and nothing ever sums
   count(DISTINCT) across overlapping cells. The leaderboard's four summing arms
-  collapse to ONE exact-cell arm; nested chips count once in SQL (admin_boundaries
+  collapse to ONE exact-cell arm; nested chips count once in SQL (admin_boundaries (dropped 729)
   parent suppression — operator ruling); `brokers_public` serves cz_* from the
   ('cz',0,'*','*') cell and the 4 `brokers.cz_*` columns are dropped (one book);
   region_shares/outreach read cells (outreach stops mislabeling listing counts as

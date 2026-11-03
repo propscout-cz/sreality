@@ -22,9 +22,9 @@ of the analytical and UI phases; runs alongside them.
 - **Part C (done):** backfill from `raw_json` for existing rows;
   exposed via `listings_public`.
 - **Part D (done):** spatial join scaffolding for ČÚZK / RÚIAN
-  polygons. Migration 017 (`admin_boundaries`),
+  polygons. Migration 017 (`admin_boundaries` (dropped 729)),
   `scripts/ingest_boundaries.py`,
-  `.github/workflows/ingest_boundaries.yml`. Bridge table populated
+  `.github/workflows/ingest_boundaries.yml` (both deleted in W8-4). Bridge table populated
   by the ingest workflow.
 
 

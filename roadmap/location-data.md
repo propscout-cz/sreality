@@ -439,7 +439,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     `region_id` / `okres_id` / `obec_id` / `cast_obce_id` — compiled in exactly two modules
     (`api/location_filter.py`, `frontend/src/lib/districtCodes.ts`) plus the two SQL bodies, all
     four tested against ONE shared table (`tests/fixtures/district_chip_plan.json`, read by pytest
-    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` and gains the
+    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` (dropped 729) and gains the
     `cast_obce` level — resolved BY NAME inside the PIP'd obec, because RÚIAN draws no polygon for
     `cast_obce`/`momc`, so a point can only ever place obec/okres/kraj. Deleted: the `locality`
     ILIKE half, the legacy name fallback, the `context` narrow as SQL, and the two sreality-only
@@ -621,7 +621,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     wave-by-wave running log into the END STATE — the store's 26 columns by role, the one lane's two
     halves and their cursors, the eleven claim types and the contract rails, the resolver's four
     stages, the served-listing predicate, the red line, what deliberately stays outside the store
-    (`admin_boundaries`, `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
+    (`admin_boundaries` (dropped 729), `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
     page-reading fields, `CoordinateRule`'s historical `"geom_column"` literal) and ONE lessons list,
     one line each — **606 → 351 lines**; the rules 24+25 rationale went 74 → 29. The skills' location
     sections describe the end state only. `toolkit/filter_registry.py`'s city-quality prose now names
@@ -1356,8 +1356,9 @@ component is slimmed twice — each wave rewrites one component and slims its st
   six price-stat entity columns, `curated_cities.default_radius_m` and the view columns only the old SPA read.
   Deleted: `scripts/ingest_boundaries.py`, its test and workflow, the growth-shape RPC and its SPA fallback, the
   curated circle fallback, the seed's population and relink paths, `csu_population`'s by-name half. A rail
-  (`tests/test_admin_boundaries_unread.py`) keeps every retired name out of the code. **Next:** backup, 725, 726,
-  727, parity, merge, deploy, 728, backup, 729, overlays re-rendered.
+  (`tests/test_admin_boundaries_unread.py`) keeps every retired name out of the code. **Next:** backup, 725, 726, the full
+  proximity rebuild (`scripts/recompute_city_proximity --full`, receipt R1/R2), 727, parity, merge, deploy, 728,
+  backup, 729, overlays re-rendered.
 - **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
   `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
   address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
@@ -3251,7 +3252,7 @@ seeded; nothing writes.
   `renderable_as_point`, `pin_collision_class`, `location_disputed`). Cohort =
   `b.is_active AND (b.region_id = ANY(:kraje) OR p.kraj_kod = ANY(:kraje))` — the UNION, so a property
   one side puts inside the two kraje and the other outside shows up as a disagreement. Legacy and
-  new use the same code space (`admin_boundaries.id` IS the RÚIAN KOD: `region_id` = `kraj_kod`),
+  new use the same code space (`admin_boundaries.id` (dropped 729) IS the RÚIAN KOD: `region_id` = `kraj_kod`),
   which is what makes an old-vs-new join by code honest.
 - **The new side is the design, verbatim, in one place** (`toolkit/location_compare.py`, 16
   module-level `*_SQL` constants, PREPARE-clean, `level` a bound parameter never interpolated):

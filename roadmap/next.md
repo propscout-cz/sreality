@@ -184,7 +184,7 @@ overlay that can be heatmap-color-coded by any chosen index.
 
 - **Schema** (migrations 078 + 079): `curated_cities`,
   `city_index_revisions`, `city_index_values`, `city_index_definitions`,
-  `city_population`, plus the three `*_public` views and the
+  `city_population` (dropped 729), plus the three `*_public` views and the
   `listings_with_city_quality(p_index_rules, p_pop_min, p_pop_max,
   p_proximity)` RPC. Anon SELECT on the views and EXECUTE on the
   RPC; SECURITY INVOKER throughout.
@@ -278,7 +278,7 @@ overlay that can be heatmap-color-coded by any chosen index.
   each municipality's kraj from the JSON-stat `child` map, drops the
   kraj-level aggregates) and `scripts/seed_curated_cities.py` matches
   municipalities to curated cities by `(name, kraj)`
-  (diacritics-insensitive) and upserts `city_population`. The seed
+  (diacritics-insensitive) and upserts `city_population` (dropped 729). The seed
   prefers the JSON and falls back to the legacy CSV when it's absent.
 - **Price-per-m² filter everywhere.** Two new `FilterDef`s in
   `toolkit/filter_registry.py` (`min/max_price_per_m2`,
@@ -325,7 +325,7 @@ overlay that can be heatmap-color-coded by any chosen index.
   built-up footprint, so a Brno-rule + Brno listing pair can miss
   unless the listing sits within 2 km of the centroid. The right
   fix is a population-weighted radius (`r ≈ k·sqrt(pop / density)`,
-  clamped 2–25 km) once `city_population` is seeded by the
+  clamped 2–25 km) once `city_population` (dropped 729) is seeded by the
   Wikidata fetcher above. Manual overrides via direct UPDATE on
   `curated_cities.default_radius_m` work today.
 - **Prague gap.** The operator's source CSV omits Prague
@@ -352,7 +352,7 @@ Headline scope:
   index column on next upload doesn't need a schema migration. Append
   -only via `source_revision`; the latest revision is the default
   query target, prior revisions stay auditable.
-- Migration: `city_population(city_id, as_of_year, population,
+- Migration (dropped 729): `city_population(city_id, as_of_year, population,
   source)` — one row per (city, year) so historical analysis stays
   possible without breaking the latest-wins norm elsewhere.
 - Migration: extend `listings` with `nearest_city_id` (FK to
