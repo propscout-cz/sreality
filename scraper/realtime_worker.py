@@ -132,6 +132,14 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `unconfigured` and touches nothing. Steps fan_out / claim / send are its
              `portal_errors` cells, recorded by exception class only: an endpoint is a
              secret and never reaches the heartbeat or the log.
+- email:     every EMAIL_TICK_SECONDS (60, a constant), one pass of the notification
+             email (api/notification_email.deliver_once, docs/design/email/PROGRAM.md
+             PR 4): each account's VISIBLE unseen events since its last email, sent to
+             its sign-in address as a daily summary (from 07:00 Prague, once a Prague
+             day) or at most once per 15 minutes, per its own setting (none = daily).
+             The brake is RESEND_API_KEY: unset, the pass records `unconfigured` and
+             opens no connection. Steps settings / select / send are its
+             `portal_errors` cells; an address never reaches the heartbeat or the log.
 - heartbeat: every 30s, upsert this worker's beat, per-lane fields and the commit it
              runs (`version`) into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
@@ -228,12 +236,12 @@ HEARTBEAT_CONNECT_TIMEOUT_SECONDS = 10
 LANES: tuple[str, ...] = (
     "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
-    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
+    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "email", "heartbeat",
 )
 # Every lane's blocking work, the heartbeat's included, runs on asyncio's default
 # executor, which makes the heartbeat its canary: if leaked threads fill it, beats stop
 # and the watchdog restarts the worker. Pinned rather than min(32, cpu+4), so the
-# headroom does not depend on what the container reports: the sixteen LANES hold at most
+# headroom does not depend on what the container reports: the seventeen LANES hold at most
 # one thread each in normal running.
 LANE_EXECUTOR_THREADS = 32
 IDLE_WAIT_SECONDS = 60.0
@@ -577,6 +585,17 @@ PUSH_STEPS: tuple[str, ...] = ("key", "fan_out", "claim", "send")
 PUSH_CONNECT_TIMEOUT_SECONDS = 10
 # A pass abandoned at the lane timeout must never overlap the next one in this process.
 _PUSH_PASS_LOCK = _PassLock("push")
+
+# email lane (docs/design/email/PROGRAM.md PR 4): the notification email's one pass, the push lane's shape — a CONSTANT
+# tick, no app_settings row, no flag. Its ONE brake is its own sending key: no RESEND_API_KEY (the worker's own Railway
+# variable, a key apart from the API's), and the pass records `unconfigured` and opens no connection. No lock but the
+# claim (api/notification_email.py): a daily email is unique per account and Prague day, an instant one waits out 15
+# minutes after the account's last claim, so a second worker in a deploy overlap finds the claim taken.
+EMAIL_TICK_SECONDS = 60.0
+# One connect attempt bound: the next tick is 60 s away.
+EMAIL_CONNECT_TIMEOUT_SECONDS = 10
+# A pass abandoned at the lane timeout must never overlap the next one in this process.
+_EMAIL_PASS_LOCK = _PassLock("email")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
@@ -2704,6 +2723,31 @@ async def _push_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
     _record_pass(state, "push", last)
 
 
+def _email_sync(stop_event: asyncio.Event) -> dict[str, Any]:
+    """One email pass in ONE thread holding the lane's pass lock; an unset key is the brake (nothing opened)."""
+    # Lazy, as the push lane's: the api package stays off every other lane's startup path.
+    from api import notification_email, resend_client
+
+    if not _EMAIL_PASS_LOCK.try_enter():
+        return {"previous_pass_running": True}
+    try:
+        # Braked, no step can fail, so every step's cell clears.
+        if not resend_client.is_configured():
+            return {"unconfigured": True, "attempted": list(notification_email.STEPS), "raised": {}}
+        return notification_email.deliver_once(
+            lambda: db.connect(connect_timeout=EMAIL_CONNECT_TIMEOUT_SECONDS), stop=stop_event.is_set)
+    finally:
+        _EMAIL_PASS_LOCK.release()
+
+
+async def _email_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
+    if stop_event.is_set():
+        return
+    last = await asyncio.to_thread(_email_sync, stop_event)
+    _record_portal_errors(state, "email", last.pop("attempted", []), last.pop("raised", {}), set())
+    _record_pass(state, "email", last)
+
+
 def _arm_exit_backstop(seconds: float) -> None:
     # faulthandler's timer thread takes no GIL and calls _exit(1) itself: it ends a
     # process whose Python threads are all stopped, and as PID 1, where the kernel drops
@@ -3016,6 +3060,12 @@ async def _amain() -> int:
             lambda: _push_pass(stop_event, state),
             state,
             default_interval=PUSH_TICK_SECONDS)),
+        # The push lane's constant interval again; its brake is RESEND_API_KEY, read in the pass.
+        ("email", lambda: _lane_loop(
+            "email", stop_event, lambda: EMAIL_TICK_SECONDS,
+            lambda: _email_pass(stop_event, state),
+            state,
+            default_interval=EMAIL_TICK_SECONDS)),
         ("heartbeat", lambda: _lane_loop(
             "heartbeat", stop_event, lambda: HEARTBEAT_INTERVAL_SECONDS,
             lambda: _heartbeat_pass(state),

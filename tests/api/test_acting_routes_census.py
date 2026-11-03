@@ -87,6 +87,9 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /runs/{run_id}/proposals/{index}/undo",
     # An account's own spending limit: sharing a board never hands it over (#2319).
     "PUT /runs/limit",
+    # An account's own notification email (migration 722): a delegate never changes where the owner's email goes.
+    "GET /account/notification-email",
+    "PUT /account/notification-email",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)

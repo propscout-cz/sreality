@@ -6,6 +6,7 @@ import { lazyChunk } from '@/lib/lazyChunk';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
+import { NOTIFICATION_EMAIL_LABEL, NOTIFICATION_EMAIL_OPTIONS, useNotificationEmail } from '@/lib/notificationEmail';
 import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
@@ -73,7 +74,7 @@ export default function AccountMenu() {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 top-[calc(100%+4px)] z-30 w-[15.5rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
+          className="absolute right-0 top-[calc(100%+4px)] z-30 w-[19rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
         >
           <div className="px-3 py-1.5 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] truncate">
             Signed in as {label}
@@ -114,6 +115,8 @@ export default function AccountMenu() {
               onChange={setMode}
             />
           </div>
+          <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
+          <NotificationEmailBar />
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
           {runOptions?.start.allowed && (
             <button
@@ -156,6 +159,30 @@ export default function AccountMenu() {
           <AgentLimitDialog onClose={() => setLimitOpen(false)} />
         </Suspense>
       )}
+    </div>
+  );
+}
+
+/* The account's notification email, beside the look: the same joined bar, mounted (and read) only while the
+ * menu is open. Unlit until the read lands. */
+function NotificationEmailBar() {
+  const { mode, setMode } = useNotificationEmail();
+  return (
+    <div className="px-3 pt-1 pb-2">
+      <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)]">{NOTIFICATION_EMAIL_LABEL}</p>
+      <div className="mt-1.5">
+        <SegmentedBar<typeof mode>
+          fill
+          segmentRole="menuitemradio"
+          label={NOTIFICATION_EMAIL_LABEL}
+          options={NOTIFICATION_EMAIL_OPTIONS}
+          value={mode}
+          disabled={mode == null}
+          onChange={(next) => {
+            if (next) setMode(next);
+          }}
+        />
+      </div>
     </div>
   );
 }

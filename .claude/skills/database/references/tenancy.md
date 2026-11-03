@@ -143,7 +143,8 @@ uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policie
 `collection_properties`, `property_tags`, `property_attachments`, `property_artifact_links`,
 `property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
 other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications (their routes never act
-as another account; the push tables, `push_subscriptions` and `notification_deliveries`, are admin-only, migration 654),
+as another account; the push tables, `push_subscriptions` and `notification_deliveries`, are admin-only, migration 654,
+as are the email ones, `account_notification_email` and `notification_email_sends`, migration 722),
 the three share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
 there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 `test_exactly_the_eleven_curation_policies_act`).
@@ -525,6 +526,10 @@ handler (pinned beside the share routes by `test_the_share_routes_open_the_servi
 statement names that account (shape 3), and `opened` reaches the account through the delivery's event. `GET /push/key` is
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
+The notification email's setting (`GET`/`PUT /account/notification-email`, `api/routes/notification_email.py`, migration
+722) has the same shape over `account_notification_email`, also in `ADMIN_ONLY_RELATIONS` and `_NEVER_ACTS` (a delegate
+never changes where the owner's email goes); its off link (`/notifications/email/unsubscribe`) is public, the account's
+`unsubscribe_token` its only credential, and it can only set that account's mode to `off`.
 
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account

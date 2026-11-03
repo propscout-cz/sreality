@@ -74,7 +74,10 @@ cache, not a bad password: do not reset twice.
 
 `RESEND_API_KEY` (Railway API; `docs/design/email/PROGRAM.md`): a sending-only key for `novinky.propscout.cz`, read by
 `api/resend_client.py` for the waitlist confirmation (`POST /waitlist`, after the redirect). Unset = no email and no claim;
-the signup still stands. Resend's free plan shares 100 a day with Supabase's password resets, hence
+the signup still stands. The realtime-worker sets its OWN `RESEND_API_KEY` (a separate Railway project, so it cannot
+reference the API's): a sending-only key for `mail.propscout.cz` named `propscout-worker`, read by the same client for
+the notification email (the `email` lane, `api/notification_email.py`). Unset = the lane's brake (`unconfigured`, no
+connection). Resend's free plan shares 100 a day with Supabase's password resets, hence
 `waitlist.CONFIRMATION_DAILY_CAP`. Supabase's own key (`propscout-supabase`, `mail.propscout.cz`) lives in its SMTP
 settings. To rotate: create the new key in Resend, paste its value over the old in Railway (the name stays), deploy, delete
 the old key. The account also holds other projects' domains and keys: leave those alone.

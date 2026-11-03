@@ -280,7 +280,7 @@ select beat_at, started_at, details from worker_heartbeats where worker = %(work
 WORKER_LANES: tuple[str, ...] = (
     "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
-    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
+    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "email", "heartbeat",
 )
 # scraper/realtime_worker.LANE_PASS_TIMEOUT_SECONDS (a check never imports the worker; a test pins the two): past it
 # the worker abandons the pass (a wedge sat nine hours). A pass in flight is Watch at two thirds of it (eight portals

@@ -33,7 +33,7 @@ that overlays estimates on portal pages.
 A **dark-by-default always-on worker** (`scraper/realtime_worker.py`, a 2nd Railway service from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: newest-first probes over the GH walks, the ONLY
 runtime of the detail drain, fresh images and incremental property/broker maintenance, plus estimation, location resolve/intake/refetch,
-sold comps, text extraction, health checks, autodedup, notification producers (their one clock) and push, heartbeats (`docs/design/realtime-scrapers.md`).
+sold comps, text extraction, health checks, autodedup, notification producers (their one clock), push, email, heartbeats (`docs/design/realtime-scrapers.md`).
 ## Territories
 
 Three top-level territories with deliberately different rules — identify which one a task is
@@ -188,9 +188,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     collection deletion still cascade): three producers (`watchdog`; `collection_monitor`, anchored on `monitor_since` so a pre-membership change never
     fires; `share`, written only by `api/shares.py`) write facts, never routing; system alerts are no producer. ONE identity index
     (`notification_dispatches_identity_uq` over `EVENT_IDENTITY`) decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and
-    marks a duplicate, never deletes; a deleted watchdog is retired. Feed, badge and push read `VISIBLE_SQL` (`REACHABLE_SQL` minus a 'new' a merge
-    withdrew); only a tap by id reads `REACHABLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries`
-    (§ rule 16 in `docs/architecture.md`).
+    marks a duplicate, never deletes; a deleted watchdog is retired. Feed, badge, push and email read `VISIBLE_SQL` (`REACHABLE_SQL` minus a 'new' a merge
+    withdrew); only a tap by id reads `REACHABLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries`, email
+    `notification_email_sends` (§ rule 16 in `docs/architecture.md`).
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
@@ -279,10 +279,10 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
 - **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
   `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
-  `/health`, `/images/{key}` photos and the landing's `/waitlist` are open by design; the Stripe webhook checks its signature.
+  `/health`, `/images/{key}` photos, the landing's `/waitlist` and the email off link are open by design; the Stripe webhook checks its signature.
 
 ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
-nor is email as a future second push-ledger channel (inactive; rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.
+nor is email, a live channel beside push (rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.
 ## Where the detail lives
 | Need | Load |
 | --- | --- |

@@ -6,6 +6,8 @@
 > roadmap track. Operator brief: push through the iPhone app (the installed PWA) for watchdog,
 > collection monitoring and shares; channels from now on are the in-app feed, email (kept, inactive)
 > and iPhone push; no Telegram or other channels; subtraction is the deliverable.
+> **2026-11-03: email is live** (docs/design/email/PROGRAM.md PR 4, migration 722), superseding "inactive" here
+> and "dormant" in § 3.7: its own per-account send ledger, not `notification_deliveries`.
 
 
 *Operator proposal, 2026-10-21, revised after three critics; origin/main 8242bfad.*
@@ -134,8 +136,12 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 - Re-sync PUT on sign-in and on the existing hourly visibilitychange check (iOS never reports a changed subscription).
 - /notifications gets a phone-width pass and "Load more"; tab names stay English. On desktop the picker, Settings › Delivery, System tab and /watchdog feed go (R1–R3).
 
-### 3.7 Email (dormant)
+### 3.7 Email (dormant until 2026-11-03)
 Delete the unused Resend transport, webhook, unsubscribe and suppression (R5). Later, email becomes a second channel on `notification_deliveries`, to each account's sign-in address. Supabase Auth email is untouched.
+
+**2026-11-03, superseded:** email went live in `docs/design/email/PROGRAM.md` PR 4 on a ledger of its own,
+`notification_email_sends` (migration 722), one row per email: an email covers many events and has no device, so
+the (event, device) grain of `notification_deliveries` cannot hold it. The worker's `email` lane sends it.
 
 ### 3.8 system_health
 - **R2 (a)/(b):** delete the emit INSERT, composers and `system_health_channels`; the SYSTEM trigger branch raises; W1 drops the two SYSTEM policy arms (a narrowing that deletes no row).

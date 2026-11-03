@@ -1,12 +1,12 @@
 /* The "Sign in" affordance is a destination, and the component's own comment
  * always called it a link — it was a <button> calling navigate('/login'). */
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import AccountMenu from './AccountMenu';
-import { fetchAgentRunOptions } from '@/lib/api';
+import { fetchAgentRunOptions, getNotificationEmail, putNotificationEmail } from '@/lib/api';
 import * as auth from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
 import { setScheme, setTheme } from '@/lib/theme';
@@ -15,6 +15,8 @@ import { ThemeToggle } from '@/pages/Settings';
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
   fetchAgentRunOptions: vi.fn(),
+  getNotificationEmail: vi.fn(),
+  putNotificationEmail: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -27,6 +29,7 @@ const ALLOWED = { start: { allowed: true, reason: null }, queue: 'open' as const
 
 function renderAs(user: unknown, options: Awaited<ReturnType<typeof fetchAgentRunOptions>> = REFUSED) {
   vi.mocked(fetchAgentRunOptions).mockResolvedValue(options);
+  vi.mocked(getNotificationEmail).mockResolvedValue({ mode: 'daily' });
   vi.mocked(auth.useAuth).mockReturnValue({
     user,
     loading: false,
@@ -142,6 +145,50 @@ describe('<AccountMenu> appearance', () => {
     for (const m of screen.getAllByRole('menuitemradio', { name: /^(Light|Dark|System)$/ })) {
       expect(m).not.toHaveAttribute('aria-pressed');
       expect(m).toHaveClass('min-w-0', 'text-ellipsis');
+    }
+  });
+});
+
+/* The notification email (docs/design/email/PROGRAM.md PR 4): one account-wide choice under the avatar, the same
+ * joined bar as light or dark, unlit until the read lands; a pick is written at once and kept on success. */
+describe('<AccountMenu> notification email', () => {
+  const openMenu = () => fireEvent.click(screen.getByRole('button', { name: 'a@example.cz' }));
+  beforeEach(() => {
+    vi.mocked(getNotificationEmail).mockClear();
+    vi.mocked(putNotificationEmail).mockClear();
+  });
+
+  it('shows the account\'s choice on a labelled bar of three', async () => {
+    renderAs({ email: 'a@example.cz' });
+    openMenu();
+    const group = screen.getByRole('group', { name: 'E-mailová upozornění' });
+    const items = within(group).getAllByRole('menuitemradio');
+    expect(items.map((b) => b.textContent)).toEqual(['Vypnuto', 'Denní přehled', 'Okamžitě']);
+    await waitFor(() => expect(within(group).getByRole('menuitemradio', { name: 'Denní přehled' })).toHaveAttribute('aria-checked', 'true'));
+    expect(getNotificationEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes a pick and keeps it lit', async () => {
+    vi.mocked(putNotificationEmail).mockResolvedValue({ mode: 'instant' });
+    renderAs({ email: 'a@example.cz' });
+    openMenu();
+    const group = screen.getByRole('group', { name: 'E-mailová upozornění' });
+    await waitFor(() => expect(within(group).getByRole('menuitemradio', { name: 'Denní přehled' })).toHaveAttribute('aria-checked', 'true'));
+    vi.mocked(getNotificationEmail).mockResolvedValue({ mode: 'instant' });
+    fireEvent.click(within(group).getByRole('menuitemradio', { name: 'Okamžitě' }));
+    await waitFor(() => expect(putNotificationEmail).toHaveBeenCalledWith('instant'));
+    await waitFor(() => expect(within(group).getByRole('menuitemradio', { name: 'Okamžitě' })).toHaveAttribute('aria-checked', 'true'));
+    expect(within(group).getByRole('menuitemradio', { name: 'Denní přehled' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('lights nothing and takes no pick before the read lands', () => {
+    renderAs({ email: 'a@example.cz' });
+    vi.mocked(getNotificationEmail).mockReturnValue(new Promise(() => {}));
+    openMenu();
+    const group = screen.getByRole('group', { name: 'E-mailová upozornění' });
+    for (const item of within(group).getAllByRole('menuitemradio')) {
+      expect(item).toHaveAttribute('aria-checked', 'false');
+      expect(item).toBeDisabled();
     }
   });
 });

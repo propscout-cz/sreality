@@ -815,7 +815,7 @@ def test_the_worker_seeds_every_lane_before_any_lane_starts(monkeypatch):
     assert asyncio.run(rw._amain()) == 0
     assert events[0] == ("seed", {lane: {"interval_s": None} for lane in rw.LANES})
     assert events[1:] == [("lane", lane) for lane in rw.LANES]
-    assert len(set(rw.LANES)) == len(rw.LANES) == 16
+    assert len(set(rw.LANES)) == len(rw.LANES) == 17
 
 
 # --- health lane (Health dashboard W3) ----------------------------------------------------
