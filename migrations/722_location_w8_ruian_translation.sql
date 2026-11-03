@@ -3,8 +3,8 @@
 -- own key, RÚIAN level and code, how it was matched, when last confirmed), Sreality Datasets first; today's rows are
 -- kept, each price-stats run confirms or adds rows from ads (scraper/price_stats_main.py), and a row stays when its
 -- ads end. Source 'sreality_municipality': sreality's municipality id, the key estate_prices fetches a town by.
--- No FK (mirror codes are not unique under SCD-2), no index (6,258 rows, read a few times a run), no policy and no
--- DELETE grant (a row stays). The grants copy ruian_admin_units; the SPA never reads it.
+-- No FK (mirror codes are not unique under SCD-2), no index (6,258 rows, read a few times a run), no policy, and
+-- service_role loses the DELETE and TRUNCATE Supabase's default privileges give it (a row stays). The SPA never reads it.
 -- Backfill: a frozen copy of price_stat_localities. 'boundary_spatial_join' where admin_boundaries.sreality_id carried
 -- the key, else 'suggest_pip' (localities/suggest plus point in polygon); last_confirmed_at is resolved_at, re-stamped
 -- by every run, so it means "last resolved", the nearest honest value.
@@ -26,6 +26,7 @@ create table if not exists ruian_translation (
 alter table ruian_translation enable row level security;
 revoke all on ruian_translation from anon, authenticated;
 grant select, insert, update on ruian_translation to service_role;
+revoke delete, truncate on ruian_translation from service_role;
 
 insert into ruian_translation
 select 'sreality_municipality', l.entity_id::text, 'obec', l.obec_id,

@@ -154,8 +154,9 @@ def test_rows_are_written_and_read_by_town_code_and_named_by_the_mirror(cur: Any
     cur.execute("SELECT obec_id, locality_name, sale_latest_price FROM price_stat_city_metrics_public "
                 "WHERE dataset_id = %s", (did,))
     assert cur.fetchall() == [(ALFA, "Alfa", 60_000)]
+    cur.execute("UPDATE ruian_admin_units SET retired_at = now() WHERE level = 'obec' AND code = %s", (BETA,))
     cur.execute("SELECT obec_id, locality_name FROM price_stat_no_data_public WHERE dataset_id = %s", (did,))
-    assert cur.fetchall() == [(BETA, "Beta")]
+    assert cur.fetchall() == [(BETA, "Beta")], "a retired town keeps its last name (the SPA keys on it)"
 
     series = analysis.dataset_city_series(cur.connection, did, ALFA)
     assert (len(series["data"]["sale"]), len(series["data"]["rent"])) == (6, 6)

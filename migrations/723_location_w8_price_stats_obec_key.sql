@@ -2,8 +2,9 @@
 -- Observations and no-data markers get obec_id from price_stat_localities (one town per key, 0 orphans, 592,805
 -- observations = 592,805 new keys on 11-02); the 3 primary keys move onto obec_id; the 2 FKs into
 -- price_stat_localities and the metrics index the new key duplicates go; the entity columns become nullable (W8-4
--- drops them). The 3 public views lose the entity columns and take locality_name from the mirror; every other
--- column stays, so price_stat_growth/series/growth_shapes read them unchanged. Grants: authenticated SELECT only.
+-- drops them). The 3 public views lose the entity columns and take locality_name from the mirror's last name for
+-- the code (a retired town keeps its name; ruian_place_names_public would read it NULL); every other column
+-- stays, so price_stat_growth/series/growth_shapes read them unchanged. Grants: authenticated SELECT only.
 -- DESTRUCTIVE. First: gh workflow run backup_before_drop.yml -f label=w8-2-price-stats -f targets="price_stat_observations
 -- price_stat_city_metrics price_stat_locality_no_data price_stat_localities", receipt read back; gh workflow disable
 -- scrape_price_stats.yml with no run in flight (the deployed scraper writes by the old key and fails here); 722 and
@@ -53,7 +54,8 @@ create view price_stat_observations_public as
   select o.dataset_id, n.name as locality_name, o.obec_id, o.category_type_cb, o.year, o.month, o.price,
          o.active_count, o.new_count, o.deleted_count
     from price_stat_observations o
-    left join ruian_place_names_public n on n.level = 'obec' and n.code = o.obec_id;
+    left join (select distinct on (u.code) u.code, u.name from ruian_admin_units u where u.level = 'obec'
+                 order by u.code, u.last_version_id desc nulls last) n on n.code = o.obec_id;
 
 drop view if exists price_stat_city_metrics_public;
 create view price_stat_city_metrics_public as
@@ -62,13 +64,15 @@ create view price_stat_city_metrics_public as
          m.rent_latest_price, m.rent_latest_ym, m.rent_cagr_pct, m.rent_months, m.rent_min_active,
          m.gross_yield_pct, m.computed_at
     from price_stat_city_metrics m
-    left join ruian_place_names_public n on n.level = 'obec' and n.code = m.obec_id;
+    left join (select distinct on (u.code) u.code, u.name from ruian_admin_units u where u.level = 'obec'
+                 order by u.code, u.last_version_id desc nulls last) n on n.code = m.obec_id;
 
 drop view if exists price_stat_no_data_public;
 create view price_stat_no_data_public as
   select nd.dataset_id, nd.obec_id, n.name as locality_name
     from price_stat_locality_no_data nd
-    left join ruian_place_names_public n on n.level = 'obec' and n.code = nd.obec_id;
+    left join (select distinct on (u.code) u.code, u.name from ruian_admin_units u where u.level = 'obec'
+                 order by u.code, u.last_version_id desc nulls last) n on n.code = nd.obec_id;
 
 revoke all on price_stat_observations_public from public, anon, authenticated;
 grant select on price_stat_observations_public to authenticated;

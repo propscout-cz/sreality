@@ -138,22 +138,8 @@ def localities_ordered(
     *,
     no_data_ttl_days: int = 60,
 ) -> list[dict[str, Any]]:
-    """Towns for a dataset run with the key each is fetched under, STALEST first.
-
-    Ordered by each town's most-recent observation for THIS dataset
-    (never-scraped first, then oldest). A time-budgeted / partial run thus
-    always advances the towns that need it most, so full coverage is reached
-    across runs (and then refreshes oldest-first) rather than re-doing town 1
-    every run. `obec_ids` None = every translated town. Each row carries its
-    `last_fetched_at` — the last fetch, else the last empty check, NULL only for a
-    town never scraped — which orders the queue across datasets. The name is the
-    mirror's; a code the mirror no longer serves keeps being fetched.
-
-    Towns the scraper recently checked and found EMPTY (a
-    price_stat_locality_no_data marker within `no_data_ttl_days`) are skipped,
-    so the budget isn't spent re-scanning the dataless tail every run; they fall
-    back in for re-verification once the marker ages past the TTL.
-    """
+    """A dataset's towns with their fetch key, stalest first (a partial run advances the oldest), towns found
+    empty within `no_data_ttl_days` skipped; `obec_ids` None = every translated town, a retired code still fetched."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(LOCALITIES_ORDERED_SQL, {"did": dataset_id, "obec_ids": obec_ids, "ttl": no_data_ttl_days})
         return cur.fetchall()

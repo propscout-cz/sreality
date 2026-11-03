@@ -165,12 +165,12 @@ def test_main_chains_only_on_progress_with_more_remaining(
     assert events == ["confirm", "list", "list", "count", "count", "run", "count", "count"]
 
 
-
 def test_a_dry_run_neither_confirms_nor_adds_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
     _patch_main(monkeypatch, [], events)
     assert pm.main(["--dry-run"]) == 0
     assert events == ["list", "list", "run"]
+
 
 def _chain_step() -> dict[str, Any]:
     (job,) = yaml.safe_load(WORKFLOW.read_text())["jobs"].values()
