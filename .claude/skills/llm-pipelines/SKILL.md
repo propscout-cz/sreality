@@ -152,7 +152,9 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
   typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
-- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops) +
+- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops, bar a
+  stamp: a known file that `rent_map_cells` serves stamps it current with no refresh, so a quiet
+  month never reads on Health as a dead job, #2318) +
   `rent_map_values` + `rent_map_adjustments` (migration 132, history kept).
   `api.rent_map.insert_revision` parses (stdlib `zipfile`+`xml.etree`), COPYs, re-renders the
   map's choropleth (reference overlay `rent_map`, VK1–4 variants; a refused guard keeps the revision

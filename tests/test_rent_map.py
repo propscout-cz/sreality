@@ -244,16 +244,22 @@ def _insert(conn):
 
 @pytest.fixture()
 def seams(monkeypatch):
-    """Log the overlay render and every matview refresh into the fake connection's log."""
+    """Log the overlay render, every matview refresh and every registry stamp into the fake
+    connection's log; a stamp logs the rows and duration it passed."""
     def install(conn, render=lambda: 99):
         def fake_render(c, key):
             assert c is conn
             conn.log.append(f"render {key}")
             return render()
 
+        def fake_stamp(c, name, *, rows=None, duration_ms=None):
+            assert c is conn
+            conn.log.append(f"stamp {name} rows={rows} duration_ms={duration_ms}")
+
         monkeypatch.setattr(api_rent_map, "render_sql_section", fake_render)
         monkeypatch.setattr(scraper_db, "refresh_matview",
                             lambda c, name, **kw: conn.log.append(f"refresh {name}") or 1)
+        monkeypatch.setattr(scraper_db, "stamp_derived_artifact", fake_stamp)
     return install
 
 
@@ -264,7 +270,7 @@ def test_a_new_revision_re_renders_the_map_overlay_inside_its_transaction(seams)
     seams(conn)
     assert _insert(conn) == 7
     assert conn.log == [
-        "BEGIN", "select source_revision from", "insert into rent_map_revisions",
+        "BEGIN", "select r.source_revision, exists", "insert into rent_map_revisions",
         "copy rent_map_values", "copy rent_map_adjustments",
         "render rent_map", "refresh rent_map_cells", "COMMIT",
     ]
@@ -298,11 +304,27 @@ def test_any_other_overlay_failure_rolls_the_ingest_back(seams):
     assert conn.log[-1] == "ROLLBACK" and "refresh rent_map_cells" not in conn.log
 
 
-def test_an_unchanged_file_re_renders_nothing(seams):
-    conn = _IngestConn(existing=(3,))
+def test_a_quiet_month_stamps_the_cells_current_and_re_renders_nothing(seams):
+    """#2318: MF published no new file, and the one it publishes is the revision the cells
+    serve, so they are current now. Without the stamp a working monthly job reads on Health
+    as a dead one after 40 days. Nothing was refreshed, so rows and duration are passed as
+    not measured and the registry keeps the last refresh's figures (migration 441)."""
+    conn = _IngestConn(existing=(3, True))
     seams(conn)
     assert _insert(conn) is None
-    assert conn.log == ["BEGIN", "select source_revision from", "COMMIT"]
+    assert conn.log == ["BEGIN", "select r.source_revision, exists",
+                        "stamp rent_map_cells rows=None duration_ms=None", "COMMIT"]
+
+
+def test_a_known_file_the_cells_do_not_serve_stamps_nothing(seams, caplog):
+    """A known file that is not the served revision (MF re-offering an older file) proves
+    nothing about the cells, so the cell keeps ageing and the log says why."""
+    conn = _IngestConn(existing=(1, False))
+    seams(conn)
+    with caplog.at_level(logging.WARNING, logger="rent_map"):
+        assert _insert(conn) is None
+    assert conn.log == ["BEGIN", "select r.source_revision, exists", "COMMIT"]
+    assert "not the revision rent_map_cells serves" in caplog.text
 
 
 def test_the_api_image_ships_the_overlay_ingest_this_module_imports():

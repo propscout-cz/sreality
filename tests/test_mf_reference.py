@@ -519,6 +519,43 @@ def test_an_ingested_revision_is_live_at_its_refresh_with_nothing_to_recompute(c
     assert mf(conn)[2]["source_revision"] == _SEEDED["latest"]
 
 
+@needs_db
+def test_a_quiet_month_stamps_the_cells_current_and_an_older_file_does_not(conn):
+    """#2318: re-fetching the file the cells serve writes no revision but stamps
+    rent_map_cells current, so Health tells a quiet month from a dead job; the cells were not
+    refreshed, so rows and duration keep the last refresh's figures. A known file the cells do
+    not serve (the seed's stale revision) stamps nothing."""
+    import psycopg
+
+    from api.rent_map import insert_revision
+    from toolkit.rent_map import ParsedRentMap
+
+    stamp_sql = ("SELECT last_succeeded_at, complete_through, last_rows, last_duration_ms "
+                 "FROM derived_artifacts WHERE name = 'rent_map_cells'")
+    revisions_sql = "SELECT count(*) FROM rent_map_revisions"
+    with conn.transaction() as tx:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE derived_artifacts SET last_succeeded_at = '2026-01-01', "
+                        "complete_through = '2026-01-01', last_rows = 4242, "
+                        "last_duration_ms = 77 WHERE name = 'rent_map_cells'")
+        old = _one(conn, stamp_sql)
+        (revisions,) = _one(conn, revisions_sql)
+
+        def known(sha: str) -> int | None:
+            return insert_revision(conn, ParsedRentMap(values=[], adjustments=[], source_date=None),
+                                   source_filename="mf-test.xlsx", file_sha256=sha,
+                                   source_date=None, uploaded_by=None).revision
+
+        assert known("mf-test-stale") is None
+        assert _one(conn, stamp_sql) == old
+        assert known("mf-test-latest") is None
+        stamped, through, rows, duration_ms = _one(conn, stamp_sql)
+        assert stamped > old[0] and through > old[1]
+        assert (rows, duration_ms) == (4242, 77)
+        assert _one(conn, revisions_sql) == (revisions,)
+        raise psycopg.Rollback(tx)
+
+
 # --- the serving views (567) -------------------------------------------------------------
 
 def _numbers(rent: Any, yld: Any) -> tuple[Any, Any]:
