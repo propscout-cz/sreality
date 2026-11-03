@@ -30,8 +30,8 @@ _QUALIFIER = re.compile(
 )
 _STREET_PREFIX = re.compile(r"^(?:ulice|ul\.?)\s+", re.IGNORECASE)
 
-# Levels worth searching for. `adresni_misto` is not an admin unit and streets come from
-# their own table; volební okrsek has no name.
+# Levels worth searching for. `adresni_misto` is not an admin unit, streets match on
+# `ruian_streets.name_norm`, volební okrsek has no name.
 _UNIT_LEVELS = (
     "stat", "region_soudrznosti", "kraj", "okres", "obec", "momc", "cast_obce",
     "katastralni_uzemi",
@@ -80,23 +80,17 @@ def build_rows(
     entity_id: int,
     name: str,
     *,
-    is_street: bool,
     parent_obec_unit_id: int | None,
     parent_okres_unit_id: int | None,
     psc_set: Iterable[str] = (),
 ) -> list[NameRow]:
-    """The alias rows one entity contributes: official, deaccented, qualifier-stripped.
-
-    `deaccented` is first-class because ceskereality stores streets ~98 % de-accented and
-    realitymix 27 %, so an exact-string join across sources silently fails without it.
-    """
-    normalize = normalize_street_name if is_street else normalize_name
+    """The alias rows one unit contributes: official, deaccented, qualifier-stripped."""
     psc = sorted({p for p in psc_set if p})
     rows: list[NameRow] = []
     seen: set[tuple[str, str]] = set()
 
     def add(text: str, kind: str, qualifier: str | None) -> None:
-        norm = normalize(text)
+        norm = normalize_name(text)
         if not norm or (norm, kind) in seen:
             return
         seen.add((norm, kind))
@@ -146,7 +140,6 @@ def _psc_sets(conn: psycopg.Connection, column: str) -> dict[int, list[str]]:
 def collect_rows(conn: psycopg.Connection) -> list[NameRow]:
     obec_psc = _psc_sets(conn, "obec_unit_id")
     cast_obce_psc = _psc_sets(conn, "cast_obce_unit_id")
-    street_psc = _psc_sets(conn, "street_id")
 
     rows: list[NameRow] = []
     with conn.cursor() as cur:
@@ -170,30 +163,9 @@ def collect_rows(conn: psycopg.Connection) -> list[NameRow]:
             psc = obec_psc if level == "obec" else cast_obce_psc if level == "cast_obce" else {}
             rows.extend(build_rows(
                 level, int(unit_id), name,
-                is_street=False,
                 parent_obec_unit_id=parent_obec,
                 parent_okres_unit_id=parent_okres,
                 psc_set=psc.get(int(unit_id), ()),
-            ))
-
-        cur.execute(
-            """
-            SELECT s.id, s.name, s.obec_unit_id,
-                   (SELECT a.id FROM ruian_admin_units a
-                     WHERE a.valid_to IS NULL AND a.level = 'okres' AND a.path @> o.path
-                     LIMIT 1)
-            FROM ruian_streets s
-            JOIN ruian_admin_units o ON o.id = s.obec_unit_id
-            WHERE s.valid_to IS NULL
-            """
-        )
-        for street_id, name, obec_unit_id, parent_okres in cur.fetchall():
-            rows.extend(build_rows(
-                "ulice", int(street_id), name,
-                is_street=True,
-                parent_obec_unit_id=obec_unit_id,
-                parent_okres_unit_id=parent_okres,
-                psc_set=street_psc.get(int(street_id), ()),
             ))
     return rows
 
