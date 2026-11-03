@@ -97,8 +97,7 @@ from the water authority. Resolve layers BY NAME from `?f=json`, never by numeri
 
 SQL source: `ST_Boundary` of each kraj's render polygon at the current registry version (W8-3,
 migration 725; shared borders are drawn twice today as well; no regression), dated by that version's
-`source_date`. Re-rendered by the quarterly `map_overlays` job (and, until W8-4 deletes it, at the end
-of `ingest_boundaries.yml`).
+`source_date`. Re-rendered by the quarterly `map_overlays` job.
 
 ### Universities — IPR Praha ÚAP `Hosted/FSV_CUR_OV_SKOLYVS_B` (CC BY) + MŠMT F21 (verified live 2026-10-16)
 
@@ -248,7 +247,6 @@ with `--sections`, `--dry-run` or `--accept-shrink` as its args. A request's ok 
 turns green), so `--sections rent_map --accept-shrink` is for a refused rent-map render only; after it, file a
 `rent_map` request too, or `job/rent_map` stays red until its own backed-off retry. A failed run retries daily at
 22:00Z (a DB-heavy job retries in its own hour), re-fetching every publisher, until it succeeds or is paused.
-`ingest_boundaries.yml` gains a final step `python -m scripts.ingest_map_overlays --sections kraje`.
 
 Registry values:
 
@@ -442,7 +440,7 @@ Backend, as built (2026-10-15):
 | wave | files |
 | --- | --- |
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
-| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
+| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
 | spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |

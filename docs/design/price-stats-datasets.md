@@ -84,8 +84,6 @@ Required CI secrets: `SREALITY_LOGIN_EMAIL`, `SREALITY_LOGIN_PASSWORD`.
   `ownership`, `usable_area_from/to`, `distance`) + `name`, `slug`, `description`,
   `is_active`, `created_at/by`. A dataset always covers **both** prodej (1) and
   pronájem (2); category_type is not stored on the dataset.
-- `price_stat_localities` — the old resolved-entity cache, read by nothing since
-  migration 723; dropped in W8-4 with the entity columns.
 - `price_stat_observations` — latest-wins fact table, keyed by RÚIAN town code
   (migration 723): PK `(dataset_id, obec_id, category_type_cb, year, month)`. Columns:
   `price`, `advert_count`, `active_count`, `new_count`, `deleted_count`,

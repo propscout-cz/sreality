@@ -459,7 +459,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
   (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`, five levels.
   A unit's polygon is `ruian_unit_render` (mig 725: current version, by `(level, code)`), a town's population
-  `obec_population` (by code, year); `admin_boundaries` has no reader since W8-3 and goes in W8-4. `scraper/street.py` still extracts a street from a portal page; that
+  `obec_population` (by code, year). `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
   to `ruian_streets` in the anchoring obec is not published, so `street_name IS NOT NULL` implies
@@ -467,7 +467,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   worker's own sweep that a bump triggers (W2: no hand dispatch); check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
-  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;
+  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence

@@ -624,7 +624,7 @@ the API serves the registry (`GET /map-overlays`) and the tile bytes (`GET
 `require_token`; the SPA's `lib/mapOverlayDraw` (lazy, map chunks only) registers one `overlay://` MapLibre protocol over
 `apiGetBlob` and one hook that builds the style layers from the registry's legend — no per-layer
 frontend code. The four tables are a MIRROR (rules 10/11's class): service-role only, rebuilt by the
-quarterly `map_overlays` job on the job runner (`ingest_boundaries.yml`'s last step re-renders `--sections kraje`).
+quarterly `map_overlays` job on the job runner.
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
 it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP national flood-zone register
@@ -5518,9 +5518,6 @@ entirely for 3.5 h with no run row and no log line. A starved job looks exactly 
 
 **WHAT REMAINS OUTSIDE THE STORE, AND WHY.**
 
-* `admin_boundaries` — the pre-mirror copy of the same RÚIAN pack. Since W8-3 (#2362, migrations
-  725-728) nothing reads it: every polygon is `ruian_unit_render` and every population
-  `obec_population`; W8-4 drops it with its loader.
 * `portal_raw_pages` / `portal_raw_payloads` — the preservation substrate, and the intake's second
   source; not a location path (`tests/test_portal_raw_pages_guard.py` fails CI on any DROP naming
   it). With it `listings.raw_json`, the content-hash substrate (rule 2) and the resolver's evidence,
