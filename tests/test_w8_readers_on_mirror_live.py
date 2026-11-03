@@ -1,5 +1,5 @@
 """Location W8-3 (#2362), executed: every reader of the legacy boundary table reads the RÚIAN mirror instead
-(migrations 725-728). One polygon read (`ruian_unit_render`, the current version's render geometry by (level, code)),
+(migrations 725-729). One polygon read (`ruian_unit_render`, the current version's render geometry by (level, code)),
 one population store (`obec_population`, by RÚIAN town code and year), and the curated cities keyed by the town code
 they already held. Runs in CI's migrations job (`TEST_DATABASE_URL`); every test rolls back.
 """
@@ -85,12 +85,12 @@ def test_the_picker_is_the_registers_kraj_okres_obec_tree_with_the_latest_popula
     cur.execute("UPDATE ruian_admin_units SET valid_to = '2026-10-31' WHERE id = %s", (gone,))
     _population(cur, OBEC, 2025, 900)
     _population(cur, OBEC, 2026, 1_000)
-    cur.execute("SELECT id, level, name, parent_id, population, sreality_id FROM price_stat_obce_picker_public "
-                "WHERE id = ANY(%s) ORDER BY id", ([KRAJ, OKRES, OBEC, OTHER, REGION],))
+    cur.execute("SELECT * FROM price_stat_obce_picker_public WHERE id = ANY(%s) ORDER BY id",
+                ([KRAJ, OKRES, OBEC, OTHER, REGION],))
     assert cur.fetchall() == [
-        (KRAJ, "kraj", "Krajov", None, None, None),
-        (OBEC, "obec", "Obcov", OKRES, 1_000, None),
-        (OKRES, "okres", "Okresov", KRAJ, None, None),
+        (KRAJ, "kraj", "Krajov", None, None),
+        (OBEC, "obec", "Obcov", OKRES, 1_000),
+        (OKRES, "okres", "Okresov", KRAJ, None),
     ]
 
 
