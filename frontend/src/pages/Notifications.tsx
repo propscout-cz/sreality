@@ -290,10 +290,12 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
     dot: 'var(--color-ink-3)',
   };
   const place = d.display_label ?? '—';
-  const sourceLabel =
+  /* The kind of source first, so a watchdog's name never reads as the ad's title. */
+  const [sourceKind, sourceName] =
     d.source_kind === 'collection_monitor'
-      ? (d.collection_name ?? 'Monitoring')
-      : (d.subscription_name ?? 'Watchdog');
+      ? ['Collection', d.collection_name]
+      : ['Watchdog', d.subscription_name];
+  const sourceLabel = sourceName ? `${sourceKind} · ${sourceName}` : sourceKind;
   const to = dispatchTarget(d);
   const newTab = useNewTabProps();
   const control = {

@@ -181,6 +181,23 @@ describe('<Notifications> listing rows', () => {
     await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
   });
 
+  /* A watchdog's name alone read like the ad's title (operator, 2026-11-03), so the row says
+     what kind of source told it first. */
+  it('name their source by its kind, then its name', () => {
+    const monitored: WatchdogDispatch = {
+      ...baseDispatch, id: 'd3', source_kind: 'collection_monitor', subscription_id: null,
+      subscription_name: null, collection_id: 7, collection_name: 'Vinohrady', property_id: 77,
+      change_kind: 'price_drop', display_label: 'Praha 2',
+    };
+    const gone: WatchdogDispatch = { ...baseDispatch, id: 'd5', subscription_name: null, property_id: 78, display_label: 'Kladno' };
+    renderPage({ ...feed, data: [baseDispatch, monitored, gone], total: 3 });
+    expect(within(screen.getByRole('link', { name: /^New match Praha 5/ })).getByText('Watchdog · Praha 2+kk'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^Price drop Praha 2/ })).getByText('Collection · Vinohrady'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^New match Kladno/ })).getByText('Watchdog')).toBeInTheDocument();
+  });
+
   it('render a row with nothing to open as a button that only marks it read', async () => {
     vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, property_id: null });
     renderPage({ ...feed, data: [{ ...baseDispatch, property_id: null }], total: 1 });
