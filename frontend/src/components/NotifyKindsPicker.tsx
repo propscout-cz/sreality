@@ -1,6 +1,6 @@
 /* "Notify me about": the property events a watchdog tells (migration 720). A pick-several, so
  * chips (system.md § Option groups), drawn as MultiselectChips draws them, with the one click rule
- * of lib/notifyKinds (`toggleNotifyKind`: Relisted comes with Delisted). The words are the feed's
+ * of lib/notifyKinds (`toggleNotifyKind`: Back on the market comes with Left the market). The words are the feed's
  * own labels, so the chip a user turned on reads like the alerts it sends. An empty set tells
  * nothing: the hosting form refuses to save it, and this says why. */
 import { PickButton } from '@/components/controls';
@@ -40,7 +40,7 @@ export default function NotifyKindsPicker({
         role={value.length ? undefined : 'alert'}
       >
         {value.length
-          ? 'About the properties these filters match, from now on. Relisted comes with Delisted.'
+          ? 'About the properties these filters match, from now on. Back on the market comes with Left the market.'
           : NOTIFY_KINDS_EMPTY}
       </p>
     </div>

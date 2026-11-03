@@ -889,7 +889,7 @@ def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str
     AFTER the source began watching (`m.since`: a collection's greatest(added_at,
     monitoring_enabled_at), a watchdog's active_since), reactivated through the inactive dispatch
     it answers, which must itself postdate it. 'inactive' also waits out the delist dwell (F14):
-    a blink sends neither Delisted nor Relisted."""
+    a blink sends neither Left the market nor Back on the market."""
     from api import notifications as nf
 
     sql = {k: " ".join(getattr(nf, f"_{source}_{k}_SQL").split())
@@ -944,7 +944,7 @@ def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
 
 def test_the_kinds_a_watchdog_stores_are_one_ordered_set() -> None:
     """Once each in WATCHDOG_KINDS order, so re-saving the same set is no change (no restamp of
-    active_since); never empty; and Relisted only beside Delisted, whose dispatch it answers."""
+    active_since); never empty; and Back on the market only beside Left the market, whose dispatch it answers."""
     from api.notifications import normalize_notify_kinds
 
     assert WATCHDOG_KINDS == ("new", "price_drop", "price_rise", "inactive", "reactivated", "new_source")

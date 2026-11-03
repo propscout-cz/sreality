@@ -153,17 +153,17 @@ describe('<CreateWatchdogModal> notify me about', () => {
     open();
     expect(kind('New match')).toHaveAttribute('aria-pressed', 'true');
     expect(kind('Price drop')).toHaveAttribute('aria-pressed', 'true');
-    expect(kind('Delisted')).toHaveAttribute('aria-pressed', 'false');
+    expect(kind('Left the market')).toHaveAttribute('aria-pressed', 'false');
     create();
     expect(await lastSavedKinds()).toEqual(['new', 'price_drop']);
   });
 
-  it('saves the events picked, Relisted bringing Delisted with it', async () => {
+  it('saves the events picked, Back on the market bringing Left the market with it', async () => {
     renderHost();
     open();
     fireEvent.click(kind('Price drop'));
-    fireEvent.click(kind('Relisted'));
-    expect(kind('Delisted')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(kind('Back on the market'));
+    expect(kind('Left the market')).toHaveAttribute('aria-pressed', 'true');
     create();
     expect(await lastSavedKinds()).toEqual(['new', 'inactive', 'reactivated']);
   });

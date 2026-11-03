@@ -1,5 +1,5 @@
 /* The watchdog's kinds as the SPA keeps them: the API's order (api/notifications.WATCHDOG_KINDS), and
- * Relisted only beside the Delisted it answers, so the editor never offers a set the API refuses. */
+ * Back on the market only beside the Left the market it answers, so the editor never offers a set the API refuses. */
 import { describe, expect, it } from 'vitest';
 
 import { CHANGE_META } from './changeKinds';
@@ -12,7 +12,7 @@ describe('toggleNotifyKind', () => {
       ['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']);
   });
 
-  it('switches Delisted on with Relisted, and Relisted off with Delisted', () => {
+  it('switches Left the market on with Back on the market, and Back on the market off with Left the market', () => {
     expect(toggleNotifyKind(DEFAULT_NOTIFY_KINDS, 'reactivated')).toEqual(
       ['new', 'price_drop', 'inactive', 'reactivated']);
     expect(toggleNotifyKind(['inactive', 'reactivated'], 'inactive')).toEqual([]);
@@ -21,6 +21,6 @@ describe('toggleNotifyKind', () => {
 
   it('names each kind with the word its alerts carry in the feed', () => {
     expect(WATCHDOG_KINDS.map((k) => CHANGE_META[k.kind].label)).toEqual(
-      ['New match', 'Price drop', 'Price rise', 'Delisted', 'Relisted', 'New source']);
+      ['New match', 'Price drop', 'Price rise', 'Left the market', 'Back on the market', 'New portal']);
   });
 });

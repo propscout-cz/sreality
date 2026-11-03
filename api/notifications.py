@@ -68,12 +68,12 @@ LIFECYCLE_KINDS = ("inactive", "reactivated", "new_source")
 
 def normalize_notify_kinds(kinds: list[str]) -> list[str]:
     """The kinds as a watchdog stores them: each once, in WATCHDOG_KINDS order. Refused when empty, and
-    'reactivated' without 'inactive': a relisting answers a delisting the same watchdog told."""
+    'reactivated' without 'inactive': Back on the market answers a Left the market the same watchdog told."""
     out = [k for k in WATCHDOG_KINDS if k in kinds]
     if not out:
         raise ValueError("choose at least one event to be notified about")
     if "reactivated" in out and "inactive" not in out:
-        raise ValueError("'reactivated' (Relisted) needs 'inactive' (Delisted)")
+        raise ValueError("'reactivated' (Back on the market) needs 'inactive' (Left the market)")
     return out
 
 
@@ -835,8 +835,8 @@ def mark_all_seen(
 # ('new') or changed after it (every other kind); a collection no earlier than `monitor_since`.
 PRICE_WINDOW = "7 days"
 MONITOR_WINDOW = "7 days"
-# 'Delisted' only once the property has stayed gone this long (F14): the delist pipeline's
-# effective dwell, so a portal blink sends neither 'Delisted' nor, later, 'Relisted'.
+# 'Left the market' only once the property has stayed gone this long (F14): the delist pipeline's
+# effective dwell, so a portal blink sends neither 'Left the market' nor, later, 'Back on the market'.
 INACTIVE_DWELL = "24 hours"
 # One producer statement past this is cancelled and fails its watchdog (or its step) instead of
 # holding a pass. The heaviest measured, a broad watchdog's price statement over 7 days of
@@ -971,7 +971,7 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
 
 # --- the property events: one detector per kind, for both producers (program § 3.3) --------
 #
-# Each detector is written once and rendered for both producers, so 'Delisted' (or any kind) means
+# Each detector is written once and rendered for both producers, so 'Left the market' (or any kind) means
 # one thing whichever producer tells it. It reads its events `e` off the market (the canonical
 # ad's price steps, the recent delistings, the ads that brought a new portal), never off a cohort,
 # and a `_Source` says who is told: `join` gives each event row `e` its `m` (source_id, listing_id
@@ -1067,7 +1067,7 @@ def _price_sql(src: _Source) -> str:
 
 
 def _inactive_sql(src: _Source) -> str:
-    """'Delisted': the property went inactive (every listing delisted) after `since` and has STAYED
+    """'Left the market': the property went inactive (every listing delisted) after `since` and has STAYED
     inactive for INACTIVE_DWELL (F14). event_ref = the epoch of the latest child inactive_at (set on
     the flip, cleared on reactivation, so a re-inactivation is a fresh event), read off the recent
     delistings (`listings_inactive_at_idx`)."""
@@ -1092,7 +1092,7 @@ def _inactive_sql(src: _Source) -> str:
 
 
 def _reactivated_sql(src: _Source) -> str:
-    """'Relisted': a property this source ALREADY told was delisted, after `since`, came back active.
+    """'Back on the market': a property this source ALREADY told had left the market, after `since`, came back active.
     That 'inactive' dispatch is the durable "was dead" marker (listings.inactive_at is cleared on
     reactivation, so it can't be read), and only an event counts: both reads skip a row a merge
     marked a duplicate. event_ref = the epoch of its dispatched_at: the pre-W3 key's last segment,
@@ -1127,7 +1127,7 @@ def _reactivated_sql(src: _Source) -> str:
 
 
 def _new_source_sql(src: _Source) -> str:
-    """'New source': a listing brought a NEW portal to the property (a cross-source sighting the
+    """'New portal': a listing brought a NEW portal to the property (a cross-source sighting the
     dedup engine grouped in) after `since`; event_ref = that introducing listing's id. It is its
     portal's first ad on the property (by first seen, then the legacy handle, then the surrogate, so
     it never changes between passes) and not the property's first ad, so another portal was there
@@ -1200,8 +1200,8 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
 
 
 def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
-    """Step lifecycle: 'Delisted' (`inactive`, gone for a day, F14), 'Relisted' (`reactivated`) and
-    'New source' (`new_source`, a sibling listing appeared on another portal), one detector per kind
+    """Step lifecycle: 'Left the market' (`inactive`, gone for a day, F14), 'Back on the market'
+    (`reactivated`) and 'New portal' (`new_source`, a sibling listing appeared on another portal), one detector per kind
     for both producers; the price kinds are step price (`match_changes_once`).
 
     The collection monitor tells all three for every monitored property, set-based (one INSERT per

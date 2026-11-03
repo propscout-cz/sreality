@@ -1,6 +1,6 @@
 """Migration 720, executed: a watchdog keeps the kinds it tells. The CHECK refuses what the API refuses, a
-kinds edit restarts the watchdog, and the producers tell a watchdog exactly the kinds it is set to: Delisted
-then Relisted, a price rise, a new source, each on a published property its spec matches, and nothing to a
+kinds edit restarts the watchdog, and the producers tell a watchdog exactly the kinds it is set to: Left the market
+then Back on the market, a price rise, a new portal, each on a published property its spec matches, and nothing to a
 watchdog left on the default. Runs in CI's migrations job (`TEST_DATABASE_URL`); every test rolls back (a
 producer's per-statement transaction is a savepoint inside the test's)."""
 
@@ -84,7 +84,7 @@ def test_a_watchdog_set_to_delisted_and_relisted_is_told_both_and_a_default_one_
     assert stats["subscriptions_evaluated"] == 1, "a watchdog telling no lifecycle kind is not read"
     assert _told(cur, pid) == [(telling, "inactive", str(int(gone_at.timestamp())))]
 
-    # Back on the portal after the Delisted alert: Relisted, keyed on that alert's epoch.
+    # Back on the portal after the Left the market alert: Back on the market, keyed on that alert's epoch.
     cur.execute("SELECT dispatched_at FROM notification_dispatches WHERE property_id = %s", (pid,))
     told_at = cur.fetchone()[0]
     cur.execute("UPDATE listings SET is_active = true, inactive_at = NULL, "

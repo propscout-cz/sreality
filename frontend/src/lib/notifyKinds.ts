@@ -9,16 +9,16 @@ export const WATCHDOG_KINDS: ReadonlyArray<{ kind: WatchdogKind; hint: string }>
   { kind: 'new', hint: 'A property that starts matching: a newly listed one.' },
   { kind: 'price_drop', hint: 'Its asking price went down.' },
   { kind: 'price_rise', hint: 'Its asking price went up.' },
-  { kind: 'inactive', hint: 'Gone from every portal for a day.' },
-  { kind: 'reactivated', hint: 'Back on a portal after a Delisted alert.' },
+  { kind: 'inactive', hint: 'Gone from every portal for a day: sold or withdrawn.' },
+  { kind: 'reactivated', hint: 'On a portal again after it was told as Left the market.' },
   { kind: 'new_source', hint: 'Listed on one more portal.' },
 ];
 
 /* What a new watchdog tells: what every watchdog told before the setting existed (migration 720). */
 export const DEFAULT_NOTIFY_KINDS: WatchdogKind[] = ['new', 'price_drop'];
 
-/* One click on a kind. Relisted answers a Delisted the same watchdog told, so switching it on
- * switches Delisted on too, and switching Delisted off takes Relisted with it. */
+/* One click on a kind. Back on the market answers a Left the market the same watchdog told, so
+ * switching it on switches Left the market on too, and switching that off takes it with it. */
 export function toggleNotifyKind(kinds: ReadonlyArray<WatchdogKind>, kind: WatchdogKind): WatchdogKind[] {
   const next = new Set(kinds);
   if (next.has(kind)) {
