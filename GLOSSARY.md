@@ -398,9 +398,15 @@ the list's own reads never park.
 _Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
 
 **Watchdog**:
-A saved filter that watches the slice of the market it matches and tells its account the property
-events the account chose about any property in that slice, whether or not it told a new match for it.
+A saved filter that watches its slice of the market, the properties on the market that match it, and
+tells its account the property events the account chose about any property in that slice. Editing it
+starts it afresh.
 _Avoid_: alert (for the saved filter), subscription, notification
+
+**Velocity filter**:
+A filter on how a property has moved on the market over time: its time on market, when it was first
+or last seen, and how often or how much its price changed.
+_Avoid_: speed filter, TOM filter (alone)
 
 **Notification**:
 One notice in an account's feed: one property event from one watchdog or one watched collection,
@@ -412,9 +418,11 @@ Something that happens to a property which a watchdog or a watched collection ca
 a new match, a price drop, a price rise, left the market, back on the market, or a new portal.
 _Avoid_: change kind, alert kind, event (alone)
 
-**New match**:
-A property event: a property starts to match a watchdog's filter, such as a newly listed one or
-one whose price fell into the filter's range. A watched collection has none.
+**New match** (UI: "Nová shoda"):
+A property event: a property enters a watchdog's slice because something about it changed (newly
+listed, its price, back on the market, a new ad, an ad's facts) or, for a watchdog with a velocity
+filter, because time passed. It names why; a property that leaves and later re-enters is a new match
+again.
 _Avoid_: new listing, new ad (for this)
 
 **Left the market** (UI: "Opustilo trh"):
@@ -423,8 +431,8 @@ withdrawn; the platform cannot tell which, and an ad may still come back.
 _Avoid_: delisted, withdrawn, sold, removed
 
 **Back on the market** (UI: "Znovu na trhu"):
-A property event: a property told as having left the market has an active ad again, by a revival
-or a re-list.
+A property event of a watched collection: a property told as having left the market has an active
+ad again, by a revival or a re-list. A watchdog tells the same return as a new match.
 _Avoid_: relisted, reactivated
 
 **New portal** (UI: "Nový portál"):
