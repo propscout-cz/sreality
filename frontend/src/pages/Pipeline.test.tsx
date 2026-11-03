@@ -43,6 +43,7 @@ import { NewPropertyProvider } from '@/components/NewPropertyProvider';
 import { watchReads } from '@/test/reads';
 import { revalidateTables } from '@/lib/curationSync';
 import { isOwed } from '@/lib/revalidate';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -250,6 +251,7 @@ const collection = (id: number, name: string): Collection => ({
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 });
 
 // Šortlist holds a board property; Archiv holds none — only the first earns a chip.

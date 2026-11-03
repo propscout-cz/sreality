@@ -12,6 +12,7 @@ import type { Letters } from '@/lib/api';
 import type { MergeMode } from '@/lib/useMergeMode';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -31,7 +32,7 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
 const MINE_7 = {
   id: 7, name: 'Šortlist', description: null, created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-  is_system: false, owner_email: null, shared_with: [],
+  is_system: false, owner_email: null, shared_with: [], notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 };
 
 const renderWith = (ui: React.ReactElement) =>

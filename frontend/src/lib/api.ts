@@ -22,6 +22,7 @@ import type {
   BuildingAttachment,
   BuildingRun,
   Collection,
+  CollectionKind,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
   UpdateBuildingInputsIn,
@@ -2416,6 +2417,7 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
+    notify_kinds?: CollectionKind[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
