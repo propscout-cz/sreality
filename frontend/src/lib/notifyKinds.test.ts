@@ -2,7 +2,8 @@
  * Relisted only beside the Delisted it answers, so the editor never offers a set the API refuses. */
 import { describe, expect, it } from 'vitest';
 
-import { CHANGE_META, DEFAULT_NOTIFY_KINDS, WATCHDOG_KINDS, toggleNotifyKind } from './changeKinds';
+import { CHANGE_META } from './changeKinds';
+import { DEFAULT_NOTIFY_KINDS, WATCHDOG_KINDS, toggleNotifyKind } from './notifyKinds';
 
 describe('toggleNotifyKind', () => {
   it('keeps the API order whatever order the clicks come in', () => {

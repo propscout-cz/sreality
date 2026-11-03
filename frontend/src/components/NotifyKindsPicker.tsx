@@ -1,10 +1,11 @@
 /* "Notify me about": the property events a watchdog tells (migration 720). A pick-several, so
  * chips (system.md § Option groups), drawn as MultiselectChips draws them, with the one click rule
- * of lib/changeKinds (`toggleNotifyKind`: Relisted comes with Delisted). The words are the feed's
+ * of lib/notifyKinds (`toggleNotifyKind`: Relisted comes with Delisted). The words are the feed's
  * own labels, so the chip a user turned on reads like the alerts it sends. An empty set tells
  * nothing: the hosting form refuses to save it, and this says why. */
 import { PickButton } from '@/components/controls';
-import { CHANGE_META, WATCHDOG_KINDS, toggleNotifyKind } from '@/lib/changeKinds';
+import { CHANGE_META } from '@/lib/changeKinds';
+import { WATCHDOG_KINDS, toggleNotifyKind } from '@/lib/notifyKinds';
 import type { WatchdogKind } from '@/lib/types';
 
 export const NOTIFY_KINDS_EMPTY = 'Choose at least one event to be notified about.';

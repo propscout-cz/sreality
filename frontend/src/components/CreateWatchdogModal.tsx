@@ -21,7 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation } from '@tanstack/react-query';
 import { ApiError, createWatchdogSubscription } from '@/lib/api';
-import { DEFAULT_NOTIFY_KINDS } from '@/lib/changeKinds';
+import { DEFAULT_NOTIFY_KINDS } from '@/lib/notifyKinds';
 import {
   filtersToWatchdogSpec,
   watchdogNameSuggestion,

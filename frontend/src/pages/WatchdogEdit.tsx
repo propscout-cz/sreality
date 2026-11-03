@@ -14,7 +14,7 @@ import {
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { usePageTitle } from '@/lib/pageTitle';
-import { DEFAULT_NOTIFY_KINDS } from '@/lib/changeKinds';
+import { DEFAULT_NOTIFY_KINDS } from '@/lib/notifyKinds';
 import {
   DEFAULT_WATCHDOG_FILTER_SPEC,
   type WatchdogFilterSpec,
