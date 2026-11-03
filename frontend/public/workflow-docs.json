@@ -384,7 +384,7 @@
         },
         {
           "name": "region_ids",
-          "description": "[submit] Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)",
+          "description": "[submit] Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)",
           "required": false,
           "type": "string",
           "default": "",
@@ -438,7 +438,7 @@
       "inputs": [
         {
           "name": "region_ids",
-          "description": "Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)",
+          "description": "Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)",
           "required": false,
           "type": "string",
           "default": "",
@@ -1159,7 +1159,7 @@
     {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
-      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
+      "description": "Load ČSÚ municipality population into obec_population (by RÚIAN code and year) for EVERY obec. Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2348,7 +2348,7 @@
     {
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
-      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values (+ city_population from data/csu_population.json when present).",
+      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values. A new city is bound to the RÚIAN town under its centroid; its population is that town's, loaded by load_obec_population.yml.",
       "manual": true,
       "schedules": [],
       "onPush": false,

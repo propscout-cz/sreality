@@ -1,15 +1,14 @@
-"""Load ČSÚ municipality population into admin_boundaries.population (all obce).
+"""Load ČSÚ municipality population into obec_population (all obce, by RÚIAN code and year).
 
 Reads the committed ČSÚ DataStat export (data/csu_population.json, OBY02AT02 —
 download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02) and upserts
-each obec's population by id (the ČSÚ municipality code IS admin_boundaries.id).
-Unlike scripts/seed_curated_cities.py (which only populates the 206 curated
-cities' city_population), this covers EVERY obec, which is what the
-"within X km of a municipality with population > N" proximity filter needs.
+each obec's population by its code (the ČSÚ municipality code IS the RÚIAN obec
+code) and year, so every year loaded is kept (ruling Q11, migration 725). The
+proximity filters, the Datasets picker and the curated cities read the latest year.
 
 Idempotent: a re-run with an unchanged file writes nothing (the `is distinct
-from` guard). Requires SUPABASE_DB_URL. Run via .github/workflows/load_obec_population.yml
-or locally.
+from` guard). One transaction, so a partial year never appears. Requires
+SUPABASE_DB_URL. Run via .github/workflows/load_obec_population.yml or locally.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
@@ -30,11 +30,27 @@ from scripts.csu_population import DATASTAT_URL, load_population_by_code  # noqa
 JSON_PATH = ROOT / "data" / "csu_population.json"
 LOG = logging.getLogger("load_obec_population")
 
+_UPSERT_SQL = """
+insert into obec_population (obec_kod, year, population)
+select * from unnest(%(codes)s::bigint[], %(years)s::int[], %(populations)s::int[])
+on conflict (obec_kod, year) do update
+   set population = excluded.population, loaded_at = now()
+ where obec_population.population is distinct from excluded.population
+"""
+
+
+def upsert_population(conn: Any, rows: list[tuple[int, int, int]]) -> int:
+    """(code, population, year) rows in one transaction; returns the rows written (new or changed)."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_UPSERT_SQL, {"codes": [r[0] for r in rows], "populations": [r[1] for r in rows],
+                                  "years": [r[2] for r in rows]})
+        return cur.rowcount or 0
+
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="load_obec_population",
-        description=f"Load obec population into admin_boundaries (source: {DATASTAT_URL})",
+        description=f"Load obec population into obec_population (source: {DATASTAT_URL})",
     )
     p.add_argument("--json", default=str(JSON_PATH))
     p.add_argument("--dry-run", action="store_true")
@@ -56,27 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     with psycopg.connect(dsn, prepare_threshold=None) as conn:
-        with conn.cursor() as cur, conn.transaction():
-            cur.execute(
-                "create temp table _obec_pop (id bigint, pop int, yr int) "
-                "on commit drop"
-            )
-            with cur.copy("copy _obec_pop (id, pop, yr) from stdin") as copy:
-                for r in rows:
-                    copy.write_row(r)
-            cur.execute(
-                """
-                update admin_boundaries b
-                   set population = p.pop, population_year = p.yr
-                  from _obec_pop p
-                 where b.id = p.id
-                   and b.level = 'obec'
-                   and (b.population is distinct from p.pop
-                        or b.population_year is distinct from p.yr)
-                """
-            )
-            updated = cur.rowcount or 0
-    LOG.info("Upserted population for %d obce (changed rows)", updated)
+        written = upsert_population(conn, rows)
+    LOG.info("Upserted population for %d obce (new or changed rows)", written)
     return 0
 
 

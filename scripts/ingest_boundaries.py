@@ -339,12 +339,10 @@ def wipe_table(conn: psycopg.Connection) -> int:
     against an unknown prior version. Spatial-join updates run after.
 
     DELETE rather than TRUNCATE because foreign keys point at this
-    table — admin_boundaries.parent_id (self-FK from migration 017)
-    and curated_cities.admin_boundary_id (from migration 081). Postgres
-    refuses TRUNCATE on a table with inbound FKs unless every
-    referencing table is also truncated. DELETE fires each FK's
-    ON DELETE SET NULL action instead, so curated_cities rows are
-    preserved with NULL admin_boundary_id (re-linked below).
+    table (admin_boundaries.parent_id, the self-FK from migration 017).
+    Postgres refuses TRUNCATE on a table with inbound FKs unless every
+    referencing table is also truncated. Curated cities no longer point
+    here: they hold the RÚIAN code of their town (migration 726).
     """
     with conn.cursor() as cur:
         cur.execute("DELETE FROM admin_boundaries")
@@ -402,43 +400,6 @@ def populate_parent_ids_spatial(conn: psycopg.Connection) -> dict[str, int]:
         out.setdefault(f"{lvl}_total", 0)
         out.setdefault(f"{lvl}_linked", 0)
     return out
-
-
-def relink_curated_cities(conn: psycopg.Connection) -> dict[str, int]:
-    """Re-establish curated_cities.admin_boundary_id after a fresh load.
-
-    Matches each curated city to the obec polygon that contains its
-    centroid. Same predicate as migration 082. Direct spatial
-    containment is more robust than the name-walk migration 081 used:
-    it needs neither admin_boundaries.parent_id (which the current
-    ČÚZK DBF schema doesn't expose under the column names
-    FIELD_CANDIDATES looks for) nor name disambiguation. Idempotent —
-    only touches rows where admin_boundary_id is currently NULL.
-    """
-    sql = '''
-        update curated_cities c
-           set admin_boundary_id = (
-             select b.id
-               from admin_boundaries b
-              where b.level = 'obec'
-                and st_covers(b.geom, c.centroid)
-              order by st_area(b.geom::geometry) asc
-              limit 1
-           )
-         where c.admin_boundary_id is null
-    '''
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        linked = cur.rowcount or 0
-        cur.execute(
-            "select count(*) from curated_cities where admin_boundary_id is null"
-        )
-        row = cur.fetchone()
-        unmatched = int(row[0]) if row else 0
-        cur.execute("select count(*) from curated_cities")
-        row = cur.fetchone()
-        total = int(row[0]) if row else 0
-    return {"linked": linked, "unmatched": unmatched, "total": total}
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
@@ -524,15 +485,6 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 parents['obec_linked'],  parents['obec_total'],
                 parents['ku_linked'],    parents['ku_total'],
             )
-
-            if "obec" in levels:
-                LOG.info("RELINK curated_cities starting")
-                relink = relink_curated_cities(conn)
-                conn.commit()
-                LOG.info(
-                    "RELINK done linked=%d unmatched=%d total=%d",
-                    relink["linked"], relink["unmatched"], relink["total"],
-                )
 
     LOG.info("RUN done")
     return 0

@@ -1,4 +1,4 @@
-"""Seed Phase QUAL data: curated cities + index definitions + values + population.
+"""Seed Phase QUAL data: curated cities + index definitions + values.
 
 Run from GitHub Actions (workflow .github/workflows/seed-curated-cities.yml)
 or from a local checkout that has both `MAPY_CZ_API_KEY` and
@@ -9,18 +9,13 @@ Steps:
   2. Geocode each (Mesto, Kraj) pair via Mapy.cz; cache results in
      data/curated_cities_geocoded.json so re-runs are deterministic and
      auditable.
-  3. Optionally load latest CSU municipality population. Preferred source is
-     the official ČSÚ DataStat JSON-stat export at data/csu_population.json —
-     download "Počet obyvatel v obcích k 1. 1." from
-     https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02 and commit it
-     there. A legacy data/csu_population_2024.csv is still read as a fallback
-     when the JSON is absent. Either is optional — a missing file just leaves
-     city_population untouched. See scripts/csu_population.py for the parser.
-  4. Connect to Supabase via SUPABASE_DB_URL and upsert.
+  3. Connect to Supabase via SUPABASE_DB_URL and upsert. A NEW city is bound at
+     insert to the RÚIAN town whose polygon covers its centroid (obec_kod); an
+     existing city is never re-bound. Its population is obec_population's for that
+     code (scripts/load_obec_population.py), read through curated_cities_public.
 
 Idempotent: a second run with the same CSV bumps source_revision and
-adds a fresh batch of city_index_values; cities + definitions + population
-upsert in place.
+adds a fresh batch of city_index_values; cities + definitions upsert in place.
 """
 
 from __future__ import annotations
@@ -37,15 +32,9 @@ from typing import Any
 
 import psycopg
 
-from scripts import csu_population
-
 ROOT = Path(__file__).resolve().parent.parent
 CSV_PATH = ROOT / "data" / "obce_v_datech_2025.csv"
 GEOCODE_CACHE_PATH = ROOT / "data" / "curated_cities_geocoded.json"
-# Preferred population source: the official ČSÚ DataStat JSON-stat export.
-# Legacy CSV is the fallback when the JSON is absent.
-POPULATION_JSON_PATH = ROOT / "data" / "csu_population.json"
-POPULATION_CSV_PATH = ROOT / "data" / "csu_population_2024.csv"
 
 LOG = logging.getLogger("seed_curated_cities")
 
@@ -214,7 +203,6 @@ def geocode_one(name: str, kraj: str) -> dict[str, Any]:
     # `regional.municipality`. Confidence "low" is acceptable here
     # because municipality is the maximum specificity for a city query.
     is_muni = result.matched_type == "regional.municipality"
-    radius_m = _radius_from_bbox(result.bbox) if result.bbox else 5000
     return {
         "name": name,
         "kraj_name": kraj,
@@ -222,26 +210,9 @@ def geocode_one(name: str, kraj: str) -> dict[str, Any]:
         "lng": result.lng,
         "matched_type": result.matched_type,
         "matched_address": result.matched_address,
-        "default_radius_m": radius_m,
         "is_municipality": is_muni,
         "raw_query": query,
     }
-
-
-def _radius_from_bbox(bbox: tuple[float, float, float, float]) -> int:
-    """Approximate the city's footprint radius from its Mapy.cz bbox.
-
-    `bbox` is (west, south, east, north) in degrees. Convert the
-    diagonal half-length to metres assuming ~111km per degree of
-    latitude and cos(lat) for longitude scaling. Clamp to 2-25km.
-    """
-    import math
-    west, south, east, north = bbox
-    lat_mid = (north + south) / 2
-    dlat_m = (north - south) * 111000.0
-    dlng_m = (east - west) * 111000.0 * math.cos(math.radians(lat_mid))
-    half_diag = 0.5 * math.hypot(dlat_m, dlng_m)
-    return max(2000, min(25000, int(half_diag)))
 
 
 def geocode_all(rows: list[CsvRow], cache_path: Path) -> dict[str, dict[str, Any]]:
@@ -258,57 +229,6 @@ def geocode_all(rows: list[CsvRow], cache_path: Path) -> dict[str, dict[str, Any
         save_geocode_cache(cache_path, cache)
     LOG.info("Geocoded %d new entries; cache now has %d", new_hits, len(cache))
     return cache
-
-
-# --- population ----------------------------------------------------------
-
-
-def read_population_csv(path: Path) -> dict[tuple[str, str], tuple[int, int]]:
-    """Returns {(name, kraj_name): (population, as_of_year)}.
-
-    Optional: if the file is missing the seed completes without
-    populating city_population — operator can refresh later.
-    """
-    out: dict[tuple[str, str], tuple[int, int]] = {}
-    if not path.exists():
-        LOG.info("No population CSV at %s — skipping population seed", path)
-        return out
-    with path.open(encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            name = (row.get("name") or row.get("Město") or "").strip()
-            kraj = (row.get("kraj_name") or row.get("Kraj") or "").strip()
-            pop_raw = (row.get("population") or "").strip()
-            year_raw = (row.get("as_of_year") or "2024").strip()
-            if not name or not kraj or not pop_raw:
-                continue
-            try:
-                pop = int(pop_raw.replace(" ", "").replace(",", ""))
-                year = int(year_raw)
-            except ValueError:
-                continue
-            out[(name, kraj)] = (pop, year)
-    LOG.info("Read %d population rows", len(out))
-    return out
-
-
-def load_population(
-    curated_rows: list[CsvRow],
-    json_path: Path,
-    csv_path: Path,
-) -> dict[tuple[str, str], tuple[int, int]]:
-    """Load latest municipality population, keyed on the curated (name, kraj).
-
-    Prefers the official ČSÚ DataStat JSON-stat export (json_path); falls back
-    to the legacy CSV when the JSON is absent. Both optional — missing both
-    returns {} and leaves city_population untouched.
-    """
-    if json_path.exists():
-        parsed = csu_population.load_population_jsonstat(json_path)
-        curated = [(r.name, r.kraj_name) for r in curated_rows]
-        matched, _misses = csu_population.match_to_curated(parsed, curated)
-        return matched
-    return read_population_csv(csv_path)
 
 
 # --- DB writes -----------------------------------------------------------
@@ -334,6 +254,27 @@ def upsert_definitions(conn: psycopg.Connection) -> None:
     LOG.info("Upserted %d index definitions", len(INDEX_METADATA))
 
 
+# A new city is bound to the RÚIAN town whose lossless pip pieces at the current registry
+# version cover its centroid; ON CONFLICT never touches obec_kod, so a re-seed never re-binds.
+_UPSERT_CITY_SQL = """
+insert into curated_cities (name, kraj_name, centroid, obec_kod, source, source_confidence)
+select %(name)s, %(kraj)s, pt::geography,
+       (select u.code
+          from registry_versions v
+          join ruian_admin_unit_geometries g on g.registry_version_id = v.id and g.purpose = 'pip'
+          join ruian_admin_units u on u.id = g.unit_id
+         where v.is_current and u.level = 'obec' and st_covers(g.geom, pt)
+         limit 1),
+       %(source)s, %(confidence)s
+  from (select st_setsrid(st_makepoint(%(lng)s, %(lat)s), 4326) as pt) p
+on conflict (name, kraj_name) do update set
+  centroid          = excluded.centroid,
+  source            = excluded.source,
+  source_confidence = excluded.source_confidence
+returning id
+"""
+
+
 def upsert_cities(
     conn: psycopg.Connection,
     rows: list[CsvRow],
@@ -348,29 +289,13 @@ def upsert_cities(
                 LOG.error("No geocode for %s, %s — skipping", row.name, row.kraj_name)
                 continue
             cur.execute(
-                """
-                insert into curated_cities
-                  (name, kraj_name, centroid, default_radius_m,
-                   source, source_confidence)
-                values (
-                  %s, %s,
-                  st_setsrid(st_makepoint(%s, %s), 4326)::geography,
-                  %s, %s, %s
-                )
-                on conflict (name, kraj_name) do update set
-                  centroid          = excluded.centroid,
-                  default_radius_m  = excluded.default_radius_m,
-                  source            = excluded.source,
-                  source_confidence = excluded.source_confidence
-                returning id
-                """,
-                (
-                    row.name, row.kraj_name,
-                    geo["lng"], geo["lat"],
-                    geo.get("default_radius_m", 5000),
-                    geo.get("source", "mapy_cz"),
-                    geo.get("matched_type"),
-                ),
+                _UPSERT_CITY_SQL,
+                {
+                    "name": row.name, "kraj": row.kraj_name,
+                    "lng": geo["lng"], "lat": geo["lat"],
+                    "source": geo.get("source", "mapy_cz"),
+                    "confidence": geo.get("matched_type"),
+                },
             )
             (city_id,) = cur.fetchone()
             ids[(row.name, row.kraj_name)] = city_id
@@ -418,78 +343,10 @@ def insert_revision_and_values(
     return revision
 
 
-def upsert_population(
-    conn: psycopg.Connection,
-    population: dict[tuple[str, str], tuple[int, int]],
-    city_ids: dict[tuple[str, str], int],
-) -> int:
-    written = 0
-    with conn.cursor() as cur:
-        for key, (pop, year) in population.items():
-            cid = city_ids.get(key)
-            if cid is None:
-                continue
-            cur.execute(
-                """
-                insert into city_population (city_id, as_of_year, population, source)
-                values (%s, %s, %s, 'csu')
-                on conflict (city_id, as_of_year) do update set
-                  population = excluded.population,
-                  loaded_at  = now()
-                """,
-                (cid, year, pop),
-            )
-            written += 1
-    LOG.info("Upserted population for %d cities", written)
-    return written
-
-
-def relink_admin_boundaries(conn: psycopg.Connection) -> int:
-    """Link any curated city still missing an obec polygon to the one that
-    covers its centroid (migration 082 predicate, idempotent).
-
-    Inlined here — not imported from scripts.ingest_boundaries — so the seed
-    keeps its psycopg-only dependency footprint (ingest_boundaries pulls in
-    shapely/pyproj/shapefile). Runs after upsert_cities so a newly-curated
-    city (e.g. Praha) gets its polygon, which the city-quality containment
-    and proximity (polygon-edge) filters both rely on.
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            update curated_cities c
-               set admin_boundary_id = (
-                 select b.id
-                   from admin_boundaries b
-                  where b.level = 'obec'
-                    and st_covers(b.geom, c.centroid)
-                  order by st_area(b.geom::geometry) asc
-                  limit 1
-               )
-             where c.admin_boundary_id is null
-            """
-        )
-        linked = cur.rowcount or 0
-        cur.execute(
-            "select count(*) from curated_cities where admin_boundary_id is null"
-        )
-        (unmatched,) = cur.fetchone()
-    LOG.info("Polygon-linked %d curated cities (%d still unmatched)",
-             linked, unmatched)
-    return linked
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="seed_curated_cities")
     p.add_argument("--csv", default=str(CSV_PATH),
                    help="Path to obce_v_datech_*.csv")
-    p.add_argument("--population-json", default=str(POPULATION_JSON_PATH),
-                   help="Path to the ČSÚ DataStat JSON-stat population export "
-                        "(preferred; download OBY02AT02 from "
-                        "https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02)")
-    p.add_argument("--population-csv", default=str(POPULATION_CSV_PATH),
-                   help="Path to legacy csu_population_*.csv (fallback when "
-                        "--population-json is absent)")
     p.add_argument("--geocode-cache", default=str(GEOCODE_CACHE_PATH))
     p.add_argument("--dry-run", action="store_true",
                    help="Geocode + plan, but don't write to the DB")
@@ -542,14 +399,9 @@ def main(argv: list[str] | None = None) -> int:
                   len(missing), [(r.name, r.kraj_name) for r in missing[:5]])
         return 2
 
-    population = load_population(
-        rows, Path(args.population_json), Path(args.population_csv),
-    )
-
     if args.dry_run:
-        LOG.info("Dry-run: would seed %d cities, %d index values, %d "
-                 "population rows", len(rows), sum(len(r.values) for r in rows),
-                 len(population))
+        LOG.info("Dry-run: would seed %d cities, %d index values",
+                 len(rows), sum(len(r.values) for r in rows))
         return 0
 
     dsn = os.environ.get("SUPABASE_DB_URL")
@@ -561,13 +413,11 @@ def main(argv: list[str] | None = None) -> int:
         with conn.transaction():
             upsert_definitions(conn)
             city_ids = upsert_cities(conn, rows, geocodes)
-            relink_admin_boundaries(conn)
             insert_revision_and_values(
                 conn, rows, city_ids,
                 source_filename=args.source_filename or csv_path.name,
                 uploaded_by=args.uploaded_by,
             )
-            upsert_population(conn, population, city_ids)
 
     LOG.info("Done.")
     return 0
