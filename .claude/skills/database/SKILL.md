@@ -106,8 +106,7 @@ did within minutes, hence migration 279).
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
   it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
-  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
-  ledgers the older copy (`broker_resolution_lock`, until #2273).
+  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,

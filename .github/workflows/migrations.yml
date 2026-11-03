@@ -758,7 +758,7 @@ jobs:
         run: pytest tests/test_maintenance_lease_live.py -q
 
       # #2108, EXECUTED: the broker lane and the daily full resolve through their real entry points on committed sessions:
-      # one holder at a time, on the new scheduled_jobs row alone and on migration 192's row alone (the deploy overlap).
+      # one holder at a time on the scheduled_jobs row.
       - name: The broker lane and the full resolve never overlap (#2108)
         timeout-minutes: 5
         env:

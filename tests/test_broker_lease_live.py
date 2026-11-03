@@ -30,7 +30,6 @@ def _connect() -> psycopg.Connection:
 
 def _clear(conn: psycopg.Connection) -> None:
     conn.execute("DELETE FROM scheduled_jobs WHERE job_name = %s", (rb.BROKER_LEASE,))
-    conn.execute("UPDATE broker_resolution_lock SET holder = NULL, mode = NULL")
 
 
 @pytest.fixture
@@ -41,11 +40,9 @@ def conn() -> Iterator[psycopg.Connection]:
         _clear(c)
 
 
-def _holders(conn: psycopg.Connection) -> tuple[str | None, str | None]:
-    """(the job_lease row's holder, the cutover row's holder)."""
+def _holder(conn: psycopg.Connection) -> str | None:
     row = conn.execute("SELECT lease_holder FROM scheduled_jobs WHERE job_name = %s", (rb.BROKER_LEASE,)).fetchone()
-    old = conn.execute("SELECT holder FROM broker_resolution_lock").fetchone()
-    return (row[0] if row else None), old[0]
+    return row[0] if row else None
 
 
 def _full_main(monkeypatch: pytest.MonkeyPatch, *, during: Any = None) -> int:
@@ -68,15 +65,13 @@ def test_the_lane_skips_while_the_full_resolve_holds_the_lease(
     seen: dict[str, Any] = {}
 
     def during(c: Any, hold: Any) -> None:
-        seen["holders"] = _holders(conn)
+        seen["holder"] = _holder(conn)
         seen["pass"] = rb.run_incremental_pass(conn)
 
     assert _full_main(monkeypatch, during=during) == 0
-    new, old = seen["holders"]
-    assert new.startswith("full:"), "the mode lives in the holder prefix"
-    assert old == new, "the cutover row names the same holder"
+    assert seen["holder"].startswith("full:"), "the mode lives in the holder prefix"
     assert seen["pass"] == {"skipped": True, "attributed": 0, "brokers": 0}
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None
     last = conn.execute("SELECT last_outcome, registry_at FROM scheduled_jobs WHERE job_name = %s",
                         (rb.BROKER_LEASE,)).fetchone()
     assert last == ("ok", None), "a lease-only row: an outcome, and never on the runner's registry"
@@ -90,7 +85,7 @@ def test_the_full_resolve_aborts_while_the_lane_holds_the_lease(
     seen: dict[str, Any] = {}
 
     def drain(c: Any, *a: Any, **k: Any) -> tuple[dict[str, int], Any]:
-        seen["holders"] = _holders(conn)
+        seen["holder"] = _holder(conn)
         with monkeypatch.context() as inner:
             seen["full"] = _full_main(inner)
         return {"attributed": 0, "brokers": 0}, c
@@ -100,16 +95,16 @@ def test_the_full_resolve_aborts_while_the_lane_holds_the_lease(
         stats = rb.run_incremental_pass(lane)
 
     assert stats["skipped"] is False
-    assert seen["holders"][0].startswith("incremental:")
+    assert seen["holder"].startswith("incremental:")
     assert seen["full"] == 1
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None
 
 
 @pytest.mark.parametrize("kind", ["incremental", "full"])
-def test_the_scheduled_jobs_row_excludes_on_its_own(
+def test_a_writer_that_loses_the_row_leaves_the_rival_holding_it(
     conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, kind: str,
 ) -> None:
-    """The state after the gate: only the new row is contended. A writer that loses it gives the cutover row back."""
+    """The lane skips and the full resolve gives up past its wait; neither touches the rival's lease."""
     monkeypatch.setattr(job_lease.time, "sleep", lambda s: None)
     with job_lease.held(conn, rb.BROKER_LEASE, cadence="30 seconds", holder="rival") as rival:
         assert rival is not None
@@ -119,27 +114,11 @@ def test_the_scheduled_jobs_row_excludes_on_its_own(
             else:
                 monkeypatch.setattr(rb, "_LOCK_WAIT_MAX_SECONDS", 1)
                 assert _full_main(monkeypatch) == 1
-        assert _holders(conn) == ("rival", None)
+        assert _holder(conn) == "rival"
 
 
-@pytest.mark.parametrize("kind", ["incremental", "full"])
-def test_an_older_worker_on_migration_192s_row_alone_still_excludes(
-    conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, kind: str,
-) -> None:
-    """The deploy overlap: older code holds only the old row, so the new row is free and must not be enough."""
-    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
-    conn.execute("UPDATE broker_resolution_lock SET holder = 'older-worker', mode = 'incremental', heartbeat_at = now()")
-    with _connect() as other:
-        if kind == "incremental":
-            assert rb.run_incremental_pass(other)["skipped"] is True
-        else:
-            monkeypatch.setattr(rb, "_LOCK_WAIT_MAX_SECONDS", 0.001)
-            assert _full_main(monkeypatch) == 1
-    assert _holders(conn) == (None, "older-worker"), "the new row was never taken, and the old holder keeps its row"
-
-
-def test_a_dead_holding_connection_releases_both_rows_through_reconnect(conn: psycopg.Connection) -> None:
-    """A phase that reconnected closed the connection the lease was taken on: the release opens its own, on both rows."""
+def test_a_dead_holding_connection_releases_through_reconnect(conn: psycopg.Connection) -> None:
+    """A phase that reconnected closed the connection the lease was taken on: the release opens its own."""
     opened: list[str] = []
 
     def reconnect() -> psycopg.Connection:
@@ -150,8 +129,8 @@ def test_a_dead_holding_connection_releases_both_rows_through_reconnect(conn: ps
     with rb._resolution_lease(holding, "full", reconnect=reconnect) as hold:
         assert hold is not None
         holding.close()
-    assert opened == ["fresh", "fresh"], "one for each row"
-    assert _holders(conn) == (None, None)
+    assert opened == ["fresh"]
+    assert _holder(conn) is None
 
 
 def test_a_lease_a_rival_took_stops_the_full_resolve(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +143,7 @@ def test_a_lease_a_rival_took_stops_the_full_resolve(conn: psycopg.Connection, m
 
     with pytest.raises(job_lease.LeaseLost):
         _full_main(monkeypatch, during=during)
-    assert _holders(conn) == ("rival", None)
+    assert _holder(conn) == "rival"
 
 
 def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
@@ -199,4 +178,4 @@ def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
     assert failures == []
     assert inside["entered"] > 0
     assert inside["most"] == 1
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None
