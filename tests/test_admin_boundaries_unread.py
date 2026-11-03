@@ -2,7 +2,8 @@
 moved every reader (migrations 725-728); W8-4 (migration 729) dropped the table with its view, its loader and that
 loader's workflow, `price_stat_localities`, `city_population`, the price-stat entity columns,
 `curated_cities.default_radius_m` and the view columns only the old SPA read. Offline over the code, so none comes
-back by name, and live over the replayed catalog.
+back by name (this file names them on purpose), live over the replayed catalog, and 726's and 729's own guards
+refuse a function body still naming what they rename or drop.
 """
 
 from __future__ import annotations
@@ -10,6 +11,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+
+import psycopg
+import pytest
 
 from tests._live_property import REQUIRED_DB
 
@@ -49,3 +53,30 @@ def test_the_retired_relations_columns_and_readers_are_gone(cur: Any) -> None:
     cur.execute("SELECT p.oid::regprocedure::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace "
                 "AND p.prosrc ~ '\\m(admin_boundar\\w*|price_stat_localities|city_population|default_radius_m)\\M'")
     assert cur.fetchall() == []
+
+
+def _pre(migration: str) -> str:
+    """The migration's `$pre$` guard, verbatim."""
+    text = (ROOT / "migrations" / migration).read_text(encoding="utf-8")
+    start = text.index("do $pre$")
+    return text[start:text.index("$pre$;", start + len("do $pre$")) + len("$pre$;")]
+
+
+def _plant(cur: Any, body: str) -> None:
+    """A function no migration made, naming what a guard protects (plpgsql: its body is not checked at create)."""
+    cur.execute(f"CREATE FUNCTION public.w8_planted() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN {body}; END $f$")
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("migration", "body"), [
+    ("726_location_w8_curated_cities_obec_kod.sql", "PERFORM admin_boundary_id FROM curated_cities"),
+    ("729_location_w8_drop_admin_boundaries.sql", "PERFORM admin_boundary_id FROM curated_cities_public"),
+    ("729_location_w8_drop_admin_boundaries.sql", "PERFORM lat, lng FROM curated_cities_public"),
+    ("729_location_w8_drop_admin_boundaries.sql", "PERFORM sreality_id FROM price_stat_obce_picker_public"),
+])
+def test_a_guard_refuses_a_function_that_still_names_what_its_migration_renames_or_drops(
+        cur: Any, migration: str, body: str) -> None:
+    cur.execute(_pre(migration))  # the replayed schema passes its own guard
+    _plant(cur, body)
+    with pytest.raises(psycopg.errors.RaiseException, match="refused"):
+        cur.execute(_pre(migration))

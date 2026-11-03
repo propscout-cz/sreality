@@ -7,14 +7,18 @@
 --      before the publish and one after. Owner-rights; the service role alone reads it.
 --   2. obec_population(obec_kod, year): ČSÚ population by town code and year (no FK: mirror codes repeat under SCD-2).
 --      Backfill: the 6,254 rows admin_boundaries holds (year 2026). scripts/load_obec_population.py writes it from now.
---   3. price_stat_obce_picker_public: the register's live kraj/okres/obec tree (valid_to null), a parent outside the
---      tree (a kraj's NUTS-2 region) read as NULL, the latest population; sreality_id stays as NULL for the deployed
---      SPA until W8-4 drops it. Same columns, so CREATE OR REPLACE keeps its grant.
+--   3. price_stat_obce_picker_public: the register's kraj/okres/obec tree at the current version, by the same rule as
+--      ruian_unit_render (a unit drawn at the current version), so a load that closes and reopens units before its
+--      publish never empties or doubles it (#2378); a parent outside the tree (a kraj's NUTS-2 region) reads NULL, the
+--      population is the latest year's. sreality_id becomes NULL (the deployed SPA selects it; 729 drops it). Same
+--      columns, so CREATE OR REPLACE keeps its grant.
 --   4. sold_coverage: the town is the one whose lossless pip pieces at the current version cover the point
 --      (resolve_db.CONTAINING_OBEC_SQL's shape), named by the register. Same signature, ACL and SECURITY DEFINER.
 --   5. price_stat_growth: 425's body without its EXISTS on admin_boundaries_public; obec_id is a register code by
 --      construction (723), so the check filtered nothing.
--- ADDITIVE (new view, new table, three bodies replaced in place). Apply BEFORE the merge: every wire shape is kept.
+-- ADDITIVE in schema (a new view, a new table, three bodies replaced in place, no column or row dropped), but not in
+-- behaviour: sold_coverage answers by the mirror's town (the pip pieces, no longer the 55 m-simplified legacy polygon)
+-- and the picker's sreality_id reads NULL. Apply BEFORE the merge: every wire shape is kept.
 -- Idempotent: rerun as is after a lock_timeout trip.
 -- Receipt: obec_population 6,254 rows; the picker 6,349 (14 + 77 + 6,258).
 -- VERIFY: select count(*), max(year) from obec_population;  -- 6,254, 2026
@@ -53,11 +57,13 @@ on conflict do nothing;
 create or replace view price_stat_obce_picker_public as
   select u.code as id, u.level::text as level, u.name, p.code as parent_id, pop.population,
          null::integer as sreality_id
-    from ruian_admin_units u
+    from registry_versions v
+    join ruian_admin_unit_geometries g on g.registry_version_id = v.id and g.purpose = 'render'
+    join ruian_admin_units u on u.id = g.unit_id
     left join ruian_admin_units p on p.id = u.parent_id and p.level in ('kraj', 'okres')
     left join obec_population pop on pop.obec_kod = u.code and u.level = 'obec'
                                  and pop.year = (select max(year) from obec_population)
-   where u.level in ('kraj', 'okres', 'obec') and u.valid_to is null;
+   where v.is_current and u.level in ('kraj', 'okres', 'obec');
 
 create or replace function public.sold_coverage(
   p_lat double precision,

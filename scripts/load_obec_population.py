@@ -18,7 +18,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 import psycopg
 
@@ -39,11 +38,12 @@ on conflict (obec_kod, year) do update
 """
 
 
-def upsert_population(conn: Any, rows: list[tuple[int, int, int]]) -> int:
-    """(code, population, year) rows in one transaction; returns the rows written (new or changed)."""
+def upsert_population(conn: psycopg.Connection, rows: list[tuple[int, int, int]]) -> int:
+    """(obec_kod, year, population) rows, the table's order, in one transaction; returns the rows written (new or
+    changed)."""
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_UPSERT_SQL, {"codes": [r[0] for r in rows], "populations": [r[1] for r in rows],
-                                  "years": [r[2] for r in rows]})
+        cur.execute(_UPSERT_SQL, {"codes": [r[0] for r in rows], "years": [r[1] for r in rows],
+                                  "populations": [r[2] for r in rows]})
         return cur.rowcount or 0
 
 
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     by_code = load_population_by_code(Path(args.json))
-    rows = [(cid, pop, yr) for cid, (pop, yr) in by_code.items()]
+    rows = [(code, year, pop) for code, (pop, year) in by_code.items()]
     LOG.info("Parsed %d obce from %s", len(rows), args.json)
     if args.dry_run:
         LOG.info("Dry-run: would upsert %d obec population rows", len(rows))

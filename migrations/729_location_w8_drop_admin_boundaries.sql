@@ -9,9 +9,12 @@
 --     (made nullable and unread by 723).
 --   * curated_cities.default_radius_m (D8), and the view columns only the pre-W8-3 SPA read: curated_cities_public's
 --     admin_boundary_id, lat, lng and default_radius_m, price_stat_obce_picker_public's sreality_id. Both views are
---     re-created without them, authenticated SELECT only.
--- No CASCADE: $pre$ names any dependent still here (a view through pg_rewrite, an FK, or a function body, which
--- pg_depend cannot see into) and refuses before anything is dropped.
+--     re-created without them (the picker as 725 defines it), authenticated SELECT only.
+-- No CASCADE. $pre$ refuses before anything is dropped while: 728 is not applied; a view or matview (pg_rewrite) reads
+-- a dropped relation, or a dropped column other than through the two views this file re-creates; an FK from a table
+-- that stays points at a dropped table; a function body names admin_boundar*, price_stat_localities, city_population
+-- or default_radius_m; or a function body names curated_cities_public or price_stat_obce_picker_public, bar 726's
+-- curated_cities_matching (md5-pinned), since lat, lng and sreality_id are too generic to scan for.
 -- DESTRUCTIVE. First: gh workflow run backup_before_drop.yml -f label=w8-4-drops -f targets="admin_boundaries
 -- price_stat_localities city_population curated_cities:id,default_radius_m
 -- price_stat_observations:dataset_id,obec_id,category_type_cb,year,month,entity_type,entity_id
@@ -55,23 +58,34 @@ begin
   select string_agg(conrelid::regclass || '.' || conname, ', ') into found
     from pg_constraint where contype = 'f' and confrelid = any(gone) and conrelid <> all(gone);
   if found is not null then raise exception '729 refused: % still references what this file drops', found; end if;
-  -- Function bodies, which pg_depend does not see into.
+  -- Function bodies, which pg_depend does not see into: one naming what goes.
   select string_agg(p.oid::regprocedure::text, ', ') into found
     from pg_proc p
    where p.pronamespace = 'public'::regnamespace
-     and p.prosrc ~ '\m(admin_boundaries\w*|price_stat_localities|city_population|default_radius_m)\M';
+     and p.prosrc ~ '\m(admin_boundar\w*|price_stat_localities|city_population|default_radius_m)\M';
   if found is not null then raise exception '729 refused: % still name what this file drops', found; end if;
+  -- And one reading either re-created view, whose dropped columns (lat, lng, sreality_id) are names too generic to
+  -- scan for: only 726's curated_cities_matching, which reads city_id and obec_kod, may.
+  select string_agg(p.oid::regprocedure::text, ', ') into found
+    from pg_proc p
+   where p.pronamespace = 'public'::regnamespace
+     and p.prosrc ~ '\m(curated_cities_public|price_stat_obce_picker_public)\M'
+     and not (p.oid is not distinct from to_regprocedure('public.curated_cities_matching(jsonb)')
+              and md5(p.prosrc) = '65457e93264c589c86155d7312012a3d');
+  if found is not null then raise exception '729 refused: % read a view this file re-creates narrower', found; end if;
 end
 $pre$;
 
 drop view if exists price_stat_obce_picker_public;
 create view price_stat_obce_picker_public as
   select u.code as id, u.level::text as level, u.name, p.code as parent_id, pop.population
-    from ruian_admin_units u
+    from registry_versions v
+    join ruian_admin_unit_geometries g on g.registry_version_id = v.id and g.purpose = 'render'
+    join ruian_admin_units u on u.id = g.unit_id
     left join ruian_admin_units p on p.id = u.parent_id and p.level in ('kraj', 'okres')
     left join obec_population pop on pop.obec_kod = u.code and u.level = 'obec'
                                  and pop.year = (select max(year) from obec_population)
-   where u.level in ('kraj', 'okres', 'obec') and u.valid_to is null;
+   where v.is_current and u.level in ('kraj', 'okres', 'obec');
 revoke all on price_stat_obce_picker_public from public, anon, authenticated;
 grant select on price_stat_obce_picker_public to authenticated;
 

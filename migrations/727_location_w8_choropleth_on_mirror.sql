@@ -2,9 +2,10 @@
 -- mirror's render polygon (ruling Q12b: a unit-keyed dataset borrows its polygon from the mirror at render time).
 -- price_stat_choropleth was 145's join of the metrics to admin_boundaries; it is the same eleven columns over
 -- ruian_unit_render (725), its name the register's. A matview's query cannot be replaced, so it and the view over it
--- are dropped and re-created, with 145's unique index and today's grants (authenticated SELECT on both; the service
--- role keeps Supabase's default). Its derived_artifacts row (440) is keyed by name and stays; every price-stats run
--- still refreshes it through refresh_matview.
+-- are dropped and re-created with 145's unique index. Grants: authenticated reads price_stat_choropleth_public only,
+-- the owner-rights view the SPA reads; the raw matview loses the browser grant it had (no SPA read, no function body
+-- names it; its one other reader is refresh_matview). The service role keeps Supabase's default. Its derived_artifacts
+-- row (440) is keyed by name and stays; every price-stats run still refreshes it through refresh_matview.
 -- DESTRUCTIVE by the letter (DROP VIEW, DROP MATERIALIZED VIEW): a derived artifact, rebuilt here from its sources,
 -- nothing to back up. Apply after 725, BEFORE the merge: the deployed SPA reads price_stat_choropleth_public, whose
 -- columns this keeps. One transaction (about 1.3 s to build): a lock_timeout trip rolls it all back; rerun as is.
@@ -42,7 +43,6 @@ create view price_stat_choropleth_public as
     from price_stat_choropleth;
 
 revoke all on price_stat_choropleth from public, anon, authenticated;
-grant select on price_stat_choropleth to authenticated;
 revoke all on price_stat_choropleth_public from public, anon, authenticated;
 grant select on price_stat_choropleth_public to authenticated;
 

@@ -12,11 +12,18 @@
 --   6. recompute_city_proximity: 674's body with the anchors drawn by ruian_unit_render and peopled by
 --      obec_population, and home_obec_pop the latest population of the town the location ad is bound to
 --      (ll.obec_kod) instead of the polygon nearest its pin (D6; 43 of a random 1,000 placed properties move, 11-03).
+-- $pre$ refuses unless recompute_city_proximity is 674's body or this file's, and refuses while any function body
+-- other than the two this file re-creates (curated_cities_matching, recompute_city_proximity) names admin_boundary_id.
 -- DESTRUCTIVE (a column rename, an FK drop, a one-row relink). Backup first: gh workflow run backup_before_drop.yml
 -- -f label=w8-3-curated-cities -f targets="curated_cities", receipt read back. Apply after 725 and
 -- BEFORE the merge: the deployed SPA reads curated_cities_public, whose columns this keeps, and nothing deployed
 -- names the table column but the seed and ingest_boundaries, neither dispatched until W8-4. One transaction: a
 -- lock_timeout trip rolls it all back; rerun as is.
+-- THEN, before the merge, the full proximity rebuild: after this file the hourly pg_cron run refills only rows whose
+-- stamp is NULL, so home_obec_pop and the near_* columns would hold two definitions until every row is redone. From a
+-- checkout with SUPABASE_DB_URL: python -m scripts.recompute_city_proximity --full (it calls only this file's
+-- function, so it needs no new code; batches of 5,000, about an hour). Receipt: its "updated N properties" line (all
+-- placeable properties, 1,015,342 on 11-03) and the parity file's R1 (41,991 to change, 11-03) and R2 (0 after).
 -- VERIFY: select population from curated_cities_public where name = 'Hodonín';  -- 23,344
 --         select count(*), count(obec_kod) from curated_cities;  -- 206, 206
 
@@ -24,11 +31,24 @@ begin;
 set local lock_timeout = '5s';
 
 do $pre$
+declare
+  found text;
 begin
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
                  where p.pronamespace = 'public'::regnamespace and p.proname = 'recompute_city_proximity'), '')
        not in ('aebcd995a0618f8763c4ff9f21a0c33b', '7026ea664e306768fbb00a12eddb900f') then
     raise exception '726 refused: recompute_city_proximity is not 674''s body nor this file''s, or has two overloads';
+  end if;
+  -- Any other body naming the column would fail on its first call after the rename (pg_depend cannot see it).
+  select string_agg(p.oid::regprocedure::text, ', ') into found
+    from pg_proc p
+   where p.pronamespace = 'public'::regnamespace
+     and p.prosrc ~ '\madmin_boundary_id\M'
+     and p.oid not in (select f from unnest(array[to_regprocedure('public.curated_cities_matching(jsonb)'),
+                                                 to_regprocedure('public.recompute_city_proximity(boolean)')]) f
+                        where f is not null);
+  if found is not null then
+    raise exception '726 refused: % still name curated_cities.admin_boundary_id', found;
   end if;
 end
 $pre$;

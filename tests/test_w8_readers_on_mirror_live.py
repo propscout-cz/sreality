@@ -81,8 +81,8 @@ def test_the_picker_is_the_registers_kraj_okres_obec_tree_with_the_latest_popula
     kraj = _mirror_unit(cur, "kraj", KRAJ, "Krajov", BOX, parent=region)
     okres = _mirror_unit(cur, "okres", OKRES, "Okresov", BOX, parent=kraj)
     _mirror_unit(cur, "obec", OBEC, "Obcov", BOX, parent=okres)
-    gone = _mirror_unit(cur, "obec", OTHER, "Zaniklov", BOX, parent=okres)
-    cur.execute("UPDATE ruian_admin_units SET valid_to = '2026-10-31' WHERE id = %s", (gone,))
+    gone = _mirror_unit(cur, "obec", OTHER, "Zaniklov", BOX, parent=okres, version=_new_version(cur, current=False))
+    cur.execute("UPDATE ruian_admin_units SET valid_to = '2026-10-31' WHERE id = %s", (gone,))  # drawn at an old one
     _population(cur, OBEC, 2025, 900)
     _population(cur, OBEC, 2026, 1_000)
     cur.execute("SELECT * FROM price_stat_obce_picker_public WHERE id = ANY(%s) ORDER BY id",
@@ -92,6 +92,22 @@ def test_the_picker_is_the_registers_kraj_okres_obec_tree_with_the_latest_popula
         (OBEC, "obec", "Obcov", OKRES, 1_000),
         (OKRES, "okres", "Okresov", KRAJ, None),
     ]
+
+
+def test_the_picker_reads_the_current_version_through_a_load_that_closes_before_it_publishes(cur: Any) -> None:
+    """#2378's shape: a load closes a unit and stages its reopened row hours before the publish. The picker keeps the
+    published row until the version flips, as ruian_unit_render does, and never shows both or neither."""
+    cur.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
+    old = _new_version(cur, current=True)
+    closed = _mirror_unit(cur, "obec", OBEC, "Starov", BOX, version=old)
+    staged = _new_version(cur, current=False)
+    cur.execute("UPDATE ruian_admin_units SET valid_to = '2026-10-31' WHERE id = %s", (closed,))
+    _mirror_unit(cur, "obec", OBEC, "Novov", BOX, version=staged, valid_from="2026-11-01")
+    cur.execute("SELECT name FROM price_stat_obce_picker_public WHERE id = %s", (OBEC,))
+    assert cur.fetchall() == [("Starov",)]
+    cur.execute("UPDATE registry_versions SET is_current = (id = %s) WHERE id IN (%s, %s)", (staged, old, staged))
+    cur.execute("SELECT name FROM price_stat_obce_picker_public WHERE id = %s", (OBEC,))
+    assert cur.fetchall() == [("Novov",)]
 
 
 def test_the_choropleth_draws_each_metric_row_with_its_towns_mirror_polygon_and_name(cur: Any) -> None:
@@ -151,9 +167,9 @@ def test_the_population_loader_upserts_by_code_and_year_and_keeps_every_year(cur
     from scripts.load_obec_population import upsert_population
 
     _population(cur, OBEC, 2025, 900)
-    assert upsert_population(cur.connection, [(OBEC, 1_000, 2026), (OTHER, 50, 2026)]) == 2
-    assert upsert_population(cur.connection, [(OBEC, 1_000, 2026)]) == 0, "an unchanged file writes nothing"
-    assert upsert_population(cur.connection, [(OBEC, 1_010, 2026)]) == 1
+    assert upsert_population(cur.connection, [(OBEC, 2026, 1_000), (OTHER, 2026, 50)]) == 2
+    assert upsert_population(cur.connection, [(OBEC, 2026, 1_000)]) == 0, "an unchanged file writes nothing"
+    assert upsert_population(cur.connection, [(OBEC, 2026, 1_010)]) == 1
     cur.execute("SELECT year, population FROM obec_population WHERE obec_kod = %s ORDER BY year", (OBEC,))
     assert cur.fetchall() == [(2025, 900), (2026, 1_010)]
 
@@ -173,3 +189,4 @@ def test_the_seed_binds_a_new_city_to_the_town_under_its_centroid_and_never_rebi
     cur.execute("SELECT obec_kod, round(ST_X(centroid::geometry)::numeric, 2)::float8 FROM curated_cities "
                 "WHERE id = %s", (city,))
     assert cur.fetchone() == (OBEC, 14.55), "a re-seed moves the centroid and never the town"
+

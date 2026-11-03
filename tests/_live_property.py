@@ -85,13 +85,13 @@ def _registry_version(cur: Any) -> int:
 
 
 def _mirror_unit(cur: Any, level: str, code: int, name: str, box: tuple[float, float, float, float], *,
-                 parent: int | None = None, version: int | None = None) -> int:
+                 parent: int | None = None, version: int | None = None, valid_from: str = "2020-01-01") -> int:
     """A RÚIAN unit drawn at `version` (the current one by default): its render polygon and one pip piece, both the
     box (west, south, east, north). Returns the unit's row id."""
     version = _registry_version(cur) if version is None else version
     cur.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, "
                 "  first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, lower(%s), %s, %s::ltree, "
-                "  '2020-01-01', %s, %s) RETURNING id", (level, code, name, name, parent, f"x{code}", version, version))
+                "  %s, %s, %s) RETURNING id", (level, code, name, name, parent, f"x{code}", valid_from, version, version))
     unit = int(cur.fetchone()[0])
     cur.execute("INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose, "
                 "  generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point, "
