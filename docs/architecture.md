@@ -2855,8 +2855,10 @@ renumber.** Navigate by area:
     rule above, so a property first seen up to 6 h before a watchdog starts and published after it is still told), so a
     late-matching property under a day old still fires and a resumed watchdog never floods. **A watchdog tells only the
     kinds it is set to** (`notification_subscriptions.notify_kinds`, migration 720: any of the six property events, default
-    `new` + `price_drop`, Relisted only beside Delisted because it answers that dispatch); a step reads only the watchdogs
-    telling one of its kinds. `price` and `lifecycle` are **one detector per kind for both producers**
+    `new` + `price_drop`, Back on the market only beside Left the market because it answers that dispatch); a step reads
+    only the watchdogs telling one of its kinds. A watched collection chooses likewise (`collections.notify_kinds`, any
+    of the five but `new`, default all five; a kinds edit while watching restamps `monitoring_enabled_at`, its start), and
+    every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
     (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
     events off the market (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
     that brought a new portal) and the source says who is told, a collection by joining its members (from
@@ -2941,7 +2943,7 @@ renumber.** Navigate by area:
     the collection monitor (its lifecycle kinds in `match_lifecycle_once`, its price half in `match_changes_once`,
     both on the lane's 300 s clock over a 7-day window, the same detectors a watchdog set to those kinds runs) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
-    collection — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
+    collection, of the kinds that collection keeps (`notify_kinds`, migration 720) — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
     `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),
