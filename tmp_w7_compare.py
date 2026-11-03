@@ -21,7 +21,7 @@ SQL = """select ll.listing_id, ll.obec_kod, ll.cast_obce_kod, l.is_active, l.sou
 tally = collections.Counter()
 by_source = collections.Counter()
 samples = []
-with psycopg.connect(os.environ["SUPABASE_DB_SESSION_URL"], autocommit=True) as conn, conn.cursor(name="c") as cur:
+with psycopg.connect(os.environ["SUPABASE_DB_SESSION_URL"]) as conn, conn.cursor(name="c") as cur:
     cur.execute(SQL)
     for lid, obec, part, active, source in cur:
         old = before.get(lid)
