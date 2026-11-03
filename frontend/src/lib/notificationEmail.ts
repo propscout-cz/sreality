@@ -5,7 +5,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 
-import { getNotificationEmail, putNotificationEmail, type NotificationEmailMode, type NotificationEmailSetting } from './api';
+import { notificationEmail, type NotificationEmailMode } from './api';
 import { cachePatch } from './revalidate';
 import { useOptimisticWrite } from './useOptimisticWrite';
 
@@ -25,14 +25,14 @@ export function useNotificationEmail(): {
 } {
   const read = useQuery({
     queryKey: notificationEmailKey,
-    queryFn: getNotificationEmail,
+    queryFn: () => notificationEmail(),
     staleTime: 5 * 60_000,
   });
-  const write = useOptimisticWrite<NotificationEmailMode, NotificationEmailSetting>({
+  const write = useOptimisticWrite<NotificationEmailMode, { mode: NotificationEmailMode }>({
     mutationKey: ['write', 'notification-email', 'set'],
-    mutationFn: putNotificationEmail,
+    mutationFn: notificationEmail,
     patch: (mode) => [
-      cachePatch<NotificationEmailSetting>({ queryKey: notificationEmailKey, exact: true }, () => ({ mode })),
+      cachePatch<{ mode: NotificationEmailMode }>({ queryKey: notificationEmailKey, exact: true }, () => ({ mode })),
     ],
     revalidate: [{ queryKey: notificationEmailKey, exact: true }],
   });

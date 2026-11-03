@@ -26,8 +26,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
-  getNotificationEmail: vi.fn(),
-  putNotificationEmail: vi.fn(),
+  notificationEmail: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -52,7 +51,7 @@ beforeEach(() => {
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(api.getNotificationEmail).mockResolvedValue({ mode: 'daily' });
+  vi.mocked(api.notificationEmail).mockImplementation(async (mode) => ({ mode: mode ?? 'daily' }));
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,
@@ -181,19 +180,18 @@ describe('phone frame', () => {
   /* The account's notification email (docs/design/email/PROGRAM.md PR 4) beside the
    * push switch: the phone-tone joined bar, the account's choice lit once read, a pick written. */
   it('sets the account\'s notification email on the phone-tone joined bar', async () => {
-    vi.mocked(api.putNotificationEmail).mockResolvedValue({ mode: 'off' });
     setNarrow(true);
     renderAt('/feed');
     await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
     const sheet = await screen.findByRole('dialog', { name: 'Účet' });
-    const group = within(sheet).getByRole('group', { name: 'E-mailová upozornění' });
+    const group = await within(sheet).findByRole('group', { name: 'E-mailová upozornění' });
     const buttons = within(group).getAllByRole('button');
     expect(buttons.map((b) => b.textContent)).toEqual(['Vypnuto', 'Denní přehled', 'Okamžitě']);
     expect(group).toHaveClass('w-full', 'border', 'border-[var(--color-rule-strong)]');
     await waitFor(() => expect(buttons[1]).toHaveAttribute('aria-pressed', 'true'));
-    vi.mocked(api.getNotificationEmail).mockResolvedValue({ mode: 'off' });
+    vi.mocked(api.notificationEmail).mockImplementation(async () => ({ mode: 'off' }));
     await userEvent.click(buttons[0]);
-    expect(api.putNotificationEmail).toHaveBeenCalledWith('off');
+    expect(api.notificationEmail).toHaveBeenCalledWith('off');
     await waitFor(() => expect(buttons[0]).toHaveAttribute('aria-pressed', 'true'));
     expect(buttons[1]).toHaveAttribute('aria-pressed', 'false');
   });

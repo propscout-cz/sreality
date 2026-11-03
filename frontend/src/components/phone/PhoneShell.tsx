@@ -34,8 +34,8 @@ import {
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
 import { COLOR_SCHEMES, THEME_MODES, type ThemeMode } from '@/lib/appearance';
-import { NOTIFICATION_EMAIL_LABEL, NOTIFICATION_EMAIL_OPTIONS, useNotificationEmail } from '@/lib/notificationEmail';
 import { useScheme, useTheme } from '@/lib/theme';
+import NotificationEmail from '@/components/NotificationEmail';
 import SchemeSwatch from '@/components/SchemeSwatch';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
@@ -277,32 +277,6 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
 const THEME_LABEL: Record<ThemeMode, string> = { light: 'Světlý', dark: 'Tmavý', system: 'Systém' };
 const THEMES = THEME_MODES.map((m) => ({ ...m, label: THEME_LABEL[m.value] }));
 
-/* The account's notification email, beside this iPhone's push switch: one account-wide choice, the same
- * joined bar as Vzhled. Unlit until the read lands. */
-function NotificationEmailSection() {
-  const { mode, setMode } = useNotificationEmail();
-  return (
-    <div className="px-4 pb-1 pt-3">
-      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
-        {NOTIFICATION_EMAIL_LABEL}
-      </p>
-      <div className="mt-2">
-        <SegmentedBar<typeof mode>
-          tone="phone"
-          fill
-          label={NOTIFICATION_EMAIL_LABEL}
-          options={NOTIFICATION_EMAIL_OPTIONS}
-          value={mode}
-          disabled={mode == null}
-          onChange={(next) => {
-            if (next) setMode(next);
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
@@ -348,7 +322,8 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
           <SegmentedBar tone="phone" fill label="Vzhled" options={THEMES} value={mode} onChange={setMode} />
         </div>
       </div>
-      <NotificationEmailSection />
+      {/* The account's notification email, beside this iPhone's push switch. */}
+      <NotificationEmail tone="phone" />
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
         {notifications && <PushSwitch />}
         {/* The phone has no Admin menu, and system alerts never reach the bell

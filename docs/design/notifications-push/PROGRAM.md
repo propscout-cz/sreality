@@ -6,7 +6,7 @@
 > roadmap track. Operator brief: push through the iPhone app (the installed PWA) for watchdog,
 > collection monitoring and shares; channels from now on are the in-app feed, email (kept, inactive)
 > and iPhone push; no Telegram or other channels; subtraction is the deliverable.
-> **2026-11-03: email is live** (docs/design/email/PROGRAM.md PR 4, migration 722), superseding "inactive" here
+> **2026-11-03: email is live** (docs/design/email/PROGRAM.md PR 4, migration 724), superseding "inactive" here
 > and "dormant" in § 3.7: its own per-account send ledger, not `notification_deliveries`.
 
 
@@ -140,7 +140,7 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 Delete the unused Resend transport, webhook, unsubscribe and suppression (R5). Later, email becomes a second channel on `notification_deliveries`, to each account's sign-in address. Supabase Auth email is untouched.
 
 **2026-11-03, superseded:** email went live in `docs/design/email/PROGRAM.md` PR 4 on a ledger of its own,
-`notification_email_sends` (migration 722), one row per email: an email covers many events and has no device, so
+`notification_email_sends` (migration 724), one row per email: an email covers many events and has no device, so
 the (event, device) grain of `notification_deliveries` cannot hold it. The worker's `email` lane sends it.
 
 ### 3.8 system_health

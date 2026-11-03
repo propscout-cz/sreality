@@ -42,7 +42,7 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     # Every waitlist email's link: its reader has no account, the entry's token is the credential.
     ("GET", "/waitlist/unsubscribe"),
     ("POST", "/waitlist/unsubscribe"),
-    # Every notification email's off link (mig 722): its reader may not be signed in, the account's unsubscribe
+    # Every notification email's off link (mig 724): its reader may not be signed in, the account's unsubscribe
     # token is the credential, and it can only switch that account's email off. Rate-limited; GET only asks.
     ("GET", "/notifications/email/unsubscribe"),
     ("POST", "/notifications/email/unsubscribe"),
@@ -422,7 +422,7 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     ("PUT", "/push/subscription"),
     ("DELETE", "/push/subscription"),
     ("POST", "/push/opened"),
-    # The account's notification email setting (migration 722): the same shape, browser roles hold nothing on it.
+    # The account's notification email setting (migration 724): the same shape, browser roles hold nothing on it.
     ("GET", "/account/notification-email"),
     ("PUT", "/account/notification-email"),
 ])

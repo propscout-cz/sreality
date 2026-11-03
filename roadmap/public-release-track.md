@@ -705,5 +705,5 @@ toggle (Authentication → Sign In / Providers → Email → "Prevent use of lea
     PR 2: the waitlist confirmation (dark until `RESEND_API_KEY`, capped), one-click unsubscribe, privacy page, 399 Kč.
     PR 4 (2026-11-03): the notification email: Vypnuto / Denní přehled (default, 07:00 Prague) / Okamžitě (at most every
     15 min) under the avatar and in the phone's account sheet; the worker's `email` lane (dark until the worker's own
-    `RESEND_API_KEY`), a per-account send ledger (migration 722), a one-click off link.
+    `RESEND_API_KEY`), a per-account send ledger (migration 724), a one-click off link.
     **Next:** PR 3 invitations.

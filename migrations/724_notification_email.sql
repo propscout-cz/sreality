@@ -1,4 +1,4 @@
--- 722: the notification email (docs/design/email/PROGRAM.md, PR 4) — each account's choice and the ledger of what went out.
+-- 724: the notification email (docs/design/email/PROGRAM.md, PR 4) — each account's choice and the ledger of what went out.
 --
 -- `account_notification_email`: one row per account. `mode` is off | daily | instant; an account with no row reads as
 --   `daily`, the default (the worker's email lane inserts the missing rows as each pass begins, so every email it sends has
@@ -27,7 +27,7 @@ alter table public.account_notification_email enable row level security;
 revoke all on public.account_notification_email from public, anon, authenticated;
 
 comment on table public.account_notification_email is
-  'Each account''s notification email choice (mig 722): off | daily (the default, also for an account with no row) | instant. Service role only.';
+  'Each account''s notification email choice (mig 724): off | daily (the default, also for an account with no row) | instant. Service role only.';
 
 create table if not exists public.notification_email_sends (
   id                   bigint generated always as identity primary key,
@@ -55,4 +55,4 @@ revoke all on public.notification_email_sends from public, anon, authenticated;
 revoke all on sequence public.notification_email_sends_id_seq from public, anon, authenticated;
 
 comment on table public.notification_email_sends is
-  'One row per notification email claimed (mig 722), written only by api/notification_email.py: covered_until is the next email''s start; daily unique per Prague day.';
+  'One row per notification email claimed (mig 724), written only by api/notification_email.py: covered_until is the next email''s start; daily unique per Prague day.';

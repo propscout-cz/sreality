@@ -349,10 +349,10 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_waitlist_live.py -q
 
-      # The notification email (migration 722): a daily claim is one per Prague day, a failure claimed again after
+      # The notification email (migration 724): a daily claim is one per Prague day, a failure claimed again after
       # 15 minutes up to three times, an instant one never within 15 minutes of any claim, and an email covers the
       # VISIBLE unseen events after the last claim that did not fail — statements the hermetic pass only scripts.
-      - name: The notification email claims once a day or once per 15 minutes (migration 722)
+      - name: The notification email claims once a day or once per 15 minutes (migration 724)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"

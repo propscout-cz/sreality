@@ -2887,18 +2887,11 @@ export const deletePushSubscription = (
 export const postPushOpened = (delivery: number): Promise<void> =>
   request<void>('/push/opened', { method: 'POST', json: { delivery } });
 
-/* The account's notification email (migration 722): `daily` while it never chose.
- * The caller's own account, never acted for. */
+/* The account's notification email (migration 724): read with no argument (`daily` while it never chose), set
+ * with one. The caller's own account, never acted for. */
 export type NotificationEmailMode = 'off' | 'daily' | 'instant';
-export interface NotificationEmailSetting {
-  mode: NotificationEmailMode;
-}
-
-export const getNotificationEmail = (): Promise<NotificationEmailSetting> =>
-  request<NotificationEmailSetting>('/account/notification-email');
-
-export const putNotificationEmail = (mode: NotificationEmailMode): Promise<NotificationEmailSetting> =>
-  request<NotificationEmailSetting>('/account/notification-email', { method: 'PUT', json: { mode } });
+export const notificationEmail = (mode?: NotificationEmailMode): Promise<{ mode: NotificationEmailMode }> =>
+  request('/account/notification-email', mode ? { method: 'PUT', json: { mode } } : {});
 
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's

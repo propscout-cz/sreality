@@ -1,4 +1,4 @@
-"""Migration 722 and api/notification_email.py's statements on the real schema (docs/design/email/PROGRAM.md PR 4): the
+"""Migration 724 and api/notification_email.py's statements on the real schema (docs/design/email/PROGRAM.md PR 4): the
 missing settings rows and the default, the off link, the tables' CHECKs and their darkness to browser roles; the daily
 claim (one per Prague day, a failure claimed again after 15 minutes up to three times, nothing to say recorded empty
 so the day is spent), the instant claim (only with an event, never within 15 minutes of any claim), what an email

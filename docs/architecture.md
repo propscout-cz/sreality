@@ -2931,7 +2931,7 @@ renumber.** Navigate by area:
     Czech renderer (`api/notification_render.py`, by `change_kind`, from the frozen prices and the place
     label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
     `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
-    SQL, never logged, never in an error. **Email is the second external channel** (2026-11, migration 722,
+    SQL, never logged, never in an error. **Email is the second external channel** (2026-11, migration 724,
     `docs/design/email/PROGRAM.md` PR 4), with a ledger of its own, `notification_email_sends`: ONE row per
     email, never per event, because an email covers many events and has no device. Each account's
     `account_notification_email.mode` decides (`off | daily | instant`; no row = `daily`). The worker's `email`

@@ -67,7 +67,7 @@ and an email has no device, so the schema is settled here. The worker needs its 
 separate Railway service. Updates rule 16 and the `CLAUDE.md` scope line, which still call email inactive. Comes last
 because nobody can receive it until accounts exist.
 
-*Built 2026-11-03.* The ledger is a per-account SEND ledger, `notification_email_sends` (migration 722), one row per
+*Built 2026-11-03.* The ledger is a per-account SEND ledger, `notification_email_sends` (migration 724), one row per
 email, not `notification_deliveries`: an email covers many events and has no device. The setting is
 `account_notification_email` (no row = Denní přehled), set by `GET`/`PUT /account/notification-email` (the caller's
 own account, never acted for) and switched off by the email's one-click link (`/notifications/email/unsubscribe`, on
