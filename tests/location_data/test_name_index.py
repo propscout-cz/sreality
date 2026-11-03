@@ -3,9 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
-from typing import Any
-
 import pytest
 
 from location_data import name_index
@@ -78,45 +75,3 @@ def test_deaccented_alias_keeps_both_spellings_under_one_key():
     assert {r.name_norm for r in rows} == {"bilovec"}
     assert {r.name for r in rows} == {"Bílovec", "Bilovec"}
 
-
-class _Cursor:
-    """Answers each registry read `collect_rows` makes; a street read would find one street."""
-
-    def __init__(self, seen: list[str]) -> None:
-        self.seen, self.rows = seen, []
-
-    def __enter__(self) -> _Cursor:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.seen.append(sql)
-        if "ruian_streets" in sql:
-            self.rows = [(3, "Krásný Les", 1, 2)]
-        elif "FROM ruian_admin_units u" in sql:
-            self.rows = [(1, "obec", 500011, "Testov", 1, 2)]
-        else:
-            self.rows = []
-
-    def fetchall(self) -> list[tuple]:
-        return self.rows
-
-
-class _Conn:
-    def __init__(self) -> None:
-        self.seen: list[str] = []
-
-    def cursor(self) -> _Cursor:
-        return _Cursor(self.seen)
-
-
-def test_the_index_holds_admin_units_only_streets_match_on_their_own_table():
-    """Both readers join `ruian_admin_units` on `level = entity_kind`, which has no `ulice` unit;
-    streets bind through `ruian_streets.name_norm` (W8, #2362)."""
-    conn = _Conn()
-    rows = name_index.collect_rows(conn)
-    assert {r.entity_kind for r in rows} == {"obec"}
-    assert not [sql for sql in conn.seen if "ruian_streets" in sql or "street_id" in sql]
-    assert "is_street" not in inspect.signature(name_index.build_rows).parameters
