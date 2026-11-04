@@ -17,7 +17,6 @@ import Brokers from './pages/Brokers';
 import Collections from './pages/Collections';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
-import Notifications from './pages/Notifications';
 
 // Admin-only pages are code-split out of the default bundle — a non-admin
 // session never downloads them.
@@ -58,8 +57,10 @@ const Feed = lazyChunk(() => import('./pages/Feed'));
 // Prohlídky, the sixth tab: phone-designed and its own chunk, as the other tabs.
 const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 // Where a tapped push lands (notifications push § 3.5): opened from a
-// notification only, so outside the first visit.
+// notification only, so outside the first visit. The feed it lands on opens
+// from the bell or a push, never on a first visit either: its own chunk.
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
+const Notifications = lazyChunk(() => import('./pages/Notifications'));
 // Paste-a-building (rule 13): an operator flow opened by its own link, never on a
 // first visit — its page and unit editor are their own chunk, like the admin pages.
 // Every /buildings route is admin-only (agent platform M0), so the page is too.
@@ -219,7 +220,15 @@ export const routes: RouteObject[] = [
         ),
         handle: { title: 'Edit watchdog' },
       },
-      { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
+      {
+        path: ROUTES.notifications.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <Notifications />
+          </Suspense>
+        ),
+        handle: { title: 'Notifications' },
+      },
       {
         path: ROUTES.notificationOpen.childPath,
         element: (

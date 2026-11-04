@@ -141,6 +141,12 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
       resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **Push on by default (PR #2399, 2026-11-04; #2398)** — the operator's iPhone had never subscribed (0 rows), so the
+      feed now asks for Apple's one tap itself (`components/phone/PushNotice`: an off row that is the tap, a denied row with
+      the Settings hint), the re-sync subscribes by itself wherever notifications are already allowed (a sign-in after a
+      sign-out, a replaced subscription, a failed registration), and the switch's off holds per account
+      (`sreality.push.off`); one subscribe path, overlapping re-syncs share one run; the Notifications page is its own
+      chunk (first-visit JS 327,566 B). Owed: the on-device proof, now from the feed row.
 - [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
       property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
       stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its

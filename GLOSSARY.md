@@ -664,8 +664,10 @@ the user signed in on it, ended when that user signs out or another signs in.
 _Avoid_: device token, subscriber, push subscription (in prose)
 
 **Switch**:
-"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
-for the signed-in user, or stops it being one. There is no other push setting.
+"Oznámení na tomto iPhonu" in the phone app's account sheet: stops this phone being a push device
+for the signed-in user, or makes it one again. Push is on by default: the phone becomes a push
+device as soon as notifications are allowed (the feed asks for that one tap) and stays one for
+whoever signs in, until they switch it off. There is no other push setting.
 _Avoid_: push preference, channel picker, opt-in
 
 **Reference overlay**:

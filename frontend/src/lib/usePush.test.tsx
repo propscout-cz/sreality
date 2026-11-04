@@ -1,17 +1,20 @@
-/* usePush, the account sheet's switch (W5b): its state is READ from the
- * platform and this device's subscription, the reading happens when the sheet
- * opens (the worker update, the key), a tap runs requestPermission ->
- * subscribe -> PUT with nothing else awaited between (Apple's gesture rule),
- * a failed PUT leaves no subscription behind, and a 503 key never ends one. */
+/* usePush, the switch's and the notice's logic (W5b): its state is READ from
+ * the platform and this device's subscription, the reading happens when the
+ * surface mounts (the worker update, the key, the re-sync: push is on by
+ * default, so an iPhone that already allows notifications comes on by itself),
+ * a tap runs requestPermission -> subscribe -> PUT with nothing else awaited
+ * between (Apple's gesture rule), a failed PUT leaves no subscription behind,
+ * and a 503 key never ends one. */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
 import * as auth from '@/lib/auth';
+import { supabase } from '@/lib/supabase';
 import { SERVER_KEY_B64, installPushFakes, type PushFakes } from '@/test/pushFakes';
 
-import { readPushOwner, writePushOwner } from './push';
+import { readPushOff, readPushOwner, resyncPush, setPushGate, writePushOff, writePushOwner } from './push';
 import { usePush } from './usePush';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -27,9 +30,18 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 
 let fakes: PushFakes;
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
   vi.mocked(auth.useAuth).mockReturnValue({ user: { id: 'user-1' } } as ReturnType<typeof auth.useAuth>);
+  vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
+    data: { session: { user: { id: 'user-1' } } },
+    error: null,
+  } as never);
+  /* The gate open (a signed-in plan with notifications), its own re-sync run
+   * before any fake platform exists, so no test shares a run with it. */
+  setPushGate(null);
+  setPushGate(true);
+  await resyncPush();
   vi.mocked(api.getPushKey).mockResolvedValue({ public_key: SERVER_KEY_B64 });
   vi.mocked(api.putPushSubscription).mockImplementation(async () => {
     fakes.log.push('PUT');
@@ -90,9 +102,32 @@ describe('usePush: the state', () => {
 
   it('is on when this device holds a subscription', async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
     const { result } = renderHook(() => usePush());
     await settled(result);
     expect(result.current.state).toBe('on');
+    expect(fakes.log).toEqual(['update', 'PUT']);
+  });
+
+  /* Push is on by default: the mount's re-sync subscribes wherever this
+   * iPhone already allows notifications, with no tap and no prompt. */
+  it('is on by itself where notifications are already allowed', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    const { result } = renderHook(() => usePush());
+    await settled(result);
+    expect(result.current.state).toBe('on');
+    expect(fakes.log).toEqual(['update', 'subscribe', 'PUT']);
+    expect(fakes.requestPermission).not.toHaveBeenCalled();
+    expect(readPushOwner()).toBe('user-1');
+  });
+
+  it('stays off for the account that switched push off here', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    writePushOff('user-1');
+    const { result } = renderHook(() => usePush());
+    await settled(result);
+    expect(result.current.state).toBe('off');
+    expect(fakes.subscribe).not.toHaveBeenCalled();
   });
 
   it('is denied once the user refused notifications', async () => {
@@ -111,6 +146,7 @@ describe('usePush: the state', () => {
 
     fakes.uninstall();
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
     fakes.rotateKey();
     const second = renderHook(() => usePush());
     await settled(second.result);
@@ -118,25 +154,28 @@ describe('usePush: the state', () => {
     expect(fakes.subscription!.unsubscribe).not.toHaveBeenCalled();
   });
 
-  it('ends a subscription made under another server key, on the server key it got', async () => {
+  it('replaces a subscription made under another server key, on the server key it got', async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
     writePushOwner('user-1');
     fakes.rotateKey();
     const { result } = renderHook(() => usePush());
     await settled(result);
-    expect(fakes.log).toContain('unsubscribe');
-    expect(result.current.state).toBe('off');
-    expect(readPushOwner()).toBeNull();
+    expect(fakes.log).toEqual(['update', 'unsubscribe', 'subscribe', 'PUT']);
+    expect(result.current.state).toBe('on');
+    expect(readPushOwner()).toBe('user-1');
   });
 
   it('keeps a subscription made under the same key', async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
     const { result } = renderHook(() => usePush());
     await settled(result);
     act(() => result.current.disable());
     await settled(result);
+    expect(readPushOff()).toBe('user-1');
     act(() => result.current.enable());
     await waitFor(() => expect(result.current.state).toBe('on'));
+    expect(readPushOff()).toBeNull();
     fakes.log.length = 0;
     const again = renderHook(() => usePush());
     await settled(again.result);
@@ -239,11 +278,16 @@ describe('usePush: disable', () => {
       reason: 'switched_off',
     });
     expect(readPushOwner()).toBeNull();
+    /* Off holds against the default: the next re-sync subscribes nothing. */
+    expect(readPushOff()).toBe('user-1');
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
   });
 
   it('is off even when the server cannot be told', async () => {
     vi.mocked(api.deletePushSubscription).mockRejectedValue(new ApiError('down', 0, null, 'network'));
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
     const { result } = renderHook(() => usePush());
     await settled(result);
     act(() => result.current.disable());

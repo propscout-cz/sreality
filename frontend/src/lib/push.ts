@@ -1,11 +1,14 @@
 /* Push on this device (notifications push program, docs/design/notifications-push
- * PROGRAM.md § 3.4-3.6): the small pieces every caller shares. The account
- * sheet's switch is lib/usePush; this file is what the other callers need:
- * the landing's open report, the re-sync and the identity binding.
+ * PROGRAM.md § 3.4-3.6): the pieces every caller shares. The switch and the
+ * feed's notice are lib/usePush; this file holds the platform gate, the one
+ * way a subscription comes to exist here, the re-sync (which is also how push
+ * comes ON BY DEFAULT), the identity binding and the landing's open report.
  *
  * A subscription belongs to the service-worker registration, not to a user,
  * so this device remembers which account switched it on (OWNER_KEY): a
- * subscription found under any other account is ended, never re-bound. */
+ * subscription found under any other account is ended, never re-bound. It
+ * also remembers which account switched it OFF (OFF_KEY): for that account
+ * alone the default is suspended until it switches on again. */
 
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -17,9 +20,11 @@ import {
   putPushSubscription,
   type PushSubscriptionBody,
 } from './api';
+import { isInstalledApp } from './serviceWorker';
 import { supabase } from './supabase';
 
 const OWNER_KEY = 'sreality.push.owner';
+const OFF_KEY = 'sreality.push.off';
 
 /* The account that switched push on here; undefined when storage is unreadable
  * (then nothing can be told apart, and the subscription is left as it is). */
@@ -32,12 +37,90 @@ export function readPushOwner(): string | null | undefined {
 }
 
 export function writePushOwner(userId: string | null): void {
+  writeKey(OWNER_KEY, userId);
+}
+
+/* The account that switched push off here (the switch); null when none did,
+ * undefined when storage is unreadable (then nothing is switched on by default). */
+export function readPushOff(): string | null | undefined {
   try {
-    if (userId) localStorage.setItem(OWNER_KEY, userId);
-    else localStorage.removeItem(OWNER_KEY);
+    return localStorage.getItem(OFF_KEY);
+  } catch {
+    return undefined;
+  }
+}
+
+export function writePushOff(userId: string | null): void {
+  writeKey(OFF_KEY, userId);
+}
+
+function writeKey(key: string, value: string | null): void {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
   } catch {
     /* ignore */
   }
+}
+
+/* What the platform allows before anything is read. 'unsupported' for anything
+ * but an iPhone or iPad (by UA, or by `navigator.standalone`, which only
+ * Apple's mobile WebKit has; the server takes Apple's push service only, so
+ * nothing else is ever asked for permission); then 'not_installed' for a
+ * Safari tab, which has no PushManager at all and must hear "install the
+ * app", not "unsupported"; then 'unsupported' for an installed app whose
+ * engine has no Web Push (iOS before 16.4). */
+export function pushPlatformGate(): 'unsupported' | 'not_installed' | null {
+  if (!(/iPhone|iPad|iPod/.test(navigator.userAgent) || 'standalone' in navigator)) return 'unsupported';
+  if (!isInstalledApp()) return 'not_installed';
+  if (
+    !('serviceWorker' in navigator) ||
+    typeof window.PushManager === 'undefined' ||
+    typeof window.Notification === 'undefined'
+  ) {
+    return 'unsupported';
+  }
+  return null;
+}
+
+/* The worker, once active (`subscribe` needs one); null where none is
+ * registered, so a dev server reads "unsupported" instead of waiting forever. */
+export async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
+  try {
+    if (!(await navigator.serviceWorker.getRegistration())) return null;
+    return await navigator.serviceWorker.ready;
+  } catch {
+    return null;
+  }
+}
+
+/* The server's key as `subscribe` takes it; null when it cannot be read (503:
+ * push not configured; offline), which is never a verdict on a subscription. */
+export function readServerKey(): Promise<Uint8Array<ArrayBuffer> | null> {
+  return getPushKey()
+    .then((r) => decodePushKey(r.public_key))
+    .catch(() => null);
+}
+
+/* THE one way a subscription comes to exist here: subscribe, register it with
+ * the server, remember who it belongs to. One the server refused is ended
+ * again, so none stays behind, and the refusal is the caller's. */
+export async function subscribePushHere(
+  registration: ServiceWorkerRegistration,
+  key: Uint8Array<ArrayBuffer>,
+  userId: string | null,
+): Promise<void> {
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: key,
+  });
+  try {
+    await putPushSubscription(pushSubscriptionBody(subscription));
+  } catch (err) {
+    await subscription.unsubscribe().catch(() => false);
+    throw err;
+  }
+  writePushOwner(userId);
 }
 
 /* This device's subscription, or null where there is none or no push at all.
@@ -99,43 +182,72 @@ export function setPushGate(allowed: boolean | null): void {
   else if (allowed === false) void endPushHere();
 }
 
-/* Re-sends this device's subscription for the signed-in account (the PUT is
- * idempotent). iOS never fires `pushsubscriptionchange`, so the launch, each
- * sign-in (setPushGate) and the hourly resume check (lib/serviceWorker) are how
- * a subscription reaches the server again. It never prompts and never
- * subscribes, and re-sends nothing while the gate is not open. A subscription
- * it must not re-send is ended here instead: one another account switched on
- * (not this user's to re-bind), or one made under a server key the server no
+/* Brings this device's subscription in line with the signed-in account (the
+ * PUT is idempotent). iOS never fires `pushsubscriptionchange`, so the launch,
+ * each sign-in (setPushGate), the hourly resume check (lib/serviceWorker) and
+ * each mount of the switch or the notice (lib/usePush, handing over the key it
+ * read) are when it runs; runs that overlap share one. It re-sends nothing
+ * while the gate is not open, and it never prompts: the permission prompt
+ * belongs to a tap (lib/usePush `enable`).
+ *
+ * PUSH IS ON BY DEFAULT. Where this iPhone already allows notifications
+ * (`Notification.permission` is `granted`) and holds no subscription, it
+ * subscribes the signed-in account at once, unless that account switched push
+ * off here (OFF_KEY): a sign-in after a sign-out, a replaced subscription and a
+ * registration that once failed all come back on their own, and the switch's
+ * "off" holds until the same account switches on again.
+ *
+ * A subscription it must not re-send is ended instead: one another account
+ * switched on (not this user's to re-bind; the signed-in account then gets its
+ * own, by the default above), or one made under a server key the server no
  * longer gives (a rotated key: every push to it is refused, so re-sending it
  * would only revive a dead row). A key that cannot be read is no verdict. */
-export async function resyncPush(): Promise<void> {
-  try {
-    if (pushGate === false) {
-      await endPushHere();
-      return;
-    }
-    if (pushGate !== true) return;
-    const subscription = await currentPushSubscription();
-    if (!subscription) return;
-    const { data } = await supabase.auth.getSession();
-    const userId = data.session?.user?.id;
-    if (!userId) return;
-    const owner = readPushOwner();
-    const foreign = owner !== undefined && owner !== userId;
-    const key = foreign
-      ? null
-      : await getPushKey()
-          .then((r) => decodePushKey(r.public_key))
-          .catch(() => null);
-    if (foreign || (key && !samePushKey(subscription, key))) {
-      await subscription.unsubscribe();
-      writePushOwner(null);
-      return;
-    }
-    await putPushSubscription(pushSubscriptionBody(subscription));
-  } catch {
-    /* The next sign-in or resume tries again. */
+let resyncing: Promise<void> | null = null;
+
+export function resyncPush(known: { key?: Uint8Array<ArrayBuffer> | null } = {}): Promise<void> {
+  resyncing ??= resync(known)
+    .catch(() => {
+      /* The next sign-in or resume tries again. */
+    })
+    .finally(() => {
+      resyncing = null;
+    });
+  return resyncing;
+}
+
+async function resync(known: { key?: Uint8Array<ArrayBuffer> | null }): Promise<void> {
+  if (pushGate === false) {
+    await endPushHere();
+    return;
   }
+  if (pushGate !== true) return;
+  const { data } = await supabase.auth.getSession();
+  const userId = data.session?.user?.id;
+  if (!userId) return;
+  const owner = readPushOwner();
+  const foreign = owner !== undefined && owner !== userId;
+  /* undefined: not read yet; null: read, and the server gave none. */
+  let key = known.key;
+  const subscription = await currentPushSubscription();
+  if (subscription) {
+    if (!foreign) {
+      if (key === undefined) key = await readServerKey();
+      if (!key || samePushKey(subscription, key)) {
+        await putPushSubscription(pushSubscriptionBody(subscription));
+        return;
+      }
+    }
+    await subscription.unsubscribe();
+    writePushOwner(null);
+  }
+  const off = readPushOff();
+  if (off === undefined || off === userId) return;
+  if (pushPlatformGate() || Notification.permission !== 'granted') return;
+  const registration = await activeRegistration();
+  if (!registration) return;
+  if (key === undefined) key = await readServerKey();
+  if (!key) return;
+  await subscribePushHere(registration, key, userId);
 }
 
 /* BINDING FOLLOWS IDENTITY, NOT A BUTTON (AUDIT F18, program § 3.6): no

@@ -1,7 +1,9 @@
 /* lib/push: the re-sync (W5b-2) and the key/body helpers. iOS never fires
  * `pushsubscriptionchange`, so the launch, a sign-in and the hourly resume
- * re-send this device's subscription; that re-send never prompts, never
- * subscribes, and never re-binds a subscription another account switched on. */
+ * re-send this device's subscription; that re-send never prompts and never
+ * re-binds a subscription another account switched on. Push is on by default:
+ * where this iPhone already allows notifications, the same re-sync subscribes
+ * the signed-in account itself, and only that account's own "off" holds. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
@@ -17,6 +19,7 @@ import {
   resyncPush,
   setPushGate,
   signOutPush,
+  writePushOff,
   writePushOwner,
 } from './push';
 
@@ -33,15 +36,17 @@ const session = (id: string | null) =>
     ReturnType<typeof supabase.auth.getSession>
   >;
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
-  /* The gate open (a signed-in plan with notifications); opening it re-syncs
-   * at once, here with no push platform installed yet, so a no-op. */
-  setPushGate(null);
-  setPushGate(true);
   vi.spyOn(supabase.auth, 'getSession').mockResolvedValue(session('user-1'));
   vi.mocked(api.putPushSubscription).mockResolvedValue(undefined);
   vi.mocked(api.getPushKey).mockResolvedValue({ public_key: SERVER_KEY_B64 });
+  /* The gate open (a signed-in plan with notifications); opening it re-syncs
+   * at once, here with no push platform installed yet, so a no-op, awaited so
+   * that no test shares a run with it (runs that overlap share one). */
+  setPushGate(null);
+  setPushGate(true);
+  await resyncPush();
 });
 
 afterEach(() => {
@@ -91,20 +96,25 @@ describe('resyncPush', () => {
     expect(fakes.subscription).not.toBeNull();
   });
 
-  it('ends a subscription another account switched on, instead of re-binding it', async () => {
+  it("ends a subscription another account switched on, never re-binding it; the signed-in account gets its own", async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    const theirs = fakes.subscription!;
     writePushOwner('user-0');
     await resyncPush();
-    expect(api.putPushSubscription).not.toHaveBeenCalled();
-    expect(fakes.log).toEqual(['unsubscribe']);
-    expect(readPushOwner()).toBeNull();
+    expect(theirs.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(fakes.log).toEqual(['unsubscribe', 'subscribe']);
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(fakes.subscription).not.toBe(theirs);
+    expect(readPushOwner()).toBe('user-1');
   });
 
-  it('ends a subscription nobody here switched on', async () => {
+  it('ends a subscription nobody here switched on, and makes the signed-in account its own', async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    const nobodys = fakes.subscription!;
     await resyncPush();
-    expect(api.putPushSubscription).not.toHaveBeenCalled();
-    expect(fakes.subscription).toBeNull();
+    expect(nobodys.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(fakes.log).toEqual(['unsubscribe', 'subscribe']);
+    expect(readPushOwner()).toBe('user-1');
   });
 
   it('re-sends when this device cannot read its storage (nothing to tell apart)', async () => {
@@ -118,14 +128,16 @@ describe('resyncPush', () => {
 
   /* A rotated server key: every push to the old subscription is refused, so
    * re-sending it every hour would only revive a dead row. */
-  it('ends a subscription made under a key the server no longer gives', async () => {
+  it('replaces a subscription made under a key the server no longer gives', async () => {
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
     writePushOwner('user-1');
     fakes.rotateKey();
     await resyncPush();
-    expect(api.putPushSubscription).not.toHaveBeenCalled();
-    expect(fakes.log).toEqual(['unsubscribe']);
-    expect(readPushOwner()).toBeNull();
+    expect(fakes.log).toEqual(['unsubscribe', 'subscribe']);
+    /* The key it read once serves the new subscription too. */
+    expect(api.getPushKey).toHaveBeenCalledTimes(1);
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(readPushOwner()).toBe('user-1');
   });
 
   it('re-sends when the key cannot be read (a 503 is no verdict)', async () => {
@@ -144,6 +156,95 @@ describe('resyncPush', () => {
     writePushOwner('user-1');
     await expect(resyncPush()).resolves.toBeUndefined();
     expect(fakes.subscription).not.toBeNull();
+  });
+});
+
+/* Push is on by default: wherever this iPhone already allows notifications and
+ * holds no subscription, the re-sync subscribes the signed-in account itself,
+ * with no prompt. Only that account's own "off" (the switch) holds against it;
+ * a tab, another phone, an unanswered prompt and a missing key subscribe nothing. */
+describe('resyncPush: on by default', () => {
+  it('subscribes the signed-in account where notifications are already allowed', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    await resyncPush();
+    expect(fakes.log).toEqual(['subscribe']);
+    expect(fakes.requestPermission).not.toHaveBeenCalled();
+    expect(fakes.subscribe).toHaveBeenCalledWith({
+      userVisibleOnly: true,
+      applicationServerKey: expect.any(Uint8Array),
+    });
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(readPushOwner()).toBe('user-1');
+  });
+
+  it('never prompts: an unanswered permission subscribes nothing', async () => {
+    fakes = installPushFakes({ permission: 'default' });
+    await resyncPush();
+    expect(fakes.requestPermission).not.toHaveBeenCalled();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('holds off for the account that switched off here, and for no other', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    writePushOff('user-1');
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+
+    vi.mocked(supabase.auth.getSession).mockResolvedValue(session('user-2'));
+    await resyncPush();
+    expect(fakes.log).toEqual(['subscribe']);
+    expect(readPushOwner()).toBe('user-2');
+  });
+
+  it('subscribes nothing when its storage cannot say who switched off', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError');
+    });
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('subscribes nothing in a Safari tab or on another phone', async () => {
+    fakes = installPushFakes({ installed: false, permission: 'granted' });
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+    fakes.uninstall();
+    fakes = installPushFakes({ apple: false, permission: 'granted' });
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('subscribes nothing when the server gives no key', async () => {
+    vi.mocked(api.getPushKey).mockRejectedValue(new ApiError('push is not configured', 503, null));
+    fakes = installPushFakes({ permission: 'granted' });
+    await resyncPush();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('takes the key a caller already read', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    await resyncPush({ key: decodePushKey(SERVER_KEY_B64) });
+    expect(fakes.log).toEqual(['subscribe']);
+    expect(api.getPushKey).not.toHaveBeenCalled();
+    await resyncPush({ key: null });
+    expect(api.getPushKey).not.toHaveBeenCalled();
+  });
+
+  it('leaves no subscription behind when the server refuses it', async () => {
+    vi.mocked(api.putPushSubscription).mockRejectedValue(new ApiError('down', 0, null, 'network'));
+    fakes = installPushFakes({ permission: 'granted' });
+    await expect(resyncPush()).resolves.toBeUndefined();
+    expect(fakes.log).toEqual(['subscribe', 'unsubscribe']);
+    expect(fakes.subscription).toBeNull();
+    expect(readPushOwner()).toBeNull();
+  });
+
+  it('runs once for runs that overlap', async () => {
+    fakes = installPushFakes({ permission: 'granted' });
+    await Promise.all([resyncPush(), resyncPush(), resyncPush()]);
+    expect(fakes.subscribe).toHaveBeenCalledTimes(1);
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
   });
 });
 

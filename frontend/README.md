@@ -187,7 +187,10 @@ Makléři, Odkaz `/link`) and an account sheet (the theme, this iPhone's push sw
 "Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
 `src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
 bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
-and riding the bell's plan gate — the desktop view, sign-out).
+and riding the bell's plan gate — the desktop view, sign-out). Push is on
+by default: the feed asks for the one tap Apple requires
+(`src/components/phone/PushNotice.tsx`) and the re-sync subscribes by itself
+wherever notifications are already allowed; the switch is the way off.
 A tapped push lands on `/n/:dispatchId` (`src/pages/NotificationOpen.tsx`),
 which marks it read and replaces itself with what it is about. One unread observer
 (`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the

@@ -878,16 +878,22 @@ rules. Identify which one a task belongs to before you start.
   sheet keeps its admin Health row: system alerts never reach the bell (R2b).
   The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b;
   `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, imported eagerly so a sheet opened
-  offline cannot hit the last-resort boundary, hidden where the bell is). Its state is read, never
+  offline cannot hit the last-resort boundary, hidden where the bell is). **Push is on by default**
+  (2026-11-04): the feed, the start screen, carries a notice row (`components/phone/PushNotice.tsx`,
+  the same hook) only while this iPhone could receive notifications and does not — off: the whole
+  row is the tap; denied: the Settings hint — so the one tap Apple requires is asked for where the
+  app opens, and the re-sync below subscribes by itself wherever notifications are already allowed;
+  the switch's off holds for that account alone (a per-device `sreality.push.off` mark, cleared by
+  its next enable). Its state is read, never
   assumed: unsupported first for anything but an iPhone or iPad (by UA or `navigator.standalone`;
   an Android phone is never prompted, and the server takes Apple's push service only), then not
   installed (a Safari tab has no `PushManager`: "Přidejte aplikaci na plochu"), unsupported (an
   installed app without Web Push), denied, unavailable (the server gave no key; a 503 never ends a
-  subscription), off, on (a subscription exists here), busy. Opening the sheet runs
-  `registration.update()` and fetches `GET /push/key` (no `VITE_` key), so the tap only calls
-  `Notification.requestPermission()` inside the click and, on `granted`,
-  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (a failed PUT
-  unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
+  subscription), off, on (a subscription exists here), busy. Mounting either surface runs
+  `registration.update()`, fetches `GET /push/key` (no `VITE_` key) and re-syncs (below), so the tap
+  only calls `Notification.requestPermission()` inside the click and, on `granted`,
+  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (one path,
+  `lib/push` `subscribePushHere`: a failed PUT unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
   identity-transition effect over `lib/push.ts`): any change of user, sign-out included, and a launch
   with CERTAINLY nobody signed in end this device's subscription locally (no JWT needed; the
   server's row ends "gone" at its next push) and clear the badge — a launch whose token refresh
@@ -897,10 +903,13 @@ rules. Identify which one a task belongs to before you start.
   (`notificationsVisible` in `lib/auth.tsx`, handed to `lib/push` `setPushGate` once the plan is
   read): opening it (a launch, a sign-in) re-sends the subscription, shutting it (a plan without
   notifications) ends it here, and while it is not open nothing is re-sent. The re-send
-  (`resyncPush`, also on the hourly resume check; iOS never fires `pushsubscriptionchange`) ends the
+  (`resyncPush`, also on the hourly resume check and on each mount of the switch or the notice;
+  runs that overlap share one; iOS never fires `pushsubscriptionchange`) ends the
   subscription instead when another account switched it on here (a per-device owner in
   `localStorage`) or when `GET /push/key` answers a key other than the one it was made with (a
-  rotated VAPID key; a failed read is no verdict). A tapped push lands on `/n/:dispatchId`
+  rotated VAPID key; a failed read is no verdict) — and then, as whenever this iPhone already
+  allows notifications (`Notification.permission` is `granted`) and holds none, subscribes the
+  signed-in account at once, never prompting, unless that account switched push off here. A tapped push lands on `/n/:dispatchId`
   (`pages/NotificationOpen.tsx`, lazy): mark-seen under RLS, then `dispatchTarget(row)` by
   replace (404 → `/notifications`); `?d=` there and on the coalesced `/notifications?d=` is
   reported once to `POST /push/opened`, never awaited.
