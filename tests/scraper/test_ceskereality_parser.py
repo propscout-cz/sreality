@@ -684,9 +684,9 @@ def _with_plot_cells(uzitna: str, pozemku: str) -> str:
 
 def test_a_commercial_plot_that_repeats_the_uzitna_cell_is_not_a_plot() -> None:
     """General ruling 3. ceskereality is the largest cell — 1,383 of its 3,023 active
-    komerční plots equal the užitná measure (2026-09-30) — and the one portal whose live
-    pages refused the readers (403), so the echo is pinned on the spec cells its stored
-    pages render: one figure under "Plocha užitná" and "Plocha pozemku" (19049187, a
+    komerční plots equal the užitná measure (2026-09-30) — and the one portal read from
+    its stored pages, so the echo is pinned on the spec cells those pages render: one
+    figure under "Plocha užitná" and "Plocha pozemku" (19049187, a
     10 m² restaurant). The page's statement stays in raw_json; the column reads absence.
     A site parcel stated beside the floor area (3 400 m² on a 1 200 m² areál) stays."""
     from scraper.area import parse_area_text

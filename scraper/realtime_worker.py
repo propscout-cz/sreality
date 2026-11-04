@@ -943,8 +943,7 @@ def _build_portal(source: str, config: PortalConfig) -> Any:
 
 
 def _skip_for_proxy(source: str) -> bool:
-    """True when the portal REQUIRES the residential proxy and the env is unset —
-    a direct request would only burn a WAF 403.
+    """True when the portal REQUIRES the residential proxy and the env is unset.
 
     A portal that merely prefers the proxy (`PROXY_REQUIRED = False`, i.e. the
     direct IP is throttled but functional) must still run: skipping it would

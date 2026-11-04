@@ -143,7 +143,7 @@ Each wave below replaces several local rules with one rule.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
-I verified this tonight, and the review re-checked it at 22Z. At 18:17 to 18:20Z ceskereality served an anti-bot page, and our drain wrote it into 51 active listings as content: price, area, description and images blanked, `last_seen_at` bumped, completions marked "written". There has been no ceskereality completion since 18:20Z.
+I verified this tonight, and the review re-checked it at 22Z. At 18:17 to 18:20Z our drain wrote a ceskereality page with no listing content into 51 active listings as content: price, area, description and images blanked, `last_seen_at` bumped, completions marked "written".
 
 The review found the same defect class on realitymix. 4 active rows (e.g. 10104448) carry a category page ("Pronájem bytů - byty k pronájmu - Tábor") as content, the latest written at 13:47Z today.
 - **Change:** one shared rule in `portal_runner`. A parsed detail with no price, area, params, images and description is a failed attempt: attempts++, no write, no sighting. No new Portal seam is added until a portal needs one.

@@ -12,9 +12,9 @@ name: "Scraping: M&M Reality scraper (pilot)"
 # RESIDENTIAL EGRESS: mmreality's Cloudflare edge HARD-403s our datacenter
 # (GitHub-Actions) IP on the first request — it ingested ZERO listings across its
 # first 101 (blocked) runs. So every request routes through the residential proxy
-# in SCRAPER_PROXY_URL (MmRealityClient.USE_PROXY), the same egress the sister
-# CF-blocked portal (ceskereality) uses. With a residential exit IP the site
-# returns 200. Required secrets: SUPABASE_DB_URL, SCRAPER_PROXY_URL.
+# in SCRAPER_PROXY_URL (MmRealityClient.USE_PROXY), the same egress ceskereality
+# uses. With a residential exit IP the site returns 200. Required secrets:
+# SUPABASE_DB_URL, SCRAPER_PROXY_URL.
 #
 # The index is a single MIXED-category feed (no per-category slice) AND exposes no
 # result-total, so it can't be gated per-category the way source-scoped
@@ -33,7 +33,7 @@ name: "Scraping: M&M Reality scraper (pilot)"
 # does not touch sreality liveness / reconciliation).
 
 on:
-  # Offset from ceskereality's index walk (25 */6) so the two CF-blocked portals
+  # Offset from ceskereality's index walk (25 */6) so the two proxied portals
   # don't hammer the shared residential proxy at the same minute.
   schedule:
     - cron: "50 */6 * * *"

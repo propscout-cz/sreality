@@ -901,23 +901,22 @@ def _scraped(native_id, **fields):
 
 
 def test_a_content_free_page_is_a_failed_fetch_not_a_write(monkeypatch):
-    """ceskereality's "Ujišťujeme se, že nejste robot!" interstitial (2026-10-30) parsed to a
-    ScrapedListing with no price, no area, no params, no images and no description, and the
-    drain wrote it into 51 live ads: blanked content, `last_seen_at` bumped, the queue row
-    completed as written. Such a page is a failed attempt: no write, no completion, the
+    """A page that parses to a ScrapedListing with no price, no area, no params, no images and
+    no description, written as the ad, would blank it, bump `last_seen_at` and complete the
+    queue row as written. Such a page is a failed attempt: no write, no completion, the
     queue's attempts bump, and the portal's failure seam is told, exactly as a fetch error."""
-    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("robot", None, None, None)]])
+    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("blank", None, None, None)]])
     p = _ParsedPortal({
         "ok": _scraped("ok", price_czk=4_500_000, usable_area=72.0, description="Byt 3+kk",
                        raw={"params": {"Stav": "dobrý"}, "image_urls": ["https://img/1.jpg"]}),
-        "robot": _scraped("robot", raw={"params": {}, "image_urls": [],
-                                        "title": "Ujišťujeme se, že nejste robot!"}),
+        "blank": _scraped("blank", raw={"params": {}, "image_urls": [],
+                                        "title": "Načítání stránky"}),
     })
     rc, agg = portal_runner.run_detail_drain(p, None, False, detail_workers=1, detail_rate=1.0)
     assert rc == 0
     assert p.calls["write"] == [["ok"]]
     assert cap["complete"] == [["ok"]]
-    assert cap["fail"] == [["robot"]] and p.calls["failure"] == ["robot"]
+    assert cap["fail"] == [["blank"]] and p.calls["failure"] == ["blank"]
     assert agg["errors"] == 1 and agg["listings_scraped_new"] == 1
 
 
@@ -1695,7 +1694,7 @@ def test_a_clean_phase_keeps_its_own_return_code(monkeypatch):
 
 class _EmptyWalkPortal(_FakePortal):
     """Every category fetched `pages` pages and collected `ids`; the portal still declares a count,
-    as a challenge page echoing the site's meta text does."""
+    as a page without listings can by echoing the site's meta text."""
 
     def __init__(self, *, pages: int, ids: set[str] | None = None, **kw: Any) -> None:
         super().__init__(categories=["A"], result_size=867, **kw)

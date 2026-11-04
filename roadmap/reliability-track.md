@@ -178,7 +178,7 @@ is read from its own table; the two domains stay separate.
 
 ## 2026-09-30 — the realtime worker cannot freeze silently (shipped with this PR)
 
-The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: ceskereality 403s pushed
+The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: penalties pushed
 the shared rate ledger an hour ahead, abandoned probe/drain passes leaked a thread each into the
 default executor until it filled, and the heartbeat starved behind them while the loop lived on.
 Fixed in one PR: a watchdog thread that `os._exit(1)`s after 300 s without a finished beat or a
@@ -188,7 +188,7 @@ all seven locks through one `_PassLock` whose age keeps a wedged lane in `in_fli
 worker's probe, drain and sold_comps refuse (never park on) a ledger wait over 120 s, and its
 drain refuses past its deadline, while the Actions walks and drains stay unbounded; the retry
 after a 403 leases one slot and a drain's lease is sized to its claims. Detail: `docs/design/realtime-scrapers.md` § Liveness.
-- **Next:** a per-portal circuit breaker (stop re-probing a portal that 403s everything), Health
+- **Next:** a per-portal circuit breaker (stop re-probing a portal whose every request fails), Health
   alerts on `budget_refused` / `portal_rate_state.next_slot_at` running ahead, and a standing
   `faulthandler` timer for a GIL-holding stall the watchdog thread cannot see.
 

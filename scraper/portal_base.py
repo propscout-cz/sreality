@@ -122,20 +122,18 @@ class BasePortalClient:
     # (GitHub-Actions / Railway) IP. Unset env or False = direct (our IP), so the
     # default for every other portal is unchanged and free.
     USE_PROXY: bool = False
-    # …and there are TWO ways an edge punishes us, which callers must not confuse.
-    # ceskereality and mmreality HARD-403 the datacenter IP: without the proxy
-    # they return nothing at all, so running them unproxied only burns requests
-    # (the realtime worker skips them entirely — `_skip_for_proxy`). idnes instead
-    # SOFT-throttles it — every page still arrives, roughly 13x slower — so
-    # skipping it would trade degraded data for NO data, which is strictly worse.
+    # …and there are TWO proxy postures, which callers must not confuse.
+    # ceskereality and mmreality are PROXY_REQUIRED: unproxied they are not run
+    # at all (the realtime worker skips them entirely — `_skip_for_proxy`). idnes
+    # instead SOFT-throttles the datacenter IP — every page still arrives, roughly
+    # 13x slower — so skipping it would trade degraded data for NO data.
     # Hence: USE_PROXY says "route through it when available"; PROXY_REQUIRED says
     # "without it, do not bother". Default True preserves the two incumbents.
     PROXY_REQUIRED: bool = True
     PROXY_ENV = "SCRAPER_PROXY_URL"
-    # Opt-in: send the Chrome client hints (sec-ch-ua*) derived from the UA. A
-    # Chrome UA without them is the bot signature ceskereality's nginx started
-    # rejecting on 2026-09-29 (403 on every request); a real Chrome sends them on
-    # every HTTPS request. Per portal, so a healthy portal's request profile stays unchanged.
+    # Opt-in: send the Chrome client hints (sec-ch-ua*) derived from the UA, as a
+    # real Chrome does on every HTTPS request. Per portal, so every other portal's
+    # request profile stays unchanged.
     CLIENT_HINTS: bool = False
 
     def __init__(
@@ -168,7 +166,7 @@ class BasePortalClient:
             else:
                 LOG.warning(
                     "USE_PROXY set but %s is empty — falling back to the direct "
-                    "(datacenter) IP; expect anti-bot throttling.", self.PROXY_ENV)
+                    "(datacenter) IP.", self.PROXY_ENV)
         self._last_at = 0.0
 
     def _pace(self) -> None:

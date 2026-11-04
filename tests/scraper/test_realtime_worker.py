@@ -2722,8 +2722,8 @@ def test_a_pass_that_ran_or_met_its_ceiling_is_not_a_failed_one(
 
 # --- liveness: the 2026-09-29 freeze ----------------------------------------------------
 #
-# ceskereality answered 403 to everything; the shared rate ledger parked every caller up
-# to an hour; each abandoned probe/drain pass left one more thread asleep there; the
+# The shared rate ledger parked every caller up to an hour; each abandoned probe/drain
+# pass left one more thread asleep there; the
 # default executor filled; the heartbeat write and every interval read queued behind
 # them; the loop stayed alive, so nothing exited and Railway never restarted the worker.
 
@@ -2758,7 +2758,7 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        # no second thread started: the abandoned pass got as far as the blocked portal
+        # no second thread started: the abandoned pass got as far as the stalled portal
         assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()

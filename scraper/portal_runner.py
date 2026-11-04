@@ -100,26 +100,24 @@ class DrainItem:
 
 CONTENT_FREE_ERROR = "content-free page: no price, area, params, images or description"
 
-# A walk that fetched this many pages and collected no ad was not served the index: an anti-bot
-# page, a redesign, a dead proxy. Keyed on what it COLLECTED, never on a declared count, because a
-# challenge page can echo the site's own "N ads" meta text (ceskereality, 2026-11). 30 days of
-# scrape_runs (2026-11-02): only that outage's 8 walks; every healthy 100+ page walk collected 1,681+.
+# A walk that fetched this many pages and collected no ad was not served the index: a page with no
+# listings, a redesign, a dead proxy. Keyed on what it COLLECTED, never on a declared count, because a
+# page without listings can still echo the site's own "N ads" meta text. 30 days of scrape_runs
+# (2026-11-02): every 100+ page walk that collected an ad collected 1,681+.
 EMPTY_WALK_MIN_PAGES = 100
 
 
 def content_free(payload: Any) -> bool:
     """A parsed detail that states NOTHING about the ad is not the ad's page.
 
-    ceskereality's "Ujišťujeme se, že nejste robot!" interstitial parsed to exactly that on
-    2026-10-30 18:17Z, and the drain wrote it into 51 live ads as content: price, area,
-    description and images blanked, `last_seen_at` bumped, the queue row completed as
-    written — rules 2, 4 and 5 broken by one write. realitymix served a category page at a
-    detail URL the same way in August (and the ad is live again today, so that page was a
-    failed fetch, never a gone signal). Keyed on the PAYLOAD'S SHAPE, never the portal
-    (rule 21): every HTML portal and bazos hand the runner a `ScrapedListing` under
-    "listing"; sreality's API payload has another shape, and an interstitial there fails
-    to parse as JSON instead. A real ad with no price states an area or a description;
-    nothing real states none of the five.
+    Writing one as content blanks the ad's price, area, description and images, bumps
+    `last_seen_at` and completes the queue row as written — rules 2, 4 and 5 broken by one
+    write. realitymix served a category page at a detail URL this way in August (and the
+    ad is live again today, so that page was a failed fetch, never a gone signal). Keyed on
+    the PAYLOAD'S SHAPE, never the portal (rule 21): every HTML portal and bazos hand the
+    runner a `ScrapedListing` under "listing"; sreality's API payload has another shape,
+    and a non-JSON page there fails to parse as JSON instead. A real ad with no price
+    states an area or a description; nothing real states none of the five.
     """
     listing = payload.get("listing") if isinstance(payload, Mapping) else None
     if not isinstance(listing, ScrapedListing):

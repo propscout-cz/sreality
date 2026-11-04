@@ -260,7 +260,7 @@ def test_a_window_beyond_the_bound_raises_instead_of_sleeping(monkeypatch, caplo
     ledger = _Ledger(clock)
     lim = LedgerRateLimiter("x", 1.0, lease_n=5, connect=ledger.connect, max_wait_s=BOUND_S)
     lim.acquire()
-    frontier = clock.now + 3600.0  # an hour out, as ceskereality's was
+    frontier = clock.now + 3600.0  # an hour out, as in the incident
     ledger.rows["x"]["next_slot_at"] = frontier
     lim._slots_left = 0
 

@@ -13,7 +13,7 @@ name: "Scraping: RealityMix index walk"
 # walks, ~2400 index pages), so a full index walk takes most of a job's window — a
 # combined index+detail run starves the drain. The walk drives ?stranka by the
 # page-reported total (not a pager arrow), so a throttled/degraded page can't end a
-# category early (the lesson from ceskereality's reverted #637). Coordinates come
+# category early (the lesson from the reverted #637). Coordinates come
 # from the page, so no MAPY_CZ_API_KEY is needed. Required secret: SUPABASE_DB_URL.
 #
 # LIVE: a validation dispatch (PR #639) confirmed GitHub-runner egress IPs are NOT
