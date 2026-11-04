@@ -3,7 +3,9 @@
  * device's service-worker registration, not to a user, so the app ends it on
  * every change of user; the explicit sign-out tells the server first, while
  * the JWT still works. The F18 scenario: the operator lends his iPhone, signs
- * out, a colleague signs in, and none of his alerts reach her lock screen. */
+ * out, a colleague signs in, and none of his alerts reach her lock screen.
+ * Push is on by default, so on an iPhone that already allows notifications
+ * she gets a subscription of her own, which ends when she signs out. */
 import { act, render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -193,10 +195,12 @@ describe('push binding follows identity', () => {
     expect(fakes.subscription).not.toBeNull();
   });
 
-  it("a colleague's session found at launch never inherits the operator's subscription", async () => {
+  it("a colleague's session found at launch never inherits the operator's subscription; she gets her own", async () => {
+    const operators = fakes.subscription!;
     renderSignedIn('colleague');
-    await waitFor(() => expect(fakes.subscription).toBeNull());
-    expect(fakes.log).toEqual(['unsubscribe']);
-    expect(api.putPushSubscription).not.toHaveBeenCalled();
+    await waitFor(() => expect(readPushOwner()).toBe('colleague'));
+    expect(operators.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(fakes.log).toEqual(['unsubscribe', 'subscribe', 'PUT']);
+    expect(fakes.subscription).not.toBe(operators);
   });
 });

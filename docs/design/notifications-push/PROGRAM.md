@@ -129,9 +129,10 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 **Phone (R4):**
 - A bell with the count beside Účet; one unread poll in Shell serves both frames and `setAppBadge`.
 - The account sheet's switch "Oznámení na tomto iPhonu": off, on, "Přidejte aplikaci na plochu", denied (Settings hint), "Oznámení zatím fungují jen na iPhonu".
-- Opening the sheet runs `registration.update()` and fetches the key, compared only after a 200 (a 503 never unsubscribes); the tap calls `subscribe({userVisibleOnly: true, applicationServerKey})` at once.
+- **Push is on by default (2026-11-04).** The feed carries a notice row (`PushNotice`) only while this iPhone could receive notifications and does not (off: the row is the tap; denied: the Settings hint), so the one tap Apple requires is asked for on the start screen; the re-sync subscribes by itself wherever notifications are already allowed; the switch's off holds for that account alone (`sreality.push.off`, cleared by its next enable).
+- Mounting the switch or the notice runs `registration.update()`, fetches the key, compared only after a 200 (a 503 never unsubscribes), and re-syncs; the tap calls `subscribe({userVisibleOnly: true, applicationServerKey})` at once.
 - **Binding follows identity, not a button.** The auth.tsx identity-transition effect (it covers token-driven switches too) unsubscribes locally on any user change or SIGNED_OUT (no JWT needed; the row ends 'gone' at its next push) and clears the badge; explicit sign-out first sends a best-effort DELETE (≤ 3 s). No subscription outlives its user.
-- Re-sync PUT on sign-in and on the existing hourly visibilitychange check (iOS never reports a changed subscription).
+- Re-sync on sign-in, on the existing hourly visibilitychange check and on each mount of the switch or the notice (iOS never reports a changed subscription): PUT the subscription; replace one made under another key or by another account; subscribe where none exists and notifications are already allowed.
 - /notifications gets a phone-width pass and "Load more"; tab names stay English. On desktop the picker, Settings › Delivery, System tab and /watchdog feed go (R1–R3).
 
 ### 3.7 Email (dormant)

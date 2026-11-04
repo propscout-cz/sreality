@@ -173,7 +173,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Push follows identity the same way (AUDIT F18): on any change of user,
    * sign-out included, and on a launch with CERTAINLY nobody signed in, this
    * device's subscription ends locally (no JWT needed) and the icon badge
-   * clears, so no subscription outlives its user. A launch that could not
+   * clears, so no subscription outlives its user; push being on by default,
+   * the next user's own comes with the opening of their gate (lib/push
+   * `resyncPush`). A launch that could not
    * refresh its session (`sessionUncertain`) ends nothing: its user is most
    * likely still there. None of it runs before the stored session is read
    * (`loading`): the null it starts from is not yet anyone. */
