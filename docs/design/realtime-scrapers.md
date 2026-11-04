@@ -130,9 +130,10 @@ alerts live on Health and the canary e-mail, ruling R2b*).
 Worker: ~$5–15/mo (Railway; same image, own service so probe load can't degrade the API).
 Residential proxy: measured ~15–20 GB/mo at CURRENT cadence vs a 10 GB plan — ceskereality's
 ~100k proxied index pages/week dominate; plan = top-up decision + drop its full-walk cadence
-once probes carry discovery. Dedup dirty-lane floor-plan budget: ≤ ~$1/day. The probe
-design keeps request volume at or below today's accepted level, the posture the operator
-accepted.
+once probes carry discovery. Dedup dirty-lane floor-plan budget: ≤ ~$1/day. sreality
+robots.txt disallows generic crawlers (EU exposure is civil/contractual — Ryanair v PR
+Aviation); the probe design keeps request volume at or below today's accepted level, which
+is the defensible posture the operator accepted.
 
 ## Sequencing
 
