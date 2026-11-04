@@ -9,8 +9,7 @@ only the HTML `Accept` header, the realitymix URL builders (`/reality/{family}/
 {sale}` index with `?stranka=N` paging, `/detail/{obec}/{slug}-{id}.html` detail),
 and the removed-listing signals (a redirect off the `.html` detail path, or a
 deleted-listing body marker on a 200). It uses the shared browser User-Agent (the
-robots.txt allow-lists everyone — `Allow: /` — and the framework default avoids
-the bot-UA throttling that bit ceskereality, PRs #637/#638)."""
+robots.txt allow-lists everyone — `Allow: /`; PRs #637/#638)."""
 
 from __future__ import annotations
 

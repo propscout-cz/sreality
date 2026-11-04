@@ -108,8 +108,8 @@ budget and a 429/403 penalty propagates. Probes are net-polite: ~1 page/host/int
 far below today's accepted walk volume.
 
 **Explicitly rejected:** Playwright/headless (all 9 portals serve complete data over plain
-HTTP; the mmreality/ceskereality blocker is IP reputation, which only residential egress
-fixes — 10–50× per-page cost for nothing) and any new queue infrastructure (Redis etc. —
+HTTP, mmreality and ceskereality through residential egress — 10–50× per-page cost for
+nothing) and any new queue infrastructure (Redis etc. —
 Postgres SKIP LOCKED is the industry-standard substrate and already proven here).
 
 ## SLOs (operator-accepted 2026-07-02)
@@ -589,10 +589,10 @@ reads `beat_at` for every worker, plus the `health` entry (`last_pass_at`, `fail
 `last_error`, `in_flight_s`) and the row's `started_at` for its `health_lane` cell (migration 621).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC
-the worker wrote no heartbeat and ran no lane, yet never exited. ceskereality answered 403 to
-every request; each 403 penalized the shared ledger and each retry leased a fresh batch, so
-`next_slot_at` ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The
-probe lane reached ceskereality (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
+the worker wrote no heartbeat and ran no lane, yet never exited. Penalized requests on one
+portal each widened the shared ledger and each retry leased a fresh batch, so `next_slot_at`
+ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The probe lane
+reached that portal (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
 the pass at `LANE_PASS_TIMEOUT_SECONDS` but the thread slept on, and with no pass lock every pass
 added one (eighteen by 23:15, plus drain threads) until asyncio's default executor
 (min(32, cpu+4)) was full. The heartbeat write and every lane's interval read ran on that same
@@ -659,11 +659,11 @@ Four changes, each closing one link:
   default-action signal sent to PID 1, so a `signal.alarm` backstop kills nothing. The timer
   dumps to /dev/null: it fires only when the dump into stderr is stuck, and its own write into
   that pipe would block it too.
-Not done here, follow-ups: a per-portal circuit breaker (trip a portal that 403s everything
-instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
+Not done here, follow-ups: a per-portal circuit breaker (trip a portal whose every request
+fails instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
 running ahead, handing unused leased slots back when a run ends, and a standing `faulthandler`
 timer, re-armed by each beat, for a C call that holds the GIL (the watchdog thread cannot run to
-arm its own then). After a blocked
+arm its own then). After a penalized
 portal recovers, reset its `portal_rate_state` row (`penalty_factor = 1`, `next_slot_at = now()`)
 before lifting the kill switches: a refused lease does not decay the penalty.
 

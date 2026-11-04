@@ -275,9 +275,9 @@ def _scraping_replay() -> tuple[_Ladder, dict[_dt.datetime, dict[str, dict[str, 
     return _told("scraping", 600, results), cells
 
 
-def test_the_walks_arm_rings_only_the_two_real_walk_outages() -> None:
+def test_the_walks_arm_rings_only_the_two_real_walk_gaps() -> None:
     """ceskereality byt/prodej's 27-day hole (no end-reached walk 09-16..10-13) and the portal's
-    403 wall (no walk reached the end 09-29 05:55..10-02 10:30); every other gap stayed Watch."""
+    late-September gap (no walk reached the end 09-29 05:55..10-02 10:30); every other gap stayed Watch."""
     ladder, cells = _scraping_replay()
     opened = _incidents(ladder, "scraping")
     assert not [i for i in opened if i["subject"].endswith("/walks")], "every portal kept walking"
@@ -288,18 +288,18 @@ def test_the_walks_arm_rings_only_the_two_real_walk_outages() -> None:
     (hole,) = [i for i in walks if i["subject"] == "ceskereality/walks/byt-prodej"]
     assert hole["first_seen_at"] == _START and hole["resolve_reason"] == "measured ok"
     assert _utc("2026-10-13T12:33:00Z") < hole["resolved_at"] < _utc("2026-10-13T18:00:00Z")
-    wall = [i for i in walks if i["subject"] != "ceskereality/walks/byt-prodej"]
-    assert len(wall) == 9 and len({i["first_seen_at"] for i in wall}) == 1
-    assert _utc("2026-09-30T18:00:00Z") < wall[0]["first_seen_at"] < _utc("2026-10-01T03:00:00Z")
+    gap = [i for i in walks if i["subject"] != "ceskereality/walks/byt-prodej"]
+    assert len(gap) == 9 and len({i["first_seen_at"] for i in gap}) == 1
+    assert _utc("2026-09-30T18:00:00Z") < gap[0]["first_seen_at"] < _utc("2026-10-01T03:00:00Z")
     assert all(_utc("2026-10-02T10:30:00Z") < i["resolved_at"] < _utc("2026-10-02T16:00:00Z")
-               for i in wall)
+               for i in gap)
 
 
-def test_the_403_wall_is_told_in_one_grouped_notice() -> None:
+def test_the_late_september_gap_is_told_in_one_grouped_notice() -> None:
     ladder, _ = _scraping_replay()
-    wall = min(i["first_seen_at"] for i in _incidents(ladder, "scraping", "ceskereality/walks/")
-               if i["subject"] != "ceskereality/walks/byt-prodej")
-    onsets = [t for t in ladder.told if (t.kind, t.at) == ("onset", wall)]
+    gap = min(i["first_seen_at"] for i in _incidents(ladder, "scraping", "ceskereality/walks/")
+              if i["subject"] != "ceskereality/walks/byt-prodej")
+    onsets = [t for t in ladder.told if (t.kind, t.at) == ("onset", gap)]
     assert len(onsets) == 1
     assert sum(s.startswith("ceskereality/walks/") for s in onsets[0].subjects) == 9
 
@@ -332,8 +332,8 @@ def test_no_end_reached_walk_missed_two_percent_of_its_declared_ads() -> None:
     assert shares and max(shares) < 2.0
 
 
-def test_the_inflow_arm_rings_only_inside_the_late_september_outages() -> None:
-    """Written ads fell under a fifth of their baseline only with the 403 wall (09-27..10-02), the
+def test_the_inflow_arm_rings_only_inside_the_late_september_gaps() -> None:
+    """Written ads fell under a fifth of their baseline only with ceskereality's gap (09-27..10-02), the
     one inflow incident live, and with the 09-28/29 stall (idnes, mmreality; a day before the 09-29/30 worker freeze, cause
     not established), an artefact
     of this replay: it has no queue history, while the live arm adds the NEW rows still queued,

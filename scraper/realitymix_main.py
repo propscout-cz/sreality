@@ -16,8 +16,8 @@ Two deliberate differences from the ceskereality template:
   instead of from the URL — self-contained, one config walks all 12 (cm × ct).
 - `walk_category` drives `?stranka` straight to `ceil(total / PER_PAGE)` (the
   page-reported total) rather than trusting a pager "next" arrow, and treats a
-  barren page as transient (one retry). This is the lesson from ceskereality's
-  reverted #637: an arrow-trusting walk stops early on a throttled/degraded page.
+  barren page as transient (one retry). This is the lesson of the reverted #637:
+  an arrow-trusting walk stops early on a barren page.
   realitymix is nginx (not Cloudflare) and paginates reliably to the exact total
   with no deep-pagination cap, so a per-category walk can reach the portal's own
   end → `walk_reached_end` gates the runner's nomination of the rows the walk

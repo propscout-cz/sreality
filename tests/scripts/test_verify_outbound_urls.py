@@ -360,7 +360,7 @@ def test_the_design_figure_reads_ok_on_the_lower_bound_where_the_raw_share_watch
 
 def test_the_10_18_run_reads_ok_once_the_probe_stops_misreading_its_answers() -> None:
     """10-18 20:24Z: 6 of 44 links non-conforming, a lower bound of 6.4 %: Watch. Two were sreality
-    301s to a bare path that kept the page, two were bot walls (mmreality and ceskereality 403);
+    301s to a bare path that kept the page, two were refused HEADs (mmreality and ceskereality);
     the two 404s left are scattered delistings."""
 
     def week(fixed: bool) -> list[tuple[mod.Sample, str]]:

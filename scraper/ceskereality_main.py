@@ -374,9 +374,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     return out("page_cap", 1, outcome="ceiling")
             if parsed.total is not None:
                 live_last = max(1, -(-parsed.total // _PER_PAGE))
-            # ITEMS FIRST, ahead of the pager: a blocked page carries no next
-            # arrow either, and reading one as the last page is how a soft block
-            # becomes a nomination.
+            # ITEMS FIRST, ahead of the pager: a page with no cards carries no
+            # next arrow either, and reading one as the last page would turn it
+            # into a nomination.
             if not parsed.items:
                 if page == 1 and declared_total == 0:
                     # A measured zero with zero collected: the portal's own answer.
@@ -384,7 +384,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 # BARREN. It is the portal's end only if the page is past what
                 # the declared total implies AND a re-read of the SAME url is
                 # empty again. Position first: it is the necessary half, and a
-                # page we already suspect is a soft block is not worth a second
+                # page we already suspect is degraded is not worth a second
                 # request we could not use anyway. On this site the position half
                 # effectively never holds — the loop bounds itself at the declared
                 # tail and deliberately never fetches the 404 beyond it — so a

@@ -610,8 +610,8 @@ only into a new document. The content script watches the Navigation API itself
 (`currententrychange`), which reaches its isolated world, and re-decides what to
 show; no `webNavigation` permission. Live-checked headless on nine of the ten
 page hosts (#2277): index → ad and ad → ad, soft on sreality and bezrealitky
-(.cz and .com), full page loads on the rest. ceskereality answers a headless
-browser with an error page, so its check is a manual one in Chrome.
+(.cz and .com), full page loads on the rest; ceskereality's check is a manual
+one in Chrome.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the
