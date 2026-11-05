@@ -2219,7 +2219,8 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
 
     out = rw._location_refetch_sync()
 
-    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500}
+    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500,
+                                  "statement_timeout_s": rw.LOCATION_REFETCH_STATEMENT_TIMEOUT_S}
     # ONE enqueue per portal, carrying (native_id, detail_ref, price) — the drain needs
     # the stored URL to fetch a crawler portal's page at all.
     assert [src for src, _ in captured["enqueued"]] == ["ceskereality", "realitymix"]

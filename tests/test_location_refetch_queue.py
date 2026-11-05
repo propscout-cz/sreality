@@ -11,6 +11,8 @@ given-up row unreachable.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,6 +58,12 @@ class _Conn:
     def cursor(self) -> _Cur:
         return _Cur(self)
 
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        self.executed.append(("BEGIN", None))
+        yield
+        self.executed.append(("COMMIT", None))
+
 
 _WHEN = datetime(2026, 9, 14, 0, 30, tzinfo=timezone.utc)
 
@@ -83,6 +91,20 @@ def test_candidates_are_the_active_ads_rule_25_calls_town_less() -> None:
         "detail_ref": "https://ceskereality.cz/3876635", "price_czk": 4_500_000,
         "last_fetch_at": _WHEN, "source_total": 63,
     }]
+
+
+def test_a_statement_timeout_is_local_to_the_reads_own_transaction() -> None:
+    # The transaction-mode pooler: a session SET could land on another backend, so the
+    # timeout is SET LOCAL inside the one transaction the read runs in.
+    conn = _Conn()
+    db.location_refetch_candidates(conn, min_age_seconds=21600, cap_per_source=500,
+                                   statement_timeout_s=600)
+    assert [sql.split()[0] for sql, _ in conn.executed] == ["BEGIN", "SET", "WITH", "COMMIT"]
+    assert conn.executed[1][0] == "SET LOCAL statement_timeout = '600s'"
+    # Without one, the read runs as it always has: no transaction, the connection's timeout.
+    bare = _Conn()
+    db.location_refetch_candidates(bare, min_age_seconds=21600, cap_per_source=500)
+    assert [sql.split()[0] for sql, _ in bare.executed] == ["WITH"]
 
 
 def test_only_pages_older_than_the_min_age_and_oldest_first_within_a_cap() -> None:
