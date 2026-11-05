@@ -42,7 +42,7 @@ from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
 from scraper.portal_identity import native_id
-from scraper.price_text import is_per_area_price
+from scraper.price_reading import PriceReading, read_price_text, resolve
 from scraper.scraped_listing import ScrapedListing
 
 SOURCE = "realitymix"
@@ -69,7 +69,8 @@ _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
 _INT_RE = re.compile(r"(-?\d+)")
 _PRICE_RUN_RE = re.compile(r"\d[\d\s  ​]*")
-_PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
+_NO_PRICE: tuple[str, ...] = (
+    "vyzadani", "dohodou", "rezerv", "info v rk", "v rk", "poptavce", "neuvedena")
 # Result total on the search page ("výsledky 1-20 z celkem 8928 nalezených").
 _TOTAL_RE = re.compile(r"z\s*celkem\s*([\d\s  ]+?)\s*nalezených", re.IGNORECASE)
 # Per-listing coordinates + structured address: the #print-map data attributes.
@@ -144,10 +145,11 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
 
 
-def index_price(text: str | None) -> int | None:
-    """The Kč amount from an index card's price text, or None ("Cena na
-    vyžádání" / "Rezervováno" / "info v RK"). Drives price-change detection."""
-    return _parse_price(text, None)[0]
+def read_price(text: str | None) -> PriceReading | None:
+    """A card's or detail cell's price as stated, or None ("Cena na vyžádání", "Rezervováno")."""
+    if not text or any(k in _strip_diacritics(text).lower() for k in _NO_PRICE):
+        return None
+    return read_price_text(text)
 
 
 def _parse_total(html: str) -> int | None:
@@ -156,27 +158,6 @@ def _parse_total(html: str) -> int | None:
         return None
     digits = re.sub(r"\D", "", m.group(1))
     return int(digits) if digits else None
-
-
-def _parse_price(text: str | None, category_type: str | None) -> tuple[int | None, str | None]:
-    unit = "za mesic" if category_type == "pronajem" else "za nemovitost"
-    if not text:
-        return None, unit
-    low = _strip_diacritics(text).lower()
-    if any(k in low for k in ("vyzadani", "dohodou", "rezerv", "info v rk", "v rk", "poptavce", "neuvedena")):
-        return None, unit
-    m = _PRICE_RUN_RE.search(text)
-    if not m:
-        return None, unit
-    # A per-m² figure must NEVER be stored as the absolute price — it reads as a
-    # total in every downstream consumer (Kč/m² stats, comparables, Browse sort).
-    if is_per_area_price(text[m.end():]):
-        return None, unit
-    digits = re.sub(r"\D", "", m.group(0))
-    if not digits:
-        return None, unit
-    value = int(digits)
-    return (value if 0 < value <= _PRICE_MAX else None), unit
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -409,20 +390,29 @@ def parse_index(html: str) -> IndexPage:
 
 
 def _card_price(card: Node) -> str | None:
-    """An index card's price text. Tailwind classes aren't stable selectors, so
-    pick the first node whose text reads as a price (a Kč run) or an explicit
-    no-price phrase; index_price then parses it (None for the no-price cases)."""
-    for node in card.css("span, div"):
-        txt = _text(node)
-        if not txt:
-            continue
-        low = _strip_diacritics(txt).lower()
-        if "kč" in txt.lower() or "kc" in low.replace(" ", ""):
-            if _PRICE_RUN_RE.search(txt):
+    """An index card's price text with its unit, or its no-price phrase (read_price reads it)."""
+    # Tailwind classes aren't stable selectors: the first span (then div) reading as a Kč or €
+    # run. Its unit ("(za m²/měsíc)") is the NEXT SIBLING span, appended: the amount alone read
+    # a rate as a total (#2355).
+    for selector in ("span", "div"):
+        for node in card.css(selector):
+            txt = _text(node)
+            if not txt:
+                continue
+            low = _strip_diacritics(txt).lower()
+            if ("kc" in low.replace(" ", "") or "€" in txt) and _PRICE_RUN_RE.search(txt):
+                unit = _sibling_span_text(node)
+                return f"{txt} {unit}" if unit else txt
+            if any(k in low for k in ("vyzadani", "dohodou", "rezerv", "info v rk")):
                 return txt
-        if any(k in low for k in ("vyzadani", "dohodou", "rezerv", "info v rk")):
-            return txt
     return None
+
+
+def _sibling_span_text(node: Node) -> str | None:
+    sibling = node.next
+    while sibling is not None and sibling.tag == "-text":
+        sibling = sibling.next
+    return _text(sibling) if sibling is not None and sibling.tag == "span" else None
 
 
 def areas_from_params(
@@ -472,7 +462,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     params = _detail_params(tree)
     read = partial(source_value, SOURCE, params=params)
 
-    price_czk, price_unit = _parse_price(_detail_price_text(tree), category_type)
+    price_unit = "za mesic" if category_type == "pronajem" else "za nemovitost"
 
     lat, lon, coord_provenance = _resolve_coords(html)
     street_raw, obec, okres, full_address = _address_parts(html)
@@ -493,6 +483,11 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
 
     disposition = vocabulary.disposition(SOURCE, read("disposition"), title)
     areas = areas_from_params(params, title=title, category_main=category_main)
+    price = resolve(
+        read_price(_detail_price_text(tree)), area_m2=areas.area_m2,
+        category_main=category_main, category_type=category_type,
+        label=f"{SOURCE}/{source_id}",
+    )
 
     description = _text(
         tree.css_first("div.advert-description__text-inner-inner")
@@ -510,6 +505,8 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         "coords": coord_provenance,
         "params": params,
     }
+    if price.record is not None:
+        raw["price_reading"] = price.record
 
     return ScrapedListing(
         source=SOURCE,
@@ -518,8 +515,9 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         ad_reference=vocabulary.reference(_detail_reference(tree)),
         category_main=category_main,
         category_type=category_type,
-        price_czk=price_czk,
+        price_czk=price.total_czk,
         price_unit=price_unit,
+        price_native=price.native,
         area_m2=areas.area_m2,
         area_basis=areas.area_basis,
         usable_area=areas.usable_area,
@@ -576,7 +574,7 @@ def _detail_reference(tree: HTMLParser) -> str | None:
 def _detail_price_text(tree: HTMLParser) -> str | None:
     """The price value cell — `<tr class="advert-description__short-props-price">
     <td>Cena:</td><td>VALUE</td></tr>` (the "Nabídněte cenu" button text is
-    stripped by _text taking the cell, then _parse_price ignoring non-digits)."""
+    stripped by _text taking the cell, then the reader taking the first amount)."""
     row = tree.css_first("tr.advert-description__short-props-price")
     if row is None:
         return None

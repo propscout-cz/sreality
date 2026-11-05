@@ -10,6 +10,8 @@ straight from `gps` (precise per-listing), so no geocoding step is needed.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from decimal import Decimal
 from functools import partial
 from typing import Any
 
@@ -18,6 +20,7 @@ from scraper.area import derive_headline_area
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
 from scraper.bezrealitky_client import detail_url
+from scraper.price_reading import CONVERTIBLE_CURRENCIES, PriceReading, resolve
 from scraper.published import iso_datetime
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import clean_street
@@ -76,6 +79,14 @@ def _str_or_none(value: Any) -> str | None:
     return s or None
 
 
+def advert_price(advert: Mapping[str, Any]) -> PriceReading | None:
+    """The advert's price as stated (a total in its currency), on the index card and the detail alike."""
+    price = _int(advert.get("price"))
+    if price is None:
+        return None
+    return PriceReading(Decimal(price), (_str_or_none(advert.get("currency")) or "CZK").upper())
+
+
 def _locality(advert: dict[str, Any]) -> str | None:
     city = advert.get("city")
     quarter = advert.get("cityDistrict")
@@ -126,17 +137,6 @@ def parse_advert(advert: dict[str, Any]) -> ScrapedListing:
         *(vocabulary.yes_no(v) for v in source_values(SOURCE, "has_parking", advert))
     )
 
-    # `price_czk` is a CZK total by contract on all nine portals. bezrealitky is the only
-    # one that states a currency, and 31 active rows quote the rent in EUR — stored as CZK
-    # they read ~25x low and become the cheapest rents in the country. Refused (and
-    # counted, so a portal switching currencies shows up in the run summary), never
-    # converted: this program does not invent an exchange rate.
-    currency = _str_or_none(advert.get("currency"))
-    price_czk = _int(advert.get("price"))
-    if price_czk is not None and currency is not None and currency.upper() != "CZK":
-        vocabulary.refuse("price_czk", SOURCE, currency)
-        price_czk = None
-
     raw = dict(advert)
     raw["image_urls"] = _image_urls(advert)
 
@@ -151,6 +151,19 @@ def parse_advert(advert: dict[str, Any]) -> ScrapedListing:
         plot=surface_land,
     )
 
+    # `price_czk` is a CZK total by contract. bezrealitky is the portal that states a
+    # currency, and some rents are quoted in EUR: stored as CZK they read ~25x low, refused
+    # they re-queued on every walk. EUR converts at the fixed rate (#2355); any other
+    # currency is refused and counted, so a portal switching currencies shows up.
+    reading = advert_price(advert)
+    if reading is not None and reading.currency not in CONVERTIBLE_CURRENCIES:
+        vocabulary.refuse("price_czk", SOURCE, reading.currency)
+        reading = None
+    price = resolve(reading, area_m2=area_m2, category_main=category_main,
+                    category_type=category_type, label=f"{SOURCE}/{native_id}")
+    if price.record is not None:
+        raw["price_reading"] = price.record
+
     return ScrapedListing(
         source=SOURCE,
         source_id_native=native_id,
@@ -158,8 +171,9 @@ def parse_advert(advert: dict[str, Any]) -> ScrapedListing:
         category_main=category_main,
         category_type=category_type,
         subtype=subtype,
-        price_czk=price_czk,
+        price_czk=price.total_czk,
         price_unit="za mesic" if category_type == "pronajem" else "za nemovitost",
+        price_native=price.native,
         area_m2=area_m2,
         area_basis=area_basis,
         disposition=disposition,

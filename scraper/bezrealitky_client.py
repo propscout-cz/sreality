@@ -27,9 +27,9 @@ LOG = logging.getLogger(__name__)
 GRAPHQL_URL = "https://api.bezrealitky.cz/graphql/"
 BASE_URL = "https://www.bezrealitky.cz"
 
-# Only the fields the index walk needs: the id + price (price-change refetch
-# decision) + uri (the public detail URL). Cheap page; full data comes from the
-# detail query.
+# Only the fields the index walk needs: the id + price and its currency (price-change
+# refetch decision; a EUR rent read as CZK never matched its stored total, #2355) + uri
+# (the public detail URL). Cheap page; full data comes from the detail query.
 _INDEX_QUERY = """
 query Index($ot: [OfferType], $et: [EstateType], $inc: Boolean, $st: Boolean, $lim: Int, $off: Int) {
   listAdverts(
@@ -39,7 +39,7 @@ query Index($ot: [OfferType], $et: [EstateType], $inc: Boolean, $st: Boolean, $l
     order: TIMEORDER_DESC, locale: CS
   ) {
     totalCount
-    list { id price uri }
+    list { id price currency uri }
   }
 }
 """

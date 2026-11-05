@@ -1214,13 +1214,14 @@ def index_summary_native(
     source: str,
     native_ids: Iterable[str],
 ) -> dict[str, dict[str, Any]]:
-    """Fetch (surrogate id, sreality_id, price_czk, last_seen_at) keyed by
-    source_id_native for one portal.
+    """Fetch (surrogate id, sreality_id, price_czk, last_seen_at, area_m2, category_main,
+    category_type) keyed by source_id_native for one portal.
 
     The index walk's sighting diff (`portal_runner.reconcile_sightings`) looks
     rows up by (source, source_id_native) to decide price-change refetch — and to
     resolve the surrogate `id` set for touch_listings_by_id. The `"id"` value is the identity
-    to carry forward; `"sreality_id"` is legacy (NULL for post-Gate-2 rows).
+    to carry forward; `"sreality_id"` is legacy (NULL for post-Gate-2 rows). The area and
+    category are what a card that states a rate is resolved against (#2355).
     Ids are deduped and looked up INDEX_SUMMARY_CHUNK at a time, so one huge
     category (ceskereality, ~21k) never becomes one statement.
     """
@@ -1232,15 +1233,18 @@ def index_summary_native(
         for start in range(0, len(ids), INDEX_SUMMARY_CHUNK):
             cur.execute(
                 """
-                SELECT source_id_native, id, sreality_id, price_czk, last_seen_at
+                SELECT source_id_native, id, sreality_id, price_czk, last_seen_at,
+                       area_m2, category_main, category_type
                 FROM listings
                 WHERE source = %s AND source_id_native = ANY(%s)
                 """,
                 (source, ids[start : start + INDEX_SUMMARY_CHUNK]),
             )
             out.update(
-                (native, {"id": lid, "sreality_id": pk, "price_czk": price, "last_seen_at": ls})
-                for native, lid, pk, price, ls in cur.fetchall()
+                (native, {"id": lid, "sreality_id": pk, "price_czk": price, "last_seen_at": ls,
+                          "area_m2": None if area is None else float(area),
+                          "category_main": cm, "category_type": ct})
+                for native, lid, pk, price, ls, area, cm, ct in cur.fetchall()
             )
     return out
 
