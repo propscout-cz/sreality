@@ -75,7 +75,7 @@ A change that does none of these is out of scope.
 - **Location ad (new).** The ad whose location a property shows. It is often the canonical ad, but not always.
 - **Live / dormant property.** A live property has at least one active ad. A dormant property has none. Dormant properties ARE on the default map: the default filter is `status: 'any'` (frontend/src/lib/filters.ts:322); `is_active` is filtered only for 'active'/'inactive' (queries.ts:268-271); the projection keeps every `status='active'` property (625:295).
 - **Served.** Rule 25's test for whether a surface may show a location: the ad has a point, or it is determined foreign (location_data/claims_common.py:43-47).
-- **Granularity rung.** How precisely the resolver matched an ad to the RÚIAN register, from address point (±10 m), building and parcel, through street (±300 m) and quarter, down to town, district, region and country. The map draws a solid dot at rank ≥ 90, otherwise a ring (frontend/src/lib/uncertaintyCircle.ts:29).
+- **Granularity rung.** How precisely the resolver matched an ad to the RÚIAN register, from address point (±10 m), building and parcel, through street (±300 m) and quarter, down to town, district, region and country. The map gives a pin at rank ≥ 90 a black outer contour, and no other pin has one (frontend/src/lib/pinPrecision.ts).
 - **Read model.** A pre-built table the app reads instead of computing the answer on every request.
 - **Materialized view (matview).** A saved query result that Postgres can only rebuild whole; it cannot be patched one row at a time.
 - **Rebuild / swap.** The list table is rebuilt every 15 minutes:
