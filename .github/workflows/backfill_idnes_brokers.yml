@@ -8,7 +8,7 @@ name: "Data: backfill idnes broker blocks"
 #
 # Dispatch-only + resumable (skips listings that already carry a broker block), so
 # re-dispatch until it reports parsed≈0 / no progress. After it completes, run
-# resolve_brokers_full to attribute the idnes brokers.
+# a broker_sweep request ("Jobs: run now") to attribute the idnes brokers.
 
 on:
   workflow_dispatch:

@@ -450,7 +450,7 @@ _LOCK_WAIT_MAX_SECONDS = 1260
 # loop, which runs AFTER attribution has usually spent all of --max-seconds. Sized
 # from the measured phase (43s on 2026-08-10, 186s on 08-09, both over the full
 # ~107-chunk corpus) with ~1.6x headroom for corpus growth. Counts on top of
-# --max-seconds, so resolve_brokers_full.yml's timeout-minutes covers both.
+# --max-seconds, so the broker_sweep entry's timeout_s (scraper/jobs.py) covers both.
 _FIRM_LINK_MIN_SECONDS = 300
 
 

@@ -1665,3 +1665,19 @@ def test_shared_contacts_are_built_only_for_the_pairs_being_written() -> None:
     assert rb._shared_contacts(contacts, [(2, 1)]) == {(1, 2): {"email:a@x.cz"}}
     assert rb._shared_contacts(contacts, [(1, 3)]) == {}   # nothing in common
     assert rb._shared_contacts(contacts, []) == {}
+
+
+# The longest tail (merge + rollups + candidates) of the 30 full sweeps to 2026-11-05: 2026-10-09's 9 + 665 + 70 s.
+MEASURED_TAIL_S = 744
+
+
+def test_the_runner_timeout_covers_every_budgeted_phase_and_a_retried_tail() -> None:
+    """#2027: the `broker_sweep` entry's timeout_s outlasts the lease wait and attribution (`--max-seconds`), the firm
+    links' own floor, and the measured tail with each of its phases tried twice (attempts=2)."""
+    import scripts.resolve_brokers as rb
+    from scraper import jobs
+
+    [entry] = [j for j in jobs.runner_jobs() if j.name == "broker_sweep"]
+    budget = int(entry.argv[entry.argv.index("--max-seconds") + 1])
+    assert rb._LOCK_WAIT_MAX_SECONDS < budget, "the lease wait spends the budget, never more"
+    assert entry.timeout_s >= budget + rb._FIRM_LINK_MIN_SECONDS + 2 * MEASURED_TAIL_S

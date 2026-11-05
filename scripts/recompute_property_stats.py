@@ -32,7 +32,7 @@
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
-commits independently -- a workflow timeout preserves completed batches.
+commits independently -- a timeout preserves completed batches.
 
 Liveness (2026-08-06 incident): the maintenance lease is a SHORT (15 min) TTL
 heartbeat-renewed every batch/slice — never a runtime-sized grant — so a
@@ -52,12 +52,12 @@ Two run modes (Phase 3 -- real-time properties):
 
   * --incremental (by hand; the realtime worker's maintenance lane runs it every 30 s): attach new stragglers + recompute
     ONLY the properties queued in `dirty_properties` by the writers + settle. O(changes).
-  * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
+  * full (default, daily reconcile, the job runner's property_sweep): attach (again after
     every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
     cuts it) + reconcile childless + clear the queue. The self-healing backstop
     for anything the incremental pass missed.
 
-Usage (typically via the workflows above):
+Usage (typically via the jobs above):
 
     python -m scripts.recompute_property_stats --batch-size 2000       # full
     python -m scripts.recompute_property_stats --incremental            # dirty-set
@@ -719,12 +719,12 @@ _LEASE_RUNNER = "railway-realtime-worker"
 # is genuinely wrong, not merely slow.
 _MAX_LEASE_WAIT_SECONDS = 1200.0
 
-# Ceiling for --max-seconds. The workflow's timeout-minutes (130) is sized as
-# budget + one in-flight batch + prelude + finalize headroom FOR THIS
-# CEILING; an unclamped dispatch input above it would let the runner
-# SIGKILL a healthy sweep before its clean-stop fires — a silent `cancelled`,
-# the exact mode this script exists to eliminate. Raising the ceiling means
-# raising timeout-minutes in the same change.
+# Ceiling for --max-seconds. The property_sweep entry's timeout_s
+# (scraper/jobs.py) is sized as budget + one in-flight batch + prelude +
+# finalize headroom FOR THIS CEILING; an unclamped request argument above it
+# would let the runner kill a healthy sweep before its clean-stop fires — the
+# exact mode this script exists to eliminate. Raising the ceiling means
+# raising timeout_s in the same change.
 #
 # 6000s (100 min), raised from 4200s: the six sweeps to 2026-08-10 measured
 # 3502/3777/4044/3890/3626s — 83-96% of the old 4200s ceiling, i.e. one bad day
@@ -756,11 +756,11 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # Retry budget for ONE recompute batch (db.run_resilient defaults to 4). A batch
 # runs under the 10-min ceiling above, so four attempts could burn 40 minutes
 # inside a single loop iteration — the deadline is only checked at a batch
-# BOUNDARY, so that would sail past the workflow's outer timeout and re-create
+# BOUNDARY, so that would sail past the runner's timeout_s and re-create
 # the silent `cancelled` this script exists to eliminate. Two attempts keeps the
 # useful part of the budget (a dropped connection or a passing lock wait replays
 # once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
-# _BOOK_STATEMENT_TIMEOUT), which is what the workflow's timeout-minutes is sized
+# _BOOK_STATEMENT_TIMEOUT), which is what the runner's timeout_s is sized
 # for. A range that times out twice is the poisoned range the error log names,
 # not a blip. 24 min also exceeds _LEASE_TTL_S, which is why the lease renewal runs
 # INSIDE the retried op (main()'s `renewed`) rather than once per loop iteration.
@@ -851,10 +851,10 @@ def main() -> int:
              "the lease; a resumed run that runs out again, or a run that runs out "
              "before its first batch, exits RED (1) — a "
              "visible failure instead of a silent timeout-minutes `cancelled` kill. "
-             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the workflow's "
-             "timeout-minutes backstop is sized for that ceiling, and a "
-             "larger budget would let the runner SIGKILL the job before the "
-             "clean-stop fires (raising both requires editing the yml).",
+             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the job runner's "
+             "timeout_s is sized for that ceiling, and a larger budget would "
+             "let the runner kill the job before the clean-stop fires "
+             "(raising both requires editing scraper/jobs.py).",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -992,8 +992,8 @@ def main() -> int:
             if budget < args.max_seconds:
                 LOG.warning(
                     "RECOMPUTE --max-seconds %.0f clamped to %.0f — the "
-                    "workflow's timeout-minutes backstop is sized for this "
-                    "ceiling; raise both together in the yml",
+                    "job runner's timeout_s is sized for this ceiling; raise "
+                    "both together in scraper/jobs.py",
                     args.max_seconds, budget,
                 )
             deadline = started_at + budget
@@ -1022,7 +1022,7 @@ def main() -> int:
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
-                # instead of being SIGKILLed mid-statement by timeout-minutes.
+                # instead of being killed mid-statement at the runner's timeout_s.
                 batch_started = time.monotonic()
                 if batch_started >= deadline:
                     incomplete_at = lo
@@ -1148,7 +1148,7 @@ def main() -> int:
             "cursor saved at id %d (resumed by a run within %s of the cycle's start, else "
             "the next run starts over at id 1); exiting RED — investigate per-batch cost "
             "first (see the progress logs); raising the budget past %.0fs requires editing "
-            "BOTH --max-seconds and the workflow's timeout-minutes",
+            "BOTH --max-seconds and the job runner's timeout_s (scraper/jobs.py)",
             elapsed, start_lo, incomplete_at - 1, max_id, batches, total_batches,
             runs + 1, cycle_started_at, incomplete_at, _CURSOR_MAX_AGE,
             _MAX_BUDGET_SECONDS,

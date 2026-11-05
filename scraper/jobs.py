@@ -51,12 +51,17 @@ _FIXED: tuple[Job, ...] = (
     Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, RUNNER),
     Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, RUNNER,
         db_heavy=True),
-    # 03:00: clear of the hourly intake's 00:35 slot, and it holds through the kill grace. (The daily
-    # full location resolve left this table in the location programme's W2: the worker sweeps itself.)
+    # The daily sweeps (#2027), each held off the other by the hour census and by job_lease's DB-heavy turn. A
+    # property sweep runs its 6000 s budget, one in-flight batch (24 min) and its finalize: 130 min; its timeout is
+    # 1.5x the budget, so only a budget stop's tail reads Watch. (The daily full location resolve left this table
+    # in the location programme's W2: the worker sweeps itself.)
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
-        DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 3 * HOUR, 150 * 60, 1024, 1, RUNNER, db_heavy=True),
+    # A broker sweep's 30 full runs to 2026-11-05 took 1622 s p50, 2404 s p95, 2556 s at most: the lease wait and
+    # attribution spend the 1500 s budget, firm links ~300 s, merge, rollups and candidates 79-744 s, each tried
+    # twice at most (~3320 s, worst case). 75 min clears that, and its Watch line (50 min) clears every run.
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
-        DAY, 6 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 6 * HOUR, 75 * 60, 1024, 1, RUNNER, db_heavy=True),
     # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
