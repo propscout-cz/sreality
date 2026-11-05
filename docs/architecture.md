@@ -1338,8 +1338,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `python -m scraper.job_runner run`, whose children get the same cap by default (`child_env`, #2032). The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
   runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
 - **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), the host of
-  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, and of `clip` since #2032 (CLIP tags, vectors
-  and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line):
+  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, of `clip` since #2032 (CLIP tags, vectors
+  and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
+  hourly claim intake `location_intake` since #2028 (§ Location data):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -5114,9 +5115,14 @@ drains run after run** (#2028; on GitHub it was a self-chain, since its hourly c
 day): a run that leaves an unfinished half THAT IT MOVED (`bodies_pass_complete=false` with
 `bodies_mined>0`, or `reached_end=false` with `listings>0`; `claims_intake.more_remains`) exits 75 and
 the runner re-dues it a minute later — the progress term is the loop breaker, and a dry run never asks.
-Every run but a dry one first projects the image's portal contracts, so a contract changed without a
-version bump refuses the run (exit 2). The fetch width is 32 (`payloads.DEFAULT_BODY_FETCH_WORKERS`)
-and the extraction pool `JOB_CPUS` (4) wide.
+A requested run's 75 re-dues the registry's unscoped incremental argv, so a run that empties the change
+log carries on any stopped full walk, a one-portal re-mine's included, in that portal's own batch row
+(`_full_walk_handoff`). The runner's SIGTERM (a deploy, 90 s before its SIGKILL) only marks a stop
+(`scraper.stop`): the batch in hand commits, the run stamps `stopped` at its cursor and exits 143,
+due again at once. Every run but a dry one first projects the image's portal contracts, so a contract
+changed without a version bump refuses the run (exit 2). Its `main` sets the fetch width to 32 (the
+module default stays 16, which every scrape's archive client reads) and the extraction pool is
+`JOB_CPUS` (4) wide.
 
 **TWELVE CLAIM TYPES, AND THE CONTRACT RAILS.** `contracts/portals/<portal>.yaml` × 9 declares every
 extractor (permanent id, surface, licence class, caps, priors, exclusion zones) and
@@ -5572,8 +5578,9 @@ runner's `location-heavy` resource (`scraper/jobs.py`; GitHub's `location-batch`
 **at most one runs at a time**: the runner claims the intake through it, and the load, on GitHub until
 #2033, claims it in its own main (`job_lease.held_job`: its row and an open `job_runs` row, waiting
 as long as an intake run can hold it), so the intake's Health cell reads `waiting for ruian_load`
-during a load, never red; a load that never got it exits 1 with nothing loaded, and a run its host
-dropped is closed `lost` by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
+during a load, never red; a load that never got it exits 1 with nothing loaded, one that returns
+non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropped is closed `lost`
+by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
 four concurrent lanes dropped backends across
 the fleet, degraded the live Browse rebuild to multi-minute DataFileReads and wedged two lanes with
 no error at all. **The resolve DRAIN is outside the group** (operator decision, 2026-09-10): it is
@@ -5620,8 +5627,9 @@ per-listing statement gets, and cancelling it threw the whole batch away.
   the ONE event that makes the rows below it eligible again — here, a contract bump.
 * **A 5 s lock ceiling is not resilience** (W12, 2026-09-14) — two `mode=full` walks died ~80 s
   in (runs 34817669095, 34824922631) because a queue-row bump waited behind a drain slice; a batch
-  that lost a lock must RETRY ITSELF (idempotent, cursor unmoved) rather than skip its rows, and of
-  two schedules writing the same rows one has to yield.
+  that lost a lock must RETRY ITSELF (idempotent, cursor unmoved) rather than skip its rows. The
+  minute lane also yielded to a running hourly run; #2028 dropped that yield, since retried batches
+  let both schedules write the same rows side by side.
 * **A contract bump must never outrun its re-mine** (W11, 2026-09-14; W18-b, 2026-09-17) — a read
   filtered by contract version blacked out 595,816 listings, then blanked 29,545 bazos ones a partial
   re-mine had reached for one entry of five. W3 ended the class: one claim per fact, written only on a

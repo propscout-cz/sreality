@@ -242,7 +242,8 @@ def test_a_backend_service_watches_the_whole_image_or_nothing(service: str) -> N
 
 def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL and its R2 set
-    (#2032: clip downloads photos), so a rotation changes one place (and redeploys the runner after the worker)."""
+    (#2032: clip downloads photos; #2028: location_intake reads archived bodies back, and without R2 it mines no page
+    and says so only in its log), so a rotation changes one place (and redeploys the runner after the worker)."""
     runner = iac_entry("jobRunner")
     env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
     assert env, "the runner declares its variables inline"

@@ -37,6 +37,8 @@ leaves work it moved exits 75 and the runner re-dues it a minute later (section 
 from __future__ import annotations
 
 import inspect
+import signal
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import psycopg
@@ -45,7 +47,7 @@ import yaml
 
 from location_data import claims_intake, contracts, loader_db, payloads, ruian_boundaries as rb, ruian_load
 from location_data.resolver import drain, resolve_db
-from scraper import jobs
+from scraper import jobs, stop
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOWS = _ROOT / ".github" / "workflows"
@@ -258,7 +260,8 @@ def test_the_intake_preflight_reads_are_bounded_too():
     Each preflight read must be the FIRST statement of a guarded block, not a bare
     `conn.cursor()` on the autocommit connection."""
     sources = {
-        "_ACTIVE_CONTRACT_SQL": (inspect.getsource(claims_intake.run), "statement_timeout"),
+        # Its own helper since #2028: a full walk carried on for one portal reads it too.
+        "_ACTIVE_CONTRACT_SQL": (inspect.getsource(claims_intake._active_contract_id), "statement_timeout"),
         # W1-a2 replaced the watermark read with the cutover seed, in its own helper —
         # two reads, two guarded blocks, neither able to hang the run before its first
         # batch row exists.
@@ -528,7 +531,7 @@ class _Connect:
 
 
 def _main(monkeypatch: pytest.MonkeyPatch, stats: dict, *argv: str,
-          refused: Exception | None = None) -> tuple[int, list[str]]:
+          refused: Exception | None = None, during: Callable[[], None] = lambda: None) -> tuple[int, list[str]]:
     calls: list[str] = []
     monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://stub")
     monkeypatch.setattr(claims_intake.db, "connect", lambda *a, **k: _Connect())
@@ -541,6 +544,7 @@ def _main(monkeypatch: pytest.MonkeyPatch, stats: dict, *argv: str,
 
     def ran(conn: object, **kwargs: object) -> dict:
         calls.append("run")
+        during()
         return dict(stats)
 
     monkeypatch.setattr(contracts, "project", projected)
@@ -557,10 +561,37 @@ def test_a_run_that_leaves_work_it_moved_exits_75_so_the_runner_re_dues_it(monke
 
 
 def test_the_hourly_job_fetches_bodies_as_wide_as_the_workflow_did(monkeypatch):
-    """The workflow set LOCATION_BODY_FETCH_WORKERS=32 (W1-a4: the R2 fetch is most of a bodies batch); the runner's
-    child inherits no such variable, so 32 is the default. The minute lane sets its own 8."""
-    monkeypatch.delenv(payloads.BODY_FETCH_WORKERS_ENV, raising=False)
-    assert payloads.body_fetch_workers() == 32
+    """The workflow set LOCATION_BODY_FETCH_WORKERS=32 (W1-a4: the R2 fetch is most of a bodies batch) and the runner
+    sets no such variable, so the intake's own main does, a value already set first. The default stays 16 for every
+    other user of the archive client (each scrape's `append_payload`); the minute lane sets its own 8."""
+    monkeypatch.setenv(payloads.BODY_FETCH_WORKERS_ENV, "registers the undo")
+    monkeypatch.delenv(payloads.BODY_FETCH_WORKERS_ENV)
+    assert payloads.body_fetch_workers() == 16
+    widths: list[int] = []
+    _main(monkeypatch, DRAINED, during=lambda: widths.append(payloads.body_fetch_workers()))
+    monkeypatch.setenv(payloads.BODY_FETCH_WORKERS_ENV, "24")
+    _main(monkeypatch, DRAINED, during=lambda: widths.append(payloads.body_fetch_workers()))
+    assert widths == [32, 24]
+
+
+@pytest.fixture(autouse=True)
+def _restore_signals() -> Iterator[None]:
+    """`claims_intake.main` installs the stop handlers: pytest gets its own back, and its Ctrl-C."""
+    saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+    yield
+    for s, handler in saved.items():
+        signal.signal(s, handler)
+    stop.reset()
+
+
+def test_a_deploy_s_sigterm_finalizes_the_run_and_exits_interrupted(monkeypatch):
+    """The runner SIGTERMs its child at a deploy (`job_process.GRACE_S` before the SIGKILL). The handler only marks the
+    stop, so `run` ends after the batch in hand and stamps its cursor; 143 reads as interrupted, due again at once,
+    never as a 75 whose `ok` would hide the cut."""
+    def sigterm() -> None:
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)  # SIG_DFL, an int, would kill the process
+
+    assert _main(monkeypatch, BACKLOG, during=sigterm)[0] == stop.EXIT_CODE
 
 
 def test_a_dry_run_projects_nothing_and_never_asks_for_more(monkeypatch):

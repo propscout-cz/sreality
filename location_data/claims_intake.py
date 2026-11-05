@@ -119,7 +119,7 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     point_wkt,
     sreality_payload_shape,
 )
-from scraper import db
+from scraper import db, stop
 from scraper.cpus import job_cpus
 from toolkit import description_extraction as text_lane
 
@@ -530,6 +530,27 @@ _RESUME_SQL = """
       AND resumable
       AND cursor_after_id IS NOT NULL
       AND outcome IN ('ok', 'stopped', 'failed')
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+"""
+
+# THE WALK AN INCREMENTAL RUN CARRIES ON (W1-a7, `_full_walk_handoff`): each source's newest finished
+# full row, then the newest of those still unfinished, so a source's older stop never outranks its
+# own newer `ok`. An unscoped run takes any source's walk (#2028): a one-portal re-mine is a single
+# request on the job runner, whose exit 75 re-dues the registry's unscoped argv.
+_STOPPED_FULL_WALK_SQL = """
+    SELECT source, cursor_after_id FROM (
+        SELECT DISTINCT ON (source) source, outcome, cursor_after_id, started_at, id
+        FROM location_claim_batches
+        WHERE lane = %(lane)s
+          AND scan_mode = 'full'
+          AND resumable
+          AND cursor_after_id IS NOT NULL
+          AND outcome IN ('ok', 'stopped', 'failed')
+          AND (%(source)s::text IS NULL OR source = %(source)s::text)
+        ORDER BY source, started_at DESC, id DESC
+    ) newest
+    WHERE outcome IN ('stopped', 'failed')
     ORDER BY started_at DESC, id DESC
     LIMIT 1
 """
@@ -1117,17 +1138,27 @@ def _bodies_resume_point(
     return int(row[0])
 
 
+def _active_contract_id(conn: psycopg.Connection, source: str | None, statement_timeout: int) -> int | None:
+    """The source's active contract header, for its batch rows; None for an unscoped run."""
+    if not source:
+        return None
+    with guarded(conn, statement_timeout) as cur:
+        cur.execute(_ACTIVE_CONTRACT_SQL, {"source": source})
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
 def _full_walk_handoff(
     conn: psycopg.Connection, *, scan_mode: str, source: str | None, anchored: bool,
     dry_run: bool, budget: "_Budget", last_seconds: float, lane: str = LANE,
-) -> int | None:
-    """The cursor of a STOPPED full walk an incremental run should carry on with, or None.
+) -> tuple[str | None, int] | None:
+    """The (source, cursor) of a STOPPED full walk an incremental run should carry on with, or None.
 
-    W1-a7. A hop is dispatched with the run's OWN mode and the cron is `incremental`, so a
-    chain that yields to a waiting cron run (13:06Z, 2026-09-12) hands the successor
-    `incremental` and the stopped full walk — a contract-bump re-walk, 80 000 of ~376k served
-    listings — falls off the chain until somebody dispatches `full` by hand. A run that has
-    emptied the change log has budget and nothing to spend it on, so it spends it there.
+    W1-a7. The hourly run is `incremental`, so a full walk's next hop used to inherit
+    `incremental` and the stopped walk — a contract-bump re-walk, 80 000 of ~376k served
+    listings — fell off until somebody dispatched `full` by hand. A run that has emptied the
+    change log has budget and nothing to spend it on, so it spends it there. An unscoped run
+    carries on a one-portal walk too (#2028; `_STOPPED_FULL_WALK_SQL`), scoped to that portal.
 
     It CONTINUES, it never STARTS: no stopped/failed cursor means nothing to continue, and
     `--mode full` keeps its meaning. An anchored or dry run hands off nothing (neither
@@ -1142,13 +1173,16 @@ def _full_walk_handoff(
         return None
     if not budget.room_for(last_seconds):
         return None
-    resumed = _resume_point(conn, mode="full", source=source, lane=lane)
-    if resumed is None:
+    with conn.cursor() as cur:
+        cur.execute(_STOPPED_FULL_WALK_SQL, {"lane": lane, "source": source})
+        row = cur.fetchone()
+    if row is None:
         return None
+    walk_source, resumed = row[0], int(row[1])
     LOG.info("INTAKE the change log is empty with %.0fs left: continuing the stopped full "
              "walk for source=%s from after_id=%d",
-             budget.left() or 0.0, source or "*", resumed)
-    return resumed
+             budget.left() or 0.0, walk_source or "*", resumed)
+    return walk_source, resumed
 
 
 def _finish_and_open_full_batch(
@@ -1234,6 +1268,9 @@ class _Budget:
         return self.max_seconds * share - self.spent()
 
     def room_for(self, estimate: float, share: float = 1.0) -> bool:
+        # A stop (the job runner's SIGTERM, `main`) spends the budget: the batch in hand finishes and the run stamps.
+        if stop.requested():
+            return False
         left = self.left(share)
         return left is None or left > estimate
 
@@ -1767,12 +1804,7 @@ def run(
     # why an unbounded one is dangerous: under the IO pressure of a concurrent registry load
     # a "small" read still waits for its pages, and a run that hangs before its first batch
     # row exists leaves nothing at all to diagnose from.
-    contract_id: int | None = None
-    if source:
-        with guarded(conn, statement_timeout) as cur:
-            cur.execute(_ACTIVE_CONTRACT_SQL, {"source": source})
-            row = cur.fetchone()
-            contract_id = int(row[0]) if row else None
+    contract_id = _active_contract_id(conn, source, statement_timeout)
 
     # An operator-anchored run does not certify that everything below its anchor was
     # scanned, so it neither resumes from a stored cursor nor becomes one. `--start-after-id`
@@ -1829,11 +1861,11 @@ def run(
         "stopped_early": False, "reached_end": False, "resumed_from_id": after_id,
     }
     refusals: dict[str, int] = {}
-    # The PHASE's mode and its share of the counters, not the run's: an incremental run that
-    # empties the change log hands its remaining budget to a stopped full walk (W1-a7), and
-    # the scan reads both from here on. Bound BEFORE the try: the failure path stamps them,
-    # and the bodies pass can raise ahead of the first payload batch.
-    scan_mode = mode
+    # The PHASE's mode, source and share of the counters, not the run's: an incremental run
+    # that empties the change log hands its remaining budget to a stopped full walk (W1-a7),
+    # one portal's included, and the scan reads them from here on. Bound BEFORE the try: the
+    # failure path stamps them, and the bodies pass can raise ahead of the first payload batch.
+    scan_mode, scan_source = mode, source
     row_count_base = 0
     try:
         # BODIES FIRST, on the hourly schedule: its backlog is bounded by the CORPUS and
@@ -1866,7 +1898,7 @@ def run(
                 statement = (_LISTINGS_INCREMENTAL_SQL if scan_mode == "incremental"
                              else _LISTINGS_FULL_SQL)
                 cur.execute(statement, {
-                    "after_id": after_id, "source": source, "batch_size": size,
+                    "after_id": after_id, "source": scan_source, "batch_size": size,
                     "lag_seconds": lag_seconds})
                 records = cur.fetchall()
                 if not records:
@@ -1951,14 +1983,16 @@ def run(
                 if handoff is None:
                     stats["reached_end"] = True
                     break
+                scan_source, handoff_cursor = handoff
                 batch_id = _finish_and_open_full_batch(
                     conn, batch_id=batch_id, stats=stats,
                     row_count=stats["written"] - row_count_base,
-                    cursor_after_id=after_id, source=source, contract_id=contract_id,
+                    cursor_after_id=after_id, source=scan_source,
+                    contract_id=_active_contract_id(conn, scan_source, statement_timeout),
                     note=note, statement_timeout=statement_timeout, lane=lane)
-                after_id, scan_mode = handoff, "full"
+                after_id, scan_mode = handoff_cursor, "full"
                 stats["full_walk_continued"] = True
-                stats["full_walk_cursor"] = handoff
+                stats["full_walk_cursor"] = handoff_cursor
                 row_count_base = stats["written"]
                 continue
             # ADVANCED ONLY HERE, after the transaction closed. The cursor that gets
@@ -2094,6 +2128,12 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: SUPABASE_DB_URL is not set.", file=sys.stderr)
         return 2
     batch_size = max(MIN_BATCH_SIZE, min(MAX_BATCH_SIZE, args.batch_size))
+    # The hourly job's fetch width, which its workflow set (W1-a4: at 16 a 1,500-body batch spent ~35 s fetching);
+    # here, not as the module default, which every scrape's archive client reads too. A value already set wins.
+    os.environ.setdefault(payloads.BODY_FETCH_WORKERS_ENV, str(payloads.MAX_BODY_FETCH_WORKERS))
+    # The runner's SIGTERM (a deploy, or timeout_s) only marks the stop: the batch in hand commits and the run stamps
+    # its cursor inside the 90 s before the SIGKILL, instead of dying with its row 'running', which no resume reads.
+    stop.install()
 
     with db.connect() as conn:
         try:
@@ -2112,6 +2152,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 2
     LOG.info("INTAKE done %s", json.dumps(stats, default=str, sort_keys=True))
+    if stop.requested():
+        return stop.EXIT_CODE
     # The job runner re-dues a run that exits 75 a minute later, so a backlog drains run after run.
     return MORE_REMAINS_EXIT if not args.dry_run and more_remains(stats) else 0
 

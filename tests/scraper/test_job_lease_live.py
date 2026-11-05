@@ -648,6 +648,23 @@ def test_a_held_job_closes_its_run_with_how_it_ended(
     assert _row(cur, load.name)["lease_holder"] is None
 
 
+def test_a_held_job_that_exits_non_zero_closes_its_run_failed(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ruian_load.run` returns 1 on a blocking assertion without raising: read off the block's normal end, that load
+    would close ok with a fresh last_success_at. The block hands its exit code back on the handle it was given."""
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    load = _until_moved()
+    with job_lease.held_job(cur.connection, load, wait_s=0) as held:
+        assert held is not None
+        held.exit_code = 1
+    assert [r[1] for r in _runs(cur, load.name)] == ["failed"]
+    row = _row(cur, load.name)
+    assert (row["lease_holder"], row["last_outcome"], row["ok_now"], row["consecutive_failures"]) == (
+        None, "failed", None, 1)
+    cur.execute("SELECT last_error FROM scheduled_jobs WHERE job_name = %s", (load.name,))
+    assert cur.fetchone() == ("exit 1",)
+
+
 def test_under_the_runner_a_held_job_is_the_runner_s_claim(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The runner exports JOB_NAME to the child it claimed for: the row and its resource are already held."""
     load = _until_moved()

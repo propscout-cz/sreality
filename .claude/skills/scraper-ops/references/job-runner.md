@@ -46,21 +46,25 @@ Recipes:
   `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
   run). The last line is `CLIP_JOB exit=<code> why=…`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
-  running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
-  can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
+  running, pause the new row (`runner-pause`) past the last one's end: a queued run in a non-cancelling group starts
+  when the run ahead ends, so one running and one queued is two timeouts from now. List again before the pause lapses
+  and extend it while one is still queued or running. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
   slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
 - **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
   so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
   held its first slot.
 - **location_intake's exits (#2028):** 75 when it leaves an unfinished half it moved (`claims_intake.more_remains`:
   unmined bodies with some mined, or a change-log scan stopped with listings opened), so a contract bump's backlog
-  drains run after run, a minute apart; 0 otherwise and on a `--dry-run`; 2 when a contract changed without a
+  drains run after run, a minute apart; 0 otherwise and on a `--dry-run`; 143 on the runner's SIGTERM (the batch in
+  hand commits and the run stamps `stopped`, so the next resumes there); 2 when a contract changed without a
   version bump (every run but a dry one projects the image's contracts first) or the schema is missing. A full
-  re-walk is `request location_intake -- --mode full` (`--source X` for one portal); a scheduled incremental run
-  carries a stopped full walk on by itself.
+  re-walk is `request location_intake -- --mode full` (`--source X` for one portal). Its 75 re-dues the registry's
+  unscoped incremental argv, which carries any stopped full walk on, a one-portal one included, once it has emptied
+  the change log.
 - **`location-heavy` off the runner:** the RÚIAN load runs on GitHub until #2033 and claims the resource in its own
   main (`job_lease.held_job`: its `scheduled_jobs` row, runner `github_actions`, and an open `job_runs` row), waiting
-  `jobs.resource_wait_s` (the intake's timeout + 10 min) and exiting 1 with nothing loaded if it never got it. While
+  `jobs.resource_wait_s` (the intake's timeout + 10 min) and exiting 1 with nothing loaded if it never got it; a
+  load that returns non-zero hands its code to the `HeldRun` it was given, which closes the run `failed`. While
   it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`; a run its workflow dropped
   without a release lapses after the load's `timeout_s` and the reaper closes it `lost`. Under the runner
   (`JOB_NAME` = the job) `held_job` is the runner's own claim.

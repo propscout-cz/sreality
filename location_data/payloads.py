@@ -615,11 +615,9 @@ def orphaned_r2_keys(cur: psycopg.Cursor, keys: Sequence[str]) -> tuple[str, ...
 # fetch a batch's bodies CONCURRENTLY, and the client's connection pool must be at least as
 # wide or urllib3 discards connections and the pool becomes the new serialiser (the "pool is
 # full" warnings the W2a backfill logged on all eleven of its runs). One knob sizes both, so
-# they cannot drift apart. The default is the hourly intake's width (W1-a4: at 16 a 1,500-body
-# batch spent ~35 s fetching; its workflow set 32 until the job runner took it, #2028); the
-# worker's minute lane sets its own.
+# they cannot drift apart.
 BODY_FETCH_WORKERS_ENV = "LOCATION_BODY_FETCH_WORKERS"
-DEFAULT_BODY_FETCH_WORKERS = 32
+DEFAULT_BODY_FETCH_WORKERS = 16
 MAX_BODY_FETCH_WORKERS = 32
 
 

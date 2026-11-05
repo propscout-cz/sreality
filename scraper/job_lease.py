@@ -470,6 +470,13 @@ class Lease(Hold):
     due_slot: bool = False  # the row was due and unpaused when claimed: the run also took its scheduled slot
 
 
+@dataclass
+class HeldRun:
+    """A `held_job` block's report: the exit code its process will return, which closes the run (non-zero: failed)."""
+
+    exit_code: int = 0
+
+
 @dataclass(frozen=True)
 class Registered:
     """What a boot's `register` did: rows born, adopted from a lane-era NULL registry_at, un-retired, and skipped."""
@@ -813,23 +820,24 @@ def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str =
 
 @contextmanager
 def held_job(conn: psycopg.Connection, job: Job, *, wait_s: float, runner: str = "github_actions",
-             connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[bool]:
-    """True while this process may run `job`, on any host: under the runner (it exports `JOB_NAME`) the runner's claim
-    holds the row and its resource; elsewhere this claims them as the runner would and opens the job's run, so a
-    sibling waits for it and reads held, and closes it with how the block ended. False when they stayed held past
-    `wait_s`."""
+             connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[HeldRun | None]:
+    """A `HeldRun` while this process may run `job`, on any host: under the runner (it exports `JOB_NAME`) the runner's
+    claim holds the row and its resource; elsewhere this claims them as the runner would and opens the job's run, so a
+    sibling waits for it and reads held, and closes it with how the block ended: an exception, or the exit code the
+    block set. None when they stayed held past `wait_s`."""
+    ran = HeldRun()
     if os.environ.get("JOB_NAME") == job.name:
-        yield True
+        yield ran
         return
     holder = holder_id()
     with _holding(conn, job.name, lambda: _claim_held_job(conn, job, runner=runner, holder=holder), wait_s,
-                  connect) as lease:
-        yield lease is not None
+                  connect, ran) as lease:
+        yield ran if lease is not None else None
 
 
 @contextmanager
 def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | None], wait_s: float,
-             connect: Callable[[], psycopg.Connection]) -> Iterator[Hold | None]:
+             connect: Callable[[], psycopg.Connection], ran: HeldRun | None = None) -> Iterator[Hold | None]:
     give_up_at = clock() + wait_s
     while True:
         hold = take()
@@ -844,6 +852,8 @@ def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | 
     outcome, error, original = "ok", None, None
     try:
         yield hold
+        if ran is not None and ran.exit_code:
+            outcome, error = "failed", f"exit {ran.exit_code}"
     except Exception as exc:  # noqa: BLE001 - the lease must be released either way
         outcome, error, original = "failed", str(exc), exc
         raise

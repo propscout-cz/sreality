@@ -1328,11 +1328,13 @@ def main(argv: list[str] | None = None) -> int:
             # for as long as the intake can hold it.
             job = jobs.entry("ruian_load")
             wait_s = jobs.resource_wait_s(job)
-            with db.connect() as conn, job_lease.held_job(conn, job, wait_s=wait_s) as mine:
-                if not mine:
+            with db.connect() as conn, job_lease.held_job(conn, job, wait_s=wait_s) as held:
+                if held is None:
                     LOG.error("RUIAN %s stayed held for %d s: nothing loaded", job.resource, wait_s)
                     return 1
-                return load()
+                # `run` returns 1 on a blocking assertion without raising: the held run closes failed on it.
+                held.exit_code = load()
+                return held.exit_code
         except (loader_db.LoadAborted, ruian_boundaries.BoundarySchemaError) as exc:
             LOG.error("RUIAN load aborted: %s", exc)
             return 1

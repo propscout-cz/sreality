@@ -79,8 +79,8 @@ production.
 - **One table**: `scheduled_jobs` = `location_jobs` renamed (migration, with a temporary alias view). Added:
   `argv`, `offset_s`, `timeout_s`, `memory_mb`, `cpus`, `due_at`, `paused_until` (finite, with a
   note and author), `requested_at/args/by`, `registry_at`, `retired_at`, a `resource` column for jobs that
-  must never overlap (intake, the RÚIAN load, the retire tool share `location-heavy`; it replaces the GitHub
-  `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
+  must never overlap (the intake and the RÚIAN load share `location-heavy`, and the retire tool did until #2223
+  deleted it; it replaces the GitHub `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
   (`enabled`, `concurrency_group`, `alert_route`, `note`) drop under R6b behind a backup receipt.
 - **One history table**: `job_runs` (closed in place; pruned daily by the runner after 90 days): holder, version
   (`RAILWAY_GIT_COMMIT_SHA`),
@@ -299,10 +299,11 @@ sweeps itself; nothing to move.) The sweeps reach the runner on consolidated lea
 the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110, and the
 broker sweep's in #2108, with #2273 doing the same after gate #2111.
 **As built (#2028), one PR on the merge light, no migration:** `location_intake` hourly at :35 on the runner, `timeout_s`
-4200 for its 2400 s budget (the ⅔ line, now an argv census), 4 CPUs (GitHub's pool width), fetch width 32 as the
-default; exit 75 on the chain's own progress rule (`claims_intake.more_remains`); every run but a dry one projects the
-image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the `location-batch` group,
-the worker's yield (`running_batch_id`; migration 730's index it read is owed a drop). The retire tool left with the
+4200 for its 2400 s budget (the ⅔ line, now an argv census), 4 CPUs (GitHub's pool width), fetch width 32 set by its
+main; exit 75 on the chain's own progress rule (`claims_intake.more_remains`), 143 on the runner's SIGTERM after
+stamping its cursor; a requested full walk is carried on by the scheduled runs, one portal's included; every run but a
+dry one projects the image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the
+`location-batch` group, the worker's yield (`running_batch_id`; migration 730's index it read: drop owed, #2419). The retire tool left with the
 location programme's W3 (#2223), so only the RÚIAN load claims `location-heavy` off the runner, in its own main
 (`job_lease.held_job`); the reaper now closes any host's lapsed run on a resource.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
