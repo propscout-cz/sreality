@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from datetime import datetime, timezone
 from typing import Any
 
 from location_data import location_steps
@@ -65,11 +64,8 @@ class _Conn:
         self.executed.append(("COMMIT", None))
 
 
-_WHEN = datetime(2026, 9, 14, 0, 30, tzinfo=timezone.utc)
-
-
 def _row(source: str, nid: str, url: str | None, total: int) -> tuple[Any, ...]:
-    return (source, nid, url, 4_500_000, _WHEN, total)
+    return (source, nid, url, 4_500_000, total)
 
 
 def test_candidates_are_the_active_ads_rule_25_calls_town_less() -> None:
@@ -89,7 +85,7 @@ def test_candidates_are_the_active_ads_rule_25_calls_town_less() -> None:
     assert out == [{
         "source": "ceskereality", "native_id": "3876635",
         "detail_ref": "https://ceskereality.cz/3876635", "price_czk": 4_500_000,
-        "last_fetch_at": _WHEN, "source_total": 63,
+        "source_total": 63,
     }]
 
 

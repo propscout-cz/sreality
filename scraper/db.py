@@ -1974,6 +1974,7 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 # day, unless a page or payload has landed since the give-up. Out of this set, not
 # just out of the enqueue: it is the oldest by that frozen clock, and would hold
 # the per-portal cap from ads that can still be read.
+# An ad with no page or payload sorts first; its -infinity clock is never returned (#2377).
 _LOCATION_REFETCH_CANDIDATES_SQL = """
 WITH cand AS (
     SELECT l.source,
@@ -2020,7 +2021,7 @@ old AS (
             AND dc.completed_at >= c.last_fetch_at
       )
 )
-SELECT source, source_id_native, source_url, price_czk, last_fetch_at, source_total
+SELECT source, source_id_native, source_url, price_czk, source_total
 FROM old
 WHERE rn <= %(cap)s::int
 ORDER BY source, rn
@@ -2059,8 +2060,7 @@ def location_refetch_candidates(
             "native_id": str(r[1]),
             "detail_ref": detail_ref(r[0], r[2]),
             "price_czk": r[3],
-            "last_fetch_at": r[4],
-            "source_total": int(r[5]),
+            "source_total": int(r[4]),
         }
         for r in rows
     ]
