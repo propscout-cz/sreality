@@ -8,6 +8,7 @@ Run from a checkout's root. Each takes `--help`, reads only, and exits 2 with th
 | `python3 -m scripts.coordinator.light_check <pr>` | head SHA, mergeable, draft, light, checks, sensitive files, numbered migrations and their clashes |
 | `python3 -m scripts.coordinator.deploy_status <sha>` | every Railway commit status; flags a non-success and a "No deployment needed" |
 | `scripts/coordinator/engine_reading.sql` | paste into the production SQL tool: one row, read only (unread per kraj and total, merges in the last hour, cap, schema MB, brake, lease). CI's SQL sweep PREPAREs it against the schema |
+| `scripts/coordinator/compute_reading.sql` | paste into the production SQL tool: one row, read only (size, `LOAD` / `STRAINED` / `QUIET` with reasons, engine backlog, detail queue, Browse rebuild, brake, engine in flight). It reads pg_cron, which CI's replay lacks, so it is checked on production, not by the sweep. When to switch: `.claude/skills/database/references/compute-size.md` |
 
 ## Reading the lane
 

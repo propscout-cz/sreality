@@ -1,6 +1,6 @@
 ---
 name: database
-description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change.
+description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change, compute size (Large/2XL resize).
 ---
 
 # Database
@@ -489,3 +489,5 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 
 - `.claude/skills/database/references/tenancy.md` — full table-by-table RLS migration list,
   policy text, and the `property_pipeline` composite-FK detail.
+- `.claude/skills/database/references/compute-size.md` — read before advising on, or watching, a
+  compute-size switch, and before heavy work that needs 2XL first (seed, backfill, large migration).
