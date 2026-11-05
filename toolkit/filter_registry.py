@@ -1158,9 +1158,7 @@ def _build_registry() -> dict[str, FilterDef]:
                 "capital letters A through G). New constructions "
                 "trend A/B; pre-renovation panel buildings often G. "
                 "G is also the legal placeholder for 'no certificate', "
-                "which no portal marks apart. A property's rating is the "
-                "first non-null one across its ads in canonical order; "
-                "an unrated property never matches."
+                "which no portal marks apart. An unrated row never matches."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,

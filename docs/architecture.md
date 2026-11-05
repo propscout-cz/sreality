@@ -2094,9 +2094,10 @@ renumber.** Navigate by area:
     `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
     the place moves: price, area, photos, link and every fact stay the canonical advert's, and
     past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
-    terrace, garage, cellar) are a union over every advert, active or not (MS6); every other
-    physical fact (building type, ownership, energy rating, estate/usable/garden area, parking
-    spaces) is the first non-empty value in the canonical order. The price figures are the
+    terrace, garage, cellar) are a union over every advert, active or not, and the energy rating
+    is the best class any advert states (MS6, ruling 2026-11-05); every other physical fact
+    (building type, ownership, estate/usable/garden area, parking spaces) is the first non-empty
+    value in the canonical order. The price figures are the
     canonical advert's LINEAGE (MS10): its own and its same-portal predecessors'
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
@@ -2663,8 +2664,8 @@ renumber.** Navigate by area:
     overcounted 12 to 22 %). Saving from Browse offers the viewport box through one checkbox (ticked;
     the preset dialog's question, because a stale viewport would fire forever) and takes a circle
     always; the editor's `MapAreaControl` shows either and sets the box to the mini-map's view. Open divergence: the six amenities are the property's union
-    (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
-    estimation cohort, until MS20
+    and the energy rating its best class (MS6) for the Watchdog, Browse and Stats but the
+    canonical advert's own flags and letter in an estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the
     WATCHDOG agenda (and `ComparableFilters`' the cohort agendas) by an equality test in
     `tests/toolkit/test_filter_registry.py`, because `extra='ignore'` drops a missing field on

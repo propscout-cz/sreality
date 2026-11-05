@@ -1386,7 +1386,6 @@ ADVERT_FIELDS = (
 AMENITIES = ("has_lift", "has_balcony", "has_parking", "terrace", "garage", "cellar")
 PHYSICAL_FACTS = (
     "usable_area", "estate_area", "garden_area", "parking_lots", "building_type", "ownership",
-    "energy_rating",
 )
 
 
@@ -1464,6 +1463,18 @@ def test_the_six_amenities_are_a_union_over_every_advert():
         assert _rhs(setc, column) == f"r.{column}"
         assert f"bool_or(k.{column}) AS {column}," in rollup
         assert f"array_agg(k.{column}" not in rollup
+
+
+def test_the_energy_rating_is_the_best_class_any_advert_states():
+    """MS6 (ruling 2026-11-05): the lowest letter over every advert, active or not; no order
+    decides it, so a first advert's placeholder G never hides a sibling's stated class."""
+    from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
+
+    setc = _set_clause(_RECOMPUTE_BATCH_SQL)
+    rollup = _child_agg(_RECOMPUTE_BATCH_SQL)
+    assert _rhs(setc, "energy_rating") == "r.energy_rating"
+    assert "min(k.energy_rating) AS energy_rating" in rollup
+    assert "array_agg(k.energy_rating" not in rollup
 
 
 def test_one_newest_ad_date_per_offered_portal_and_the_two_portal_lists():

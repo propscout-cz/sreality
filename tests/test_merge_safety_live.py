@@ -587,6 +587,21 @@ def test_the_six_amenities_are_a_union(cur, canonical, ended, union):
     assert cur.fetchone() == (union,) * len(amenities)
 
 
+@pytest.mark.parametrize(("canonical", "ended", "best"), [
+    ("G", "B", "B"), ("G", "G", "G"), (None, "C", "C"), (None, None, None)])
+def test_the_energy_rating_is_the_best_class_any_advert_states(cur, canonical, ended, best):
+    """MS6 (ruling 2026-11-05): the lowest letter over every advert, an ended one too, so a
+    first advert's placeholder G never hides a sibling's stated class."""
+    pid = _property(cur)
+    canon = _advert(cur, pid, source="sreality")
+    other = _advert(cur, pid, source="idnes", active=False)
+    for lid, value in ((canon, canonical), (other, ended)):
+        cur.execute("UPDATE listings SET energy_rating = %s WHERE id = %s", (value, lid))
+    assert _recomputed_canonical(cur, pid) == canon
+    cur.execute("SELECT energy_rating FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == (best,)
+
+
 def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):
     """MS19: both portal lists and each portal's newest-advert date follow a merge and a detach."""
     from toolkit.filter_registry import PORTAL_OPTIONS
