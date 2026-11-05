@@ -1338,8 +1338,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `python -m scraper.job_runner run`, whose children get the same cap by default (`child_env`, #2032). The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
   runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
 - **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), the host of
-  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, and of `clip` since #2032 (CLIP tags, vectors
-  and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line):
+  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, of `clip` since #2032 (CLIP tags, vectors
+  and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
+  daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
+  or any other DB-heavy job (`job_lease`'s heavy turn):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -3661,11 +3663,11 @@ renumber.** Navigate by area:
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
     brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
     of the daily full sweep, under the lease that sweep already holds. The
-    **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
+    **daily full sweep** (the job runner's `property_sweep`, no `--incremental`, 03:00 UTC, #2027) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
     since the 2026-08-06 incident it runs under a `--max-seconds` budget (default 6000s, clamped
-    to the same ceiling the workflow's `timeout-minutes: 130` is sized for) and on exhaustion
+    to the ceiling its `timeout_s` of 150 min is sized for: 130 min worst run) and on exhaustion
     clean-stops at a batch boundary, clears only the id range that run swept, and saves a resume
     cursor (`app_settings.property_sweep_cursor`); the next run continues the cycle there instead
     of at id 1 (2026-10-03: four daily runs in a row stopped near id 540k of 927k, each from id 1)
@@ -3679,8 +3681,8 @@ renumber.** Navigate by area:
     start, which can be ~38h earlier) — so chronic exhaustion surfaces as red runs plus the
     `jobs` check's `artifact/property_sweep` cell, and the unswept id tail keeps its pre-sweep
     windowed stats until a cycle finishes (is_active flips still heal incrementally — every
-    delist path enqueues `dirty_properties`). Its 38h staleness budget plus the 18h GitHub
-    delivery slack the `jobs` check adds to a `github-actions` artifact put its Problem at 56h,
+    delist path enqueues `dirty_properties`). Its staleness budget puts its Problem at 56h (622's
+    38h + GitHub's 18h delivery slack; 56h with no slack on `job-runner` since migration 731),
     sized for a two-run cycle (operator, 2026-10-03), so a dead sweep is flagged after about two
     days, not 30h; the old `property_maintenance` check's 52h Watch has no equivalent, because
     an artifact cell has no Watch tier. A run that stops on budget twice or sweeps nothing exits
@@ -3693,10 +3695,9 @@ renumber.** Navigate by area:
     (There is no scheduled dedup job any more — the automatic decision
     layer was removed in the 2026-08 cutoff, rule #15.) The
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
-    that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
-    second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
-    own after-step: scoped recompute, broker book, Browse patch) directly, and never
-    enqueue `dirty_properties`.
+    that lease; the runner's one open run per job keeps a second sweep out. Inline merge/detach
+    run `properties_changed` (the drain's own after-step: scoped recompute, broker book, Browse
+    patch) directly, and never enqueue `dirty_properties`.
     **The pass also keeps the broker book** (`broker_book`, migration 692): one row per (property,
     canonical broker), stored from its one view `broker_book_projection`. `properties_changed` upserts
     the view's rows for its ids, rewriting only a row that differs, and deletes the rows the view no
@@ -4701,7 +4702,7 @@ renumber.** Navigate by area:
 Unlike property merges (rule #15: operator-ordered, plus AUTODEDUP — the batch `mode=apply` and
 the worker lane — merging only inside the area `autodedup_apply_scope` names), broker identities
 DO auto-merge. The nightly
-sweep (`scripts/resolve_brokers.py::_auto_merge`, cron 04:35 UTC) hands the WHOLE identity +
+sweep (`scripts/resolve_brokers.py::_auto_merge`, the job runner's `broker_sweep`, 06:00 UTC) hands the WHOLE identity +
 contact corpus to `toolkit.broker_resolver.decide_merges`, which since 2026-08-20 is
 **portal-agnostic and name-gated** — one rule, no per-portal exceptions:
 

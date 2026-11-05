@@ -148,7 +148,7 @@ scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes
 **Parked flags, the walk cycle and the retired gate: `references/coverage-and-delisting.md`.**
 The properties track runs the worker's maintenance lane (**dirty-set incremental, every 30 s** — attaches new stragglers as
 singletons + recomputes only changed properties; rule #20) and
-`recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
+the runner's `property_sweep` (the **daily full-sweep reconcile** at 03:00 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
