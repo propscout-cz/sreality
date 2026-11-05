@@ -485,7 +485,7 @@ def test_the_pg_ledger_latches_on_a_lost_connection_and_retries_next_tick(monkey
 
     calls: list[str] = []
 
-    def due(conn: FakeConn, names: Sequence[str]) -> list[str]:
+    def due(conn: FakeConn, names: Sequence[str], *, heavy: Sequence[str]) -> list[str]:
         calls.append("due")
         if len(calls) == 1:
             conn.broken = True
@@ -506,7 +506,7 @@ def test_the_pg_ledger_latches_on_a_lost_connection_and_retries_next_tick(monkey
 def test_the_pg_ledger_keeps_a_statement_error_to_its_call_unless_stopping(monkeypatch: pytest.MonkeyPatch) -> None:
     import psycopg
 
-    def due(conn: FakeConn, names: Sequence[str]) -> list[str]:
+    def due(conn: FakeConn, names: Sequence[str], *, heavy: Sequence[str]) -> list[str]:
         raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
 
     monkeypatch.setattr(job_lease, "due", due)
@@ -545,7 +545,7 @@ def test_each_claim_is_its_own_holder_so_a_stale_release_never_reaches_a_later_r
     """One holder per replica would let run 1's late release or renewal match run 2's lease on the same job."""
     holders: list[str] = []
 
-    def claim(conn: FakeConn, name: str, *, holder: str, version: str | None) -> None:
+    def claim(conn: FakeConn, name: str, *, holder: str, version: str | None, heavy: Sequence[str]) -> None:
         holders.append(holder)
 
     monkeypatch.setattr(job_lease, "claim", claim)
@@ -554,6 +554,29 @@ def test_each_claim_is_its_own_holder_so_a_stale_release_never_reaches_a_later_r
     ledger.claim("x")
     ledger.claim("x")
     assert len(set(holders)) == 2 and all(h.startswith("H/") for h in holders), holders
+
+
+def test_the_ledger_keeps_every_db_heavy_job_of_the_registry_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2027: due and claim get main's DB-heavy names, whatever the Runner holds (`once` holds one job)."""
+    heavy = tuple(j.name for j in jobs.runner_jobs() if j.db_heavy)
+    assert {"property_sweep", "broker_sweep", "map_overlays"} <= set(heavy)
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    def due(conn: FakeConn, names: Sequence[str], *, heavy: Sequence[str]) -> list[str]:
+        seen.append(("due", tuple(heavy)))
+        return []
+
+    def claim(conn: FakeConn, name: str, *, holder: str, version: str | None, heavy: Sequence[str]) -> None:
+        seen.append(("claim", tuple(heavy)))
+
+    monkeypatch.setattr(job_lease, "due", due)
+    monkeypatch.setattr(job_lease, "claim", claim)
+    monkeypatch.setattr(job_runner.db, "connect", lambda **_: FakeConn())
+    ledger = job_runner._ledger()
+    ledger.begin(stopping=False)
+    ledger.due(["x"])
+    ledger.claim("x")
+    assert seen == [("due", heavy), ("claim", heavy)]
 
 
 def test_a_job_that_cannot_start_is_a_failed_run_with_no_exit_code() -> None:

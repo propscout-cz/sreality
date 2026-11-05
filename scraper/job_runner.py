@@ -417,10 +417,11 @@ class PgLedger:
 
     def __init__(self, connect: Callable[[], psycopg.Connection], *, holder: str, version: str | None = None,
                  heartbeat: str | None = None, deployment: str | None = None,
-                 started_at: datetime | None = None) -> None:
+                 started_at: datetime | None = None, heavy: Sequence[str] = ()) -> None:
         self._connect = connect
         self._conn: psycopg.Connection | None = None
         self.holder = holder
+        self.heavy = tuple(heavy)  # the DB-heavy names job_lease keeps apart
         self.version = version
         self.heartbeat = heartbeat
         self.deployment = deployment
@@ -475,13 +476,14 @@ class PgLedger:
         return self._list(self._ask("reap_lost", lambda c: job_lease.reap_lost(c, names=names, on_hour=on_hour)))
 
     def due(self, names: Sequence[str]) -> list[str] | None:
-        return self._list(self._ask("due", lambda c: job_lease.due(c, names)))
+        return self._list(self._ask("due", lambda c: job_lease.due(c, names, heavy=self.heavy)))
 
     def claim(self, name: str) -> job_lease.Lease | None:
         # Each claim is its own holder: renewals and releases match on it, so a late release of an earlier run of
         # the same job (lapsed, reaped and re-claimed by this replica) can never free or extend the later run's lease.
         holder = f"{self.holder}/{next(self._claims)}"
-        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=holder, version=self.version))
+        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=holder, version=self.version,
+                                                             heavy=self.heavy))
         return lease if isinstance(lease, job_lease.Lease) else None
 
     def renew(self, lease: job_lease.Lease) -> bool | None:
@@ -561,9 +563,11 @@ def _pooler_addresses(url: str) -> int | None:
 
 
 def _ledger(heartbeat: str | None = None) -> PgLedger:
+    # main's whole registry, not the Runner's: `once` runs one job, which still waits for every other DB-heavy one.
     return PgLedger(lambda: db.connect(attempts=1, connect_timeout=CONNECT_TIMEOUT_S), holder=job_lease.holder_id(),
                     version=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), heartbeat=heartbeat,
-                    deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"))
+                    deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"),
+                    heavy=[j.name for j in jobs.runner_jobs() if j.db_heavy])
 
 
 def _guard(*, watchdog: bool) -> Guard:
