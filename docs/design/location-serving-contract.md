@@ -103,17 +103,12 @@ the SPA compares numbers, never enum text) and `uncertainty_radius_m`. In point 
 draws a pin **at building level or better** (rank ≥ 90) with a black outer contour — the pin is the
 building — and every other pin, unresolved included, without it; the fill says active (magenta, white
 contour) or inactive (white transparent, magenta contour). A legend under the count names the faces with
-their counts. The true-metre circle of `uncertainty_radius_m` is drawn for **one pin
-only: the one whose popup is open**, and the popup prints the rung and the true radius in words
-("Přibližná poloha: obec, ±1 km"). W3-3 first drew that circle under every pin below building
-level, all the time; with ~87 % of active pins below it (street 300 m, část obce 750 m, obec 1 km)
-the map became stacked discs with pins and prices buried underneath, and the operator called it
-unusable. Clusters and server-side grid cells carry no per-pin identity or radius, so none of this
-applies above the point budget. The DRAWN radius is capped at **2 km** (`MAX_DRAWN_CIRCLE_RADIUS_M`,
-`frontend/src/lib/uncertaintyCircle.ts`) — the coarse rungs carry radii of a different order
-(okres ~25 km, kraj ~60 km, unknown ~250 km) and a 25 km disc is a wash of colour with a moving
-clipped arc on pan. The cap is display only: the true radius rides on every feature and is what the
-popup and any measurement read.
+their counts. The popup says "Přesná poloha" or "Přibližná poloha" and names the rung in its
+tooltip ("Přibližná poloha: obec"; `frontend/src/lib/pinPrecision.ts`). No circle is drawn and no
+radius is printed: ruling 2026-11-01 retired the radius ("a pin is exact or it is the centre of the
+RÚIAN unit we hold, marked inaccurate"), and W6-b removed the clicked pin's circle, the popup's "±"
+figure and the map's read of `uncertainty_radius_m`. Clusters and server-side grid cells carry no
+per-pin identity or rung, so none of this applies above the point budget.
 
 **Country and self-disagreement.** `country_status` (NOT NULL: `cz` | `foreign` | `disputed` |
 `undetermined`) — foreign is a DETERMINATION the resolver makes, never a default for "no town
@@ -131,7 +126,7 @@ resolution trace is stored.
 shared-pin count was parked as a read-time aggregate (`count(*) over (partition by geom)`) and W3
 REFUSED it (decision W3-2): `sync_browse_list` filters `WHERE property_id = ANY(…)` and that qual
 cannot be pushed below a window function, so every merge would aggregate the whole corpus. No
-producer, no measured need; the circle rule above is granularity-only. `position_licence_class` — the licence rail
+producer, no measured need; the pin rule above is granularity-only. `position_licence_class` — the licence rail
 moved UPSTREAM: the resolver's claim projection admits only `licence_class IN ('portal','operator')`,
 so a Mapy-class coordinate is never READ, and a partial index on `location_claims` keeps the
 remediation set one indexed predicate away. `position_source`, `blur_evidence`,

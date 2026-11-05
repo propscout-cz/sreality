@@ -69,13 +69,12 @@ export const CARD_PAGE_SIZE = 24;
  * renders it. */
 /* W3: `district` came OUT and `display_label` went in -- one string per pin, from
  * listing_location through the projection, so the popup no longer names the okres
- * when it knows the street. The two that joined it are what the PIN PRECISION
- * reads, and they are the only two columns on this list that ListingMap draws
- * rather than prints: a pin resolved below building level is drawn as an open
- * ring, the clicked one with a circle of `uncertainty_radius_m` metres around it,
- * and `granularity_rank` is the INT form of the rung (migration 380), because
- * granularity is compared by rank and never by enum text. */
-const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
+ * when it knows the street. `granularity_rank` is what the PIN PRECISION reads
+ * (lib/pinPrecision): a pin at building level or better wears a black contour,
+ * and the popup says exact or approximate. It is the INT form of the rung
+ * (migration 380), because granularity is compared by rank and never by enum
+ * text. The radius left this list with the drawn circle (ruling 2026-11-01). */
+const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
   /* The point of the property (its location ad) — the hovered card hands it to the map. */
@@ -385,13 +384,10 @@ export interface MapRow {
   /* The one server-composed place string (migration 503) -- what the popup
    * prints. */
   display_label: string | null;
-  /* The two the pin-precision rules read (lib/uncertaintyCircle). `granularity_rank`
-   * is the INT rung from location_granularity_rank (migration 380): compare it,
-   * never the enum text. A pin at BUILDING or better gets a black outer contour, and the pin
-   * whose popup is open gets a circle of `uncertainty_radius_m` metres -- see
-   * ListingMap. Both are NULL for an unresolved row, which draws no circle rather
-   * than a circle of unknown size. */
-  uncertainty_radius_m: number | null;
+  /* What the pin-precision rules read (lib/pinPrecision): the INT rung from
+   * location_granularity_rank (migration 380). Compare it, never the enum text.
+   * A pin at BUILDING or better gets a black outer contour -- see ListingMap.
+   * NULL for an unresolved row, which reads as precision unknown. */
   granularity_rank: number | null;
   last_seen_at: string;
   is_active: boolean;
