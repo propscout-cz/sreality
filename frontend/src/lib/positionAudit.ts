@@ -20,7 +20,7 @@ import {
   type KeysetCursor,
 } from '@/lib/keyset';
 import type { SortSpec } from '@/lib/queries';
-import { pinPrecisionShort } from '@/lib/uncertaintyCircle';
+import { pinPrecisionShort } from '@/lib/pinPrecision';
 
 export const POSITION_AUDIT_RELATION = 'location_position_audit';
 export const POSITION_AUDIT_PAGE_SIZE = 100;
@@ -61,10 +61,7 @@ export const POSITION_GRAINS: ReadonlyArray<{ key: string; label: string; rank: 
 ];
 
 /* The one approximate label: the map's rule, read for a rank. */
-export const precisionWords = (rank: number | null): string => {
-  const pin = { granularity_rank: rank, uncertainty_radius_m: null };
-  return pinPrecisionShort(pin);
-};
+export const precisionWords = (rank: number | null): string => pinPrecisionShort({ granularity_rank: rank });
 
 export type PositionGrid = Record<string, Record<string, number>>;
 
