@@ -579,6 +579,25 @@ def test_the_ledger_keeps_every_db_heavy_job_of_the_registry_apart(monkeypatch: 
     assert seen == [("due", heavy), ("claim", heavy)]
 
 
+class _Built(Exception):
+    pass
+
+
+def test_the_ledger_and_the_runner_read_db_heavy_from_one_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The registry main is given decides both what the Runner retries in its own hour and what the ledger keeps apart:
+    `once` of one entry still waits for the registry's other DB-heavy ones."""
+    registry = [_job("a", db_heavy=True), _job("b"), _job("c", db_heavy=True)]
+    assert job_runner._ledger(registry).heavy == ("a", "c")
+
+    def built(registry: Sequence[Job] | None = None, heartbeat: str | None = None) -> None:
+        raise _Built(registry)
+
+    monkeypatch.setattr(job_runner, "_ledger", built)
+    with pytest.raises(_Built) as ledger:
+        job_runner.main(["once", "a"], registry=registry)
+    assert ledger.value.args == (registry,)
+
+
 def test_a_job_that_cannot_start_is_a_failed_run_with_no_exit_code() -> None:
     """N9: a spawn OSError is the run's failure, never the runner's."""
     rig = _rig([_job()], due=["test_job"])

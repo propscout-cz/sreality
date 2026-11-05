@@ -562,12 +562,12 @@ def _pooler_addresses(url: str) -> int | None:
         return None
 
 
-def _ledger(heartbeat: str | None = None) -> PgLedger:
+def _ledger(registry: Sequence[Job] | None = None, heartbeat: str | None = None) -> PgLedger:
     # main's whole registry, not the Runner's: `once` runs one job, which still waits for every other DB-heavy one.
     return PgLedger(lambda: db.connect(attempts=1, connect_timeout=CONNECT_TIMEOUT_S), holder=job_lease.holder_id(),
                     version=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), heartbeat=heartbeat,
                     deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"),
-                    heavy=[j.name for j in jobs.runner_jobs() if j.db_heavy])
+                    heavy=[j.name for j in (jobs.runner_jobs() if registry is None else registry) if j.db_heavy])
 
 
 def _guard(*, watchdog: bool) -> Guard:
@@ -581,7 +581,7 @@ def serve(registry: Sequence[Job] | None = None) -> int:
     stop.install()  # first: PID 1 discards a SIGTERM that comes before its handler (the imports, the DNS lookup)
     entries = tuple(jobs.runner_jobs() if registry is None else registry)
     heartbeat = heartbeat_name(os.environ)
-    ledger = _ledger(heartbeat)
+    ledger = _ledger(entries, heartbeat)
     limits = {"memory_limit_mb": cgroup.memory_limit_mb(), "cpus": cpus.job_cpus()}  # the replica's, by its cgroup
     LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d "
              "memory_limit_mb=%s cpus=%s", os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment,
@@ -595,12 +595,13 @@ def serve(registry: Sequence[Job] | None = None) -> int:
     return 0
 
 
-def once(job: Job, *, ledger: Ledger | None = None, spawner: Spawner = spawn_process, guard: Guard | None = None,
-         clock: Callable[[], float] = job_lease.clock, sleep: Callable[[float], object] = time.sleep) -> int:
-    """One foreground claim, run and release of a runner entry: no upsert, no heartbeat. 0 ok or not due, 143
-    interrupted, 1 anything else (a timeout, or a database that never answered, included)."""
+def once(job: Job, *, registry: Sequence[Job] | None = None, ledger: Ledger | None = None,
+         spawner: Spawner = spawn_process, guard: Guard | None = None, clock: Callable[[], float] = job_lease.clock,
+         sleep: Callable[[float], object] = time.sleep) -> int:
+    """One foreground claim, run and release of a runner entry of `registry`: no upsert, no heartbeat. 0 ok or not
+    due, 143 interrupted, 1 anything else (a timeout, or a database that never answered, included)."""
     stop.install(hangup=True)  # the child has its own session: a closed terminal must stop it, not orphan it
-    pg = None if ledger is not None else _ledger()
+    pg = None if ledger is not None else _ledger(registry)
     runner = Runner([job], ledger=ledger or pg, spawner=spawner, guard=guard or _guard(watchdog=False),  # type: ignore[arg-type]
                     clock=clock, service=False, claim_limit=1, answer_by=clock() + ONCE_ANSWER_S)
     loop(runner, sleep=sleep)
@@ -701,7 +702,7 @@ def main(argv: Sequence[str] | None = None, *, registry: Sequence[Job] | None = 
         print(f"{ns.job} runs on {host}" if host else f"no job named {ns.job} in the registry", file=sys.stderr)
         return 2
     if ns.verb == "once":
-        return once(entries[ns.job])
+        return once(entries[ns.job], registry=registry)
     until = None
     if ns.verb == "pause":
         try:
