@@ -57,9 +57,11 @@ _FIXED: tuple[Job, ...] = (
     # in the location programme's W2: the worker sweeps itself.)
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
         DAY, 3 * HOUR, 150 * 60, 1024, 1, RUNNER, db_heavy=True),
-    # A broker sweep's 30 full runs to 2026-11-05 took 1622 s p50, 2404 s p95, 2556 s at most: the lease wait and
-    # attribution spend the 1500 s budget, firm links ~300 s, merge, rollups and candidates 79-744 s, each tried
-    # twice at most (~3320 s, worst case). 75 min clears that, and its Watch line (50 min) clears every run.
+    # A broker sweep's 36 full runs since Broker Unify W3 (2026-10-01 to 11-05, end to end from their logs) took
+    # 1684 s p50, 2799 s p95, 2982 s at most; 10-02's failed at 3497 s, its 28-min rollup outliving the lease. The
+    # lease wait and attribution spend the 1500 s budget and the firm links ~300 s (1843 s at most), then merge,
+    # rollups and candidates take 48-1137 s, each tried twice at most (~4120 s, worst case). 75 min clears that; its
+    # Watch line (50 min) clears every completed run, 10-01's the closest.
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
         DAY, 6 * HOUR, 75 * 60, 1024, 1, RUNNER, db_heavy=True),
     # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.

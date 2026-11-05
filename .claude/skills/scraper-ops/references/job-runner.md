@@ -176,7 +176,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   clear (stale_images runs 2-9 s of 1200; rent_map and map_overlays carry no self-budget), W5's clip (`--max-seconds
   1500` against 3300) and W3's sweeps: property_sweep's 6000 s budget against 9000 (its worst run, budget + one
   in-flight batch + finalize, is 130 min; only a budget stop's tail crosses 6000 s), broker_sweep's against 4500
-  (its 30 full runs to 2026-11-05: 2556 s at most, under the 3000 s line).
+  (its full runs since Broker Unify W3, 2026-10-01: 2982 s at most, under the 3000 s line; one failed at 3497 s).
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
   `health_job_cells(interval)` with `select '[]'::jsonb`.
 

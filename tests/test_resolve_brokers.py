@@ -1667,20 +1667,25 @@ def test_shared_contacts_are_built_only_for_the_pairs_being_written() -> None:
     assert rb._shared_contacts(contacts, []) == {}
 
 
-# The longest tail (merge + rollups + candidates) of the 30 full sweeps to 2026-11-05: 2026-10-09's 9 + 665 + 70 s.
-MEASURED_TAIL_S = 744
+# From the logs of the 36 full sweeps since Broker Unify W3 (2026-10-01 to 11-05): attribution and the firm links stop
+# at a chunk boundary, so the prefix ran up to 43 s past budget + floor, and the longest tail (merge + rollups +
+# candidates) was 10-01's 8 + 1069 + 60 s. A measurement, not a bound: the job cell and gate #2411 watch it live.
+MEASURED_PREFIX_OVERSHOOT_S = 43
+MEASURED_TAIL_S = 1137
 
 
 def test_the_runner_timeout_covers_every_budgeted_phase_and_a_retried_tail() -> None:
     """#2027: the `broker_sweep` entry's timeout_s outlasts the lease wait and attribution (`--max-seconds`), the firm
-    links' own floor, and the measured tail with each of its phases tried twice (attempts=2)."""
+    links' own floor, their measured overshoot, and the measured tail with each of its phases tried twice
+    (attempts=2)."""
     import scripts.resolve_brokers as rb
     from scraper import jobs
 
     [entry] = [j for j in jobs.runner_jobs() if j.name == "broker_sweep"]
     budget = int(entry.argv[entry.argv.index("--max-seconds") + 1])
     assert rb._LOCK_WAIT_MAX_SECONDS < budget, "the lease wait spends the budget, never more"
-    assert entry.timeout_s >= budget + rb._FIRM_LINK_MIN_SECONDS + 2 * MEASURED_TAIL_S
+    prefix = budget + rb._FIRM_LINK_MIN_SECONDS + MEASURED_PREFIX_OVERSHOOT_S
+    assert entry.timeout_s >= prefix + 2 * MEASURED_TAIL_S
 
 
 def test_the_runner_s_stop_unwinds_the_sweep_so_its_lease_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
