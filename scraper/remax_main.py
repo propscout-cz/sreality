@@ -48,7 +48,7 @@ from scraper.portal_base import ListingGoneError
 from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 from scraper.remax_client import RemaxClient, detail_url, index_url
-from scraper.remax_parser import category_of, index_price, parse_detail, parse_index
+from scraper.remax_parser import category_of, parse_detail, parse_index, read_price
 
 LOG = logging.getLogger(__name__)
 SOURCE = "remax"
@@ -196,7 +196,7 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 ref_map[nid] = detail_url(item.detail_path)
                 # As stated; reconcile_sightings resolves it against the stored row and
                 # applies the write boundary's clamps before it compares.
-                price_map[nid] = index_price(item.price_text)
+                price_map[nid] = read_price(item.price_text)
                 cat_map[nid] = category_of(None, item.title)
             if self._max_pages and pages >= self._max_pages:
                 stop_reason = "page_cap"

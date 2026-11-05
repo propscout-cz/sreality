@@ -270,16 +270,14 @@ IndexPrice = int | PriceReading | None
 Sightings = Mapping[str, tuple[str | None, IndexPrice]]
 
 
-def _index_total(source: str, nid: str, price: IndexPrice,
-                 row: Mapping[str, Any] | None) -> int | None:
-    """The card's total, a reading resolved the way the detail parser resolves it, with the
-    area and category stored for the listing, so a matching card reads unchanged."""
+def _index_total(price: IndexPrice, row: Mapping[str, Any] | None) -> int | None:
+    """The card's total, resolved like the detail against the row's stored area and category."""
     if not isinstance(price, PriceReading):
         return db.sane_price_czk(price)
     row = row or {}
     return db.sane_price_czk(resolve(
         price, area_m2=row.get("area_m2"), category_main=row.get("category_main"),
-        category_type=row.get("category_type"), label=f"{source}/{nid} card",
+        category_type=row.get("category_type"),
     ).total_czk)
 
 
@@ -297,8 +295,7 @@ def reconcile_sightings(
         db.index_summary_native(conn, source, list(sightings))
         if conn is not None and sightings else {}
     )
-    prices = {nid: _index_total(source, nid, price, existing.get(nid))
-              for nid, (_, price) in sightings.items()}
+    prices = {nid: _index_total(price, existing.get(nid)) for nid, (_, price) in sightings.items()}
     if conn is not None and existing:
         db.touch_listings_by_id(conn, [row["id"] for row in existing.values()])
     new = [nid for nid in sightings if nid not in existing]

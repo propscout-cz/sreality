@@ -145,10 +145,11 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
 
 
-def index_price(text: str | None) -> PriceReading | None:
-    """An index card's price as stated (amount, currency, basis), or None ("Cena na
-    vyžádání" / "Rezervováno" / "info v RK"). The walk resolves it against the stored row."""
-    return _read_price(text)
+def read_price(text: str | None) -> PriceReading | None:
+    """A card's or detail cell's price as stated, or None ("Cena na vyžádání", "Rezervováno")."""
+    if not text or any(k in _strip_diacritics(text).lower() for k in _NO_PRICE):
+        return None
+    return read_price_text(text)
 
 
 def _parse_total(html: str) -> int | None:
@@ -157,12 +158,6 @@ def _parse_total(html: str) -> int | None:
         return None
     digits = re.sub(r"\D", "", m.group(1))
     return int(digits) if digits else None
-
-
-def _read_price(text: str | None) -> PriceReading | None:
-    if not text or any(k in _strip_diacritics(text).lower() for k in _NO_PRICE):
-        return None
-    return read_price_text(text)
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -395,12 +390,10 @@ def parse_index(html: str) -> IndexPage:
 
 
 def _card_price(card: Node) -> str | None:
-    """An index card's price text WITH its unit. Tailwind classes aren't stable selectors, so
-    pick the first span (then div) whose text reads as a price (a Kč or € run) or an explicit
-    no-price phrase; index_price then reads it (None for the no-price cases).
-
-    The unit ("(za m²)", "(za m²/měsíc)", "(za měsíc)") is the price span's next SIBLING
-    span, so it is appended: the amount alone read a per-m² rate as a total (#2355)."""
+    """An index card's price text with its unit, or its no-price phrase (read_price reads it)."""
+    # Tailwind classes aren't stable selectors: the first span (then div) reading as a Kč or €
+    # run. Its unit ("(za m²/měsíc)") is the NEXT SIBLING span, appended: the amount alone read
+    # a rate as a total (#2355).
     for selector in ("span", "div"):
         for node in card.css(selector):
             txt = _text(node)
@@ -491,7 +484,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     disposition = vocabulary.disposition(SOURCE, read("disposition"), title)
     areas = areas_from_params(params, title=title, category_main=category_main)
     price = resolve(
-        _read_price(_detail_price_text(tree)), area_m2=areas.area_m2,
+        read_price(_detail_price_text(tree)), area_m2=areas.area_m2,
         category_main=category_main, category_type=category_type,
         label=f"{SOURCE}/{source_id}",
     )

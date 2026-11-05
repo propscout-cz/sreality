@@ -1,11 +1,4 @@
-"""A stated price is a number plus its basis, and ONE conversion turns it into the stored total.
-
-#2355: remax, realitymix and bezrealitky state some prices per m², per m² per month or in EUR.
-The detail parsers stored NULL for those while the index card still showed a number, so every
-walk re-queued the ad. Now both sides read (amount, currency, basis) and convert it the same
-way with the area the platform's measure uses, so a card that matches the stored total reads
-unchanged and a real change still refetches.
-"""
+"""A stated price is a number plus its basis, and ONE conversion turns it into the stored total (#2355)."""
 
 from __future__ import annotations
 
@@ -59,7 +52,7 @@ def _r(amount: str, currency: str = "CZK", basis: str = TOTAL) -> PriceReading:
     ("3 350 Kč (za m 2 )", _r("3350", basis=PER_M2)),
     ("5 800 Kč (za měsíc)", _r("5800")),
     ("5 290 000 Kč", _r("5290000")),
-    # a struck original before the current price: the FIRST run, never their concatenation
+    # two amounts never concatenate into one (the integer column overflowed); the first is read
     ("12 000 000 Kč 5 290 000 Kč", _r("12000000")),
     # a total with a per-m² NOTE beside it is still a total
     ("4 990 000 Kč (4 008 Kč za m²)", _r("4990000")),
@@ -211,6 +204,39 @@ def test_an_impossible_per_m2_whose_total_is_not_normal_stores_nothing(
     assert [r.getMessage() for r in caplog.records] == [
         "PRICE basis_override realitymix/7055474 stated=per_m2_month used=none "
         "amount_czk=8575 area_m2=614.0 category=komercni/pronajem"]
+
+
+def test_a_land_rate_stored_as_a_total_is_read_per_m2() -> None:
+    """realitymix 8615319: "1 567 Kč" for a 1,659 m² building plot. The bands read from every
+    source put land's p0.1 at 0.15 Kč/m², so this was never caught; sreality's is 10.24."""
+    out = resolve(_r("1567"), area_m2=1659.0, category_main="pozemek", category_type="prodej")
+    assert out.total_czk == 2_599_653
+    assert out.record == {"amount": 1567.0, "currency": "CZK", "basis": TOTAL, "read_as": PER_M2}
+
+
+def test_an_impossible_rent_total_is_read_per_m2_per_month() -> None:
+    """remax 441508: "120 Kč" a month for 274 m² of offices is 120 Kč per m² per month."""
+    out = resolve(_r("120"), area_m2=274.0, category_main="komercni", category_type="pronajem")
+    assert out.total_czk == 32_880
+    assert out.record == {"amount": 120.0, "currency": "CZK", "basis": TOTAL,
+                          "read_as": PER_M2_MONTH}
+
+
+def test_a_rent_rate_that_names_no_period_stores_nothing() -> None:
+    # per m² on a rent could be monthly or yearly (12x apart): only "per m² per month" is stored
+    out = resolve(_r("150", basis=PER_M2), area_m2=200.0, category_main="komercni",
+                  category_type="pronajem")
+    assert out.total_czk is None
+
+
+def test_an_unlabelled_resolve_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    # the walk resolves every card on every sighting; only the detail parse, which writes the
+    # row, logs an override
+    caplog.set_level(logging.INFO, logger="scraper.price_reading")
+    out = resolve(_r("6490000", basis=PER_M2), area_m2=4087.0, category_main="pozemek",
+                  category_type="prodej")
+    assert out.total_czk == 6_490_000
+    assert caplog.records == []
 
 
 def test_no_band_for_the_category_trusts_the_label() -> None:

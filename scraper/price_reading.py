@@ -1,18 +1,8 @@
-"""A stated price as a number plus its basis, and the ONE conversion to the stored total.
+"""A stated price as (amount, currency, basis), and the ONE conversion to the stored total (#2355)."""
 
-`listings.price_czk` is a CZK TOTAL: the asking price, or the monthly rent (rule 23). Some
-adverts state a rate instead: per m², per m² per month, or an amount in EUR. Before #2355 the
-detail parsers stored nothing for those while the index card still showed a number, so
-`price_changed(None, x)` re-queued the ad on every walk. Now the card reader and the detail
-parser both read `PriceReading(amount, currency, basis)` and `resolve` turns it into the total
-with the area the platform's per-m² measure divides by (`area_m2`: the plot for pozemek, the
-floor area otherwise; migrations 423/425). The card side resolves against the area already
-stored for the listing, so a card that matches the stored total reads unchanged and a real
-change still refetches.
-
-One reader and one conversion for every portal that states a rate (rule 21: no portal branch
-here); the portals that do not yet still refuse a rate (`scraper.price_text.is_per_area_price`).
-"""
+# `listings.price_czk` is a CZK TOTAL: the asking price or the monthly rent (rule 23). The card
+# reader and the detail parser both resolve a reading here, the card against the area stored for
+# the row, so a card matching the stored total reads unchanged. No portal branch (rule 21).
 
 from __future__ import annotations
 
@@ -37,7 +27,8 @@ PER_M2_MONTH = "per_m2_month"
 # Every converted price records the rate it used (`ResolvedPrice.record`, kept in raw_json
 # and so in every snapshot), and the content hash reads the stated EUR amount
 # (`ResolvedPrice.native`), so a rate change re-prices the current row on its next detail
-# fetch without a snapshot or a price-change alert.
+# fetch without a snapshot or a price-change alert. That fetch is the walk reading every EUR
+# card as changed once: one refetch per active EUR ad (about 300, #2416).
 EUR_CZK_RATE = Decimal("24.5")
 EUR_CZK_RATE_SET = "2026-11-05"
 _CZK_PER_UNIT: dict[str, Decimal] = {"CZK": Decimal(1), "EUR": EUR_CZK_RATE}
@@ -101,14 +92,9 @@ def _unit_text(rest: str) -> str:
 
 
 def read_price_text(text: str | None) -> PriceReading | None:
-    """The first amount in a price cell with its currency and basis; None when it states none we store.
-
-    The unit is read where the portals put it: right after the currency, bare or bracketed
-    and behind a VAT note ("bez DPH, za m²"), or before the amount ("Cena za m2: 7 759").
-    A bracket that names a currency is a NOTE beside a total ("4 990 000 Kč (4 008 Kč za
-    m²)"), never the unit. A yearly rate and a currency other than CZK or EUR read as None:
-    `price_czk` holds neither.
-    """
+    """The first amount in a price cell with its currency and basis; None when it states none we store."""
+    # The unit sits right after the currency (bare, bracketed, behind "bez DPH,") or before the
+    # amount ("Cena za m2: 7 759"). A yearly rate and an unconverted currency read as None.
     if not text:
         return None
     match = _AMOUNT_RE.search(text)
@@ -126,7 +112,7 @@ def read_price_text(text: str | None) -> PriceReading | None:
         currency = "EUR"
     unit = _unit_text(rest)
     if _CURRENCY_TOKEN_RE.search(unit):
-        unit = ""
+        unit = ""  # a NOTE beside a total ("4 990 000 Kč (4 008 Kč za m²)"), never its unit
     marked = unit + " " + prefix
     basis = TOTAL
     if _PER_AREA_RE.search(marked):
@@ -141,13 +127,10 @@ def read_price_text(text: str | None) -> PriceReading | None:
 
 @dataclass(frozen=True)
 class Ppm2Band:
-    """One category's per-m² distribution: the 0.1st, 1st and 99th percentile.
+    """One category's per-m² 0.1st, 1st and 99th percentile (a rent's per month)."""
 
-    A reading is IMPOSSIBLE beyond five times the extreme percentile (under p001 / 5, over
-    p99 * 5) and NORMAL inside [p01, p99]. The portal's label is overridden only when its
-    reading is impossible and the other reading is normal; a monthly rent band is per month.
-    """
-
+    # IMPOSSIBLE is past five times an extreme percentile, NORMAL inside [p01, p99]; a label is
+    # overridden only when its reading is impossible and the other one normal.
     p001: float
     p01: float
     p99: float
@@ -161,26 +144,30 @@ class Ppm2Band:
         return self.p99 * 5
 
 
-# Read 2026-11-05 from public.measure_price_per_m2 over every active listing, all sources,
-# per (category_main, category_type) with at least 1,000 rows; a category without a band
-# trusts the label. Re-derive them the same way; never hand-tune one to make a case pass.
+# Read 2026-11-05 from public.measure_price_per_m2 over sreality's active listings, per
+# (category_main, category_type) with at least 1,000 rows; a category without a band trusts the
+# label. sreality alone because its price arrives as a number with its unit (JSON API): the
+# text portals' stored rates-as-totals put land's all-source p0.1 at 0.15 Kč/m², where no
+# override could fire. Re-derive them the same way; never hand-tune one to make a case pass.
 PPM2_BANDS: dict[tuple[str, str], Ppm2Band] = {
-    ("byt", "prodej"): Ppm2Band(9_900.00, 22_715.07, 277_222),
-    ("byt", "pronajem"): Ppm2Band(27.11, 117.64, 881),
-    ("dum", "prodej"): Ppm2Band(831.59, 3_856.97, 218_125),
-    ("dum", "pronajem"): Ppm2Band(9.65, 33.62, 600),
-    ("komercni", "prodej"): Ppm2Band(259.69, 1_177.51, 220_097),
-    ("komercni", "pronajem"): Ppm2Band(2.12, 21.10, 1_558),
-    ("ostatni", "prodej"): Ppm2Band(49.39, 838.69, 185_813),
-    ("ostatni", "pronajem"): Ppm2Band(1.25, 21.50, 784),
+    ("byt", "prodej"): Ppm2Band(11_190.10, 23_771.42, 272_221),
+    ("byt", "pronajem"): Ppm2Band(69.77, 120.50, 840),
+    ("dum", "prodej"): Ppm2Band(2_054.08, 6_140.72, 175_988),
+    ("komercni", "prodej"): Ppm2Band(248.88, 1_338.01, 219_144),
+    ("komercni", "pronajem"): Ppm2Band(2.60, 28.73, 1_352),
+    ("ostatni", "prodej"): Ppm2Band(325.23, 3_827.78, 152_293),
     ("pozemek", "podil"): Ppm2Band(4.07, 7.30, 2_659),
-    ("pozemek", "prodej"): Ppm2Band(0.15, 3.41, 19_302),
-    ("pozemek", "pronajem"): Ppm2Band(0.10, 0.18, 253),
+    ("pozemek", "prodej"): Ppm2Band(10.24, 19.13, 19_404),
 }
 
 
+def _rate_basis(category_type: str | None) -> str:
+    """The one rate basis a category stores: a rent's per m² per month, any other's per m²."""
+    return PER_M2_MONTH if category_type == "pronajem" else PER_M2
+
+
 def _basis_used(stated: str, czk: Decimal, area: Decimal | None, category_main: str | None,
-                category_type: str | None, label: str) -> str | None:
+                category_type: str | None, label: str | None) -> str | None:
     """The basis to convert with: the label, unless its reading is impossible (#2355)."""
     band = PPM2_BANDS.get((category_main or "", category_type or ""))
     if band is None or area is None:
@@ -189,10 +176,10 @@ def _basis_used(stated: str, czk: Decimal, area: Decimal | None, category_main: 
     used: str | None = stated
     if stated == TOTAL:
         if czk < Decimal(repr(band.impossible_low)) * area and low <= czk <= high:
-            used = PER_M2
+            used = _rate_basis(category_type)
     elif czk > Decimal(repr(band.impossible_high)):
         used = TOTAL if low * area <= czk <= high * area else None
-    if used != stated:
+    if used != stated and label:
         LOG.info(
             "PRICE basis_override %s stated=%s used=%s amount_czk=%s area_m2=%s category=%s/%s",
             label, stated, used or "none", czk, area, category_main, category_type,
@@ -206,9 +193,11 @@ def resolve(
     area_m2: float | None,
     category_main: str | None,
     category_type: str | None,
-    label: str = "",
+    label: str | None = None,
 ) -> ResolvedPrice:
-    """The stored total for a reading: converted to CZK, times the measure's area when per m²."""
+    """The stored total for a reading: converted to CZK, times the measure's area when a rate."""
+    # `label` names the row in the override log line: the detail parse passes it, the card
+    # (resolved on every sighting) does not.
     rate = _CZK_PER_UNIT.get(reading.currency) if reading is not None else None
     if reading is None or rate is None:
         return ResolvedPrice(None)
@@ -221,8 +210,7 @@ def resolve(
     total: Decimal | None = None
     if used == TOTAL:
         total = czk
-    elif used is not None and area is not None and (
-            used == PER_M2 or category_type == "pronajem"):
+    elif used == _rate_basis(category_type) and area is not None:
         total = czk * area
     # Whole crowns, the fraction dropped as the parsers always did, so a stored decimal
     # total ("1 234,50 Kč") does not move by a crown and fire a price change.

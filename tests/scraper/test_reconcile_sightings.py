@@ -323,12 +323,17 @@ def test_a_per_m2_card_with_no_stored_area_reads_unchanged(monkeypatch: pytest.M
     assert calls["entries"] == []
 
 
-def test_a_mislabelled_card_resolves_like_the_detail(monkeypatch: pytest.MonkeyPatch) -> None:
-    """realitymix 8557677: the card's "6 490 000 Kč (za m²)" is the plot's total."""
+def test_a_mislabelled_card_resolves_like_the_detail_and_logs_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """realitymix 8557677: the card's "6 490 000 Kč (za m²)" is the plot's total. The override
+    line is the detail parse's, once per fetch; a card is resolved on every sighting."""
+    caplog.set_level(logging.INFO, logger="scraper.price_reading")
     calls = _patch_db(monkeypatch, {"8557677": _land(1, 6_490_000, 4087.0)})
     portal_runner.reconcile_sightings(
         _CONN, "realitymix", {"8557677": ("r", _per_m2("6490000"))}, min_change_pct=0.0)
     assert calls["entries"] == []
+    assert [r for r in caplog.records if r.name == "scraper.price_reading"] == []
 
 
 def test_a_eur_card_converts_at_the_fixed_rate(monkeypatch: pytest.MonkeyPatch) -> None:

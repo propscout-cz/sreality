@@ -16,7 +16,7 @@ from scraper.price_reading import PER_M2, PER_M2_MONTH, TOTAL, PriceReading
 from scraper.realitymix_parser import (
     _category_from_slug,
     category_from_breadcrumb,
-    index_price,
+    read_price,
     parse_detail,
     parse_index,
     resolve_category,
@@ -229,13 +229,13 @@ def test_parse_index_ids():
 
 
 def test_index_price_parsing():
-    assert index_price("5 290 000 Kč") == PriceReading(Decimal(5_290_000))
-    assert index_price("Cena na vyžádání") is None
-    assert index_price("Rezervováno") is None
-    assert index_price("info v RK") is None
-    assert index_price(None) is None
+    assert read_price("5 290 000 Kč") == PriceReading(Decimal(5_290_000))
+    assert read_price("Cena na vyžádání") is None
+    assert read_price("Rezervováno") is None
+    assert read_price("info v RK") is None
+    assert read_price(None) is None
     # Two runs (struck original + current) must NOT concatenate to an overflow.
-    assert index_price("12 000 000 Kč 5 290 000 Kč") == PriceReading(Decimal(12_000_000))
+    assert read_price("12 000 000 Kč 5 290 000 Kč") == PriceReading(Decimal(12_000_000))
 
 
 def test_index_card_reads_the_unit_in_the_sibling_span():
@@ -245,7 +245,7 @@ def test_index_card_reads_the_unit_in_the_sibling_span():
     html = (Path(__file__).resolve().parents[1] / "fixtures" / "portal_html"
             / "realitymix_index_price_markers.html").read_text(encoding="utf-8")
     page = parse_index(html)
-    assert {i.source_id_native: index_price(i.price_text) for i in page.items} == {
+    assert {i.source_id_native: read_price(i.price_text) for i in page.items} == {
         "8497597": PriceReading(Decimal(3350), "CZK", PER_M2),
         "8070969": PriceReading(Decimal(29), "CZK", PER_M2_MONTH),
         "8264083": PriceReading(Decimal(5800), "CZK", TOTAL),
@@ -257,7 +257,7 @@ def test_index_card_in_eur_is_read():
     html = INDEX_HTML.replace("<span>5 290 000 Kč</span>",
                               "<span>1,00 €</span><span>(za m<sup>2</sup>/měsíc)</span>")
     item = parse_index(html).items[1]
-    assert index_price(item.price_text) == PriceReading(Decimal("1.00"), "EUR", PER_M2_MONTH)
+    assert read_price(item.price_text) == PriceReading(Decimal("1.00"), "EUR", PER_M2_MONTH)
 
 
 def test_category_from_breadcrumb():

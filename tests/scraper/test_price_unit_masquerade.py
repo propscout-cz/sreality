@@ -18,9 +18,6 @@ withdrawn: measured against production it would have NULLed 3,025 active rows,
 2,501 of them `pronajem`/`komercni`, after the content hash — so the deletion
 would append no snapshot (rule 8) and each row would then read as "price
 changed" on every index walk forever. See the W1 review notes.
-
-Since #2355 remax and realitymix no longer refuse a rate: `scraper.price_reading` reads it
-as a rate and stores rate x area, so their cells are held to the reader below instead.
 """
 
 from __future__ import annotations

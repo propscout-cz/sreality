@@ -365,7 +365,8 @@ listings) served as STRUCTURED server-rendered HTML (no JSON API), so
 `remax_parser` is deterministic: the search cards are `<div class="pl-items__item"
 data-url=… data-price=… data-gps=… data-title=…>` (price, coordinates and title
 straight off the card), and the detail page is a `pd-detail-info__row` →
-`__label`/`__value` spec block + a clean integer `data-advert-price` + per-listing
+`__label`/`__value` spec block + a CZK total in `data-advert-price` (sometimes with a decimal point;
+absent on ~44% of pages, which read the `.pd-header__price` header: the card's own price and unit) + per-listing
 coordinates in `data-gps` (DMS, e.g. `50°05'26.1"N,14°29'33.4"E` — parsed to
 decimal, CZ-bbox-guarded, no geocoding step) + a `mlsf.remax-czech.cz/data//zs/{id}/`
 gallery (the `_th350` thumbnail strips to the full-resolution original). Typed
@@ -4190,12 +4191,14 @@ renumber.** Navigate by area:
     `scraper/price_reading.resolve`, stores the total: per m² times `area_m2` at its column scale
     (this measure's own denominator, so the plot on pozemek), per m² per month as the monthly rent,
     EUR at a FIXED 24.5 CZK (`EUR_CZK_RATE`: reviewed quarterly, changed only when the market rate
-    moves more than 0.5 CZK). No area, a yearly rate or another currency stores nothing. The walk
-    resolves a card against the stored row's area and category, so a card matching the stored total
-    reads unchanged and a real move still refetches. The portal's label is overridden only when its
-    reading is impossible (past five times the category's p0.1 or p99 of this measure,
-    `PPM2_BANDS`, read 2026-11-05) and the other reading normal (p1..p99); every override logs one
-    `PRICE basis_override` line. What was stated and the EUR rate used sit in
+    moves more than 0.5 CZK). No area, a yearly rate, a rent rate naming no month, or another
+    currency stores nothing. The walk resolves a card against the stored row's area and category,
+    so a card matching the stored total reads unchanged and a real move still refetches. The
+    portal's label is overridden only when its reading is impossible (past five times the
+    category's p0.1 or p99 of this measure, `PPM2_BANDS`: sreality's rows alone, read 2026-11-05,
+    since the text portals' stored rates-as-totals sank the all-source land p0.1 to 0.15 Kč/m²) and
+    the other reading normal (p1..p99); each override the DETAIL parse makes logs one
+    `PRICE basis_override` line (the card resolves silently). What was stated and the EUR rate used sit in
     `raw_json.price_reading`, so every snapshot keeps the rate it was converted at, and a EUR amount
     is hashed as `price_native` in place of `price_czk` (rule 2). remax, realitymix and bezrealitky
     read prices this way; the other text portals still refuse a rate

@@ -306,25 +306,17 @@ def parse_dms_pair(text: str | None) -> tuple[float | None, float | None]:
 
 _NO_PRICE: tuple[str, ...] = (
     "na vyzadani", "info o cene", "cena v rk", "dohodou", "neuvedena", "poptavce")
-# The detail spec-table cell renders "{amount} CZK / {unit}"; its unit names the column's.
+# The price's unit ("( za měsíc)", "/ za nemovitost") names the price_unit column's.
 _DETAIL_PRICE_UNITS: tuple[str, ...] = ("za mesic", "za nemovitost")
 
 
-def _read_price(text: str | None) -> PriceReading | None:
-    """A price cell (the card's `data-price`, the detail spec cell) as stated.
-
-    The unit is in the cell's `<small>` ("(za m²)", "(bez DPH, za m²)", "/ m2/měsíc"), so the
-    tags are spaced out, never cut at: cutting at the first `<` lost it and read a rate as a
-    total (#2355). The shared reader also keeps the "2" of a "Cena za m2:" prefix out of the
-    amount and reads a decimal comma as one ("9 990 000,39" was 999,000,039).
-    """
+def read_price(text: str | None) -> PriceReading | None:
+    """A price as stated (the card's `data-price`, the detail header or cell), or None."""
+    # Tags are spaced out, never cut at: the unit is the `<small>`, and cutting at the first
+    # `<` read a rate as a total (#2355).
     if not text or any(k in _norm_key(text) for k in _NO_PRICE):
         return None
     return read_price_text(re.sub(r"<[^>]*>", " ", text))
-
-
-def _detail_price(text: str | None) -> PriceReading | None:
-    return _read_price(text)
 
 
 def _detail_price_unit(text: str | None, category_type: str | None) -> str:
@@ -333,10 +325,14 @@ def _detail_price_unit(text: str | None, category_type: str | None) -> str:
                 "za mesic" if category_type == "pronajem" else "za nemovitost")
 
 
-def index_price(text: str | None) -> PriceReading | None:
-    """An index card's `data-price` as stated (amount, currency, basis), or None. The walk
-    resolves it against the stored row to decide a detail refetch."""
-    return _read_price(text)
+def _header_price_text(tree: HTMLParser) -> str | None:
+    """The detail header's price and its `<small>` unit, without the energy badge beside them."""
+    node = tree.css_first(".pd-header__price")
+    if node is None:
+        return None
+    unit = tree.css_first(".pd-header__price > small")
+    text = f"{node.text(deep=False)} {unit.text() if unit is not None else ''}"
+    return re.sub(r"\s+", " ", text).strip() or None
 
 
 def _parse_total(html: str) -> int | None:
@@ -568,13 +564,16 @@ def parse_detail(
     # 6,702 active pages carrying it (2026-11-05) states a rate or EUR in its price cell.
     reading = PriceReading(Decimal(price_attr)) if price_attr and float(price_attr) > 0 else None
     if reading is None:
-        # `data-advert-price` is absent on 132/300 stored pages, and the previous
-        # `.pd-price` fallback on ALL 300 — so ~44% of remax listings had no price path at
-        # all. The spec-table cell carries it on 300/300 and, unlike `.pd-header__price`,
-        # is not polluted by the adjacent energy-rating glyphs.
-        cell = _text(tree.css_first(".pd-table__value--price"))
-        reading = _detail_price(cell)
-        price_unit = _detail_price_unit(cell, category_type)
+        # Absent on ~44% of pages. The header renders the card's own price: the same amount at
+        # the card's precision, with its unit. The spec cell hides the unit on a reserved ad
+        # ("140 CZK / Rezervováno") and gives a rate three decimals to the card's two, so its
+        # total missed the card's and re-queued the ad (#2355); it stays the fallback.
+        text = _header_price_text(tree)
+        reading = read_price(text)
+        if reading is None:
+            text = _text(tree.css_first(".pd-table__value--price"))
+            reading = read_price(text)
+        price_unit = _detail_price_unit(text, category_type)
 
     # Coordinates: the SUBJECT's own map element carries `data-gps` (`#printMap` /
     # `#listingMap` on the real page, `.pd-map` on the pinned fixture); the recommended

@@ -11,7 +11,7 @@ owns *what a merge and a split do*: the property's facts, its curation, and what
 ## State (2026-11-05)
 - **Energy rating joins MS6 (PR #2400, 2026-11-05):** a property's class is the best any ad states (`min` in
   the rollup); maxima's second PENB grammar deleted; gate #2403. Its follow-ups are tickets: the stale-page
-  re-read #2401, the realitymix/remax repriced loop #2355, the engine's G-vs-B contradiction #2402.
+  re-read #2401, the realitymix/remax repriced loop #2355 (fixed by PR #2418), the engine's G-vs-B contradiction #2402.
 - **Delivered.** W1b–W5 live since 2026-10-08; **W6 applied 2026-10-18 06:46 UTC** (migration 618,
   first attempt, `618: landed`) after the R2 backup was read back (`backups/merge-sprint-w6/2026-10-18`), with the
   engine braked 06:38–06:53 UTC; PR #1732 merged as 4311673b. Database −1.89 GB.

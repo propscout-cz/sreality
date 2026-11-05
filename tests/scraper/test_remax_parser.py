@@ -12,11 +12,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 from scraper.hashing import digest
-from scraper.price_reading import PER_M2, PER_M2_MONTH, PriceReading
+from scraper.price_reading import PER_M2, PER_M2_MONTH, PriceReading, resolve
 from scraper.remax_parser import (
     category_from_typ,
     category_of,
-    index_price,
+    read_price,
     parse_detail,
     parse_index,
     subtype_of,
@@ -139,11 +139,11 @@ def test_parse_index_total_and_cards():
     assert first.detail_path.endswith("praha-3-zizkov")
     assert "Prodej bytu" in (first.title or "")
     assert "Žižkov" in (first.address or "")
-    assert index_price(first.price_text) == PriceReading(Decimal(9_962_000))
+    assert read_price(first.price_text) == PriceReading(Decimal(9_962_000))
 
     second = page.items[1]
     assert second.source_id_native == "440889"
-    assert index_price(second.price_text) is None  # "Dohodou"
+    assert read_price(second.price_text) is None  # "Dohodou"
 
 
 def test_parse_index_ids_only():
@@ -244,12 +244,12 @@ def test_type_of():
 
 
 def test_index_price_parsing():
-    assert index_price("9\xa0962\xa0000\xa0Kč") == PriceReading(Decimal(9_962_000))
-    assert index_price("4 900 000 Kč <small>(za nemovitost)</small>") == PriceReading(
+    assert read_price("9\xa0962\xa0000\xa0Kč") == PriceReading(Decimal(9_962_000))
+    assert read_price("4 900 000 Kč <small>(za nemovitost)</small>") == PriceReading(
         Decimal(4_900_000))
-    assert index_price("Info o ceně") is None
-    assert index_price("Dohodou") is None
-    assert index_price(None) is None
+    assert read_price("Info o ceně") is None
+    assert read_price("Dohodou") is None
+    assert read_price(None) is None
 
 
 def test_index_price_reads_the_small_unit_marker():
@@ -257,13 +257,13 @@ def test_index_price_reads_the_small_unit_marker():
     a rate read as a total. Shapes from a live rent index page (2026-11-05), VAT-prefixed
     forms included: the old anchored test missed 108 of 522 stored per-area cards."""
     card = "{}\n\t\t\t<small>\n\t\t\t\t({}\t\t\t\t{})\n\t\t\t</small>"
-    assert index_price(card.format("109\xa0Kč", "", "m²/měsíc")) == PriceReading(
+    assert read_price(card.format("109\xa0Kč", "", "m²/měsíc")) == PriceReading(
         Decimal(109), "CZK", PER_M2_MONTH)
-    assert index_price(card.format("2\xa0500\xa0Kč", "bez DPH,", "za m²")) == PriceReading(
+    assert read_price(card.format("2\xa0500\xa0Kč", "bez DPH,", "za m²")) == PriceReading(
         Decimal(2500), "CZK", PER_M2)
-    assert index_price(card.format("16\xa0500\xa0Kč", "vč. DPH,", "za měsíc")) == PriceReading(
+    assert read_price(card.format("16\xa0500\xa0Kč", "vč. DPH,", "za měsíc")) == PriceReading(
         Decimal(16500))
-    assert index_price(card.format("15,5\xa0€", "", "m²/měsíc")) == PriceReading(
+    assert read_price(card.format("15,5\xa0€", "", "m²/měsíc")) == PriceReading(
         Decimal("15.5"), "EUR", PER_M2_MONTH)
 
 
@@ -369,25 +369,19 @@ def test_detail_price_reads_a_per_area_cell_as_a_rate():
     """`listings.price_czk` is a TOTAL (or monthly rent), so a per-m² cell is a RATE that
     `parse_detail` multiplies by the area. The naive digit scrape used to take the "2" out of
     "m2": 7 759 -> 77592."""
-    from scraper.remax_parser import _detail_price
-
-    assert _detail_price("7\xa0759\n\t\tCZK/ za m2") == PriceReading(Decimal(7759), "CZK", PER_M2)
+    assert read_price("7\xa0759\n\t\tCZK/ za m2") == PriceReading(Decimal(7759), "CZK", PER_M2)
 
 
 def test_detail_price_reads_amount_and_unit():
-    from scraper.remax_parser import _detail_price
-
-    assert _detail_price("7\xa0800\xa0000\n\tCZK/ za nemovitost") == PriceReading(
+    assert read_price("7\xa0800\xa0000\n\tCZK/ za nemovitost") == PriceReading(
         Decimal(7_800_000))
-    assert _detail_price("2\xa0429\n\tCZK/ za měsíc") == PriceReading(Decimal(2429))
+    assert read_price("2\xa0429\n\tCZK/ za měsíc") == PriceReading(Decimal(2429))
 
 
 def test_detail_price_is_none_when_the_portal_withholds_it():
-    from scraper.remax_parser import _detail_price
-
-    assert _detail_price("Cena na vyžádání v kanceláři") is None
-    assert _detail_price(None) is None
-    assert _detail_price("bez CZK ale bez cisla") is None
+    assert read_price("Cena na vyžádání v kanceláři") is None
+    assert read_price(None) is None
+    assert read_price("bez CZK ale bez cisla") is None
 
 
 def _price_cell_page(cell: str, *, typ: str = "Pozemky", plot: str = "1 422 m²",
@@ -421,6 +415,50 @@ def test_a_decimal_total_is_not_inflated_100x():
     assert parse_detail(_price_cell_page(cell), source_url=_PLOT_URL).price_czk == 9_990_000
     attr = parse_detail(_price_cell_page(cell, advert_price="9990000.39"), source_url=_PLOT_URL)
     assert attr.price_czk == 9_990_000
+
+
+def _office_rent_page(cell: str, header: str) -> str:
+    """remax 436223 (Havlíčkův Brod): the header renders the card's own price, the spec cell
+    the same amount; on a reserved ad the cell's unit is replaced by the status."""
+    row = '<div class="pd-detail-info__row"><div class="pd-detail-info__label">{}</div>' \
+          '<div class="pd-detail-info__value">{}</div></div>'
+    return f"""<!DOCTYPE html><html><body>
+<h1 class="pd-header__title">Pronájem kancelářských prostor 36 m², Havlíčkův Brod</h1>
+<h2 class="pd-header__price">{header}
+<div class="pd-header__price-energy-rating"><div class="energy-efficiency-detail">
+<span class="energy-efficiency-detail__type">G</span>
+<span class="energy-efficiency-detail__desc">Mimořádně<br>nehospodárná</span></div></div></h2>
+<div class="pd-table__value pd-table__value--price">{cell}</div>
+<div class="pd-detail-info">{row.format("Typ nemovitosti:", "Kanceláře")}{row.format("Užitná plocha:", "36 m²")}</div>
+</body></html>"""
+
+
+_OFFICE_URL = "https://www.remax-czech.cz/reality/detail/436223/pronajem-kancelarskych-prostor"
+_OFFICE_CARD = "140 Kč <small> (bez DPH, m²/měsíc) </small>"
+
+
+def test_remax_436223_a_reserved_rate_is_read_with_the_unit_the_cell_hides():
+    """The reserved cell reads "140 CZK / Rezervováno": no unit, so the rate read as a 140 Kč
+    rent, while the card ("140 Kč (bez DPH, m²/měsíc)") resolved to 5,040 and re-queued the ad on
+    every walk. The header carries the card's unit."""
+    cell = '<strong> 140 CZK </strong> / <strong class="price-red">Rezervováno</strong>'
+    listing = parse_detail(_office_rent_page(cell, _OFFICE_CARD), source_url=_OFFICE_URL)
+    assert (listing.category_main, listing.category_type, listing.area_m2) == (
+        "komercni", "pronajem", 36.0)
+    assert listing.price_czk == 5_040
+    card = resolve(read_price(_OFFICE_CARD), area_m2=listing.area_m2,
+                   category_main="komercni", category_type="pronajem")
+    assert card.total_czk == listing.price_czk
+
+
+def test_the_detail_reads_the_card_s_precision_not_the_cell_s():
+    """remax 450103: the cell says "36,748 CZK", the card and the header "36,75 Kč". Reading the
+    cell, the detail and the card resolved a crown apart, and the exact compare re-queued it."""
+    cell = "<strong> 36,748 CZK </strong><small> / m2/měsíc</small>"
+    header = "36,75 Kč <small> ( m²/měsíc) </small>"
+    listing = parse_detail(_office_rent_page(cell, header), source_url=_OFFICE_URL)
+    assert listing.price_czk == 1_323   # 36.75 x 36 m², never 36.748 x 36 = 1,322
+    assert listing.price_unit == "za mesic"
 
 
 def test_a_eur_total_converts_at_the_fixed_rate():
