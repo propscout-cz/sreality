@@ -97,7 +97,7 @@ over the answer table's own columns is one definition, computed where it is read
 5. nothing → NULL. A CZ row with no town is the red line rule 25 measures; it renders as an em-dash,
    never as a bare "CZ".
 
-**Precision is DRAWN, not described** (W3-3, revised 2026-09-22). `browse_projection` and
+**Precision is exact or approximate, never a radius** (W3-3, revised 2026-09-22 and 2026-11-05). `browse_projection` and
 `listing_feed_public` also publish `granularity_rank` (the INT from `location_granularity_rank` —
 the SPA compares numbers, never enum text) and `uncertainty_radius_m`. In point mode the Browse map
 draws a pin **at building level or better** (rank ≥ 90) with a black outer contour — the pin is the

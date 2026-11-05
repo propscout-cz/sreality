@@ -1,12 +1,10 @@
 /* How precise a map pin is, carried by the pin itself.
  *
- * Ruling 2026-11-01 retired the radius: "A pin is exact or it is the centre of
- * the RÚIAN unit we hold, marked inaccurate." An ad below address level that
- * stands on a portal pin keeps its pin and reads as approximate too (Q3). So the
- * map draws no uncertainty circle and prints no metre figure: a pin resolved at
- * building level or better wears a black outer contour (the pin IS the
- * building), anything coarser, or not resolved at all, does not, and the popup
- * says "Přesná poloha" or "Přibližná poloha", naming the rung in its tooltip.
+ * A pin is exact or approximate, never a radius (rulings of 2026-11-01 and Q3 in
+ * docs/design/location-quality/PROGRAM.md): a pin resolved at building level or
+ * better wears a black outer contour (the pin IS the building), anything coarser,
+ * or not resolved at all, does not, and the popup says "Přesná poloha" or
+ * "Přibližná poloha", naming the rung in its tooltip.
  *
  * Granularity is compared by RANK and never by enum text or enum ordinality
  * (migration 380's `location_granularity_rank` is the only legal comparator);

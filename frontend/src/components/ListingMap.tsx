@@ -878,7 +878,6 @@ export default function ListingMap({
         if (!f || f.geometry.type !== 'Point') return;
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
-        /* The hover preview gives way to the clicked popup. */
         hidePreview();
         popupRef.current?.remove();
         popupRef.current = new maplibregl.Popup({

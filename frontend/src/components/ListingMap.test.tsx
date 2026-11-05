@@ -32,8 +32,6 @@ describe('<PriceMetricControls>', () => {
   });
 });
 
-/* Ruling 2026-11-01 retired the radius: a pin is exact or approximate, and the key
- * says so without promising a circle the map no longer draws. */
 describe('<PinPrecisionKey>', () => {
   it('names exact and approximate pins and promises no circle', () => {
     render(<PinPrecisionKey exact={3} approx={5} inactive={1} />);

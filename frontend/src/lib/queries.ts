@@ -73,7 +73,7 @@ export const CARD_PAGE_SIZE = 24;
  * (lib/pinPrecision): a pin at building level or better wears a black contour,
  * and the popup says exact or approximate. It is the INT form of the rung
  * (migration 380), because granularity is compared by rank and never by enum
- * text. The radius left this list with the drawn circle (ruling 2026-11-01). */
+ * text. */
 const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
