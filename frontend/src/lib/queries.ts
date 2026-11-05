@@ -1043,8 +1043,7 @@ const DETAIL_COLS =
   'description,source_url';
 
 /* THE PROPERTY as its Browse card shows it (decision 11): the `properties_public`
- * row, whose every advert field is its canonical advert's and every physical fact
- * the first non-empty in the same order (migration 561). Selected in the
+ * row, every field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md). Selected in the
  * ListingPublic shape the detail components render, `id` being the canonical
  * advert (`listing_id`); the price-change pair is the canonical advert's own
  * series, as Browse filters on it. The row carries no portal URL: each advert's

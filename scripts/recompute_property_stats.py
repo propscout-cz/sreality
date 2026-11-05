@@ -12,8 +12,9 @@
    (`location_listing_ref_id`) is rank 1 of the same function's location order (migration 635:
    a map point, then determined foreign, then the finest rung, then the canonical order), set in
    the same statement as the canonical advert, so both are set or neither is; every read model
-   takes a property's place from it. The six amenities are a union over every advert (MS6);
-   every other physical fact is the first non-empty value in the canonical order. The price
+   takes a property's place from it. The six amenities are a union over every advert and the
+   energy rating the best class any advert states (MS6); every other physical fact is the first
+   non-empty value in the canonical order. The price
    figures are the canonical advert's lineage (MS10): its own and its same-portal predecessors'
    `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
    the portal lists and one newest-advert date per offered portal (MS19). `repr_since` is
@@ -125,8 +126,8 @@ _RECOMPUTE_BATCH_SQL = f"""
       SELECT * FROM kids WHERE location_rank = 1
     ),
     -- Lifecycle and the portals over every advert, active or not; the six amenities are a union
-    -- (yes when any advert says yes, MS6); every other physical fact is the first non-empty value
-    -- in the canonical order.
+    -- (yes when any advert says yes) and the energy rating the best class any advert states
+    -- (MS6); every other physical fact is the first non-empty value in the canonical order.
     child_agg AS (
       SELECT
         k.property_id              AS pid,
@@ -150,7 +151,7 @@ _RECOMPUTE_BATCH_SQL = f"""
         (array_agg(k.parking_lots ORDER BY k.canonical_rank) FILTER (WHERE k.parking_lots IS NOT NULL))[1] AS parking_lots,
         (array_agg(k.building_type ORDER BY k.canonical_rank) FILTER (WHERE k.building_type IS NOT NULL))[1] AS building_type,
         (array_agg(k.ownership ORDER BY k.canonical_rank) FILTER (WHERE k.ownership IS NOT NULL))[1] AS ownership,
-        (array_agg(k.energy_rating ORDER BY k.canonical_rank) FILTER (WHERE k.energy_rating IS NOT NULL))[1] AS energy_rating
+        min(k.energy_rating)       AS energy_rating
       FROM kids k
       GROUP BY k.property_id
     ),

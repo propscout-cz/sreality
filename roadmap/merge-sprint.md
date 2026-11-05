@@ -56,6 +56,9 @@ owns *what a merge and a split do*: the property's facts, its curation, and what
   of Browse and the map: the first full sweep after the deploy does it, no manual write.
 
 ## Owed now that W6 is applied
+- Done 2026-11-05: the energy rating joins MS6 (the best class any ad states, `min` in the rollup); maxima's
+  second PENB grammar deleted. Owed: the stale-page re-read, the realitymix/remax repriced loop and the
+  engine's G-vs-B contradiction are their own tickets (see the PR).
 - The AUTODEDUP session's drop of `properties.published_at` is unblocked; `properties_gate_cover_idx`
   INCLUDEs that column, so its replacement comes first.
 - #1655 rebases onto the sprint; #1634 removes its two `listing_feed_public` reads (migration 575's pre-

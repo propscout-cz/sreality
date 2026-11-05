@@ -243,9 +243,7 @@ export interface ListingFilters {
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
-  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
-   * rating — the first non-null across its ads in canonical order — is one of them;
-   * an unrated property never does. Empty = no constraint. */
+  /* PENB letters A–G (registry `energy_rating_match`). Empty = no constraint. */
   energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;

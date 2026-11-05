@@ -85,7 +85,6 @@ _PRICE_RUN_RE = re.compile(r"\d[\d\s ​‌‍⁠]*")
 _PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
 # "3./6." -> floor 3 of 6.
 _FLOOR_RE = re.compile(r"(-?\d+)\s*\.\s*/\s*(\d+)\s*\.")
-_PENB_RE = re.compile(r"PENB\s*:?\s*([A-G])\b")
 # maxima serves /resize/w-{width}-...; a detail page mixes a w-800 cover with w-300
 # thumbnails. Request the largest — the CDN caps at the original (~1799x1200).
 _MAXIMA_RESIZE_RE = re.compile(r"/resize/w-\d+-")
@@ -171,11 +170,6 @@ def _sale_type_from_title(title: str | None) -> str | None:
     if "prodej" in low:
         return "prodej"
     return None
-
-
-def _penb_from_text(text: str) -> str | None:
-    m = _PENB_RE.search(text)
-    return m.group(1).upper() if m else None
 
 
 def index_price(text: str | None) -> int | None:
@@ -409,10 +403,7 @@ def parse_detail(
         building_type=vocabulary.canonical("building_type", SOURCE, read("building_type")),
         condition=vocabulary.canonical("condition", SOURCE, read("condition")),
         ownership=vocabulary.canonical("ownership", SOURCE, read("ownership")),
-        energy_rating=(
-            vocabulary.energy_rating(read("energy_rating"))
-            or _penb_from_text(_page_text(tree))
-        ),
+        energy_rating=vocabulary.energy_rating(read("energy_rating")),
         # R11: balcony OR loggia, and parking-stání OR garage. maxima renders each as
         # its own "Ano"-or-absent row, so the union must not lose a stated "Ne" — which
         # is what `a or b` did (`False or None` is None).

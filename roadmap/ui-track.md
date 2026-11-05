@@ -315,9 +315,8 @@ toolkit work.
   migration 680, and a placeholder-price floor in the rollup) was merged 2026-10-26 and reverted the next
   day (migration 685): the user narrows odd values with the filters (Lot area, Price, Price change).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
-  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
-  property's rating is the first non-null across its ads; G is also the legal "no certificate"
-  placeholder (~half of rated flats for sale), which no portal marks apart.
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). G is
+  also the legal "no certificate" placeholder (~half of rated flats for sale), which no portal marks apart.
 - **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
   existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
   (the explore-broker modal still opens a broker's whole book) and stays outside presets.

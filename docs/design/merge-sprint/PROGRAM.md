@@ -107,7 +107,13 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   With no active ad, an ad with a map point outranks one without, even if that one was seen later.
 - **MS6 — Amenities are a union.** Balcony, lift, parking, terrace, garage, cellar: yes if any of the
   property's ads says yes, active or not. Accepted cost: an unreliable "yes" beats a stated "no"; MF
-  rent and yield rise on about 2,300 sale flats.
+  rent and yield rise on about 2,300 sale flats. **Energy rating (operator ruling 2026-11-05, moved here
+  from the first-ad row of MS11):** the best class any of the property's ads states, active or not (A
+  best, G worst: `min` over the letters). Reason: about 96 % of a stated G is the statutory placeholder
+  for "no certificate" (zákon 406/2000 Sb. § 7a), which no portal marks apart, so the first ad's G hid
+  a sibling's real class. Accepted costs: where two ads state different real classes the better one
+  wins; an active property can show a class only an ended ad states; a house whose best class is
+  better than G now sends it to a Valuo valuation.
 - **MS7 — Brokers are a list.** The brokers of the active ads, one entry per person, the canonical ad's
   broker first. When no ad is active: the brokers of all its ads, marked as from inactive ads. The
   property header shows the list; the pipeline board shows its first entry plus "+N"; each ad's own row
@@ -130,8 +136,9 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
 | Field | Rule |
 |---|---|
 | Price, price per m², area, layout, floor, category (a share sale with a sale reads as a sale once #1655 lands: operator ruling 2026-10-01), description, photos, link, furnished, condition text, our two condition grades (MS4), map point, address, the city figures read from that point | the canonical ad (MS5) |
-| Building type, ownership, energy rating, usable / plot / garden area, parking spaces | the first ad in the canonical order that states it (today's rule, kept) *(default)* |
+| Building type, ownership, usable / plot / garden area, parking spaces | the first ad in the canonical order that states it (today's rule, kept) *(default)* |
 | Balcony, lift, parking, terrace, garage, cellar | yes if any ad says yes (MS6) |
+| Energy rating | the best class any ad states, active or not (MS6, ruling 2026-11-05) |
 | Brokers | MS7 |
 | Portals | every portal with an ad; portals with an active ad kept separately (MS19) |
 | Active | any ad active |

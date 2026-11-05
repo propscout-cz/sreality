@@ -50,11 +50,12 @@ ENTRIES = (
         name="get_property_dossier",
         description=f"Up to {PROPERTIES_MAX} properties as their page shows them, read as the user reads it, one row "
         "each in the order asked: the facts (price, area, layout, condition, floor and description are its "
-        "canonical ad's; building, ownership, energy rating and the other areas the first known across its ads, "
-        "canonical first; an amenity is yes when any ad says so), the place (label, point, town code), the per-m² "
-        "price with its basis, MF gross yield, price changes and time on market; every ad, the canonical first, then "
+        "canonical ad's; building, ownership and the other areas the first known across its ads, canonical first; "
+        "an amenity is yes, the energy class the best, when any ad says so), the place (label, point, town code), "
+        "the per-m² price with its basis, MF gross yield, price changes and time on market; every ad, the canonical "
+        "first, then "
         "the live, then the ended, newest first (listing_id, portal, URL, the advertiser's reference, deal type, "
-        "price, its own per-m² price with its basis and the points where its price changed); and the estimation runs "
+        "price, its own per-m² price with its basis and its price-change points); and the estimation runs "
         "its page lists on its ads, the user's and the platform's alike, newest first. A property too large to return "
         "whole keeps the first of its ads and runs that fit, its truncated naming each cut. No broker: "
         "get_property_brokers lists them. When metadata.truncated is present, ask again for the properties left out.",

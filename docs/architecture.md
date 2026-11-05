@@ -2094,9 +2094,10 @@ renumber.** Navigate by area:
     `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
     the place moves: price, area, photos, link and every fact stay the canonical advert's, and
     past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
-    terrace, garage, cellar) are a union over every advert, active or not (MS6); every other
-    physical fact (building type, ownership, energy rating, estate/usable/garden area, parking
-    spaces) is the first non-empty value in the canonical order. The price figures are the
+    terrace, garage, cellar) are a union over every advert, active or not, and the energy rating
+    is the best class any advert states (MS6, ruling 2026-11-05); every other physical fact
+    (building type, ownership, estate/usable/garden area, parking spaces) is the first non-empty
+    value in the canonical order. The price figures are the
     canonical advert's LINEAGE (MS10): its own and its same-portal predecessors'
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
