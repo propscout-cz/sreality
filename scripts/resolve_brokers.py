@@ -71,6 +71,7 @@ _T = TypeVar("_T")
 def _sigterm_to_systemexit(signum: int, frame: Any) -> None:
     raise SystemExit(stop.EXIT_CODE)
 
+
 _FREE_KEY = "broker_free_email_domains"
 _FRANCHISE_KEY = "broker_franchise_domains"
 # The kill switch for the whole auto-merge step. ABSENT MEANS ON: the engine is the
