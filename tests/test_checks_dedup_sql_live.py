@@ -445,7 +445,8 @@ def test_the_decision_lag_reads_the_new_feeds_in_scope_ads_first_seen_1_to_24_h_
     _decided(conn, f"w5{uuid.uuid4().hex[:10]}", oldest, after_min=5)   # another generation's decision
 
     young_h, old_h = dd._LAG_WINDOW_H
-    assert conn.execute(dd._ARRIVAL_FLOOR_SQL, {"hours": old_h + dd._FLOOR_SLACK_H}).fetchone() == (floor,)
+    assert conn.execute(dd._ARRIVAL_FLOOR_SQL, {"hours": old_h + dd._FLOOR_SLACK_H,
+                                                "sources": [_PORTAL]}).fetchone() == (floor,)
     window = conn.execute(RT_NEW_LISTINGS_SQL, {"after_id": floor, "lag": young_h * 3600,
                                                 "window": dd._LAG_WINDOW_ROWS,
                                                 **parse_scope(_LANE_SCOPE).params()}).fetchone()

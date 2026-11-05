@@ -501,10 +501,11 @@ _BATCH_INSERT_SQL = """
     RETURNING id
 """
 
-# THE YIELD READ (W12): is a GitHub run of `lane` still in flight? One indexed-enough read —
-# the table is ~1 300 rows, so no migration buys anything a sequential scan does not already
-# give. `started_at` bounds it because a killed run leaves its 'running' stamp behind for
-# ever, and a stale marker must never silence the minute lane permanently.
+# THE YIELD READ (W12): is a GitHub run of `lane` still in flight? Every minute, so it reads
+# location_claim_batches_running_idx (migration 730; partial on 'running', in this ORDER BY),
+# never the never-pruned table (74k rows on 2026-11-05). `started_at` bounds it because a killed
+# run leaves its 'running' stamp behind for ever, and a stale marker must never silence the
+# minute lane permanently.
 _RUNNING_BATCH_SQL = """
     SELECT id FROM location_claim_batches
     WHERE lane = %(lane)s

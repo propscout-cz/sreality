@@ -70,6 +70,33 @@ select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' ->
  order by c ->> 'subject', r.run_at desc
 """
 
+# Every active ad with a gone verdict newer than its last sighting (in dwell), with the earliest such
+# verdict, as db.gone_evidence reads it: a refuted earlier verdict never hides a later one that still
+# stands. Delisting's stuck arm and coverage's residual read it. The verdicts are grouped per ad off
+# the partial gone index first, so listings is probed once per ad, never once per verdict (each
+# re-check of an ad files one more); its key is unique, so the rows are one per ad as before. The
+# probe itself, one heap row an ad, is the read's cost: 43k verdicts of 42k ads, 177k buffers, 11-05.
+# `{scope}` is an extra `and ...` on the verdicts.
+_IN_DWELL_CTES = """gone as (
+    select c.source, c.native_id, array_agg(c.completed_at) as gone_at
+      from detail_queue_completions c
+     where c.outcome = 'gone'{scope}
+     group by c.source, c.native_id),
+pending as (
+    select l.source, l.category_main, l.category_type, l.id, v.first_gone_at
+      from gone g
+      join listings l on l.source = g.source and l.source_id_native = g.native_id
+     cross join lateral (
+           select min(t) filter (where t > coalesce(l.last_seen_at, '-infinity'::timestamptz))
+                      as first_gone_at
+             from unnest(g.gone_at) as t) v
+     where l.is_active and v.first_gone_at is not null)"""
+
+
+def in_dwell_ctes(scope: str = "") -> str:
+    """The `gone` and `pending` CTEs above, `scope` (an `and ...` on the verdicts) spliced in."""
+    return _IN_DWELL_CTES.format(scope=scope)
+
 
 def now(conn: Any) -> _dt.datetime:
     """The database's clock, the one every window in these checks' SQL is measured on."""

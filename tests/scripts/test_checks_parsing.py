@@ -1037,7 +1037,7 @@ def test_parsing_is_registered_as_the_portals_alarm_on_the_worker() -> None:
     assert row.fn is qu.check_parsing
     assert (row.domain, row.cls, row.host, row.cadence_s, row.label, row.unit, row.owner_path,
             row.budget_s) == ("portals", "alarm", "realtime-worker", 21_600, "Parsing", "cells",
-                              "/scrapers", 180.0)
+                              "/scrapers", 300.0)
 
 
 def test_no_portal_is_spelled_in_the_parsing_literals() -> None:
