@@ -45,7 +45,7 @@ from scraper.portal import (
     deadline_reached, stop_is_portal_end, walk_coverage, walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
-from scraper.portal_runner import DrainItem
+from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 from scraper.remax_client import RemaxClient, detail_url, index_url
 from scraper.remax_parser import category_of, index_price, parse_detail, parse_index
@@ -61,7 +61,7 @@ class _AgendaWalk:
 
     def __init__(
         self, native_ids: list[str], ref_map: dict[str, str],
-        price_map: dict[str, int | None], cat_map: dict[str, str | None],
+        price_map: dict[str, IndexPrice], cat_map: dict[str, str | None],
         total: int | None, pages: int, stop_reason: StopReason, reached_end: bool,
     ) -> None:
         self.native_ids = native_ids
@@ -144,7 +144,7 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 LOG.warning("INDEX archive preload failed: %s", exc)
         native_ids: list[str] = []
         ref_map: dict[str, str] = {}
-        price_map: dict[str, int | None] = {}
+        price_map: dict[str, IndexPrice] = {}
         cat_map: dict[str, str | None] = {}
         total: int | None = None
         pages = 0
@@ -194,9 +194,9 @@ class RemaxPortal(portal_runner.PortalDefaults):
                     native_ids.append(nid)
                     new_on_page += 1
                 ref_map[nid] = detail_url(item.detail_path)
-                # Same clamps as the stored price so the unchanged-compare can't
-                # see a value the write boundary would have nulled.
-                price_map[nid] = db.sane_price_czk(index_price(item.price_text))
+                # As stated; reconcile_sightings resolves it against the stored row and
+                # applies the write boundary's clamps before it compares.
+                price_map[nid] = index_price(item.price_text)
                 cat_map[nid] = category_of(None, item.title)
             if self._max_pages and pages >= self._max_pages:
                 stop_reason = "page_cap"

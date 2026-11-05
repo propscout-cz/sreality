@@ -9,7 +9,10 @@ full-resolution original).
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from scraper.hashing import digest
+from scraper.price_reading import PER_M2, PER_M2_MONTH, PriceReading
 from scraper.remax_parser import (
     category_from_typ,
     category_of,
@@ -136,7 +139,7 @@ def test_parse_index_total_and_cards():
     assert first.detail_path.endswith("praha-3-zizkov")
     assert "Prodej bytu" in (first.title or "")
     assert "Žižkov" in (first.address or "")
-    assert index_price(first.price_text) == 9_962_000
+    assert index_price(first.price_text) == PriceReading(Decimal(9_962_000))
 
     second = page.items[1]
     assert second.source_id_native == "440889"
@@ -241,11 +244,27 @@ def test_type_of():
 
 
 def test_index_price_parsing():
-    assert index_price("9\xa0962\xa0000\xa0Kč") == 9_962_000
-    assert index_price("4 900 000 Kč <small>(za nemovitost)</small>") == 4_900_000
+    assert index_price("9\xa0962\xa0000\xa0Kč") == PriceReading(Decimal(9_962_000))
+    assert index_price("4 900 000 Kč <small>(za nemovitost)</small>") == PriceReading(
+        Decimal(4_900_000))
     assert index_price("Info o ceně") is None
     assert index_price("Dohodou") is None
     assert index_price(None) is None
+
+
+def test_index_price_reads_the_small_unit_marker():
+    """#2355: `_parse_price` cut the card at the first `<`, so the `<small>` unit was lost and
+    a rate read as a total. Shapes from a live rent index page (2026-11-05), VAT-prefixed
+    forms included: the old anchored test missed 108 of 522 stored per-area cards."""
+    card = "{}\n\t\t\t<small>\n\t\t\t\t({}\t\t\t\t{})\n\t\t\t</small>"
+    assert index_price(card.format("109\xa0Kč", "", "m²/měsíc")) == PriceReading(
+        Decimal(109), "CZK", PER_M2_MONTH)
+    assert index_price(card.format("2\xa0500\xa0Kč", "bez DPH,", "za m²")) == PriceReading(
+        Decimal(2500), "CZK", PER_M2)
+    assert index_price(card.format("16\xa0500\xa0Kč", "vč. DPH,", "za měsíc")) == PriceReading(
+        Decimal(16500))
+    assert index_price(card.format("15,5\xa0€", "", "m²/měsíc")) == PriceReading(
+        Decimal("15.5"), "EUR", PER_M2_MONTH)
 
 
 def test_parse_detail_full():
@@ -346,32 +365,70 @@ def test_parse_detail_rent_and_category_from_typ():
     assert "Praha 10" in (listing.locality or "")
 
 
-def test_detail_price_refuses_per_area_pricing():
-    """`listings.price_czk` is a TOTAL (or monthly rent) across all nine portals —
-    production carries only za nemovitost / za mesic / celkem / měsíc, none per-area. A
-    per-m² figure stored there reads as a total in every downstream consumer, so it must
-    yield NULL. The naive digit scrape also took the "2" out of "m2": 7 759 -> 77592."""
+def test_detail_price_reads_a_per_area_cell_as_a_rate():
+    """`listings.price_czk` is a TOTAL (or monthly rent), so a per-m² cell is a RATE that
+    `parse_detail` multiplies by the area. The naive digit scrape used to take the "2" out of
+    "m2": 7 759 -> 77592."""
     from scraper.remax_parser import _detail_price
 
-    assert _detail_price("7\xa0759\n\t\tCZK/ za m2", "prodej") == (None, "za nemovitost")
+    assert _detail_price("7\xa0759\n\t\tCZK/ za m2") == PriceReading(Decimal(7759), "CZK", PER_M2)
 
 
 def test_detail_price_reads_amount_and_unit():
     from scraper.remax_parser import _detail_price
 
-    assert _detail_price("7\xa0800\xa0000\n\tCZK/ za nemovitost", "prodej") == (
-        7800000,
-        "za nemovitost",
-    )
-    assert _detail_price("2\xa0429\n\tCZK/ za měsíc", "pronajem") == (2429, "za mesic")
+    assert _detail_price("7\xa0800\xa0000\n\tCZK/ za nemovitost") == PriceReading(
+        Decimal(7_800_000))
+    assert _detail_price("2\xa0429\n\tCZK/ za měsíc") == PriceReading(Decimal(2429))
 
 
 def test_detail_price_is_none_when_the_portal_withholds_it():
     from scraper.remax_parser import _detail_price
 
-    assert _detail_price("Cena na vyžádání v kanceláři", "prodej")[0] is None
-    assert _detail_price(None, "prodej")[0] is None
-    assert _detail_price("bez CZK ale bez cisla", "prodej")[0] is None
+    assert _detail_price("Cena na vyžádání v kanceláři") is None
+    assert _detail_price(None) is None
+    assert _detail_price("bez CZK ale bez cisla") is None
+
+
+def _price_cell_page(cell: str, *, typ: str = "Pozemky", plot: str = "1 422 m²",
+                     advert_price: str | None = None) -> str:
+    """remax 447268 (Kostomlaty nad Labem) in the live spec-table shape."""
+    row = '<div class="pd-detail-info__row"><div class="pd-detail-info__label">{}</div>' \
+          '<div class="pd-detail-info__value">{}</div></div>'
+    attr = f' data-advert-price="{advert_price}"' if advert_price else ""
+    return f"""<!DOCTYPE html><html><body>
+<h1 class="pd-header__title">Prodej pozemku 1422 m², Kostomlaty nad Labem (ID 059-NP08053)</h1>
+<div class="pd-price-box"><span class="pd-price"{attr}>x</span></div>
+<div class="pd-table__value pd-table__value--price">{cell}</div>
+<div class="pd-detail-info">{row.format("Typ nemovitosti:", typ)}{row.format("Plocha parcely:", plot)}</div>
+</body></html>"""
+
+
+_PLOT_URL = "https://www.remax-czech.cz/reality/detail/447268/prodej-pozemku-1422-m2-kostomlaty-nad-labem"
+
+
+def test_remax_447268_a_per_m2_plot_price_is_the_plot_total():
+    listing = parse_detail(_price_cell_page("<strong> 2 500 CZK </strong><small> / za m2</small>"),
+                           source_url=_PLOT_URL)
+    assert (listing.category_main, listing.area_m2) == ("pozemek", 1422.0)
+    assert listing.price_czk == 3_555_000
+    assert listing.raw["price_reading"] == {"amount": 2500.0, "currency": "CZK", "basis": PER_M2}
+
+
+def test_a_decimal_total_is_not_inflated_100x():
+    """18 active rows read "9 990 000,39 CZK" as 999,000,039 by concatenating every digit."""
+    cell = "<strong> 9 990 000,39 CZK </strong><small> / za nemovitost</small>"
+    assert parse_detail(_price_cell_page(cell), source_url=_PLOT_URL).price_czk == 9_990_000
+    attr = parse_detail(_price_cell_page(cell, advert_price="9990000.39"), source_url=_PLOT_URL)
+    assert attr.price_czk == 9_990_000
+
+
+def test_a_eur_total_converts_at_the_fixed_rate():
+    cell = "<strong> 635 000,08 EUR </strong><small> / za nemovitost</small>"
+    listing = parse_detail(_price_cell_page(cell), source_url=_PLOT_URL)
+    assert listing.price_czk == 15_557_501
+    assert listing.raw["price_reading"]["czk_per_eur"] == 24.5
+    assert listing.price_native == "635000.08 EUR"
 
 
 # Two DIFFERENT labelled measures on one page: the discriminating case for the

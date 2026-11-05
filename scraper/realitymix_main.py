@@ -42,7 +42,7 @@ from scraper.portal import (
     walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
-from scraper.portal_runner import DrainItem
+from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 from scraper.realitymix_client import RealitymixClient, detail_url
 from scraper.realitymix_parser import (
@@ -108,7 +108,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
         client = RealitymixClient(limiter=limiter)
 
         native_ids: list[str] = []
-        price_map: dict[str, int | None] = {}
+        price_map: dict[str, IndexPrice] = {}
         ref_map: dict[str, str] = {}
         total: int | None = None
         pages = 0

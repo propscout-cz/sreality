@@ -23,6 +23,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
+# Since #2355 remax, realitymix and bezrealitky no longer refuse a rate: they read it with its
+# basis and store rate x area (scraper.price_reading). This test serves the other text portals.
+
 # Matched against NFKD-folded text, so `Kč`->`Kc`, `m²`->`m2`, `měsíc`->`mesic`
 # and the alternatives stay small. `_G` is the thin / no-break / zero-width gap
 # the Czech portals sprinkle between amount, currency and unit. Currency and

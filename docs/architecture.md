@@ -1447,7 +1447,9 @@ renumber.** Navigate by area:
    `hashing.digest`; unifying the documents is a data event (≈1.5M snapshots), not a refactor.
    A page that states its price in a foreign currency hashes that (`price_native`, never a column)
    IN PLACE OF `price_czk`: idnes re-converts it to Kč daily, which re-snapshotted its whole
-   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed.
+   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed. Our own
+   fixed EUR rate (rule 23, `scraper/price_reading.py`) rides the same field, so its quarterly
+   review re-prices a row on its next fetch without a snapshot.
    **Sanctioned exceptions — payload-free, no snapshot.** Writers of derived, enrichment, link
    or lifecycle columns: condition levels (`toolkit/condition_scoring.py`), the stored `mf_*`
    columns (their SQL recompute, last redefined in migration 507, is no longer called — MF is
@@ -4181,6 +4183,23 @@ renumber.** Navigate by area:
     price below its per-basis floor (sale 100 000 CZK, rent 1 000 CZK, land deliberately
     unfloored) all yield NULL — a visible gap, never a guess. Rounded to 2dp so all five
     publishing relations return byte-identical figures.
+
+    **The numerator is a stored TOTAL, never a rate** (#2355; operator rulings 2026-11-03 and
+    2026-11-05). Where a portal states a price per m², per m² per month or in EUR, its card reader
+    and its detail parser both read `PriceReading(amount, currency, basis)`, and ONE conversion,
+    `scraper/price_reading.resolve`, stores the total: per m² times `area_m2` at its column scale
+    (this measure's own denominator, so the plot on pozemek), per m² per month as the monthly rent,
+    EUR at a FIXED 24.5 CZK (`EUR_CZK_RATE`: reviewed quarterly, changed only when the market rate
+    moves more than 0.5 CZK). No area, a yearly rate or another currency stores nothing. The walk
+    resolves a card against the stored row's area and category, so a card matching the stored total
+    reads unchanged and a real move still refetches. The portal's label is overridden only when its
+    reading is impossible (past five times the category's p0.1 or p99 of this measure,
+    `PPM2_BANDS`, read 2026-11-05) and the other reading normal (p1..p99); every override logs one
+    `PRICE basis_override` line. What was stated and the EUR rate used sit in
+    `raw_json.price_reading`, so every snapshot keeps the rate it was converted at, and a EUR amount
+    is hashed as `price_native` in place of `price_czk` (rule 2). remax, realitymix and bezrealitky
+    read prices this way; the other text portals still refuse a rate
+    (`scraper/price_text.is_per_area_price`).
 
     **Its sibling, the MF reference rent** (migration 565): one inlinable SQL function,
     `mf_reference(...)`, over the ingest-refreshed `rent_map_cells` matview — a value, the town's

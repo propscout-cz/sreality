@@ -658,7 +658,8 @@ def _floor_cell(row: dict[str, Any], thresholds: dict[str, Any]) -> dict[str, An
     return _gauge_share_cell(
         f"floor/{row['source']}/{_grain(row)}", row["source"], shares, (warn, fail),
         "a per-m² unit price is written as the price: check the portal's price parsing against "
-        "scraper/price_text.is_per_area_price",
+        "scraper/price_text.is_per_area_price, or scraper/price_reading.py where the portal "
+        "reads a rate",
         f"{priced:,} priced ads with an area, {priced_7d:,} of them first written in 7 d: "
         f"under the {min_n} an arm needs",
         {"basis": row["price_per_m2_basis"], "priced": priced, "priced_7d": priced_7d})

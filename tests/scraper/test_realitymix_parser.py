@@ -8,7 +8,11 @@ broker anchor + data-fk_rk agency id, and the st.realitymix.cz/i/…/nab_ galler
 
 from __future__ import annotations
 
+from decimal import Decimal
+from pathlib import Path
+
 from scraper.hashing import digest
+from scraper.price_reading import PER_M2, PER_M2_MONTH, TOTAL, PriceReading
 from scraper.realitymix_parser import (
     _category_from_slug,
     category_from_breadcrumb,
@@ -146,6 +150,67 @@ RENT_NO_PRICE_HTML = """
 """
 
 
+def _land_html(price_cell: str, plot: str = "4087 m²") -> str:
+    """A land detail page in the live shape of realitymix 8557677 (#2355)."""
+    return f"""
+<!DOCTYPE html><html><head>
+<script type="application/ld+json">
+{{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[
+ {{"@type":"ListItem","position":2,"item":{{"@id":"https://realitymix.cz/reality/pozemky","name":"Pozemky"}}}},
+ {{"@type":"ListItem","position":3,"item":{{"@id":"https://realitymix.cz/reality/pozemky/prodej","name":"Prodej"}}}}
+]}}
+</script>
+</head><body>
+<h1>Prodej pozemku pro bydlení, 4 087 m²</h1>
+<table><tr class="advert-description__short-props-price"><td>Cena:</td>
+  <td>{price_cell} &nbsp;<button>Nabídněte cenu</button></td></tr></table>
+<ul class="detail-information">
+  <li class="detail-information__data-item"><span>Plocha parcely:</span><span>{plot}</span></li>
+</ul>
+</body></html>
+"""
+
+
+_LAND_URL = "https://realitymix.cz/detail/x/prodej-pozemku-8557677.html"
+
+
+def test_a_per_m2_price_is_stored_as_the_total_of_the_plot():
+    listing = parse_detail(_land_html("3 350 Kč / (za m 2 )"), source_url=_LAND_URL)
+    assert (listing.area_m2, listing.area_basis) == (4087.0, "plot")
+    assert listing.price_czk == 13_691_450
+    assert listing.raw["price_reading"] == {"amount": 3350.0, "currency": "CZK", "basis": PER_M2}
+    assert listing.price_native is None
+
+
+def test_realitymix_8557677_a_total_labelled_per_m2_stores_the_total():
+    """"6 490 000 Kč / (za m 2)" on a 4,087 m² plot: 6.49M per m² is impossible for land and
+    6.49M for the plot is normal, so the label is overridden and the total stored."""
+    listing = parse_detail(_land_html("6 490 000 Kč / (za m 2 )"), source_url=_LAND_URL)
+    assert listing.price_czk == 6_490_000
+    assert listing.raw["price_reading"]["read_as"] == TOTAL
+
+
+def test_realitymix_8557727_the_same_on_1914_m2():
+    listing = parse_detail(_land_html("3 190 000 Kč / (za m 2 )", plot="1914 m²"),
+                           source_url=_LAND_URL)
+    assert listing.price_czk == 3_190_000
+
+
+def test_a_eur_rate_converts_and_records_the_rate_used():
+    html = _land_html("2,00 € / (za m 2 )")
+    listing = parse_detail(html, source_url=_LAND_URL)
+    assert listing.price_czk == 200_263   # 2 EUR x 24.5 x 4,087 m2
+    assert listing.raw["price_reading"] == {
+        "amount": 2.0, "currency": "EUR", "basis": PER_M2, "czk_per_eur": 24.5,
+        "rate_set": "2026-11-05"}
+    assert listing.price_native == "2 EUR per_m2"
+
+
+def test_a_yearly_rate_still_stores_nothing():
+    listing = parse_detail(_land_html("1 000 Kč / (za m 2 /rok)"), source_url=_LAND_URL)
+    assert listing.price_czk is None
+
+
 def test_parse_index_total_and_items():
     page = parse_index(INDEX_HTML)
     assert page.total == 8928
@@ -164,13 +229,35 @@ def test_parse_index_ids():
 
 
 def test_index_price_parsing():
-    assert index_price("5 290 000 Kč") == 5_290_000
+    assert index_price("5 290 000 Kč") == PriceReading(Decimal(5_290_000))
     assert index_price("Cena na vyžádání") is None
     assert index_price("Rezervováno") is None
     assert index_price("info v RK") is None
     assert index_price(None) is None
     # Two runs (struck original + current) must NOT concatenate to an overflow.
-    assert index_price("12 000 000 Kč 5 290 000 Kč") == 12_000_000
+    assert index_price("12 000 000 Kč 5 290 000 Kč") == PriceReading(Decimal(12_000_000))
+
+
+def test_index_card_reads_the_unit_in_the_sibling_span():
+    """#2355: the card puts the amount in one span and its unit in the next. Reading the amount
+    alone made "29 Kč (za m²/měsíc)" a 29 Kč total that no stored price ever matched, so the ad
+    was re-queued on every walk. Live markup, fetched 2026-11-05 (see the fixture's header)."""
+    html = (Path(__file__).resolve().parents[1] / "fixtures" / "portal_html"
+            / "realitymix_index_price_markers.html").read_text(encoding="utf-8")
+    page = parse_index(html)
+    assert {i.source_id_native: index_price(i.price_text) for i in page.items} == {
+        "8497597": PriceReading(Decimal(3350), "CZK", PER_M2),
+        "8070969": PriceReading(Decimal(29), "CZK", PER_M2_MONTH),
+        "8264083": PriceReading(Decimal(5800), "CZK", TOTAL),
+        "8246691": None,
+    }
+
+
+def test_index_card_in_eur_is_read():
+    html = INDEX_HTML.replace("<span>5 290 000 Kč</span>",
+                              "<span>1,00 €</span><span>(za m<sup>2</sup>/měsíc)</span>")
+    item = parse_index(html).items[1]
+    assert index_price(item.price_text) == PriceReading(Decimal("1.00"), "EUR", PER_M2_MONTH)
 
 
 def test_category_from_breadcrumb():
