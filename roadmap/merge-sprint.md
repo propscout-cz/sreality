@@ -8,7 +8,10 @@ Full plan, the binding decisions MS1–MS23 and the gates:
 Separate from [AUTODEDUP](autodedup.md), which decides *which* ads are the same unit. This sprint
 owns *what a merge and a split do*: the property's facts, its curation, and what the app says.
 
-## State (2026-10-18)
+## State (2026-11-05)
+- **Energy rating joins MS6 (PR #2400, 2026-11-05):** a property's class is the best any ad states (`min` in
+  the rollup); maxima's second PENB grammar deleted; gate #2403. Its follow-ups are tickets: the stale-page
+  re-read #2401, the realitymix/remax repriced loop #2355, the engine's G-vs-B contradiction #2402.
 - **Delivered.** W1b–W5 live since 2026-10-08; **W6 applied 2026-10-18 06:46 UTC** (migration 618,
   first attempt, `618: landed`) after the R2 backup was read back (`backups/merge-sprint-w6/2026-10-18`), with the
   engine braked 06:38–06:53 UTC; PR #1732 merged as 4311673b. Database −1.89 GB.
@@ -56,9 +59,6 @@ owns *what a merge and a split do*: the property's facts, its curation, and what
   of Browse and the map: the first full sweep after the deploy does it, no manual write.
 
 ## Owed now that W6 is applied
-- Done 2026-11-05: the energy rating joins MS6 (the best class any ad states, `min` in the rollup); maxima's
-  second PENB grammar deleted. Owed: the stale-page re-read, the realitymix/remax repriced loop and the
-  engine's G-vs-B contradiction are their own tickets (see the PR).
 - The AUTODEDUP session's drop of `properties.published_at` is unblocked; `properties_gate_cover_idx`
   INCLUDEs that column, so its replacement comes first.
 - #1655 rebases onto the sprint; #1634 removes its two `listing_feed_public` reads (migration 575's pre-

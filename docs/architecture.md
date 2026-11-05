@@ -2664,8 +2664,8 @@ renumber.** Navigate by area:
     overcounted 12 to 22 %). Saving from Browse offers the viewport box through one checkbox (ticked;
     the preset dialog's question, because a stale viewport would fire forever) and takes a circle
     always; the editor's `MapAreaControl` shows either and sets the box to the mini-map's view. Open divergence: the six amenities are the property's union
-    (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
-    estimation cohort, until MS20
+    and the energy rating its best class (MS6) for the Watchdog, Browse and Stats but the
+    canonical advert's own flags and letter in an estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the
     WATCHDOG agenda (and `ComparableFilters`' the cohort agendas) by an equality test in
     `tests/toolkit/test_filter_registry.py`, because `extra='ignore'` drops a missing field on

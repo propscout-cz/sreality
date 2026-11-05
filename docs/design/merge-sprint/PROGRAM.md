@@ -113,7 +113,8 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   for "no certificate" (zákon 406/2000 Sb. § 7a), which no portal marks apart, so the first ad's G hid
   a sibling's real class. Accepted costs: where two ads state different real classes the better one
   wins; an active property can show a class only an ended ad states; a house whose best class is
-  better than G now sends it to a Valuo valuation.
+  better than G now sends it to a Valuo valuation; an estimation cohort reads the canonical ad's own
+  letter until MS20 (§9).
 - **MS7 — Brokers are a list.** The brokers of the active ads, one entry per person, the canonical ad's
   broker first. When no ad is active: the brokers of all its ads, marked as from inactive ads. The
   property header shows the list; the pipeline board shows its first entry plus "+N"; each ad's own row
@@ -533,8 +534,8 @@ that session; the two never-used indexes come from migrations 198 and 275.
 ## 9. Cut from scope (reported, not built)
 
 - **The estimation subject lookup (MS20).** Its own design and approval; it keeps giving the
-  estimator the subject's two condition grades (MS4). Until then estimation comparables read amenity
-  and portal filters per ad, a named exception to rule 16.
+  estimator the subject's two condition grades (MS4). Until then estimation comparables read amenity,
+  energy-rating and portal filters per ad, a named exception to rule 16.
 - **A notice to other accounts after a split.** Worth revisiting when a second real account curates a
   property with two or more ads, or when splitting opens beyond admins.
 - **The lowest active price on Browse rows.**
