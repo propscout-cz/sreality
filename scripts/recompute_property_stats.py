@@ -43,8 +43,8 @@ release the lease. The next run continues that CYCLE from the cursor instead
 of id 1 (2026-10-03: four daily runs in a row stopped near id 540k of 927k,
 each restarting at 1, so the tail went days without a reconcile). The first
 stop of a cycle exits 0 with a warning; a resumed run that stops again, or a
-run that stops before its first batch (nothing to resume), exits RED (GH
-reports a timeout kill as `cancelled`, which alerts nobody). The jobs
+run that stops before its first batch (nothing to resume), exits RED, a
+`failed` run on its job cell rather than a kill at timeout_s. The jobs
 check's `artifact/property_sweep` cell (scripts/checks/platform.py) watches
 the completion stamp (derived_artifacts, migration 622) independently.
 
@@ -692,13 +692,13 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
 # TRY the lease and skip when held (the next tick is seconds away); the daily full
 # sweep WAITS (bounded) until it holds it — the backstop must not be skipped.
 #
-# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to
-# take a single 3-hour grant sized to its whole runtime and release it in a
-# `finally` — but a GH Actions timeout kill escalates SIGINT→SIGTERM→SIGKILL
-# faster than the release round-trip, so every timeout stranded the lease and
-# froze ALL property maintenance (worker lane + both crons) for hours
-# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze). Cleanup-
-# on-death cannot be relied on; cheap-death can: every writer takes the same
+# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to take
+# a single 3-hour grant sized to its whole runtime and release it in a `finally` —
+# but a timeout kill (then GitHub's SIGINT→SIGTERM→SIGKILL, now the runner's SIGKILL
+# 90 s after its SIGTERM) can beat the release round-trip, so every timeout stranded
+# the lease and froze ALL property maintenance (worker lane + both crons) for hours
+# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze).
+# Cleanup-on-death cannot be relied on; cheap-death can: every writer takes the same
 # 15-minute TTL and renews it between batches, so a kill at ANY point strands the
 # row for at most 15 minutes. A renewal refuses a lapsed lease, so the TTL less
 # job_lease.FENCE_MARGIN_S must comfortably exceed one batch's worst case — a sweep
@@ -757,7 +757,7 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # runs under the 10-min ceiling above, so four attempts could burn 40 minutes
 # inside a single loop iteration — the deadline is only checked at a batch
 # BOUNDARY, so that would sail past the runner's timeout_s and re-create
-# the silent `cancelled` this script exists to eliminate. Two attempts keeps the
+# the kill mid-batch this script exists to eliminate. Two attempts keeps the
 # useful part of the budget (a dropped connection or a passing lock wait replays
 # once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
 # _BOOK_STATEMENT_TIMEOUT), which is what the runner's timeout_s is sized
@@ -850,7 +850,7 @@ def main() -> int:
              "covered, saves where the next run resumes the cycle, and releases "
              "the lease; a resumed run that runs out again, or a run that runs out "
              "before its first batch, exits RED (1) — a "
-             "visible failure instead of a silent timeout-minutes `cancelled` kill. "
+             "visible failure instead of a kill mid-batch at the runner's timeout_s. "
              f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the job runner's "
              "timeout_s is sized for that ceiling, and a larger budget would "
              "let the runner kill the job before the clean-stop fires "
@@ -859,10 +859,10 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    # SIGTERM (the middle step of GH's SIGINT→SIGTERM→SIGKILL cancel ladder)
-    # defaults to instant death — no finally, lease stranded. Route it through
-    # SystemExit so the release path gets its chance; the short renewed TTL is
-    # the guarantee for when even this loses the race.
+    # SIGTERM (the job runner's stop at a deploy or timeout_s, 90 s before its
+    # SIGKILL) defaults to instant death — no finally, lease stranded. Route it
+    # through SystemExit so the release path gets its chance; the short renewed
+    # TTL is the guarantee for when even this loses the race.
     signal.signal(signal.SIGTERM, _sigterm_to_systemexit)
 
     logging.basicConfig(
@@ -1137,8 +1137,8 @@ def main() -> int:
         return 0
     if incomplete_at is not None:
         # RED on purpose: a resumed run that runs out again means the cycle needs three or
-        # more runs — genuinely too slow, not a partial success. GH only emails on
-        # scheduled-run FAILURES (a timeout kill lands as `cancelled` and alerts nobody,
+        # more runs — genuinely too slow, not a partial success, so its job cell shows a
+        # `failed` run (on GitHub a timeout kill landed as `cancelled` and alerted nobody,
         # which is how 5 dead sweeps went unnoticed for 4 days). The id tail above
         # `incomplete_at` keeps its pre-sweep stats until a cycle completes; the jobs
         # check's `artifact/property_sweep` cell tracks that staleness.

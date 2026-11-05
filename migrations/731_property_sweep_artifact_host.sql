@@ -5,7 +5,8 @@
 -- budget leaned on the 18 h GitHub delivery slack the jobs check adds to a `github-actions` row. On `job-runner` there
 -- is no slack, so the budget becomes 56 h: the fail line stays where 622 put it, sized for a two-run cycle. The
 -- cadence names the registry entry, as 702 did for `map_overlay_tiles`. Additive (three values); idempotent. A revert
--- of the move leaves this row reading `job-runner` and 56 h: the same fail line.
+-- of the move leaves this row reading `job-runner` and 56 h: the same fail line. 622 no longer re-runs after this
+-- file: its post-condition asserts its own host and 38 h, so its "a retry re-runs the whole file" ends here.
 -- tests/test_derived_artifacts_stamping.py::test_no_artifact_of_a_runner_job_is_hosted_on_github is the rail.
 
 update public.derived_artifacts
