@@ -368,10 +368,9 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_SCHEMA_SIZE_SQL:
         return [(int(db.schema_bytes),)]
     if sql == S.RT_ROW_CENSUS_SQL:
-        return [("fp_key", sum(1 for row in db.fp_key if row[0] == gen)),
-                ("rt_fp", sum(1 for g, _i in db.rt_fp if g == gen)),
-                ("pairs", sum(1 for g, _lo, _hi in db.pairs if g == gen)),
-                ("rt_block_cell", sum(1 for g, _k, _c in db.cells if g == gen))]
+        return [("rt_fp", sum(1 for g, _i in db.rt_fp if g == gen)),
+                ("rt_block_cell", sum(1 for g, _k, _c in db.cells if g == gen)),
+                ("fp_key", len(db.fp_key)), ("pairs", len(db.pairs))]
     if sql == S.RT_GENERATION_BYTES_SQL:
         held = {
             "pairs": [key[0] for key in db.pairs],
