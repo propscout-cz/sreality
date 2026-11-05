@@ -29,7 +29,8 @@ from ČÚZK (which refreshes the pack in place daily), and refuses if they diffe
 recorded sha256.
 
 CLI:  python -m location_data.ruian_load [--vintage YYYYMMDD] [--dry-run] [--work-dir DIR]
-Required: LOCATION_DB_DIRECT_URL or SUPABASE_DB_SESSION_URL, plus the R2_* archive vars.
+Required: LOCATION_DB_DIRECT_URL or SUPABASE_DB_SESSION_URL, plus the R2_* archive vars, and SUPABASE_DB_URL for the
+`location-heavy` claim (scraper.job_lease.held_job), which keeps the claim intake off the database while it loads.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ from location_data import (
     ruian_boundaries,
     ruian_csv,
 )
-from scraper import db
+from scraper import db, job_lease, jobs
 from location_data.load_assertions import Assertion, PriorLoad, StagingStats
 
 LOG = logging.getLogger("location_data.ruian_load")
@@ -1313,11 +1314,25 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="ruian-") as tmp:
         work_dir = Path(args.work_dir) if args.work_dir else Path(tmp)
         work_dir.mkdir(parents=True, exist_ok=True)
-        try:
+
+        def load() -> int:
             return run(
                 vintage=vintage, work_dir=work_dir, dry_run=args.dry_run,
                 reuse=args.reuse_downloads, keep_staging=args.keep_staging, limit=args.limit,
             )
+
+        try:
+            if args.dry_run:
+                return load()
+            # The claim intake never runs beside a load (`jobs.LOCATION_HEAVY`): claimed here on any host, and waited
+            # for as long as the intake can hold it.
+            job = jobs.entry("ruian_load")
+            wait_s = jobs.resource_wait_s(job)
+            with db.connect() as conn, job_lease.held_job(conn, job, wait_s=wait_s) as mine:
+                if not mine:
+                    LOG.error("RUIAN %s stayed held for %d s: nothing loaded", job.resource, wait_s)
+                    return 1
+                return load()
         except (loader_db.LoadAborted, ruian_boundaries.BoundarySchemaError) as exc:
             LOG.error("RUIAN load aborted: %s", exc)
             return 1

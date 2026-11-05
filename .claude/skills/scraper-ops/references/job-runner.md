@@ -3,8 +3,8 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
-`map_overlays`, and since #2032 `clip`, whose workflows those PRs deleted; each later move PR (#2027–#2031,
-#2033) flips more entries' host. On
+`map_overlays`, since #2032 `clip` and since #2028 `location_intake`, whose workflows those PRs deleted; each later
+move PR (#2027, #2029–#2031, #2033) flips more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -52,6 +52,18 @@ Recipes:
 - **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
   so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
   held its first slot.
+- **location_intake's exits (#2028):** 75 when it leaves an unfinished half it moved (`claims_intake.more_remains`:
+  unmined bodies with some mined, or a change-log scan stopped with listings opened), so a contract bump's backlog
+  drains run after run, a minute apart; 0 otherwise and on a `--dry-run`; 2 when a contract changed without a
+  version bump (every run but a dry one projects the image's contracts first) or the schema is missing. A full
+  re-walk is `request location_intake -- --mode full` (`--source X` for one portal); a scheduled incremental run
+  carries a stopped full walk on by itself.
+- **`location-heavy` off the runner:** the RÚIAN load runs on GitHub until #2033 and claims the resource in its own
+  main (`job_lease.held_job`: its `scheduled_jobs` row, runner `github_actions`, and an open `job_runs` row), waiting
+  `jobs.resource_wait_s` (the intake's timeout + 10 min) and exiting 1 with nothing loaded if it never got it. While
+  it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`; a run its workflow dropped
+  without a release lapses after the load's `timeout_s` and the reaper closes it `lost`. Under the runner
+  (`JOB_NAME` = the job) `held_job` is the runner's own claim.
 
 ## Log lines (Railway logs)
 
@@ -164,10 +176,11 @@ of a sibling on its resource seen since its clock started. The worst condition w
   older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
   one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
   does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
-- **For the move PRs (#2027, #2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
-  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200)
-  and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
-  budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
+- **For the move PRs (#2027, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it: property_sweep runs `--max-seconds 6000` against 7800 (⅔ = 5200).
+  Each move PR sets `timeout_s` ≥ 1.5× the job's own budget, lowers the budget, or asks the operator; the argv census
+  (`tests/scraper/test_job_registry.py`) refuses a runner job past it. location_intake (#2028) went to 4200 for its
+  2400 s, room for a last batch and the readout under the line. A walk stopped at its own timeout records `timeout`, a Problem: W4
   keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 2-9 s of 1200;
   rent_map and map_overlays carry no self-budget), and so is W5's clip (`--max-seconds 1500` against 3300: a full
   run, with its last chunk and its exit, ends by about 1600 s, under the 2200 s line).

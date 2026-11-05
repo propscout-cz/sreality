@@ -298,6 +298,13 @@ GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted. (The full location
 sweeps itself; nothing to move.) The sweeps reach the runner on consolidated leases (operator ruling 2026-10-26):
 the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110, and the
 broker sweep's in #2108, with #2273 doing the same after gate #2111.
+**As built (#2028), one PR on the merge light, no migration:** `location_intake` hourly at :35 on the runner, `timeout_s`
+4200 for its 2400 s budget (the ⅔ line, now an argv census), 4 CPUs (GitHub's pool width), fetch width 32 as the
+default; exit 75 on the chain's own progress rule (`claims_intake.more_remains`); every run but a dry one projects the
+image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the `location-batch` group,
+the worker's yield (`running_batch_id`; migration 730's index it read is owed a drop). The retire tool left with the
+location programme's W3 (#2223), so only the RÚIAN load claims `location-heavy` off the runner, in its own main
+(`job_lease.held_job`); the reaper now closes any host's lapsed run on a resource.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.

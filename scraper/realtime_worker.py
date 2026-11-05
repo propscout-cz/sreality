@@ -62,8 +62,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              scheduled_jobs lease.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
-             (location_data.claims_intake.run, the same code
-             location_claims_intake.yml runs) — payload half only, no bodies
+             (location_data.claims_intake.run, the same code the job
+             runner's hourly location_intake runs) — payload half only, no bodies
              pass, a SHORT `LOCATION_INTAKE_FAST_LAG_S` (default 120) snapshot
              lag and a `LOCATION_INTAKE_FAST_BUDGET_S` (default 45) budget,
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
@@ -1675,15 +1675,15 @@ def _project_contracts_once() -> bool:
     """Project contracts/portals/*.yaml into portal_contracts, ONCE per process.
 
     The extractor reads the DB PROJECTION of the contracts, not the files, and the hourly
-    workflow re-projects from git before every run (02 §2.1.8: git is the store of record).
+    runner job re-projects from its image before every run (02 §2.1.8: git is the store of record).
     This image carries contracts/ for the same reason payload_norm does, so the worker can
     do the equivalent — idempotent per (portal, contract_version), so on the steady state it
     is a handful of no-op reads at startup.
 
     A FAILURE IS A WARNING, NEVER A DEAD LANE. The projection raises by design when a
     contract's governed bytes changed without a version bump, and the authoritative
-    projector is still the workflow: a worker that refused to start its lane over a
-    condition another lane will report would trade a loud failure for a silent one.
+    projector is the hourly job, which fails on it: a worker that refused to start its lane
+    over a condition another job will report would trade a loud failure for a silent one.
     """
     global _INTAKE_FAST_CONTRACTS_PROJECTED
     if _INTAKE_FAST_CONTRACTS_PROJECTED:
@@ -1698,10 +1698,10 @@ def _project_contracts_once() -> bool:
         with db.connect() as conn:
             for contract in parsed:
                 contracts.project(conn, contract, git_ref=git_ref)
-    except Exception as exc:  # noqa: BLE001 - the workflow is the authoritative projector
+    except Exception as exc:  # noqa: BLE001 - the hourly job is the authoritative projector
         LOG.warning(
             "LOCATION_INTAKE_FAST could not project the portal contracts (%s); the lane "
-            "runs against whatever projection location_claims_intake.yml last loaded", exc)
+            "runs against whatever projection the hourly location_intake job last loaded", exc)
         return False
     _INTAKE_FAST_CONTRACTS_PROJECTED = True
     LOG.info("LOCATION_INTAKE_FAST projected the portal contracts from the image")
@@ -1769,22 +1769,12 @@ def _location_intake_fast_sync() -> dict[str, Any]:
 
 def _intake_fast_pass(conn: Any) -> dict[str, Any]:
     """The tick itself, on an open connection — the lock and the connection are the
-    caller's. Split out so the yield below is the FIRST thing the tick does."""
+    caller's. It never stands aside for the hourly job (#2028): that one drains a backlog
+    run after run for hours, a cut run is due again within a minute, and its batches retry
+    a lost lock (W12)."""
     from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
-
-    # THE GITHUB RUN OWNS THE LANE WHILE IT IS WALKING (W12). Both schedules write claims and
-    # bump the same `dirty_locations` rows, and the hourly/full run is the one that cannot be
-    # re-dispatched cheaply — a `mode=full` walk is hours of work. So the minute lane stands
-    # aside while one is in flight: nothing is lost (the hourly run re-reads its own
-    # 15-minute-lag slice), and the cost is that a new listing waits for that run instead of a
-    # minute. One read, no lock, no write.
-    yielded_to = claims_intake.running_batch_id(conn)
-    if yielded_to is not None:
-        LOG.info("LOCATION_INTAKE_FAST yielding: batch %d of the %s lane is still running",
-                 yielded_to, claims_intake.LANE)
-        return {"ran": False, "yielded_to": yielded_to}
 
     _project_contracts_once()
     # The lane's own fetch width, not the hourly runner's 32. `setdefault`, so the

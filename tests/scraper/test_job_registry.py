@@ -89,6 +89,9 @@ def argv_problems(job: Job) -> list[str]:
             problems.append(f"{job.name}: a walk's budget is the runner's SIGTERM at timeout_s, not --max-seconds")
     elif budget is not None and not 0 < budget < job.timeout_s:
         problems.append(f"{job.name}: --max-seconds {budget} must fire inside timeout_s {job.timeout_s}")
+    elif budget is not None and job.host == jobs.RUNNER and budget * 3 > job.timeout_s * 2:
+        problems.append(f"{job.name}: --max-seconds {budget} passes 2/3 of timeout_s {job.timeout_s}, where Health "
+                        "reads a healthy run in flight as Watch")
     return problems
 
 
@@ -115,6 +118,7 @@ def test_the_argv_census_fires() -> None:
     assert argv_problems(replace(stale, argv=(*stale.argv, "--dry-run")))
     sweep = _entry("property_sweep")
     assert argv_problems(replace(sweep, timeout_s=6000))
+    assert argv_problems(replace(_entry("location_intake"), timeout_s=3300)), "2400 s of budget against 55 min"
     walk = _entry("walk_bazos")
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index")))
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index-only", "--drain-only")))
@@ -303,6 +307,14 @@ def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
 
 def test_no_two_db_heavy_jobs_share_an_hour() -> None:
     assert db_heavy_problems(jobs.declared()) == []
+
+
+def test_a_job_waits_for_its_resource_as_long_as_a_sibling_can_hold_it() -> None:
+    """The registry load, on GitHub until #2033, claims location-heavy itself and waits out the intake's longest run."""
+    load = jobs.entry("ruian_load")
+    assert load == _entry("ruian_load")
+    assert jobs.resource_wait_s(load) == _entry("location_intake").timeout_s + jobs.STUCK_RUN_GRACE_S
+    assert jobs.resource_wait_s(_entry("clip")) == 0, "no resource, no sibling to wait for"
 
 
 def test_the_db_heavy_census_fires() -> None:
@@ -528,13 +540,22 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
         "clip: on the runner, and clip_tag.yml still runs scripts.clip_tag_backfill"]
     unflipped_clip = [replace(j, host=jobs.UNTIL_MOVED) if j.name == "clip" else j for j in jobs.declared()]
     assert pairing_problems(unflipped_clip, workflows) == ["clip: waiting to move, and no scheduled workflow runs it"]
+    # W3 (#2028): the intake's move, both halves.
+    kept_intake = Workflow("location_claims_intake.yml", True, 3300,
+                           (Invocation("location_data.claims_intake", frozenset({"--mode"})),))
+    assert pairing_problems(jobs.declared(), {**workflows, kept_intake.file: kept_intake}) == [
+        "location_intake: on the runner, and location_claims_intake.yml still runs location_data.claims_intake"]
+    unflipped_intake = [replace(j, host=jobs.UNTIL_MOVED) if j.name == "location_intake" else j
+                        for j in jobs.declared()]
+    assert pairing_problems(unflipped_intake, workflows) == [
+        "location_intake: waiting to move, and no scheduled workflow runs it"]
 
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    intake = workflows["location_claims_intake.yml"]
-    silent = replace(intake, invocations=tuple(c for c in intake.invocations if c.module != "location_data.claims_intake"))
-    assert pairing_problems(jobs.declared(), {**workflows, "location_claims_intake.yml": silent})
+    load = workflows["location_registry_load.yml"]
+    silent = replace(load, invocations=tuple(c for c in load.invocations if c.module != "location_data.ruian_load"))
+    assert pairing_problems(jobs.declared(), {**workflows, "location_registry_load.yml": silent})
     stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
