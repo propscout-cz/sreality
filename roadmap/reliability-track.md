@@ -1131,6 +1131,8 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   - The Health checks' scans and budgets fit a smaller instance (#2406).
   - One reading, `scripts/coordinator/compute_reading.sql` (`LOAD` / `STRAINED` / `QUIET`), and the switch
     procedure: `.claude/skills/database/references/compute-size.md`.
+  - Text extraction walks the last 24 h every pass and the archive 25k ads a pass. Before, every pass walked all
+    217k bazos ads: 600k buffers, 27 statement timeouts on Large. The heaviest pass is now 215k buffers. Every
+    text change, a reparse heal included, is still re-read, within ~45 min (ruling 2026-11-05).
 - **Next:**
-  - The text-extraction claim stops re-hashing every read ad's text each pass (needs a ruling on the reparse-heal edge).
   - One supervised Large trial on a quiet day; until it holds, Large is unproven on the current data.

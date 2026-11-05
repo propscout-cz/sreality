@@ -370,24 +370,54 @@ def _eligible_where(open_sources: Iterable[str]) -> str:
     )
 
 
-# ONE arm, newest-first, walking each portal in scope on its own `(source, first_seen_at)`
-# index (LATERAL: over an ARRAY of sources the index cannot give the order). An extracted
-# row leaves the predicate, so the walk stops at LIMIT while a backlog exists (prod
-# 2026-09-30, a new version: 0.19 s) and reaches back through it at PASS_SLICE a pass; with
-# nothing eligible it reads the whole portal, delisted rows too (pre-W1, active only: 21.7 s cold).
-# The text and its hash are composed OUTSIDE the ordered pick: in its target list they were
-# computed for every candidate before the sort (prod EXPLAIN, 2026-09-30: > 50 s).
+# The HEAD (adverts first seen within HEAD_HOURS) is walked whole on every pass, so a new
+# advert meets SLO_MINUTES. The ARCHIVE below it is walked ARCHIVE_WALK rows a pass from a
+# cursor (`_ARCHIVE`), so every advert's text is still compared on every cycle (~9 passes,
+# ~45 min at 214k bazos adverts) and a changed text — a portal edit or a reparse heal alike
+# (ruling 2026-11-05) — is re-read within one. Before, every pass walked the whole portal
+# because nothing marks a read advert: 600k buffers, 1.7 s on 2XL and 27 statement timeouts
+# in 7 h on Large (2026-11-04). The heaviest slice now is ~215k buffers, 0.56 s; it no
+# longer grows with the archive. Each portal walks its own `(source, first_seen_at)` index
+# newest-first (LATERAL: over an ARRAY of sources the index cannot give the order). An
+# extracted row leaves the predicate, so a backlog is reached back through at PASS_SLICE a
+# pass (prod 2026-09-30, a new version: 0.19 s). The text and its hash are composed OUTSIDE
+# the ordered pick: in its target list they were computed for every candidate before the
+# sort (prod EXPLAIN, 2026-09-30: > 50 s). One `edge` row per portal says how far its slice
+# walked, which is where the next slice starts.
+HEAD_HOURS = 24
+ARCHIVE_WALK = 25_000
 _SELECT_SQL_TEMPLATE = f"""
+WITH walk AS MATERIALIZED (
+    SELECT s.src, w.id, w.first_seen_at, w.eligible
+      FROM unnest({{scope}}) s(src)
+     CROSS JOIN LATERAL (
+           SELECT l.id, l.first_seen_at, ({{where}}) AS eligible
+             FROM listings l
+            WHERE l.source = s.src
+              AND l.first_seen_at < now() - make_interval(hours => {HEAD_HOURS})
+              AND l.first_seen_at <= coalesce(%(below)s::timestamptz, 'infinity')
+            ORDER BY l.first_seen_at DESC
+            LIMIT %(walk)s) w
+), pick AS (
+    SELECT p.id, 'head' AS arm
+      FROM unnest({{scope}}) s(src)
+     CROSS JOIN LATERAL (SELECT l.id FROM listings l
+             WHERE l.source = s.src
+               AND l.first_seen_at >= now() - make_interval(hours => {HEAD_HOURS})
+               AND {{where}}
+             ORDER BY l.first_seen_at DESC
+             LIMIT %(limit)s) p
+    UNION ALL
+    (SELECT w.id, 'archive' FROM walk w WHERE w.eligible
+      ORDER BY w.first_seen_at DESC
+      LIMIT %(limit)s)
+)
 SELECT l.id, l.source, l.first_seen_at, l.is_active,
-       {_TEXT_EXPR} AS advert_text, {_HASH_EXPR} AS text_hash
-  FROM unnest({{scope}}) s(src)
- CROSS JOIN LATERAL (SELECT l.id FROM listings l
-         WHERE l.source = s.src AND {{where}}
-         ORDER BY l.first_seen_at DESC
-         LIMIT %(limit)s) pick
-  JOIN listings l ON l.id = pick.id
- ORDER BY l.first_seen_at DESC
- LIMIT %(limit)s
+       {_TEXT_EXPR} AS advert_text, {_HASH_EXPR} AS text_hash, pick.arm, NULL::bigint AS walked
+  FROM pick JOIN listings l ON l.id = pick.id
+UNION ALL
+SELECT NULL, w.src, min(w.first_seen_at), NULL, NULL, NULL, 'edge', count(*)
+  FROM walk w GROUP BY w.src
 """
 
 # The stock the health check's text_extraction gauge judges: every advert the ONE predicate holds
@@ -541,14 +571,41 @@ def lane_scope(conn: Any) -> dict[str, tuple[str, ...]]:
     return scope_from(location_sources(conn))
 
 
+# Where the next archive slice starts, in this process: None = just below the head. A restart
+# resets it, which restarts the cycle and skips nothing.
+_ARCHIVE: dict[str, Any] = {"below": None}
+
+
+def _newest(row: Mapping[str, Any]) -> Any:
+    return row["first_seen_at"]
+
+
 def select_eligible(conn: Any, *, version: str,
                     slice_size: int = PASS_SLICE) -> list[dict[str, Any]]:
-    """The newest eligible listings, `slice_size` a pass (the walk: `_SELECT_SQL_TEMPLATE`)."""
+    """The head's newest eligible listings, then the archive slice's, `slice_size` a pass
+    (the walk: `_SELECT_SQL_TEMPLATE`); moves the archive cursor for the next pass."""
+    limit = max(0, slice_size)
+    below = _ARCHIVE["below"]
     with conn.cursor() as cur:
-        cur.execute(SELECT_INFLOW_SQL, {"version": version, "limit": max(0, slice_size)})
-        rows = cur.fetchall()
+        cur.execute(SELECT_INFLOW_SQL, {"version": version, "limit": limit,
+                                        "below": below, "walk": ARCHIVE_WALK})
+        fetched = cur.fetchall()
     keys = ("id", "source", "first_seen_at", "is_active", "advert_text", "text_hash")
-    return [dict(zip(keys, row)) for row in rows]
+    head = sorted((dict(zip(keys, r)) for r in fetched if r[6] == "head"),
+                  key=_newest, reverse=True)[:limit]
+    archive = sorted((dict(zip(keys, r)) for r in fetched if r[6] == "archive"),
+                     key=_newest, reverse=True)
+    kept = archive[:limit - len(head)]
+    if len(kept) < len(archive) or len(archive) >= limit:
+        # Eligible rows may remain in this slice: resume AT the oldest one kept (`<=`
+        # re-walks its timestamp's ties), or where this slice began when none fit.
+        _ARCHIVE["below"] = min(map(_newest, kept)) if kept else below
+    else:
+        # The slice is done: the next starts where the portal still walking stopped (the
+        # LATEST such edge, so no portal skips a row), or the cycle starts over.
+        full = [r[2] for r in fetched if r[6] == "edge" and r[7] >= ARCHIVE_WALK]
+        _ARCHIVE["below"] = max(full) if full else None
+    return sorted(head + kept, key=_newest, reverse=True)
 
 
 def _tool_arguments(response: Any) -> Mapping[str, Any] | None:
@@ -639,9 +696,12 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
         return {"claimed": 0, "reason": "no_model"}
     version = extractor_version(model)
     rows = select_eligible(conn, version=version, slice_size=slice_size)
+    below = _ARCHIVE["below"]
+    archive_below = below.isoformat() if below is not None else None
     if not rows:
         return {"claimed": 0, "extracted": 0, "written": 0, "failed": 0,
-                "spent_usd": 0.0, "errors": 0, "model": model}
+                "spent_usd": 0.0, "errors": 0, "model": model,
+                "archive_below": archive_below}
 
     written: Counter[str] = Counter()
     dropped: Counter[str] = Counter()
@@ -726,6 +786,8 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
         "aborted": bool(stats["aborted"]),
         "fatal": stats["fatal"],
         "model": model,
+        # Where the next archive slice starts; None = the cycle starts over.
+        "archive_below": archive_below,
         # The backlog signal, free: a full slice means more is waiting.
         "slice_full": len(rows) >= slice_size,
         # The listings that got a reading this pass: the worker mines exactly these (W4).
