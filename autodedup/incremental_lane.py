@@ -2407,8 +2407,9 @@ def schema_bytes(conn: Any) -> int:
 
 
 def rt_rows(conn: Any, generation: str, scope: Scope) -> dict[str, int]:
-    """What the generation holds, by table. Exact while the scope is small — which is the
-    point of a scope — and the planner's estimate when there is none to keep it cheap."""
+    """What the generation holds, by table: `rt_fp` and `rt_block_cell` exact and the
+    report-only `fp_key` and `pairs` estimated while the scope is bounded, every table the
+    planner's estimate when there is none."""
     sql = RT_ROW_ESTIMATE_SQL if scope.whole_corpus else RT_ROW_CENSUS_SQL
     params = None if scope.whole_corpus else {"generation": generation}
     return {str(row[0]): int(row[1] or 0) for row in _rows(conn, sql, params)}
