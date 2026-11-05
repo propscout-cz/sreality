@@ -417,10 +417,11 @@ class PgLedger:
 
     def __init__(self, connect: Callable[[], psycopg.Connection], *, holder: str, version: str | None = None,
                  heartbeat: str | None = None, deployment: str | None = None,
-                 started_at: datetime | None = None) -> None:
+                 started_at: datetime | None = None, heavy: Sequence[str] = ()) -> None:
         self._connect = connect
         self._conn: psycopg.Connection | None = None
         self.holder = holder
+        self.heavy = tuple(heavy)  # the DB-heavy names job_lease keeps apart
         self.version = version
         self.heartbeat = heartbeat
         self.deployment = deployment
@@ -475,13 +476,14 @@ class PgLedger:
         return self._list(self._ask("reap_lost", lambda c: job_lease.reap_lost(c, names=names, on_hour=on_hour)))
 
     def due(self, names: Sequence[str]) -> list[str] | None:
-        return self._list(self._ask("due", lambda c: job_lease.due(c, names)))
+        return self._list(self._ask("due", lambda c: job_lease.due(c, names, heavy=self.heavy)))
 
     def claim(self, name: str) -> job_lease.Lease | None:
         # Each claim is its own holder: renewals and releases match on it, so a late release of an earlier run of
         # the same job (lapsed, reaped and re-claimed by this replica) can never free or extend the later run's lease.
         holder = f"{self.holder}/{next(self._claims)}"
-        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=holder, version=self.version))
+        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=holder, version=self.version,
+                                                             heavy=self.heavy))
         return lease if isinstance(lease, job_lease.Lease) else None
 
     def renew(self, lease: job_lease.Lease) -> bool | None:
@@ -560,10 +562,12 @@ def _pooler_addresses(url: str) -> int | None:
         return None
 
 
-def _ledger(heartbeat: str | None = None) -> PgLedger:
+def _ledger(registry: Sequence[Job] | None = None, heartbeat: str | None = None) -> PgLedger:
+    # main's whole registry, not the Runner's: `once` runs one job, which still waits for every other DB-heavy one.
     return PgLedger(lambda: db.connect(attempts=1, connect_timeout=CONNECT_TIMEOUT_S), holder=job_lease.holder_id(),
                     version=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), heartbeat=heartbeat,
-                    deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"))
+                    deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"),
+                    heavy=[j.name for j in (jobs.runner_jobs() if registry is None else registry) if j.db_heavy])
 
 
 def _guard(*, watchdog: bool) -> Guard:
@@ -577,7 +581,7 @@ def serve(registry: Sequence[Job] | None = None) -> int:
     stop.install()  # first: PID 1 discards a SIGTERM that comes before its handler (the imports, the DNS lookup)
     entries = tuple(jobs.runner_jobs() if registry is None else registry)
     heartbeat = heartbeat_name(os.environ)
-    ledger = _ledger(heartbeat)
+    ledger = _ledger(entries, heartbeat)
     limits = {"memory_limit_mb": cgroup.memory_limit_mb(), "cpus": cpus.job_cpus()}  # the replica's, by its cgroup
     LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d "
              "memory_limit_mb=%s cpus=%s", os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment,
@@ -591,12 +595,13 @@ def serve(registry: Sequence[Job] | None = None) -> int:
     return 0
 
 
-def once(job: Job, *, ledger: Ledger | None = None, spawner: Spawner = spawn_process, guard: Guard | None = None,
-         clock: Callable[[], float] = job_lease.clock, sleep: Callable[[float], object] = time.sleep) -> int:
-    """One foreground claim, run and release of a runner entry: no upsert, no heartbeat. 0 ok or not due, 143
-    interrupted, 1 anything else (a timeout, or a database that never answered, included)."""
+def once(job: Job, *, registry: Sequence[Job] | None = None, ledger: Ledger | None = None,
+         spawner: Spawner = spawn_process, guard: Guard | None = None, clock: Callable[[], float] = job_lease.clock,
+         sleep: Callable[[float], object] = time.sleep) -> int:
+    """One foreground claim, run and release of a runner entry of `registry`: no upsert, no heartbeat. 0 ok or not
+    due, 143 interrupted, 1 anything else (a timeout, or a database that never answered, included)."""
     stop.install(hangup=True)  # the child has its own session: a closed terminal must stop it, not orphan it
-    pg = None if ledger is not None else _ledger()
+    pg = None if ledger is not None else _ledger(registry)
     runner = Runner([job], ledger=ledger or pg, spawner=spawner, guard=guard or _guard(watchdog=False),  # type: ignore[arg-type]
                     clock=clock, service=False, claim_limit=1, answer_by=clock() + ONCE_ANSWER_S)
     loop(runner, sleep=sleep)
@@ -697,7 +702,7 @@ def main(argv: Sequence[str] | None = None, *, registry: Sequence[Job] | None = 
         print(f"{ns.job} runs on {host}" if host else f"no job named {ns.job} in the registry", file=sys.stderr)
         return 2
     if ns.verb == "once":
-        return once(entries[ns.job])
+        return once(entries[ns.job], registry=registry)
     until = None
     if ns.verb == "pause":
         try:

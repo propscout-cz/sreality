@@ -347,10 +347,9 @@ everything revoked, read by the backend only (the `jobs` check's `artifact/<name
 them; migration 643 dropped its browser view `derived_artifacts_public`). **A new derived artifact needs a registry row**, and
 `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
 set is now empty and **nothing may be added to it**. One budget is deliberately NOT its
-cadence: `property_sweep` (migration 622,
-the daily full sweep's completed cycle, stamped by `recompute_property_stats`) 38 h, because the
-`jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem at 56 h, as
-ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+cadence: `property_sweep` (migrations 622, 731: the daily full sweep's completed cycle, stamped by
+`recompute_property_stats`) 56 h, ruled for the two-run cycle; `jobs` adds GitHub's 18 h delivery
+slack to a `github-actions` row only. `rent_map_cells`'s `host` is honestly `api-request`:
 it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
 `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
 unregistered.
