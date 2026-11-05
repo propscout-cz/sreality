@@ -5,6 +5,7 @@ The listing content write is scraper/listing_write.py.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -2026,11 +2027,18 @@ def location_refetch_candidates(
     *,
     min_age_seconds: int,
     cap_per_source: int,
+    statement_timeout_s: int | None = None,
 ) -> list[dict[str, Any]]:
     """Active ads with no town whose page is old enough to re-read and that the drain has not
     just given up on, oldest-fetched first, at most `cap_per_source` per portal. `source_total`
-    carries the UNCAPPED per-portal backlog, so a capped tick still says how much is left."""
-    with conn.cursor() as cur:
+    carries the UNCAPPED per-portal backlog, so a capped tick still says how much is left.
+    `statement_timeout_s` replaces the connection's timeout for this one read, transaction-local
+    (a session SET on the transaction-mode pooler can land on another backend)."""
+    guard = (conn.transaction() if statement_timeout_s is not None
+             else contextlib.nullcontext())
+    with guard, conn.cursor() as cur:
+        if statement_timeout_s is not None:
+            cur.execute(f"SET LOCAL statement_timeout = '{int(statement_timeout_s)}s'")
         cur.execute(
             _LOCATION_REFETCH_CANDIDATES_SQL,
             {

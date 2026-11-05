@@ -468,6 +468,11 @@ LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
 # MIN_AGE is skipped), so the tick rate costs one ~1 s SELECT an hour and nothing else; an
 # hourly tick is what makes the lane's liveness judgeable (Watch after 3 h, not 3 days).
 LOCATION_REFETCH_TICK_SECONDS = 3600.0
+# The candidates read joins every active ad to its location row. That is seconds on an instance
+# whose memory holds the listings heap and minutes on one that reads it from disk (Supabase Large,
+# 2026-11-04: the 120 s default cancelled it, and at an hourly tick one miss is a Jobs Problem).
+# One read-only SELECT an hour that touches no Browse table can afford the wait.
+LOCATION_REFETCH_STATEMENT_TIMEOUT_S = 600
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
 # the portals' geocoding lag, and it means a listing discovered today gets its second look
 # on TOMORROW's tick rather than waiting for the day after.
@@ -1865,7 +1870,8 @@ def _location_refetch_sync() -> dict[str, Any]:
     conn = db.connect()
     try:
         rows = db.location_refetch_candidates(
-            conn, min_age_seconds=min_age, cap_per_source=cap)
+            conn, min_age_seconds=min_age, cap_per_source=cap,
+            statement_timeout_s=LOCATION_REFETCH_STATEMENT_TIMEOUT_S)
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
