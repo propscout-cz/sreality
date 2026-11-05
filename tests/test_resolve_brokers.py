@@ -1681,3 +1681,22 @@ def test_the_runner_timeout_covers_every_budgeted_phase_and_a_retried_tail() -> 
     budget = int(entry.argv[entry.argv.index("--max-seconds") + 1])
     assert rb._LOCK_WAIT_MAX_SECONDS < budget, "the lease wait spends the budget, never more"
     assert entry.timeout_s >= budget + rb._FIRM_LINK_MIN_SECONDS + 2 * MEASURED_TAIL_S
+
+
+def test_the_runner_s_stop_unwinds_the_sweep_so_its_lease_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2027: the job runner stops a run with SIGTERM (a deploy, or its timeout_s). Python's default dies on the spot
+    and strands the broker_resolution lease for its 20-min TTL, stalling the worker's broker lane; SystemExit unwinds
+    `job_lease.held`, which releases it."""
+    import signal
+    import sys
+
+    import scripts.resolve_brokers as rb
+
+    handlers: dict[int, Any] = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    monkeypatch.setattr(sys, "argv", ["resolve_brokers", "--max-seconds", "1500"])
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    assert rb.main() == 2
+    with pytest.raises(SystemExit) as stopped:
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert stopped.value.code == 143
