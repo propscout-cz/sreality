@@ -897,7 +897,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the worker budgets (685 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # Wave 6: the worker budgets (1,030 s) outgrow one pass inside the watcher's 600 s in-flight line,
     # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
     # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
     # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one

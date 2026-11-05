@@ -19,6 +19,7 @@ from autodedup import incremental_sql as isql
 from autodedup.apply_sql import SETTING_SQL
 from scraper import job_lease
 from autodedup.incremental_scope import parse_scope
+from location_data.claims_common import SOURCES
 from scripts.checks import common
 from scripts.checks import dedup as dd
 from scripts.checks import platform as plat
@@ -557,7 +558,7 @@ def test_the_stall_counts_from_a_brake_lift_not_from_the_last_commit_before_it()
 def test_the_cohort_is_read_through_the_lanes_own_feed_statements() -> None:
     """The new feed with an hour's lag from the arrival floor, its scope's parameters whole."""
     out, conn = _check(arrivals=_arrivals(400, 0, older=5))
-    assert _params(conn, dd._ARRIVAL_FLOOR_SQL) == {"hours": 25}
+    assert _params(conn, dd._ARRIVAL_FLOOR_SQL) == {"hours": 25, "sources": sorted(SOURCES)}
     assert _params(conn, isql.RT_NEW_LISTINGS_SQL) == {
         "after_id": 19_340_583, "lag": 3_600, "window": 50_000,
         **parse_scope(_LANE_SCOPE).params()}
