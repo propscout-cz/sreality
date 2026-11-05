@@ -203,6 +203,8 @@ jobs:
       # test_connect_read_only_live joins because the wave shadow's "no write" is the server's refusal;
       # test_shadow_ties_live because which rulings tie a mover to the ids block is an executed answer.
       # test_description_extraction_walk_live because the text lane's archive cursor reaching a healed text is too.
+      # test_location_position_replay_live because the position audit's kind (migration 733) equals the resolver's
+      # origin only when its SQL runs over a loaded mirror.
       - name: PREPARE every SQL statement against the replayed schema
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -214,6 +216,7 @@ jobs:
                  tests/location_data/test_operator_pick_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/location_data/test_registry_reparent_live.py \
+                 tests/location_data/test_location_position_replay_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \
                  tests/autodedup/test_shadow_ties_live.py \

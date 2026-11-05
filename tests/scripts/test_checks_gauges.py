@@ -562,6 +562,24 @@ def test_every_count_cell_reads_the_count_that_colours_it() -> None:
         "registry's KÚ geometry is missing at its version")
 
 
+def test_the_town_cell_stores_the_position_grid_shown_not_judged() -> None:
+    """W6-c: the view's `position` rows (class `kind/grain`) land on the portal's town cell as {kind: {grain: n}},
+    whose sum is the cell's `ads`. Shown, not judged: an `unexplained` point colours nothing (until ruled)."""
+    grid = {"door/address": 40, "own_pin/street": 30, "own_pin/quarter": 20, "town_point/obec": 6,
+            "unexplained/street": 3, "none/unknown": 1}
+    rows = [("listing", "bazos", "position", cls, n, 100, None, None, None, None) for cls, n in grid.items()]
+    out, _ = _location(_stock(_portal("bazos", ads=100), rows))
+    town = _cells(out)["bazos/town"]
+    assert town["facts"]["positions"] == {
+        "door": {"address": 40}, "own_pin": {"street": 30, "quarter": 20}, "town_point": {"obec": 6},
+        "unexplained": {"street": 3}, "none": {"unknown": 1}}
+    assert sum(n for g in town["facts"]["positions"].values() for n in g.values()) == town["facts"]["ads"]
+    assert town["status"] == "ok" and out["status"] == "ok"
+    assert "positions" not in _cells(out)["bazos/town_withheld"]["facts"]
+    assert _cells(_location()[0])["sreality/town"]["facts"]["positions"] == {}, "no position rows: an empty grid"
+    assert "positions" not in _cells(out)["served/town"]["facts"], "the served cohort has no position metric"
+
+
 def test_the_town_share_leaves_foreign_ads_out_of_its_denominator() -> None:
     """idnes on 10-31: 17,668 of 108,726 ads are abroad, and every Czech one has a town: 100 %."""
     cells = _cells(_location(_stock(_portal("idnes", ads=108_726, foreign=17_668)))[0])

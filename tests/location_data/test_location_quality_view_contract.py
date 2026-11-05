@@ -25,8 +25,14 @@ from tests.location_data.test_location_schema_contracts import _statements, _val
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "migrations" / "698_location_quality_scorecard.sql"
 VIEW = "public.location_quality_by_source"
+# The view's live text is its newest restatement (698 first, 733 adds the position metric): the rails read that one.
+MIGRATION = sorted(p for p in (ROOT / "migrations").glob("*.sql")
+                   if f"create or replace view {VIEW}" in p.read_text(encoding="utf-8"))[-1]
+# W6-c's position audit (migration 733): the matview, its admin-gated list view and its refresh.
+POSITION_MIGRATION = ROOT / "migrations" / "733_location_w6c_position_audit.sql"
+POSITION_MV = "public.location_position_mv"
+POSITION_VIEW = "public.location_position_audit"
 
 # The CTEs left inline, each with why: the three scalar lookups the planner runs once as InitPlans, and the two feeders
 # read exactly once by a materialized CTE (the shape measured at 11.7 s).
@@ -100,7 +106,7 @@ def test_the_view_is_service_role_only_and_runs_as_its_caller() -> None:
     assert f"create or replace view {VIEW} with (security_invoker = true) as" in code
     assert f"revoke all on {VIEW} from public, anon, authenticated;" in code
     assert f"grant select on {VIEW} to service_role;" in code
-    grants = re.findall(r"grant [a-z, ]+ on [a-z_.]+ to ([a-z_, ]+);", code)
+    grants = re.findall(rf"grant [a-z, ]+ on {re.escape(VIEW)} to ([a-z_, ]+);", code)
     assert grants == ["service_role"], grants
 
 
@@ -310,10 +316,115 @@ def test_the_location_quality_page_renders_the_registered_check() -> None:
     assert "...HEALTH_QUERY" in page and "/location/quality" not in page
 
     bars = re.findall(r"at\[source\]\?\.(\w+)\?\.facts\.(\w+)", page)
-    assert {arm for arm, _ in bars} == {"street", "outside"}, bars
+    assert {arm for arm, _ in bars} == {"town", "outside"}, bars
+    assert ("town", "positions") in bars, "W6-c: the position grid reads the town cell's stored positions"
     card = {("town", "ads"): (100, 0), ("outside", "position"): (1, 90),
-            ("grain", "address"): (60, 90), ("grain", "street"): (10, 0)}
+            ("grain", "address"): (60, 90), ("grain", "street"): (10, 0),
+            ("position", "door/address"): (60, 100)}
     cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, {}, "not read", THRESHOLDS)}
     for arm, fact in bars:
         assert arm in qc.LOCATION_PORTAL_CELLS, f"the gauge emits no {arm!r} arm"
         assert fact in cells[f"bazos/{arm}"]["facts"], f"bazos/{arm} writes no {fact!r} fact"
+
+
+# --- W6-c: the position metric and the position audit (migration 733) ----------------------------------------------
+
+
+def _position_code() -> str:
+    return re.sub(r"--[^\n]*", "", POSITION_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _statement(code: str, head: str) -> str:
+    start = code.index(head)
+    return code[start:code.index(";", start)]
+
+
+def test_the_position_metric_is_the_matview_kind_by_the_live_grain_over_the_listing_cohort() -> None:
+    """Design § 2: the kind is the hourly matview's while the row's answer is the one it classified (`resolved_at`
+    unchanged), else `unclassified`; the grain is the row's LIVE grain, so the grid's columns are the grain counts."""
+    ctes = _ctes()
+    assert "positions" in ctes and ctes["positions"][0], "positions is a materialized CTE"
+    positions = _squeeze(ctes["positions"][1])
+    assert "left join location_position_mv m on m.listing_id = b.id" in positions
+    assert "where b.cohort = 'listing'" in positions
+    assert ("coalesce(case when m.resolved_at is not distinct from b.resolved_at then m.position_kind end, "
+            "'unclassified')") in positions
+    assert _squeeze(ls.position_grain_sql("b")) in positions
+    b = _squeeze(ctes["b"][1])
+    assert "ll.granularity" in b and "ll.resolved_at" in b
+    branch = next(_squeeze(x) for x in _branches() if "from positions" in x)
+    assert branch.startswith("select 'listing'::text, p.source, 'position', p.class, p.n, p.source_n,")
+
+
+def test_the_position_grain_opens_with_the_scorecards_four_classes_verbatim() -> None:
+    """The grid's address/street/quarter/obec columns ARE the `grain` counts: each WHEN is the `agg` FILTER."""
+    grain = _squeeze(ls.position_grain_sql("b"))
+    whens = re.findall(r"when (.+?) then '(\w+)'", grain)
+    town = "b.has_town and b.country_status = 'cz' and "
+    assert [(w, cls) for w, cls in whens[:4]] == [(town + p, g) for g, p in GRAIN_FILTERS.items()]
+    assert tuple(cls for _, cls in whens) + ("unknown",) == tuple(
+        g for g in ls.POSITION_GRAINS if g not in ("okres", "kraj", "country"))
+    seed = _rank_seed()
+    below_town = {g for g, (rank, _) in seed.items() if rank < seed["obec"][0]}
+    assert below_town == {"okres", "kraj", "country", "unknown"} <= set(ls.POSITION_GRAINS)
+
+
+def test_the_view_vocabulary_names_the_open_position_class() -> None:
+    assert ("position", "*") in qc.LOCATION_VIEW_VOCABULARY
+    assert ("position", "*") in _vocabulary()
+
+
+def test_the_position_matview_renders_the_shared_sql_verbatim() -> None:
+    """The matview's kind is location_steps.position_kind_sql(), its grain position_grain_sql(), its cohort the
+    consumer rule negated (any status) beside every active ad, and the evidence probe the scorecard's."""
+    mv = _squeeze(_statement(_position_code(), f"create materialized view if not exists {POSITION_MV}"))
+    assert _squeeze(f"{ls.position_kind_sql('p')} as position_kind") in mv
+    assert _squeeze(f"{ls.position_grain_sql('b')} as grain") in mv
+    assert _squeeze(f"not {served_location_predicate('l.id')}") in mv
+    assert "where l.is_active" in mv and "where not l.is_active" in mv
+    assert _squeeze(f"case when b.position_kind = 'none' then {ls.town_evidence_sql('b.listing_id', 'ec')} end "
+                    "as town_evidence") in mv
+    assert "g.purpose = 'authoritative'" in mv and "g.registry_version_id = (select id from cur)" in mv
+    assert "st_buffer" not in mv and "radius" not in mv, "no radius anywhere (ruling 2026-11-01)"
+    assert "location_claims_geom" not in mv
+
+
+def test_the_position_kinds_close_over_the_sql_and_each_maps_to_a_resolver_origin() -> None:
+    sql = _squeeze(ls.position_kind_sql("p"))
+    kinds = re.findall(r"then '(\w+)'", sql)
+    assert len(kinds) == len(set(kinds)) and {*kinds, "unexplained"} == set(ls.POSITION_KINDS)
+    assert sql.endswith("else 'unexplained' end")
+    assert set(ls.POSITION_ORIGIN.values()) == {"registry_point", "street_point", "portal_pin", "admin_centroid",
+                                                "none"}
+    # The pin is fetched by its key behind OFFSET 0 and compared outside (design § 2, the plan trap).
+    assert "offset 0) k)" in _squeeze(ls.position_kind_sql("p"))
+
+
+def test_the_position_audit_is_admin_gated_and_the_matview_dark_to_the_browser() -> None:
+    code = _squeeze(_position_code())
+    assert code.startswith("set lock_timeout = '5s'; set statement_timeout = ")
+    assert f"revoke all on {POSITION_MV} from public, anon, authenticated;" in code
+    assert re.findall(rf"grant [a-z, ]+ on {re.escape(POSITION_MV)} to ([a-z_, ]+);", code) == ["service_role"]
+    view = _squeeze(_statement(_position_code(), f"create or replace view {POSITION_VIEW}"))
+    assert view.endswith(") __admin_gate where is_platform_admin()")
+    assert f"revoke all on {POSITION_VIEW} from public, anon, authenticated;" in code
+    assert re.findall(rf"grant [a-z, ]+ on {re.escape(POSITION_VIEW)} to ([a-z_, ]+);", code) == ["authenticated"]
+    assert "left join listings l on l.id = m.listing_id" in view, "the live property, never a stale link"
+    assert "location_display_label(" in view
+
+
+def test_the_position_matview_is_registered_indexed_and_refreshed_off_the_old_minute() -> None:
+    code = _squeeze(_position_code())
+    assert f"create unique index if not exists location_position_mv_pk on {POSITION_MV} (listing_id);" in code
+    assert (f"create index if not exists location_position_mv_cell on {POSITION_MV} "
+            "(position_kind, source, grain, listing_id);") in code
+    for lane in ("last_seen_at", "first_seen_at"):
+        assert f"on {POSITION_MV} ({lane}, listing_id);" in code
+    assert "values ('location_position_mv', 'refresh_matview', 'pg_cron'," in code
+    cron = re.search(r"cron\.schedule\(\s*'refresh-location-position',\s*'([^']+)',\s*\$\$(.+?)\$\$", code)
+    assert cron, "pg_cron refresh-location-position"
+    minute = cron.group(1).split()[0]
+    assert minute.isdigit() and minute != "25", "hourly, never at the old job's :25"
+    assert cron.group(2).strip() == ("set statement_timeout='900s'; "
+                                     "select public.refresh_matview('location_position_mv');")
+    assert "refresh materialized view" not in code

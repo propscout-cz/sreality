@@ -1,0 +1,106 @@
+/* The position audit's list read and grid vocabulary (W6-c, migration 733).
+ *
+ * The stub records the PostgREST chain instead of hitting a server (as lib/pinAudit.test does): every method returns
+ * the same recorder and the recorder is thenable, so the builder's real shape is what the assertions read. */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+type Call = [string, unknown[]];
+
+const stub = vi.hoisted(() => {
+  const calls: Call[] = [];
+  const target = { then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: 12 }) };
+  const proxy: Record<string, unknown> = new Proxy(target, {
+    get(t, prop) {
+      if (prop === 'then') return t.then;
+      return (...args: unknown[]) => {
+        calls.push([String(prop), args]);
+        return proxy;
+      };
+    },
+  }) as unknown as Record<string, unknown>;
+  return { calls, proxy };
+});
+
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    from: (relation: string) => {
+      stub.calls.push(['from', [relation]]);
+      return stub.proxy;
+    },
+  },
+  isSupabaseConfigured: () => true,
+}));
+
+import {
+  cellFromParams,
+  fetchPositionAuditPage,
+  gridGrains,
+  gridKinds,
+  listFilters,
+  paramsForCell,
+  positionGrid,
+  precisionWords,
+} from '@/lib/positionAudit';
+
+const eqs = (): Call[] => stub.calls.filter(([m]) => m === 'eq');
+const sort = { field: 'last_seen_at', direction: 'desc' } as const;
+
+describe('positionAudit list read', () => {
+  beforeEach(() => {
+    stub.calls.length = 0;
+  });
+
+  it('reads the admin view, scoped to the cell, and counts exactly on the first page only', async () => {
+    const first = await fetchPositionAuditPage(listFilters('idnes', { kind: 'own_pin', grain: 'street' }), sort, null);
+    expect(stub.calls[0]).toEqual(['from', ['location_position_audit']]);
+    expect(first.total).toBe(12);
+    expect(eqs()).toEqual([['eq', ['source', 'idnes']], ['eq', ['position_kind', 'own_pin']], ['eq', ['grain', 'street']]]);
+    expect(stub.calls.find(([m]) => m === 'limit')?.[1]).toEqual([100]);
+    stub.calls.length = 0;
+    const next = await fetchPositionAuditPage(listFilters('idnes', { kind: 'own_pin', grain: null }), sort, { value: '2026-11-01', id: 9 });
+    expect(next.total).toBeNull();
+    expect(eqs().some(([, [col]]) => col === 'grain')).toBe(false);
+  });
+
+  it('sends the evidence and sibling facts only for a no-position cell, and every kind sends no kind', async () => {
+    const filters = { ...listFilters('bazos', { kind: 'all', grain: 'street' }), evidence: 'withheld', sibling: 'yes' } as const;
+    await fetchPositionAuditPage(filters, sort, null);
+    expect(eqs().map(([, [col]]) => col)).toEqual(['source', 'grain']);
+    stub.calls.length = 0;
+    await fetchPositionAuditPage({ ...filters, cell: { kind: 'none', grain: null }, status: 'delisted' }, sort, null);
+    expect(eqs()).toEqual([
+      ['eq', ['source', 'bazos']], ['eq', ['position_kind', 'none']], ['eq', ['is_active', false]],
+      ['eq', ['town_evidence', false]], ['eq', ['sibling_placed', true]]]);
+  });
+
+  it('opens a no-position list on every status', () => {
+    expect(listFilters('bazos', { kind: 'none', grain: null }).status).toBe('all');
+  });
+});
+
+describe('positionAudit grid and cell', () => {
+  it('reads the stored fact defensively and keeps the rare grains out until they hold a row', () => {
+    const grid = positionGrid({ door: { address: 3 }, own_pin: { kraj: 0, street: 'x' }, odd: 7 });
+    expect(grid).toEqual({ door: { address: 3 }, own_pin: { kraj: 0 } });
+    expect(gridGrains(grid)).toEqual(['address', 'street', 'quarter', 'obec', 'okres', 'country', 'unknown']);
+    expect(gridGrains({ ...grid, unit_point: { kraj: 1 }, x: { mystery: 2 } })).toEqual(
+      ['address', 'street', 'quarter', 'obec', 'okres', 'kraj', 'country', 'unknown', 'mystery']);
+    expect(gridKinds({ unclassified: { street: 1 }, zzz: { street: 1 } }).slice(-2)).toEqual(['unclassified', 'zzz']);
+  });
+
+  it('words the precision as the map does, never a second rule', () => {
+    expect(precisionWords(100)).toBe('Přesná poloha');
+    expect(precisionWords(90)).toBe('Přesná poloha');
+    expect(precisionWords(60)).toBe('Přibližná poloha');
+    expect(precisionWords(null)).toBe('Přesnost polohy neznámá');
+  });
+
+  it('round-trips the cell through the URL', () => {
+    const params = new URLSearchParams(paramsForCell('remax', { kind: 'town_point', grain: 'obec' }));
+    expect(params.toString()).toBe('portal=remax&kind=town_point&grain=obec');
+    expect(cellFromParams(params)).toEqual({ kind: 'town_point', grain: 'obec' });
+    expect(cellFromParams(new URLSearchParams(paramsForCell('remax', null)))).toBeNull();
+    expect(cellFromParams(new URLSearchParams('kind=all'))).toEqual({ kind: 'all', grain: null });
+  });
+});
