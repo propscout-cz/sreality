@@ -46,6 +46,18 @@ a house normally has its own, and a plot of land has none of its own. An ad has 
 when that door is certain; everything else stands at a coarser level and says so.
 _Avoid_: address point (in prose), house number, door (alone, where a physical door could be meant)
 
+**Place** (UI: "Lokalita"):
+One named area of the Czech register that a search, a watchdog or the map can be limited to: a kraj,
+an okres, a town (obec), a quarter (část obce) or a street. A property is in a place only when its
+location ad is known to lie inside it; a property known only at a coarser level is in none of the
+finer places below that level, never assumed to be.
+_Avoid_: location (for the area), area, region, locality
+
+**Place shortcut** (UI: "zkratka lokality"):
+One pick that stands for several places at once, such as Praha 6 for every quarter inside it.
+Choosing it adds each of those places; nothing is ever limited by the shortcut itself.
+_Avoid_: alias, place group, district (for Praha 6)
+
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
 _Avoid_: dupe, match, twin
