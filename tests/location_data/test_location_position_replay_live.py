@@ -214,9 +214,50 @@ def test_the_scorecard_counts_the_kinds_by_live_grain_and_a_re_resolve_reads_unc
         "door/address": 2, "street_point/street": 1, "own_pin/obec": 1, "own_pin/unknown": 1,
         "part_point/quarter": 1, "town_point/obec": 1, "town_point/quarter": 1, "unit_point/okres": 1,
         "unit_point/kraj": 1, "foreign/country": 1, "none/unknown": 1}
+    assert _cells(conn) == classes(), "a cell's list is its number"
     conn.execute("UPDATE listing_location SET resolved_at = resolved_at + interval '1 second'"
                  " WHERE listing_id = %s", (written["street_point"][0],))
     assert classes()["unclassified/street"] == 1 and "street_point/street" not in classes()
+    assert _cells(conn) == classes(), "re-resolved since the refresh: unclassified in the list as in the reading"
+
+
+def _cells(conn: Any) -> dict[str, int]:
+    """The list a grid cell opens, grouped by its cell: the reading's rows of the portal by kind and grain."""
+    return dict(conn.execute(
+        "SELECT position_kind || '/' || grain, count(*)::int FROM location_position_audit_public"
+        " WHERE in_reading AND source = 'bazos' GROUP BY 1").fetchall())
+
+
+def test_a_cells_list_keeps_the_readings_cohort_where_the_snapshot_differs(
+    conn: Any, written: dict[str, tuple[int, Position]],
+) -> None:
+    """Decision A: an ad first written under 24 h ago is in the hourly snapshot and out of the reading, so out of a
+    cell's list; an ad reactivated since the refresh is in the reading as `unclassified`, so in the list as that."""
+    fresh, back = _listing(conn), written["town_point"][0]
+    conn.execute("UPDATE listings SET first_seen_at = now() - interval '1 hour' WHERE id = %s", (fresh,))
+    conn.execute("UPDATE listings SET is_active = false WHERE id = %s", (back,))
+    conn.execute("SELECT public.refresh_matview('location_position_mv')")
+    conn.execute("UPDATE listings SET is_active = true WHERE id = %s", (back,))
+    rows = dict(conn.execute(
+        "SELECT listing_id, (in_reading, position_kind, snapshot_kind)::text FROM location_position_audit_public"
+        " WHERE listing_id = ANY(%s)", ([fresh, back],)).fetchall())
+    assert rows == {fresh: "(f,none,none)", back: "(t,unclassified,)"}
+    reading = dict(conn.execute(
+        "SELECT class, n FROM location_quality_by_source"
+        " WHERE cohort = 'listing' AND metric = 'position' AND source = 'bazos'").fetchall())
+    assert _cells(conn) == reading
+
+
+def test_the_no_answer_entry_reaches_every_status(
+    conn: Any, written: dict[str, tuple[int, Position]],
+) -> None:
+    """Decision B: a delisted ad with no answer is no grid cell's (out of the reading) and the entry's row."""
+    gone = _listing(conn)
+    conn.execute("UPDATE listings SET is_active = false WHERE id = %s", (gone,))
+    conn.execute("SELECT public.refresh_matview('location_position_mv')")
+    entry = dict(conn.execute(
+        "SELECT listing_id, in_reading FROM location_position_audit_public WHERE snapshot_kind = 'none'").fetchall())
+    assert entry == {written["none"][0]: True, gone: False}
 
 
 def test_the_admin_list_serves_the_live_property_and_the_none_extras(
@@ -229,7 +270,7 @@ def test_the_admin_list_serves_the_live_property_and_the_none_extras(
     conn.execute("SELECT public.refresh_matview('location_position_mv')")
     rows = {r[0]: r[1:] for r in conn.execute(
         "SELECT listing_id, property_id, position_kind, grain, town_evidence, sibling_placed, queued, display_label"
-        " FROM location_position_audit WHERE listing_id = ANY(%s)", ([none, door],)).fetchall()}
+        " FROM location_position_audit_public WHERE listing_id = ANY(%s)", ([none, door],)).fetchall()}
     assert rows[none][:6] == (prop, "none", "unknown", False, True, False)
     assert rows[door][:6] == (prop, "door", "address", None, None, None)
     assert rows[door][6], "the one place string"

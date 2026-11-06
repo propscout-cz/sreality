@@ -158,6 +158,14 @@ def position_kind_sql(row: str = "p") -> str:
     )
 
 
+def position_reading_kind_sql(live: str = "b") -> str:
+    """The kind a READING gives a row: the matview's (alias `m`) while the row's live answer is the one it classified
+    (`resolved_at` unchanged), else `unclassified`. The scorecard's `position` metric and the list a grid cell opens
+    (`location_position_audit_public`) both read it, so a cell's list differs from its number only by churn."""
+    return (f"coalesce(case when m.resolved_at is not distinct from {live}.resolved_at then m.position_kind end, "
+            "'unclassified')")
+
+
 # The position grid's grain classes, in its column order (frontend/src/lib/positionAudit.ts words them).
 POSITION_GRAINS: tuple[str, ...] = (
     "address", "street", "quarter", "obec", "other", "okres", "kraj", "country", "unknown",

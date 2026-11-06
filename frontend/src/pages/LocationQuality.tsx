@@ -25,12 +25,18 @@ import StatusDot from '@/components/StatusDot';
 import { HEALTH_QUERY, HealthEmptyError, tail, verdictOf, type HealthCell, type HealthRow } from '@/lib/healthChecks';
 import { portalShort } from '@/lib/portals';
 import { LOCATION_SOURCES } from '../lib/locationQuality';
-import { KindStrip, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
-import { cellFromParams, paramsForCell, positionGrid, type PositionCell } from '@/lib/positionAudit';
+import { KindStrip, NoAnswerEntry, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
+import {
+  listFromParams,
+  paramsForList,
+  positionGrid,
+  type PositionCell,
+  type PositionListSpec,
+} from '@/lib/positionAudit';
 
 const CHECK_KEY = 'location_town_coverage';
 
-/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars, in the matrix's figures. */
+/* A cell's counts by class (`facts.disputed`) as bars, in the matrix's figures. */
 function BarList({ counts }: { counts: unknown }) {
   const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
     .filter((e): e is [string, number] => typeof e[1] === 'number');
@@ -91,16 +97,18 @@ function pivot(cells: HealthCell[]) {
 function Scorecard({
   row,
   source,
-  cell,
+  list,
   onSource,
-  onCell,
+  onList,
 }: {
   row: HealthRow;
   source: string;
-  cell: PositionCell | null;
+  list: PositionListSpec | null;
   onSource: (s: string) => void;
-  onCell: (portal: string, cell: PositionCell | null) => void;
+  onList: (portal: string, list: PositionListSpec | null) => void;
 }) {
+  const cell = list?.mode === 'cell' ? list.cell : null;
+  const onCell = (portal: string, next: PositionCell) => onList(portal, { mode: 'cell', cell: next });
   const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
   /* Every verdict is Health's (`verdictOf`); a stale row's facts are history, withheld as on Health. */
   const current = row.effective_status !== 'unknown';
@@ -173,9 +181,15 @@ function Scorecard({
         />
       ) : null}
       {cell ? (
-        <PositionList key={`${source}|${cell.kind}|${cell.grain ?? ''}`} portal={source} cell={cell} onClose={() => onCell(source, null)} />
+        <PositionList key={`${source}|${cell.kind}|${cell.grain ?? ''}`} portal={source} spec={{ mode: 'cell', cell }}
+          readingAt={row.run_at} onClose={() => onList(source, null)} />
       ) : null}
       <KindStrip grids={grids} portal={source} chosen={cell} onOpen={onCell} />
+      <NoAnswerEntry open={list?.mode === 'answerless'}
+        onOpen={() => onList(source, list?.mode === 'answerless' ? null : { mode: 'answerless' })} />
+      {list?.mode === 'answerless' ? (
+        <PositionList key="answerless" portal={source} spec={list} readingAt={null} onClose={() => onList(source, null)} />
+      ) : null}
       {disputed ? (
         <Panel title={`Disputed classes · ${portalShort(source)}`}>
           <BarList counts={disputed} />
@@ -191,9 +205,9 @@ export default function LocationQuality() {
   /* The portal and the open cell are the URL's (?portal=&kind=&grain=), so a cell is a link. */
   const [params, setParams] = useSearchParams();
   const source = params.get('portal') ?? 'bezrealitky';
-  const cell = cellFromParams(params);
-  const openCell = (portal: string, next: PositionCell | null) => setParams(paramsForCell(portal, next));
-  const setSource = (portal: string) => openCell(portal, null);
+  const list = listFromParams(params);
+  const openList = (portal: string, next: PositionListSpec | null) => setParams(paramsForList(portal, next));
+  const setSource = (portal: string) => openList(portal, null);
   /* The Health page's own entry (same key, same poll): identical numbers by construction. */
   const health = useQuery({
     ...HEALTH_QUERY,
@@ -235,7 +249,7 @@ export default function LocationQuality() {
           />
         ) : row ? (
           <>
-            <Scorecard row={row} source={source} cell={cell} onSource={setSource} onCell={openCell} />
+            <Scorecard row={row} source={source} list={list} onSource={setSource} onList={openList} />
             <Panel title="As on Health">
               <CheckRow row={{ ...row, owner_path: '' }} />
             </Panel>

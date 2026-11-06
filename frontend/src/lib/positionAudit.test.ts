@@ -34,48 +34,68 @@ vi.mock('@/lib/supabase', () => ({
 
 import {
   cellFromParams,
+  fetchNoAnswerCount,
   fetchPositionAuditPage,
   gridGrains,
   gridKinds,
   listFilters,
+  listFromParams,
   paramsForCell,
+  paramsForList,
   positionGrid,
   precisionWords,
 } from '@/lib/positionAudit';
 
 const eqs = (): Call[] => stub.calls.filter(([m]) => m === 'eq');
+const ins = (): Call[] => stub.calls.filter(([m]) => m === 'in');
 const sort = { field: 'last_seen_at', direction: 'desc' } as const;
+const cell = (kind: string, grain: string | null) => ({ mode: 'cell', cell: { kind, grain } }) as const;
 
 describe('positionAudit list read', () => {
   beforeEach(() => {
     stub.calls.length = 0;
   });
 
-  it('reads the admin view, scoped to the cell, and counts exactly on the first page only', async () => {
-    const first = await fetchPositionAuditPage(listFilters('idnes', { kind: 'own_pin', grain: 'street' }), sort, null);
-    expect(stub.calls[0]).toEqual(['from', ['location_position_audit']]);
+  it("reads a cell as the reading does: its cohort, kind and grain, counted exactly on the first page only", async () => {
+    const first = await fetchPositionAuditPage(listFilters('idnes', cell('own_pin', 'street')), sort, null);
+    expect(stub.calls[0]).toEqual(['from', ['location_position_audit_public']]);
     expect(first.total).toBe(12);
-    expect(eqs()).toEqual([['eq', ['source', 'idnes']], ['eq', ['position_kind', 'own_pin']], ['eq', ['grain', 'street']]]);
+    expect(eqs()).toEqual([['eq', ['in_reading', true]], ['eq', ['source', 'idnes']],
+      ['eq', ['position_kind', 'own_pin']], ['eq', ['grain', 'street']]]);
     expect(stub.calls.find(([m]) => m === 'limit')?.[1]).toEqual([100]);
     stub.calls.length = 0;
-    const next = await fetchPositionAuditPage(listFilters('idnes', { kind: 'own_pin', grain: null }), sort, { value: '2026-11-01', id: 9 });
+    const next = await fetchPositionAuditPage(listFilters('idnes', cell('own_pin', null)), sort, { value: '2026-11-01', id: 9 });
     expect(next.total).toBeNull();
     expect(eqs().some(([, [col]]) => col === 'grain')).toBe(false);
   });
 
-  it('sends the evidence and sibling facts only for a no-position cell, and every kind sends no kind', async () => {
-    const filters = { ...listFilters('bazos', { kind: 'all', grain: 'street' }), evidence: 'withheld', sibling: 'yes' } as const;
+  it('sends the evidence and sibling facts only where the list holds none rows, and every kind sends no kind', async () => {
+    const filters = { ...listFilters('bazos', cell('all', 'street')), evidence: 'withheld', sibling: 'yes' } as const;
     await fetchPositionAuditPage(filters, sort, null);
-    expect(eqs().map(([, [col]]) => col)).toEqual(['source', 'grain']);
+    expect(eqs().map(([, [col]]) => col)).toEqual(['in_reading', 'source', 'grain']);
     stub.calls.length = 0;
-    await fetchPositionAuditPage({ ...filters, cell: { kind: 'none', grain: null }, status: 'delisted' }, sort, null);
+    await fetchPositionAuditPage({ ...filters, spec: cell('none', null), categories: ['byt'] }, sort, null);
     expect(eqs()).toEqual([
-      ['eq', ['source', 'bazos']], ['eq', ['position_kind', 'none']], ['eq', ['is_active', false]],
+      ['eq', ['in_reading', true]], ['eq', ['source', 'bazos']], ['eq', ['position_kind', 'none']],
       ['eq', ['town_evidence', false]], ['eq', ['sibling_placed', true]]]);
+    expect(ins()).toEqual([['in', ['category_main', ['byt']]]]);
   });
 
-  it('opens a no-position list on every status', () => {
-    expect(listFilters('bazos', { kind: 'none', grain: null }).status).toBe('all');
+  it('reads the no-answer list off the snapshot in every status, by its own portal and status chips', async () => {
+    const filters = listFilters('bazos', { mode: 'answerless' });
+    expect(filters.status).toBe('all');
+    await fetchPositionAuditPage(filters, sort, null);
+    expect(eqs()).toEqual([['eq', ['snapshot_kind', 'none']]]);
+    stub.calls.length = 0;
+    await fetchPositionAuditPage({ ...filters, portals: ['remax', 'idnes'], status: 'delisted', evidence: 'unresolved' }, sort, null);
+    expect(eqs()).toEqual([['eq', ['snapshot_kind', 'none']], ['eq', ['is_active', false]], ['eq', ['town_evidence', true]]]);
+    expect(ins()).toEqual([['in', ['source', ['remax', 'idnes']]]]);
+  });
+
+  it("counts the no-answer entry's list exactly, with no rows", async () => {
+    expect(await fetchNoAnswerCount()).toBe(12);
+    expect(stub.calls.find(([m]) => m === 'select')?.[1]).toEqual(['listing_id', { count: 'exact', head: true }]);
+    expect(eqs()).toEqual([['eq', ['snapshot_kind', 'none']]]);
   });
 });
 
@@ -96,11 +116,15 @@ describe('positionAudit grid and cell', () => {
     expect(precisionWords(null)).toBe('Přesnost polohy neznámá');
   });
 
-  it('round-trips the cell through the URL', () => {
+  it('round-trips the list through the URL, one list at a time', () => {
     const params = new URLSearchParams(paramsForCell('remax', { kind: 'town_point', grain: 'obec' }));
     expect(params.toString()).toBe('portal=remax&kind=town_point&grain=obec');
     expect(cellFromParams(params)).toEqual({ kind: 'town_point', grain: 'obec' });
     expect(cellFromParams(new URLSearchParams(paramsForCell('remax', null)))).toBeNull();
     expect(cellFromParams(new URLSearchParams('kind=all'))).toEqual({ kind: 'all', grain: null });
+    const entry = new URLSearchParams(paramsForList('remax', { mode: 'answerless' }));
+    expect(entry.toString()).toBe('portal=remax&answerless=1');
+    expect(listFromParams(entry)).toEqual({ mode: 'answerless' });
+    expect(cellFromParams(entry)).toBeNull();
   });
 });

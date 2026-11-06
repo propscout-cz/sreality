@@ -954,9 +954,8 @@ def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | N
                  by_portal: Mapping[str, _Card] | None = None) -> dict[str, Any]:
     """The one street share, (address + street) / Czech ads with a town by the rank table: Problem
     when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression)."""
-    grains = {g: _n(card, "grain", g) for g in _GRAINS}
-    hits, n = grains["address"] + grains["street"], _of(card, "grain", "address")
-    facts: dict[str, Any] = {"n": n, "floor": floor, "grains": grains}
+    hits, n = _n(card, "grain", "address") + _n(card, "grain", "street"), _of(card, "grain", "address")
+    facts: dict[str, Any] = {"n": n, "floor": floor}
     if by_portal is not None:
         facts["by_portal"] = {p: round((_n(c, "grain", "address") + _n(c, "grain", "street"))
                                        / _of(c, "grain", "address"), 4)

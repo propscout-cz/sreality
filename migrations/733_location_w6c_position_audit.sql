@@ -16,9 +16,13 @@
 --      shown, not judged); its GRAIN class (location_steps.position_grain_sql, verbatim, the scorecard's four classes
 --      first); and, on `none` rows only, the town evidence (town_evidence_sql, verbatim: unresolved vs withheld), a
 --      sibling ad of the same property that has a point, and a queued re-resolve.
---   2. location_position_audit, the list the Location Quality page reads: the matview's rows with live display fields
---      (the live property_id, so no stale link after a merge, and location_display_label), behind the 619/687 admin gate
---      (`) __admin_gate where is_platform_admin()`), granted to authenticated only.
+--   2. location_position_audit_public, the list the Location Quality page reads, behind the 619/687 admin gate
+--      (`) __admin_gate where is_platform_admin()`), granted to authenticated only. Its rows are LIVE listings: the
+--      scorecard's listing cohort (`in_reading`, its edge verbatim) and every row the matview holds. A row carries the
+--      READING's kind (location_steps.position_reading_kind_sql: the matview's kind while resolved_at is unchanged,
+--      else `unclassified`) and its live grain, exactly as the `position` metric counts them, so a grid cell's list
+--      differs from its number only by churn since the reading; `snapshot_kind` is the matview's own (the every-status
+--      no-answer entry), the none-row facts are the matview's, the property and the label are live.
 --   3. location_quality_by_source restated (rule 1: in full, 698's text) with one more metric, `position` (class
 --      `kind/grain`) over the listing cohort: the matview's kind while the row's answer is the one it classified
 --      (resolved_at unchanged), else `unclassified`, by the row's LIVE grain, so the grid's column totals are exactly
@@ -29,9 +33,11 @@
 -- serves from location_claims_geom (GiST) took a 59,768-row slice from 5.2 s to 50 s. Street and část points are the
 -- centroids of their valid doors (resolve_db _STREET_POINT_SQL / _PART_POINT_SQL), computed once for the streets and
 -- parts the cohort names (23k + 10k). Measured on production 2026-11-05/06: the classification of all active ads took
--- 48 s warm in one statement; per portal, idnes 113k rows 13.8 s, maxima 0.3k rows 7.4 s (the fixed centroid cost).
--- The build needs about two minutes, hence the statement_timeout below; the hourly CONCURRENTLY refresh runs under
--- the cron command's own 900 s.
+-- 48 s warm in one statement; per portal, sreality 109k rows 50.4 s (45,952 door probes, cold), idnes 113k rows
+-- 13.8 s, maxima 0.3k rows 7.4 s (the fixed centroid cost). The build may take a few minutes, hence the
+-- statement_timeout below; the hourly CONCURRENTLY refresh runs under the cron command's own 900 s. The list view
+-- reads one portal's live cohort (112k rows at most: its edge and live grain 0.5 s on idnes) per count or page, or the
+-- matview's ~12k no-answer rows through location_position_mv_cell.
 --
 -- GRANTS. The matview is service_role only (ADMIN_ONLY_RELATIONS; a matview cannot embed the gate). The scorecard view
 -- stays service_role only and security_invoker. The list view runs as its owner behind the admin gate.
@@ -42,7 +48,7 @@
 --   select position_kind, count(*) from location_position_mv group by 1 order by 2 desc;   -- unexplained 0 expected
 --   select class, sum(n) from location_quality_by_source where cohort = 'listing' and metric = 'position' group by 1;
 --   select has_table_privilege('authenticated', 'public.location_position_mv', 'select');  -- false
---   select has_table_privilege('authenticated', 'public.location_position_audit', 'select'); -- true
+--   select has_table_privilege('authenticated', 'public.location_position_audit_public', 'select'); -- true
 --   select schedule, command from cron.job where jobname = 'refresh-location-position';
 --   then after the next :07, derived_artifacts.last_succeeded_at for location_position_mv moves.
 
@@ -146,11 +152,9 @@ select b.listing_id, b.source, b.is_active, b.first_seen_at, b.last_seen_at, b.c
 
 -- REFRESH ... CONCURRENTLY needs one plain unique index: listing grain, so the listing id.
 create unique index if not exists location_position_mv_pk on public.location_position_mv (listing_id);
--- The list's cell (portal, kind, grain) and its two keyset lanes ((col, id) btrees, lib/keyset.ts).
+-- A kind's rows (the every-status no-answer entry reads `none` through it).
 create index if not exists location_position_mv_cell
   on public.location_position_mv (position_kind, source, grain, listing_id);
-create index if not exists location_position_mv_last_seen on public.location_position_mv (last_seen_at, listing_id);
-create index if not exists location_position_mv_first_seen on public.location_position_mv (first_seen_at, listing_id);
 
 -- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back.
 revoke all on public.location_position_mv from public, anon, authenticated;
@@ -172,25 +176,49 @@ exception when invalid_schema_name then
 end
 $cron$;
 
--- THE LIST. Owner rights behind the admin gate; the two left joins are by primary key, so PostgREST's count over a
--- cell reads the matview's index alone.
-create or replace view public.location_position_audit as
+-- THE LIST (header item 2). Owner rights behind the admin gate. A grid cell's list filters `in_reading` and the
+-- reading's kind and grain, which the planner computes over that portal's live cohort (no index serves the kind rule);
+-- the no-answer entry filters `snapshot_kind = 'none'`, which turns the matview join inner and reads its kind index.
+create or replace view public.location_position_audit_public as
+with
+obec_rank as (select r.rank from location_granularity_rank r where r.granularity = 'obec'),
+street_rank as (select r.rank from location_granularity_rank r where r.granularity = 'street')
 select * from (
-  select m.listing_id, l.property_id, m.source, m.is_active, m.first_seen_at, m.last_seen_at, m.category_main,
-         l.category_type, l.disposition, l.area_m2, l.price_czk, l.source_url,
-         location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
-                                ll.obec_name, ll.cast_obce_name, ll.country_code,
-                                ll.country_status) as display_label,
-         m.granularity, m.granularity_rank, m.grain, m.position_kind, m.country_status, m.resolved_at,
-         m.registry_version, m.town_evidence, m.sibling_placed, m.queued, m.refreshed_at
-    from public.location_position_mv m
-    left join listings l on l.id = m.listing_id
-    left join listing_location ll on ll.listing_id = m.listing_id
+  select b.listing_id, b.property_id, b.source, b.is_active, b.first_seen_at, b.last_seen_at, b.category_main,
+         b.category_type, b.disposition, b.area_m2, b.price_czk, b.source_url,
+         location_display_label(b.street_name, b.house_number_cp, b.house_number_co,
+                                b.obec_name, b.cast_obce_name, b.country_code,
+                                b.country_status) as display_label,
+         b.granularity::text as granularity, b.rank as granularity_rank,
+         -- THE READING: location_steps.position_grain_sql('b') and position_reading_kind_sql('b'), verbatim.
+         CASE WHEN b.has_town and b.country_status = 'cz' and b.is_address_grain THEN 'address'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank >= (select rank from street_rank) and not b.is_address_grain THEN 'street'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank > (select rank from obec_rank) and b.rank < (select rank from street_rank) THEN 'quarter'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank = (select rank from obec_rank) THEN 'obec'
+              WHEN b.rank >= (select rank from obec_rank) THEN 'other'
+              ELSE coalesce(b.granularity::text, 'unknown') END as grain,
+         coalesce(case when m.resolved_at is not distinct from b.resolved_at then m.position_kind end, 'unclassified') as position_kind,
+         m.position_kind as snapshot_kind, b.in_reading,
+         b.country_status::text as country_status, b.resolved_at,
+         m.town_evidence, m.sibling_placed, m.queued, m.refreshed_at
+    from (
+      select l.id as listing_id, l.property_id, l.source, l.is_active, l.first_seen_at, l.last_seen_at,
+             l.category_main, l.category_type, l.disposition, l.area_m2, l.price_czk, l.source_url,
+             -- The scorecard's listing cohort, its edge verbatim (scripts/checks/common.py NEW_AD_H).
+             (l.is_active and l.first_seen_at < now() - interval '24 hours') as in_reading,
+             ll.street_name, ll.house_number_cp, ll.house_number_co, ll.obec_name, ll.cast_obce_name,
+             ll.country_code, ll.country_status, ll.granularity, ll.resolved_at, gr.rank, gr.is_address_grain,
+             (ll.obec_kod is not null and gr.rank >= (SELECT r.rank FROM location_granularity_rank r WHERE r.granularity = 'obec')) as has_town
+        from listings l
+        left join listing_location ll on ll.listing_id = l.id
+        left join location_granularity_rank gr on gr.granularity = ll.granularity) b
+    left join location_position_mv m on m.listing_id = b.listing_id
+   where b.in_reading or m.listing_id is not null
 ) __admin_gate
 where is_platform_admin();
 
-revoke all on public.location_position_audit from public, anon, authenticated;
-grant select on public.location_position_audit to authenticated;
+revoke all on public.location_position_audit_public from public, anon, authenticated;
+grant select on public.location_position_audit_public to authenticated;
 
 -- THE SCORECARD, 698's text with the `position` metric (header item 3).
 create or replace view public.location_quality_by_source
@@ -301,7 +329,8 @@ versions as materialized (
     from b where b.cohort = 'listing' and b.has_row
    group by b.source, b.resolver_version),
 -- W6-c: where each listing-cohort ad's point came from. The kind is location_position_mv's (hourly) while the row's
--- answer is the one it classified, else `unclassified`; the grain is the row's LIVE grain class
+-- answer is the one it classified, else `unclassified` (location_steps.position_reading_kind_sql, verbatim; the list
+-- view location_position_audit_public reads the same rule); the grain is the row's LIVE grain class
 -- (location_steps.position_grain_sql, verbatim), whose first four classes are `agg`'s grain FILTERs, so the classes of
 -- one grain sum to its `grain` count. Class `kind/grain`; of_n the source's cohort.
 positions as materialized (

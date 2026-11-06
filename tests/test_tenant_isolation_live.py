@@ -889,7 +889,7 @@ _ADMIN_GATED_VIEWS: list[str] = [
     "pipeline_checks_public",
     # Matview-backed (migration 733): the seed reaches it only through a refresh, so it is not in the seeded set and its
     # non-admin zero is the gate's shape, not proof (test_location_position_replay_live reads it with rows, as service).
-    "location_position_audit",
+    "location_position_audit_public",
 ]
 
 

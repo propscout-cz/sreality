@@ -22,6 +22,8 @@ import { apiGet, apiPost } from '@/lib/api';
 import { HEALTH_QUERY, type HealthCell, type HealthRow, type Status } from '@/lib/healthChecks';
 import { pgRead } from '@/lib/pgRead';
 import { propertyPath } from '@/lib/listingUrl';
+import { fmtDateSlash, fmtTime24 } from '@/lib/format';
+import { portalShort } from '@/lib/portals';
 import { expectNoNestedInteractive } from '@/test/a11y';
 
 const at = new Date(Date.now() - 30 * 60_000).toISOString();
@@ -78,25 +80,28 @@ function renderPage(qc = new QueryClient({ defaultOptions: { queries: { retry: f
   return qc;
 }
 
-/* The list's rows (location_position_audit), answered where Health's row is, by the relation the read names. */
+/* The list's rows (location_position_audit_public), answered where Health's row is, by the relation the read names. */
 const LIST_ROW = {
   listing_id: 501, property_id: 77, source: 'bazos', is_active: false, first_seen_at: '2026-09-01T10:00:00Z',
   last_seen_at: '2026-10-02T10:00:00Z', category_main: 'byt', category_type: 'prodej', disposition: '2+kk',
   area_m2: 54, price_czk: 5_000_000, source_url: 'https://www.bazos.cz/inzerat/1', display_label: null,
-  granularity: 'unknown', granularity_rank: 0, grain: 'unknown', position_kind: 'none', country_status: 'undetermined',
-  resolved_at: '2026-10-02T10:00:00Z', town_evidence: true, sibling_placed: true, queued: false,
-  refreshed_at: '2026-11-05T22:07:00Z',
+  granularity: 'unknown', granularity_rank: 0, grain: 'unknown', position_kind: 'none', snapshot_kind: 'none',
+  in_reading: false, country_status: 'undetermined', resolved_at: '2026-10-02T10:00:00Z', town_evidence: true,
+  sibling_placed: true, queued: false, refreshed_at: '2026-11-05T22:07:00Z',
 };
-const listUrls = () => vi.mocked(pgRead).mock.calls
-  .map(([q]) => decodeURIComponent(String((q as unknown as { url?: URL }).url ?? '')))
-  .filter((u) => u.includes('location_position_audit'));
+const urlOf = (q: unknown) => decodeURIComponent(String((q as { url?: URL }).url ?? ''));
+/* The list's page reads (the entry's count is a HEAD read of the same relation, with no `select` of the row columns). */
+const listUrls = () => vi.mocked(pgRead).mock.calls.map(([q]) => urlOf(q))
+  .filter((u) => u.includes('location_position_audit_public') && u.includes('limit='));
+const NO_ANSWER = 12_272;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(pgRead).mockImplementation(async (q: unknown) =>
-    String((q as { url?: URL }).url ?? '').includes('location_position_audit')
-      ? { data: [LIST_ROW], count: 4066 }
-      : { data: [stored()], count: null });
+  vi.mocked(pgRead).mockImplementation(async (q: unknown) => {
+    const url = urlOf(q);
+    if (!url.includes('location_position_audit_public')) return { data: [stored()], count: null };
+    return url.includes('limit=') ? { data: [LIST_ROW], count: 4066 } : { data: null, count: NO_ANSWER };
+  });
 });
 
 describe('LocationQuality scorecard', () => {
@@ -164,9 +169,11 @@ describe('LocationQuality scorecard', () => {
     qc.setQueryData(HEALTH_QUERY.queryKey, [stored()]);
     renderPage(qc);
     expect(await screen.findByTestId('location-matrix-bazos')).toHaveTextContent(/12,263/);
-    expect(pgRead).not.toHaveBeenCalled();
-    /* The page's one read. */
-    expect(qc.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([HEALTH_QUERY.queryKey]);
+    /* Health's row is never read twice; the one read of the page's own is the no-answer entry's count. */
+    await screen.findByText('12,272');
+    expect(vi.mocked(pgRead).mock.calls.map(([q]) => urlOf(q)).every((u) => u.includes('snapshot_kind=eq.none'))).toBe(true);
+    expect(qc.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([
+      HEALTH_QUERY.queryKey, ['position-audit', 'no-answer-count']]);
   });
 
   it('says an empty read is an empty read, never all clear', async () => {
@@ -196,10 +203,9 @@ describe('LocationQuality positions (W6-c)', () => {
     /* The column totals are the grain counts; the corner is the cell's ads. */
     expect(within(grid()).getByRole('button', { name: 'Every kind · street: 33' })).toBeInTheDocument();
     expect(within(grid()).getByRole('button', { name: 'Every kind · every grain: 100' })).toBeInTheDocument();
-    /* A row the hourly refresh has not classified yet is counted, but the list cannot show it. */
+    /* A row re-resolved since the hourly refresh reads unclassified, in the reading as in its list. */
     const later = within(grid()).getByRole('row', { name: /Not yet classified/ });
-    expect(within(later).getAllByText('3')).toHaveLength(2);
-    expect(within(later).queryAllByRole('button')).toEqual([]);
+    expect(within(later).getByRole('button', { name: 'Not yet classified · street: 3' })).toBeInTheDocument();
     /* The list is not read until a number is chosen. */
     expect(listUrls()).toEqual([]);
   });
@@ -213,6 +219,12 @@ describe('LocationQuality positions (W6-c)', () => {
     expect(await screen.findByText('Ads')).toBeInTheDocument();
     await screen.findByTestId('position-row-501');
     const [url] = listUrls();
+    /* Decision A: the reading's own cohort and rule, and the reading's time beside the list's own count. */
+    expect(url).toContain('in_reading=eq.true');
+    expect(url).not.toContain('snapshot_kind=eq');
+    expect(screen.getByTestId('position-total')).toHaveTextContent('4,066 ads now');
+    expect(screen.getByTestId('position-reading')).toHaveTextContent(`reading of ${fmtDateSlash(at)} ${fmtTime24(at)}`);
+    expect(screen.queryByText(/can differ/)).toBeNull();
     expect(url).toContain('source=eq.bazos');
     expect(url).toContain('position_kind=eq.own_pin');
     expect(url).toContain('grain=eq.street');
@@ -220,19 +232,63 @@ describe('LocationQuality positions (W6-c)', () => {
     expect(url).toContain('limit=100');
   });
 
-  it('a no-position cell opens every status with its evidence, sibling and queue, each row linking its property', async () => {
+  it('a no-position cell lists its evidence, sibling and queue, each row linking its property with its price', async () => {
     renderPage(undefined, '/location-quality?portal=bazos&kind=none&grain=unknown');
     const row = await screen.findByTestId('position-row-501');
     expect(screen.getByTestId('position-total')).toHaveTextContent('4,066 ads');
     expect(within(row).getByRole('link', { name: /Byt · 2\+kk/ })).toHaveAttribute('href', propertyPath(77, 501));
     expect(row).toHaveTextContent('unresolved');
     expect(row).toHaveTextContent('has a point');
-    expect(row).toHaveTextContent('delisted');
     expect(row).toHaveTextContent('no point');
-    expect(screen.getByRole('group', { name: 'Status' })).toBeInTheDocument();
+    expect(row).toHaveTextContent(/5\s000\s000\sKč/);
+    /* Every row of a cell is in the reading, so active: no status bar here. */
+    expect(screen.queryByRole('group', { name: 'Status' })).toBeNull();
     fireEvent.click(within(screen.getByRole('group', { name: 'Town evidence' })).getByRole('button', { name: 'withheld' }));
     await vi.waitFor(() => expect(listUrls().some((u) => u.includes('town_evidence=eq.false'))).toBe(true));
-    expect(listUrls()[0]).not.toContain('is_active=eq');
+    /* Property-type chips (design § 1 row 3). */
+    fireEvent.click(screen.getByRole('button', { name: 'Byty' }));
+    await vi.waitFor(() => expect(listUrls().some((u) => u.includes('category_main=in.(byt)'))).toBe(true));
+  });
+
+  it('the no-answer entry opens every status from its own count, even where the grid reads no none', async () => {
+    /* Sreality's grid holds no `none` cell (its reading cohort is active ads); the entry still reaches the rows. */
+    renderPage(undefined, '/location-quality?portal=sreality');
+    await screen.findByText('Positions · Sreality');
+    expect(within(grid()).getByRole('row', { name: /No position/ })).not.toHaveTextContent(/[1-9]/);
+    const entry = screen.getByRole('region', { name: 'No location answer · every status' });
+    expect(await within(entry).findByText('12,272')).toBeInTheDocument();
+    fireEvent.click(within(entry).getByRole('button', { name: 'Open the list' }));
+    expect(screen.getByTestId('search')).toHaveTextContent('?portal=sreality&answerless=1');
+    const row = await screen.findByTestId('position-row-501');
+    const [url] = listUrls();
+    expect(url).toContain('snapshot_kind=eq.none');
+    expect(url).not.toContain('in_reading=eq');
+    expect(url).not.toMatch(/[?&]source=/);
+    expect(row).toHaveTextContent('delisted');
+    expect(row).toHaveTextContent('Bazoš');
+    /* Every status, with the snapshot's time to the hour. */
+    expect(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: 'all' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('position-reading')).toHaveTextContent(
+      `snapshot of ${fmtDateSlash(LIST_ROW.refreshed_at)} ${fmtTime24(LIST_ROW.refreshed_at)}`);
+    expect(screen.getByRole('group', { name: 'Town evidence' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: portalShort('remax') }));
+    await vi.waitFor(() => expect(listUrls().some((u) => u.includes('source=in.(remax)'))).toBe(true));
+  });
+
+  it('keeps an empty section as a card with its count 0 (C10)', async () => {
+    const bare = CELLS.map((c) => (c.subject.endsWith('/town') ? { ...c, facts: { ads: 0 } } : c));
+    vi.mocked(pgRead).mockImplementation(async (q: unknown) => urlOf(q).includes('location_position_audit_public')
+      ? { data: null, count: 0 }
+      : { data: [stored({ details: { cells: bare, message: '' } })], count: null });
+    renderPage(undefined, '/location-quality?portal=bazos');
+    const positions = await screen.findByRole('region', { name: 'Positions · Bazoš' });
+    expect(positions).toHaveTextContent('0');
+    const strip = screen.getByRole('region', { name: 'By kind' });
+    expect(strip).toHaveTextContent(/0\s*No portal has stored positions/);
+    const entry = screen.getByRole('region', { name: 'No location answer · every status' });
+    await vi.waitFor(() => expect(entry).toHaveTextContent(/every status0.*Every ad has a location answer/));
+    expect(within(entry).queryByRole('button')).toBeNull();
   });
 
   it("the by-kind strip sums each portal's grid over grain, every number a way into the list", async () => {

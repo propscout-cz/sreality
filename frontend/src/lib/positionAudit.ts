@@ -2,11 +2,14 @@
  *
  * Two reads, one vocabulary. The GRID is the location gauge's stored `positions` fact on each portal's town cell
  * ({kind: {grain: n}}, the listing cohort the gauge counts), read through Health's own query like every other number on
- * the Location quality page (ruling Q7: nothing measured twice). The LIST is `location_position_audit`, the admin-gated
- * view over the hourly `location_position_mv`: a keyset page of 100 rows, the first page carrying the exact count.
+ * the Location quality page (ruling Q7: nothing measured twice). The LIST is the admin-gated view
+ * `location_position_audit_public`: a keyset page of 100 rows, the first page carrying the exact count. A grid cell's
+ * list is the READING's (decision A, 2026-11-06): the scorecard's cohort (`in_reading`), its kind rule and the live
+ * grain, computed over that portal's live cohort, so it differs from the cell's number only by churn since the
+ * reading. The no-answer entry lists the hourly snapshot's `none` rows in every status (`snapshot_kind`).
  *
  * A kind is decided by geometric identity (location_steps.position_kind_sql); `unexplained` is shown, not judged, and
- * `unclassified` is a grid-only kind: a row re-resolved since the hourly refresh, which the list cannot show yet.
+ * `unclassified` is a row re-resolved since the hourly refresh, in the reading and its list alike.
  * The approximate label is the map's own rule (`pinPrecisionShort`, ruling Q3), never a second definition.
  */
 
@@ -22,12 +25,12 @@ import {
 import type { SortSpec } from '@/lib/queries';
 import { pinPrecisionShort } from '@/lib/pinPrecision';
 
-export const POSITION_AUDIT_RELATION = 'location_position_audit';
+export const POSITION_AUDIT_RELATION = 'location_position_audit_public';
 export const POSITION_AUDIT_PAGE_SIZE = 100;
 /* The relation is listing-grain: `listing_id` is its key and the keyset tiebreaker. */
 const TIEBREAK = 'listing_id';
 
-/* location_steps.POSITION_KINDS, in the resolver's precedence, then the grid-only kind. */
+/* location_steps.POSITION_KINDS, in the resolver's precedence; the reading adds `unclassified`. */
 export const POSITION_KINDS = [
   'door', 'street_point', 'own_pin', 'part_point', 'town_point', 'unit_point', 'foreign', 'none', 'unexplained',
 ] as const;
@@ -98,30 +101,43 @@ export const kindTotal = (grid: PositionGrid, kind: string): number =>
 export const grainTotal = (grid: PositionGrid, grain: string): number =>
   Object.values(grid).reduce((a, g) => a + (g[grain] ?? 0), 0);
 
-/* ---------- the cell in the URL: ?portal=&kind=&grain= ---------- */
+/* ---------- the list in the URL ---------- */
 
-/* `kind` opens the list (`all` = every kind); `grain` narrows it (absent = every grain). */
+/* `kind` opens a cell's list (`all` = every kind; `grain` narrows it, absent = every grain); `answerless=1` opens the
+ * no-answer entry's list instead. One list at a time: opening one drops the other. */
 export interface PositionCell {
   kind: string;
   grain: string | null;
 }
 
+export type PositionListSpec = { mode: 'cell'; cell: PositionCell } | { mode: 'answerless' };
+
 export const ALL_KINDS = 'all';
 
-export function cellFromParams(params: URLSearchParams): PositionCell | null {
+export function listFromParams(params: URLSearchParams): PositionListSpec | null {
   const kind = params.get('kind');
-  if (!kind) return null;
-  return { kind, grain: params.get('grain') || null };
+  if (kind) return { mode: 'cell', cell: { kind, grain: params.get('grain') || null } };
+  return params.get('answerless') === '1' ? { mode: 'answerless' } : null;
 }
 
-export function paramsForCell(portal: string, cell: PositionCell | null): Record<string, string> {
+export const cellFromParams = (params: URLSearchParams): PositionCell | null => {
+  const spec = listFromParams(params);
+  return spec?.mode === 'cell' ? spec.cell : null;
+};
+
+export function paramsForList(portal: string, spec: PositionListSpec | null): Record<string, string> {
   const out: Record<string, string> = { portal };
-  if (cell) {
-    out.kind = cell.kind;
-    if (cell.grain) out.grain = cell.grain;
+  if (spec?.mode === 'cell') {
+    out.kind = spec.cell.kind;
+    if (spec.cell.grain) out.grain = spec.cell.grain;
+  } else if (spec?.mode === 'answerless') {
+    out.answerless = '1';
   }
   return out;
 }
+
+export const paramsForCell = (portal: string, cell: PositionCell | null): Record<string, string> =>
+  paramsForList(portal, cell ? { mode: 'cell', cell } : null);
 
 /* ---------- the list ---------- */
 
@@ -142,49 +158,69 @@ export interface PositionAuditRow {
   display_label: string | null;
   granularity: string | null;
   granularity_rank: number | null;
+  /* The live grain class and the READING's kind (the snapshot's while not re-resolved since, else unclassified). */
   grain: string;
   position_kind: string;
+  /* The hourly snapshot's own kind; null for a row it does not hold. */
+  snapshot_kind: string | null;
+  /* In the scorecard's listing cohort: active, first written more than 24 h ago. */
+  in_reading: boolean;
   country_status: string | null;
   resolved_at: string | null;
-  /* On `none` rows only (null elsewhere). */
+  /* The snapshot's facts of a `none` row (null elsewhere). */
   town_evidence: boolean | null;
   sibling_placed: boolean | null;
   queued: boolean | null;
-  refreshed_at: string;
+  refreshed_at: string | null;
 }
 
 export interface PositionListFilters {
+  spec: PositionListSpec;
+  /* A cell's portal; the no-answer list's portal chips (empty = every portal: the fail-open filter idiom). */
   portal: string;
-  cell: PositionCell;
-  /* Empty / 'all' = no constraint (the fail-open filter idiom). */
+  portals: ReadonlyArray<string>;
+  categories: ReadonlyArray<string>;
   status: 'all' | 'active' | 'delisted';
   evidence: 'all' | 'unresolved' | 'withheld';
   sibling: 'all' | 'yes' | 'no';
 }
 
-/* `none` opens on every status: the delisted ads with no answer are the old audit's rows, all reachable. */
-export const listFilters = (portal: string, cell: PositionCell): PositionListFilters => ({
-  portal, cell, status: 'all', evidence: 'all', sibling: 'all',
+/* The no-answer list opens on every status: the delisted ads with no answer are the old audit's rows, all reachable. */
+export const listFilters = (portal: string, spec: PositionListSpec): PositionListFilters => ({
+  spec, portal, portals: [], categories: [], status: 'all', evidence: 'all', sibling: 'all',
 });
+
+/* A list that holds `none` rows carries their facts (evidence, sibling, queue). */
+export const listsNone = (spec: PositionListSpec): boolean =>
+  spec.mode === 'answerless' || spec.cell.kind === 'none';
 
 const ROW_COLS = [
   'listing_id', 'property_id', 'source', 'is_active', 'first_seen_at', 'last_seen_at', 'category_main',
   'category_type', 'disposition', 'area_m2', 'price_czk', 'source_url', 'display_label', 'granularity',
-  'granularity_rank', 'grain', 'position_kind', 'country_status', 'resolved_at', 'town_evidence',
-  'sibling_placed', 'queued', 'refreshed_at',
+  'granularity_rank', 'grain', 'position_kind', 'snapshot_kind', 'in_reading', 'country_status', 'resolved_at',
+  'town_evidence', 'sibling_placed', 'queued', 'refreshed_at',
 ].join(',');
 
 interface FilterBuilder {
   eq: (column: string, value: boolean | string) => FilterBuilder;
+  in: (column: string, values: readonly string[]) => FilterBuilder;
 }
 
 function applyFilters<T extends FilterBuilder>(query: T, f: PositionListFilters): T {
-  let q = query.eq('source', f.portal) as T;
-  if (f.cell.kind !== ALL_KINDS) q = q.eq('position_kind', f.cell.kind) as T;
-  if (f.cell.grain) q = q.eq('grain', f.cell.grain) as T;
-  if (f.status !== 'all') q = q.eq('is_active', f.status === 'active') as T;
+  let q = query;
+  if (f.spec.mode === 'cell') {
+    /* A cell's list is the reading's: its cohort, its kind rule and the live grain (view location_position_audit_public). */
+    q = q.eq('in_reading', true).eq('source', f.portal) as T;
+    if (f.spec.cell.kind !== ALL_KINDS) q = q.eq('position_kind', f.spec.cell.kind) as T;
+    if (f.spec.cell.grain) q = q.eq('grain', f.spec.cell.grain) as T;
+  } else {
+    q = q.eq('snapshot_kind', 'none') as T;
+    if (f.portals.length > 0) q = q.in('source', f.portals) as T;
+    if (f.status !== 'all') q = q.eq('is_active', f.status === 'active') as T;
+  }
+  if (f.categories.length > 0) q = q.in('category_main', f.categories) as T;
   /* The evidence split and the sibling are facts of a `none` row only; elsewhere they would empty the list. */
-  if (f.cell.kind === 'none') {
+  if (listsNone(f.spec)) {
     if (f.evidence !== 'all') q = q.eq('town_evidence', f.evidence === 'unresolved') as T;
     if (f.sibling !== 'all') q = q.eq('sibling_placed', f.sibling === 'yes') as T;
   }
@@ -216,4 +252,17 @@ export const fetchPositionAuditPage = async (
     total: cursor == null ? count : null,
     nextCursor: nextCursorFrom(rows as unknown as Record<string, unknown>[], sort, TIEBREAK),
   };
+};
+
+/* The no-answer entry's own number: the exact size of its list (every portal, every status), one HEAD read through
+ * the matview's kind index. */
+export const NO_ANSWER_COUNT_KEY = ['position-audit', 'no-answer-count'] as const;
+
+export const fetchNoAnswerCount = async ({ signal }: PgReadOptions = {}): Promise<number | null> => {
+  const q = supabase
+    .from(POSITION_AUDIT_RELATION)
+    .select('listing_id', { count: 'exact', head: true })
+    .eq('snapshot_kind', 'none');
+  const { count } = await pgRead<null>(q, { signal });
+  return count;
 };

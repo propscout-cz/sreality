@@ -1,57 +1,67 @@
 /* The location position audit on Location quality (W6-c, migration 733): where every ad's point came from.
  *
  * The grid and the strip draw the location gauge's STORED position facts (one number per kind and grain, ruling Q7);
- * every non-zero number is a button that opens the list of those ads, the cell living in the URL. The list reads the
- * admin-gated `location_position_audit`. Ledger figures (mono tabular), borders only; copper marks the chosen cell and
- * nothing else. Ruling Q3 reads off the grain heads: each carries the map's own precision words. */
+ * every non-zero number is a button that opens the list of those ads as the reading counts them, the cell living in
+ * the URL. The no-answer entry opens the hourly snapshot's ads with no location answer in every status. Both lists
+ * read the admin-gated `location_position_audit_public`. Ledger figures (mono tabular), borders only; copper marks the
+ * chosen cell and nothing else. Ruling Q3 reads off the grain heads: each carries the map's own precision words. */
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { SegmentedBar } from '@/components/controls';
+import { useQuery } from '@tanstack/react-query';
+import { PickButton, SegmentedBar } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import { fmtNumber } from '@/components/health/CheckRow';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import Panel from '@/components/Panel';
 import Spinner from '@/components/Spinner';
-import { categoryMainLabel } from '@/lib/enums';
-import { fmtArea, fmtDateSlash } from '@/lib/format';
+import { CATEGORY_MAIN_LABELS, categoryMainLabel, categoryMainLabelPlural } from '@/lib/enums';
+import { fmtArea, fmtCzk, fmtDateSlash, fmtTime24 } from '@/lib/format';
 import type { KeysetCursor } from '@/lib/keyset';
 import { propertyPath } from '@/lib/listingUrl';
+import { LOCATION_SOURCES } from '@/lib/locationQuality';
 import { portalShort } from '@/lib/portals';
 import {
   ALL_KINDS,
   KIND_LABEL,
+  NO_ANSWER_COUNT_KEY,
   POSITION_AUDIT_PAGE_SIZE,
   POSITION_GRAINS,
-  UNCLASSIFIED,
+  fetchNoAnswerCount,
   fetchPositionAuditPage,
   grainTotal,
   gridGrains,
   gridKinds,
   kindTotal,
   listFilters,
+  listsNone,
   precisionWords,
   type PositionAuditPage,
   type PositionAuditRow,
   type PositionCell,
   type PositionGrid,
   type PositionListFilters,
+  type PositionListSpec,
 } from '@/lib/positionAudit';
 import type { SortSpec } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 
-const HEAD = 'text-[0.65rem] font-medium uppercase tracking-[0.1em] text-[var(--color-ink-3)]';
+/* L4 (system.md § Section cards, the ladder): small caps 11/14, weight 600, 0.08em, ink-3. */
+const HEAD = 'text-[11px] leading-[14px] font-semibold uppercase tracking-[0.08em] text-[var(--color-ink-3)]';
 const ROW = 'border-t border-[var(--color-rule-soft)]';
+const MUTED = 'text-sm text-[var(--color-ink-3)]';
 
 const kindLabel = (kind: string): string => KIND_LABEL[kind]?.label ?? kind;
 const grainLabel = (grain: string | null): string =>
   grain == null ? 'every grain' : POSITION_GRAINS.find((g) => g.key === grain)?.label ?? grain;
 
+/* A time to the minute: the snapshot's, the reading's. */
+const fmtStamp = (iso: string | null | undefined): string => `${fmtDateSlash(iso)} ${fmtTime24(iso)}`;
+
 const sameCell = (a: PositionCell | null, b: PositionCell): boolean =>
   a != null && a.kind === b.kind && a.grain === b.grain;
 
-/* One figure. A non-zero count the list can show is a button naming its cell; a zero, or a kind the list cannot show
- * (`unclassified`), stays a figure. */
+/* One figure. A non-zero count is a button naming its cell; a zero stays a figure. */
 function Count({
   n,
   name,
@@ -61,14 +71,12 @@ function Count({
 }: {
   n: number;
   name: string;
-  cell: PositionCell | null;
+  cell: PositionCell;
   chosen: PositionCell | null;
   onOpen: (cell: PositionCell) => void;
 }) {
   const figure = 'font-mono tabular-nums text-[0.78rem]';
-  if (n === 0 || cell == null) {
-    return <span className={`${figure} ${n === 0 ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-ink)]'}`}>{fmtNumber(n)}</span>;
-  }
+  if (n === 0) return <span className={`${figure} text-[var(--color-ink-3)]`}>{fmtNumber(n)}</span>;
   const on = sameCell(chosen, cell);
   return (
     <button
@@ -105,16 +113,14 @@ export function PositionsGrid({
   const title = `Positions · ${portalShort(portal)}`;
   if (!grid || Object.keys(grid).length === 0) {
     return (
-      <Panel title={title}>
-        <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no positions for this portal.</p>
+      <Panel title={title} count={0}>
+        <p className={MUTED}>The gauge has stored no positions for this portal.</p>
       </Panel>
     );
   }
   const kinds = gridKinds(grid);
   const grains = gridGrains(grid);
   const total = kinds.reduce((a, k) => a + kindTotal(grid, k), 0);
-  /* The list holds what the hourly refresh classified: `unclassified` opens nothing. */
-  const listable = (kind: string) => kind !== UNCLASSIFIED;
   return (
     <Panel
       title={title}
@@ -150,23 +156,13 @@ export function PositionsGrid({
                 </th>
                 {grains.map((g) => (
                   <td key={g} className="py-1.5 pr-3 text-right">
-                    <Count
-                      n={grid[k]?.[g] ?? 0}
-                      name={`${kindLabel(k)} · ${grainLabel(g)}`}
-                      cell={listable(k) ? { kind: k, grain: g } : null}
-                      chosen={chosen}
-                      onOpen={onOpen}
-                    />
+                    <Count n={grid[k]?.[g] ?? 0} name={`${kindLabel(k)} · ${grainLabel(g)}`} cell={{ kind: k, grain: g }}
+                      chosen={chosen} onOpen={onOpen} />
                   </td>
                 ))}
                 <td className="py-1.5 text-right">
-                  <Count
-                    n={kindTotal(grid, k)}
-                    name={`${kindLabel(k)} · every grain`}
-                    cell={listable(k) ? { kind: k, grain: null } : null}
-                    chosen={chosen}
-                    onOpen={onOpen}
-                  />
+                  <Count n={kindTotal(grid, k)} name={`${kindLabel(k)} · every grain`} cell={{ kind: k, grain: null }}
+                    chosen={chosen} onOpen={onOpen} />
                 </td>
               </tr>
             ))}
@@ -176,13 +172,8 @@ export function PositionsGrid({
               <th scope="row" className="py-1.5 pr-3 text-left font-medium text-[var(--color-ink)]">Every kind</th>
               {grains.map((g) => (
                 <td key={g} className="py-1.5 pr-3 text-right">
-                  <Count
-                    n={grainTotal(grid, g)}
-                    name={`Every kind · ${grainLabel(g)}`}
-                    cell={{ kind: ALL_KINDS, grain: g }}
-                    chosen={chosen}
-                    onOpen={onOpen}
-                  />
+                  <Count n={grainTotal(grid, g)} name={`Every kind · ${grainLabel(g)}`} cell={{ kind: ALL_KINDS, grain: g }}
+                    chosen={chosen} onOpen={onOpen} />
                 </td>
               ))}
               <td className="py-1.5 text-right">
@@ -210,10 +201,16 @@ export function KindStrip({
   onOpen: (portal: string, cell: PositionCell) => void;
 }) {
   const held = grids.filter(([, g]) => Object.keys(g).length > 0);
-  if (held.length === 0) return null;
+  if (held.length === 0) {
+    return (
+      <Panel title="By kind" count={0}>
+        <p className={MUTED}>No portal has stored positions in this reading.</p>
+      </Panel>
+    );
+  }
   const kinds = gridKinds(Object.assign({}, ...held.map(([, g]) => g)) as PositionGrid);
   return (
-    <Panel title="By kind" note="each portal’s positions summed over grain">
+    <Panel title="By kind" count={fmtNumber(held.length)} note="each portal’s positions summed over grain">
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <caption className="sr-only">By kind: portals by point kind; a number opens its ads</caption>
@@ -234,13 +231,8 @@ export function KindStrip({
                 <th scope="row" className="py-1.5 pr-3 text-left font-normal text-[var(--color-ink-2)]">{portalShort(p)}</th>
                 {kinds.map((k) => (
                   <td key={k} className="py-1.5 pr-3 text-right">
-                    <Count
-                      n={kindTotal(grid, k)}
-                      name={`${portalShort(p)} · ${kindLabel(k)}`}
-                      cell={k === UNCLASSIFIED ? null : { kind: k, grain: null }}
-                      chosen={p === portal ? chosen : null}
-                      onOpen={(cell) => onOpen(p, cell)}
-                    />
+                    <Count n={kindTotal(grid, k)} name={`${portalShort(p)} · ${kindLabel(k)}`} cell={{ kind: k, grain: null }}
+                      chosen={p === portal ? chosen : null} onOpen={(cell) => onOpen(p, cell)} />
                   </td>
                 ))}
                 <td className="py-1.5 text-right font-mono tabular-nums text-[0.78rem] text-[var(--color-ink)]">
@@ -255,7 +247,43 @@ export function KindStrip({
   );
 }
 
-/* ---------- Ads: the cell's list ---------- */
+/* ---------- No location answer · every status: the entry ---------- */
+
+export function NoAnswerEntry({ open, onOpen }: { open: boolean; onOpen: () => void }) {
+  const count = useQuery({
+    queryKey: NO_ANSWER_COUNT_KEY,
+    queryFn: ({ signal }) => fetchNoAnswerCount({ signal }),
+    staleTime: 300_000,
+  });
+  const n = count.data ?? null;
+  return (
+    <Panel title="No location answer · every status" count={n == null ? null : fmtNumber(n)} note="every portal · the hourly snapshot">
+      {count.error ? <ErrorBanner message={count.error.message} /> : null}
+      {n === 0 ? (
+        <p className={MUTED}>Every ad has a location answer.</p>
+      ) : (
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
+          <p className="text-[0.78rem] leading-relaxed text-[var(--color-ink-2)] max-w-[52rem]">
+            Ads in any status with no point and no determination abroad, the rows the pin audit page lists; the
+            grid counts only active ads.
+          </p>
+          {n != null ? (
+            <button
+              type="button"
+              aria-pressed={open}
+              onClick={onOpen}
+              className={`text-xs underline decoration-dotted underline-offset-2 ${open ? 'text-[var(--color-copper)]' : 'text-[var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
+            >
+              Open the list
+            </button>
+          ) : null}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/* ---------- Ads: a cell's list, or the no-answer list ---------- */
 
 const SORT_OPTIONS = [
   { field: 'last_seen_at' as const, label: 'last seen' },
@@ -278,20 +306,26 @@ const SIBLING: ReadonlyArray<{ value: PositionListFilters['sibling']; label: str
   { value: 'no', label: 'without' },
 ];
 
+const toggle = (list: ReadonlyArray<string>, v: string): string[] =>
+  list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+
 /* A row's precision words where it HAS a point; an ad abroad or with no position has none to qualify. */
 const rowPrecision = (r: PositionAuditRow): string =>
   r.position_kind === 'none' || r.position_kind === 'foreign' ? 'no point' : precisionWords(r.granularity_rank);
 
 export function PositionList({
   portal,
-  cell,
+  spec,
+  readingAt,
   onClose,
 }: {
   portal: string;
-  cell: PositionCell;
+  spec: PositionListSpec;
+  /* When the gauge read the grid this cell came from. */
+  readingAt: string | null;
   onClose: () => void;
 }) {
-  const [filters, setFilters] = useState<PositionListFilters>(() => listFilters(portal, cell));
+  const [filters, setFilters] = useState<PositionListFilters>(() => listFilters(portal, spec));
   const [sort, setSort] = useState<SortSpec>({ field: 'last_seen_at', direction: 'desc' });
   const list = useInfiniteList<PositionAuditRow, PositionAuditPage>({
     queryKey: ['position-audit', 'list', JSON.stringify(filters), sort.field, sort.direction],
@@ -300,10 +334,12 @@ export function PositionList({
     getRowId: (r) => r.listing_id,
   });
   const total = list.firstPage?.total ?? null;
-  const refreshedAt = list.rows[0]?.refreshed_at ?? null;
-  const none = cell.kind === 'none';
-  const everyStatus = none || cell.kind === ALL_KINDS;
-  const what = `${portalShort(portal)} · ${cell.kind === ALL_KINDS ? 'every kind' : kindLabel(cell.kind)} · ${grainLabel(cell.grain)}`;
+  const cell = spec.mode === 'cell';
+  const none = listsNone(spec);
+  const snapshotAt = list.rows.find((r) => r.refreshed_at)?.refreshed_at ?? null;
+  const what = cell
+    ? `${portalShort(portal)} · ${spec.cell.kind === ALL_KINDS ? 'every kind' : kindLabel(spec.cell.kind)} · ${grainLabel(spec.cell.grain)}`
+    : 'No location answer · every portal, every status';
 
   return (
     <Panel
@@ -318,15 +354,20 @@ export function PositionList({
           Close
         </button>
       }
-      lede={`One row per ad of the cell, from the hourly snapshot${refreshedAt ? ` of ${fmtDateSlash(refreshedAt)}` : ''}: active ads of any age${everyStatus ? ', and every ad in any status with no position' : ''}. The grid counts the gauge’s own reading, so the two can differ by the ads in between.`}
+      lede={cell
+        ? 'The ads this cell counts, read now by the reading’s own rule: active ads first written more than 24 h ago, each at the hourly snapshot’s kind unless re-resolved since (then not yet classified), by the grain of its live answer.'
+        : 'Every ad in any status the consumer rule refuses (no point and not determined abroad), as the hourly snapshot holds it, with its town evidence, a sibling ad with a point and a queued re-resolve.'}
     >
       {list.error ? <ErrorBanner message={list.error.message} /> : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[0.78rem] text-[var(--color-ink-3)]">
         {total != null ? (
           <span data-testid="position-total" className="font-mono tabular-nums text-[var(--color-ink)]">
-            {fmtNumber(total)} ads
+            {fmtNumber(total)} ads{cell ? ' now' : ''}
           </span>
         ) : null}
+        <span data-testid="position-reading" className="font-mono tabular-nums">
+          {cell ? `reading of ${fmtStamp(readingAt)}` : snapshotAt ? `snapshot of ${fmtStamp(snapshotAt)}` : ''}
+        </span>
         {/* A click on the lit order flips its direction; the other order starts newest first. */}
         <SegmentedBar
           hug
@@ -342,7 +383,7 @@ export function PositionList({
             )
           }
         />
-        {everyStatus ? (
+        {!cell ? (
           <SegmentedBar hug label="Status" options={STATUS} value={filters.status}
             onChange={(status) => setFilters((f) => ({ ...f, status }))} />
         ) : null}
@@ -355,14 +396,40 @@ export function PositionList({
           </>
         ) : null}
       </div>
+      {!cell ? (
+        <div>
+          <p className={HEAD}>Portal</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {LOCATION_SOURCES.map((s) => (
+              <PickButton key={s} on={filters.portals.includes(s)}
+                onClick={() => setFilters((f) => ({ ...f, portals: toggle(f.portals, s) }))}>
+                {portalShort(s)}
+              </PickButton>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div>
+        <p className={HEAD}>Property type</p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {Object.keys(CATEGORY_MAIN_LABELS).map((c) => (
+            <PickButton key={c} on={filters.categories.includes(c)}
+              onClick={() => setFilters((f) => ({ ...f, categories: toggle(f.categories, c) }))}>
+              {categoryMainLabelPlural(c)}
+            </PickButton>
+          ))}
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-[0.8rem]">
           <caption className="sr-only">Ads of {what}</caption>
           <thead>
             <tr className="text-left">
               <th scope="col" className={`py-1.5 pr-3 ${HEAD}`}>Ad</th>
+              {!cell ? <th scope="col" className={`py-1.5 pr-3 ${HEAD}`}>Portal</th> : null}
               <th scope="col" className={`py-1.5 pr-3 ${HEAD}`}>Kind</th>
               <th scope="col" className={`py-1.5 pr-3 ${HEAD}`}>Grain</th>
+              <th scope="col" className={`py-1.5 pr-3 text-right ${HEAD}`}>Price</th>
               <th scope="col" className={`py-1.5 pr-3 ${HEAD}`}>Status</th>
               <th scope="col" className={`py-1.5 pr-3 text-right ${HEAD}`}>Last seen</th>
               {none ? (
@@ -401,11 +468,13 @@ export function PositionList({
                       </a>
                     ) : null}
                   </td>
+                  {!cell ? <td className="py-1.5 pr-3 whitespace-nowrap">{portalShort(r.source)}</td> : null}
                   <td className="py-1.5 pr-3 whitespace-nowrap">{kindLabel(r.position_kind)}</td>
                   <td className="py-1.5 pr-3 whitespace-nowrap">
                     {grainLabel(r.grain)}
                     <span className="block text-[var(--color-ink-3)]">{rowPrecision(r)}</span>
                   </td>
+                  <td className="py-1.5 pr-3 text-right font-mono tabular-nums whitespace-nowrap">{fmtCzk(r.price_czk)}</td>
                   <td className="py-1.5 pr-3">{r.is_active ? 'active' : 'delisted'}</td>
                   <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{fmtDateSlash(r.last_seen_at)}</td>
                   {none ? (

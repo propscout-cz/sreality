@@ -224,7 +224,7 @@ UNGATED: dict[str, Ungated] = {
         "view", "acl", ("733_location_w6c_position_audit.sql",),
         "The location scorecard (698, restated by 733 with the position metric), read by the location gauge as "
         "service_role; security invoker, every privilege revoked from public, anon and authenticated. The browser "
-        "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit."),
+        "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit_public."),
     "location_jobs": Ungated(
         "view", "acl", ("675_scheduled_jobs_expand.sql",),
         "The temporary alias of scheduled_jobs that keeps the pre-rename deployment on its lease; security invoker "

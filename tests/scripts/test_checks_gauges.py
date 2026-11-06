@@ -629,7 +629,9 @@ def test_the_street_floor_is_judged_on_the_upper_bound_over_min_n(share: float, 
     assert cell["facts"]["share"] == round(hits / n, 4)
     if status != "unknown":
         assert cell["value"] == round(100 * hits / n, 2)
-    assert set(cell["facts"]["grains"]) == {"address", "street", "quarter", "obec"}
+    # W6-c: nothing reads the grain mix off this cell any more (the page draws the town cell's positions, whose
+    # column totals are these counts), so it is not stored twice.
+    assert "grains" not in cell["facts"]
 
 
 def test_served_street_is_the_fleet_share_against_its_own_floor() -> None:

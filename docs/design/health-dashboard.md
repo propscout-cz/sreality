@@ -283,7 +283,7 @@ As built (location data quality W1, 2026-10-31, #2218, migration 698; label "Loc
 - `<portal>/town_withheld`: the ads holding no town-bearing claim (ruling Q6: the page names no town).
 - `<portal>/ku`: Czech address-grain rows with a town and no KÚ at the running `RESOLVER_VERSION`, the degenerate-boundary obce excused (moved out of the town cell). Facts: KÚ coverage by grain (address, street, quarter, obec), shown only.
 - `<portal>/outside`: positions CHECK flagged (`pin_outside_obec`, `pin_outside_cz`, `country_conflict`) that the bound town's pip polygon does not cover (ruling Q3, strict). Facts: the disputed-class mix.
-- `<portal>/street`: (address + street) / Czech ads with a town, by the rank table. Facts `share`, `lower_bound`, `upper_bound`, `n`, `floor`, the grain mix.
+- `<portal>/street`: (address + street) / Czech ads with a town, by the rank table. Facts `share`, `lower_bound`, `upper_bound`, `n`, `floor` (the grain mix went with W6-c: the town cell's `positions` hold it).
 - `<portal>/accuracy`: radius cover on the `id % 10 = 0` sample (the truth a word-bound RÚIAN address point, the ad's or its property's location ad's). Facts `share`, `lower_bound`, `n`, `pin_error_m` q50/q90/q95/max/n per declared label.
 - `served/town`, `served/town_withheld`, `served/outside`, `served/street`: the same over published properties at their location ad, facts per portal.
 - `registry` (unchanged), `freshness/version` (rows not at `RESOLVER_VERSION`, plus rows at it on a stale registry label, each counted once), `freshness/evidence` (the oldest `claim_insert`/`operator_edit` resolve waiting, minutes; the backfill queue a fact).

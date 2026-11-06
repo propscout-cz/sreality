@@ -32,7 +32,7 @@ MIGRATION = sorted(p for p in (ROOT / "migrations").glob("*.sql")
 # W6-c's position audit (migration 733): the matview, its admin-gated list view and its refresh.
 POSITION_MIGRATION = ROOT / "migrations" / "733_location_w6c_position_audit.sql"
 POSITION_MV = "public.location_position_mv"
-POSITION_VIEW = "public.location_position_audit"
+POSITION_VIEW = "public.location_position_audit_public"
 
 # The CTEs left inline, each with why: the three scalar lookups the planner runs once as InitPlans, and the two feeders
 # read exactly once by a materialized CTE (the shape measured at 11.7 s).
@@ -145,7 +145,7 @@ def test_no_grain_is_compared_by_enum_order() -> None:
 def test_the_listing_cohort_and_the_sample_start_where_publishing_ends() -> None:
     """NEW_AD_H is the one edge between publishing's new ads and this scorecard; the only other interval is the
     publication cap."""
-    code = _squeeze(_code())
+    code = _squeeze(_view_body())
     edge = f"l.is_active and l.first_seen_at < now() - interval '{NEW_AD_H} hours'"
     assert code.count(_squeeze(edge)) == 2, "the listing cohort and the sample"
     hours = set(re.findall(r"interval '(\d+) hours'", code))
@@ -347,8 +347,9 @@ def test_the_position_metric_is_the_matview_kind_by_the_live_grain_over_the_list
     positions = _squeeze(ctes["positions"][1])
     assert "left join location_position_mv m on m.listing_id = b.id" in positions
     assert "where b.cohort = 'listing'" in positions
-    assert ("coalesce(case when m.resolved_at is not distinct from b.resolved_at then m.position_kind end, "
-            "'unclassified')") in positions
+    assert _squeeze(ls.position_reading_kind_sql("b")) in positions
+    assert _squeeze(ls.position_reading_kind_sql("b")) == ("coalesce(case when m.resolved_at is not distinct from "
+                                                          "b.resolved_at then m.position_kind end, 'unclassified')")
     assert _squeeze(ls.position_grain_sql("b")) in positions
     b = _squeeze(ctes["b"][1])
     assert "ll.granularity" in b and "ll.resolved_at" in b
@@ -409,8 +410,27 @@ def test_the_position_audit_is_admin_gated_and_the_matview_dark_to_the_browser()
     assert view.endswith(") __admin_gate where is_platform_admin()")
     assert f"revoke all on {POSITION_VIEW} from public, anon, authenticated;" in code
     assert re.findall(rf"grant [a-z, ]+ on {re.escape(POSITION_VIEW)} to ([a-z_, ]+);", code) == ["authenticated"]
-    assert "left join listings l on l.id = m.listing_id" in view, "the live property, never a stale link"
     assert "location_display_label(" in view
+    assert not re.search(r"create (?:or replace )?view public\.location_position_audit\b(?!_public)", code), (
+        "every admin-gated browser view ends _public")
+
+
+def test_a_cells_list_is_the_scorecards_reading_rule_over_live_rows() -> None:
+    """Decision A (2026-11-06): the list opened from a grid cell applies the scorecard's own cohort (its listing edge,
+    verbatim), kind rule (the matview's kind while resolved_at is unchanged, else unclassified) and LIVE grain, so a
+    cell's list differs from its number only by the churn since the reading. Rows come from live listings; the
+    matview's own kind stays readable as `snapshot_kind` for the every-status no-answer entry."""
+    view = _squeeze(_statement(_position_code(), f"create or replace view {POSITION_VIEW}"))
+    edge = _squeeze(f"(l.is_active and l.first_seen_at < now() - interval '{NEW_AD_H} hours') as in_reading")
+    assert edge in view
+    assert _squeeze(f"{ls.position_reading_kind_sql('b')} as position_kind") in view
+    assert _squeeze(f"{ls.position_grain_sql('b')} as grain") in view
+    assert "m.position_kind as snapshot_kind" in view
+    assert "from listings l left join listing_location ll on ll.listing_id = l.id" in view
+    assert "left join location_position_mv m on m.listing_id = b.listing_id" in view
+    assert "where b.in_reading or m.listing_id is not null" in view
+    for scalar in ("obec_rank", "street_rank"):
+        assert f"{scalar} as (select r.rank from location_granularity_rank r where r.granularity = " in view
 
 
 def test_the_position_matview_is_registered_indexed_and_refreshed_off_the_old_minute() -> None:
@@ -418,8 +438,8 @@ def test_the_position_matview_is_registered_indexed_and_refreshed_off_the_old_mi
     assert f"create unique index if not exists location_position_mv_pk on {POSITION_MV} (listing_id);" in code
     assert (f"create index if not exists location_position_mv_cell on {POSITION_MV} "
             "(position_kind, source, grain, listing_id);") in code
-    for lane in ("last_seen_at", "first_seen_at"):
-        assert f"on {POSITION_MV} ({lane}, listing_id);" in code
+    # The list sorts live listings (a cell's rows) or the ~12k no-answer rows: no keyset lane on the matview.
+    assert "last_seen_at, listing_id" not in code and "first_seen_at, listing_id" not in code
     assert "values ('location_position_mv', 'refresh_matview', 'pg_cron'," in code
     cron = re.search(r"cron\.schedule\(\s*'refresh-location-position',\s*'([^']+)',\s*\$\$(.+?)\$\$", code)
     assert cron, "pg_cron refresh-location-position"
