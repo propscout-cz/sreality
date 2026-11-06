@@ -713,7 +713,8 @@ rules. Identify which one a task belongs to before you start.
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  matview `location_pin_audit_mv` (no RLS); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  matview `location_pin_audit_mv` (no RLS) and its successor, the admin-gated view `location_position_audit_public` over the
+  service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -5437,6 +5438,26 @@ for; the mandatory town entry, BIND's tail rungs and the sweep's fourth arm are 
 it. Its KÚ cell (MF PR-B; out of the town cell since W1) is the same kind of zero: a Czech address-grain
 row with a town written by the current `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is
 missing at the registry version; KÚ coverage of the coarser grains is a fact, never judged.
+
+**Where each point came from** (W6-c1, migration 733; rulings Q2 and Q3 of 2026-11-02): `location_position_mv`
+(listing grain, every active ad plus every ad in any status the consumer rule refuses; pg_cron
+`refresh-location-position` at :07 through `refresh_matview`) decides each point's KIND by geometric identity within
+1e-7° against the points the resolver could have used, in its own precedence (`location_steps.position_kind_sql`:
+RÚIAN door, street point, own pin, část point, town point, unit point; `foreign` and `none` have no point; anything
+else is `unexplained`, shown and not judged until ruled); a DB-lane replay over the mini mirror holds each kind to the
+resolver's `Position.origin`. The scorecard's `position` metric (class `kind/grain`) counts the listing cohort by the
+READING's kind (`location_steps.position_reading_kind_sql`: the matview's kind while the row's `resolved_at` is
+unchanged, else `unclassified`) and by its LIVE grain (`location_steps.position_grain_sql`, the four `grain` classes
+first, so a grid's column totals are the `grain` counts); the gauge stores it as the `positions` fact on each
+`{portal}/town` cell (ruling Q7: the grid is that stored reading, never a count of its own). The page draws it as the
+"Positions" grid (each grain head in the map's own `pinPrecisionShort` words, so a portal pin below address grain
+reads "Přibližná poloha") and the "By kind" strip; every number opens the "Ads" list from the admin-gated
+`location_position_audit_public`, which applies the reading's own cohort (`in_reading`, the scorecard's edge
+verbatim), kind rule and live grain to live listings, so a cell's list differs from its number only by churn since the
+reading, whose time the list shows beside its own exact count. A separate entry, "No location answer · every status",
+carries its list's exact count and opens the matview's `none` rows in every status and portal (`snapshot_kind`; town
+evidence, a sibling with a point, a queued re-resolve), the rows the old audit page lists. That page and
+`location_pin_audit_mv` stay until the operator has compared the two (W6-c2 deletes them).
 
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +

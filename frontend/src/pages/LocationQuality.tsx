@@ -5,11 +5,15 @@
  * measured twice and the page holds no threshold; every status is the check's, every value the
  * count or share that colours it. Admin-only (the health view returns no row to anyone else).
  * W3b moved corrections to the property page's address picker and deleted the inspector.
+ * W6-c (migration 733): the town cell's stored position grid replaced the grain bars, and every
+ * number in it opens its ads (components/location/PositionAudit); the portal and the open cell
+ * live in the URL (?portal=&kind=&grain=).
  *
  * Visual note: a class mix is single-hue horizontal bars — magnitude of one measure, so one
  * hue; identity color would be noise. */
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -21,10 +25,18 @@ import StatusDot from '@/components/StatusDot';
 import { HEALTH_QUERY, HealthEmptyError, tail, verdictOf, type HealthCell, type HealthRow } from '@/lib/healthChecks';
 import { portalShort } from '@/lib/portals';
 import { LOCATION_SOURCES } from '../lib/locationQuality';
+import { KindStrip, NoAnswerEntry, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
+import {
+  listFromParams,
+  paramsForList,
+  positionGrid,
+  type PositionCell,
+  type PositionListSpec,
+} from '@/lib/positionAudit';
 
 const CHECK_KEY = 'location_town_coverage';
 
-/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars, in the matrix's figures. */
+/* A cell's counts by class (`facts.disputed`) as bars, in the matrix's figures. */
 function BarList({ counts }: { counts: unknown }) {
   const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
     .filter((e): e is [string, number] => typeof e[1] === 'number');
@@ -82,12 +94,29 @@ function pivot(cells: HealthCell[]) {
   return { portals, columns, at, fleet };
 }
 
-function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; onSource: (s: string) => void }) {
+function Scorecard({
+  row,
+  source,
+  list,
+  onSource,
+  onList,
+}: {
+  row: HealthRow;
+  source: string;
+  list: PositionListSpec | null;
+  onSource: (s: string) => void;
+  onList: (portal: string, list: PositionListSpec | null) => void;
+}) {
+  const cell = list?.mode === 'cell' ? list.cell : null;
+  const onCell = (portal: string, next: PositionCell) => onList(portal, { mode: 'cell', cell: next });
   const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
   /* Every verdict is Health's (`verdictOf`); a stale row's facts are history, withheld as on Health. */
   const current = row.effective_status !== 'unknown';
-  const grains = current ? at[source]?.street?.facts.grains : undefined;
+  const positions = current ? at[source]?.town?.facts.positions : undefined;
   const disputed = current ? at[source]?.outside?.facts.disputed : undefined;
+  const grids = current
+    ? portals.map((p) => [p, positionGrid(at[p]?.town?.facts.positions)] as const)
+    : [];
   return (
     <>
       <Panel title="By portal">
@@ -143,15 +172,28 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
           </ul>
         )}
       </Panel>
-      {grains || disputed ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Panel title={`Grain · ${portalShort(source)}`}>
-            <BarList counts={grains} />
-          </Panel>
-          <Panel title={`Disputed classes · ${portalShort(source)}`}>
-            <BarList counts={disputed} />
-          </Panel>
-        </div>
+      {current ? (
+        <PositionsGrid
+          portal={source}
+          grid={positions === undefined ? undefined : positionGrid(positions)}
+          chosen={cell}
+          onOpen={(c) => onCell(source, c)}
+        />
+      ) : null}
+      {cell ? (
+        <PositionList key={`${source}|${cell.kind}|${cell.grain ?? ''}`} portal={source} spec={{ mode: 'cell', cell }}
+          readingAt={row.run_at} onClose={() => onList(source, null)} />
+      ) : null}
+      <KindStrip grids={grids} portal={source} chosen={cell} onOpen={onCell} />
+      <NoAnswerEntry open={list?.mode === 'answerless'}
+        onOpen={() => onList(source, list?.mode === 'answerless' ? null : { mode: 'answerless' })} />
+      {list?.mode === 'answerless' ? (
+        <PositionList key="answerless" portal={source} spec={list} readingAt={null} onClose={() => onList(source, null)} />
+      ) : null}
+      {disputed ? (
+        <Panel title={`Disputed classes · ${portalShort(source)}`}>
+          <BarList counts={disputed} />
+        </Panel>
       ) : null}
     </>
   );
@@ -160,7 +202,12 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
 /* ---------- page ---------- */
 
 export default function LocationQuality() {
-  const [source, setSource] = useState<string>('bezrealitky');
+  /* The portal and the open cell are the URL's (?portal=&kind=&grain=), so a cell is a link. */
+  const [params, setParams] = useSearchParams();
+  const source = params.get('portal') ?? 'bezrealitky';
+  const list = listFromParams(params);
+  const openList = (portal: string, next: PositionListSpec | null) => setParams(paramsForList(portal, next));
+  const setSource = (portal: string) => openList(portal, null);
   /* The Health page's own entry (same key, same poll): identical numbers by construction. */
   const health = useQuery({
     ...HEALTH_QUERY,
@@ -202,7 +249,7 @@ export default function LocationQuality() {
           />
         ) : row ? (
           <>
-            <Scorecard row={row} source={source} onSource={setSource} />
+            <Scorecard row={row} source={source} list={list} onSource={setSource} onList={openList} />
             <Panel title="As on Health">
               <CheckRow row={{ ...row, owner_path: '' }} />
             </Panel>
