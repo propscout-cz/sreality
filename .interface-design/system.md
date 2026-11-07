@@ -76,7 +76,7 @@ index), **B, section cards** is ruled. **Picture with each value tagged: `docs/d
   the side panel's page, the host or `<html>` wearing the user's scheme and theme): the listing panel is **Chrome's
   side panel** (operator ruling 2026-10-31; it narrows the page, never covers it) — `--color-paper` under a
   `--color-chrome` top bar (wordmark, "V aplikaci", ⋯, › close), its width Chrome's — of the same cards; on a listing
-  page a tab on the right edge opens it (the PS mark over the stage badge, the price drop and MF). Cards:
+  page a tab on the right edge opens it (the PS mark over the stage badge, the price drop and MF), dragged up or down to where it stays; the toolbar icon, Chrome's strip over the panel and the store wear that same PS mark. Cards:
   `--color-paper-2` on the panel's `--color-paper`, 1px `--color-rule`, `--radius-xs`, no shadow. Title bar
   9 / 12 / 8 px with a `--color-rule` line under it; title 600 14/20 `--color-ink` in the system font (no Fraunces),
   the count `--color-ink-3` mono tabular, a note (12, ink-3) pushed right. Body 10 / 12 / 12 px, 10 px between cards.

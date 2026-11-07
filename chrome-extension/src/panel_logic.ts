@@ -116,6 +116,14 @@ export function tabMarkList<N>(stage: N | null, move: number | null, mf: N | nul
   return [stage, move != null && move < 0 ? drop(move) : null, mf].filter((n): n is N => n != null);
 }
 
+/* The edge tab stays this clear of the window's ends. */
+const TAB_END_GAP = 8;
+
+/* Where the edge tab can sit in this window: a window too short for it keeps its top in reach. */
+export function clampTabTop(top: number, tabHeight: number, windowHeight: number): number {
+  return Math.max(TAB_END_GAP, Math.min(top, windowHeight - tabHeight - TAB_END_GAP));
+}
+
 export function cutChips<T>(items: readonly T[], max = CHIPS_MAX): { shown: T[]; more: number } {
   return { shown: items.slice(0, max), more: Math.max(0, items.length - max) };
 }
