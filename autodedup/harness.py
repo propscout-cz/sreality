@@ -21,6 +21,7 @@ import gzip
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -386,12 +387,16 @@ def _drain(store: MemoryStore, facts: CohortFacts, work: Schedule, settings: Set
     return passes
 
 
+def fingerprints_of(dataset: Dataset, settings: Settings) -> dict[int, Fingerprint]:
+    return {i: build_fingerprint(listing, images, settings)
+            for i, (listing, images) in CohortFacts(dataset).facts(sorted(dataset.listings)).items()}
+
+
 def calibrated(dataset: Dataset, settings: Settings
                ) -> tuple[dict[int, Fingerprint], Calibration]:
     """The lane's calibration core (`cut_calibration`: fingerprints off the facts, folded into
     E962's `CalibrationCut`) over the whole cohort, in one fold."""
-    fps = {i: build_fingerprint(listing, images, settings)
-           for i, (listing, images) in CohortFacts(dataset).facts(sorted(dataset.listings)).items()}
+    fps = fingerprints_of(dataset, settings)
     cut = CalibrationCut(settings)
     cut.fold(fps, dataset.listings)
     return fps, cut.build()
@@ -850,6 +855,7 @@ def cmd_evaluate(args: argparse.Namespace, out: Any) -> int:
 
 def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     """A location wave's shadow: base vs movers, live scorer, `evaluate --base`; 0 = PASS."""
+    started_at = datetime.now(timezone.utc).isoformat()
     scorer = json.loads(Path(args.scorer).read_text(encoding="utf-8"))
     settings = Settings.from_dict(scorer["settings"])
     model = model_of_version(scorer.get("model_version"))
@@ -880,6 +886,16 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
     verdict["recent_same"]["since"] = args.recent_since
     verdict["group"] = group.get("group", "1/1")
     verdict["blocks_skipped_no_ruling"] = group.get("blocks_skipped_no_ruling")
+    arms = {name: (load(path), evaluation.read_run(root / name))
+            for name, path in (("base", args.artifact), ("candidate", candidate))}
+    verdict["door"] = shadow.door_report(
+        *(shadow.Arm(run, data.listings, fingerprints_of(data, settings))
+          for data, run in arms.values()),
+        report["d83"]["lists"], done.changed, settings)
+    verdict["door"]["piece"] = shadow.piece_span(group)
+    verdict["door"]["crossing_pairs"] = group.get("crossing_pairs")
+    verdict["state"] = "judged"
+    verdict["started_at"] = group.get("started_at") or started_at
     (root / shadow.SHADOW_FILE).write_text(json.dumps(verdict, indent=1, sort_keys=True),
                                            encoding="utf-8")
     facts, e111 = verdict["run"], verdict["e111"]
@@ -903,6 +919,28 @@ def cmd_shadow(args: argparse.Namespace, out: Any) -> int:
         print(f"  D83 {name} touching a mover: {len(rows)}", file=out)
         for lo, hi, *tags in rows[:args.show]:
             print(f"    {lo} x {hi} {' '.join(str(tag) for tag in tags if tag)}", file=out)
+    door = verdict["door"]
+    print(f"  door report (base -> candidate, pair ids in shadow.json `door`): "
+          f"{door['door_gainers']} ads gained a door"
+          f"  position moved {door['position_moved']['count']}"
+          f"  E242 {door['e242']['base']} -> {door['e242']['candidate']}"
+          f" (new {len(door['e242']['new'])}, gone {len(door['e242']['gone'])})"
+          f"  E272 {door['e272']['base']} -> {door['e272']['candidate']}"
+          f" (new {len(door['e272']['new'])}, gone {len(door['e272']['gone'])})"
+          f"  same_house_number to 1: {len(door['same_house_number_to_1'])}"
+          f"  new addr pairs {len(door['addr_new'])}"
+          f"  displaced by the cap {len(door['cap_displaced'])}"
+          f"  merge gained {len(door['merge_gained'])} lost {len(door['merge_lost'])}"
+          f"  block key split {door['block_key_split']['count']}"
+          f"  two doors in one building {len(door['two_doors_one_building'])}", file=out)
+    piece, crossing = door["piece"], door["crossing_pairs"]
+    print(f"  piece {piece['first']} .. {piece['last']}, {piece['blocks']} blocks"
+          f"  started {verdict['started_at']}", file=out)
+    print("  crossing pairs not read" if crossing is None else
+          f"  crossing pairs {crossing['movers']} movers, {crossing['pairs']} pairs ("
+          + ", ".join(f"{zone} {n}" for zone, n in crossing["by_zone"].items()) + ")", file=out)
+    print(f"  this gate is a sample: it says nothing about any block outside group "
+          f"{verdict['group']} of scope {facts.get('scope', '?')}", file=out)
     print(f"wrote {root / shadow.SHADOW_FILE}", file=out)
     return 0 if verdict["pass"] else 1
 

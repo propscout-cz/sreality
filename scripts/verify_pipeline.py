@@ -401,12 +401,6 @@ THRESHOLDS: dict[str, Any] = {
     "location_street_floor_min_n": 200,
     # The served properties' fleet street share, the same rule: 0.9x 49.0 % on 10-31.
     "location_served_street_floor": 0.44,
-    # Pin accuracy, Watch only until W6 ships the calibrated table: the Wilson LB of the sampled
-    # below-address ads whose address point lies inside their own radius under 90 % (W6 targets
-    # >= 93 %; sreality 87.9 % of 116 and bazos 57.1 % of 373 read Watch on 10-31)...
-    "location_radius_cover_watch": 0.90,
-    # ...over at least 30 sampled ads (bezrealitky had 7 and maxima 11 on 10-31).
-    "location_accuracy_min_n": 30,
     # The oldest evidence change (a new claim, an operator edit) waiting for its resolve past 60 min
     # is a Problem: 4x W2's 15-min target, red only when evidence starves behind a sweep (v5.8
     # measured up to 3.4 h mid-sweep).

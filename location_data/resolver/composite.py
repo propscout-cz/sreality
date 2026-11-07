@@ -275,6 +275,7 @@ class StreetBind:
     cislo_domovni: int | None = None
     typ_so: str | None = None
     cislo_orientacni: int | None = None
+    znak_orientacniho: str | None = None
     reason: str = "no_match"
     candidates: tuple[StreetBind, ...] = ()
     named_part: AdminUnit | None = None
@@ -431,7 +432,8 @@ def _bound(street: Street, numbers: dict[str, object], *,
     cislo_domovni, typ_so = house_number(numbers)
     return StreetBind(
         street=street, cislo_domovni=cislo_domovni, typ_so=typ_so,
-        cislo_orientacni=_as_int(numbers.get("cislo_orientacni")), reason="street_match",
+        cislo_orientacni=_as_int(numbers.get("cislo_orientacni")),
+        znak_orientacniho=_letter(numbers), reason="street_match",
         named_part=named_part,
     )
 
@@ -467,6 +469,10 @@ def _one_part(parts: dict[int, AdminUnit]) -> AdminUnit | None:
     part, and the část is the level a streetless house number is unique in."""
     found = [u for u in parts.values() if u.level == "cast_obce"]
     return found[0] if len(found) == 1 else None
+
+
+def _letter(numbers: dict[str, object]) -> str | None:
+    return str(numbers["znak_orientacniho"]) if numbers.get("znak_orientacniho") else None
 
 
 def _as_int(value: object) -> int | None:

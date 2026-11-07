@@ -105,6 +105,16 @@ PIP_SLIVER_TOLERANCE_M = 250.0
 # registry point stays the position and GRADE caps the confidence.
 REGISTRY_PIN_CONFLICT_M = 300.0
 
+# THE DOOR A PIN NAMES (W5b, ruling Q8 (a), 2026-11-02): "what is certain gets a door". Only a flat or
+# a house, its pin within 1 m of the door: the measured line where a pin-named door agrees with a
+# sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %,
+# within noise). 5 m does not (94.5 %, 99.0 %).
+PIN_DOOR_M = 1.0
+PIN_DOOR_AD_TYPES = frozenset({"byt", "dum"})
+PIN_DOOR_RUNG = "R5"  # set after the ranking, so it has no score
+# The claims that state a door: `names_a_door` refuses on any of them.
+WORD_DOOR_CLAIM_TYPES: tuple[str, ...] = ("address_point_id", "house_number_cp", "house_number_co")
+
 
 # Portal-declared labels that mean "this pin is not address-grade". The portal contract maps
 # its own vocabulary onto these; a label we do not know is NOT treated as blurred (cap,
@@ -198,6 +208,8 @@ class Constraints:
     cislo_domovni: int | None = None
     typ_so: str | None = None
     cislo_orientacni: int | None = None
+    # The č.o.'s letter, lower case: 8, 8a and 8b are three entrances (Q23 (a)).
+    znak_orientacniho: str | None = None
     kod_adm: int | None = None
     pin: tuple[float, float] | None = None
     claim_ids: dict[str, tuple[int, ...]] = field(default_factory=dict)
@@ -222,7 +234,7 @@ def collect_constraints(
         return norm.typed_slots if norm else {}
 
     kod_adm = psc = street_key = street_line = None
-    cp = co = typ = None
+    cp = co = typ = znak = None
     pin: tuple[float, float] | None = None
     if (claim := one.get("address_point_id")) is not None and claim.value_text:
         read("address_point_id", "kod_adm")
@@ -235,6 +247,7 @@ def collect_constraints(
     if "house_number_co" in one:
         numbers = slots(read("house_number_co", "house_number_co"))
         co = _as_int(str(numbers.get("cislo_orientacni") or numbers.get("cislo_domovni") or ""))
+        znak = numbers.get("znak_orientacniho")
     street = norms.get("street_name")
     if "street_name" in one and not (street and street.rejections):
         line = str(one["street_name"].value_text or "")
@@ -246,6 +259,7 @@ def collect_constraints(
             cp, typ = house_number(slots(street))
         if co is None and slots(street).get("cislo_orientacni"):
             co = _as_int(str(slots(street)["cislo_orientacni"]))
+            znak = slots(street).get("znak_orientacniho")
     keys: dict[str, tuple[str, ...]] = {}
     obec_lines: tuple[str, ...] = ()
     for t in ("obec_name", "cast_obce_name", "okres_name", "kraj_name"):
@@ -273,6 +287,7 @@ def collect_constraints(
         cislo_domovni=cp,
         typ_so=typ,
         cislo_orientacni=co,
+        znak_orientacniho=str(znak) if znak else None,
         kod_adm=kod_adm,
         pin=pin,
         claim_ids=dict(sorted(ids.items())),
@@ -364,7 +379,7 @@ def narrow_towns(
     ):
         if not keys or len(surviving) <= 1:
             continue
-        wanted = {u.code for key in keys for u in registry.admin_units_by_name(key, levels=(label,))}
+        wanted = {u.code for u in _units_named(keys, label, registry)}
         filtered = [u for u in surviving if getattr(u, attr) in wanted]
         if filtered:
             surviving = filtered
@@ -379,6 +394,19 @@ def narrow_towns(
         surviving = inside or [min(surviving, key=lambda u: (
             _town_distance(u, pin, registry), u.unit_id))]
     return surviving, applied
+
+
+def _units_named(keys: Sequence[str], level: str, registry: RegistryView) -> list[AdminUnit]:
+    return [u for key in keys for u in registry.admin_units_by_name(key, levels=(level,))]
+
+
+def _region_disagrees(town: AdminUnit, constraints: Constraints, registry: RegistryView) -> bool:
+    """An okres or kraj word the register holds at that level, and the town lies outside it. A word
+    it does not hold there ("Vysočina" as a kraj) is a spelling, not a disagreement."""
+    return any((wanted := {u.code for u in _units_named(keys, level, registry)})
+               and getattr(town, attr) not in wanted
+               for keys, attr, level in ((constraints.okres_keys, "okres_kod", "okres"),
+                                         (constraints.kraj_keys, "kraj_kod", "kraj")))
 
 
 def _admits(
@@ -591,6 +619,7 @@ def bind(
             if town in constraining_obec_kods and (claimed := part_of(unit, town, registry)):
                 said.append(_Part(claimed, _ids(constraints, "cast_obce_name"),
                                   ("obec_constrained",)))
+    part_claim_unmatched = bool(constraints.cast_obce_keys) and not said
     if towns.composite.part is not None:
         said.append(_Part(towns.composite.part, _ids(constraints, "obec_name"),
                           ("obec_constrained",)))
@@ -630,35 +659,28 @@ def bind(
         elif len(spelled) == 1 and len(inside) != 1 and (part is None or inside):
             line = replace(spelled[0], named_part=line.named_part)
 
-    # ---- R1 / R2: a bound street reaches R1 when there is a house number and R2 otherwise.
+    # ---- R1 / R2: a bound street reaches R1 when its number names ONE door, R2 otherwise.
     if line.street is not None:
         # The street claim's own number first; a listing-wide `house_number_*` claim behind it
         # (the portals that state the street and the číslo in separate fields). The number
-        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits.
+        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits, and the č.o.
+        # with its letter, so one source's 8 never takes another's b.
         cislo_domovni, typ_so = ((line.cislo_domovni, line.typ_so) if line.cislo_domovni
                                  else (constraints.cislo_domovni, constraints.typ_so))
-        cislo_orientacni = line.cislo_orientacni or constraints.cislo_orientacni
-        points = _typed(
+        cislo_orientacni, znak = ((line.cislo_orientacni, line.znak_orientacniho) if line.cislo_orientacni
+                                  else (constraints.cislo_orientacni, constraints.znak_orientacniho))
+        doors = _stated_doors(
             registry.address_points_by_number(
-                obec_kod=line.street.obec_kod,
-                street_name_norm=line.street.name_norm,
-                cislo_domovni=cislo_domovni,
-                typ_so=typ_so,
-                cislo_orientacni=cislo_orientacni,
-            )
-            if cislo_domovni or cislo_orientacni
-            else []
-        )
-        for point in points:
-            agreed = ["house_number", "street", "obec"]
-            if constraints.psc == point.psc:
-                agreed.append("psc")
-            out.append(
-                _point_candidate(
-                    point, rung="R1", agreed=tuple(agreed), relaxations=relaxed,
-                    claim_ids=_ids(constraints, "street", "house_number_cp",
-                                   "house_number_co")))
-        if not points:
+                obec_kod=line.street.obec_kod, street_name_norm=line.street.name_norm,
+                cislo_domovni=cislo_domovni, typ_so=typ_so, cislo_orientacni=cislo_orientacni,
+            ) if cislo_domovni or cislo_orientacni else [],
+            znak, constraints.psc, by_co=cislo_orientacni is not None)
+        if len(doors) == 1:
+            agreed = ("house_number", "street", "obec", *(("psc",) if constraints.psc == doors[0].psc else ()))
+            out.append(_point_candidate(
+                doors[0], rung="R1", agreed=agreed, relaxations=relaxed,
+                claim_ids=_ids(constraints, "street", "house_number_cp", "house_number_co")))
+        else:
             out.append(_street_candidate(line.street, "R2", constraints, relaxations=relaxed))
 
     # ---- R3: the typo-tolerant rung, and the ONE place a street may be bound by similarity
@@ -715,10 +737,11 @@ def bind(
     if (town is not None and constraints.cislo_domovni is not None
             and not constraints.street_line and not any(
                 c.target_kind == "address_point" for c in out)):
-        points = _typed(registry.address_points_by_number(
+        points = _stated_doors(registry.address_points_by_number(
             obec_kod=town.code, street_name_norm=None,
             cislo_domovni=constraints.cislo_domovni, typ_so=constraints.typ_so,
-            cislo_orientacni=constraints.cislo_orientacni, cast_obce_unit_id=part.unit_id))
+            cislo_orientacni=constraints.cislo_orientacni, cast_obce_unit_id=part.unit_id),
+            constraints.znak_orientacniho, constraints.psc, by_co=constraints.cislo_orientacni is not None)
         if len(points) == 1 and _pin_agrees(points[0], constraints.pin, blurred=pin_blurred):
             out.append(_point_candidate(
                 points[0], rung="R1", agreed=("house_number", "cast_obce", "obec"),
@@ -826,6 +849,17 @@ def bind(
             relaxations=top.relaxations,
             ambiguous=ambiguous,
             source_claim_ids=top.source_claim_ids,
+            words_part_ids=tuple(sorted({p.unit.unit_id for p in (*said, *found)})),
+            # An okres word that is really a MOMC ("Praha 5", the portals' old district).
+            words_momc_ids=tuple(sorted({
+                u.unit_id for u in _units_named(constraints.okres_keys, "momc", registry)})),
+            # A part claim that matched no část (a MOMC is none), a locality line the town was only
+            # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
+            # (the PSČ or a part claim bound it), an okres or kraj word the town is not in.
+            words_unchecked=(
+                part_claim_unmatched or towns.composite.bound
+                or (bool(constraints.obec_keys) and not towns.named)
+                or any(_region_disagrees(town, constraints, registry) for town in obec_units)),
         ),
         constraints,
     )
@@ -929,6 +963,21 @@ def _point_candidate(
         cast_obce_unit_id=point.cast_obce_unit_id,
         agreed=agreed, relaxations=relaxations, source_claim_ids=claim_ids,
     )
+
+
+def _stated_doors(
+    points: Sequence[AddressPoint], znak: str | None, psc: str | None, *, by_co: bool,
+) -> list[AddressPoint]:
+    """The doors the words name among the register's points of the stated number (`points`, read by its č.p. and
+    č.o.; Q23 (a), 2026-11-07: a door only when it is certain). A stated č.o. keeps its letter exactly; no letter
+    stated, the letter-less entrance, else the lettered ones. Then a stated PSČ that leaves exactly one. None or
+    several left is no door: the caller binds the street (or keeps the část)."""
+    if by_co:
+        points = ([p for p in points if (p.znak_orientacniho or "").lower() == znak] if znak is not None
+                  else [p for p in points if not p.znak_orientacniho] or list(points))
+    doors = _typed(points)
+    by_psc = [p for p in doors if psc is not None and p.psc == psc]
+    return by_psc if len(doors) > 1 and len(by_psc) == 1 else doors
 
 
 def _typed(points: Sequence[AddressPoint]) -> list[AddressPoint]:
@@ -1035,7 +1084,7 @@ def read_declared_precision(claims: Sequence[Claim]) -> DeclaredPrecision:
 def pin_inside_bound_obec(
     binding: Binding, pin_claim: Claim | None, registry: RegistryView
 ) -> bool | None:
-    """The ONE containment question `place()` and CHECK both read: does the pin lie inside the
+    """The ONE containment question `pin_door`, `place()` and CHECK read: does the pin lie inside the
     obec the CLAIMS bound? None when it is not asked — no pin, no bound town (a region-only
     bind), or a town the pin itself established (R7/R8, where the comparison is circular). The
     drain pre-answers `containing_obec` for every claim coordinate in the slice, so this is one
@@ -1047,6 +1096,53 @@ def pin_inside_bound_obec(
     return covering is not None and covering.code == binding.obec_kod
 
 
+def names_a_door(stored: Sequence[Claim]) -> bool:
+    """The words state a door, bound or not: ANY stored claim of a door type, parsed or not, or a
+    digit in the street line ("12a" parses as nothing; "28. října" pays for it)."""
+    return any(c.claim_type in WORD_DOOR_CLAIM_TYPES
+               or (c.claim_type == "street_name" and any(ch.isdigit() for ch in c.value_text or ""))
+               for c in stored)
+
+
+def pin_door(
+    binding: Binding,
+    constraints: Constraints,
+    pin_claim: Claim | None,
+    *,
+    stored: Sequence[Claim],
+    ad_type: str | None,
+    declared: DeclaredPrecision,
+    pin_inside_bound_obec: bool | None,
+    registry: RegistryView,
+) -> Binding:
+    """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house whose words bound a street
+    (F1, ruling Q24: a town or a část alone is how a village centre shared by many ads became their
+    door), its exact pin inside the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there,
+    on that street (so in its town): the door agrees with every word that can check it (street, each
+    část claimed, PSČ), and what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
+    A refusal is silent; the words stand. The binding carries no point, so `place` keeps the ad's
+    own pin: two pins within 1 m of one door must not read as one exact pin to the engine."""
+    # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
+    if (ad_type not in PIN_DOOR_AD_TYPES or pin_claim is None or pin_claim.point is None
+            or declared.blurred or pin_inside_bound_obec is not True or binding.words_unchecked
+            or binding.target_kind != "street" or names_a_door(stored)):
+        return binding
+    near = registry.doors_near(*pin_claim.point)
+    door = registry.address_point(near[0]) if len(near) == 1 else None
+    if (door is None or door.ulice_kod != binding.ulice_kod
+            or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
+            or (binding.words_momc_ids and door.momc_unit_id not in binding.words_momc_ids)
+            or (constraints.psc is not None and door.psc != constraints.psc)):
+        return binding
+    return replace(
+        binding, target_kind="address_point", rung=PIN_DOOR_RUNG,
+        ruian_adm_kod=door.kod_adm, ulice_kod=door.ulice_kod, street_name=door.street_name,
+        cast_obce_unit_id=door.cast_obce_unit_id, lat=None, lon=None,
+        street_extent_m=None, street_katastr_kod=None,
+        source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),
+    )
+
+
 def place(
     binding: Binding,
     pin_claim: Claim | None,
@@ -1054,8 +1150,9 @@ def place(
     declared: DeclaredPrecision,
     pin_inside_bound_obec: bool | None = None,
 ) -> Position:
-    """The ONE precedence rule (W18): registry ADDRESS POINT > bound STREET point > portal pin >
-    FILL's unit point (an unplaced `Position` here). One truth (v5.10, ruling Q3): where the words
+    """The ONE precedence rule (W18): registry ADDRESS POINT the words named > bound STREET point >
+    portal pin (the door a pin names stands here, `pin_door`) > FILL's unit point (an unplaced
+    `Position` here). One truth (v5.10, ruling Q3): where the words
     bound the row, a pin may place it only inside the bound town (`pin_inside_bound_obec`, None =
     not asked) and never as an AREA marker; without words (R7/R8) it names its town and stays. A
     pin that may not place the row is still evidence the branches measure and CHECK flags. The

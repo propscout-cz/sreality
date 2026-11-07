@@ -21,7 +21,7 @@ So: one definition per step, spelled here once and RENDERED into every reader.
 NO WORDING LIVES HERE. A step's Czech and English labels live in exactly one file,
 frontend/src/lib/locationSteps.ts, because a better sentence must never cost a migration.
 A migration cannot import Python, so the location scorecard view `location_quality_by_source`
-(migration 698: the step flags, `town_missing_sql()` and `town_evidence_sql()`) holds these
+(migration 736: the step flags, `town_missing_sql()` and `town_evidence_sql()`) holds these
 expressions VERBATIM, pinned by tests/location_data/test_location_quality_view_contract.py — the
 same rail W5 uses to keep the serving surfaces on one rule.
 """
@@ -85,7 +85,7 @@ def _located_no_town_sql(flags: str) -> str:
 def town_missing_sql(*, loc: str = "ll", rank: str = "gr") -> str:
     """Rule 25's invariant, broken: not determined foreign and no town, off a LEFT JOIN of the
     answer row — so a listing with no row counts (foreign is a determination, never a default).
-    The scorecard view (migration 698) counts it; the `location_refetch` lane acts on it."""
+    The scorecard view (migration 736) counts it; the `location_refetch` lane acts on it."""
     flags = step_flags_sql(loc=loc, rank=rank)
     return _no_town(flags["is_foreign"], flags["has_town"])
 

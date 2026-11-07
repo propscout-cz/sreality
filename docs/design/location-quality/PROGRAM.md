@@ -15,7 +15,7 @@ Origin: the operator's follow-up on the location refactoring sprint (2026-10-30)
 | Q5 | Corrections stay, as a pencil on the property page's address line opening a RÚIAN-matched address picker; the chosen entity becomes an operator claim on every current ad of the property and outranks the portal. Admin-gated (builder's call). The admin inspector form goes. | New wave W3b after W3. |
 | Q6 | Confirmed after the operator checked the 27 pages: unresolved stays red, page-withheld shows as Watch. | W1 as planned. |
 | Q7 | Fixed red thresholds from day one; nothing measured twice: W1 first folds the five existing location counters (gauge cells, Location Quality aggregates, pin-audit matview, audit waterfall, gate SQL) into the one scorecard. | W1 acceptance line 1. Pin-accuracy cells wait for W6. |
-| Q8 | **The map is the source when it is there.** An exact pin resolves to the RÚIAN address point and refines the row below the town the words bound (street, house number), never contradicting it. The remax header slot is NOT read; for remax pages without a pin the ruled map attribute stays. | New wave W5b after W5 (a pin → address point rung, tolerance calibrated against address points; June 2026 measured 99.2 % precision at 15 m). W4 shrinks to realitymix. |
+| Q8 | **Narrowed by Q8 (a), 2026-11-02: what is certain gets a door (a flat or a house, its pin within 1 m of the address point; W5b below).** **The map is the source when it is there.** An exact pin resolves to the RÚIAN address point and refines the row below the town the words bound (street, house number), never contradicting it. The remax header slot is NOT read; for remax pages without a pin the ruled map attribute stays. | New wave W5b after W5 (a pin → address point rung, tolerance calibrated against address points; June 2026 measured 99.2 % precision at 15 m). W4 shrinks to realitymix. |
 | Q9 | Worker is the only resolve runtime. | W2 as planned. |
 | Q10 | Praha's okres = 9999 under ČÚZK's own name. | W7 as planned. |
 | Q11 | One `obec_population` table keyed by RÚIAN code and year; the curated-city population becomes a view over it. | W8. |
@@ -25,9 +25,9 @@ Origin: the operator's follow-up on the location refactoring sprint (2026-10-30)
 | Q14 | Order: W0 → W1 → W2 → W7 → W8 → W4 → W3 → W3b → W5 → W5b → W6. | Sequencing. |
 | — | **The legacy `admin_boundaries` table is retired and removed entirely; its eleven consumers are rebuilt on the RÚIAN mirror; cleanup is a deliverable.** It is the same ČÚZK RÚIAN boundary pack loaded in May 2026 by a simpler script, so "pre-mirror RÚIAN table" is the honest name. Only `population` (ČSÚ) and the sreality locality crosswalk were not RÚIAN data. | New wave W8 after W7 (Praha's okres must exist in the mirror first; brokers and the Datasets tree read parents). |
 
-### Rulings of 2026-11-01 and 2026-11-02
+### Rulings since 2026-11-01
 
-These replace any earlier text they contradict. Q numbers restart: they are the questions of that grill, not the table above.
+These replace any earlier text they contradict. Q numbers restart with each grill: a row's Q is its own day's question, not the table above's.
 
 | Date | Ruling | Effect |
 |---|---|---|
@@ -37,7 +37,7 @@ These replace any earlier text they contradict. Q numbers restart: they are the 
 | 11-01 | Street floors at 0.9 are Problem. Drop the audit waterfall, and delete the denominator script. | W1 finish, #2346. |
 | 11-01 | Finished = every gate ticket closed. The session runs migrations itself. W3's REINDEX is a small numbered migration after the body re-walk. W5 goes before W7. | Programme. |
 | 11-01 | Glossary terms: **RÚIAN door**, **Sreality Datasets** (#2345). E111 goes to the engine session (#2344). | Glossary, engine. |
-| 11-02 | **Q8 (a): an ad gets a door from its pin only if it is a flat or a house, its pin is exact and exactly one door lies within 1 m, and its words do not disagree.** "What is certain gets a door." | W5b rebuilt. |
+| 11-02 | **Narrowed by Q24, 2026-11-07: the words must name a street (F1).** **Q8 (a): an ad gets a door from its pin only if it is a flat or a house, its pin is exact and exactly one door lies within 1 m, and its words do not disagree.** "What is certain gets a door." | W5b rebuilt. |
 | 11-02 | **A městská část filters as the set of its části**, through the one code predicate and with no new location field; a část that straddles several counts for each it touches. Still no served MOMC level (Q1). | #2380. |
 | 11-02 | **The translation into RÚIAN is kept and made the standard.** This corrects Q12's "a view, no stored crosswalk" above. RÚIAN is the foundation, and any outside source translates into it. | W8 redesign, below. |
 | 11-02 | Q10a (a): one translation table now (source, the source's own key, RÚIAN level and code, how it was matched, when last confirmed), Sreality Datasets first. Other sources move onto it when next touched. | W8. |
@@ -50,6 +50,9 @@ These replace any earlier text they contradict. Q numbers restart: they are the 
 | 11-02 | Q3: an ad below address level that stands on a portal pin keeps its pin and reads as approximate. The audit view shows this with enough breakdown to see it. | W6 stays deletion only, plus the view. |
 | 11-02 | Q4: clear the end month on Sreality Datasets 9, 11, 13 and 14 (each was stored as 2026-06 by the creation form). | Done 11-02. |
 | 11-03 | W5b stage 1 (A, via the engine session): accept stage 1's losses (16 pair-level merges of 15,609; at cluster level only the Putimská mill changes, and only as a proposed split). The engine fixes ride #2056. This is not a merge order for #2339, and the Okružní pair 18579817×18734646 stays unjudged. | W5b stage 2 runs. A new loss class goes to the engine session first. |
+| 11-05 | W5b set aside: "skip w5b for now and proceed with other parts". F1 goes to the operator: a pin names a door only when the ad's words name a street. | #2339 stays a draft, its 717 unapplied. W6-b (#2422) and W6-c1 (#2423, migration 733) ship meanwhile; W6-a, W6-d and W6-e wait for W5b. 733 restates `location_quality_by_source`, so W5b's migration restates 733's text, not 698's. |
+| 11-07 | **Q24: resume W5b with F1.** A pin yields an address point only when the ad's words name a street (`target_kind` street). This stops the known false doors, geocoded village-centre points shared by many ads (1,251 shared points under 4,755 ads). The cost: about 4,183 village ads keep their pin, labelled approximate. It narrows Q8 (a). | W5b resumes; migration 717 becomes 736, above 734. The shadow's stages 1 and 2 re-run on the F1 build (11-03 read the pre-F1 doors); the engine owner restated stage 1 for F1 and Q23 the same day (`w5b-pin-door.md`). Supersedes 11-03's "W5b stage 2 runs". |
+| 11-07 | **Q23 (a): an ambiguous door yields no door**: several register address points share the stated house number and the resolver picks one. Such an ad stands at the street and the map says "Přibližná poloha". As GLOSSARY.md's RÚIAN door has it, and the operator's 11-01 "co je jisté, dostane bod, žádné odhady". | Built on #2339 (`resolver:v5.11`), no migration, no own PR. First counted 11-07 as about 1,186 ambiguous active ads (sreality 550, ceskereality 589, bazos 40, bezrealitky 6, realitymix 1; 1,187 later that day): the resolver took the lowest kód ADM, and the tie only lowered confidence, so the map still said "Přesná poloha". 538 name one door once R1 reads the č.o. letter, 245 of them stood on the wrong entrance, now corrected; the 649 genuine ties stand at their street. No field added; the tied doors leave the engine's input. `w5b-pin-door.md`. |
 
 ### W8: one registry (added 2026-10-31)
 Consumers of `admin_boundaries` and what each takes from the mirror instead: brokers leaderboard and count book (migrations 580, 609: parents and names → `ruian_admin_units` chain); Datasets page and price statistics (obec → okres tree → the chain; sreality locality id → a view over current sreality ads' payload ids and their `listing_location.obec_kod`); sold comparables (`sold_db`, `sold_fetch`: the obec polygon envelope → `ruian_admin_unit_geometries` render geometry); map overlays (kraje outline, rent-map choropleth, migration 601 → render geometry); city proximity and curated city indexes (migrations 636, 674: polygon + population → geometry + `obec_population`); admin pages for CLIP tagging and condition scoring (kraj list → the mirror). `curated_cities.admin_boundary_id` is renamed to the RÚIAN code it already holds.
@@ -62,7 +65,9 @@ On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-
 **As built 2026-10-31 (#2247; design and measurements: `w3b-address-picker.md`).** No migration, table, view, index, claim type or design token. A pick writes all four picker types (`address_point_id`, `street_name`, `obec_name`, `okres_name`) on every ad, the register's names for the picked level and tombstones for the rest, so a re-pick replaces the operator's statement and "Vrátit údaje z inzerátů" (`pick: null`) is four tombstones per ad. `/maps/resolve` gained the `address_point` flag (one door within 300 m of the pick, else no code). Rulings taken as defaults: R1 = (b), a detach clears the pick on the ads it moved. Named limits: L1 a portal PSČ or kód ADM can defeat a street or obec pick (`held: false`), L2 the portal pin stays evidence, L3 část/okres/kraj picks wait for W5. Deleted: `toolkit/location_quality.py`, `/location/listing/*`, the inspector and correction form, the old submit and its 8-type list. Owed before the merge: about 20 real Mapy address picks on production to confirm the 300 m slack picks one door.
 
 ### W5b: the pin refines within the words (added 2026-10-31)
-After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
+After W5 binds the town from words, an exact pin inside that town names the RÚIAN address point and refines the row: house number, address point. As built: 1 m, flats and houses only (Q8 (a)), and only rows whose words bound a street, the door on that street (Q24, F1). It never contradicts the words. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only.
+
+**As built 2026-11-02 (#2338; `resolver:v5.11`, migration 736; design and measurements: `w5b-pin-door.md`). Amended 2026-11-07 by F1 (Q24: the words must name the street) and Q23 (a) (an ambiguous door yields none).** Ruling Q8 (a), 2026-11-02: what is certain gets a door. `bind.pin_door`: a flat or a house (`listings.category_main`) whose words bound a street, its exact pin inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing with the words' obec, street, every claimed část and PSČ, and nothing in the words a door cannot be checked against; the row gets that address point's keys (rung R5) and keeps the ad's own pin as its position. At 1 m a pin-named door agrees with a sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %); ≈ 40k rows was the pre-F1 estimate (W5b was never applied), and F1 keeps the town- and část-bound ones on their pin. **The operator had retired the radius on 2026-11-01: W6 becomes deletion only.** Migration 736 drops the view's pin sample (`pin_error_m`, `radius_cover`) and orders the containment probe by code (W5's deferral); the gauge loses `{p}/accuracy`. A changed `category_main` queues its re-resolve in the same statement (`claim_insert`). Net addition approved by the operator. Shadow binds it.
 
 ---
 
@@ -130,7 +135,7 @@ Each wave below replaces several local rules with one rule.
 | W3 | Claim store: one current claim per fact | location_claims 14.77 M → about 5.95 M rows, −1 column, −2 indexes | cascade points; stale values | about −700 lines; 7 tie rules → 0; 4 supersession paths → 2 (the upsert and explicit retract) | L |
 | W4 | realitymix + remax contracts | none | issues 5, 6 | contract changes net negative, 1 regex in | S |
 | W5 | Resolver v5.10: one ladder, one matcher, one grain, one containment test | quarter field holds one level | issues 2, 3; cascade points | 6 special cases out; one match-key list and the shadow's `ids` block in (no distance read, Q3) | M |
-| W6 | Radius v5.11: CE95 for pins, reach for register placements | −declared_radius_m, −match_confidence, −sentinel | issue 4 | hand table and two fields out; generated table, script and one standing recalibration in | M |
+| W6 | Radius (retired 11-01: deletion only, no resolver version; v5.11 is W5b's): CE95 for pins, reach for register placements | −declared_radius_m, −match_confidence, −sentinel | issue 4 | hand table and two fields out; generated table, script and one standing recalibration in | M |
 | W7 | RÚIAN loader: full partitions, read levels only | −4 levels, 24,225 units retired, −6 columns | Praha okres, mirror defects | negative | S |
 
 **Sequencing.**
@@ -248,7 +253,7 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 - **Grain = `grade.grain_of(keys)`**, the one writer (`grade()`, `Grade`, `Binding.granularity`, `Verdict.granularity` and `coarser_of` deleted).
 - **Quarter = část obce only (Q1):** `MATCH_LEVELS = ("cast_obce", "momc")` and `composite.part_of` (a část itself, a KÚ the část its name spells, a MOMC nothing). MOMC stays a match key: the 1,607 remax "Praha N" rows still bind Praha. Správní obvod and ZSJ are no level. Part claims match like town names; a street keeps the claimed část when it has doors there (Q2).
 - **KÚ fix:** an address point with no coordinates takes its část's door KÚ (19405830).
-- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border).
+- **Determinism deferred:** the `ORDER BY` in `CONTAINING_OBEC_SQL` waits for the next re-render of the scorecard view (0 of 6,553 sampled pins lie on a shared border). Done by W5b, migration 736.
 - **Shadow:** the `ids` export block is built, so the about 5.4k Praha rows that gain a quarter are judged; dispatch per slice (`wave-shadow.md`).
 - **Consumers:** labels lose "Praha 5, " on about 935 rows and 1,899 gain their část; the location ad can change where an ad's grain changes; the bazos map "±" grows to the town's reach.
 - **Acceptance** (before: 2026-10-31 16Z):
@@ -273,7 +278,8 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
 
 Residual, named: about 10 register-point slivers (not pins) and about 300 ceskereality ads with only a pin (R7: the pin names the town, the words cannot judge it).
 
-### W6: one honest radius (v5.11)
+### W6: one honest radius (retired: deletion only, no resolver version; v5.11 is W5b's)
+**Retired by the operator's ruling of 2026-11-01: W6 becomes deletion only (no radius is built). The text below is what it replaces; W5b's migration 736 already dropped the pin sample and the gauge's `{p}/accuracy`.**
 Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos, 100 % for remax.
 - **New rule:** the radius is decided by how the point was made.
   - Address point: 10 m.
@@ -315,9 +321,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 
 ## Deferred or rejected (headline)
 - **Deferred:** retiring the legacy `admin_boundaries` table (dropped 729, W8-4) (its own track; after W7 both registries agree on Praha).
-- **Deferred:** a precise pin deciding the část through its KÚ (2,188 Praha rows). It reverses a ruling and adds without deleting; ask again after W5.
 - **Deferred:** a radius gate in comparables (an estimation methodology change).
-- **Deferred:** remax house numbers from index cards (a new surface; deletes nothing).
 - **Rejected:** a served MOMC level.
 - **Rejected as patchwork:** MOMC kept as a fallback in the quarter field.
 - **Rejected:** a DB CHECK for grain (a second spelling of the rule).

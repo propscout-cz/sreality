@@ -16,7 +16,7 @@ name: "Ops: Location wave shadow (the engine gate)"
 # `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
 # predicate) with this ref's resolver after the wave's claim change (`remine` re-mines the stored
 # pages under the contract at `contract_ref`, read with `git show`); `autodedup.shadow` sizes the
-# movers' old and new blocks, refusing more than 40 blocks or 60,000 ads (exit 2), then exports
+# movers' old and new blocks, refusing more than 40 blocks or 20,000 ads (exit 2), then exports
 # them, the rulings and the live scorer; `harness shadow` judges base vs candidate and exits 1 on
 # FAIL (PARTIAL when `limit` cut the ids or a mover sat outside the cohort). `ids_sql` runs as one
 # wrapped, read-only statement (`what_if.select_ids`). No movers: nothing to judge, the run ends
@@ -49,6 +49,11 @@ on:
         default: apply
         type: choice
         options: [apply, all]
+      all_blocks:
+        description: "Export every mover's blocks, ruled or not (W5b's door report needs them; more groups)"
+        required: false
+        default: false
+        type: boolean
       ids_sql:
         description: "A SELECT whose first column is the listing id (add a LIMIT, or use `limit`)"
         required: false
@@ -160,7 +165,8 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GROUP: ${{ inputs.group }}
-        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}"
+          ALL_BLOCKS: ${{ inputs.all_blocks && '--all-blocks' || '' }}
+        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}" $ALL_BLOCKS
 
       # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"

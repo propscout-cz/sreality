@@ -937,7 +937,7 @@ def _door(kod: int, at: tuple[float, float], street: _Row | None, cp: int, co: i
           znak: str | None = None) -> tuple:
     return (kod, 3214, street.obec if street else 583600, "11000", at[0], at[1],
             street.code if street else None, normalize_street_name(street.name) if street else None,
-            street.name if street else None, cp, co, znak, None, None, None, "č.p.")
+            street.name if street else None, cp, co, znak, None, None, None, "č.p.", None)
 
 
 def _doors(obec: int, street: _Row | None, cp: int, co: int | None, *rows: tuple) -> _Expect:

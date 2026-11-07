@@ -112,6 +112,7 @@ _WRITE_CLAIMS_SQL = """
         INSERT INTO dirty_locations (listing_id, reason)
         SELECT DISTINCT listing_id, %(reason)s::text
           FROM (SELECT listing_id FROM up UNION ALL SELECT listing_id FROM gone) changed
+         ORDER BY listing_id
         ON CONFLICT (listing_id) DO UPDATE
            SET enqueued_at = now(), reason = EXCLUDED.reason,
                attempts = 0, next_eligible_at = now()

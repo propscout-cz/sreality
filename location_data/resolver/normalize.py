@@ -59,6 +59,8 @@ _NUMERIC_LEADING = re.compile(r"^\s*\d{1,3}\.\s*\S")
 # čp / čo forms: '128', '128/40', '128/40a', 'ev. č. 12', 'č.ev. 12', bezrealitky's 'ev.32'
 _EVIDENCNI = re.compile(r"(?:\bev\.?\s*(?:č\.?)?|č\.?\s*ev\.?|evidenční\s*číslo)\s*(\d{1,6})", re.IGNORECASE)
 _HN = re.compile(r"(\d{1,6})(?:\s*/\s*(\d{1,5})\s*([a-zA-Z])?)?")
+# A č.o. claim on its own ('8b', text_reading's `\d{1,5}[a-z]?`): the letter is part of the entrance (Q23 (a)).
+_CO_LETTER = re.compile(r"\d{1,5}\s*([a-zA-Z])")
 # The number that ENDS a street claim, WITH the marker that types it: "Chata Moravské Prusy
 # č.ev. 13" is evidence number 13, and splitting the bare digits off read it as č.p. 13 (D7).
 _TRAILING_NUMBER = re.compile(
@@ -229,6 +231,8 @@ def normalize_claim(
         ascii_key = psc or ""
     elif claim.claim_type in ("house_number_cp", "house_number_co"):
         slots.update(normalize_house_number(verbatim))
+        if claim.claim_type == "house_number_co" and (letter := _CO_LETTER.fullmatch(verbatim.strip())):
+            slots["znak_orientacniho"] = letter.group(1).lower()
         if not slots:
             rejections.append("house_number_unparsed")
     elif claim.claim_type in ("obec_name", "cast_obce_name", "okres_name", "kraj_name", "country"):

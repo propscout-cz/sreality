@@ -1,12 +1,10 @@
-"""W1: the location scorecard view (migration 698) is the ONE definition of every location quality number.
+"""W1: the location scorecard view (migrations 698, 733, 736) is the ONE definition of every location quality number.
 
 Static over the migration text, like test_location_schema_contracts.py: no database, so it runs in every lane. A
 migration cannot import Python, so each shared definition the view carries VERBATIM is pinned here against the module
 that spells it (location_steps' flags, town-missing set and evidence probe; the publication rule; NEW_AD_H), and the
-view's (metric, class) vocabulary against the gauge's closed tuple. Two plan facts are rails too: every CTE but the
-scalars and the single-use feeders is `as materialized` (inlined, the text ran 34.8 s on production against 11.7 s),
-and every UNION branch carries a literal cohort and no window function, so the gauge's two statements each prune the
-other's branches (a window function in a branch blocks the qual's pushdown: measured with EXPLAIN on 2026-10-31).
+view's (metric, class) vocabulary against the gauge's closed tuple. A plan fact is a rail too: every CTE but the
+scalars and the single-use feeders is `as materialized` (inlined, the text ran 34.8 s on production against 11.7 s).
 """
 
 from __future__ import annotations
@@ -43,7 +41,7 @@ INLINE = {
     "degenerate_ku_obce": "a feeder read once, by `versions`",
     "cohort_rows": "a feeder read once, by `b`",
 }
-COHORTS = {"listing", "served", "sample", "queue"}
+COHORTS = {"listing", "served", "queue"}
 # The view's four grain classes as its `agg` FILTERs spell them after `b.has_town and b.country_status = 'cz' and`.
 GRAIN_FILTERS = {
     "address": "b.is_address_grain",
@@ -116,15 +114,14 @@ def test_every_cte_but_the_scalars_and_the_single_use_feeders_is_materialized() 
     body = _view_body()
     for name in ("degenerate_ku_obce", "cohort_rows"):
         assert len(re.findall(rf"\b{name}\b", body)) == 2, f"{name} is read more than once: materialize it"
-    assert {"b", "agg", "townless", "outside", "versions", "stock", "smp", "pin"} <= set(ctes)
+    assert {"b", "agg", "townless", "outside", "versions", "stock"} <= set(ctes)
 
 
-def test_every_union_branch_carries_a_literal_cohort_and_no_window_function() -> None:
+def test_every_union_branch_carries_a_literal_cohort() -> None:
     branches = _branches()
     cohorts = [re.match(r"select '(\w+)'::text\b", b) for b in branches]
     assert all(cohorts), [b[:60] for b, m in zip(branches, cohorts) if not m]
     assert {m.group(1) for m in cohorts if m} == COHORTS
-    assert not [b[:60] for b in branches if re.search(r"\bover\s*\(", b)], "a window blocks the cohort pushdown"
 
 
 def test_the_columns_are_the_ones_the_gauge_reads() -> None:
@@ -142,12 +139,12 @@ def test_no_grain_is_compared_by_enum_order() -> None:
     assert "location_granularity_rank" in _ctes()["obec_rank"][1]
 
 
-def test_the_listing_cohort_and_the_sample_start_where_publishing_ends() -> None:
+def test_the_listing_cohort_starts_where_publishing_ends() -> None:
     """NEW_AD_H is the one edge between publishing's new ads and this scorecard; the only other interval is the
     publication cap."""
     code = _squeeze(_view_body())
     edge = f"l.is_active and l.first_seen_at < now() - interval '{NEW_AD_H} hours'"
-    assert code.count(_squeeze(edge)) == 2, "the listing cohort and the sample"
+    assert code.count(_squeeze(edge)) == 1, "the listing cohort"
     hours = set(re.findall(r"interval '(\d+) hours'", code))
     assert hours == {str(NEW_AD_H), re.search(r"\d+", publication.CAP_SQL).group(0)}
 
@@ -199,6 +196,7 @@ def test_outside_probes_with_the_one_containing_obec_statement() -> None:
     sql = resolve_db.CONTAINING_OBEC_SQL
     block = sql[sql.index("FROM ruian_admin_unit_geometries g"):sql.index("LIMIT 1") + len("LIMIT 1")]
     assert block.count("%s") == 1 and block.count(resolve_db._PT) == 1
+    assert _squeeze("OFFSET 0) o ORDER BY o.code LIMIT 1") in _squeeze(block), "a border point replays"
     rendered = block.replace("%s", "(select id from cur)").replace(resolve_db._PT, "b.geom")
     assert _squeeze(rendered) in _squeeze(_ctes()["outside"][1])
 
@@ -321,7 +319,7 @@ def test_the_location_quality_page_renders_the_registered_check() -> None:
     card = {("town", "ads"): (100, 0), ("outside", "position"): (1, 90),
             ("grain", "address"): (60, 90), ("grain", "street"): (10, 0),
             ("position", "door/address"): (60, 100)}
-    cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, {}, "not read", THRESHOLDS)}
+    cells = {c["subject"]: c for c in qc._portal_cells("bazos", card, THRESHOLDS)}
     for arm, fact in bars:
         assert arm in qc.LOCATION_PORTAL_CELLS, f"the gauge emits no {arm!r} arm"
         assert fact in cells[f"bazos/{arm}"]["facts"], f"bazos/{arm} writes no {fact!r} fact"

@@ -131,4 +131,18 @@ from __future__ import annotations
 #      (no such row known as of 2026-10-31; the count's SELECT: the W5 design, As built). The
 #      grain is the row's finest key. An address point without coordinates takes its část's KÚ.
 #      The bump re-resolves the corpus through W2's reconcile.
-RESOLVER_VERSION = "resolver:v5.10"
+# v5.11 = location W5b (ruling Q8 (a), 2026-11-02). WHAT IS CERTAIN GETS A DOOR: a flat or a house
+#      whose words bound a street (F1, ruling Q24, 2026-11-07: a town or a část alone gets none) and
+#      named no door, its exact pin (not declared blurred) inside the bound town and within 1 m of the
+#      one RÚIAN door there, the door on that street and agreeing with the words' obec, every část they
+#      claim and their PSČ. The row becomes that address point (rung R5) and keeps the ad's own pin as
+#      its position. Commercial, plots and other: no door from a pin. Two doors, a door elsewhere, or
+#      words no door can be checked against (a digit in the street line, any door claim, a composed
+#      locality line, a part claim that matched no část) refine nothing. At 1 m a pin-named door agrees
+#      with a sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs
+#      99.47 %). Q23 (a), 2026-11-07: an AMBIGUOUS DOOR YIELDS NONE. R1 (and R1 inside a část) matches
+#      the stated č.o. with its letter (no letter: the letter-less entrance, else the lettered ones), the
+#      č.o. and letter from one source (the street line first, as for the č.p.); a stated PSČ may settle two;
+#      none or several left bind the street (R2), never the lowest kód. The containing-obec probe orders by code. Its sweep also carries #2358 (no version of its own): the
+#      words say another country and no Czech town bound, so the row is foreign.
+RESOLVER_VERSION = "resolver:v5.11"
