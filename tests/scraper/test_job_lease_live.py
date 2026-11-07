@@ -573,6 +573,126 @@ def test_a_held_wait_takes_the_lane_when_its_holder_lets_go(cur: Any, monkeypatc
     assert naps == [job_lease.WAIT_POLL_S]
 
 
+# --- held_job: a job a workflow still runs claims its run and its resource on any host (#2028) ---------------------
+
+def _until_moved(resource: str | None = "test-heavy") -> Job:
+    return _entry(every_s=30 * 86400, timeout_s=6 * 3600, resource=resource, host=jobs.UNTIL_MOVED)
+
+
+def _due_sibling(cur: Any) -> str:
+    name = _registered_job(cur, resource="test-heavy")
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '1 second' WHERE job_name = %s", (name,))
+    return name
+
+
+def test_a_held_job_opens_its_run_and_holds_its_resource_against_the_runner(
+        cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    conn = cur.connection
+    load, intake = _until_moved(), _due_sibling(cur)
+    with job_lease.held_job(conn, load, wait_s=0) as mine:
+        assert mine
+        cur.execute("SELECT runner, registry_at, cadence, timeout_s, resource, lease_expires_at - now(), lease_holder"
+                    " FROM scheduled_jobs WHERE job_name = %s", (load.name,))
+        runner, registry_at, cadence, timeout_s, resource, ttl, holder = cur.fetchone()
+        assert (runner, registry_at, cadence, timeout_s, resource) == (
+            "github_actions", None, timedelta(days=30), 6 * 3600, "test-heavy"), "a lane row, never the runner's"
+        assert ttl == timedelta(hours=6), "held as long as its host lets it run"
+        assert _runs(cur, load.name) == [(holder, None, True, None, None, None, None, None)]
+        assert job_lease.due(conn, [intake]) == [], "a sibling waits while the resource has an open run"
+        assert job_lease.claim(conn, intake, holder="B") is None
+        assert job_lease.reap_lost(conn, names=[intake], on_hour=[]) == [], "a live run is never reaped"
+    assert [r[1] for r in _runs(cur, load.name)] == ["ok"]
+    row = _row(cur, load.name)
+    assert (row["lease_holder"], row["last_outcome"], row["due_at"]) == (None, "ok", None)
+    assert job_lease.claim(conn, intake, holder="B") is not None
+
+
+def test_a_held_job_waits_out_a_sibling_and_gives_up_past_its_bound(
+        cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    conn = cur.connection
+    intake = _due_sibling(cur)
+    running = job_lease.claim(conn, intake, holder="A")
+    assert running is not None
+    now = [0.0]
+    naps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        naps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(job_lease, "clock", lambda: now[0])
+    monkeypatch.setattr(job_lease.time, "sleep", sleep)
+    load = _until_moved()
+    with job_lease.held_job(conn, load, wait_s=25) as mine:
+        assert not mine
+    assert naps == [job_lease.WAIT_POLL_S] * 3 and _runs(cur, load.name) == []
+
+    monkeypatch.setattr(job_lease.time, "sleep", lambda s: job_lease.release(conn, running, "ok"))
+    with job_lease.held_job(conn, load, wait_s=600) as mine:
+        assert mine, "taken once the sibling's run lets go"
+
+
+@pytest.mark.parametrize("raised,outcome", [(RuntimeError("load aborted"), "failed"), (KeyboardInterrupt(), "interrupted")])
+def test_a_held_job_closes_its_run_with_how_it_ended(
+        cur: Any, monkeypatch: pytest.MonkeyPatch, raised: BaseException, outcome: str) -> None:
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    load = _until_moved()
+    with pytest.raises(type(raised)), job_lease.held_job(cur.connection, load, wait_s=0):
+        raise raised
+    assert [r[1] for r in _runs(cur, load.name)] == [outcome]
+    assert _row(cur, load.name)["lease_holder"] is None
+
+
+def test_a_held_job_that_exits_non_zero_closes_its_run_failed(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ruian_load.run` returns 1 on a blocking assertion without raising: read off the block's normal end, that load
+    would close ok with a fresh last_success_at. The block hands its exit code back on the handle it was given."""
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    load = _until_moved()
+    with job_lease.held_job(cur.connection, load, wait_s=0) as held:
+        assert held is not None
+        held.exit_code = 1
+    assert [r[1] for r in _runs(cur, load.name)] == ["failed"]
+    row = _row(cur, load.name)
+    assert (row["lease_holder"], row["last_outcome"], row["ok_now"], row["consecutive_failures"]) == (
+        None, "failed", None, 1)
+    cur.execute("SELECT last_error FROM scheduled_jobs WHERE job_name = %s", (load.name,))
+    assert cur.fetchone() == ("exit 1",)
+
+
+def test_under_the_runner_a_held_job_is_the_runner_s_claim(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The runner exports JOB_NAME to the child it claimed for: the row and its resource are already held."""
+    load = _until_moved()
+    monkeypatch.setenv("JOB_NAME", load.name)
+    with job_lease.held_job(cur.connection, load, wait_s=0) as mine:
+        assert mine
+    cur.execute("SELECT count(*) FROM scheduled_jobs WHERE job_name = %s", (load.name,))
+    assert cur.fetchone() == (0,)
+
+
+def test_the_reaper_closes_a_dead_hosts_run_on_a_resource_so_its_siblings_come_due(cur: Any) -> None:
+    """A workflow killed before its release leaves an open run on the resource, and `due` lists no sibling while one is
+    open: the runner's reaper closes it lost once its lease lapsed, and leaves the lane row unscheduled."""
+    _now(cur)
+    conn = cur.connection
+    intake, load = _due_sibling(cur), f"test-load-{uuid.uuid4().hex[:12]}"
+    cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner, resource)"
+                " VALUES (%s, '30 days', 'github_actions', 'test-heavy')", (load,))
+    cur.execute("INSERT INTO job_runs (job_name, holder, resource) VALUES (%s, 'gh', 'test-heavy')", (load,))
+    cur.execute("UPDATE scheduled_jobs SET lease_holder = 'gh', lease_expires_at = now() - interval '1 second'"
+                " WHERE job_name = %s", (load,))
+    assert job_lease.due(conn, [intake]) == []
+    assert job_lease.reap_lost(conn, names=[intake], on_hour=[]) == [load]
+    assert job_lease.due(conn, [intake]) == [intake]
+    row = _row(cur, load)
+    assert (row["lease_holder"], row["last_outcome"], row["due_at"]) == (None, "lost", None)
+
+
 def _open_lapsed(cur: Any, name: str, holder: str = "A") -> None:
     cur.execute("INSERT INTO job_runs (job_name, holder) VALUES (%s, %s)", (name, holder))
     cur.execute("UPDATE scheduled_jobs SET lease_holder = %s, lease_expires_at = now() - interval '1 second'"

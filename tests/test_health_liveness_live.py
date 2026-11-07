@@ -1086,6 +1086,30 @@ def test_a_job_that_is_not_due_is_not_held_by_a_running_sibling(cur: Any) -> Non
     assert _said(_liveness(cur)[3], "job/a_intake") == ("ok", "a_intake: last ok 20 min ago; next slot in 40 min")
 
 
+def test_intake_reads_held_while_a_workflow_holds_its_resource_through_the_lease_module(
+        cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2028: the registry load runs on GitHub until #2033 and claims location-heavy with `job_lease.held_job`, so the
+    intake waiting for it reads held by its sibling, never due-and-not-started red; the workflow's row is no cell."""
+    from scraper import job_lease, jobs
+
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "a_intake", every="1 hour", timeout_s=70 * 60, resource="location-heavy", due="-20 minutes",
+         last_ok="80 minutes")
+    _run(cur, "a_intake", started="81 minutes", ended="80 minutes", outcome="ok", exit_code=0,
+         resource="location-heavy")
+    load = jobs.Job("b_registry", ("location_data.ruian_load",), 30 * 86400, 0, 6 * 3600, 2048, 1, jobs.UNTIL_MOVED,
+                    "location-heavy", db_heavy=True)
+    with job_lease.held_job(cur.connection, load, wait_s=0) as mine:
+        assert mine
+        cells = _liveness(cur)[3]
+
+    status, message = _said(cells, "job/a_intake")
+    assert status == "ok" and message.startswith("a_intake: waiting for b_registry, which holds location-heavy")
+    assert message.endswith("of its 6.0 h budget)"), message
+    assert "job/b_registry" not in cells
+
+
 def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur: Any) -> None:
     """C7: the cells survive a missing heartbeat; waiting is Watch while a replica beats, a Problem when none does."""
     _job(cur, "x", due="-15 minutes", last_ok="375 minutes")

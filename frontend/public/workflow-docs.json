@@ -1124,98 +1124,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/load_obec_population.yml"
     },
     {
-      "filename": "location_claims_intake.yml",
-      "name": "Jobs: Location claim intake",
-      "description": "THE claim lane (CLAUDE.md rule 25: one store, one lane). Deterministic extraction of location claims from BOTH substrates we hold for a listing, all nine portals:",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "35 * * * *",
-          "human": "Every hour at :35"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source",
-          "description": "one portal only (blank = all nine)",
-          "required": false,
-          "type": "choice",
-          "default": "",
-          "options": [
-            "",
-            "sreality",
-            "bezrealitky",
-            "bazos",
-            "idnes",
-            "mmreality",
-            "remax",
-            "ceskereality",
-            "realitymix",
-            "maxima"
-          ]
-        },
-        {
-          "name": "mode",
-          "description": "full = walk every listing; incremental = only rows seen since the last ok batch",
-          "required": false,
-          "type": "choice",
-          "default": "incremental",
-          "options": [
-            "incremental",
-            "full"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; stops between batches, never mid-batch",
-          "required": false,
-          "type": "string",
-          "default": "2400",
-          "options": null
-        },
-        {
-          "name": "batch_size",
-          "description": "listings per batch (10000-30000; blank = 20000)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "extract and report; write nothing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "chain",
-          "description": "dispatch one successor when this run leaves work behind (untick for a one-shot run; crons always chain)",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "location-batch",
-      "cancelInProgress": false,
-      "timeoutMinutes": 55,
-      "permissions": "contents: read, actions: write",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_intake.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_intake.yml"
-    },
-    {
       "filename": "location_registry_load.yml",
       "name": "Location: RÚIAN registry load",
       "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every okres, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
@@ -1256,8 +1164,8 @@
         "SUPABASE_DB_SESSION_URL",
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "location-batch",
-      "cancelInProgress": false,
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
       "timeoutMinutes": 360,
       "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_registry_load.yml",

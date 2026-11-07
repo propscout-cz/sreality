@@ -23,6 +23,8 @@ REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
+# The claim intake and the RÚIAN load never overlap (2026-08-10: four heavy location lanes at once dropped backends
+# across the instance). It replaced GitHub's `location-batch` group (#2028); the load claims it with job_lease.held_job.
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
@@ -57,10 +59,12 @@ _FIXED: tuple[Job, ...] = (
         DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
         DAY, 6 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
-    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
+    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy. 75 under a
+    # backlog (#2028). 70 min keeps its 2400 s budget, a last batch and the readout under the 2/3 Watch line; 4 CPUs,
+    # the extraction pool GitHub's runner gave it.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
-        HOUR, 35 * 60, 55 * 60, 1024, 2, UNTIL_MOVED, LOCATION_HEAVY),
+        HOUR, 35 * 60, 70 * 60, 1024, 4, RUNNER, LOCATION_HEAVY),
     # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
     # A chunk of 64: Pillow holds RGB at 4 B a pixel. Its first runner run peaked at 2,386 MB (#2155), so 3072.
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
@@ -106,3 +110,14 @@ def runner_jobs() -> tuple[Job, ...]:
 def host_of(name: str) -> Host | None:
     """The declared host of a name, for a refusal's message; never an entry: a scheduler reads runner_jobs()."""
     return next((j.host for j in declared() if j.name == name), None)
+
+
+def entry(name: str) -> Job:
+    """One job's own entry, for its own process to claim its run on whichever host starts it (job_lease.held_job)."""
+    return next(j for j in declared() if j.name == name)
+
+
+def resource_wait_s(job: Job) -> int:
+    """The longest a sibling on the job's resource can hold it: the sibling's timeout plus the runner's kill grace."""
+    return max((s.timeout_s + STUCK_RUN_GRACE_S for s in declared()
+                if job.resource is not None and s.resource == job.resource and s.name != job.name), default=0)
