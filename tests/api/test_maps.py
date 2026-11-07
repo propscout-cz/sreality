@@ -983,7 +983,7 @@ def test_a_refused_address_logs_its_level_and_reason_never_what_was_typed(client
         ])
     assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
     assert [r.getMessage() for r in caplog.records if r.name == "api.maps"] == [
-        "maps.resolve: adresni_misto pick has 0 doors within 300 m of the pick — no code"]
+        "maps.resolve: adresni_misto pick has 0 doors within 300 m of the pick (obec 554782, street 472786) — no code"]
 
 
 def test_an_orientation_letter_picks_its_own_door(client):
@@ -1029,13 +1029,18 @@ def test_anything_but_one_door_near_the_pick_binds_nothing(client, doors):
     assert maps._DOOR_LABEL_SQL not in executed
 
 
-def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client):
-    """Never widened to the whole obec: an unbound street is no door."""
+def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client, caplog):
+    """Never widened to the whole obec: an unbound street is no door. Its line names the ADDRESS pick's level, the
+    street being the step that failed inside it, and none of the typed words (#2444)."""
     pick = _address("12", "Nová", _TYNSKA_DOOR)
-    body, executed = _resolve_logged(client, pick, [
-        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
-    ])
+    with caplog.at_level("INFO", logger="api.maps"):
+        body, executed = _resolve_logged(client, pick, [
+            *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        ])
     assert body["id"] is None and _ADDRESS_POINTS_BY_NUMBER_SQL not in executed
+    [line] = [r.getMessage() for r in caplog.records if r.name == "api.maps"]
+    assert line.startswith("maps.resolve: adresni_misto pick: its street in obec 554782 not bound (")
+    assert "Nová" not in line and "12" not in line.replace("554782", "")
 
 
 def test_an_address_without_a_number_reads_nothing_past_its_town(client):
