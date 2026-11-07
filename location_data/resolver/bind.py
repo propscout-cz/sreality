@@ -208,6 +208,8 @@ class Constraints:
     cislo_domovni: int | None = None
     typ_so: str | None = None
     cislo_orientacni: int | None = None
+    # The č.o.'s letter, lower case: 8, 8a and 8b are three entrances (Q23 (a)).
+    znak_orientacniho: str | None = None
     kod_adm: int | None = None
     pin: tuple[float, float] | None = None
     claim_ids: dict[str, tuple[int, ...]] = field(default_factory=dict)
@@ -232,7 +234,7 @@ def collect_constraints(
         return norm.typed_slots if norm else {}
 
     kod_adm = psc = street_key = street_line = None
-    cp = co = typ = None
+    cp = co = typ = znak = None
     pin: tuple[float, float] | None = None
     if (claim := one.get("address_point_id")) is not None and claim.value_text:
         read("address_point_id", "kod_adm")
@@ -245,6 +247,7 @@ def collect_constraints(
     if "house_number_co" in one:
         numbers = slots(read("house_number_co", "house_number_co"))
         co = _as_int(str(numbers.get("cislo_orientacni") or numbers.get("cislo_domovni") or ""))
+        znak = numbers.get("znak_orientacniho")
     street = norms.get("street_name")
     if "street_name" in one and not (street and street.rejections):
         line = str(one["street_name"].value_text or "")
@@ -256,6 +259,7 @@ def collect_constraints(
             cp, typ = house_number(slots(street))
         if co is None and slots(street).get("cislo_orientacni"):
             co = _as_int(str(slots(street)["cislo_orientacni"]))
+            znak = slots(street).get("znak_orientacniho")
     keys: dict[str, tuple[str, ...]] = {}
     obec_lines: tuple[str, ...] = ()
     for t in ("obec_name", "cast_obce_name", "okres_name", "kraj_name"):
@@ -283,6 +287,7 @@ def collect_constraints(
         cislo_domovni=cp,
         typ_so=typ,
         cislo_orientacni=co,
+        znak_orientacniho=str(znak) if znak else None,
         kod_adm=kod_adm,
         pin=pin,
         claim_ids=dict(sorted(ids.items())),
@@ -654,35 +659,28 @@ def bind(
         elif len(spelled) == 1 and len(inside) != 1 and (part is None or inside):
             line = replace(spelled[0], named_part=line.named_part)
 
-    # ---- R1 / R2: a bound street reaches R1 when there is a house number and R2 otherwise.
+    # ---- R1 / R2: a bound street reaches R1 when its number names ONE door, R2 otherwise.
     if line.street is not None:
         # The street claim's own number first; a listing-wide `house_number_*` claim behind it
         # (the portals that state the street and the číslo in separate fields). The number
         # travels WITH its type, so a č.ev. can never join a č.p. of the same digits.
         cislo_domovni, typ_so = ((line.cislo_domovni, line.typ_so) if line.cislo_domovni
                                  else (constraints.cislo_domovni, constraints.typ_so))
-        cislo_orientacni = line.cislo_orientacni or constraints.cislo_orientacni
-        points = _typed(
+        cislo_orientacni, znak = ((line.cislo_orientacni, line.znak_orientacniho) if line.cislo_orientacni
+                                  else (constraints.cislo_orientacni, constraints.znak_orientacniho))
+        doors = _stated_doors(
             registry.address_points_by_number(
-                obec_kod=line.street.obec_kod,
-                street_name_norm=line.street.name_norm,
-                cislo_domovni=cislo_domovni,
-                typ_so=typ_so,
-                cislo_orientacni=cislo_orientacni,
-            )
-            if cislo_domovni or cislo_orientacni
-            else []
-        )
-        for point in points:
-            agreed = ["house_number", "street", "obec"]
-            if constraints.psc == point.psc:
-                agreed.append("psc")
-            out.append(
-                _point_candidate(
-                    point, rung="R1", agreed=tuple(agreed), relaxations=relaxed,
-                    claim_ids=_ids(constraints, "street", "house_number_cp",
-                                   "house_number_co")))
-        if not points:
+                obec_kod=line.street.obec_kod, street_name_norm=line.street.name_norm,
+                cislo_domovni=cislo_domovni, typ_so=typ_so,
+                cislo_orientacni=None if cislo_domovni else cislo_orientacni,
+            ) if cislo_domovni or cislo_orientacni else [],
+            cislo_orientacni, znak, constraints.psc, by_cp=bool(cislo_domovni))
+        if len(doors) == 1:
+            agreed = ("house_number", "street", "obec", *(("psc",) if constraints.psc == doors[0].psc else ()))
+            out.append(_point_candidate(
+                doors[0], rung="R1", agreed=agreed, relaxations=relaxed,
+                claim_ids=_ids(constraints, "street", "house_number_cp", "house_number_co")))
+        else:
             out.append(_street_candidate(line.street, "R2", constraints, relaxations=relaxed))
 
     # ---- R3: the typo-tolerant rung, and the ONE place a street may be bound by similarity
@@ -739,10 +737,11 @@ def bind(
     if (town is not None and constraints.cislo_domovni is not None
             and not constraints.street_line and not any(
                 c.target_kind == "address_point" for c in out)):
-        points = _typed(registry.address_points_by_number(
+        points = _stated_doors(registry.address_points_by_number(
             obec_kod=town.code, street_name_norm=None,
             cislo_domovni=constraints.cislo_domovni, typ_so=constraints.typ_so,
-            cislo_orientacni=constraints.cislo_orientacni, cast_obce_unit_id=part.unit_id))
+            cislo_orientacni=None, cast_obce_unit_id=part.unit_id),
+            constraints.cislo_orientacni, constraints.znak_orientacniho, constraints.psc, by_cp=True)
         if len(points) == 1 and _pin_agrees(points[0], constraints.pin, blurred=pin_blurred):
             out.append(_point_candidate(
                 points[0], rung="R1", agreed=("house_number", "cast_obce", "obec"),
@@ -964,6 +963,26 @@ def _point_candidate(
         cast_obce_unit_id=point.cast_obce_unit_id,
         agreed=agreed, relaxations=relaxations, source_claim_ids=claim_ids,
     )
+
+
+def _stated_doors(
+    points: Sequence[AddressPoint], cislo_orientacni: int | None, znak: str | None, psc: str | None, *,
+    by_cp: bool,
+) -> list[AddressPoint]:
+    """The doors the words name among the register's points of the stated number (Q23 (a), 2026-11-07: a door
+    only when it is certain). The č.o. with its letter exactly; no letter stated, the letter-less entrance, else
+    the lettered ones. A č.o. none of the č.p.'s points carries leaves the č.p.'s points. Then a stated PSČ that
+    leaves exactly one. More than one left is no door: the caller binds the street."""
+    if cislo_orientacni is not None:
+        same = [p for p in points if p.cislo_orientacni == cislo_orientacni]
+        if znak is not None:
+            same = [p for p in same if (p.znak_orientacniho or "").lower() == znak]
+        else:
+            same = [p for p in same if not p.znak_orientacniho] or same
+        points = same or (points if by_cp else [])
+    doors = _typed(points)
+    by_psc = [p for p in doors if psc is not None and p.psc == psc]
+    return by_psc if len(doors) > 1 and len(by_psc) == 1 else doors
 
 
 def _typed(points: Sequence[AddressPoint]) -> list[AddressPoint]:

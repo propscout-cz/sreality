@@ -1073,3 +1073,87 @@ def test_an_off_street_pin_that_names_its_door_stands_on_that_pin_not_the_street
     assert (before.lat, before.lon) != pin
     row = _resolve(_pinned("gps", pin, *words))
     assert (row.lat, row.lon, row.ruian_adm_kod, row.disputed) == (*pin, 55000001, None)
+
+
+# ------------------------------------ Q23 (a): an ambiguous door yields none (ruling 2026-11-07)
+
+_STOCESOVA = {"obec_unit_id": 13, "obec_kod": 554782, "psc": "19700", "ulice_kod": 121,
+              "street_name_norm": "stocesova", "street_name": "Stočesova",
+              "cast_obce_unit_id": 14, "cast_obce_kod": 490067}
+
+
+def _entrance(kod: int, cp: int, co: int | None, znak: str | None = None, *, at: float = 0.0, **over) -> AddressPoint:
+    """One door of a Stočesova building, `at` metres-ish east of the first so each has its own point."""
+    return AddressPoint(**{**_STOCESOVA, "kod_adm": kod, "lat": 50.0900, "lon": 14.4500 + at / 71_000,
+                           "cislo_domovni": cp, "cislo_orientacni": co, "znak_orientacniho": znak, **over})
+
+
+def _stocesova(*doors: AddressPoint) -> mm.MiniMirror:
+    mirror = _door_mirror(*doors)
+    mirror.streets.append(Street(code=121, name="Stočesova", name_norm="stocesova", obec_kod=554782))
+    return mirror
+
+
+def _stated(line: str, *more) -> list:
+    return [_PRAHA, mm.claim(4, "street_name", value_text=line), *more]
+
+
+@pytest.mark.parametrize("line", ["Stočesova 3389/8b", "Stočesova 3389/8B"])
+def test_the_stated_letter_picks_its_entrance(line):
+    """sreality-33 (2026-11-07): the č.o. letter was dropped, so 8, 8a and 8b tied and the lowest kód won."""
+    mirror = _stocesova(_entrance(1001, 3389, 8), _entrance(1002, 3389, 8, "a", at=10), _entrance(1003, 3389, 8, "b", at=20))
+    row = _resolve(_stated(line), mirror)
+    assert (row.ruian_adm_kod, row.house_number_co) == (1003, "8b")
+
+
+def test_a_number_with_no_letter_is_the_entrance_with_none():
+    """Words 1065/32 bound 32a although the register holds a plain 32."""
+    mirror = _stocesova(_entrance(2001, 1065, 32, "a"), _entrance(2002, 1065, 32, at=10))
+    assert _resolve(_stated("Stočesova 1065/32"), mirror).ruian_adm_kod == 2002
+
+
+def test_a_number_with_no_letter_falls_back_to_the_lettered_entrance_when_no_plain_one_exists():
+    mirror = _stocesova(_entrance(2001, 1065, 32, "a"), _entrance(2003, 1065, 34, at=10))
+    assert _resolve(_stated("Stočesova 1065/32"), mirror).ruian_adm_kod == 2001
+
+
+@pytest.mark.parametrize("line", ["Stočesova 1168", "Stočesova 1168/9"], ids=["cp-alone", "co-on-no-entrance"])
+def test_several_doors_left_bind_the_street(line):
+    """Ruling Q23 (a): ceskereality 19338297, Stočesova 1168, entrances 3 and 1. Several register points share the
+    stated number and nothing in the words picks one: no door, the row stands at its street point, approximate."""
+    mirror = _stocesova(_entrance(3001, 1168, 3), _entrance(3002, 1168, 1, at=20))
+    binding = _bind(_stated(line), mirror=mirror)
+    assert (binding.target_kind, binding.rung, binding.ruian_adm_kod, binding.ulice_kod) == ("street", "R2", None, 121)
+    row = _resolve(_stated(line), mirror)
+    point = mirror.street_point(next(s for s in mirror.streets if s.code == 121))
+    assert (row.granularity, row.ruian_adm_kod, row.house_number_cp) == ("street", None, None)
+    assert (row.lat, row.lon) == (point.lat, point.lon)
+
+
+@pytest.mark.parametrize(("line", "kod"), [("Stočesova 512", None), ("Stočesova 512/3", 4001)])
+def test_two_doors_sharing_a_cp_are_no_door_unless_the_words_say_which(line, kod):
+    mirror = _stocesova(_entrance(4001, 512, 3), _entrance(4002, 512, 5, at=15))
+    row = _resolve(_stated(line), mirror)
+    assert (row.ruian_adm_kod, row.granularity) == (kod, "address_point" if kod else "street")
+
+
+def test_a_stated_psc_that_leaves_one_door_settles_it():
+    mirror = _stocesova(_entrance(3001, 1168, 3, psc="19000"), _entrance(3002, 1168, 1, at=20))
+    psc = mm.claim(6, "psc", value_text="197 00")
+    assert _resolve(_stated("Stočesova 1168", psc), mirror).ruian_adm_kod == 3002
+
+
+def test_a_co_on_no_entrance_of_a_one_door_cp_is_that_door():
+    """(d): the č.p. alone leaves one point, so the č.o. the register does not carry does not undo it."""
+    mirror = _stocesova(_entrance(5001, 700, 2))
+    assert _resolve(_stated("Stočesova 700/9"), mirror).ruian_adm_kod == 5001
+
+
+@pytest.mark.parametrize(("co", "kod"), [("8b", 6002), ("8", None)])
+def test_r1_inside_a_part_reads_the_letter_too(co, kod):
+    """R1 without a street: č.p. 12 in Vokovice with entrances 8a and 8b; a č.o. claim "8b" names one."""
+    mirror = _stocesova(_entrance(6001, 12, 8, "a", ulice_kod=None, street_name_norm=None, street_name=None),
+                        _entrance(6002, 12, 8, "b", at=10, ulice_kod=None, street_name_norm=None, street_name=None))
+    claims = [_PRAHA, _VOKOVICE, mm.claim(6, "house_number_cp", value_text="12"),
+              mm.claim(7, "house_number_co", value_text=co)]
+    assert _resolve(claims, mirror).ruian_adm_kod == kod

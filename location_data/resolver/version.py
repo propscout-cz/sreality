@@ -140,6 +140,9 @@ from __future__ import annotations
 #      words no door can be checked against (a digit in the street line, any door claim, a composed
 #      locality line, a part claim that matched no část) refine nothing. At 1 m a pin-named door agrees
 #      with a sibling ad's as often as two stated doors do (flats 96.99 % vs 95.70 %, houses 99.33 % vs
-#      99.47 %). The containing-obec probe orders by code. Its sweep also carries #2358 (no version of its own): the
+#      99.47 %). Q23 (a), 2026-11-07: an AMBIGUOUS DOOR YIELDS NONE. R1 (and R1 inside a část) matches
+#      the stated č.o. with its letter (no letter: the letter-less entrance, else the lettered ones; a
+#      č.o. none of the č.p.'s points carries leaves the č.p.'s points); a stated PSČ may settle two;
+#      several left bind the street (R2), never the lowest kód. The containing-obec probe orders by code. Its sweep also carries #2358 (no version of its own): the
 #      words say another country and no Czech town bound, so the row is foreign.
 RESOLVER_VERSION = "resolver:v5.11"

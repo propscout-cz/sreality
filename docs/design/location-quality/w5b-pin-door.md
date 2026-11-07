@@ -32,6 +32,18 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 
 **Why ceskereality gains části.** Its contract declares no část: its words are the town, the okres and rarely a street. Of the scoping run's 2,405 ceskereality movers gaining one (2,311 at obec grain, 94 at street grain), a 1-in-12 id sample of 213 held no `cast_obce_name` claim, a town word equal to the row's town on all 213, no KÚ word, and 7 street claims naming no část. So the door names a část where the words were silent, and none disagrees with a stated one. On 30 sampled non-main-part ads the page title and locality name the door's část on none. On the 21 of them whose title states a street, the door's street is that street. The door's část is the town's main část by name on 1,428 of the 2,405 and another on 977. Since F1 only the 94 at street grain still move.
 
+## Q23 (a): an ambiguous door yields none
+
+The operator's ruling of 2026-11-07, as GLOSSARY.md's RÚIAN door states it: an ad has a RÚIAN door only when that door is certain ("co je jisté, dostane bod, žádné odhady", 11-01). Before it, R1 bound every register point sharing the stated number, and the same-rung tie (`at_top`) marked the row ambiguous while the pick followed `ORDER BY kod_adm`. `bind._stated_doors` now narrows the points of the stated č.p. (or, with no č.p., of the stated č.o. on the street):
+- the č.o. and its letter exactly (case-insensitive). No letter stated: the letter-less entrance, else the lettered ones. The letter rides from `normalize` (a street line's `3389/8b`, a č.o. claim's `8b`) through `Constraints` and `StreetBind`; the register read is unchanged, since it already answers each point's `znak_orientacniho`;
+- a č.o. that none of the č.p.'s points carries leaves the č.p.'s points. Before, such words ended at the street whatever the č.p. said;
+- a PSČ the words state settles it when it leaves exactly one (the words decide; about 14 ads);
+- more than one left: no point candidate. R2 binds the street, so the row stands at its street point, street grain, and the map says "Přibližná poloha". The pin cannot add a door: the street line's number refuses it (`names_a_door`).
+
+R1 inside a část (no street) reads the letter the same way and still wants exactly one door. R0 binds one kód and R3 binds no door, so neither can pick among doors.
+
+**The cohort.** Production, sreality-33, 2026-11-07: of about 1,186 active ads first counted as ambiguous, 538 name exactly ONE point once the letter is read, and 245 of those stood on the WRONG entrance (words 3389/8b bound 8a; 777/9c bound 9; 1065/32 bound 32a beside a plain 32): the letter fix corrects them. The ruling's cohort is the about 649 genuine ties, mostly ceskereality č.p.-only ads (19338297, Stočesova 1168, entrances 3 and 1); they stand at their street.
+
 ## Why 1 m, and why flats and houses
 
 The bar is how often two stated doors of one property agree. A pin-named door must agree with a sibling ad's stated door as often (production, 2026-11-02, the operator's measurement):
