@@ -9,7 +9,7 @@ import {
 import { COPY_WORDS, copyText, type CopyWords } from '@/lib/clipboard';
 import { portalBadge } from '@/lib/portals';
 import type { PropertySource } from '@/lib/types';
-import type { VCardContact } from '@/lib/vcard';
+import { contactName, type VCardContact } from '@/lib/vcard';
 import SaveContactButton from './SaveContactButton';
 
 /* An ad as the card names it: its portal, and the number it prints for callers. */
@@ -57,6 +57,7 @@ export default function BrokerContactCard({
         {saveAs && (
           <SaveContactButton
             contact={saveAs}
+            label={`uložit kontakt: ${contactName(saveAs)}`}
             className="shrink-0 py-1.5 md:py-0 text-[0.6rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
           >
             uložit kontakt

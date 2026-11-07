@@ -1,7 +1,7 @@
 /* A contact as a vCard file, for "Uložit kontakt": the phone hands it to its contacts
- * app (iOS opens a .vcf as "Create New Contact"), a desktop imports it into Outlook or
- * Google. Version 3.0 (RFC 2426), not 4.0 (RFC 6350): every contacts app reads 3.0 and
- * Outlook reads nothing newer. The text rules are RFC 6350's, which 3.0 shares: values
+ * app (iOS opens a .vcf as "Create New Contact"), a desktop imports it into its contacts
+ * (Google, macOS; Outlook for Windows may need the file opened as UTF-8). Version 3.0
+ * (RFC 2426), not 4.0 (RFC 6350): every contacts app reads 3.0, Outlook nothing newer. The text rules are RFC 6350's, which 3.0 shares: values
  * escaped, lines folded at 75 octets without splitting a UTF-8 character, CRLF between
  * lines. Built in the browser from what the page already shows; nothing is sent anywhere. */
 
@@ -64,7 +64,7 @@ export function buildVCard(c: VCardContact, now: Date = new Date()): string {
   if (c.org) lines.push(`ORG:${escape(c.org)}`);
   if (c.title) lines.push(`TITLE:${escape(c.title)}`);
   if (c.phone) lines.push(`TEL;TYPE=WORK,VOICE:${c.phone}`);
-  if (c.email) lines.push(`EMAIL;TYPE=INTERNET,WORK:${c.email}`);
+  if (c.email) lines.push(`EMAIL;TYPE=INTERNET,WORK:${escape(c.email)}`);
   if (c.url) lines.push(`URL:${c.url}`);
   if (c.note) lines.push(`NOTE:${escape(c.note)}`);
   lines.push(`REV:${now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`, 'END:VCARD');

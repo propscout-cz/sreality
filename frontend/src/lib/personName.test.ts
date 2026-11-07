@@ -12,6 +12,13 @@ describe('splitName', () => {
     expect(splitName('Mgr. Petr van der Berg')).toEqual({ family: 'Berg', given: 'Petr van der', prefix: 'Mgr.', suffix: '' });
   });
 
+  it('knows degrees without their dots, "et" between two, and keeps a one-letter initial', () => {
+    expect(splitName('Mgr. et Mgr. Jana Nováková')).toEqual({ family: 'Nováková', given: 'Jana', prefix: 'Mgr. et Mgr.', suffix: '' });
+    expect(splitName('MUDr Jan Novák PhD')).toEqual({ family: 'Novák', given: 'Jan', prefix: 'MUDr', suffix: 'PhD' });
+    expect(splitName('Jan N.')).toEqual({ family: 'N.', given: 'Jan', prefix: '', suffix: '' });
+    expect(nameInitials('Mgr. et Mgr. Jana Nováková')).toBe('JN');
+  });
+
   it('reads a one-word name as a surname and a bare degree as no name', () => {
     expect(splitName('Novák')).toEqual({ family: 'Novák', given: '', prefix: '', suffix: '' });
     expect(splitName('Bc.')).toEqual({ family: '', given: '', prefix: 'Bc.', suffix: '' });

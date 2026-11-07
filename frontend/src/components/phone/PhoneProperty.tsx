@@ -4,7 +4,7 @@
  * affordance and the property's number; the canonical ad's photos as a swiper
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
- * broker strip (Zavolat, Uložit kontakt: BrokerStrip); the curation row; then the sections as section cards (components/Panel, the desktop
+ * curation row; the broker strip (Zavolat, Uložit kontakt: BrokerStrip); then the sections as section cards (components/Panel, the desktop
  * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (a streamed
  * Mapy static image through the API, never a WebGL map on the phone), then "Moje
  * fotky" (the camera and the user's own photos, PropertyPhotos).
@@ -199,10 +199,10 @@ export default function PhoneProperty({
         <p className="text-[12px] text-[var(--color-ink-3)]">{metaLine({ property, portals, lastMove })}</p>
       </header>
 
+      <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
+
       {/* The broker one tap away: call, or save the contact (operator 2026-11-06). */}
       <BrokerStrip sources={sources} sourcesFailed={sourcesFailed} canonicalId={property.id} about={about} />
-
-      <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
 
       {/* Every section is its own card, reused blocks included; one that has nothing keeps its card
           and says so (C10). */}

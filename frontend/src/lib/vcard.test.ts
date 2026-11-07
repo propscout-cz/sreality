@@ -50,6 +50,10 @@ describe('buildVCard', () => {
     const card = buildVCard({ uid: 'u', name: 'A;B\\C', note: 'jedna, dvě; tři' }, NOW);
     expect(card).toContain(String.raw`FN:A\;B\\C`);
     expect(card).toContain(String.raw`NOTE:jedna\, dvě\; tři`);
+    /* An e-mail is a text value too: a scraped one can never add a line to the card. */
+    const injected = buildVCard({ uid: 'u', name: 'X', email: 'a@b.cz\nTEL:999' }, NOW);
+    expect(injected).toContain(String.raw`EMAIL;TYPE=INTERNET,WORK:a@b.cz\nTEL:999`);
+    expect(injected).not.toMatch(/^TEL:999/m);
   });
 
   it('folds a long line at 75 octets, never inside a character', () => {
