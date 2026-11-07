@@ -2160,8 +2160,8 @@ renumber.** Navigate by area:
     (desktop: "Naplánovat prohlídku" in the heading) adds a Prague day + time (`lib/viewings`), the
     property's upcoming viewings lead the list under a calendar leaf, and the phone's sixth tab,
     Prohlídky (`pages/phone/PhoneViewings`, `GET /viewings` = the acting identity's own), lists them
-    one day at a time — arrows, swipe, a date wheel, Nadcházející / Vše, jumps to the nearest day
-    with one. No table, carrier or registry of its own: a viewing is shared, carried and split as
+    one day at a time — arrows, swipe, a date wheel, jumps to the nearest day with one either way;
+    one calendar, past days as reachable as coming ones (no scope). No table, carrier or registry of its own: a viewing is shared, carried and split as
     the note it is (the split copy keeps the date). Under it,
     `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the

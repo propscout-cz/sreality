@@ -10,7 +10,6 @@ import {
   defaultSlot,
   neighbours,
   relativeDay,
-  scoped,
   sectionOrder,
   shortDay,
   slotInstant,
@@ -90,15 +89,13 @@ describe('the order and the days', () => {
     expect(sectionOrder([plain, past, later, soon], now).map((n) => n.id)).toEqual([4, 3, 1, 2]);
   });
 
-  it('scopes to today on, groups by Prague day and finds the neighbouring days', () => {
+  it('groups by Prague day and finds the neighbouring days', () => {
     const all = [
       note(1, '2026-10-20T08:00:00Z'),
       note(2, '2026-10-23T12:00:00Z'),
       note(3, '2026-10-23T07:00:00Z'),
       note(4, '2026-10-23T22:30:00Z'), // 00:30 on the 24th in Prague
     ];
-    expect(scoped(all, 'upcoming', now).map((n) => n.id)).toEqual([2, 3, 4]);
-    expect(scoped(all, 'all', now)).toHaveLength(4);
     const days = byDay(all);
     expect([...days.keys()]).toEqual(['2026-10-20', '2026-10-23', '2026-10-24']);
     expect(days.get('2026-10-23')!.map((n) => n.id)).toEqual([3, 2]);

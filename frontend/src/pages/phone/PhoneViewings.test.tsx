@@ -1,7 +1,7 @@
 /* Prohlídky (the Phone app's sixth tab): my viewings one day at a time, in time
  * order, each opening its property; the arrows, a swipe and the day jumps flip
- * the day, Nadcházející never steps before today. jsdom lays nothing out, so
- * the slide and the date wheel are browser checks; the wiring is pinned here. */
+ * the day either way, the past as reachable as what is ahead. jsdom lays nothing
+ * out, so the slide and the date wheel are browser checks; the wiring is pinned here. */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -71,6 +71,8 @@ function renderAt(path = '/viewings') {
 }
 
 const rows = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'));
+const PAST = 'text-[var(--color-ink-3)]';
+const timeOf = (text: string) => screen.getByText(text, { selector: 'time' });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -108,75 +110,64 @@ describe('<PhoneViewings>', () => {
     // The now rule (10:00) sits between the morning viewing and the afternoon one.
     const items = screen.getAllByRole('listitem', { hidden: true });
     expect(items.map((li) => (li.querySelector('a') ? 'row' : 'now'))).toEqual(['row', 'now', 'row']);
+    expect(timeOf('09:00')).toHaveClass(PAST);
+    expect(timeOf('14:30')).not.toHaveClass(PAST);
   });
 
-  it('never steps before today while upcoming, and offers the next day that holds a viewing', async () => {
+  it('steps a day either way and offers the nearest days that hold a viewing', async () => {
     renderAt();
     await screen.findByText('Seifertova, Praha 3 – Žižkov');
-    expect(screen.getByRole('button', { name: 'Předchozí den' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Další den' }));
-    expect(screen.getByText('Zítra')).toBeInTheDocument();
-    expect(screen.getByTestId('search')).toHaveTextContent('?day=2026-10-24');
-    expect(screen.getByText('Žádná prohlídka')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Další prohlídka · út 27\. 10\./ }));
+    expect(screen.queryByRole('button', { name: 'Dnes' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Vybrat den')).not.toHaveAttribute('min');
+    fireEvent.click(screen.getByRole('button', { name: 'Předchozí den' }));
+    expect(screen.getByText('Včera')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('?day=2026-10-22');
+    expect(screen.getByText('Tento den nic. Nejbližší prohlídka je níže.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Další prohlídka · pá 23\. 10\./ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Předchozí · út 20\. 10\./ }));
+    expect(await screen.findByText('Krátká, Brno')).toBeInTheDocument();
+    expect(rows()).toEqual(['/property/45']);
+    // A day gone by: every viewing on it reads as past, and no now rule.
+    expect(timeOf('11:00')).toHaveClass(PAST);
+    expect(screen.getAllByRole('listitem', { hidden: true }).every((li) => li.querySelector('a'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Další prohlídka: pá 23. 10.' }));
+    expect(screen.getByTestId('search')).toHaveTextContent(/^$/);
+    fireEvent.click(screen.getByRole('button', { name: 'Další prohlídka: út 27. 10.' }));
     expect(await screen.findByText('Dlouhá, Praha 1')).toBeInTheDocument();
-    expect(rows()).toEqual(['/property/44']);
+    expect(timeOf('10:00')).not.toHaveClass(PAST);
     fireEvent.click(screen.getByRole('button', { name: 'Dnes' }));
     expect(screen.getByTestId('search')).toHaveTextContent(/^$/);
   });
 
-  it('under Vše steps into the past and jumps to the previous viewing', async () => {
+  it('with nothing ahead, the last viewing is the way back', async () => {
+    vi.setSystemTime(new Date('2026-11-07T09:00:00Z'));
     renderAt();
-    await screen.findByText('Seifertova, Praha 3 – Žižkov');
-    fireEvent.click(screen.getByRole('button', { name: 'Vše' }));
-    expect(screen.getByRole('button', { name: 'Předchozí den' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Předchozí prohlídka: út 20. 10.' }));
-    expect(await screen.findByText('Krátká, Brno')).toBeInTheDocument();
-    expect(screen.getByTestId('search')).toHaveTextContent('?scope=all&day=2026-10-20');
-    // Back to upcoming: a past day cannot stay open.
-    fireEvent.click(screen.getByRole('button', { name: 'Nadcházející' }));
+    expect(await screen.findByText('Tento den nic a dál už žádná naplánovaná.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Další prohlídka/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Předchozí prohlídka · út 27. 10.' }));
+    expect(await screen.findByText('Dlouhá, Praha 1')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('?day=2026-10-27');
+    expect(timeOf('10:00')).toHaveClass(PAST);
+    fireEvent.click(screen.getByRole('button', { name: 'Předchozí prohlídka: pá 23. 10.' }));
     expect(await screen.findByText('Seifertova, Praha 3 – Žižkov')).toBeInTheDocument();
-    expect(screen.getByTestId('search')).toHaveTextContent(/^$/);
-  });
-
-  /* Operator ruling 2026-10-27 (system.md § Option groups): the scope is the one
-   * joined bar in its phone tone — chosen = ink on the inset well, never copper. */
-  it('picks the scope on the phone-tone joined bar', async () => {
-    renderAt();
-    await screen.findByText('Seifertova, Praha 3 – Žižkov');
-    const group = screen.getByRole('group', { name: 'Které prohlídky' });
-    const buttons = within(group).getAllByRole('button');
-    expect(buttons.map((b) => b.textContent)).toEqual(['Nadcházející', 'Vše']);
-    expect(Array.from(group.children)).toEqual(buttons);
-    expect(group).toHaveClass('border', 'border-[var(--color-rule-strong)]');
-    for (const b of buttons) {
-      expect(b).not.toHaveClass('border-l');
-      expect(b.className).not.toMatch(/copper/);
-    }
-    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true');
-    expect(buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
-    expect(buttons[1]).toHaveAttribute('aria-pressed', 'false');
-
-    fireEvent.click(buttons[1]);
-    expect(screen.getByTestId('search')).toHaveTextContent('?scope=all');
-    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
-    // A tap on the lit segment keeps it: the scope is never "none".
-    fireEvent.click(buttons[1]);
-    expect(screen.getByTestId('search')).toHaveTextContent('?scope=all');
-    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('flips the day on a sideways swipe, not on a scroll', async () => {
     renderAt();
-    const row = await screen.findByText('Seifertova, Praha 3 – Žižkov');
+    await screen.findByText('Seifertova, Praha 3 – Žižkov');
+    // The day's page, which outlives the rows a flip replaces.
+    const page = document.querySelector('[class~="min-h-[60dvh]"]')!;
     const swipe = (dx: number, dy: number) => {
-      fireEvent.touchStart(row, { touches: [{ clientX: 200, clientY: 300 }] });
-      fireEvent.touchEnd(row, { changedTouches: [{ clientX: 200 + dx, clientY: 300 + dy }] });
+      fireEvent.touchStart(page, { touches: [{ clientX: 200, clientY: 300 }] });
+      fireEvent.touchEnd(page, { changedTouches: [{ clientX: 200 + dx, clientY: 300 + dy }] });
     };
     swipe(-30, 200);
     expect(screen.getByText('Dnes')).toBeInTheDocument();
     swipe(-120, 10);
     expect(screen.getByText('Zítra')).toBeInTheDocument();
+    swipe(120, 10);
+    swipe(120, 10);
+    expect(screen.getByText('Včera')).toBeInTheDocument();
   });
 
   it('says where a viewing is booked when there is none', async () => {

@@ -9,8 +9,6 @@
 import { FEED_TZ, pragueDayKey, shiftDay } from './feed';
 import type { Note } from './types';
 
-export type ViewingScope = 'upcoming' | 'all';
-
 /* A viewing as the composer holds it: a Prague day ('YYYY-MM-DD') and time ('HH:MM'). */
 export interface ViewingSlot {
   day: string;
@@ -137,11 +135,6 @@ export function sectionOrder(notes: readonly Note[], now: Date = new Date()): No
     .filter((n) => n.viewing_at && isUpcoming(n.viewing_at, now))
     .sort((a, b) => a.viewing_at!.localeCompare(b.viewing_at!));
   return [...ahead, ...notes.filter((n) => !ahead.includes(n))];
-}
-
-/* The tab's viewings in a scope, earliest first (the read already orders them). */
-export function scoped(viewings: readonly Note[], scope: ViewingScope, now: Date = new Date()): Note[] {
-  return viewings.filter((v) => v.viewing_at && (scope === 'all' || isUpcoming(v.viewing_at, now)));
 }
 
 /* Each Prague day that holds a viewing, with its viewings in time order. */

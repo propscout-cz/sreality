@@ -154,11 +154,16 @@ toolkit work.
   "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
   and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
-  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
-  "now" rule on today; a row opens its property.
+  arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a "now" rule on today; a
+  row opens its property.
 - **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
   under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
   full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
+- **Done** (operator ask 2026-11-07, #2436): past viewings are a day back. The Nadcházející / Vše scope is
+  gone (its default barred every day before today, so with every viewing behind the operator the tab showed
+  nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
+  (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
+  the upcoming ones.
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
