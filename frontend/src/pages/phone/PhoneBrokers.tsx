@@ -14,6 +14,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { CoverageLine, IgnoredNote, MarketLine, RefusalLine, SpeedLegend, sharePct } from '@/components/brokers/BoardNotes';
 import BottomSheet from '@/components/phone/BottomSheet';
+import BrokerAvatar from '@/components/phone/BrokerAvatar';
 import DayRule from '@/components/phone/DayRule';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { SegmentedBar } from '@/components/controls';
@@ -135,7 +136,7 @@ function SearchResults({ typed, term }: { typed: string; term: string }) {
               {/* The live properties the search orders by. */}
               <BrokerRow
                 id={b.broker_id}
-                lead={<Initials name={b.display_name} />}
+                lead={<BrokerAvatar name={b.display_name} size="sm" />}
                 name={b.display_name}
                 firm={b.firm_name ?? b.firm_domain}
                 value={b.active_properties}
@@ -395,35 +396,6 @@ function BrokerRow({
         <ChevronIcon className="h-4 w-4 shrink-0 text-[var(--color-ink-4)]" />
       </span>
     </Link>
-  );
-}
-
-/* "Jana Kubíčková" → "JK", "Ing. Petr Novák, MBA" → "PN": the avatar, in
- * Fraunces. Degrees (a word with a dot, anything after a comma) are not the
- * person's letters. */
-export function brokerInitials(name: string | null | undefined): string {
-  const words = (name ?? '')
-    .split(',')[0]
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w && !w.includes('.'));
-  if (words.length === 0) return '?';
-  const first = words[0][0] ?? '';
-  const last = words.length > 1 ? (words[words.length - 1][0] ?? '') : '';
-  return (first + last).toLocaleUpperCase('cs-CZ');
-}
-
-export function Initials({ name, size = 'sm' }: { name: string | null | undefined; size?: 'sm' | 'lg' }) {
-  return (
-    <span
-      aria-hidden
-      className={[
-        'flex shrink-0 items-center justify-center rounded-full border border-[var(--color-rule-strong)] font-display text-[var(--color-ink-2)]',
-        size === 'lg' ? 'h-12 w-12 text-[17px]' : 'h-8 w-8 text-[12px]',
-      ].join(' ')}
-    >
-      {brokerInitials(name)}
-    </span>
   );
 }
 

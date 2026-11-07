@@ -2135,8 +2135,10 @@ renumber.** Navigate by area:
     advert's own facts, broker and stored portal link in its row; the broker card lists no advert
     -- under each broker's contact it quotes the AD REFERENCE of the ads that broker advertises
     (`ad_reference`, migration 667: one `<portál> · <číslo>` line per ad, a dash when the ad prints
-    none, never the portal id in its place), on both shells through ONE `BrokerContactCard` and
-    ONE copy behaviour (`lib/clipboard`). Every property-grain surface links
+    none, never the portal id in its place), on both shells through ONE `BrokerContactCard`,
+    ONE copy behaviour (`lib/clipboard`) and ONE saved contact ("Uložit kontakt": `lib/brokerContact`
+    → `lib/vcard`, a vCard 3.0 file built in the browser, its note naming the property and the ads;
+    the phone page's `BrokerStrip` under the price dials and saves the lead broker, #2428). Every property-grain surface links
     `propertyPath(property_id)` (`lib/listingUrl`). Old advert addresses -- `/listing/{source}/
     {native}` (emails, the extension), `/listing/{sreality_id}`, `/listing?property=` -- are
     aliases (`AdvertRedirect`) that resolve the advert's property and open its row

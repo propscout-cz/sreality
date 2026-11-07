@@ -79,8 +79,9 @@ _Avoid_: native id (in prose), hash id, listing id
 The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
 Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
 broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
-portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
-quoted on a call; never replaced by another number when it is missing.
+portal id. An ad may print none (a private seller). Shown beside the broker's contact, and written
+into a saved contact's note, so it can be quoted on a call; never replaced by another number when it
+is missing.
 _Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
