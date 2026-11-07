@@ -34,13 +34,13 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 
 ## Q23 (a): an ambiguous door yields none
 
-The operator's ruling of 2026-11-07, as GLOSSARY.md's RÚIAN door states it: an ad has a RÚIAN door only when that door is certain ("co je jisté, dostane bod, žádné odhady", 11-01). Before it, R1 bound every register point sharing the stated number, and the same-rung tie (`at_top`) marked the row ambiguous while the pick followed `ORDER BY kod_adm`. `bind._stated_doors` now narrows the points of the stated č.p. (or, with no č.p., of the stated č.o. on the street):
-- the č.o. and its letter exactly (case-insensitive). No letter stated: the letter-less entrance, else the lettered ones. The letter rides from `normalize` (a street line's `3389/8b`, a č.o. claim's `8b`) through `Constraints` and `StreetBind`; the register read is unchanged, since it already answers each point's `znak_orientacniho`;
-- a č.o. that none of the č.p.'s points carries leaves the č.p.'s points. Before, such words ended at the street whatever the č.p. said;
+The operator's ruling of 2026-11-07, as GLOSSARY.md's RÚIAN door states it: an ad has a RÚIAN door only when that door is certain ("co je jisté, dostane bod, žádné odhady", 11-01). Before it, R1 bound every register point sharing the stated number, and the same-rung tie (`at_top`) marked the row ambiguous while the pick followed `ORDER BY kod_adm`. `bind._stated_doors` now narrows the points the register holds for the stated č.p. and č.o.:
+- the č.o.'s letter exactly (case-insensitive). No letter stated: the letter-less entrance, else the lettered ones. The letter rides from `normalize` (a street line's `3389/8b`, a č.o. claim's `8b`, "8 b" too) through `Constraints` and `StreetBind`, with its č.o. as one unit from one source: a claim outranks the street line, as `collect_constraints` ranks them. The register read is unchanged, since it already answers each point's `znak_orientacniho`;
+- a č.o. or a letter that no point carries is no door, as before W5b: the words contradict the register (č.p. 1234 as Stočesova 1234/8 and Bořetická 1234/2, words "Stočesova 1234/2", stand at Stočesova);
 - a PSČ the words state settles it when it leaves exactly one (the words decide; about 14 ads);
-- more than one left: no point candidate. R2 binds the street, so the row stands at its street point, street grain, and the map says "Přibližná poloha". The pin cannot add a door: the street line's number refuses it (`names_a_door`).
+- none or more than one left: no point candidate. R2 binds the street, so the row stands at its street point, street grain, and the map says "Přibližná poloha". The pin cannot add a door: the street line's number refuses it (`names_a_door`).
 
-R1 inside a část (no street) reads the letter the same way and still wants exactly one door. R0 binds one kód and R3 binds no door, so neither can pick among doors.
+R1 inside a část (no street) reads the letter the same way and still wants exactly one door; none keeps the row at its část. R0 binds one kód and R3 binds no door, so neither can pick among doors.
 
 **The cohort.** Production, sreality-33, 2026-11-07: of about 1,186 active ads first counted as ambiguous, 538 name exactly ONE point once the letter is read, and 245 of those stood on the WRONG entrance (words 3389/8b bound 8a; 777/9c bound 9; 1065/32 bound 32a beside a plain 32): the letter fix corrects them. The ruling's cohort is the about 649 genuine ties, mostly ceskereality č.p.-only ads (19338297, Stočesova 1168, entrances 3 and 1); they stand at their street.
 
@@ -98,7 +98,7 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
          AND (h.claim_type IN ('house_number_cp', 'house_number_co')
               OR (h.claim_type = 'street_name' AND h.value_text ~ '[0-9]'))))
    OR (ll.granularity = 'address_point' AND EXISTS (SELECT 1 FROM location_claims h WHERE h.listing_id = l.id
-         AND h.claim_type IN ('house_number_co', 'street_name') AND coalesce(h.value_text, '') ~ '[0-9][[:alpha:]]')))
+         AND h.claim_type IN ('house_number_co', 'street_name') AND coalesce(h.value_text, '') ~ '[0-9][[:space:]]*[[:alpha:]]')))
 ```
    `what_if` keeps real movers. Dispatch `location_wave_shadow.yml --ref feature/location-w5b-pin-door -f wave=w5b -f claims=none -f scope=apply -f all_blocks=true -f group=1/1 -f ids_sql="…"`, then the printed `i/n` groups with `positions_run_id`. **`all_blocks=true` is required here:** by default only blocks holding a ruling are exported, and most of this wave's movers have none, so the door report would not see them. No gate runs until W5's sweep ends.
 
@@ -142,8 +142,8 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
 
 | Measure | After |
 |---|---|
-| Address-grain rows | up by the street movers (the shadow's mover count decides) |
-| `{p}/street` | unchanged: since F1 every mover was at street grain |
+| Address-grain rows | up by the pin's street movers, down by the Q23 losers (the shadow's mover counts decide) |
+| `{p}/street` | not unchanged: a Q23 loser goes from address to street grain (still inside the share), one bound inside a část from address to quarter (out of it), and the letter fix inside a část can move a quarter row to address grain (into it); the pin's movers were already at street grain |
 | `{p}/ku` | up (a door carries its KÚ) |
 | `{p}/outside` | no higher |
 | Pin-named doors on a non-flat, non-house ad, over 1 m from their pin, on another street than the bound one, or in another část than the claimed one | 0, once the queue has drained |

@@ -783,7 +783,7 @@ def check_data_quality(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 # location_quality_by_source (migration 736) defines every location quality number once, in a long
 # shape (cohort, source, metric, class, n of of_n, quantiles); this gauge only judges its rows, read
 # in one statement (11.7 s warm on 10-31). The radius and its pin sample are retired (ruling
-# 2026-11-02).
+# 2026-11-01).
 _LOCATION_COLUMNS = "cohort, source, metric, class, n, of_n, q50, q90, q95, q100"
 _LOCATION_STOCK_SQL = f"select {_LOCATION_COLUMNS} from location_quality_by_source"
 

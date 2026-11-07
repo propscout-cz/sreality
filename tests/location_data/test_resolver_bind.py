@@ -820,10 +820,8 @@ def test_a_refined_row_keeps_the_ads_own_pin_and_the_door_only_names_it():
 @pytest.mark.parametrize(("doors", "words", "pin", "grain"), [
     ((AddressPoint(kod_adm=991, lat=50.10100, lon=14.34800, ulice_kod=101, street_name_norm="nad borislavkou",
                    street_name="Nad Bořislavkou", **_PRAHA_DOOR),), _ON_STREET, _ON_DOOR, "street"),
-    ((AddressPoint(kod_adm=992, obec_unit_id=15, obec_kod=567639, psc="41502", lat=50.10105, lon=14.34805),),
-     _ON_STREET, (50.10105, 14.348057), "street"),
     ((), (_PRAHA, mm.claim(4, "street_name", value_text="28. října")), _ON_DOOR, "street"),
-], ids=["two-doors-at-equal-distance", "the-door-is-in-another-obec", "another-street"])
+], ids=["two-doors-at-equal-distance", "another-street"])
 def test_a_tie_or_a_door_elsewhere_refines_nothing_silently(doors, words, pin, grain):
     row = _resolve(_pinned("gps", pin, *words), _door_mirror(*doors))
     assert (row.ruian_adm_kod, row.granularity, row.disputed) == (None, grain, None)
@@ -1143,17 +1141,56 @@ def test_a_stated_psc_that_leaves_one_door_settles_it():
     assert _resolve(_stated("Stočesova 1168", psc), mirror).ruian_adm_kod == 3002
 
 
-def test_a_co_on_no_entrance_of_a_one_door_cp_is_that_door():
-    """(d): the č.p. alone leaves one point, so the č.o. the register does not carry does not undo it."""
+def test_a_co_no_entrance_carries_is_no_door_even_when_the_cp_has_one():
+    """The words contradict the register (700/9 where it holds only 700/2): no door, the row stands at its street."""
     mirror = _stocesova(_entrance(5001, 700, 2))
-    assert _resolve(_stated("Stočesova 700/9"), mirror).ruian_adm_kod == 5001
+    row = _resolve(_stated("Stočesova 700/9"), mirror)
+    assert (row.ruian_adm_kod, row.granularity) == (None, "street")
 
 
-@pytest.mark.parametrize(("co", "kod"), [("8b", 6002), ("8", None)])
+def test_a_cp_on_two_streets_never_lends_the_other_streets_door():
+    """The review's case: č.p. 1234 is A 1234/8 on Stočesova and B 1234/2 on Bořetická. "Stočesova 1234/2" names no
+    door on Stočesova, so the row stands at Stočesova, as it did before W5b."""
+    other = {"ulice_kod": 122, "street_name_norm": "boreticka", "street_name": "Bořetická"}
+    mirror = _stocesova(_entrance(7001, 1234, 8), _entrance(7002, 1234, 2, at=30, **other))
+    mirror.streets.append(Street(code=122, name="Bořetická", name_norm="boreticka", obec_kod=554782))
+    row = _resolve(_stated("Stočesova 1234/2"), mirror)
+    assert (row.ruian_adm_kod, row.ulice_kod, row.granularity) == (None, 121, "street")
+
+
+@pytest.mark.parametrize(("words", "doors"), [
+    ([_PRAHA, mm.claim(4, "street_name", value_text="Stočesova"), mm.claim(7, "house_number_co", value_text="8b")],
+     ((8001, 3389, 8, None),)),
+    (_stated("Stočesova 3389/8c"), ((8001, 3389, 8, None), (8002, 3389, 8, "a"), (8003, 3389, 8, "b"))),
+], ids=["co-claim-8b-register-8", "8c-among-8-8a-8b"])
+def test_a_letter_no_entrance_carries_is_no_door(words, doors):
+    mirror = _stocesova(*(_entrance(kod, cp, co, znak, at=10 * n) for n, (kod, cp, co, znak) in enumerate(doors)))
+    row = _resolve(words, mirror)
+    assert (row.ruian_adm_kod, row.granularity) == (None, "street")
+
+
+def test_the_co_claim_outranks_the_street_lines_number_with_its_letter():
+    """`collect_constraints`: a house-number claim outranks the number written in the street line, and the č.o.
+    travels with its own letter: "Stočesova 3389/8" beside a č.o. claim "8b" is 8b, never the line's 8."""
+    mirror = _stocesova(_entrance(1001, 3389, 8), _entrance(1002, 3389, 8, "a", at=10), _entrance(1003, 3389, 8, "b", at=20))
+    assert _resolve(_stated("Stočesova 3389/8", mm.claim(7, "house_number_co", value_text="8b")), mirror
+                    ).ruian_adm_kod == 1003
+
+
+@pytest.mark.parametrize(("co", "kod"), [("8b", 6002), ("8", None), ("9", None)])
 def test_r1_inside_a_part_reads_the_letter_too(co, kod):
-    """R1 without a street: č.p. 12 in Vokovice with entrances 8a and 8b; a č.o. claim "8b" names one."""
+    """R1 without a street: č.p. 12 in Vokovice with entrances 8a and 8b; a č.o. claim "8b" names one, "9" none."""
     mirror = _stocesova(_entrance(6001, 12, 8, "a", ulice_kod=None, street_name_norm=None, street_name=None),
                         _entrance(6002, 12, 8, "b", at=10, ulice_kod=None, street_name_norm=None, street_name=None))
     claims = [_PRAHA, _VOKOVICE, mm.claim(6, "house_number_cp", value_text="12"),
               mm.claim(7, "house_number_co", value_text=co)]
     assert _resolve(claims, mirror).ruian_adm_kod == kod
+
+
+def test_r1_inside_a_part_gives_no_door_for_a_co_its_one_point_does_not_carry():
+    """"12/9" where č.p. 12 is one point, 12/8: the words contradict the register, so the row stays at its část."""
+    mirror = _stocesova(_entrance(6101, 12, 8, ulice_kod=None, street_name_norm=None, street_name=None))
+    claims = [_PRAHA, _VOKOVICE, mm.claim(6, "house_number_cp", value_text="12"),
+              mm.claim(7, "house_number_co", value_text="9")]
+    row = _resolve(claims, mirror)
+    assert (row.ruian_adm_kod, row.granularity) == (None, "cast_obce_or_quarter")

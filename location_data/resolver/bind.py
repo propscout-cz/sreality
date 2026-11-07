@@ -663,18 +663,20 @@ def bind(
     if line.street is not None:
         # The street claim's own number first; a listing-wide `house_number_*` claim behind it
         # (the portals that state the street and the číslo in separate fields). The number
-        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits.
+        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits. The č.o.
+        # travels with its letter, from ONE source as `collect_constraints` ranks them (a claim
+        # outranks the line); the line's own parse only where the constraints read none.
         cislo_domovni, typ_so = ((line.cislo_domovni, line.typ_so) if line.cislo_domovni
                                  else (constraints.cislo_domovni, constraints.typ_so))
-        cislo_orientacni, znak = ((line.cislo_orientacni, line.znak_orientacniho) if line.cislo_orientacni
-                                  else (constraints.cislo_orientacni, constraints.znak_orientacniho))
+        cislo_orientacni, znak = (
+            (constraints.cislo_orientacni, constraints.znak_orientacniho)
+            if constraints.cislo_orientacni is not None else (line.cislo_orientacni, line.znak_orientacniho))
         doors = _stated_doors(
             registry.address_points_by_number(
                 obec_kod=line.street.obec_kod, street_name_norm=line.street.name_norm,
-                cislo_domovni=cislo_domovni, typ_so=typ_so,
-                cislo_orientacni=None if cislo_domovni else cislo_orientacni,
+                cislo_domovni=cislo_domovni, typ_so=typ_so, cislo_orientacni=cislo_orientacni,
             ) if cislo_domovni or cislo_orientacni else [],
-            cislo_orientacni, znak, constraints.psc, by_cp=bool(cislo_domovni))
+            znak, constraints.psc, by_co=cislo_orientacni is not None)
         if len(doors) == 1:
             agreed = ("house_number", "street", "obec", *(("psc",) if constraints.psc == doors[0].psc else ()))
             out.append(_point_candidate(
@@ -740,8 +742,8 @@ def bind(
         points = _stated_doors(registry.address_points_by_number(
             obec_kod=town.code, street_name_norm=None,
             cislo_domovni=constraints.cislo_domovni, typ_so=constraints.typ_so,
-            cislo_orientacni=None, cast_obce_unit_id=part.unit_id),
-            constraints.cislo_orientacni, constraints.znak_orientacniho, constraints.psc, by_cp=True)
+            cislo_orientacni=constraints.cislo_orientacni, cast_obce_unit_id=part.unit_id),
+            constraints.znak_orientacniho, constraints.psc, by_co=constraints.cislo_orientacni is not None)
         if len(points) == 1 and _pin_agrees(points[0], constraints.pin, blurred=pin_blurred):
             out.append(_point_candidate(
                 points[0], rung="R1", agreed=("house_number", "cast_obce", "obec"),
@@ -966,20 +968,15 @@ def _point_candidate(
 
 
 def _stated_doors(
-    points: Sequence[AddressPoint], cislo_orientacni: int | None, znak: str | None, psc: str | None, *,
-    by_cp: bool,
+    points: Sequence[AddressPoint], znak: str | None, psc: str | None, *, by_co: bool,
 ) -> list[AddressPoint]:
-    """The doors the words name among the register's points of the stated number (Q23 (a), 2026-11-07: a door
-    only when it is certain). The č.o. with its letter exactly; no letter stated, the letter-less entrance, else
-    the lettered ones. A č.o. none of the č.p.'s points carries leaves the č.p.'s points. Then a stated PSČ that
-    leaves exactly one. More than one left is no door: the caller binds the street."""
-    if cislo_orientacni is not None:
-        same = [p for p in points if p.cislo_orientacni == cislo_orientacni]
-        if znak is not None:
-            same = [p for p in same if (p.znak_orientacniho or "").lower() == znak]
-        else:
-            same = [p for p in same if not p.znak_orientacniho] or same
-        points = same or (points if by_cp else [])
+    """The doors the words name among the register's points of the stated number (`points`, read by its č.p. and
+    č.o.; Q23 (a), 2026-11-07: a door only when it is certain). A stated č.o. keeps its letter exactly; no letter
+    stated, the letter-less entrance, else the lettered ones. Then a stated PSČ that leaves exactly one. None or
+    several left is no door: the caller binds the street (or keeps the část)."""
+    if by_co:
+        points = ([p for p in points if (p.znak_orientacniho or "").lower() == znak] if znak is not None
+                  else [p for p in points if not p.znak_orientacniho] or list(points))
     doors = _typed(points)
     by_psc = [p for p in doors if psc is not None and p.psc == psc]
     return by_psc if len(doors) > 1 and len(by_psc) == 1 else doors
@@ -1123,8 +1120,8 @@ def pin_door(
     """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house whose words bound a street
     (F1, ruling Q24: a town or a část alone is how a village centre shared by many ads became their
     door), its exact pin inside the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there,
-    on that street: the door agrees with every word that can check it (obec, street, each část
-    claimed, PSČ), and what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
+    on that street (so in its town): the door agrees with every word that can check it (street, each
+    část claimed, PSČ), and what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
     A refusal is silent; the words stand. The binding carries no point, so `place` keeps the ad's
     own pin: two pins within 1 m of one door must not read as one exact pin to the engine."""
     # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
@@ -1134,7 +1131,7 @@ def pin_door(
         return binding
     near = registry.doors_near(*pin_claim.point)
     door = registry.address_point(near[0]) if len(near) == 1 else None
-    if (door is None or door.obec_kod != binding.obec_kod or door.ulice_kod != binding.ulice_kod
+    if (door is None or door.ulice_kod != binding.ulice_kod
             or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
             or (binding.words_momc_ids and door.momc_unit_id not in binding.words_momc_ids)
             or (constraints.psc is not None and door.psc != constraints.psc)):

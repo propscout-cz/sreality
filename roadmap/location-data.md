@@ -1297,7 +1297,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   immediately before the merge; `resolver:v5.11`; merges after W5). Ruling Q8 (a): a flat or a house, its exact pin
   inside the bound town and within 1 m of the one RÚIAN door there, the door agreeing with the words' obec, street,
   every claimed část and PSČ; words no door can be checked against refuse. The row becomes that address point (rung
-  R5). About 40k rows gained a door before F1. Set aside 2026-11-05, resumed 2026-11-07: F1 (Q24, the words must
+  R5). About 40k rows was the pre-F1 estimate of doors gained (W5b was never applied). Set aside 2026-11-05, resumed 2026-11-07: F1 (Q24, the words must
   name the street) and Q23 (a) (an ambiguous door yields none; R1 reads the č.o. letter). The radius is retired
   (11-01; W6 becomes deletion only): 736 drops the view's pin sample and orders the containment probe by code; the
   gauge loses `{p}/accuracy`. A changed `category_main` queues its re-resolve (`claim_insert`, same statement). Prerequisites:
