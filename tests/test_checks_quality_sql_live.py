@@ -20,14 +20,13 @@ whole check, in a transaction that always rolls back. The rules pinned:
 - field matrix: the active ads of enabled scraper portals only: fill, booleans and the spellings off the canon;
 - data quality: the floor, divergence and estate-sum shares and the stock's measure gap come off the view, land skipped;
   the ship-time red (realitymix komerční pronájem, 472 of 4,140, LB 10.5 %) is Problem; links are counts per portal;
-- location: the scorecard view (migration 698) over active ads first written more than NEW_AD_H hours ago, exactly where
+- location: the scorecard view (migrations 698, 733, 736) over active ads first written more than NEW_AD_H hours ago, exactly where
   publishing's visible day ends: a town-less ad (no row, or a Czech or undetermined row with no town) holding
   town-bearing evidence is unresolved (Problem), one holding none page-withheld (Watch), a foreign one neither; the KÚ
   gap reads rows with a town at the running resolver version and spares only an obec holding a KÚ the boundary load
   found degenerate at the current version; outside is a flagged position the town's pip polygon does not cover; the
-  served cohort is published properties at their location ad; the sample's truth is a word-bound address point, its
-  pin the newest coordinate; the queue parts evidence from backfill; a resolve lag is Watch once, Problem twice; each
-  statement prunes the other's branches; the registry cell reads the current version's age and a newer one left
+  served cohort is published properties at their location ad; the queue parts evidence from backfill; a resolve lag
+  is Watch once, Problem twice; the registry cell reads the current version's age and a newer one left
   staged, an older staged one being history;
 - description lane: the scope is the lane's own (an active contract's llm_text entry, or an open gate); arrivals 1-24 h
   old read at any version of the current SCHEMA_VERSION, the given-up apart, p95 minutes to the first reading; the stock
@@ -72,7 +71,6 @@ _PRAGUE = ZoneInfo("Europe/Prague")
 # sreality rows carry a positive sreality_id (the sign CHECK, migration 311), every other portal NULL; ten thousand
 # ids per seed call, so no two calls collide.
 _SREALITY_IDS = itertools.count(9_600_000_000, 10_000)
-# Listing ids the scorecard's sample reads by their last digit (id % 10 = 0), far above any the sequence hands out.
 _KEYS = (q._PARSING, q._DATA_QUALITY, q._LOCATION, q._TEXT)
 _MODEL = "w6-live-model"
 # Made-up RÚIAN codes no ad carries: two towns and a KÚ of each.

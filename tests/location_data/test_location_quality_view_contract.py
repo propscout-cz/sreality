@@ -1,4 +1,4 @@
-"""W1: the location scorecard view (migrations 698, 717) is the ONE definition of every location quality number.
+"""W1: the location scorecard view (migrations 698, 733, 736) is the ONE definition of every location quality number.
 
 Static over the migration text, like test_location_schema_contracts.py: no database, so it runs in every lane. A
 migration cannot import Python, so each shared definition the view carries VERBATIM is pinned here against the module

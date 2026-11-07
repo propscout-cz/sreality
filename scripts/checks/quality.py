@@ -780,7 +780,7 @@ def check_data_quality(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 
 # --- location_town_coverage (gauge): ONE location scorecard (W1, rulings Q3, Q6, Q7) ----------
 
-# location_quality_by_source (migration 717) defines every location quality number once, in a long
+# location_quality_by_source (migration 736) defines every location quality number once, in a long
 # shape (cohort, source, metric, class, n of of_n, quantiles); this gauge only judges its rows, read
 # in one statement (11.7 s warm on 10-31). The radius and its pin sample are retired (ruling
 # 2026-11-02).

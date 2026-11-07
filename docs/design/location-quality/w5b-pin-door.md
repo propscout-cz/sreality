@@ -57,13 +57,13 @@ The bar is how often two stated doors of one property agree. A pin-named door mu
 
 `RegistryView.doors_near(lat, lon)` answers at most two kódy. `_DOORS_NEAR_SQL` has the same array shape as `CONTAINING_OBEC_SQL`, its `ST_Expand(… / 60000)` box letting `ruian_ap_geom_gist` drive. "Exactly one?" does not depend on which two, so nothing orders or measures them. `warm_points` asks three point-keyed questions: one extra round trip per slice.
 
-## The scorecard (migration 717)
+## The scorecard (migration 736)
 
-The operator retired the radius on 2026-11-01; W6 becomes deletion only. So the pin sample has no reader. 717 is `create or replace` of the one view, 698's text but for:
+The operator retired the radius on 2026-11-01; W6 becomes deletion only. So the pin sample has no reader. 736 (first numbered 717, renumbered above W6-c1's 733) is `create or replace` of the one view, 733's text (698's plus the `position` metric) but for:
 - the `sample` cohort is gone: the `smp` and `pin` CTEs, `pin_error_m`, `radius_cover`;
 - determinism, W5's deferral: the containment probe orders by code behind an `OFFSET 0` fence, the same text as `CONTAINING_OBEC_SQL`. `EXPLAIN` rail: the fenced plan reaches `ruian_aug_pip_gist` before `ruian_admin_units`; a bare `ORDER BY` plan does not.
 
-The gauge reads the view in one statement and loses `{p}/accuracy` with its two thresholds: 57 cells, five per portal. The door scorecard is what stood already: `{p}/street`, the `grain` facts, `{p}/ku`, `{p}/outside`. `listing_location.uncertainty_radius_m` and `grade.RADIUS_M` are untouched; deleting them is W6's.
+The gauge reads the view in one statement and loses `{p}/accuracy` with its two thresholds: 57 cells, five per portal. The door scorecard is what stood already: `{p}/street`, the `grain` rows (the town cell's `positions` since W6-c1), `{p}/ku`, `{p}/outside`. `listing_location.uncertainty_radius_m` and `grade.RADIUS_M` are untouched; deleting them is W6's.
 
 ## Rollout
 
@@ -116,7 +116,7 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
    Both blockers read the settings the arms ran under: `harness.cmd_shadow` builds them from `scorer.json` (the live `autodedup.rt_calibration` row: `d43_stored_house_number` guarded, `d43_floor_sequential_address_split` true, `d43_house_number_entrance` stored, as `autodedup/settings/w31.json`) and passes them to `door_report`. Under the `Settings` defaults both are off.
 
    Read a pair with `python3 -m autodedup.harness pair`. The log prints the counts per group. Blockers and flips read the stored rows, so a pair under the store floor is not in them; retrieval uses `BlockIndex` in each arm, the same fill the run uses.
-2. Apply `717` immediately before the merge. Between apply and deploy the old gauge reads no sample row, so its accuracy cells read Not measured for minutes. New code on the old view is harmless: it ignores the sample rows.
+2. Apply `736` immediately before the merge (733 first: the view reads its matview). Between apply and deploy the old gauge reads no sample row, so its accuracy cells read Not measured for minutes. New code on the old view is harmless: it ignores the sample rows.
 3. Merge; W2's reconcile sweeps.
 
 ## Acceptance (W1 cells; read after `freshness/version` clears)

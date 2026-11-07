@@ -4720,7 +4720,7 @@ renumber.** Navigate by area:
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
     listing has a town (the `location_town_coverage` gauge, over active ads first written more than
-    24 h ago, reads the W1 scorecard view, migrations 698, 717: an ad holding town-bearing evidence and no
+    24 h ago, reads the W1 scorecard view, migrations 698, 733, 736: an ad holding town-bearing evidence and no
     town is red until zero, one whose page names no town is Watch, ruling Q6), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
@@ -5108,7 +5108,7 @@ index card never changed afterwards, so nothing ever re-enqueued them and the li
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` ticks hourly (`LOCATION_REFETCH_TICK_SECONDS`, a constant), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 733, 717) splits the town cells with,
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 733, 736) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5431,7 +5431,7 @@ index on `properties (repr_listing_ref_id)` stays — append-only, and every rea
 `SERVED_LOCATION_PREDICATE`, below, and it decides what is *shown*, never what is *worked*. **The red
 line**: the `location_town_coverage` gauge ("Location quality", `scripts/checks/quality.py`, on the
 worker every 6 h since Health dashboard sprint wave 6) reads ONE view since W1,
-`location_quality_by_source` (migrations 698, 717, service_role only: every location quality number defined
+`location_quality_by_source` (migrations 698, 733, 736, service_role only: every location quality number defined
 once, its shared fragments rendered verbatim from `location_steps` and pinned by
 `tests/location_data/test_location_quality_view_contract.py`). It reports, per portal and in absolute
 counts, ACTIVE ads first written more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm

@@ -1,22 +1,23 @@
--- 717_location_w5b_scorecard_drop_sample.sql -- W5b: the scorecard loses its radius reading.
+-- 736_location_w5b_scorecard_drop_sample.sql -- W5b: the scorecard loses its radius reading.
 --
 -- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8 (a); docs/design/location-quality/w5b-pin-door.md).
--- The operator retired the radius on 2026-11-02 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,
+-- The operator retired the radius on 2026-11-01 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,
 -- radius_cover) has no reader. And since resolver v5.11 a pin names doors, so that sample's truth (address grain) would
--- count a door against the pin that named it.
+-- count a door against the pin that named it. First numbered 717; renumbered above W6-c1's 733, which restated the view.
 --
--- WHAT. create or replace of the one view, migration 698's text but for:
+-- WHAT. create or replace of the one view, migration 733's text (698's plus the `position` metric) but for:
 --   (i)   the `sample` cohort is gone: the smp and pin CTEs and the pin_error_m and radius_cover branches. The door
 --         scorecard is the grain, KÚ and outside cells, which stand;
 --   (ii)  determinism, W5's deferral: the containment probe orders by code behind an OFFSET 0 fence, the same text as
 --         resolve_db.CONTAINING_OBEC_SQL (pinned by tests/location_data/test_location_quality_view_contract.py).
 -- The output columns stay, as create or replace requires; q90 and q95 now read NULL on every row.
 --
--- GRANTS. service_role only, as 698. PostGIS functions are unqualified (production keeps PostGIS in `extensions`, CI
--- replays it in `public`).
+-- GRANTS. service_role only, as 698 and 733. PostGIS functions are unqualified (production keeps PostGIS in
+-- `extensions`, CI replays it in `public`).
 --
--- ADDITIVE: a view text, no row written. APPLY ORDER: immediately before the PR merges; between apply and deploy the old
--- gauge reads no sample row, so the Watch-only accuracy cells read Not measured for minutes.
+-- ADDITIVE: a view text, no row written; it reads 733's location_position_mv, so 733 is applied first. APPLY ORDER:
+-- immediately before the PR merges; between apply and deploy the old gauge reads no sample row, so the Watch-only
+-- accuracy cells read Not measured for minutes.
 -- VERIFY: select cohort, metric, count(*) from location_quality_by_source group by 1, 2;  -- no sample cohort
 --         select has_table_privilege('authenticated', 'public.location_quality_by_source', 'select');  -- false
 
@@ -56,6 +57,7 @@ b as materialized (
   select c.cohort, c.id, c.source,
          ll.geom, ll.obec_kod, ll.katastr_kod, ll.country_status, ll.disputed,
          ll.resolver_version, ll.registry_version, gr.rank, gr.is_address_grain,
+         ll.granularity, ll.resolved_at,
          (ll.listing_id is not null) as has_row,
          EXISTS (SELECT 1 FROM listing_location sl WHERE sl.listing_id = c.id AND (sl.geom IS NOT NULL OR sl.country_status = 'foreign')) as located,
          (ll.country_status = 'foreign') as is_foreign,
@@ -132,6 +134,27 @@ versions as materialized (
                             and b.obec_kod not in (select code from degenerate_ku_obce)) as ku_gap_n
     from b where b.cohort = 'listing' and b.has_row
    group by b.source, b.resolver_version),
+-- W6-c: where each listing-cohort ad's point came from. The kind is location_position_mv's (hourly) while the row's
+-- answer is the one it classified, else `unclassified` (location_steps.position_reading_kind_sql, verbatim; the list
+-- view location_position_audit_public reads the same rule); the grain is the row's LIVE grain class
+-- (location_steps.position_grain_sql, verbatim), whose first four classes are `agg`'s grain FILTERs, so the classes of
+-- one grain sum to its `grain` count. Class `kind/grain`; of_n the source's cohort.
+positions as materialized (
+  select b.source,
+         coalesce(case when m.resolved_at is not distinct from b.resolved_at then m.position_kind end, 'unclassified')
+           || '/' ||
+         CASE WHEN b.has_town and b.country_status = 'cz' and b.is_address_grain THEN 'address'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank >= (select rank from street_rank) and not b.is_address_grain THEN 'street'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank > (select rank from obec_rank) and b.rank < (select rank from street_rank) THEN 'quarter'
+              WHEN b.has_town and b.country_status = 'cz' and b.rank = (select rank from obec_rank) THEN 'obec'
+              WHEN b.rank >= (select rank from obec_rank) THEN 'other'
+              ELSE coalesce(b.granularity::text, 'unknown') END as class,
+         count(*) as n,
+         (sum(count(*)) over (partition by b.source))::bigint as source_n
+    from b
+    left join location_position_mv m on m.listing_id = b.id
+   where b.cohort = 'listing'
+   group by 1, 2),
 stock as materialized (
   select a.cohort, a.source, v.metric, v.class, v.n, v.of_n
     from agg a
@@ -176,6 +199,9 @@ union all
 select 'listing'::text, v.source, 'ku_gap', v.resolver_version, v.ku_gap_n, v.ku_scope_n, null, null, null, null
   from versions v
 union all
+select 'listing'::text, p.source, 'position', p.class, p.n, p.source_n, null, null, null, null
+  from positions p
+union all
 select 'queue'::text, null::text, 'backlog_s',
        case when d.reason in ('claim_insert', 'operator_edit') then 'evidence' else 'backfill' end,
        count(*), count(*) filter (where d.attempts > 0),
@@ -186,7 +212,7 @@ select 'queue'::text, null::text, 'backlog_s',
  group by 4;
 
 comment on view public.location_quality_by_source is
-  'W1 (migrations 698, 717): the ONE definition of every location quality number, long shape, cohorts listing/served/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
+  'W1 (migration 698), W6-c (733: the position metric), W5b (736: no pin sample, the containment probe ordered by code): the ONE definition of every location quality number, long shape, cohorts listing/served/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
 
 -- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back.
 revoke all on public.location_quality_by_source from public, anon, authenticated;

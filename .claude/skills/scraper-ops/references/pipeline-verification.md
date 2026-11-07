@@ -1724,7 +1724,7 @@ It replaces `ppm2_basis_floor_share`, `area_vs_usable_divergence`, `outbound_url
 startup timeout", each ringing the `jobs` check's cron cell for a job this gauge supersedes), and
 `data_quality_snapshots` stays as frozen history (Q5): migration 643 dropped the view and kept the table.
 
-### `location_town_coverage` — the ONE location scorecard (W1, migrations 698, 717)
+### `location_town_coverage` — the ONE location scorecard (W1, migrations 698, 733, 736)
 
 `check_location_town_coverage` (cadence 21,600 s, label "Location quality" since W1, unit "cells", owner page
 `/location-quality`, which renders this stored row through Health's `HEALTH_QUERY` and nothing else). Since W1 (2026-10-31, #2218) it reads ONE view, `location_quality_by_source` (migration 698,
