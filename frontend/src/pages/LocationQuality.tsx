@@ -8,6 +8,8 @@
  * W6-c (migration 733): the town cell's stored position grid replaced the grain bars, and every
  * number in it opens its ads (components/location/PositionAudit); the portal and the open cell
  * live in the URL (?portal=&kind=&grain=).
+ * Ruling Q18: the property waterfall, from served/town's stored `grains` and the served cells (one table pins gauge
+ * and page: tests/fixtures/property_waterfall.json); no portal pick, no arithmetic.
  *
  * Visual note: a class mix is single-hue horizontal bars — magnitude of one measure, so one
  * hue; identity color would be noise. */

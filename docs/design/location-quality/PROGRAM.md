@@ -192,6 +192,10 @@ The review found the same defect class on realitymix. 4 active rows (e.g. 101044
   - Street floors are red, as above.
   - **Migration 719** (W1-c, destructive): `location_audit_waterfall`, its producer, `location_pin_audit_summary()` and `refresh_location_pin_audit_mv()` dropped, the cron re-pointed at `refresh_matview`, the artifact row gone. `location_pin_audit_mv` stays until W6. `location_steps.AUDIT_STEPS`, the `hidden` wording entry and the `deduction` row kind left with it.
   - **W1-d:** `scripts/location_archive_denominator.py` and its test deleted; nothing called it.
+- **As built (2026-11-08, ticket #2443; spec #2441 Part 2, ruling Q18; no migration): the property waterfall.**
+  - The gauge stores `grains` {address, street, quarter, obec} on `served/town` when the fleet has ads. With that cell's `ads` (published), `foreign` (abroad) and value (unresolved) and `served/town_withheld`'s value, every published property is counted once at its location ad's finest level; the grains partition `has_town`, so no step is a remainder (prod 11-07: 300,440 = 21,274 + 0 + 21 + 279,145).
+  - Location Quality draws it as "Property waterfall": the no-town steps by their cells' names, the rest "ends at …" in the position grid's words, withheld on a stale reading. One table, `tests/fixtures/property_waterfall.json`, pins the stored cells (DB lane) and the page (vitest).
+  - Deleted: the four `by_portal` facts on the served cells (nothing read them; a location-ad split by portal hides coarser ads: 29,483 of 44,044 multi-portal published properties have one). Per-portal precision stays in the matrix and the position grid. Nothing migration 719 dropped comes back.
 
 ### W2: one queue discipline, one trigger, one runtime
 - **Queue order:** the drain claims by `(reason = 'full_sweep'), enqueued_at, listing_id`, so fresh evidence always beats backfill. The sweep enqueues active ads first. The EXPLAIN rail must show that the new index still serves the `next_eligible_at <= now()` filter.
