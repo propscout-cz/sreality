@@ -654,6 +654,21 @@ def test_heartbeat_upserts_latest_wins_row(monkeypatch):
     assert params["details"].obj["probe"]["last"] == {"portals": 4}
 
 
+def test_the_beat_records_the_commit_beside_every_lane(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(rw.db, "connect", lambda **_: conn)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
+    state = rw._new_state()
+    rw._record_pass(state, "probe", {"portals": 4})
+    rw._beat_sync(state)
+    details = conn.calls[0][1]["details"].obj
+    assert details["version"] == "abc123"
+    assert details["probe"]["last"] == {"portals": 4}
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA")
+    rw._beat_sync(state)
+    assert conn.calls[-1][1]["details"].obj["version"] is None
+
+
 def test_the_heartbeat_lane_records_its_own_pass(monkeypatch):
     """No pseudo-lane: the heartbeat's entry has every lane's shape, and the next beat says so."""
     conn = _FakeConn()
@@ -882,7 +897,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the worker budgets (685 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # Wave 6: the worker budgets (1,030 s) outgrow one pass inside the watcher's 600 s in-flight line,
     # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
     # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
     # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one
@@ -2204,7 +2219,8 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
 
     out = rw._location_refetch_sync()
 
-    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500}
+    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500,
+                                  "statement_timeout_s": rw.LOCATION_REFETCH_STATEMENT_TIMEOUT_S}
     # ONE enqueue per portal, carrying (native_id, detail_ref, price) — the drain needs
     # the stored URL to fetch a crawler portal's page at all.
     assert [src for src, _ in captured["enqueued"]] == ["ceskereality", "realitymix"]
@@ -2436,7 +2452,7 @@ def test_a_failed_cell_is_counted_and_never_stops_the_tick(
 
 def test_a_cell_that_could_not_be_boxed_never_reads_as_a_quiet_pass(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # The work-list's admin_boundaries join means the lane should never see one; if
+    # The work-list's ruian_unit_render join means the lane should never see one; if
     # it ever does, `skipped` is the only place it can show, because a skip writes
     # no ledger row either.
     _patch_sold_comps(monkeypatch, [1], results=[
@@ -2707,8 +2723,8 @@ def test_a_pass_that_ran_or_met_its_ceiling_is_not_a_failed_one(
 
 # --- liveness: the 2026-09-29 freeze ----------------------------------------------------
 #
-# ceskereality answered 403 to everything; the shared rate ledger parked every caller up
-# to an hour; each abandoned probe/drain pass left one more thread asleep there; the
+# The shared rate ledger parked every caller up to an hour; each abandoned probe/drain
+# pass left one more thread asleep there; the
 # default executor filled; the heartbeat write and every interval read queued behind
 # them; the loop stayed alive, so nothing exited and Railway never restarted the worker.
 
@@ -2743,7 +2759,7 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        # no second thread started: the abandoned pass got as far as the blocked portal
+        # no second thread started: the abandoned pass got as far as the stalled portal
         assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()

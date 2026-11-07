@@ -93,10 +93,11 @@ locally; bands are nested (Q5 ⊂ Q20 ⊂ Q100 to within 0.2 %), so overlaps ren
 zone can leak outside Q100; nothing is mapped for pluvial flooding; binding information comes only
 from the water authority. Resolve layers BY NAME from `?f=json`, never by numeric id.
 
-### Kraj borders — ČÚZK RÚIAN via our `admin_boundaries` (level = 'kraj', already in the database)
+### Kraj borders — ČÚZK RÚIAN via our mirror (`ruian_unit_render`, level = 'kraj')
 
-SQL source: `ST_Boundary` of each kraj polygon (shared borders are drawn twice today as well; no
-regression). Re-rendered at the end of `ingest_boundaries.yml`.
+SQL source: `ST_Boundary` of each kraj's render polygon at the current registry version (W8-3,
+migration 725; shared borders are drawn twice today as well; no regression), dated by that version's
+`source_date`. Re-rendered by the quarterly `map_overlays` job.
 
 ### Universities — IPR Praha ÚAP `Hosted/FSV_CUR_OV_SKOLYVS_B` (CC BY) + MŠMT F21 (verified live 2026-10-16)
 
@@ -246,7 +247,6 @@ with `--sections`, `--dry-run` or `--accept-shrink` as its args. A request's ok 
 turns green), so `--sections rent_map --accept-shrink` is for a refused rent-map render only; after it, file a
 `rent_map` request too, or `job/rent_map` stays red until its own backed-off retry. A failed run retries daily at
 22:00Z (a DB-heavy job retries in its own hour), re-fetching every publisher, until it succeeds or is paused.
-`ingest_boundaries.yml` gains a final step `python -m scripts.ingest_map_overlays --sections kraje`.
 
 Registry values:
 
@@ -377,7 +377,8 @@ URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy
 Section `rent_map` (label "Cenová mapa nájemného", 7–12, attribution "Ministerstvo financí ČR –
 Cenová mapa nájemného"), layer `rent_map` with `scale = {prop: 'vk1', stops: RENT_RAMP, null_color,
 unit: 'rent_per_m2'}` and `variants = [{key:'vk1', label:'1+kk, 1+1', prop:'vk1'} … vk4]`; SqlSource
-= `admin_boundaries` × latest `rent_map_values` revision (the matview's query). The monthly `rent_map`
+= the mirror's render polygon (`ruian_unit_render`, the MF's `ku` read as `katastralni_uzemi`; W8-3) ×
+latest `rent_map_values` revision (the matview's query). The monthly `rent_map`
 job (`scripts/fetch_rent_map.py`) re-renders the section after an ingest. The SPA deletes `fetchRentMapChoropleth`, `RentMapPolygon`,
 `toRentFC`, `rentPopupHtml`, the `rent-map` source/layers/effects/handlers, `RentMapControls`,
 `showRentMap`/`rentVk` (URL `rentmap`/`rentvk` read as legacy → `rent_map:vkN`). Migration 601 drops
@@ -439,7 +440,7 @@ Backend, as built (2026-10-15):
 | wave | files |
 | --- | --- |
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
-| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
+| ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
 | spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |

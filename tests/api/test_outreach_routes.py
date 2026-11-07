@@ -12,7 +12,7 @@ from api import main as api_main
 from api import outreach
 from api.broker_board import BOARD_MAX
 from api.routes import outreach as outreach_routes
-from tests.test_brokers_toolkit import _Conn
+from tests._cursor_stub import _Conn
 
 _PRAHA = {"name": "Praha", "context": None, "excluded": False, "level": "obec", "id": 554782}
 

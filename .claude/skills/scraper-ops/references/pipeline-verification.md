@@ -199,7 +199,7 @@ happened to cover. Measured on the shipped code before this was fixed — mmreal
 from a balanced mix to 73 % commercial rentals in two days, moving `cellar` 40.2 % → 8.2 % and
 `disposition` 41.4 % → 6.3 % with no parser touched, twice over the fail tier. So the matrix is one
 aggregate pass over every `is_active` row: measured 12.2 s for all nine portals (3.7 s in production on
-2026-10-19), inside the `parsing` alarm's 180 s budget. It never expands a row into (field, value)
+2026-10-19), inside the `parsing` alarm's 300 s budget (180 s until the Large-compute budgets, 2026-11-05). It never expands a row into (field, value)
 pairs — that form costs 32 s
 over the stock; per-value counts come from `count(*) filter (where col = '<canonical value>')`
 interpolated from `toolkit/filter_registry.COLUMN_CANONICAL_VALUES`, keyed by COLUMN — which is also
@@ -364,7 +364,8 @@ therefore wrote **zero rows and fired zero alerts** — blinding `db_saturation`
 `worker_liveness` at precisely the moment DB saturation would make checks slow. Now each result
 is inserted the instant its check returns, and since wave 1 the harness calls no alert function
 at all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per check
-(`Check.budget_s`; 120 s for the outbound URL probe, 180 s for `parsing`), capped by whatever remains of
+(`Check.budget_s`; 120 s for the outbound URL probe; sized for the Large compute (8 GB) since 2026-11-05: 300 s
+`parsing`, 150 s `coverage`, 120 s `location_town_coverage`, 90 s `scraping`), capped by whatever remains of
 the RUN budget — one per-check budget per DUE check (`lane_budget_for`); the summed budgets are proven
 to fit, with the 180 s headroom, the harness step's 6-minute limit (the poller step has 5, the job
 19 with 8 minutes for setup and the assertions; 21 and 35 until Health dashboard sprint wave 6) by
@@ -395,7 +396,7 @@ longer fits what is left (weighed before it starts: at most the time left plus 1
 due alone, whose budget is the lane's whole budget, runs): the check waits, unwritten and still due, for the
 next pass (the log line `DEFER <key>: its N s budget does not fit …`), because one started short would time
 out and store an `unknown` row, which keeps it waiting a whole cadence (6 h for a gauge). Alarms run first and
-every alarm due at once fits the pass (a rail), so only gauges wait; the canary's run budget is the sum of its
+every alarm but the last (`parsing`) due at once fits the pass (a rail), so only it and gauges wait; the canary's run budget is the sum of its
 due checks' budgets, so it never meets the case. Due-ness reads the newest row of any status, so the wave-1
 `unknown` "not run" row (`details.not_run`) made an unreached check wait a whole cadence for its next try.
 Until wave 1 timeouts and not-runs were stored as `warn` (which the old ladder read as "not failing", rule 1)
@@ -762,8 +763,8 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
   lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6; every worker alarm due at
-  once owes `scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S`, 505 s since `curation_sync` (curation sync W3),
-  so all but the last alarm (`parsing`) fit even at their whole budgets and it is deferred one tick, like a gauge
+  once owes `scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S`, 670 s since the Large-compute budgets (505 s from
+  `curation_sync`), so all but the last alarm (`parsing`, 300 s) fit even at their whole budgets (370 s) and it is deferred one tick, like a gauge
   whose budget no longer fits what is left; `tests/scraper/test_realtime_worker.py` pins both; a further alarm needs
   the pass or a budget reworked; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
@@ -775,7 +776,8 @@ Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
 `scripts.verify_pipeline` inside the pass (the image carries `scripts/`; `migrations/` is
 dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
-worker's keys carry the 45 s per-check budget (180 s for `parsing`) and a staleness budget of 3 × cadence
+worker's keys carry the 45 s per-check budget (300 s `parsing`, 150 s `coverage`, 120 s `location_town_coverage`,
+90 s `scraping`) and a staleness budget of 3 × cadence
 (30 min for `jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
 `curation_sync` and the `coverage` and `text_extraction` gauges, 18 h for `parsing` and the `data_quality` and
 `location_town_coverage` gauges), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
@@ -913,7 +915,7 @@ whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELI
 exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
 `is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
-`*/15`) except `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
+`*/15`) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
 38 h on a daily cron, so with the slack it reads Problem at 56 h, the retired `property_maintenance`
 sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
@@ -1545,7 +1547,7 @@ worker's role lacks `pg_read_all_stats`, so the pattern could match nothing. The
 ## `parsing` — are new ads still read the way they were? (Health dashboard sprint wave 6)
 
 `check_parsing` (`scripts/checks/quality.py`; an alarm on the worker, domain `portals`, cadence 21,600 s,
-budget 180 s, label "Parsing", unit "cells", owner page `/scrapers`). The regression detectors of field
+budget 300 s, label "Parsing", unit "cells", owner page `/scrapers`). The regression detectors of field
 capture and the measure program, folded into one per-portal alarm: a field's fill dropping, new ads losing
 their per-m² measure, a jump in a stock median, an unreadable location payload, a re-snapshot storm. Every
 subject is emitted on every pass, OK cells included (about 540, 541 on 10-19), so a cell recovers on a

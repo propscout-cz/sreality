@@ -369,8 +369,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "has_lift": _cell("structured", "výtah"),
         "building_type": _cell("structured", "budova"),
         "condition": _cell("structured", "stav objektu"),
-        "energy_rating": _cell("structured", "penb",
-                               note="a whole-page `PENB: X` scan is the last resort"),
+        "energy_rating": _cell("structured", "penb"),
         "estate_area": _cell("structured", "plocha pozemku", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "plocha užitná"),
         "garden_area": _cell("none", gap=None),
@@ -628,10 +627,10 @@ IGNORED: dict[str, dict[str, str]] = {
         "id": "identity", "uri": "identity", "title": "identity",
         "active": "lifecycle", "isDiscounted": "no column",
         "originalPrice": "no column", "charges": "no column",
-        # Read by the parse as a GUARD, not as a cell's source key: 31 active rows hold
-        # EUR rents, which read ~25x low in a CZK column. Refused (None + a counted
-        # event), never converted — this program does not invent an exchange rate.
-        "currency": "a price_czk guard: a non-CZK amount is refused, never converted",
+        # Read by the parse with `price`, not as a cell's source key: some rents are quoted
+        # in EUR, which read ~25x low in a CZK column. EUR converts at the fixed rate in
+        # scraper.price_reading (#2355); any other currency is refused (None + a counted event).
+        "currency": "price_czk's currency: EUR converts at the fixed rate, any other is refused",
         "timeActivated": "published_at", "timeDeactivated": "lifecycle",
         "mainImage": "images phase", "publicImages": "images phase",
         "image_urls": "images phase", "description": "the text lane's substrate",

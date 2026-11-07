@@ -58,6 +58,7 @@ from autodedup.incremental_sql import (
 )
 from autodedup.rt_lease import DISPATCH_TTL_S, NAME as LEASE_NAME
 from autodedup.ui_sql import LIVE_STREAM_SQL, NEGATIVE_VERDICTS
+from location_data.claims_common import SOURCES as _PORTALS
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
     BEAT_FRESH_S,
@@ -159,28 +160,42 @@ select count(*)::bigint
 """
 
 # The newest listing older than the window and its slack: first_seen_at is the insert time, so
-# every ad first seen inside the window sits above it (one day of rows, backward on listings_pkey;
-# no index serves first_seen_at alone).
+# every ad first seen inside the window sits above it. One descent per portal of
+# listings_first_seen_source_idx (source, first_seen_at) finds each portal's newest such ad, and the
+# highest of their ids is the floor; the backward listings_pkey walk it replaced read a whole day of
+# rows (8.4k buffers on 11-05). It can sit below the highest id older than the line, never above it
+# (the ads between were written after a newer ad though first seen before it: a long flush), so it
+# only reads a few more rows, which the window's own stamp test drops; a portal missing from the
+# list lowers it the same way. Both floors rest on the same hour of slack: first_seen_at is the
+# writing transaction's start, so a flush open under an hour writes no ad older than the line above
+# an ad first seen in the window.
 _ARRIVAL_FLOOR_SQL = """
-select coalesce((select l.id
-                   from public.listings l
-                  where l.first_seen_at < now() - make_interval(hours => %(hours)s::int)
-                  order by l.id desc
-                  limit 1), 0)
+select coalesce(max(f.id), 0)
+  from unnest(%(sources)s::text[]) as s(source)
+  cross join lateral (select l.id
+                        from public.listings l
+                       where l.source = s.source
+                         and l.first_seen_at < now() - make_interval(hours => %(hours)s::int)
+                       order by l.first_seen_at desc
+                       limit 1) f
 """
 
 # Merge groups of the engine and of operators over the splits cohort's span, a split's birth rows
-# left out. Nothing indexes created_at or source, so a backward primary-key scan finds the newest
-# row older than the span and the id range above it is read; the span is then judged on each
-# group's own stamp, because a created_at predicate on the rows made the planner AND in a whole
-# scan of the legacy (listing_id, created_at) index: 249 ms against 50 ms (EXPLAIN, 10-19).
+# left out. The floor is the id of the newest row older than the span and its slack, one descent of
+# property_merge_events_created_idx (migration 730; the backward primary-key walk it replaced read
+# the whole span twice, 55k buffers for the floor alone on 11-05). It may sit a little below the
+# highest such id, never above it, so the range only reads a few more pre-span rows; a group is one
+# merge's transaction with one stamp, so those groups fall to the span's own test. The id range
+# above it is read and the span judged on each group's own stamp, because a created_at predicate on
+# the rows made the planner AND in a whole scan of the legacy (listing_id, created_at) index: 249 ms
+# against 50 ms (EXPLAIN, 10-19).
 _MERGES_SQL = """
 with floor as materialized (
     select coalesce((select e.id
                        from public.property_merge_events e
                       where e.created_at < now() - make_interval(days => %(old_d)s::int,
                                                                   hours => %(slack_h)s::int)
-                      order by e.id desc
+                      order by e.created_at desc
                       limit 1), 0) as id
 ), groups as (
     select e.source, e.merge_group_id, min(e.created_at) as merged_at,
@@ -686,7 +701,8 @@ def _lag_reading(conn: Any, engine: _Engine, thresholds: dict[str, Any],
     excused = bool(excuses) and not stalled
     if excused and not open_reading:
         return cell(subject, "unknown", _not_lag(excuses), facts=facts)
-    floor = fetchone(conn, _ARRIVAL_FLOOR_SQL, {"hours": old_h + _FLOOR_SLACK_H})
+    floor = fetchone(conn, _ARRIVAL_FLOOR_SQL, {"hours": old_h + _FLOOR_SLACK_H,
+                                                "sources": sorted(_PORTALS)})
     window = fetchone(conn, RT_NEW_LISTINGS_SQL, {
         "after_id": int(floor[0] or 0) if floor else 0, "lag": young_h * 3600,
         "window": _LAG_WINDOW_ROWS, **scope.params()})

@@ -7,7 +7,7 @@ for the whole fleet, so the refusal is not scoped to the portal that drifted. It
 claim-intake lane down for all nine.
 
 That is not hypothetical. PR #1209 (9929efcf, merged 2026-08-27) rewrote two pieces of
-PROSE in `ceskereality.yaml` — `fetch.robots_note` and one `extractions[].notes` — without
+PROSE in `ceskereality.yaml` — a `fetch` note and one `extractions[].notes` — without
 bumping `contract_version`. `contract_body_hash` excludes `persistence:` and `shadow:` and
 NOTHING else, so a note is hashed exactly like a selector: v3's hash moved from 45db104c…
 to 780cd716… and every hourly intake run from 22:32Z died on it. 14 consecutive failures,

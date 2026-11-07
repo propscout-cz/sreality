@@ -282,8 +282,9 @@ def _override_conn(scripted: list[_Expect]) -> _FakeConn:
 #   1. the mirror probe + the current registry version (`_registry_version`);
 #   2. the containing-obec PIP + its parent chain (`_chain`): the resolver's own
 #      CONTAINING_OBEC_SQL, ONE point in its arrays, at the current version;
-# then, for a část obce, one name-index read per name variant (`_parts`), and for
-# a street the ONE register read `SqlRegistryView.streets_in_obec` issues
+# then, for a část obce, one name-index read per name variant (`_parts`), each miss
+# followed by the městská část's own (`_momc`) and, once one binds, the door read of
+# its části (`_momc_doors`); and for a street the ONE register read `SqlRegistryView.streets_in_obec` issues
 # (`_streets_of`) and, once a street binds, its `street_point` read (`_point_of`).
 #
 # Codes, names, chains and street points are REAL register rows (ruian_admin_units,
@@ -330,6 +331,18 @@ _OSTROVACICE = [
     (9503, "kraj", 116, "Jihomoravský kraj"),
     (9004, "stat", 1, "Česká republika"),
 ]
+_BRNO = [
+    (5498, "obec", 582786, "Brno"),
+    (9702, "okres", 3702, "Brno-město"),
+    (9703, "kraj", 116, "Jihomoravský kraj"),
+    (9004, "stat", 1, "Česká republika"),
+]
+_OSTRAVA = [
+    (3218, "obec", 554821, "Ostrava"),
+    (9802, "okres", 3807, "Ostrava-město"),
+    (9803, "kraj", 132, "Moravskoslezský kraj"),
+    (9004, "stat", 1, "Česká republika"),
+]
 _HRADEC = [
     (4398, "obec", 569810, "Hradec Králové"),
     (9603, "kraj", 86, "Královéhradecký kraj"),
@@ -350,6 +363,20 @@ def _parts(name_norm: str, obec_unit_id: int, *rows: tuple) -> _Expect:
         maps._PART_LOOKUP_SQL,
         {"version": _VERSION, "name_norm": name_norm, "obec_unit_id": obec_unit_id},
         list(rows),
+    )
+
+
+def _momc(name_norm: str, obec_unit_id: int, *rows: tuple) -> _Expect:
+    return _Expect(
+        maps._MOMC_LOOKUP_SQL,
+        {"version": _VERSION, "name_norm": name_norm, "obec_unit_id": obec_unit_id},
+        list(rows),
+    )
+
+
+def _momc_doors(momc_code: int, obec_code: int, *rows: tuple) -> _Expect:
+    return _Expect(
+        maps._MOMC_PARTS_SQL, {"momc_code": momc_code, "obec_code": obec_code}, list(rows),
     )
 
 
@@ -517,13 +544,32 @@ def test_an_okres_pick_that_does_not_name_its_okres_binds_nothing(client):
     assert body == {"level": "okres", **_NO_CODE, "context": None}
 
 
-def test_a_prague_district_typed_as_a_municipality_binds_nothing(client, caplog):
-    """Mapy types "Praha 2" `regional.municipality` (the shape `_MOCK_SUGGEST`
-    mirrors); it is a městská část, which no chip serves, and no unit of Praha's
-    chain has its name — the point alone would bind ALL of Praha."""
+def test_a_prague_district_typed_as_a_municipality_answers_its_parts(client):
+    """Mapy types "Praha 2" `regional.municipality` (the shape `_MOCK_SUGGEST` mirrors); no
+    unit of Praha's chain has its name, and the point alone would bind ALL of Praha. It is a
+    městská část: the answer is the set of its části, with no code of its own."""
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782, (490229, "Vinohrady"), (490148, "Nové Město"), (490156, "Nusle")),
+    ])
+    assert body == {
+        "level": "cast_obce", "id": None, "name": "Praha 2", "context": "Praha",
+        "parts": [
+            {"id": 490148, "name": "Nové Město"},
+            {"id": 490156, "name": "Nusle"},
+            {"id": 490229, "name": "Vinohrady"},
+        ],
+    }
+
+
+def test_a_municipality_naming_no_unit_and_no_mestska_cast_binds_nothing(client, caplog):
+    pick = {"name": "Praha 99", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
     with caplog.at_level("INFO", logger="api.maps"):
-        body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
+        body = _resolve(client, pick, [
+            *_MIRROR_PRESENT, _chain(pick, _PRAHA), _momc("praha 99", 3214),
+        ])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
     assert len([r for r in caplog.records if "no code" in r.getMessage()]) == 1
 
@@ -531,7 +577,7 @@ def test_a_prague_district_typed_as_a_municipality_binds_nothing(client, caplog)
 def test_a_municipality_whose_point_lies_in_another_obec_binds_nothing(client):
     """A town's point that PIPs over a border would otherwise bind the neighbour."""
     pick = {**_OBEC_SUGGESTION, "name": "Pardubice"}
-    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _JIHLAVA)])
+    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _JIHLAVA), _momc("pardubice", 9001)])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
 
 
@@ -595,6 +641,7 @@ def test_resolve_composite_quarter_name_retries_on_its_last_segment(client):
         *_MIRROR_PRESENT,
         _chain(pick, _HRADEC),
         _parts("hradec kralove trebes", 4398),
+        _momc("hradec kralove trebes", 4398),
         _parts("trebes", 4398, (409847, "Třebeš")),
     ])
     assert body == {
@@ -603,14 +650,89 @@ def test_resolve_composite_quarter_name_retries_on_its_last_segment(client):
 
 
 def test_an_unplaceable_quarter_gets_NO_CODE_never_the_whole_town(client):
-    """"Praha 2" is a městská část (`momc`), which the answer table has no column
-    for. Falling back to the containing obec would turn "this quarter" into
-    "this whole city" — in a watchdog, a mail about every listing in Prague."""
-    pick = {**_PART_SUGGESTION, "name": "Praha 2"}
+    """Neither a část nor a městská část of Praha. Falling back to the containing obec would
+    turn "this quarter" into "this whole city" — in a watchdog, a mail about every listing."""
+    pick = {**_PART_SUGGESTION, "name": "Holešovičky"}
     body = _resolve(client, pick, [
-        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _parts("praha 2", 3214),
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _parts("holesovicky", 3214), _momc("holesovicky", 3214),
     ])
     assert body == {"level": "cast_obce", **_NO_CODE, "context": "Praha"}
+
+
+def test_a_mestska_cast_typed_as_a_part_answers_its_parts(client):
+    """Brno-střed is no část of Brno. The exact městská část is read BEFORE the name's tail,
+    so "střed" is never asked for."""
+    pick = {**_PART_SUGGESTION, "name": "Brno-střed", "lat": 49.19, "lng": 16.6}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _BRNO),
+        _parts("brno stred", 5498),
+        _momc("brno stred", 5498, (550973, "Brno-střed")),
+        _momc_doors(550973, 582786, (411591, "Staré Brno"), (411582, "Brno-město")),
+    ])
+    assert body == {
+        "level": "cast_obce", "id": None, "name": "Brno-střed", "context": "Brno",
+        "parts": [{"id": 411582, "name": "Brno-město"}, {"id": 411591, "name": "Staré Brno"}],
+    }
+
+
+def test_a_part_of_that_name_stays_the_part_a_saved_pick_always_was(client):
+    """"Ostrava-Poruba": the tail names a část, as it did before; no městská část overrides."""
+    pick = {**_PART_SUGGESTION, "name": "Ostrava-Poruba", "lat": 49.83, "lng": 18.17}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
+        _parts("ostrava poruba", 3218),
+        _momc("ostrava poruba", 3218),
+        _parts("poruba", 3218, (414085, "Poruba")),
+    ])
+    assert body == {"level": "cast_obce", "id": 414085, "name": "Poruba", "context": "Ostrava"}
+
+
+def test_a_mestska_cast_binds_on_the_tail_of_the_name_too(client):
+    pick = {"name": "Ostrava-Mariánské Hory a Hulváky", "lat": 49.83, "lng": 18.26,
+            "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _OSTRAVA),
+        _momc("ostrava marianske hory a hulvaky", 3218),
+        _momc("marianske hory a hulvaky", 3218, (554286, "Mariánské Hory a Hulváky")),
+        _momc_doors(554286, 554821, (414115, "Hulváky"), (414107, "Mariánské Hory")),
+    ])
+    assert body["name"] == "Mariánské Hory a Hulváky"
+    assert [p["id"] for p in body["parts"]] == [414115, 414107]
+
+
+def test_a_mestska_cast_with_no_doors_binds_nothing(client):
+    """A mirror with no doors for it has no set to offer: no code, never an empty chip list."""
+    pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2")),
+        _momc_doors(500089, 554782),
+    ])
+    assert body == {"level": "obec", **_NO_CODE, "context": None}
+
+
+def test_a_name_meaning_two_mestske_casti_is_refused_rather_than_guessed(client):
+    pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
+    body = _resolve(client, pick, [
+        *_MIRROR_PRESENT, _chain(pick, _PRAHA),
+        _momc("praha 2", 3214, (500089, "Praha 2"), (500120, "Praha 2")),
+    ])
+    assert body == {"level": "obec", **_NO_CODE, "context": None}
+
+
+def test_a_pick_that_binds_one_unit_answers_no_parts(client):
+    """The shape every other pick has always had."""
+    body = _resolve(client, _PART_SUGGESTION, [
+        *_MIRROR_PRESENT, _chain(_PART_SUGGESTION, _PRAHA),
+        _parts("vinohrady", 3214, (490229, "Vinohrady")),
+    ])
+    assert "parts" not in body
+
+
+def test_the_mestska_cast_lookup_is_the_part_lookup_at_its_level():
+    """One statement at two levels: whichever way a part is read at its version, so is this."""
+    assert maps._MOMC_LOOKUP_SQL == maps._PART_LOOKUP_SQL.replace("'cast_obce'", "'momc'")
+    assert "u.level = 'momc'" in maps._MOMC_LOOKUP_SQL
 
 
 def test_an_ambiguous_quarter_name_is_refused_rather_than_guessed(client):

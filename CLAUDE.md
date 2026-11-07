@@ -191,8 +191,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     marks a duplicate, never deletes; a deleted watchdog is retired. Feed, badge and push read `VISIBLE_SQL` (`REACHABLE_SQL` minus a 'new' a merge
     withdrew); only a tap by id reads `REACHABLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries`
     (§ rule 16 in `docs/architecture.md`).
-17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
-    + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
+17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`;
+    population from ČSÚ in `obec_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`). Every
     property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`), inside the merge
@@ -211,7 +211,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal, re-attribution, broker re-point) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); the worker's maintenance lane (`run_incremental_pass`, 30 s)
     attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
-    the reconcile backstop. Both take the `property_maintenance` lease row, so they never overlap. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
+    the reconcile backstop. Both hold the `property_maintenance` job_lease row, never overlapping. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`
     adapter + a config row (`PortalConfig`/`PortalLimits` = its politeness); shared code grows NO new portal-name
@@ -268,7 +268,7 @@ API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh`. Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh`. Before you pick, work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now

@@ -69,13 +69,12 @@ export const CARD_PAGE_SIZE = 24;
  * renders it. */
 /* W3: `district` came OUT and `display_label` went in -- one string per pin, from
  * listing_location through the projection, so the popup no longer names the okres
- * when it knows the street. The two that joined it are what the PIN PRECISION
- * reads, and they are the only two columns on this list that ListingMap draws
- * rather than prints: a pin resolved below building level is drawn as an open
- * ring, the clicked one with a circle of `uncertainty_radius_m` metres around it,
- * and `granularity_rank` is the INT form of the rung (migration 380), because
- * granularity is compared by rank and never by enum text. */
-const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
+ * when it knows the street. `granularity_rank` is what the PIN PRECISION reads
+ * (lib/pinPrecision): a pin at building level or better wears a black contour,
+ * and the popup says exact or approximate. It is the INT form of the rung
+ * (migration 380), because granularity is compared by rank and never by enum
+ * text. */
+const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
   /* The point of the property (its location ad) — the hovered card hands it to the map. */
@@ -385,13 +384,10 @@ export interface MapRow {
   /* The one server-composed place string (migration 503) -- what the popup
    * prints. */
   display_label: string | null;
-  /* The two the pin-precision rules read (lib/uncertaintyCircle). `granularity_rank`
-   * is the INT rung from location_granularity_rank (migration 380): compare it,
-   * never the enum text. A pin at BUILDING or better gets a black outer contour, and the pin
-   * whose popup is open gets a circle of `uncertainty_radius_m` metres -- see
-   * ListingMap. Both are NULL for an unresolved row, which draws no circle rather
-   * than a circle of unknown size. */
-  uncertainty_radius_m: number | null;
+  /* What the pin-precision rules read (lib/pinPrecision): the INT rung from
+   * location_granularity_rank (migration 380). Compare it, never the enum text.
+   * A pin at BUILDING or better gets a black outer contour -- see ListingMap.
+   * NULL for an unresolved row, which reads as precision unknown. */
   granularity_rank: number | null;
   last_seen_at: string;
   is_active: boolean;
@@ -1043,8 +1039,7 @@ const DETAIL_COLS =
   'description,source_url';
 
 /* THE PROPERTY as its Browse card shows it (decision 11): the `properties_public`
- * row, whose every advert field is its canonical advert's and every physical fact
- * the first non-empty in the same order (migration 561). Selected in the
+ * row, every field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md). Selected in the
  * ListingPublic shape the detail components render, `id` being the canonical
  * advert (`listing_id`); the price-change pair is the canonical advert's own
  * series, as Browse filters on it. The row carries no portal URL: each advert's
@@ -1537,19 +1532,13 @@ export interface CuratedCity {
   city_id: number;
   name: string;
   kraj_name: string;
-  lat: number;
-  lng: number;
-  default_radius_m: number;
+  /* The latest ČSÚ year of obec_population for obec_kod (migration 726). */
   population: number | null;
   population_as_of_year: number | null;
-  /* The RÚIAN obec this curated city was matched to (migration 081), or null
-   * when the name match failed. The view has always exposed it and
-   * fetchCuratedCities has always `select('*')`-ed it — it was simply absent
-   * from this type. It is the join key that lets a property carry its city's
-   * indexes without a PostGIS round-trip: `properties.obec_id =
-   * curated_cities.admin_boundary_id`. All 206 curated cities have one, so the
-   * centroid+radius fallback arm in the SQL predicates is currently dead. */
-  admin_boundary_id: number | null;
+  /* The RÚIAN town code of the city (curated_cities.obec_kod, migration 726;
+   * never null). It is the join key that lets a property carry the indexes of
+   * its city without a PostGIS round-trip: `properties.obec_id = obec_kod`. */
+  obec_kod: number;
 }
 
 export interface CityIndexDefinition {
@@ -1639,7 +1628,8 @@ export interface CityPolygon {
 export const fetchCuratedCityPolygons = async (
   { signal }: PgReadOptions = {},
 ): Promise<CityPolygon[]> => {
-  /* One simplified municipality boundary per curated city (205 rows).
+  /* One simplified municipality boundary per curated city (206 rows), the
+   * RÚIAN render polygon of its town (migration 726).
    * `geojson` is the raw ST_AsGeoJSON string the map JSON.parses into a
    * Feature geometry. Fetched once and cached (staleTime: Infinity), and only
    * when the map tab is active. */
@@ -2031,7 +2021,9 @@ export const fetchPipelineStages = async (
       .select(
         'id, key, label, position, color, is_terminal, is_entry, code, ' +
           /* The stage's delegated stamp (migration 641), for the stage editor. */
-          'edited_by_account_id, edited_at',
+          'edited_by_account_id, edited_at, ' +
+          /* The stage role (migration 734): the viewing stage a viewing date offers. */
+          'role',
       )
       .order('position'),
     { signal, actAs },

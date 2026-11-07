@@ -73,13 +73,15 @@ def test_get_detail_propagates_listing_gone(monkeypatch):
         client.get_detail(12345)
 
 
-def test_get_detail_reraises_non_gone_http_error(monkeypatch):
+@pytest.mark.parametrize("status", [409, 503])
+def test_get_detail_reraises_non_gone_http_error(monkeypatch, status):
+    """A 409 is a failed fetch: rule #3's gone statuses are 404 and 410, nothing else."""
     client = SrealityClient()
     resp = requests.Response()
-    resp.status_code = 503
+    resp.status_code = status
 
     def boom(url, params=None):
-        raise requests.HTTPError("503", response=resp)
+        raise requests.HTTPError(str(status), response=resp)
 
     monkeypatch.setattr(client, "_get_json", boom)
     with pytest.raises(requests.HTTPError):

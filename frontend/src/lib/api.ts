@@ -38,6 +38,7 @@ import type {
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
+  PipelineStageRole,
   SkillRefinement,
   Tag,
   TagColor,
@@ -2315,7 +2316,7 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
 }
 
 /* ----- condition scoring: per-kraj enablement ------------------------------
- * GET returns every kraj (admin_boundaries level='kraj') with its enabled
+ * GET returns every kraj (the RÚIAN register's kraj codes) with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
  * same payload. Condition scoring is parked (rule 14): its workflows are
@@ -2656,11 +2657,12 @@ export const undismissProperty = (
 
 export const addPipelineCard = (
   property_id: number,
-  { actAs }: Acting = {},
+  /* `stage_id`: a live, open stage to add at (the viewing prompt); absent = the entry stage. */
+  { actAs, stage_id }: Acting & { stage_id?: number } = {},
 ): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
   request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
-    { method: 'POST', json: { property_id }, actAs },
+    { method: 'POST', json: stage_id != null ? { property_id, stage_id } : { property_id }, actAs },
   );
 
 export const removePipelineCard = (
@@ -2711,6 +2713,8 @@ export const updatePipelineStage = (
     is_entry?: boolean;
     /* Explicit null clears the badge back to the ordinal fallback. */
     code?: string | null;
+    /* A role moves onto this stage from whichever held it; null clears it (migration 734). */
+    role?: PipelineStageRole | null;
   },
   { actAs }: Acting = {},
 ): Promise<PipelineStage> =>

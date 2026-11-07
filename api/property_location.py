@@ -35,7 +35,6 @@ select st_y(ll.geom) as lat,
        (select t.rank from location_granularity_rank t
          where t.granularity = 'obec') as obec_rank,
        ll.country_status::text as country_status,
-       ll.uncertainty_radius_m,
        location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
                               ll.obec_name, ll.cast_obce_name, ll.country_code,
                               ll.country_status) as label
@@ -70,7 +69,6 @@ def load_location(conn: Any, property_id: int) -> dict[str, Any]:
         raise NoLocation("no_location", "Bez polohy")
     level = precision(row["granularity_rank"], row["street_rank"], row["quarter_rank"], row["obec_rank"])
     zoom, note = PRECISIONS[level]
-    radius = row["uncertainty_radius_m"]
     return {
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
@@ -78,7 +76,6 @@ def load_location(conn: Any, property_id: int) -> dict[str, Any]:
         "granularity_rank": row["granularity_rank"],
         "precision": level,
         "country_status": row["country_status"],
-        "uncertainty_radius_m": None if radius is None else float(radius),
         "label": row["label"],
         "zoom": zoom,
         "note": note,

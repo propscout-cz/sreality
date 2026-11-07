@@ -24,11 +24,11 @@ import CityPicker from './CityPicker';
 /* One kraj with an okres and an obec under it, plus a kraj with an obec
  * hanging straight off it (Praha) — the two shapes buildTree distinguishes. */
 const TREE: ObecNode[] = [
-  { id: 1, level: 'kraj', name: 'Jihomoravský kraj', parent_id: null, population: null, sreality_id: null },
-  { id: 2, level: 'okres', name: 'Brno-město', parent_id: 1, population: null, sreality_id: null },
-  { id: 3, level: 'obec', name: 'Brno', parent_id: 2, population: 381_000, sreality_id: 5000 },
-  { id: 4, level: 'kraj', name: 'Praha', parent_id: null, population: null, sreality_id: null },
-  { id: 5, level: 'obec', name: 'Praha', parent_id: 4, population: 1_300_000, sreality_id: 1 },
+  { id: 1, level: 'kraj', name: 'Jihomoravský kraj', parent_id: null, population: null },
+  { id: 2, level: 'okres', name: 'Brno-město', parent_id: 1, population: null },
+  { id: 3, level: 'obec', name: 'Brno', parent_id: 2, population: 381_000 },
+  { id: 4, level: 'kraj', name: 'Praha', parent_id: null, population: null },
+  { id: 5, level: 'obec', name: 'Praha', parent_id: 4, population: 1_300_000 },
 ];
 
 function seededClient(): QueryClient {

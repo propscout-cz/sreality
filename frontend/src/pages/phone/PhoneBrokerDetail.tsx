@@ -15,14 +15,19 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import Panel from '@/components/Panel';
+import SaveContactButton from '@/components/SaveContactButton';
+import BrokerAvatar from '@/components/phone/BrokerAvatar';
+import { ContactAddIcon } from '@/components/phone/phoneIcons';
 import DayRule from '@/components/phone/DayRule';
 import { CardRoll } from '@/components/phone/CardRoll';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
+import { brokerContact } from '@/lib/brokerContact';
 import { browseKeys } from '@/lib/browseKeys';
 import {
   contactState,
   fetchBrokerDossier,
   prettyPhone,
+  telHref,
   type BrokerCategoryShare,
   type BrokerMembership,
   type BrokerPublic,
@@ -42,7 +47,6 @@ import { ROUTES } from '@/lib/routes';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { useListHold } from '@/lib/useListHold';
 
-import { Initials } from './PhoneBrokers';
 
 const MASKED_TITLE = 'Kontakt je viditelný jen pro administrátory.';
 
@@ -125,7 +129,7 @@ function Dossier({ b }: { b: BrokerPublic }) {
   return (
     <header className="px-4 pb-4 pt-5">
       <div className="flex items-center gap-3">
-        <Initials name={b.display_name} size="lg" />
+        <BrokerAvatar name={b.display_name} size="lg" />
         <div className="min-w-0">
           <h2 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-0.01em] text-[var(--color-ink)]">
             {b.display_name ?? 'Neznámý makléř'}
@@ -143,7 +147,30 @@ function Dossier({ b }: { b: BrokerPublic }) {
       )}
       <PhoneLine state={contactState(b.primary_phone, b.has_phone)} />
       <EmailLine state={contactState(b.primary_email, b.has_email)} />
+      <SaveContact b={b} />
     </header>
+  );
+}
+
+/* "Uložit kontakt" (lib/brokerContact): the .vcf the property page's broker strip saves;
+ * nothing while the contact is masked. */
+function SaveContact({ b }: { b: BrokerPublic }) {
+  const contact = brokerContact({
+    brokerId: b.broker_id,
+    name: b.display_name,
+    firm: b.firm_name ?? b.firm_domain,
+    phone: b.primary_phone,
+    email: b.primary_email,
+  });
+  if (!contact) return null;
+  return (
+    <SaveContactButton
+      contact={contact}
+      className="mt-2 inline-flex h-9 items-center gap-2 text-[13px] font-medium text-[var(--color-copper)]"
+    >
+      <ContactAddIcon className="h-4 w-4" />
+      Uložit kontakt
+    </SaveContactButton>
   );
 }
 
@@ -179,7 +206,7 @@ function PhoneLine({ state }: { state: ContactState }) {
     <div className="mt-4 flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] py-1 pl-3 pr-1">
       <a
         ref={numRef}
-        href={`tel:${pretty.replace(/\s/g, '')}`}
+        href={telHref(state.value)}
         aria-label={`Zavolat ${pretty}`}
         className="min-w-0 select-all truncate font-mono text-[15px] tabular-nums text-[var(--color-ink)]"
       >

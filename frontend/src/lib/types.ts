@@ -608,6 +608,9 @@ export interface Attachment {
 }
 
 
+/* The stage roles migration 734 allows; one stage per role per account. */
+export type PipelineStageRole = 'viewing';
+
 /* The kanban columns (pipeline_stages_public, operator-curated). */
 export interface PipelineStage {
   id: number;
@@ -620,6 +623,9 @@ export interface PipelineStage {
   /* Short operator-owned badge shown inside the funnel (migration 377). NULL =
    * fall back to the stage's 1-based ordinal among live stages. */
   code: string | null;
+  /* What the stage means to the app, whatever its label (migration 734): `viewing`
+   * = where a property waits for its viewing. NULL or absent = no role. */
+  role?: PipelineStageRole | null;
   /* The stage's latest delegated edit (migration 641's view columns; null when
    * none). Only the view read carries them — the API's stage writes do not. */
   edited_by_account_id?: string | null;

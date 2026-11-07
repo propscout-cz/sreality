@@ -2,7 +2,7 @@
 point the ingest checks before it trusts PostGIS with S-JTSK, `map_overlay_render_section` on a
 square, a line and a point (one MVT layer per layer key, feature ids, props as attributes, the
 tile range from the Web Mercator formula), the store's posture, and the MF rent choropleth
-(section `rent_map`, migration 601's cleanup) rendered from admin_boundaries × the latest
+(section `rent_map`, migration 601's cleanup) rendered from the RÚIAN mirror × the latest
 rent_map revision, both by the database-only render and inside a rent-map ingest. Runs in CI's
 migrations job (`TEST_DATABASE_URL`); every test rolls back.
 """
@@ -21,7 +21,7 @@ import pytest
 
 from api.rent_map import insert_revision
 from scripts import ingest_map_overlays as overlays
-from tests._live_property import REQUIRED_DB
+from tests._live_property import REQUIRED_DB, _mirror_unit
 from toolkit.rent_map import ParsedRentMap, RentValue
 
 pytestmark = REQUIRED_DB
@@ -236,13 +236,25 @@ OBEC, KU, NO_SHAPE, NO_RENT = 990_101, 990_102, 990_103, 990_104
 
 
 def _boundary(cur: Any, code: int, level: str, name: str, east: int) -> None:
-    """A 0.01° square `east` hundredths of a degree east of Florenc."""
+    """A register unit drawn as a 0.01° square `east` hundredths of a degree east of Florenc."""
     lon = FLORENC_LON + east * 0.01
-    cur.execute(
-        "INSERT INTO admin_boundaries (id, level, name, geom) VALUES (%s, %s, %s, "
-        "ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326))::geography)",
-        (code, level, name, lon, FLORENC_LAT, lon + 0.01, FLORENC_LAT + 0.01),
-    )
+    _mirror_unit(cur, level, code, name, (lon, FLORENC_LAT, lon + 0.01, FLORENC_LAT + 0.01))
+
+
+def test_the_kraje_outline_is_the_registers_current_kraj_polygons_dated_by_its_vintage(cur: Any) -> None:
+    """W8 (ruling Q12b): the reference outline reads the mirror's render geometry, and its revision is the current
+    registry version's source date."""
+    _boundary(cur, 990_019, "kraj", "Kraj Test", 0)
+    _boundary(cur, 990_101, "obec", "Obecov", 1)
+    ctx = overlays.Context(None, None, cur.connection)  # type: ignore[arg-type]
+    features = list(overlays.SqlSource(overlays.KRAJE_SQL).read(ctx))
+    assert [(f.source_id, f.props) for f in features if f.source_id in {"990019", "990101"}] == [
+        ("990019", {"class": "kraj", "name": "Kraj Test"})]
+    assert json.loads(next(f for f in features if f.source_id == "990019").geometry)["type"] in (
+        "LineString", "MultiLineString")
+    cur.execute("SELECT source_date FROM registry_versions WHERE is_current")
+    section = overlays.SOURCES["kraje"]
+    assert section.revised_at(section, ctx) == cur.fetchone()[0]
 
 
 def _rent_revision(cur: Any, source_date: date,
@@ -270,11 +282,11 @@ def _rent_overlay(cur: Any) -> tuple[Any, ...] | None:
 
 @pytest.mark.usefixtures("mvt")
 def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -> None:
-    """One feature per territory the latest revision prices AND admin_boundaries can draw, at
+    """One feature per territory the latest revision prices AND the register can draw, at
     the level the MF priced it, its VK rents as flat numeric props (an unpriced VK and a NULL
     kraj stripped); the stale revision, an undrawable code and an unpriced boundary are absent."""
     _boundary(cur, OBEC, "obec", "Obecov", 0)
-    _boundary(cur, KU, "ku", "KU Test", 1)
+    _boundary(cur, KU, "katastralni_uzemi", "KU Test", 1)
     _boundary(cur, NO_RENT, "obec", "Nikde", 2)
     _rent_revision(cur, date(2026, 5, 15), [(OBEC, "obec", "Kraj Test", 1, 999)])
     _rent_revision(cur, date(2026, 8, 15), [

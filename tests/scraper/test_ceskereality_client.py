@@ -149,7 +149,7 @@ def test_fetch_detail_archived_page_is_gone():
 
 
 def test_sends_chrome_client_hints_matching_its_ua():
-    """2026-09-29: the site's nginx 403s a Chrome UA without sec-ch-ua hints."""
+    """The client sends the sec-ch-ua hints derived from its Chrome UA."""
     headers = CeskerealityClient()._session.headers
     major = re.search(r"Chrome/(\d+)", headers["User-Agent"]).group(1)
     assert headers["sec-ch-ua"] == client_hints(headers["User-Agent"])["sec-ch-ua"]

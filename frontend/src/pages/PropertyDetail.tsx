@@ -2,9 +2,8 @@
  * `/property/:propertyId`.
  *
  * The header shows the property exactly as its Browse card does: the
- * `properties_public` row, whose advert fields are its canonical advert's and
- * whose physical facts are the first non-empty in the same order (migration 561,
- * decision 18). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
+ * `properties_public` row, every field at its MS11 grain (decision 18,
+ * docs/design/merge-sprint/PROGRAM.md). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
  * every advert's own line (MS9), and a lowest active price that differs from the
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
@@ -344,7 +343,6 @@ export default function PropertyDetail() {
             images={images}
             loading={imagesQ.isLoading}
             isActive={property.is_active}
-            onAll={() => setTab('fotky')}
           />
         </Suspense>
         <div className="min-w-0 space-y-5">

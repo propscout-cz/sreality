@@ -90,6 +90,7 @@ def test_the_sighting_diff_makes_no_http_request(monkeypatch: pytest.MonkeyPatch
         lambda _c, _s, ids: {"a": {"id": 1, "price_czk": 100}} if "a" in ids else {})
     monkeypatch.setattr(db, "touch_listings_by_id", lambda _c, ids: len(ids))
     monkeypatch.setattr(db, "enqueue_detail", lambda _c, _s, entries: len(entries))
+    monkeypatch.setattr(db, "rearm_sighted_given_up", lambda _c, _s, _ids: 0)
     monkeypatch.setattr(
         db, "presence_candidates", lambda *_a, **_k: ([("z", None, None)], 3))
     monkeypatch.setattr(db, "orphan_candidates", lambda *_a, **_k: ([("o", None, None)], 1))

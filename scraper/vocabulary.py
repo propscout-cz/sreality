@@ -204,8 +204,8 @@ def refuse(field: str, portal: str, label: str) -> None:
 
     The same channel as an unmapped label, because it is the same event: a value the
     portal published that reaches no column, visible in the run summary instead of
-    silently gone. bezrealitky's EUR rents are the first customer (W4) — a non-CZK amount
-    in `price_czk` reads ~25x low, and converting it would invent an exchange rate."""
+    silently gone. bezrealitky's prices in a currency we do not convert are the first
+    customer (W4; EUR converts at a fixed rate since #2355, `scraper.price_reading`)."""
     with _UNMAPPED_LOCK:
         UNMAPPED[f"{field}/{portal}/{fold(label)}"] += 1
 
@@ -262,22 +262,12 @@ def disposition_code(value: str | None) -> str | None:
     return f"{match.group(1)}+kk" if match.group(2) == "KK" else f"{match.group(1)}+1"
 
 
-def energy_rating(*texts: str | None) -> str | None:
-    """The PENB class: the first standalone A–G letter any of the texts states.
-
-    A stated `G` is very often the statutory placeholder for an UNASSESSED building
-    (67.4% of every rated row, uniformly across all nine portals) rather than a
-    measurement — but NO portal marks which (W5 measured all nine: every one spells its
-    G as the ordinary class label, "G - Mimořádně nehospodárná" or idnes's decree
-    citation). So it cannot be split here, and stays a measure-validity fact the fill
-    matrix reports."""
-    for text in texts:
-        if not text:
-            continue
-        match = _ENERGY_RE.search(str(text))
-        if match:
-            return match.group(1).upper()
-    return None
+def energy_rating(text: str | None) -> str | None:
+    """The PENB class: the first standalone A–G letter the text states (a stated G is often the
+    statutory placeholder for an unassessed building, which no portal marks apart: W5 in
+    `docs/design/field-capture/PROGRAM.md`)."""
+    match = _ENERGY_RE.search(str(text)) if text else None
+    return match.group(1) if match else None
 
 
 # --- the three boolean readings -------------------------------------------

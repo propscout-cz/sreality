@@ -455,10 +455,6 @@ def test_the_workflow_reader(tmp_path: Path) -> None:
 LEAVERS = {
     "recompute_city_proximity.yml": "#2012 / PR #2040: city proximity moves onto pg_cron",
 }
-# A RUNNER entry's module may still run from these attended (dispatch-only) files.
-ATTENDED = {
-    ("ingest_boundaries.yml", "scripts.ingest_map_overlays"): "re-renders kraje after a human-run boundary ingest",
-}
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
@@ -495,16 +491,14 @@ def _invokes(job: Job, workflow: Workflow) -> bool:
 
 
 def pairing_problems(entries: Sequence[Job], workflows: dict[str, Workflow], *,
-                     leavers: dict[str, str] = LEAVERS, attended: dict[tuple[str, str], str] = ATTENDED,
-                     ) -> list[str]:
+                     leavers: dict[str, str] = LEAVERS) -> list[str]:
     """Each job runs on exactly one host: a RUNNER job on no workflow, every waiting job on one, and every
     scheduled workflow runs a registry job."""
     problems: list[str] = []
     for job in entries:
         if job.host == jobs.RUNNER:
             problems += [f"{job.name}: on the runner, and {w.file} still runs {job.argv[0]}"
-                         for w in workflows.values() if (w.file, job.argv[0]) not in attended
-                         and any(c.module == job.argv[0] for c in w.invocations)]
+                         for w in workflows.values() if any(c.module == job.argv[0] for c in w.invocations)]
         elif job.host == jobs.UNTIL_MOVED and not any(w.scheduled and _invokes(job, w) for w in workflows.values()):
             problems.append(f"{job.name}: waiting to move, and no scheduled workflow runs it")
     for w in workflows.values():
@@ -521,8 +515,6 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
     first_wave = {"stale_images", "rent_map", "map_overlays"}
     workflows = _repo_workflows()
     assert pairing_problems(jobs.declared(), workflows) == []
-    assert pairing_problems(jobs.declared(), workflows, attended={}) == [  # ingest_boundaries.yml still runs it
-        "map_overlays: on the runner, and ingest_boundaries.yml still runs scripts.ingest_map_overlays"]
     kept = Workflow("refresh_stale_images.yml", True, 1200,
                     (Invocation("scripts.refresh_stale_image_urls", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, kept.file: kept}) == [  # flipped, workflow kept
@@ -545,8 +537,6 @@ def test_the_pairing_census_fires() -> None:
     assert pairing_problems(jobs.declared(), {**workflows, "location_claims_intake.yml": silent})
     stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
-    # ingest_boundaries.yml runs the overlay module by hand; only ATTENDED keeps it from being map_overlays' 2nd host.
-    assert pairing_problems(jobs.declared(), workflows, attended={})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
     once = (Invocation("scripts.price_stats_probe", frozenset()), Invocation("scraper.job_runner", frozenset()))
     ticked = replace(workflows["scrape_price_stats.yml"], invocations=once)

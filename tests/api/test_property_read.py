@@ -6,9 +6,6 @@ columns (the page's), the statements, the rows they assemble, the broker cap and
 
 from __future__ import annotations
 
-import contextlib
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,91 +14,12 @@ import pytest
 from api import curation, pipeline
 from api import property_read as pr
 from api.capabilities import registry, truncate
-from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.tenant_pool import READ_BOUND
 from tests.api._script_conn import ScriptConn
-from tests.test_property_page_read_contract import _select_cols
+from tests._read_contract import _select_cols
+from tests.api._tool_fixtures import COLLEAGUE, _at, _broker, _row, run, script
 from toolkit.measures import RENT_MONTHLY_CZK_M2, SALE_CAPITAL_CZK_M2
-
-T0 = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
-
-
-def _at(hours: int) -> datetime:
-    return T0 + timedelta(hours=hours)
-
-
-def _row(columns: tuple[str, ...], **values: Any) -> tuple[Any, ...]:
-    return tuple(values.get(c) for c in columns)
-
-
-# Asked: 7, then 9 (merged into 8), then 404 (unknown). 7 has a live canonical ad (71) and an ended one (72); 8 one ad.
-PROPS = {
-    7: _row(pr.PROPERTY_COLS, property_id=7, listing_id=71, last_seen_at=_at(30), category_main="byt",
-            category_type="prodej", price_czk=6_000_000, price_per_m2=Decimal("100000.5"),
-            price_per_m2_basis=SALE_CAPITAL_CZK_M2, display_label="Nusle, Praha", total_price_change_pct=Decimal("-5")),
-    8: _row(pr.PROPERTY_COLS, property_id=8, listing_id=81, last_seen_at=_at(40), category_main="byt",
-            category_type="pronajem", price_czk=20_000, price_per_m2=Decimal("400"),
-            price_per_m2_basis=RENT_MONTHLY_CZK_M2),
-}
-ADS = [
-    _row(pr.SOURCE_COLS, id=71, property_id=7, source="sreality", is_active=True, price_czk=6_000_000,
-         first_seen_at=_at(0)),
-    _row(pr.SOURCE_COLS, id=81, property_id=8, source="idnes", is_active=True, price_czk=20_000, first_seen_at=_at(1),
-         ad_reference="N-1"),
-    _row(pr.SOURCE_COLS, id=72, property_id=7, source="bazos", is_active=False, price_czk=5_900_000,
-         first_seen_at=_at(2)),
-]
-MEASURES = [(71, "prodej", Decimal("100000.5"), SALE_CAPITAL_CZK_M2), (72, "pronajem", Decimal("300"),
-            RENT_MONTHLY_CZK_M2), (81, "pronajem", None, None)]
-POINTS = [(71, _at(0), 6_300_000), (71, _at(20), 6_000_000)]
-RUNS = [_row(pr.RUN_COLS, id=3, created_at=_at(9), status="success", input_listing_id=81,
-             gross_yield_pct=Decimal("4.2")),
-        _row(pr.RUN_COLS, id=2, created_at=_at(8), status="failed", input_listing_id=72),
-        _row(pr.RUN_COLS, id=1, created_at=_at(7), status="success", input_listing_id=71)]
-# The user's own: a card on 8; 7 in their collection 6 and in 5, a colleague's shared with them, tagged and dismissed.
-STATES = [_row(curation.STATE_COLS, property_id=8, stage_id=3, stage_key="zajem", stage_label="Zájem",
-               entered_stage_at=_at(3), collection_ids=[5], tag_ids=[], dismissed=False),
-          _row(curation.STATE_COLS, property_id=7, collection_ids=[5, 6], tag_ids=[2], dismissed=True)]
-COLLEAGUE = "kolega@rk.test"
-NOTES = [(12, 8, "a colleague's", True, _at(5), _at(5), None, COLLEAGUE, None, None),
-         (11, 7, "mine", False, _at(4), _at(4), _at(50), None, None, None)]
-COLLECTIONS = [(6, "Mine", None, _at(0), _at(2), 1, True, True, None, [{"account_id": "x", "email": COLLEAGUE}]),
-               (5, "Shared with me", None, _at(0), _at(1), 3, False, False, COLLEAGUE, [])]
-TAGS = [(2, "balkon", "slate", _at(0), 4)]
-STAGES = [(3, "zajem", "Zájem", 1, "sky", False, True, "Z"), (4, "konec", "Konec", 2, "slate", True, False, None)]
-
-
-def script(props: dict[int, tuple[Any, ...]] = PROPS, runs: list[tuple[Any, ...]] = RUNS,
-           brokers: list[dict[str, Any]] = (), notes: list[tuple[Any, ...]] = NOTES) -> ScriptConn:
-    """The page's relations for the seeds above, every read answered as its statement would be."""
-    return ScriptConn([
-        (lambda sql: sql.startswith("WITH RECURSIVE chain"), [(7, 7), (9, 8)]),
-        (lambda sql: "from properties_public" in sql, list(props.values())[::-1]),   # never in the asked order
-        (lambda sql: "from property_sources_public" in sql, ADS),
-        (lambda sql: "from listings_public" in sql, MEASURES),
-        (lambda sql: "lag(price_czk)" in sql, POINTS),
-        (lambda sql: "from estimation_runs" in sql, runs),
-        (lambda sql: "FROM listing_broker_public" in sql, [dict(b) for b in brokers]),
-        (lambda sql: "FROM property_pipeline pp" in sql, STATES),
-        (lambda sql: "FROM property_notes n WHERE" in sql, notes),
-        (lambda sql: "FROM collections c ORDER BY" in sql, COLLECTIONS),
-        (lambda sql: "FROM tags t ORDER BY" in sql, TAGS),
-        (lambda sql: "FROM pipeline_stages WHERE" in sql, STAGES),
-    ])
-
-
-def run(name: str, args: object, conn: ScriptConn | None = None) -> dict[str, Any]:
-    """`name` through the one call path, either tenancy reading `conn`."""
-    conn = conn or script()
-
-    @contextlib.contextmanager
-    def own(claims: dict[str, Any], *, act_as: Any, method: str) -> Any:
-        assert (act_as, method) == (None, "GET")
-        yield conn
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(registry.tenant_pool, "tenant_transaction", own)
-        return registry.call(Caller(market=conn, claims={"sub": "a"}), name, args)
 
 
 # --- the page's columns -----------------------------------------------------------------------------------------
@@ -327,12 +245,6 @@ def test_a_vocabulary_cut_beside_properties_lifts_with_no_property_ids() -> None
 
 
 # --- the brokers ------------------------------------------------------------------------------------------------
-
-def _broker(listing_id: int, broker_id: int) -> dict[str, Any]:
-    return {"sreality_id": None, "listing_id": listing_id, "broker_id": broker_id,
-            "broker_display_name": f"B{broker_id}", "broker_firm_label": "RK", "primary_email": f"b{broker_id}@rk.cz",
-            "primary_phone": f"+420 777 000 {broker_id:03d}"}
-
 
 def test_brokers_are_the_pages_the_canonical_ads_first_and_contacts_shown() -> None:
     out = run("get_property_brokers", {"property_ids": [9, 7]}, script(brokers=[

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from tests.migration_defs import latest_definition
+from tests.migration_defs import _params, latest_definition
 from tests.test_read_model_rewrite_migration import _function_bodies, _md5, _read
 
 NAME = "597_portal_exclusion.sql"
@@ -52,20 +52,6 @@ def _guard(fn: str) -> str:
 def _block(tag: str) -> str:
     at = SQL.index(f"do ${tag}$")
     return SQL[at: SQL.index(f"${tag}$;", at)]
-
-
-def _params(text: str, fn: str) -> list[tuple[str, str]]:
-    at = re.search(rf"create or replace function public\.{fn}\(", text, re.I).end()
-    depth, i = 1, at
-    while depth:
-        depth += {"(": 1, ")": -1}.get(text[i], 0)
-        i += 1
-    args = re.sub(r"--[^\n]*", "", text[at: i - 1])
-    out = []
-    for part in re.split(r",\s*(?=[a-z][a-z0-9_]* )", " ".join(args.split())):
-        name, rest = part.split(" ", 1)
-        out.append((name, re.split(r"\s+default\s+", rest, flags=re.I)[0].lower()))
-    return out
 
 
 def _types(params: list[tuple[str, str]]) -> str:

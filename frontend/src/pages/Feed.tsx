@@ -10,6 +10,10 @@
  * follow that timestamp. The photos come through the shared hydration layer, the
  * cover chosen as the Browse card chooses it.
  *
+ * Above the chips, only while this iPhone could receive notifications and does
+ * not, the push notice (components/phone/PushNotice): push is on by default,
+ * and the start screen is where the one tap Apple requires is asked for.
+ *
  * The chips: "Filtry" (Browse's whole filter set in a sheet, its own lazy chunk),
  * "Vše" + the account's saved presets (#1761, per account since #1775); the
  * portals; "Skryté" switches the roll to the hidden properties only
@@ -31,6 +35,7 @@ import { PHOTOS_PER_CARD } from '@/components/phone/CardRoll';
 import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
+import PushNotice from '@/components/phone/PushNotice';
 import { SlidersIcon } from '@/components/phone/phoneIcons';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
@@ -306,6 +311,7 @@ export default function Feed() {
 
   return (
     <div className="pt-3">
+      <PushNotice />
       <div className={CHIP_ROW} role="group" aria-label="Předvolby">
         <button
           type="button"

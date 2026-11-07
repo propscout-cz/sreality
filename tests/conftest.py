@@ -61,6 +61,15 @@ def _stop_signal_untouched():
 
 
 @pytest.fixture()
+def no_sighted_rearm(monkeypatch):
+    """A walk suite over a fake connection: the re-arm that `reconcile_sightings` runs after its enqueue
+    reaches for a cursor those fakes lack (executed in tests/test_given_up_rearm_live.py)."""
+    from scraper import db
+
+    monkeypatch.setattr(db, "rearm_sighted_given_up", lambda _conn, _source, _ids: 0)
+
+
+@pytest.fixture()
 def cur() -> Iterator[Any]:
     """A rollback-always cursor on `db_url()`; a module that defines its own `cur` overrides it."""
     import psycopg

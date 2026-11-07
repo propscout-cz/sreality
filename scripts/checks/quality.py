@@ -658,7 +658,8 @@ def _floor_cell(row: dict[str, Any], thresholds: dict[str, Any]) -> dict[str, An
     return _gauge_share_cell(
         f"floor/{row['source']}/{_grain(row)}", row["source"], shares, (warn, fail),
         "a per-m² unit price is written as the price: check the portal's price parsing against "
-        "scraper/price_text.is_per_area_price",
+        "scraper/price_text.is_per_area_price, or scraper/price_reading.py where the portal "
+        "reads a rate",
         f"{priced:,} priced ads with an area, {priced_7d:,} of them first written in 7 d: "
         f"under the {min_n} an arm needs",
         {"basis": row["price_per_m2_basis"], "priced": priced, "priced_7d": priced_7d})
@@ -797,7 +798,7 @@ LOCATION_VIEW_VOCABULARY: tuple[tuple[str, str], ...] = (
     ("disputed", "pin_outside_obec"), ("disputed", "pin_off_street"),
     ("disputed", "country_conflict"), ("disputed", "pin_outside_cz"),
     ("grain", "address"), ("grain", "street"), ("grain", "quarter"), ("grain", "obec"),
-    ("version", "*"), ("registry_stale", "*"), ("ku_gap", "*"),
+    ("version", "*"), ("registry_stale", "*"), ("ku_gap", "*"), ("position", "*"),
     ("backlog_s", "evidence"), ("backlog_s", "backfill"),
 )
 _GRAINS = ("address", "street", "quarter", "obec")
@@ -948,9 +949,8 @@ def _street_cell(subject: str, portal: str | None, card: _Card, floor: float | N
                  by_portal: Mapping[str, _Card] | None = None) -> dict[str, Any]:
     """The one street share, (address + street) / Czech ads with a town by the rank table: Problem
     when its Wilson UPPER bound sits under the fixed floor (a parser or contract regression)."""
-    grains = {g: _n(card, "grain", g) for g in _GRAINS}
-    hits, n = grains["address"] + grains["street"], _of(card, "grain", "address")
-    facts: dict[str, Any] = {"n": n, "floor": floor, "grains": grains}
+    hits, n = _n(card, "grain", "address") + _n(card, "grain", "street"), _of(card, "grain", "address")
+    facts: dict[str, Any] = {"n": n, "floor": floor}
     if by_portal is not None:
         facts["by_portal"] = {p: round((_n(c, "grain", "address") + _n(c, "grain", "street"))
                                        / _of(c, "grain", "address"), 4)
@@ -1034,13 +1034,27 @@ def _evidence_cell(queue: _Card, thresholds: dict[str, Any]) -> dict[str, Any]:
                   value=oldest, unit="min", facts=facts)
 
 
+def _positions(card: _Card) -> dict[str, dict[str, int]]:
+    """W6-c: where the cohort's points came from, {kind: {grain: n}} off the `position` rows (class `kind/grain`).
+    Shown, not judged: `unexplained` colours nothing until the operator rules it."""
+    grid: dict[str, dict[str, int]] = {}
+    for (metric, cls), row in sorted(card.items()):
+        if metric == "position":
+            kind, _, grain = cls.partition("/")
+            grid.setdefault(kind, {})[grain] = int(row[0] or 0)
+    return grid
+
+
 def _portal_cells(source: str, card: _Card, thresholds: dict[str, Any]) -> list[dict[str, Any]]:
-    """A portal's five cells over the listing cohort; all Not measured with no ad past the edge."""
+    """A portal's five cells over the listing cohort; all Not measured with no ad past the edge. The town cell also
+    stores the position grid, whose total is its `ads`."""
     if not _n(card, "town", "ads"):
         return [_unmeasured(f"{source}/{name}", source, f"no {_LISTING}",
                             "%" if name == "street" else "ads")
                 for name in LOCATION_PORTAL_CELLS]
-    return [*_town_cells(source, source, card, _LISTING), _ku_cell(source, card),
+    town, withheld = _town_cells(source, source, card, _LISTING)
+    town["facts"]["positions"] = _positions(card)
+    return [town, withheld, _ku_cell(source, card),
             _outside_cell(f"{source}/outside", source, card, _LISTING),
             _street_cell(f"{source}/street", source, card,
                          thresholds["location_street_floor"].get(source),

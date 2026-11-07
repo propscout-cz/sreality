@@ -287,11 +287,22 @@ def test_has_parking_can_be_unknown_and_a_stated_false_survives():
     assert parse_advert(_advert(parking=False, garage=True)).has_parking is True
 
 
-def test_a_non_czk_price_is_refused_never_converted():
-    """price_czk is a CZK total by contract on all nine portals. 31 active rows quote
-    the rent in EUR; stored as CZK a 1,124 EUR Prague rent reads as 1,124 CZK."""
+def test_a_eur_price_converts_at_the_fixed_rate_and_records_it():
+    """price_czk is a CZK total by contract. Some rents are quoted in EUR: stored as CZK a
+    1,124 EUR Prague rent read as 1,124 CZK, refused it looped (#2355). Converted at the
+    fixed rate, with what was stated and the rate kept in raw_json."""
+    listing = parse_advert(_advert(price=1124, currency="EUR", offerType="PRONAJEM"))
+    assert listing.price_czk == 27_538
+    assert listing.raw["price_reading"] == {
+        "amount": 1124.0, "currency": "EUR", "basis": "total", "czk_per_eur": 24.5,
+        "rate_set": "2026-11-05"}
+    assert listing.price_native == "1124 EUR"
+    czk = parse_advert(_advert(price=1124, currency="CZK"))
+    assert (czk.price_czk, czk.price_native) == (1124, None)
+    assert "price_reading" not in czk.raw
+
+
+def test_a_currency_we_do_not_convert_is_refused():
     vocabulary.take_unmapped()
-    listing = parse_advert(_advert(price=1124, currency="EUR"))
-    assert listing.price_czk is None
-    assert vocabulary.take_unmapped() == [("price_czk/bezrealitky/eur", 1)]
-    assert parse_advert(_advert(price=1124, currency="CZK")).price_czk == 1124
+    assert parse_advert(_advert(price=1124, currency="USD")).price_czk is None
+    assert vocabulary.take_unmapped() == [("price_czk/bezrealitky/usd", 1)]

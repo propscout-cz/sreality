@@ -18,9 +18,8 @@ name: "Scraping: Českéreality index walk"
 #
 # Categories + rates live in the `portals` registry row (migration 249); coverage is
 # tuned with a SQL update, no workflow edit. Coordinates come from the page, so no
-# MAPY_CZ_API_KEY is needed. The client uses an honest identifying User-Agent at a
-# polite rate (the site disallows generic bots in robots.txt). Required secret:
-# SUPABASE_DB_URL.
+# MAPY_CZ_API_KEY is needed. The client crawls at a polite rate through the
+# residential proxy (SCRAPER_PROXY_URL). Required secret: SUPABASE_DB_URL.
 
 on:
   schedule:

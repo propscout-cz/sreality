@@ -384,7 +384,7 @@
         },
         {
           "name": "region_ids",
-          "description": "[submit] Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)",
+          "description": "[submit] Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)",
           "required": false,
           "type": "string",
           "default": "",
@@ -438,7 +438,7 @@
       "inputs": [
         {
           "name": "region_ids",
-          "description": "Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)",
+          "description": "Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)",
           "required": false,
           "type": "string",
           "default": "",
@@ -765,6 +765,24 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
     },
     {
+      "filename": "engine_light.yml",
+      "name": "CI: engine light",
+      "description": "Fails an engine-sensitive PR (a numbered migration, autodedup/, the worker or its lease, .railway/) that does not carry the merge coordinator's light, the label engine-light. Every PR and every merge group gets a verdict.",
+      "manual": false,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": true,
+      "paths": null,
+      "inputs": [],
+      "secrets": [],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 5,
+      "permissions": "contents: read, pull-requests: write",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/engine_light.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/engine_light.yml"
+    },
+    {
       "filename": "export_raw_pages_archive.yml",
       "name": "Export portal_raw_pages archive to R2",
       "description": "Location-data program W0 item 0o: the ~447k-row / 14 GB portal_raw_pages archive is the only surviving copy of several portals' best location signal, so a full off-database copy goes to R2 under backups/portal-raw-pages/<snapshot>/. Chunked + resumable — re-dispatch with the same snapshot date to continue an interrupted run; the final step verifies the manifest row count against the DB. Deletion of the live table is guarded by tests/test_portal_raw_pages_guard.py. workflow_dispatch only; re-run with a new snapshot date for a fresh export.",
@@ -958,59 +976,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
     },
     {
-      "filename": "ingest_boundaries.yml",
-      "name": "Data: ingest admin boundaries",
-      "description": "Loads ČÚZK RÚIAN administrative-unit polygons (kraj / okres / obec / KÚ) into the admin_boundaries table. Manual-only; boundaries change rarely (a few municipal mergers / cadastral re-alignments per year), so there is no cron. Re-run when ČÚZK publishes a notable update or when the operator wants to bring in newly-created units.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source_url",
-          "description": "RÚIAN SHP zip URL (from ČÚZK ATOM feed)",
-          "required": true,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "levels",
-          "description": "Levels to load (comma-separated). Default: all four.",
-          "required": false,
-          "type": "string",
-          "default": "kraj,okres,obec,ku",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Parse and validate only; do not write to DB.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "no_truncate",
-          "description": "Skip TRUNCATE; upsert into existing rows instead.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 30,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ingest_boundaries.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
-    },
-    {
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",
@@ -1141,7 +1106,7 @@
     {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
-      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
+      "description": "Load ČSÚ municipality population into obec_population (by RÚIAN code and year) for EVERY obec. Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2094,7 +2059,7 @@
     {
       "filename": "scrape_price_stats.yml",
       "name": "Scraping: Sreality price stats (ceny-nemovitosti, weekly + manual)",
-      "description": "Ingests the aggregate market statistics sreality publishes at /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables. For each active dataset (one named filter set) × tracked municipality × {prodej, pronájem} it fetches the per-month series from the login-gated estate_prices JSON API, then recomputes the per-city derived metrics (CAGR growth, gross yield) + refreshes the map choropleth. Design: docs/design/price-stats-datasets.md.",
+      "description": "Ingests the aggregate market statistics sreality publishes at /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables. For each active dataset (one named filter set) × town in ruian_translation × {prodej, pronájem} it fetches the per-month series from the login-gated estate_prices JSON API, then recomputes the per-city derived metrics (CAGR growth, gross yield) + refreshes the map choropleth. Design: docs/design/price-stats-datasets.md.",
       "manual": true,
       "schedules": [
         {
@@ -2108,13 +2073,12 @@
       "inputs": [
         {
           "name": "mode",
-          "description": "probe (test auth) | resolve (refresh localities) | full",
+          "description": "probe (test auth) | full",
           "required": true,
           "type": "choice",
           "default": "full",
           "options": [
             "probe",
-            "resolve",
             "full"
           ]
         },
@@ -2339,7 +2303,7 @@
     {
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
-      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values (+ city_population from data/csu_population.json when present).",
+      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values. A new city is bound to the RÚIAN town under its centroid; its population is that town's, loaded by load_obec_population.yml.",
       "manual": true,
       "schedules": [],
       "onPush": false,

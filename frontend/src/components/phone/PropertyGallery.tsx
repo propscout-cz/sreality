@@ -2,19 +2,17 @@
  * "Nemovitost"): the canonical ad's photos as full-width 4:3 slides — the 1080 px
  * copies (#1765) — snapped one per swipe, dots and "N fotek" under them. The
  * photos show bare, no stage wash: here the stage is the curation row's funnel
- * cell (operator ruling 2026-10-22). A tap opens the app's lightbox on that photo
- * at full size. */
+ * cell (operator ruling 2026-10-22). A tap opens the viewer on that photo at full
+ * size (listing-detail/PhotoViewer, the desktop's opener too). */
 
-import { Suspense, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
+import { OFF_MARKET_DIM, usePhotoViewer } from '@/components/listing-detail/PhotoViewer';
 import { czPlural } from '@/lib/format';
 import { imageSrc } from '@/lib/imageUrl';
-import { lazyChunk } from '@/lib/lazyChunk';
 import type { ImagePublic } from '@/lib/types';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
-
-const ImageLightbox = lazyChunk(() => import('@/components/ImageLightbox'));
 
 /* More dots than this stop reading as positions; a counter takes over. */
 const MAX_DOTS = 12;
@@ -31,7 +29,7 @@ export default function PropertyGallery({
   isActive: boolean;
 }) {
   const [at, setAt] = useState(0);
-  const [openAt, setOpenAt] = useState<number | null>(null);
+  const { open, viewer } = usePhotoViewer(images, isActive);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
   const raf = useRef(0);
 
@@ -66,7 +64,7 @@ export default function PropertyGallery({
             <button
               key={img.id}
               type="button"
-              onClick={() => setOpenAt(i)}
+              onClick={() => open(i)}
               aria-label={`Fotka ${i + 1} z ${images.length}`}
               className="relative aspect-[4/3] w-full shrink-0 snap-start overflow-hidden bg-[var(--color-inset)]"
             >
@@ -81,7 +79,7 @@ export default function PropertyGallery({
                   loading={i === 0 ? 'eager' : 'lazy'}
                   decoding="async"
                   onError={() => setBroken((prev) => new Set(prev).add(img.id))}
-                  className={`block h-full w-full object-cover ${isActive ? '' : 'opacity-70'} ${PHOTO_DARK}`}
+                  className={`block h-full w-full object-cover ${isActive ? '' : OFF_MARKET_DIM} ${PHOTO_DARK}`}
                 />
               )}
             </button>
@@ -107,16 +105,7 @@ export default function PropertyGallery({
           {photosWord(images.length)}
         </span>
       </div>
-      {openAt != null && (
-        <Suspense fallback={null}>
-          <ImageLightbox
-            images={images}
-            startIndex={openAt}
-            onClose={() => setOpenAt(null)}
-            dim={isActive ? '' : 'opacity-70'}
-          />
-        </Suspense>
-      )}
+      {viewer}
     </div>
   );
 }

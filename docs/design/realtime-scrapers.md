@@ -108,8 +108,8 @@ budget and a 429/403 penalty propagates. Probes are net-polite: ~1 page/host/int
 far below today's accepted walk volume.
 
 **Explicitly rejected:** Playwright/headless (all 9 portals serve complete data over plain
-HTTP; the mmreality/ceskereality blocker is IP reputation, which only residential egress
-fixes — 10–50× per-page cost for nothing) and any new queue infrastructure (Redis etc. —
+HTTP, mmreality and ceskereality through residential egress — 10–50× per-page cost for
+nothing) and any new queue infrastructure (Redis etc. —
 Postgres SKIP LOCKED is the industry-standard substrate and already proven here).
 
 ## SLOs (operator-accepted 2026-07-02)
@@ -334,14 +334,14 @@ one `app_settings` integer, `realtime_sold_comps_interval_seconds`, seeded 0 by 
   fail-safe reason, sharpened here: a settings blip must not spend another site's bandwidth.
 - **The work-list is a query, not a queue** (`sold_db.sold_comp_cells`): obec cells of properties
   holding ANY account's pipeline card at a non-terminal, non-archived stage, active, `byt`/`dum`,
-  with a resolved point AND an `admin_boundaries` polygon, minus the cells whose NEWEST ledger row
+  with a resolved point AND a `ruian_unit_render` polygon, minus the cells whose NEWEST ledger row
   is `ok` within 35 days or `failed` within 6 hours; stalest first, 5 cells a pass. The source
   republishes a transfer ~30 days after the sale, so 35 days is not a guess — asking sooner cannot
   find anything new. The boundary join is the one clause that is about the QUEUE rather than the
   work: an unboxable cell can only be skipped, a skip writes no ledger row, and `NULLS FIRST` would
   then hand back the same starved cell at the head of every pass for ever.
 - **The cell is the unit, and the ledger is the run record.** The box is the obec's
-  `admin_boundaries` envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
+  RÚIAN render polygon's envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
   largest radius). `sold_fetch.fetch_cell` NEVER raises: ok, failed or skipped, every attempt that
   has a box ends as a `sold_transaction_fetches` row — a cell that failed silently would be
   indistinguishable from a cell that holds no sales. And an `ok` row says what it COVERED: a walk
@@ -589,10 +589,10 @@ reads `beat_at` for every worker, plus the `health` entry (`last_pass_at`, `fail
 `last_error`, `in_flight_s`) and the row's `started_at` for its `health_lane` cell (migration 621).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC
-the worker wrote no heartbeat and ran no lane, yet never exited. ceskereality answered 403 to
-every request; each 403 penalized the shared ledger and each retry leased a fresh batch, so
-`next_slot_at` ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The
-probe lane reached ceskereality (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
+the worker wrote no heartbeat and ran no lane, yet never exited. Penalized requests on one
+portal each widened the shared ledger and each retry leased a fresh batch, so `next_slot_at`
+ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The probe lane
+reached that portal (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
 the pass at `LANE_PASS_TIMEOUT_SECONDS` but the thread slept on, and with no pass lock every pass
 added one (eighteen by 23:15, plus drain threads) until asyncio's default executor
 (min(32, cpu+4)) was full. The heartbeat write and every lane's interval read ran on that same
@@ -659,11 +659,11 @@ Four changes, each closing one link:
   default-action signal sent to PID 1, so a `signal.alarm` backstop kills nothing. The timer
   dumps to /dev/null: it fires only when the dump into stderr is stuck, and its own write into
   that pipe would block it too.
-Not done here, follow-ups: a per-portal circuit breaker (trip a portal that 403s everything
-instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
+Not done here, follow-ups: a per-portal circuit breaker (trip a portal whose every request
+fails instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
 running ahead, handing unused leased slots back when a run ends, and a standing `faulthandler`
 timer, re-armed by each beat, for a C call that holds the GIL (the watchdog thread cannot run to
-arm its own then). After a blocked
+arm its own then). After a penalized
 portal recovers, reset its `portal_rate_state` row (`penalty_factor = 1`, `next_slot_at = now()`)
 before lifting the kill switches: a refused lease does not decay the penalty.
 

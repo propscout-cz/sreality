@@ -43,6 +43,7 @@ import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import type { ListingSnapshotPublic, PropertySource, SoldComparable } from '@/lib/types';
 import { useCityQuality } from '@/lib/useCityQuality';
 import { band, shownPrice, useValuoPage } from '@/lib/valuo';
+import { contactAbout } from '@/lib/brokerContact';
 import BrokerList from './BrokerList';
 import { DescriptionBody } from './ListingOverview';
 import type { PropertyTabId } from './PropertyTabs';
@@ -84,7 +85,7 @@ export default function PropertyOverview({
           label="Popis"
           empty="Inzerát nemá popis."
           className="min-w-0"
-          clamp="line-clamp-6"
+          lines={6}
           words={['Celý popis', 'Méně']}
         />
         <AdvertsPriceCard
@@ -105,6 +106,7 @@ export default function PropertyOverview({
           canonicalId={property.id}
           advertsFailed={sourcesFailed}
           onRetryAdverts={onRetrySources}
+          about={contactAbout(property)}
         />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
         <CityQualityCard obecId={property.obec_id} />

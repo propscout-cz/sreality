@@ -49,6 +49,7 @@ from scraper.portal import (
     walk_coverage,
 )
 from scraper.portal_identity import Resolved
+from scraper.price_reading import PriceReading, resolve
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
 from scraper.rate_limit import OUR_REFUSALS, RateLimiter
 from scraper.scraped_listing import ScrapedListing
@@ -100,20 +101,24 @@ class DrainItem:
 
 CONTENT_FREE_ERROR = "content-free page: no price, area, params, images or description"
 
+# A walk that fetched this many pages and collected no ad was not served the index: a page with no
+# listings, a redesign, a dead proxy. Keyed on what it COLLECTED, never on a declared count, because a
+# page without listings can still echo the site's own "N ads" meta text. 30 days of scrape_runs
+# (2026-11-02): every 100+ page walk that collected an ad collected 1,681+.
+EMPTY_WALK_MIN_PAGES = 100
+
 
 def content_free(payload: Any) -> bool:
     """A parsed detail that states NOTHING about the ad is not the ad's page.
 
-    ceskereality's "Ujišťujeme se, že nejste robot!" interstitial parsed to exactly that on
-    2026-10-30 18:17Z, and the drain wrote it into 51 live ads as content: price, area,
-    description and images blanked, `last_seen_at` bumped, the queue row completed as
-    written — rules 2, 4 and 5 broken by one write. realitymix served a category page at a
-    detail URL the same way in August (and the ad is live again today, so that page was a
-    failed fetch, never a gone signal). Keyed on the PAYLOAD'S SHAPE, never the portal
-    (rule 21): every HTML portal and bazos hand the runner a `ScrapedListing` under
-    "listing"; sreality's API payload has another shape, and an interstitial there fails
-    to parse as JSON instead. A real ad with no price states an area or a description;
-    nothing real states none of the five.
+    Writing one as content blanks the ad's price, area, description and images, bumps
+    `last_seen_at` and completes the queue row as written — rules 2, 4 and 5 broken by one
+    write. realitymix served a category page at a detail URL this way in August (and the
+    ad is live again today, so that page was a failed fetch, never a gone signal). Keyed on
+    the PAYLOAD'S SHAPE, never the portal (rule 21): every HTML portal and bazos hand the
+    runner a `ScrapedListing` under "listing"; sreality's API payload has another shape,
+    and a non-JSON page there fails to parse as JSON instead. A real ad with no price
+    states an area or a description; nothing real states none of the five.
     """
     listing = payload.get("listing") if isinstance(payload, Mapping) else None
     if not isinstance(listing, ScrapedListing):
@@ -259,8 +264,21 @@ class PortalDefaults:
         return None
 
 
+# What a card states: a CZK total, or a reading that may be a rate or in EUR (#2355).
+IndexPrice = int | PriceReading | None
 # What one walk (or one probe page) saw: native_id -> (detail_ref, index price).
-Sightings = Mapping[str, tuple[str | None, int | None]]
+Sightings = Mapping[str, tuple[str | None, IndexPrice]]
+
+
+def _index_total(price: IndexPrice, row: Mapping[str, Any] | None) -> int | None:
+    """The card's total, resolved like the detail against the row's stored area and category."""
+    if not isinstance(price, PriceReading):
+        return db.sane_price_czk(price)
+    row = row or {}
+    return db.sane_price_czk(resolve(
+        price, area_m2=row.get("area_m2"), category_main=row.get("category_main"),
+        category_type=row.get("category_type"),
+    ).total_czk)
 
 
 def reconcile_sightings(
@@ -273,11 +291,11 @@ def reconcile_sightings(
     retry_first: Callable[[Any, list[str]], set[str]] | None = None,
 ) -> dict[str, int]:
     """Touch every sighted listing we hold and enqueue new + repriced ids (rules #3/#4/#19); conn=None is a dry run."""
-    prices = {nid: db.sane_price_czk(price) for nid, (_, price) in sightings.items()}
     existing = (
         db.index_summary_native(conn, source, list(sightings))
         if conn is not None and sightings else {}
     )
+    prices = {nid: _index_total(price, existing.get(nid)) for nid, (_, price) in sightings.items()}
     if conn is not None and existing:
         db.touch_listings_by_id(conn, [row["id"] for row in existing.values()])
     new = [nid for nid in sightings if nid not in existing]
@@ -297,6 +315,9 @@ def reconcile_sightings(
         "ENQUEUE source=%s%s new=%d changed=%d unchanged=%d enqueued=%d",
         source, label, len(new), len(changed), len(existing) - len(changed), enqueued,
     )
+    rearmed = db.rearm_sighted_given_up(conn, source, new) if conn is not None and new else 0
+    if rearmed:
+        LOG.info("REARM source=%s%s sighted_given_up=%d", source, label, rearmed)
     return {"found_new": len(new), "enqueued": enqueued}
 
 
@@ -770,12 +791,14 @@ def run_index_walk(
         if conn is not None:
             conn.close()
 
+    empty_walk = total_index == 0 and total_pages >= EMPTY_WALK_MIN_PAGES
+    errors = failed_categories + int(empty_walk)
     LOG.info(
         "RUN done pages=%d enqueued=%d to_verify=%d deferred=%d errors=%d",
         total_pages, total_enqueued,
         sum(c["listings_to_verify"] for c in category_aggregates),
         sum(c["verify_deferred"] for c in category_aggregates),
-        failed_categories,
+        errors,
     )
     scrape_agg: dict[str, Any] = {
         "index_pages":          total_pages,
@@ -784,20 +807,27 @@ def run_index_walk(
         "listings_updated":     0,
         "listings_inactive":    sum(c["listings_inactive"] for c in category_aggregates),
         "images_discovered":    0,
-        "errors":               failed_categories,
+        "errors":               errors,
         "by_category":          category_aggregates,
     }
     # Every unit this run attempted failed -> the portal is fully blocked
     # (e.g. a WAF 403s the runner's egress). Fail loudly so the workflow goes
     # red instead of recording a green zero-listing run; a partial failure
     # stays rc=0 with errors>0 in the aggregate.
-    rc = 1 if unit_entries and unit_failures == unit_entries else 0
-    if rc != 0:
+    all_failed = bool(unit_entries) and unit_failures == unit_entries
+    if all_failed:
         LOG.error(
             "INDEX every category failed (%d/%d); failing the run",
             unit_failures, unit_entries,
         )
-    return (rc, scrape_agg)
+    # The same block arriving as HTTP 200s. Only the exit changes: nomination already ran above,
+    # on each unit's own reached_end (rule #3). The CHECK shape makes this the run's reason line.
+    if empty_walk:
+        LOG.error(
+            "CHECK empty_walk status=fail: %s collected 0 ads from %d pages; failing the run",
+            portal.source, total_pages,
+        )
+    return (1 if all_failed or empty_walk else 0, scrape_agg)
 
 
 def run_index_probe(

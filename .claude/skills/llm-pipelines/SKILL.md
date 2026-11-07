@@ -58,8 +58,7 @@ calls an LLM must do the same.
   curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact
   or estimate reads the levels.
 - `enrich_listing_description` — the post-publication text lane (`toolkit/description_extraction.py`),
-  rebuilt by field-capture W7 on the **realtime worker** (lane `text_extract`, constant 300 s, no
-  flag / setting / env var). **A field is in scope only once its `Cell.gate.passed` is true** (R7,
+  rebuilt by field-capture W7 on the **realtime worker** (lane `text_extract`, 300 s; `scraper-ops`). **A field is in scope only once its `Cell.gate.passed` is true** (R7,
   a measured ≥ 95 % panel — `scripts/bakeoff_text_extraction.py`, dispatch-only): a closed gate is
   not extracted, not billed and not written (open since 2026-09-22: bazos `floor` + `has_lift`).
   **Since location reader W1 (2026-09-30)** the lane reads the ADVERT TEXT (headline + description, composed
@@ -69,11 +68,12 @@ calls an LLM must do the same.
   claim lane (hourly, and the worker right after each pass) mines the CURRENT reading (V1–V4) into bazos@10's
   claims, stamped `mined_contract_version` (mig 581); no model call. A
   `not_property` advert keeps its town; business premises are an offer (that edit: ≈ 54.7k re-reads, ≈ $25).
-  The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
-  `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
-  a price-only snapshot never re-bills, and **a prompt edit or a gate opening re-reads the corpus**
-  (delisted adverts once per schema, never filled), so batch such edits. Concurrency
-  + the one pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
+  The cache is keyed `(listing_id, text_hash, extractor_version)` (mig 552), the version
+  `<schema>:<prompt+schema hash>:<model>`: a model swap re-attempts, a price-only snapshot never
+  re-bills, a changed text (reparse heals too) is re-read within a ~45 min walk (24 h head +
+  25k archived ads a pass), **a prompt edit or a gate opening re-reads the corpus**
+  (delisted adverts once per schema, never filled), so batch such edits. Concurrency + the
+  pre-call budget guard come from `toolkit.vision_batch.run_batch`; the write is
   NULL-only (`coalesce`), active rows only, with the `dirty_properties` enqueue in the same CTE and
   no snapshot; a failed call is cached with an attempt count, given up after 5, as is an empty
   location block on an `llm_text` portal (W3).
@@ -82,8 +82,7 @@ calls an LLM must do the same.
   convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN
   statements (R8): new ads in scope still unread 1-24 h after arriving (Wilson lower bound; counted over
   arrivals, never through the eligibility predicate), p95 minutes to the first reading beside the 20 min
-  SLO, and the backlog's ETA; a provider stop (`last.fatal`, a failed
-  pass in the heartbeat) is the `llm` check's credit cell and the `jobs` check's `lane/text_extract` cell. `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
+  SLO, and the backlog's ETA; a provider stop is the `llm` check's credit cell and the `jobs` check's `lane/text_extract` cell. `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
   A komerční parcel the plot rule (`scraper.area.stated_plot`) drops because the description names a DIFFERENT one lives only in that text — the text lane's to fill (no `estate_area` cell is gated open today).
 
 **Vision image downscaling is unified in `toolkit/vision_images.py` — one helper, two
@@ -152,12 +151,12 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
   typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
-- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops) +
+- **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE) +
   `rent_map_values` + `rent_map_adjustments` (migration 132, history kept).
   `api.rent_map.insert_revision` parses (stdlib `zipfile`+`xml.etree`), COPYs, re-renders the
   map's choropleth (reference overlay `rent_map`, VK1–4 variants; a refused guard keeps the revision
-  and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; every caller of the
-  measure sees the new revision at that REFRESH, nothing to recompute. Fed by the monthly
+  and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; readers see the
+  new revision at that REFRESH. A re-fetch of the served file only stamps it (#2318). Fed by the monthly
   `rent_map` runner job (it re-renders `rent_map` last) and the Settings upload / "Fetch latest
   now" (`POST /admin/rent-map/*`). Sheet sanity check:
   Litoměřice older 3+1, 68 m², +výtah +balkon +garáž → 291 Kč/m² → 19 788 Kč.

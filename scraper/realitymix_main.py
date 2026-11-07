@@ -16,8 +16,8 @@ Two deliberate differences from the ceskereality template:
   instead of from the URL — self-contained, one config walks all 12 (cm × ct).
 - `walk_category` drives `?stranka` straight to `ceil(total / PER_PAGE)` (the
   page-reported total) rather than trusting a pager "next" arrow, and treats a
-  barren page as transient (one retry). This is the lesson from ceskereality's
-  reverted #637: an arrow-trusting walk stops early on a throttled/degraded page.
+  barren page as transient (one retry). This is the lesson of the reverted #637:
+  an arrow-trusting walk stops early on a barren page.
   realitymix is nginx (not Cloudflare) and paginates reliably to the exact total
   with no deep-pagination cap, so a per-category walk can reach the portal's own
   end → `walk_reached_end` gates the runner's nomination of the rows the walk
@@ -42,15 +42,15 @@ from scraper.portal import (
     walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
-from scraper.portal_runner import DrainItem
+from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 from scraper.realitymix_client import RealitymixClient, detail_url
 from scraper.realitymix_parser import (
     CATEGORY_MAIN,
     SALE_TYPE,
-    index_price,
     parse_detail,
     parse_index,
+    read_price,
 )
 
 LOG = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
         client = RealitymixClient(limiter=limiter)
 
         native_ids: list[str] = []
-        price_map: dict[str, int | None] = {}
+        price_map: dict[str, IndexPrice] = {}
         ref_map: dict[str, str] = {}
         total: int | None = None
         pages = 0
@@ -175,7 +175,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
                     native_ids.append(nid)
                     new_on_page += 1
                 ref_map[nid] = detail_url(item.detail_path)
-                price_map[nid] = index_price(item.price_text)
+                price_map[nid] = read_price(item.price_text)
 
             if self._max_pages and pages >= self._max_pages:
                 stop = "page_cap"

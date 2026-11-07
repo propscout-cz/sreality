@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute
+from tests._live_property import REQUIRED_DB, _advert, _mirror_unit, _property, _recompute
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -75,18 +75,41 @@ def test_recompute_city_proximity_holds_an_advisory_lock_until_its_transaction_e
     assert cur.fetchone()[0] == 1
 
 
-def _placed_property(cur: Any, at: tuple[float, float]) -> int:
-    """A property whose location ad has a map point, stamped long ago."""
+TESTOV, VEDLEJOV = 9990101, 9990102
+
+
+def _placed_property(cur: Any, at: tuple[float, float], town: int = TESTOV) -> int:
+    """A property whose location ad has a map point bound to `town`, stamped long ago."""
     pid = _property(cur)
     lid = _advert(cur, pid, source="idnes")
     cur.execute(
         "INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, uncertainty_radius_m, "
-        "  country_status, resolver_version, claim_set_hash, registry_version, country_code, obec_name) "
+        "  country_status, resolver_version, claim_set_hash, registry_version, country_code, obec_name, obec_kod) "
         "VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), 'exact', 'address_point'::location_granularity, 10, "
-        "  'cz'::country_status, 'test', '\\x00'::bytea, 'test', 'CZ', 'Testov')", (lid, *at))
+        "  'cz'::country_status, 'test', '\\x00'::bytea, 'test', 'CZ', 'Testov', %s)", (lid, *at, town))
     _recompute(cur, pid)
     cur.execute("UPDATE properties SET city_proximity_computed_at = '2026-01-01 00:00+00' WHERE id = %s", (pid,))
     return pid
+
+
+def _testov(cur: Any) -> None:
+    """Testov, 25,000 people, and its smaller neighbour Vedlejov to the east (W8: the register and obec_population)."""
+    _mirror_unit(cur, "obec", TESTOV, "Testov", (15.45, 49.45, 15.55, 49.55))
+    _mirror_unit(cur, "obec", VEDLEJOV, "Vedlejov", (15.55, 49.45, 15.65, 49.55))
+    cur.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, 2025, 24000), "
+                "(%s, 2026, 25000), (%s, 2026, 800)", (TESTOV, TESTOV, VEDLEJOV))
+
+
+@REQUIRED_DB
+def test_the_home_population_is_the_bound_towns_and_the_anchors_are_the_registers(cur: Any) -> None:
+    """home_obec_pop is the latest population of the town the location ad is bound to (`ll.obec_kod`), not of the
+    polygon nearest its pin; the 5/15 km anchors are the register's render polygons with population >= 10,000."""
+    _testov(cur)
+    inside_bound_next_door = _placed_property(cur, (15.50, 49.50), town=VEDLEJOV)
+    cur.execute("SELECT recompute_city_proximity(true)")
+    cur.execute("SELECT home_obec_pop, near_pop_5km, near_pop_15km FROM properties WHERE id = %s",
+                (inside_bound_next_door,))
+    assert cur.fetchone() == (800, 25000, 25000)
 
 
 @REQUIRED_DB
@@ -94,9 +117,7 @@ def test_the_full_rebuild_recomputes_every_placeable_property_in_batches(cur: An
     from scripts.recompute_city_proximity import full_rebuild
 
     centre = (15.50, 49.50)
-    cur.execute(
-        "INSERT INTO admin_boundaries (id, level, name, geom, population) VALUES (9990101, 'obec', 'Testov', "
-        "ST_Multi(ST_MakeEnvelope(15.45, 49.45, 15.55, 49.55, 4326))::geography, 25000)")
+    _testov(cur)
     pids = [_placed_property(cur, (centre[0] + d, centre[1])) for d in (0.0, 0.001, 0.002)]
     unplaced = _property(cur)
     assert full_rebuild(cur.connection, batch_size=2) >= 3

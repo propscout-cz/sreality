@@ -67,8 +67,9 @@ Independent of the analytical, UI, and map tracks.
   Scrapers page's portal posture still reads it) and `delist_flip_refusals`, still written by
   `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
   removes the writer first).
-- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 (DONE 2026-11-02: the
+  walk re-arms only active listings, an unheld ad returns on a sighting at most once per 24 h) a sreality ad that
+  answered HTTP 409 (615387212) was given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
   PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
   bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
@@ -194,18 +195,13 @@ Independent of the analytical, UI, and map tracks.
   single pre-594 verdict closed (sreality 10.7k, idnes 9.5k, bezrealitky 0.9k, remax 0.4k,
   mmreality 0.6k over 14 d) at VERIFY priority, pilot 25/portal then release.
 
-### ceskereality hard-403 — Chrome client hints (2026-10-02, recovered)
-- 2026-10-02: every ceskereality request 403'd from 09-29 07:37Z (last 200) until 10-02 — the site's own
-  nginx (not Cloudflare) rejects a Chrome UA arriving over HTTP/1.1 without `sec-ch-ua` client hints (a
-  header rule, not IP/proxy). Fixed by #1685: `BasePortalClient.CLIENT_HINTS` opt-in derives the hints from
-  the UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
-  36995661138): 0×403, 5/5 pages, errors=0 → `portal_rate_state` reset, both `app_settings` kill switches
-  lifted, both workflows re-enabled, full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
-- **Next:** `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403s on ceskereality (the on-demand
-  URL parser that shared the exposure was deleted 2026-10-20) — pre-existing exposure;
-  new ceskereality rows/day fell 800→2 on 09-26..09-29 BEFORE the wall, unexplained; a fully blocked walk
-  ends green (`errors=0`, `walk_coverage='complete'` with collected=0) and the drain budget is not enforced
-  inside a chunk — observability follow-ups from the 10-02 review.
+### ceskereality — Chrome client hints (2026-10-02, done)
+- 2026-10-02, #1685: the `BasePortalClient.CLIENT_HINTS` opt-in derives the `sec-ch-ua` hints from the
+  UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
+  36995661138): 5/5 pages, errors=0; full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
+- **Next:** `scripts/verify_outbound_urls.py` HEADs ceskereality unproxied; new ceskereality rows/day
+  fell 800→2 on 09-26..09-29, unexplained; the drain budget is not enforced inside a chunk —
+  follow-ups from the 10-02 review.
 
 ### The sighting diff lives once — `portal_runner.reconcile_sightings` (2026-10-01, done)
 - **Moved:** the index-walk diff (clamp → `index_summary_native` → touch → `classify_index_sighting`
@@ -568,7 +564,7 @@ Independent of the analytical, UI, and map tracks.
   (22 scopes, ~2,400 pages) GitHub was cancelling the walk at 75 min, so the tail scopes never
   walked and the `scrape_run` was never finalized.
 - **Next:** watch the first `COVERAGE` warnings per portal (a forged terminator shows up there
-  first) and the drain volume from ceskereality's newly-unblocked categories.
+  first) and the drain volume from ceskereality's newly-nominating categories.
 
 ### Presence-verified delisting — rule #3 rewritten (2026-09-07, done)
 - Index absence NOMINATES, the page DECIDES: a complete category walk queues every active
@@ -601,8 +597,7 @@ Independent of the analytical, UI, and map tracks.
   `written_unseen=0`, every `CHECK` row opens as a live detail page (all ceskereality/
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or
   price dropped — content, since the HTML parsers' key set is fixed) and erroring + given-up is
-  negligible (else first make the `enqueue_presence_checks` re-arm skip inactive listings — it
-  re-arms given-up rows forever, #1851). Finish every pass within 7 days: the "already read as gone" skip
+  negligible (the `enqueue_presence_checks` re-arm skips inactive listings since #1851). Finish every pass within 7 days: the "already read as gone" skip
   and the readout read `detail_queue_completions` (7-day retention); a later pass only re-fetches.
 
 ### mmreality: ten per-type indexes, proved against the portal's own count (2026-09-06, done)

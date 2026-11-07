@@ -132,7 +132,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `unconfigured` and touches nothing. Steps fan_out / claim / send are its
              `portal_errors` cells, recorded by exception class only: an endpoint is a
              secret and never reaches the heartbeat or the log.
-- heartbeat: every 30s, upsert this worker's beat + per-lane fields into
+- heartbeat: every 30s, upsert this worker's beat, per-lane fields and the commit it
+             runs (`version`) into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
              boot, seeded from the previous row, so a deploy resets no counter. It
@@ -467,6 +468,11 @@ LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
 # MIN_AGE is skipped), so the tick rate costs one ~1 s SELECT an hour and nothing else; an
 # hourly tick is what makes the lane's liveness judgeable (Watch after 3 h, not 3 days).
 LOCATION_REFETCH_TICK_SECONDS = 3600.0
+# The candidates read joins every active ad to its location row. That is seconds on an instance
+# whose memory holds the listings heap and minutes on one that reads it from disk (Supabase Large,
+# 2026-11-04: the 120 s default cancelled it, and at an hourly tick one miss is a Jobs Problem).
+# One read-only SELECT an hour that touches no Browse table can afford the wait.
+LOCATION_REFETCH_STATEMENT_TIMEOUT_S = 600
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
 # the portals' geocoding lag, and it means a listing discovered today gets its second look
 # on TOMORROW's tick rather than waiting for the day after.
@@ -526,11 +532,13 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
-# pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
-# under both. Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S,
-# past this budget since curation sync (migration 696): all but the last alarm (parsing) fit, and
-# it, like a gauge that does not fit the rest, is deferred to the next 60 s tick, never started
-# short (run_due). The harness stays a lazy import of `_health_sync`, so the figure is read there.
+# pass for 600 s (migration 621, c_lane_dead in 682's health_liveness): 500 s plus the 60 s tick and
+# the heartbeat's 30 s lag stays under both, so the pass cannot grow to hold every alarm at once.
+# Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S, 670 s
+# since the Large-compute budgets (2026-11-05; the arithmetic is there): all but the last alarm
+# (parsing, 300 s) fit, 370 s, and it, like a gauge that does not fit the rest, is deferred to the
+# next 60 s tick, never started short (run_due); due alone, its 300 s fits. The harness stays a lazy
+# import of `_health_sync`, so the figure is read there.
 HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
@@ -1864,7 +1872,8 @@ def _location_refetch_sync() -> dict[str, Any]:
     conn = db.connect()
     try:
         rows = db.location_refetch_candidates(
-            conn, min_age_seconds=min_age, cap_per_source=cap)
+            conn, min_age_seconds=min_age, cap_per_source=cap,
+            statement_timeout_s=LOCATION_REFETCH_STATEMENT_TIMEOUT_S)
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
@@ -2480,7 +2489,8 @@ def _beat_sync(state: dict[str, Any]) -> None:
                 cur.execute(_HEARTBEAT_SQL, {
                     "worker": WORKER_NAME,
                     "started_at": state["started_at"],
-                    "details": Jsonb(_lane_snapshot(state["lanes"])),
+                    "details": Jsonb({**_lane_snapshot(state["lanes"]),
+                                      "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA")}),
                 })
         finally:
             with contextlib.suppress(Exception):

@@ -6,7 +6,6 @@ Mapy call is a mocked `requests.get`, so no credit is spent."""
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -34,7 +33,6 @@ def _row(granularity: str | None = "address_point", **over: Any) -> dict[str, An
         "quarter_rank": 50,
         "obec_rank": 40,
         "country_status": "cz",
-        "uncertainty_radius_m": Decimal("12.5"),
         "label": "Freyova 534/2, Praha",
     }
     row.update(over)
@@ -136,7 +134,6 @@ def test_location_answers_point_label_and_zoom_by_granularity(client, conn, gran
         "granularity_rank": RANKS[granularity],
         "precision": level,
         "country_status": "cz",
-        "uncertainty_radius_m": 12.5,
         "label": "Freyova 534/2, Praha",
         "zoom": zoom,
         "note": note,

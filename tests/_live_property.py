@@ -72,6 +72,36 @@ def _recompute(cur: Any, pid: int) -> None:
     cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
+def _registry_version(cur: Any) -> int:
+    """The current RÚIAN registry version, made when the replay holds none (migration 381 allows one)."""
+    cur.execute("SELECT id FROM registry_versions WHERE is_current")
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline, "
+                    "  is_current) VALUES (%s, 'baseline', '2026-10-31', '{}', 'test', 'test', true) RETURNING id",
+                    (f"lp-{uuid.uuid4().hex}",))
+        row = cur.fetchone()
+    return int(row[0])
+
+
+def _mirror_unit(cur: Any, level: str, code: int, name: str, box: tuple[float, float, float, float], *,
+                 parent: int | None = None, version: int | None = None, valid_from: str = "2020-01-01") -> int:
+    """A RÚIAN unit drawn at `version` (the current one by default): its render polygon and one pip piece, both the
+    box (west, south, east, north). Returns the unit's row id."""
+    version = _registry_version(cur) if version is None else version
+    cur.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, "
+                "  first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, lower(%s), %s, %s::ltree, "
+                "  %s, %s, %s) RETURNING id", (level, code, name, name, parent, f"x{code}", valid_from, version, version))
+    unit = int(cur.fetchone()[0])
+    cur.execute("INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose, "
+                "  generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point, "
+                "  containment_radius_m) "
+                "SELECT %s, %s, p, 0, g, ST_PointOnSurface(g), 0, ST_Centroid(g), 0 "
+                "  FROM (SELECT ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326)) AS g) s, unnest(ARRAY['render', 'pip']) p",
+                (unit, version, *box))
+    return unit
+
+
 def _account(cur: Any) -> uuid.UUID:
     """A bare tenant: no auth user, no membership, no seeded stages or collections."""
     cur.execute(

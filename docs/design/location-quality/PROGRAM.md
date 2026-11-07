@@ -38,12 +38,18 @@ These replace any earlier text they contradict. Q numbers restart: they are the 
 | 11-01 | Finished = every gate ticket closed. The session runs migrations itself. W3's REINDEX is a small numbered migration after the body re-walk. W5 goes before W7. | Programme. |
 | 11-01 | Glossary terms: **RÚIAN door**, **Sreality Datasets** (#2345). E111 goes to the engine session (#2344). | Glossary, engine. |
 | 11-02 | **Q8 (a): an ad gets a door from its pin only if it is a flat or a house, its pin is exact and exactly one door lies within 1 m, and its words do not disagree.** "What is certain gets a door." | W5b rebuilt. |
+| 11-02 | **A městská část filters as the set of its části**, through the one code predicate and with no new location field; a část that straddles several counts for each it touches. Still no served MOMC level (Q1). | #2380. |
 | 11-02 | **The translation into RÚIAN is kept and made the standard.** This corrects Q12's "a view, no stored crosswalk" above. RÚIAN is the foundation, and any outside source translates into it. | W8 redesign, below. |
 | 11-02 | Q10a (a): one translation table now (source, the source's own key, RÚIAN level and code, how it was matched, when last confirmed), Sreality Datasets first. Other sources move onto it when next touched. | W8. |
 | 11-02 | Q10b (a): keep today's 6,258 Sreality rows and confirm or add from ads at each fetch. A row stays when ads end, so no town stops updating. | W8. Replaces design default D1. |
 | 11-02 | Q10c (a): names stay the matching tool in `ruian_name_index`, because a name needs context and 1,635 of 6,258 town names are shared. The translation table records each result, whatever matched it. | W8. |
 | 11-02 | Q10d (a): W8's defaults D3 to D8 stand, and the series route becomes `/cities/{obec_id}/series`. | W8. |
 | 11-02 | Q13 (a): this programme's PRs enter the merge queue without a coordinator light, once CI and the gate pass, after telling the engine session about anything it reads. Other PRs keep the rule in `docs/agents/issue-tracker.md`. | Programme. Record: #2254. |
+| 11-02 | Q7: accept the merges W5b loses when a door gains a část and splits a block key. The engine session's next version fixes it so the next dedup pass resolves them. | W5b. Engine fix #2379 rides #2056. |
+| 11-02 | Q2: the pin audit page and its matview go only once the operator has a new, current view of the database's location data quality, which replaces them. That view's line count does not count against rule 25. | W6. |
+| 11-02 | Q3: an ad below address level that stands on a portal pin keeps its pin and reads as approximate. The audit view shows this with enough breakdown to see it. | W6 stays deletion only, plus the view. |
+| 11-02 | Q4: clear the end month on Sreality Datasets 9, 11, 13 and 14 (each was stored as 2026-06 by the creation form). | Done 11-02. |
+| 11-03 | W5b stage 1 (A, via the engine session): accept stage 1's losses (16 pair-level merges of 15,609; at cluster level only the Putimská mill changes, and only as a proposed split). The engine fixes ride #2056. This is not a merge order for #2339, and the Okružní pair 18579817×18734646 stays unjudged. | W5b stage 2 runs. A new loss class goes to the engine session first. |
 
 ### W8: one registry (added 2026-10-31)
 Consumers of `admin_boundaries` and what each takes from the mirror instead: brokers leaderboard and count book (migrations 580, 609: parents and names → `ruian_admin_units` chain); Datasets page and price statistics (obec → okres tree → the chain; sreality locality id → a view over current sreality ads' payload ids and their `listing_location.obec_kod`); sold comparables (`sold_db`, `sold_fetch`: the obec polygon envelope → `ruian_admin_unit_geometries` render geometry); map overlays (kraje outline, rent-map choropleth, migration 601 → render geometry); city proximity and curated city indexes (migrations 636, 674: polygon + population → geometry + `obec_population`); admin pages for CLIP tagging and condition scoring (kraj list → the mirror). `curated_cities.admin_boundary_id` is renamed to the RÚIAN code it already holds.
@@ -139,7 +145,7 @@ Each wave below replaces several local rules with one rule.
 - Respect the two-implementer limit.
 
 ### W0: a page with no listing content is a failed fetch (urgent, scraper track)
-I verified this tonight, and the review re-checked it at 22Z. At 18:17 to 18:20Z ceskereality served an anti-bot page, and our drain wrote it into 51 active listings as content: price, area, description and images blanked, `last_seen_at` bumped, completions marked "written". There has been no ceskereality completion since 18:20Z.
+I verified this tonight, and the review re-checked it at 22Z. At 18:17 to 18:20Z our drain wrote a ceskereality page with no listing content into 51 active listings as content: price, area, description and images blanked, `last_seen_at` bumped, completions marked "written".
 
 The review found the same defect class on realitymix. 4 active rows (e.g. 10104448) carry a category page ("Pronájem bytů - byty k pronájmu - Tábor") as content, the latest written at 13:47Z today.
 - **Change:** one shared rule in `portal_runner`. A parsed detail with no price, area, params, images and description is a failed attempt: attempts++, no write, no sighting. No new Portal seam is added until a portal needs one.
@@ -311,7 +317,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 | fetch-failure rule | per-portal challenge guards (gone signals stay per portal) |
 
 ## Deferred or rejected (headline)
-- **Deferred:** retiring the legacy `admin_boundaries` table (its own track; after W7 both registries agree on Praha).
+- **Deferred:** retiring the legacy `admin_boundaries` table (dropped 729, W8-4) (its own track; after W7 both registries agree on Praha).
 - **Deferred:** a radius gate in comparables (an estimation methodology change).
 - **Rejected:** a served MOMC level.
 - **Rejected as patchwork:** MOMC kept as a fallback in the quarter field.
@@ -354,7 +360,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 | 2,823 multi-pin, 136 towns, 86 streets | 2,289, 104, 50; all are portal edits over time |
 | #2102 open | closed 10-30 21:10Z. #1792 still open; #1634 also drops has_polygon |
 | ZSJ binds unmapped | ZSJ can never bind (0 name-index entries) |
-| ČÚZK publishes no Praha okres | the SHP pack and admin_boundaries carry 9999 |
+| ČÚZK publishes no Praha okres | the SHP pack and admin_boundaries (dropped 729) carry 9999 |
 
 ## Corrections to this plan (review, 22Z)
 | Plan said | Measured or read |

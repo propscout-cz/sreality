@@ -55,10 +55,10 @@ class MmRealityClient(BasePortalClient):
     # Route every request through the residential proxy in SCRAPER_PROXY_URL.
     # mmreality's Cloudflare edge HARD-403s our datacenter (GitHub-Actions) IP on
     # the first request (verified — the portal ingested 0 listings across 101
-    # blocked runs); a residential exit IP returns 200. Same opt-in the sister
-    # CF-blocked portal (ceskereality) uses; the shared browser UA is most natural
-    # once proxied, so no USER_AGENT override. Unset env = direct IP (logs a warn,
-    # then 403s) — a misconfigured deploy fails loudly, never silently green.
+    # blocked runs); a residential exit IP returns 200. Same opt-in ceskereality
+    # uses; the shared browser UA is most natural once proxied, so no USER_AGENT
+    # override. Unset env = direct IP (logs a warn, then 403s) — a misconfigured
+    # deploy fails loudly, never silently green.
     USE_PROXY = True
 
     def fetch_index(

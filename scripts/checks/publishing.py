@@ -101,22 +101,29 @@ select a.source, a.first_seen_at >= now() - make_interval(hours => %(window_h)s:
 """
 
 # One statement for every portal and the fleet. A portal's cell counts the properties holding an
-# active ad of that portal; the fleet's counts every active property once.
+# active ad of that portal; the fleet's counts every active property once. The active properties are
+# read once. A portal's holding is the property's own `active_sources` (the rollup's distinct portals
+# of its active ads, migration 590), never a join to every active ad: that read the listings heap
+# (1.73M buffers against 154k, 11-05) and ran past its 45 s budget on an 8 GB database (11-04). The
+# two differ only while a property waits in dirty_properties for its rollup, which fleet/dirty in
+# this check reports.
 _STOCK_SQL = f"""
 with {_REBUILT_CTE},
+active as materialized (
+    select p.id, p.active_sources, p.location_listing_ref_id, p.settled_at, p.first_seen_at,
+           p.created_at
+      from properties p
+     where p.status = 'active' and p.is_active),
 missing as materialized (
     select p.id, case{_STAGE_TAIL}
            end as stage
-      from properties p
+      from active p
       cross join rebuilt r
-     where p.status = 'active' and p.is_active
-       and not exists (select 1 from browse_list b where b.property_id = p.id)),
+     where not exists (select 1 from browse_list b where b.property_id = p.id)),
 held as (
-    select l.source, l.property_id
-      from properties p
-      join listings l on l.property_id = p.id and l.is_active
-     where p.status = 'active' and p.is_active
-     group by l.source, l.property_id)
+    select s.source, p.id as property_id
+      from active p
+      cross join lateral unnest(p.active_sources) as s(source))
 select h.source, count(*) as properties,
        count(m.id) filter (where m.stage = 'location_not_served') as location_not_served,
        count(m.id) filter (where m.stage = 'not_in_browse_list') as not_in_browse_list,
@@ -126,7 +133,7 @@ select h.source, count(*) as properties,
   left join missing m on m.id = h.property_id
  group by h.source
 union all
-select null, (select count(*) from properties p where p.status = 'active' and p.is_active),
+select null, (select count(*) from active),
        count(*) filter (where stage = 'location_not_served'),
        count(*) filter (where stage = 'not_in_browse_list'),
        count(*) filter (where stage = '{_WAITING}'),

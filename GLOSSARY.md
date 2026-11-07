@@ -79,8 +79,9 @@ _Avoid_: native id (in prose), hash id, listing id
 The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
 Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
 broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
-portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
-quoted on a call; never replaced by another number when it is missing.
+portal id. An ad may print none (a private seller). Shown beside the broker's contact, and written
+into a saved contact's note, so it can be quoted on a call; never replaced by another number when it
+is missing.
 _Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
@@ -274,6 +275,12 @@ _Avoid_: deal, card (alone)
 **Stage**:
 One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
 _Avoid_: fáze (in code), column
+
+**Viewing stage** (UI: "Fáze prohlídky"):
+The one stage an account marks as where a property waits for its viewing, whatever the stage is
+called; never a closed stage. Adding a viewing to a property that is off the board, at an earlier
+stage or closed offers to put its card there.
+_Avoid_: visit stage, the stage's key or label as its meaning
 
 **Collection**:
 A named set of properties an account keeps, optionally watched for changes. It may be shared
@@ -664,8 +671,10 @@ the user signed in on it, ended when that user signs out or another signs in.
 _Avoid_: device token, subscriber, push subscription (in prose)
 
 **Switch**:
-"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
-for the signed-in user, or stops it being one. There is no other push setting.
+"Oznámení na tomto iPhonu" in the phone app's account sheet: stops this phone being a push device
+for the signed-in user, or makes it one again. Push is on by default: the phone becomes a push
+device as soon as notifications are allowed (the feed asks for that one tap) and stays one for
+whoever signs in, until they switch it off. There is no other push setting.
 _Avoid_: push preference, channel picker, opt-in
 
 **Reference overlay**:

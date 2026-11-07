@@ -154,11 +154,16 @@ toolkit work.
   "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
   and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
-  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
-  "now" rule on today; a row opens its property.
+  arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a "now" rule on today; a
+  row opens its property.
 - **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
   under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
   full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
+- **Done** (operator ask 2026-11-07, #2436): past viewings are a day back. The Nadcházející / Vše scope is
+  gone (its default barred every day before today, so with every viewing behind the operator the tab showed
+  nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
+  (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
+  the ones still ahead ("2 v plánu"); another year's day title is "čt 27. listopadu 2025".
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
@@ -315,9 +320,8 @@ toolkit work.
   migration 680, and a placeholder-price floor in the rollup) was merged 2026-10-26 and reverted the next
   day (migration 685): the user narrows odd values with the filters (Lot area, Price, Price change).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
-  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
-  property's rating is the first non-null across its ads; G is also the legal "no certificate"
-  placeholder (~half of rated flats for sale), which no portal marks apart.
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). G is
+  also the legal "no certificate" placeholder (~half of rated flats for sale), which no portal marks apart.
 - **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
   existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
   (the explore-broker modal still opens a broker's whole book) and stays outside presets.
@@ -650,12 +654,12 @@ End-to-end browser flow over the U1b backend.
 
 ### browse-2: Region search + box plots (done)
 - Mapy.cz suggest / resolve proxy endpoints (`api/maps.py`) — bearer-
-  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware
+  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware (dropped 729)
   polygon resolution that auto-degrades to point + radius when the
   table is missing or empty.
 - Region page rebuilt around a single `LocationSearchBox`: typing a
   street address, neighbourhood, or kraj returns ranked Mapy.cz
-  suggestions and resolves to either a polygon (when admin_boundaries
+  suggestions and resolves to either a polygon (when admin_boundaries (dropped 729)
   ships) or a point + radius. Browse-1's district / radius pickers
   remain reachable under an "Advanced" disclosure for legacy
   bookmarks and direct radius drag-and-drop.

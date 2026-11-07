@@ -1,6 +1,6 @@
 ---
 name: database
-description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change.
+description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change, compute size (Large/2XL resize).
 ---
 
 # Database
@@ -106,8 +106,7 @@ did within minutes, hence migration 279).
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
   it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
-  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
-  ledgers the older copies (`property_maintenance_lease`, `broker_resolution_lock`, until #2267/#2273).
+  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
@@ -374,17 +373,18 @@ which extracts every name literal from both the repo tree and `pg_proc.prosrc` a
 `llm_cost_hour_rollup` keeps its own inline UPDATE because it must pass its own watermark as
 `complete_through`; don't unify it onto the helper without a fourth parameter.
 
-**Matview publication has ONE idiom: `select public.refresh_matview(name)`** (migration 578,
-the Broker Unify sprint's answer to the 2026-09-30 outage — a plain ACCESS EXCLUSIVE REFRESH
-of the broker count book (dropped by 693) blocked every reader for 352 s in working hours). Python
+**Matview publication has ONE idiom: `select public.refresh_matview(name)`** (migration 578;
+its header has the 2026-09-30 outage: a plain REFRESH blocked all readers). Python
 producers call `scraper.db.refresh_matview(conn, name)` and never run
 `refresh materialized view` themselves (`tests/test_matview_refresh_convention.py` fails CI
 on a bypass, and on a plain refresh in any migration after 578). The chokepoint RAISEs on a
-name with no `derived_artifacts` row (so for matviews the silent-no-op stamp hole is closed
-at runtime too), refreshes CONCURRENTLY — plain form only on an unpopulated first populate —
+name with no `derived_artifacts` row (closing the silent-no-op hole at runtime),
+refreshes CONCURRENTLY — plain form only on an unpopulated first populate —
 skips with -1 when a refresh of the same matview is already in flight
 (`pg_try_advisory_xact_lock`: transaction-scoped, so pooler-safe), and stamps rows +
-duration in the refresh's own transaction. **CONCURRENTLY is valid inside a transaction**
+duration in the refresh's own transaction. One stamp skips it: a re-fetch of the file
+`rent_map_cells` serves stamps it via the helper, unrefreshed, checked offline only (#2318).
+**CONCURRENTLY is valid inside a transaction**
 (the restriction people misremember is `CREATE INDEX CONCURRENTLY`'s); two producer comments
 claimed otherwise and drove the blocking design — never re-derive that claim from a comment.
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
@@ -453,14 +453,14 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.location_listing_ref_id`, never the
   canonical advert, since 636; a cohort goes spatial-first: `ll` → `properties lp on lp.location_listing_ref_id =
   ll.listing_id and lp.status = 'active'` → `listings l on l.id = lp.repr_listing_ref_id`). The codes are `ll.obec_kod` /
-  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
+  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN codes), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast
   `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it silently
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
   (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`, five levels.
-  `admin_boundaries` survives for price stats / the rent map / city proximity / the kraje overlay only — it is no
-  longer a location path. `scraper/street.py` still extracts a street from a portal page; that
+  A unit's polygon is `ruian_unit_render` (mig 725: current version, by `(level, code)`), a town's population
+  `obec_population` (by code, year). `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
   to `ruian_streets` in the anchoring obec is not published, so `street_name IS NOT NULL` implies
@@ -468,7 +468,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   worker's own sweep that a bump triggers (W2: no hand dispatch); check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
-  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;
+  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
@@ -490,3 +490,5 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 
 - `.claude/skills/database/references/tenancy.md` — full table-by-table RLS migration list,
   policy text, and the `property_pipeline` composite-FK detail.
+- `.claude/skills/database/references/compute-size.md` — read before advising on, or watching, a
+  compute-size switch, and before heavy work that needs 2XL first (seed, backfill, large migration).

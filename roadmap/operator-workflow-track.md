@@ -71,6 +71,24 @@ last-writer-wins.
       was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6
       deploys. Whoever closes it sets the index row back to 🟢.
 
+### Phase U-PAGE-EDITS: four property-page edits, each one shared primitive (spec #2425, 2026-11-06)
+
+Operator ask: call and save the broker from the top of the phone page; header photos open the viewer;
+adding a viewing date offers the viewing stage, which the stage set-up can mark; a long notes section
+shows "show more". Rulings 2026-11-06: silent at or after the viewing stage; backfill where exactly one
+open stage label names a visit; notes cut by height only; the "Všech N fotek" tile opens the viewer.
+
+- [x] **Show more (#2426, PR #2431).** `components/Expandable` (measured, focus-aware); the notes list cut at
+      24rem; the four hand-rolled clamps moved onto it.
+- [x] **Photo viewer (#2427, PR #2432).** `listing-detail/PhotoViewer` `usePhotoViewer` for the mosaic, the Fotky
+      tab and the phone swiper; the last tile opens the viewer on its photo.
+- [x] **Call + save contact (#2428, PR #2433).** `phone/BrokerStrip` under the curation row; `lib/vcard`,
+      `lib/personName`, `lib/brokerContact`; one `SaveContactButton` on every broker card. Gate #2430: the
+      operator's iPhone check.
+- [x] **Viewing stage (#2429, migration 734).** `pipeline_stages.role` (`viewing`, one per account, never
+      closed, cleared on archive), backfilled 10/10 boards; `add_card {stage_id}`; `lib/viewingStage` +
+      `pipeline/ViewingStageOffer`; the stage set-up's calendar toggle.
+
 ### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
 
 Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it
@@ -141,6 +159,12 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
       resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **Push on by default (PR #2399, 2026-11-04; #2398)** — the operator's iPhone had never subscribed (0 rows), so the
+      feed now asks for Apple's one tap itself (`components/phone/PushNotice`: an off row that is the tap, a denied row with
+      the Settings hint), the re-sync subscribes by itself wherever notifications are already allowed (a sign-in after a
+      sign-out, a replaced subscription, a failed registration), and the switch's off holds per account
+      (`sreality.push.off`); one subscribe path, overlapping re-syncs share one run; the Notifications page is its own
+      chunk (first-visit JS 327,566 B). Owed: the on-device proof, now from the feed row.
 - [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
       property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
       stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
@@ -709,7 +733,7 @@ Vertical ordering the operator controls, plus two data signals on the card.
 - **Civic index strip** — four fixed cells (celkové hodnocení, přírůstek obyvatel,
   stěhování mladých, nabídka práce) underscored by a 2px rule in the shared
   city-index scale's band colour, repeating the column header's motif at card
-  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id`, an
+  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id` (`obec_kod` since 726), an
   integer equi-join that reproduces the SQL predicate's `ST_Covers` arm (all 206
   curated cities have a boundary, so its radius arm is dead). No migration.
   ~52% of properties resolve to a curated city; the rest render no strip.

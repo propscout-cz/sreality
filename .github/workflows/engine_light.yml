@@ -1,0 +1,28 @@
+name: "CI: engine light"
+
+# Fails an engine-sensitive PR (a numbered migration, autodedup/, the worker or its lease, .railway/) that does not carry
+# the merge coordinator's light, the label engine-light. Every PR and every merge group gets a verdict.
+#
+# No path filters: a required check that never runs blocks the queue. A new push removes the label, which binds the
+# light to the commit reviewed; the merge group's run reads the PR's files and labels through the API and judges again.
+# Rules and the speed-bump caveat: docs/agents/issue-tracker.md § Merging.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+
+jobs:
+  engine-light:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Judge the light
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_engine_light.py

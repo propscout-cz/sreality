@@ -74,8 +74,9 @@ class ScrapedListing:
     price_czk: int | None = None
     price_unit: str | None = None
     # The price as the page states it when that is not Kč ("298000 EUR"). Hash-only, never a
-    # column: the portal re-converts it to `price_czk` daily, so an unchanged ad would snapshot
-    # on every exchange-rate move (rule 2) — the hash reads this in place of price_czk.
+    # column: idnes re-converts it to `price_czk` daily and our fixed EUR rate is reviewed
+    # quarterly (scraper.price_reading), so an unchanged ad would snapshot on every rate move
+    # (rule 2) — the hash reads this in place of price_czk.
     price_native: str | None = None
     area_m2: float | None = None
     # Which physical area `area_m2` holds ('usable'|'floor'|'total'|'plot'|

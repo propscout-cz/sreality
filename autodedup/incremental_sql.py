@@ -618,18 +618,23 @@ select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as bytes
    and c.relkind in ('r', 'p', 'm')
 """
 
-# What the generation holds, exactly. Cheap while the scope is small — which is the point of
-# having a scope — and replaced by the planner's estimate when `rt_scope = all`.
+# What the generation holds. `rt_fp` and `rt_block_cell` are counted exactly: they are small, and
+# the pass reads `rt_fp` as the scope's size. `fp_key` and `pairs` are only reported, so they are
+# the planner's whole-table estimate: an exact count of `pairs` (6.7 GB at four kraje) reads it from
+# disk on an instance whose memory cannot hold it and hit the pass's statement timeout on every
+# tick (2026-11-04, Large). The whole estimate replaces this when `rt_scope = all`.
 RT_ROW_CENSUS_SQL = """
-select 'fp_key' as table_name, count(*) as n
-  from autodedup.fp_key where generation = %(generation)s::text
-union all
-select 'rt_fp', count(*) from autodedup.rt_fp where generation = %(generation)s::text
-union all
-select 'pairs', count(*) from autodedup.pairs where generation = %(generation)s::text
+select 'rt_fp' as table_name, count(*) as n
+  from autodedup.rt_fp where generation = %(generation)s::text
 union all
 select 'rt_block_cell', count(*)
   from autodedup.rt_block_cell where generation = %(generation)s::text
+union all
+select c.relname, greatest(c.reltuples, 0)::bigint
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'autodedup'
+   and c.relname in ('fp_key', 'pairs')
 """
 
 RT_ROW_ESTIMATE_SQL = """

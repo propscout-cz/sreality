@@ -1,16 +1,13 @@
-"""Pure mapping for the sreality `estate_prices` / `localities/suggest` JSON.
+"""Pure mapping for the sreality `estate_prices` JSON.
 
-No HTTP, no DB — just dict-in / dict-out, so it unit-tests offline. Three jobs:
-build the `estate_prices` query params from a dataset filter spec, fold the
-monthly response arrays into per-month observation rows, and pick the best
-municipality match out of a `localities/suggest` response.
+No HTTP, no DB — just dict-in / dict-out, so it unit-tests offline. Two jobs:
+build the `estate_prices` query params from a dataset filter spec, and fold the
+monthly response arrays into per-month observation rows.
 """
 
 from __future__ import annotations
 
 from typing import Any
-
-from scraper.price_stats_enums import ENTITY_MUNICIPALITY
 
 
 class PriceStatsParseError(Exception):
@@ -104,56 +101,3 @@ def parse_estate_prices(payload: dict[str, Any]) -> dict[str, Any]:
         "aggregates": aggregates,
         "previous_range": result.get("previous_range"),
     }
-
-
-def _suggest_munis(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """The municipality (`source == 'muni'`) userData objects in a suggest response."""
-    results = payload.get("results") if isinstance(payload, dict) else None
-    out: list[dict[str, Any]] = []
-    for r in results or []:
-        ud = r.get("userData") or {}
-        if ud.get("source") == ENTITY_MUNICIPALITY:
-            out.append(ud)
-    return out
-
-
-def _muni_dict(ud: dict[str, Any]) -> dict[str, Any]:
-    """The fields we cache in price_stat_localities for one muni candidate."""
-    lat, lon = ud.get("latitude"), ud.get("longitude")
-    return {
-        "entity_id": ud.get("id"),
-        "entity_type": ENTITY_MUNICIPALITY,
-        "name": ud.get("municipality") or ud.get("suggestFirstRow"),
-        "municipality_id": ud.get("municipality_id"),
-        "municipality_seo_name": ud.get("municipality_seo_name"),
-        "district": ud.get("district"),
-        "district_id": ud.get("district_id"),
-        "district_seo_name": ud.get("district_seo_name"),
-        "region": ud.get("region"),
-        "region_id": ud.get("region_id"),
-        "region_seo_name": ud.get("region_seo_name"),
-        "lat": float(lat) if lat is not None else None,
-        "lon": float(lon) if lon is not None else None,
-    }
-
-
-def parse_suggest_municipality(
-    payload: dict[str, Any], *, phrase: str
-) -> dict[str, Any] | None:
-    """Best municipality match (exact name, else first), or None if no muni."""
-    munis = _suggest_munis(payload)
-    if not munis:
-        return None
-    want = phrase.strip().casefold()
-    chosen = next(
-        (m for m in munis if (m.get("municipality") or "").strip().casefold() == want),
-        munis[0],
-    )
-    return _muni_dict(chosen)
-
-
-def parse_suggest_municipalities(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """EVERY municipality candidate. Each carries its own coordinates, so
-    upsert_locality PIP-places each to its own RÚIAN obec — resolving all
-    same-name obce ('Nová Ves' has ~30) instead of just the first."""
-    return [_muni_dict(ud) for ud in _suggest_munis(payload)]

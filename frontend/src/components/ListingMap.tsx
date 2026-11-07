@@ -52,11 +52,7 @@ import {
   useMapZoom,
 } from '@/lib/mapOverlayDraw';
 import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
-import {
-  drawnUncertaintyRadiusM,
-  isPinExact,
-  uncertaintyPixelsAtZoom0,
-} from '@/lib/uncertaintyCircle';
+import { isPinExact } from '@/lib/pinPrecision';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
 
@@ -84,15 +80,6 @@ const viewBounds = (map: maplibregl.Map): MapBounds => {
   const b = map.getBounds();
   return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
-
-/* Fallback shape for a curated city that has no municipality boundary
- * (every city has one today, but a future operator upload might add one
- * before its admin_boundary link is backfilled). */
-const circlePolygonGeom = (
-  lat: number,
-  lng: number,
-  radiusM: number,
-): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
 
@@ -130,7 +117,7 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
   return `${czPriceCompact.format(r.price_per_m2)}\u00a0${PPM2_UNIT[basis]}`;
 };
 
-/* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
+/* `pin_exact` picks the pin's black outer contour (lib/pinPrecision.isPinExact):
  * present for a pin placed on a building, absent for anything coarser. Baked per
  * feature so the rule stays in TypeScript, where it is tested, and the paint
  * expression only reads a boolean. `is_active` picks the fill: the pin colour, or white and
@@ -173,27 +160,6 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     },
   })),
 });
-
-/* The one uncertainty circle on the map: the pin whose popup is open. Empty
- * otherwise — including for a pin with no circle to draw (building level, or
- * unresolved), whose popup says why in words. */
-const pinPrecisionArea = (
-  row: MapRow | null,
-  at: [number, number] | null,
-): GeoJSON.FeatureCollection<GeoJSON.Point, { px_z0: number }> => {
-  const radiusM = row ? drawnUncertaintyRadiusM(row) : null;
-  return {
-    type: 'FeatureCollection',
-    features:
-      radiusM == null || at == null
-        ? []
-        : [{
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: at },
-            properties: { px_z0: uncertaintyPixelsAtZoom0(radiusM, at[1]) },
-          }],
-  };
-};
 
 /* Imperative "fly to this place" command. `ts` is a monotonic stamp
  * (Date.now() at the originating event) so back-to-back picks of the
@@ -746,41 +712,6 @@ export default function ListingMap({
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      /* HOW FAR OFF THIS PIN MAY BE — for the ONE pin whose popup is open (see
-       * lib/uncertaintyCircle for why it is no longer drawn under every pin). Its
-       * own source holding zero or one point, fed by the `point`
-       * click handler and emptied when that popup closes. A `circle` layer, not
-       * a polygon ring like `center-circle`: the radius interpolates on zoom with
-       * an exponential base of exactly 2, which is EXACT (web-Mercator metres per
-       * pixel halve per zoom level). Added before `point` so the pin always sits
-       * on top of its own circle. */
-      map.addSource('pin-precision', {
-        type: 'geojson',
-        data: pinPrecisionArea(null, null),
-      });
-      map.addLayer({
-        id: 'pin-precision-area',
-        type: 'circle',
-        source: 'pin-precision',
-        paint: {
-          'circle-radius': [
-            'interpolate', ['exponential', 2], ['zoom'],
-            0, ['get', 'px_z0'],
-            20, ['*', ['get', 'px_z0'], 2 ** 20],
-          ],
-          'circle-color': PIN_COLOR,
-          'circle-opacity': 0.08,
-          'circle-stroke-color': PIN_COLOR,
-          'circle-stroke-width': 1.5,
-          'circle-stroke-opacity': 0.6,
-          /* A footprint on the ground, so it stays a circle around the pin when
-             the map is pitched rather than a disc facing the camera. It is never
-             a hit target: no handler binds to this layer, and listingUnderCursor
-             queries ['point', 'counts'] by name. */
-          'circle-pitch-alignment': 'map',
-        },
-      });
-
       /* The black outer contour of an exact pin (building / address). A layer of
        * its own because a circle has ONE stroke, and the white (active) or pin-coloured
        * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
@@ -942,34 +873,22 @@ export default function ListingMap({
         hidePreview();
       });
 
-      const setPinPrecisionArea = (row: MapRow | null, at: [number, number] | null) => {
-        (map.getSource('pin-precision') as GeoJSONSource | undefined)
-          ?.setData(pinPrecisionArea(row, at));
-      };
-
       map.on('click', 'point', (e) => {
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return;
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
-        /* Removing the previous popup fires its `close`, which clears the
-         * previous circle before this one is drawn; the hover preview gives way. */
         hidePreview();
         popupRef.current?.remove();
-        const popup = new maplibregl.Popup({
+        popupRef.current = new maplibregl.Popup({
           closeButton: true,
           closeOnClick: true,
           maxWidth: '280px',
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(listingPopupHtml(props, newTabRef.current));
-        /* The circle lives exactly as long as the popup that explains it: its
-         * ×, a click elsewhere on the map, or the next popup replacing it all
-         * end in `close`. */
-        popup.on('close', () => setPinPrecisionArea(null, null));
-        setPinPrecisionArea(props, at);
-        popupRef.current = popup.addTo(map);
+          .setHTML(listingPopupHtml(props, newTabRef.current))
+          .addTo(map);
       });
 
       /* The circle map area. The polygon source carries an empty ring
@@ -1211,9 +1130,9 @@ export default function ListingMap({
    * by-index, the boundary polygons, or the underlying data. The shared
    * `interpolate` paint expression reads `properties.value`, so a change
    * of colorByIndex is implemented as a fresh setData with new values +
-   * labels. Geometry is the municipality boundary (JSON.parsed from the
-   * ST_AsGeoJSON string), falling back to a radius circle if a city has
-   * no boundary. */
+   * labels. Geometry is the RÚIAN render polygon of the town (JSON.parsed
+   * from the ST_AsGeoJSON string); a city the register cannot draw is not
+   * drawn. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
@@ -1230,7 +1149,7 @@ export default function ListingMap({
      * that case (or when no index is selected) so no figure is drawn. */
     const fc: CityFC = {
       type: 'FeatureCollection',
-      features: list.map((c) => {
+      features: list.flatMap((c) => {
         let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null;
         const raw = polys.get(c.city_id);
         if (raw) {
@@ -1243,9 +1162,7 @@ export default function ListingMap({
             geometry = null;
           }
         }
-        if (!geometry) {
-          geometry = circlePolygonGeom(c.lat, c.lng, c.default_radius_m);
-        }
+        if (!geometry) return [];
         const v = idxVals.get(c.city_id);
         const hasReading = typeof v === 'number' && Number.isFinite(v);
         /* Below the operator's min threshold → treat as "no reading" so
@@ -1267,8 +1184,8 @@ export default function ListingMap({
         const value = norm ?? -1;
         const valueLabel =
           colorByIndex && passesMin ? (v as number).toFixed(1) : '';
-        return {
-          type: 'Feature',
+        return [{
+          type: 'Feature' as const,
           id: c.city_id,
           geometry,
           properties: {
@@ -1280,7 +1197,7 @@ export default function ListingMap({
             value_label: valueLabel,
             popup_html: cityPopupHtml(c, allDefs, allVals, colorByIndex ?? null),
           },
-        };
+        }];
       }),
     };
     src.setData(fc);
@@ -2043,8 +1960,7 @@ function Pill({ children }: { children: React.ReactNode }) {
 const PIN_FACES_HINT =
   'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
   + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
-  + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
-  + 'nemovitost leží, a popisek řekne, jak je velký.';
+  + 'obrysem neaktivní.';
 
 /* The key to the pin's faces, inside the count pill: the swatches and their
  * counts, the words only on a map wide enough to hold them (the full key is in
@@ -2072,7 +1988,7 @@ function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx
 }
 
 /* The same key in full, for the Piny a ceny panel. */
-function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+export function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
   const faces = [
     { exact: true, active: true, label: 'Přesná poloha', n: exact },
     { exact: false, active: true, label: 'Přibližná poloha', n: approx },

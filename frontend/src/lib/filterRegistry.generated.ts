@@ -1448,7 +1448,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "energy_rating",
       "default": null,
-      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G. G is also the legal placeholder for 'no certificate', which no portal marks apart. A property's rating is the first non-null one across its ads in canonical order; an unrated property never matches.",
+      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G. G is also the legal placeholder for 'no certificate', which no portal marks apart. An unrated row never matches.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -2295,7 +2295,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "int",
       "pg_column": "home_obec_pop",
       "default": null,
-      "description": "Lower bound on the population of the listing's OWN municipality (`home_obec_pop >= N`, ČSÚ population of the obec whose polygon contains the listing). Precomputed by recompute_city_proximity (migration 142) for every listing country-wide — not just the 206 curated cities.",
+      "description": "Lower bound on the population of the listing's OWN municipality (`home_obec_pop >= N`, the latest ČSÚ population of the obec its location ad is bound to, `obec_population`). Precomputed by recompute_city_proximity (migrations 142, 726) for every listing country-wide — not just the 206 curated cities.",
       "category": "City quality",
       "ui_control": "range_inputs",
       "agendas": [

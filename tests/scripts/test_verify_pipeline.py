@@ -417,10 +417,12 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
-    # Wave 6: parsing reads the active stock several ways on four default budgets; W4's push ledger
-    # reads a few hundred rows on 5 s, and so do the curation clock's two reads (migration 696).
+    # The stock readers are sized for the Large compute (8 GB, 2026-11-05): parsing, coverage, the
+    # location scorecard and scraping's inflow. W4's push ledger reads a few hundred rows on 5 s, and
+    # so do the curation clock's two reads (migration 696).
     assert {c.key: c.budget_s for c in CHECKS if c.budget_s != clock.CHECK_BUDGET_S} == {
-        "parsing": 180.0, "outbound_url_conformance": 120.0, "notifications": 5.0, "curation_sync": 5.0}
+        "parsing": 300.0, "coverage": 150.0, "location_town_coverage": 120.0, "scraping": 90.0,
+        "outbound_url_conformance": 120.0, "notifications": 5.0, "curation_sync": 5.0}
 
 
 # --- the registry ------------------------------------------------------------
@@ -505,13 +507,13 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
                 c.owner_path)
 
     worker, github = "realtime-worker", "github-actions"
-    assert meta("parsing") == (quality.check_parsing, "portals", "alarm", worker, 21_600, 180.0,
+    assert meta("parsing") == (quality.check_parsing, "portals", "alarm", worker, 21_600, 300.0,
                                "Parsing", "cells", "/scrapers")
     # data_quality's owner is the per-portal page: no page renders value quality yet.
     assert meta("data_quality") == (quality.check_data_quality, "data_quality", "gauge", worker,
                                     21_600, 45.0, "Data quality", "cells", "/scrapers")
     assert meta("location_town_coverage") == (
-        quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 45.0,
+        quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 120.0,
         "Location quality", "cells", "/location-quality")
     assert meta("text_extraction") == (quality.check_text_extraction, "data_quality", "gauge",
                                        worker, 3_600, 45.0, "Description reading", "cells",
@@ -531,20 +533,21 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
 
 
 def test_every_worker_alarm_due_at_once_fits_the_pass_but_the_last_and_gauges_defer() -> None:
-    """Wave 6 (D2): the fourteen worker budgets sum 685 s, past what one pass may take inside the
-    watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker pins the
-    constant). Every ALARM due at once owes vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9,
-    migration 696): alarms run first, in registry order, so all but the last fit even when each
-    spends its whole budget, and the last (parsing) is deferred one 60 s tick, the tested
-    capped-pass path; a gauge that no longer fits is deferred likewise. GitHub's two checks owe
-    165 s. The literal 505 s is what pipeline-verification.md and health-dashboard.md state."""
+    """Wave 6 (D2): the fourteen worker budgets sum 1,030 s since the Large-compute budgets
+    (2026-11-05), past what one pass may take inside the watcher's 600 s in-flight line, so the
+    pass is capped at 500 s (the worker pins the constant). Every ALARM due at once owes
+    vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9, migration 696): alarms run first, in
+    registry order, so all but the last fit even when each spends its whole budget, and the last
+    (parsing) is deferred one 60 s tick, the tested capped-pass path; a gauge that no longer fits is
+    deferred likewise. GitHub's two checks owe 165 s. The literal 670 s is what
+    pipeline-verification.md and health-dashboard.md state."""
     from scripts import verify_pipeline as vp
 
     worker = [c for c in CHECKS if c.host == "realtime-worker"]
     alarms = [c for c in worker if c.cls == "alarm"]
     assert vp.WORKER_ALARMS_DUE_AT_ONCE_S == vp.lane_budget_for(alarms)
-    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (505.0, 685.0), (
-        "the docs state 505 s: restate them")
+    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (670.0, 1030.0), (
+        "the docs state 670 s: restate them")
     assert alarms[-1].key == "parsing"
     assert vp.lane_budget_for(alarms[:-1]) <= 500.0 < vp.WORKER_ALARMS_DUE_AT_ONCE_S
     assert vp.WORKER_ALARMS_DUE_AT_ONCE_S - 500.0 <= alarms[-1].budget_s, "only the last alarm can defer"

@@ -20,12 +20,15 @@ unchanged and still decides each slice's logged `outcome` and the subtype descen
 from __future__ import annotations
 
 import re
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from scraper import ceskereality_main as m
 from scraper import portal as m_portal
+from scraper import portal_runner
 from scraper.ceskereality_client import (
     KRAJ_SLUGS,
     OKRES_SLUGS,
@@ -34,6 +37,8 @@ from scraper.ceskereality_client import (
     search_url,
 )
 from scraper.portal import default_config
+
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
 
 
 def _page_html(
@@ -225,7 +230,7 @@ def test_blank_page_mid_slice_is_degraded_not_the_end(monkeypatch):
     r = portal._walk_slice(fake, "prodej", "byty", "praha")
     assert r.outcome == "degraded"
     # Items-first: the blank page has no next arrow either, and reading it as the
-    # last page is exactly how a soft block would become a nomination.
+    # last page is exactly how a degraded page would become a nomination.
     assert (r.stop, r.reached_end) == ("barren", False)
     assert len(r.rows) == 40                 # pages 1-2 kept, the slice unproven
     _seen, _c, _t, _p, complete = _walk(portal, fake, monkeypatch)
@@ -432,7 +437,7 @@ def test_a_category_whose_slices_all_failed_to_start_never_reaches_the_end(monke
     portal's end."""
     class _AllBoomClient(_PartitionClient):
         def fetch_search(self, url):  # noqa: ANN001
-            raise RuntimeError("blocked")
+            raise RuntimeError("fetch failed")
 
     fake = _AllBoomClient({k: 40 for k in KRAJ_SLUGS})
     portal = m.CeskerealityPortal(default_config("ceskereality"))
@@ -838,7 +843,7 @@ def test_an_unmapped_kraj_keeps_an_over_ceiling_child_at_the_ceiling(
     assert complete is False
 
 
-# RÚIAN (admin_boundaries), 2026-10-13: okresy per kraj.
+# RÚIAN register, 2026-10-13: okresy per kraj.
 _RUIAN_OKRES_COUNT = {
     "stredocesky-kraj": 12, "jihocesky-kraj": 7, "plzensky-kraj": 7,
     "karlovarsky-kraj": 3, "ustecky-kraj": 7, "liberecky-kraj": 4,
@@ -942,8 +947,8 @@ def test_deadline_stops_walk_and_forces_incomplete(monkeypatch):
 
 
 class _NoTotalClient:
-    """Cards on the page but no "Máme tady N" and no H1 — unmeasurable, which is
-    ceskereality's live failure mode and now reads degraded, not complete."""
+    """Cards on the page but no "Máme tady N" and no H1 — unmeasurable, which now
+    reads degraded, not complete."""
 
     def __init__(self) -> None:
         self._n = 0
@@ -1228,3 +1233,51 @@ def test_an_unmeasurable_national_probe_no_longer_decides(monkeypatch):
     _seen, _c, total, _pages, complete = _walk(portal, fake, monkeypatch)
     assert complete is True
     assert total == 5600                            # declared_sum, not None
+
+
+# --- a page with no listings whose meta tags still echo the count ---------------
+
+
+_NO_LISTINGS = (
+    Path(__file__).parent / "fixtures" / "portal_html" / "ceskereality_no_listings_page.html"
+).read_text("utf-8")
+
+
+class _NoListingsClient:
+    """HTTP 200 and the same card-less page for every URL; its meta tags echo the slice's "Máme tady N"."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def fetch_search(self, url):  # noqa: ANN001
+        self.urls.append(url)
+        return _NO_LISTINGS, 200
+
+    def fetch_index(self, sale_type, cat, page=None):  # noqa: ANN001
+        return _NO_LISTINGS, 200
+
+
+def test_the_no_listings_page_declares_a_count_and_carries_no_card():
+    parsed = m.parse_index(_NO_LISTINGS)
+    assert (parsed.total, parsed.items, parsed.next_offset) == (1093, [], None)
+
+
+def test_a_no_listings_page_is_our_stop_whatever_count_it_echoes():
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    bad = portal._walk_slice(_NoListingsClient(), "prodej", "byty", "stredocesky-kraj")
+    assert (bad.declared_total, bad.rows, bad.stop, bad.reached_end) == (1093, [], "barren", False)
+
+
+def test_a_walk_of_no_listings_pages_collects_nothing_nominates_nothing_and_reads_red(monkeypatch):
+    client = _NoListingsClient()
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: client)
+    categories = [{"sale_type": "prodej", "category": "byty"}] * 8
+    portal = m.CeskerealityPortal(replace(default_config("ceskereality"), categories=categories))
+
+    rc, agg = portal_runner.run_index_walk(portal, dry_run=True)
+
+    assert agg["index_pages"] >= portal_runner.EMPTY_WALK_MIN_PAGES
+    assert (rc, agg["errors"]) == (1, 1)
+    assert all(c["collected"] == 0 for c in agg["by_category"])
+    assert not any(c["walk_reached_end"] for c in agg["by_category"])
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0

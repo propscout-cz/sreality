@@ -27,12 +27,9 @@ const CITY: CuratedCity = {
   city_id: 5,
   name: 'Beroun',
   kraj_name: 'Středočeský kraj',
-  lat: 49.9,
-  lng: 14.07,
-  default_radius_m: 5000,
   population: 19_000,
   population_as_of_year: 2024,
-  admin_boundary_id: 531057,
+  obec_kod: 531057,
 };
 
 const values = (vals: Record<string, number>): CityIndexValue[] =>
@@ -46,22 +43,13 @@ const quality = (vals: Record<string, number>) =>
   buildCityQualityByObec([CITY], DEFS, values(vals)).get(531057);
 
 describe('buildCityQualityByObec', () => {
-  /* The join key. All 206 curated cities carry an admin_boundary_id, so
-   * properties.obec_id = curated_cities.admin_boundary_id reproduces the SQL
-   * predicate's ST_Covers arm without PostGIS. */
-  it('keys the lookup on admin_boundary_id, not city_id', () => {
+  /* The join key. Every curated city carries the RÚIAN code of its town
+   * (curated_cities.obec_kod, migration 726), so properties.obec_id = obec_kod
+   * is the join the city-quality filter uses, without PostGIS. */
+  it('keys the lookup on obec_kod, not city_id', () => {
     const map = buildCityQualityByObec([CITY], DEFS, values({ celkove_hodnoceni: 7 }));
     expect(map.has(531057)).toBe(true);
     expect(map.has(5)).toBe(false);
-  });
-
-  it('skips a city with no boundary rather than mis-keying it', () => {
-    const map = buildCityQualityByObec(
-      [{ ...CITY, admin_boundary_id: null }],
-      DEFS,
-      values({ celkove_hodnoceni: 7 }),
-    );
-    expect(map.size).toBe(0);
   });
 
   it('keeps the four card slugs in their fixed order', () => {

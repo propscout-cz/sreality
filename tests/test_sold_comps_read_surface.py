@@ -34,6 +34,8 @@ REPO = Path(__file__).resolve().parents[1]
 MIGRATIONS = REPO / "migrations"
 STORE = MIGRATIONS / "542_sold_transactions.sql"
 SURFACE = MIGRATIONS / "545_sold_comps_read_surface.sql"
+# W8-3 (#2362) re-points `sold_coverage` at the RÚIAN mirror; its live body is read from there.
+COVERAGE = MIGRATIONS / "725_location_w8_readers_on_mirror.sql"
 
 LINE_COMMENT = re.compile(r"--.*$", re.MULTILINE)
 
@@ -202,16 +204,17 @@ def test_sold_coverage_answers_about_the_points_own_municipality() -> None:
     """The fetched cell is the obec envelope expanded by 5 km, so cells overlap heavily
     and "the newest box containing the point" would answer with whichever town happened
     to be walked last — a village's counts over a Prague address. The point is resolved
-    through `admin_boundaries` instead, and the obec NAME comes back so the sentence can
-    name the town it is about."""
-    block = _function_block(_sql(SURFACE), "sold_coverage")
+    through the register's lossless `pip` pieces at the current version instead (W8-3),
+    and the obec NAME comes back so the sentence can name the town it is about."""
+    block = _function_block(_sql(COVERAGE), "sold_coverage")
     cols = _returns_table_columns(block)
     assert cols == [
         "obec_kod", "obec_name", "fetched_at", "record_count", "source_total",
         "truncated", "last_attempt_at", "last_attempt_status",
     ], cols
     body = _body(block)
-    assert "admin_boundaries" in body and "level = 'obec'" in body
+    assert "from registry_versions v" in body and "v.is_current" in body
+    assert "g.purpose = 'pip'" in body and "u.level = 'obec'" in body
     assert "bbox" not in body, "coverage must not be inferred from the margin-expanded box"
     assert "f.error is not null as truncated" in body, "a capped walk must not read as complete"
     # PostGIS is in `public` on the CI replay and in `extensions` on Supabase: pinning
@@ -223,7 +226,7 @@ def test_sold_coverage_distinguishes_a_failing_lane_from_an_unasked_cell() -> No
     """A cell that has only ever FAILED is not a cell nobody asked for: collapsing the
     two renders a broken fetch lane as operator inaction ("add this property to the
     pipeline") on the only surface that reads this ledger."""
-    body = _body(_function_block(_sql(SURFACE), "sold_coverage"))
+    body = _body(_function_block(_sql(COVERAGE), "sold_coverage"))
     assert body.count("f.status = 'ok'") == 1, "the successful fetch is one of two arms"
     assert "try.status" in body, "the newest attempt of ANY status must come back too"
 

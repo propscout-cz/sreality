@@ -178,7 +178,7 @@ is read from its own table; the two domains stay separate.
 
 ## 2026-09-30 — the realtime worker cannot freeze silently (shipped with this PR)
 
-The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: ceskereality 403s pushed
+The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: penalties pushed
 the shared rate ledger an hour ahead, abandoned probe/drain passes leaked a thread each into the
 default executor until it filled, and the heartbeat starved behind them while the loop lived on.
 Fixed in one PR: a watchdog thread that `os._exit(1)`s after 300 s without a finished beat or a
@@ -188,7 +188,7 @@ all seven locks through one `_PassLock` whose age keeps a wedged lane in `in_fli
 worker's probe, drain and sold_comps refuse (never park on) a ledger wait over 120 s, and its
 drain refuses past its deadline, while the Actions walks and drains stay unbounded; the retry
 after a 403 leases one slot and a drain's lease is sized to its claims. Detail: `docs/design/realtime-scrapers.md` § Liveness.
-- **Next:** a per-portal circuit breaker (stop re-probing a portal that 403s everything), Health
+- **Next:** a per-portal circuit breaker (stop re-probing a portal whose every request fails), Health
   alerts on `budget_refused` / `portal_rate_state.next_slot_at` running ahead, and a standing
   `faulthandler` timer for a GIL-holding stall the watchdog thread cannot see.
 
@@ -1117,3 +1117,22 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   and 703 gain absence probes. 679, 686, 687, 688 and 689 have left the window; a read of production on 11-02 found
   their drops, and every drop and create in the window, as expected.
 - **Deleted:** the duplicate drift suite in the harness tests (the platform checks' suite covers it).
+
+## 2026-11-05 — the database can change size without breaking (#2404, #2405, #2406; shipped with this PR)
+
+- **Why:** the operator downsized Supabase 2XL → Large on 11-04 20:23Z to stop paying for idle capacity. The hot set
+  (~29 GB) no longer fit in 8 GB: about 238 statement timeouts in 7 h. The engine stalled on an exact row count of
+  `pairs`, text extraction failed about one pass in three, and the publishing, dedup and coverage checks went
+  "Not measured". The operator went back to 2XL at 11-05 03:40Z and ruled that sizes must switch "2–3 times a
+  month … without coding or breaking things".
+- **Shipped:**
+  - The engine reports estimated row counts for its report-only tables (#2404).
+  - Location refetch has a 600 s read (#2405).
+  - The Health checks' scans and budgets fit a smaller instance (#2406).
+  - One reading, `scripts/coordinator/compute_reading.sql` (`LOAD` / `STRAINED` / `QUIET`), and the switch
+    procedure: `.claude/skills/database/references/compute-size.md`.
+  - Text extraction walks the last 24 h every pass and the archive 25k ads a pass. Before, every pass walked all
+    217k bazos ads: 600k buffers, 27 statement timeouts on Large. The heaviest pass is now 215k buffers. Every
+    text change, a reparse heal included, is still re-read, within ~45 min (ruling 2026-11-05).
+- **Next:**
+  - One supervised Large trial on a quiet day; until it holds, Large is unproven on the current data.

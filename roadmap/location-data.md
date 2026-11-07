@@ -439,7 +439,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     `region_id` / `okres_id` / `obec_id` / `cast_obce_id` — compiled in exactly two modules
     (`api/location_filter.py`, `frontend/src/lib/districtCodes.ts`) plus the two SQL bodies, all
     four tested against ONE shared table (`tests/fixtures/district_chip_plan.json`, read by pytest
-    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` and gains the
+    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` (dropped 729) and gains the
     `cast_obce` level — resolved BY NAME inside the PIP'd obec, because RÚIAN draws no polygon for
     `cast_obce`/`momc`, so a point can only ever place obec/okres/kraj. Deleted: the `locality`
     ILIKE half, the legacy name fallback, the `context` narrow as SQL, and the two sreality-only
@@ -621,7 +621,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     wave-by-wave running log into the END STATE — the store's 26 columns by role, the one lane's two
     halves and their cursors, the eleven claim types and the contract rails, the resolver's four
     stages, the served-listing predicate, the red line, what deliberately stays outside the store
-    (`admin_boundaries`, `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
+    (`admin_boundaries` (dropped 729), `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
     page-reading fields, `CoordinateRule`'s historical `"geom_column"` literal) and ONE lessons list,
     one line each — **606 → 351 lines**; the rules 24+25 rationale went 74 → 29. The skills' location
     sections describe the end state only. `toolkit/filter_registry.py`'s city-quality prose now names
@@ -1348,6 +1348,26 @@ component is slimmed twice — each wave rewrites one component and slims its st
   units retired by SCD-2) and 6 of the pack's layers; 3 relations and 6 unread columns go; one Praha tree in CI. **Next:** the
   shadow, merge, backup, migration, then `location_registry_load.yml` re-enabled and vintage 20261031 dispatched once no
   full sweep is queued. Acceptance from 49,900 active Praha rows with okres NULL (179,398 all) and a Praha cell in okres pivots.
+- **W8-2 — the translation table and the price-stats re-key — built 2026-11-03, not rolled out** (#2362 §2-5, §8; rulings
+  Q10a-d; migrations 722 additive, 723 destructive, neither applied). `ruian_translation` holds the 6,258 sreality keys;
+  each price-stats run confirms or adds keys from active ads and never moves a stored row; observations, no-data and
+  metrics are keyed by `obec_id`; the series route is `/cities/{obec_id}/series`. Deleted: the suggest/PiP/by-name
+  resolution, the cities file, `--resolve-only` and the workflow's `resolve` mode. **Next:** backup, workflow disabled,
+  722, parity (§8 step 3), 723, merge, re-enable, dispatch dataset 9.
+- **W8-3 + W8-4 — admin_boundaries retires onto the RÚIAN mirror — built 2026-11-03, not rolled out** (#2362 §7-8;
+  rulings Q11, Q12b, Q13; defaults D3-D8; migrations 725 additive, 726 and 727 destructive before the merge, 728 and
+  729 destructive after the deploy; none applied). One polygon read, `ruian_unit_render` (current version, by
+  `(level, code)`), and one population store, `obec_population` (by code and year). Moved: broker footprint and the
+  admin kraj list (register names), the Datasets picker, choropleth and growth RPC, sold comps (cell box, work list,
+  `sold_coverage` by pip), the kraje and rent-map overlays, city proximity (`home_obec_pop` = the bound town's
+  population), curated cities (`obec_kod`, Hodonín relinked to 586021), the population loader and the seed's
+  insert-time bind. Dropped (729): `admin_boundaries` and its view, `price_stat_localities`, `city_population`, the
+  six price-stat entity columns, `curated_cities.default_radius_m` and the view columns only the old SPA read.
+  Deleted: `scripts/ingest_boundaries.py`, its test and workflow, the growth-shape RPC and its SPA fallback, the
+  curated circle fallback, the seed's population and relink paths, `csu_population`'s by-name half. A rail
+  (`tests/test_admin_boundaries_unread.py`) keeps every retired name out of the code. **Next:** backup, 725, 726, the full
+  proximity rebuild (`scripts/recompute_city_proximity --full`, receipt R1/R2), 727, parity, merge, deploy, 728,
+  backup, 729, overlays re-rendered.
 - **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
   `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
   address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
@@ -1356,6 +1376,18 @@ component is slimmed twice — each wave rewrites one component and slims its st
   location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
   Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
   Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
+- **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
+  additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
+  :07) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
+  over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
+  stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality
+  draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
+  · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
+  cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
+  unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
+  with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
+  artifact row.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
@@ -3241,7 +3273,7 @@ seeded; nothing writes.
   `renderable_as_point`, `pin_collision_class`, `location_disputed`). Cohort =
   `b.is_active AND (b.region_id = ANY(:kraje) OR p.kraj_kod = ANY(:kraje))` — the UNION, so a property
   one side puts inside the two kraje and the other outside shows up as a disagreement. Legacy and
-  new use the same code space (`admin_boundaries.id` IS the RÚIAN KOD: `region_id` = `kraj_kod`),
+  new use the same code space (`admin_boundaries.id` (dropped 729) IS the RÚIAN KOD: `region_id` = `kraj_kod`),
   which is what makes an old-vs-new join by code honest.
 - **The new side is the design, verbatim, in one place** (`toolkit/location_compare.py`, 16
   module-level `*_SQL` constants, PREPARE-clean, `level` a bound parameter never interpolated):

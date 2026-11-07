@@ -28,7 +28,6 @@ def _connect() -> psycopg.Connection:
 
 def _clear(conn: psycopg.Connection) -> None:
     conn.execute("DELETE FROM scheduled_jobs WHERE job_name = %s", (rps.MAINTENANCE_LEASE,))
-    conn.execute("UPDATE property_maintenance_lease SET holder = NULL, expires_at = NULL")
 
 
 @pytest.fixture
@@ -39,12 +38,10 @@ def conn() -> Iterator[psycopg.Connection]:
         _clear(c)
 
 
-def _holders(conn: psycopg.Connection) -> tuple[str | None, str | None]:
-    """(the job_lease row's holder, the cutover row's holder)."""
+def _holder(conn: psycopg.Connection) -> str | None:
     row = conn.execute("SELECT lease_holder FROM scheduled_jobs WHERE job_name = %s",
                        (rps.MAINTENANCE_LEASE,)).fetchone()
-    old = conn.execute("SELECT holder FROM property_maintenance_lease").fetchone()
-    return (row[0] if row else None), old[0]
+    return row[0] if row else None
 
 
 def _sweep_main(monkeypatch: pytest.MonkeyPatch, *, during: Any = None) -> int:
@@ -69,15 +66,13 @@ def test_the_lane_skips_while_the_sweep_holds_the_lease(conn: psycopg.Connection
     seen: dict[str, Any] = {}
 
     def during() -> None:
-        seen["holders"] = _holders(conn)
+        seen["holder"] = _holder(conn)
         seen["pass"] = rps.run_incremental_pass(conn)
 
     assert _sweep_main(monkeypatch, during=during) == 0
-    new, old = seen["holders"]
-    assert new.startswith("full:"), "the mode lives in the holder prefix"
-    assert old == new, "the cutover row names the same holder"
+    assert seen["holder"].startswith("full:"), "the mode lives in the holder prefix"
     assert seen["pass"] == {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None
     last = conn.execute("SELECT last_outcome, registry_at FROM scheduled_jobs WHERE job_name = %s",
                         (rps.MAINTENANCE_LEASE,)).fetchone()
     assert last == ("ok", None), "a lease-only row: an outcome, and never on the runner's registry"
@@ -90,7 +85,7 @@ def test_the_sweep_goes_red_while_the_lane_holds_the_lease(conn: psycopg.Connect
     holders: list[Any] = []
 
     def attach(c: Any, **_: Any) -> int:
-        holders.append(_holders(conn))
+        holders.append(_holder(conn))
         with monkeypatch.context() as inner:
             try:
                 _sweep_main(inner)
@@ -105,17 +100,17 @@ def test_the_sweep_goes_red_while_the_lane_holds_the_lease(conn: psycopg.Connect
         stats = rps.run_incremental_pass(lane)
 
     assert stats["skipped"] is False
-    assert holders[0][0].startswith("incremental:")
+    assert holders[0].startswith("incremental:")
     assert len(errors) == 1
     assert "failing RED" in str(errors[0])
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None
 
 
 @pytest.mark.parametrize("kind", ["incremental", "full"])
 def test_the_scheduled_jobs_row_excludes_on_its_own(
     conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, kind: str,
 ) -> None:
-    """The state after the gate: only the new row is contended. A writer that loses it gives the cutover row back."""
+    """A writer that loses the row to a rival holds nothing and leaves the rival's lease."""
     monkeypatch.setattr(job_lease.time, "sleep", lambda s: None)
     with job_lease.held(conn, rps.MAINTENANCE_LEASE, cadence="30 seconds", holder="rival") as rival:
         assert rival is not None
@@ -126,24 +121,7 @@ def test_the_scheduled_jobs_row_excludes_on_its_own(
                 monkeypatch.setattr(rps, "_MAX_LEASE_WAIT_SECONDS", 1.0)
                 with pytest.raises(RuntimeError, match="failing RED"):
                     _sweep_main(monkeypatch)
-        assert _holders(conn) == ("rival", None)
-
-
-@pytest.mark.parametrize("kind", ["incremental", "full"])
-def test_an_older_worker_on_migration_279s_row_alone_still_excludes(
-    conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch, kind: str,
-) -> None:
-    """The deploy overlap: older code holds only the old row, so the new row is free and must not be enough."""
-    monkeypatch.setattr(rps.time, "sleep", lambda s: None)
-    conn.execute("UPDATE property_maintenance_lease SET holder = 'older-worker', expires_at = now() + interval '1 hour'")
-    with _connect() as other:
-        if kind == "incremental":
-            assert rps.run_incremental_pass(other)["skipped"] is True
-        else:
-            monkeypatch.setattr(rps, "_MAX_LEASE_WAIT_SECONDS", 0.001)
-            with pytest.raises(RuntimeError, match="failing RED"):
-                _sweep_main(monkeypatch)
-    assert _holders(conn) == (None, "older-worker"), "the new row was never taken, and the old holder keeps its row"
+        assert _holder(conn) == "rival"
 
 
 def test_a_lapsed_lease_stops_the_sweep_before_it_stamps(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,7 +136,7 @@ def test_a_lapsed_lease_stops_the_sweep_before_it_stamps(conn: psycopg.Connectio
         _sweep_main(monkeypatch, during=during)
         stamps.append("finished")
     assert stamps == []
-    assert _holders(conn) == ("rival", None)
+    assert _holder(conn) == "rival"
 
 
 def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
@@ -193,4 +171,4 @@ def test_many_writers_never_overlap(conn: psycopg.Connection) -> None:
     assert failures == []
     assert inside["entered"] > 0
     assert inside["most"] == 1
-    assert _holders(conn) == (None, None)
+    assert _holder(conn) is None

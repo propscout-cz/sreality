@@ -13,7 +13,7 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
 ## Adding a new scraper field without breaking existing data
 
 1. Add the column with a new numbered migration (`alter table listings add column ...`). Never touch `001_initial.sql`.
-   Content that is no column is hash-only (`locality`; `price_native`, a page's own foreign-currency price, hashed IN PLACE OF `price_czk` so the portal's daily FX re-conversion never snapshots).
+   Content that is no column is hash-only (`locality`; `price_native`, a page's foreign price, hashed IN PLACE OF `price_czk` so an FX re-conversion never snapshots).
 2. Declare the cell in `scraper/attribute_contract.py` for EVERY portal (producer, source-key
    precedence, absence semantics, sentinels) and read it in the parser through `source_value` /
    `source_label`; a label→value mapping belongs in `scraper/vocabulary.py`, never in the parser.
@@ -137,8 +137,8 @@ scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
-`PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality (own nginx, not CF) is the one
-portal with `CLIENT_HINTS=True`: since 09-29 it 403s a Chrome UA without sec-ch-ua hints, no proxy fixes);
+`PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality is the one portal with
+`CLIENT_HINTS=True`, sending sec-ch-ua hints derived from the UA);
 bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
 scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
@@ -222,7 +222,7 @@ from the slow "download each ad" write:
   Never hand-roll it, and never add a portal without wiring the flag through —
   `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
-  never `changed`**) — and are **enqueued** into
+  never `changed`**; a rate or EUR card resolves like its detail: `scraper/price_reading.py`) — and are **enqueued** into
   `listing_detail_queue` in one of two service classes — ACQUISITION (never fetched) or REFRESH
   (failure-retry > price-changed > the location refetch lane). The drain reserves half of every
   claim for acquisition, so an unbounded refresh backlog can no longer starve new listings; unused
@@ -309,7 +309,7 @@ A dark-by-default, always-on Railway service (a 2nd process from the SAME image,
 `REALTIME_WORKER_ENABLED`) running every lane registered in `_amain`. Its probe/drain/images
 core replaces cron quantization for the latency-critical path (the GH walks above stay the completeness
 backbone; the drain, images and maintenance lanes have no GitHub twin since W0, #2010); the other lanes host background jobs, `health` measures the worker-hosted checks
-every 60 s and `heartbeat` beats `worker_heartbeats`. Design + shipped waves: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eleven lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, health, autodedup, notifications, push) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so the `jobs` check's `lane/<lane>` cell sees the wedge (Watch past 1,200 s, Problem past 1,800 s). The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
+every 60 s and `heartbeat` beats `worker_heartbeats` (`details.version`: commit). Design: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eleven lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, health, autodedup, notifications, push) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so the `jobs` check's `lane/<lane>` cell sees the wedge (Watch past 1,200 s, Problem past 1,800 s). The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
 Per-lane notes:
 - **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane. A drain-disabled portal's queue FREEZES: no GitHub drain takes it over (W0 #2010; the four combined scrapers only walk since W1 #2021).
 - The sreality count-probe lane and its `index_walk.yml` dispatch were deleted in W0 (#2015): the worker triggers no
@@ -352,18 +352,17 @@ Per-lane notes:
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
-- **Location-refetch lane** (W8) — once a day (`LOCATION_REFETCH_INTERVAL_S` 86400, first tick 5 min
-  after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the active ads rule 25 calls town-less
+- **Location-refetch lane** (W8) — hourly (a constant tick) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
   whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,
-  oldest-fetched first. ceskereality/realitymix geocode AFTER publishing; the drain + intake lane do
-  the rest, and a bazos dead ad delists on the same fetch. Heartbeat
+  oldest-fetched first; an ad given up on rests `RECHECK_THROTTLE` (24 h) unless a page has landed since.
+  ceskereality/realitymix geocode AFTER publishing; the drain + intake lane do the rest, and a bazos dead ad delists on the same fetch. Heartbeat
   `details.location_refetch.last` = `{candidates, queued, sources:{src:{candidates,queued,backlog}},
   min_age_s, cap, seconds}`.
 - **Sold-comps lane** (sold-comps W2, migration 544) — registered sales from reas.cz (an external FACT
   feed, NOT a tenth portal) for ≤5 obec cells a pass: towns where the deal pipeline holds a live card AND
-  the obec has an `admin_boundaries` polygon (an unboxable cell writes no ledger row, so it would sit at
+  the obec has a `ruian_unit_render` polygon (an unboxable cell writes no ledger row, so it would sit at
   the queue's head for ever), stalest first, minus cells whose newest `sold_transaction_fetches` row is
   `ok` within 35 d or `failed` within 6 h. Ships **DARK** behind ONE integer,
   `realtime_sold_comps_interval_seconds` (seeded 0, editable on /settings) — cadence AND kill switch, no
@@ -465,7 +464,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
   collected vs our active DB count (`active=` lives in this log line only; the `scraping` check's missing arm and the
   `coverage` gauge judge the gaps)
 - `CYCLE … anchor=… resumed=… skipped=…` first; at the end `CYCLE ended … closed=…`, `INDEX total=N pages=M enqueued=K`
-- `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories)
+- `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories; + 1, exit 1 on `CHECK empty_walk status=fail`: 100+ pages, 0 ads)
 
 **Detail drain** (the worker's drain lane, or an ad-hoc `--drain-only` / flagless run):
 - `DRAIN reclaimed stale claims=N` when a prior SIGKILLed run left claims behind
@@ -492,7 +491,6 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `IMAGES lane ... phash_retried=... phash_hashed=... phash_given_up=...` per pass, also in the heartbeat; a row given up logs one
   `PHASH gave up id=...` WARNING, and `phash_attempts = 0` re-queues (after an R2 outage)
 
-A run ending with `errors > 0` is not necessarily a failure (single-listing fetch errors are
-tolerated). A run that did not emit a `RUN done` line is a real failure — check the GitHub
-Actions log for a stack trace.
+`errors > 0` need not be a failure (single-listing errors are tolerated). No `RUN done` line is a
+real failure: check the Actions log for a stack trace.
 

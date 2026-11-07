@@ -21,7 +21,7 @@ from scraper.db import QUEUE_PRIORITY_VERIFY
 from location_data.claims_common import SOURCES
 from scraper.delist_policy import GONE_DWELL, RECHECK_THROTTLE
 from scripts.checks.clock import fetchall
-from scripts.checks.common import ago, as_utc, cell, iso, judged, num, result
+from scripts.checks.common import ago, as_utc, cell, in_dwell_ctes, iso, judged, num, result
 from toolkit.measures import wilson_lower
 
 # A second walk-path verdict confirms a removal GONE_DWELL after the first, but presence_candidates
@@ -70,16 +70,9 @@ select r.source, r.started_at,
  order by r.source, r.started_at
 """
 
-# Per ad first, as db.gone_evidence reads it: the earliest gone verdict newer than the ad's last
-# sighting, so a refuted earlier verdict never hides a later one that still stands.
-_STUCK_SQL = """
-with pending as (
-    select l.source, min(c.completed_at) as first_gone_at
-      from detail_queue_completions c
-      join listings l on l.source = c.source and l.source_id_native = c.native_id
-     where c.outcome = 'gone' and l.is_active
-       and c.completed_at > coalesce(l.last_seen_at, '-infinity'::timestamptz)
-     group by l.source, l.id)
+# Per ad first (common.in_dwell_ctes): the earliest gone verdict newer than the ad's last sighting.
+_STUCK_SQL = f"""
+with {in_dwell_ctes()}
 select p.source, count(*)::int,
        count(*) filter (where p.first_gone_at < now() - make_interval(
                             secs => coalesce(lim.limit_s, %(fallback_s)s::float8)))::int,

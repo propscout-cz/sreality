@@ -101,7 +101,7 @@ never nominated (693 such active ads exist today on realitymix, remax and cesker
 probe lane never nominates. A portal with no index therefore needs a declared seam, not a pretend walk.
 
 **Where a fetch may run.** The Railway API service holds no `SCRAPER_PROXY_URL`; ceskereality and
-mmreality hard-403 without it, idnes soft-throttles, and every portal's pacing lives in its client +
+mmreality require it, idnes soft-throttles without it, and every portal's pacing lives in its client +
 limiter. The worker has all of it. The text lane's provider is live at scale (`enrichment_model =
 gpt-5.6-luna`: 602 k calls / $196 in the last seven days, p50 2.6 s), bounded by its own pass budget,
 dollar cap, thread pool and provider-fatal exemption; the dormant parser's `llm_parse_model` is a second

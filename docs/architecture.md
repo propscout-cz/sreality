@@ -255,8 +255,8 @@ in ~2.3s each for exactly 20 requests, then one stalls for ~390 SECONDS and retu
 429, no error, no retry, so every rail we own stays quiet. Twenty-four such stalls consumed 143
 of one 160-minute run. A residential IP shows no stall over 26 consecutive requests (0.62
 pages/s vs 0.047), so idnes now sets `USE_PROXY` like ceskereality and mmreality — but with
-`PROXY_REQUIRED = False`, because idnes only *degrades* without the proxy where they hard-403,
-and skipping a slow portal trades degraded data for none.
+`PROXY_REQUIRED = False`, because idnes only *degrades* without the proxy (the other two are
+`PROXY_REQUIRED`), and skipping a slow portal trades degraded data for none.
 **The walk is SLICED, and the slices are REMEMBERED.** Each category is walked as the 14
 `CZ_KRAJ_SLUGS` plus the abroad bucket (`?s-l=STAT-XX` — a query parameter, not a path segment;
 every `/zahranici/` spelling 404s). That last slice is not a nicety: the kraj slices sum to
@@ -365,7 +365,8 @@ listings) served as STRUCTURED server-rendered HTML (no JSON API), so
 `remax_parser` is deterministic: the search cards are `<div class="pl-items__item"
 data-url=… data-price=… data-gps=… data-title=…>` (price, coordinates and title
 straight off the card), and the detail page is a `pd-detail-info__row` →
-`__label`/`__value` spec block + a clean integer `data-advert-price` + per-listing
+`__label`/`__value` spec block + a CZK total in `data-advert-price` (sometimes with a decimal point;
+absent on ~44% of pages, which read the `.pd-header__price` header: the card's own price and unit) + per-listing
 coordinates in `data-gps` (DMS, e.g. `50°05'26.1"N,14°29'33.4"E` — parsed to
 decimal, CZ-bbox-guarded, no geocoding step) + a `mlsf.remax-czech.cz/data//zs/{id}/`
 gallery (the `_th350` thumbnail strips to the full-resolution original). Typed
@@ -417,8 +418,8 @@ itself past the ceiling descends once more, onto its kraj's **declared** okresy 
 RÚIAN districts of 13 kraje, each measured an exact partition on prodej/rodinne-domy on 2026-10-13 —
 any other category relies on the per-level self-verify; the okres slug takes the kraj's URL slot) and self-verifies the same way; Praha's okres axis is owed (praha-1..10 are not a
 partition), so an over-ceiling Praha subtype stays `ceiling` and logs `DESCENT no okres axis`. A 200 carrying
-zero cards is the portal's real degraded response and is only ever read as a finished slice when
-the page's H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
+zero cards is only ever read as a finished slice when the page's H1 proves it is the empty slice
+we asked for. ceskereality is a STRUCTURED HTML portal
 like idnes: each detail page carries a `schema.org` `individualProduct` JSON-LD block (clean price +
 broker), an `i-info` spec list, **precise per-listing coordinates** in `data-coord-lat/lng` (and a
 Google-Maps `?q=` link) so there is **no geocoding step**, and an `img.ceskereality.cz/foto/` gallery.
@@ -439,9 +440,8 @@ its `source_url` from the page's `<link rel="canonical">` path, host normalised 
 host), the requested URL the fallback (no canonical, or one naming another id) — a re-categorised ad keeps answering 200 at its
 old URL, which froze its label until 2026-10-24. One config (the `portals` row, migration 249) walks all 12 (cm × offer-type) descriptors.
 The client rides the residential proxy (`USE_PROXY`) with the shared Chrome browser `User-Agent` plus
-matching `sec-ch-ua` client hints (`CLIENT_HINTS` — since 2026-09-29 the site's own nginx 403s a hint-less
-Chrome UA), at a polite rate. The site's robots.txt disallows generic bots; sending browser-like headers is
-an operator-owned posture (decided 2026-10-02).
+matching `sec-ch-ua` client hints (`CLIENT_HINTS`), at a polite rate; the request headers are an
+operator-owned posture (decided 2026-10-02).
 
 **Data source (web — any other site, the tenth portal).** An ad on a site we do not crawl
 enters through the paste box (`POST /listings/ingest`, docs/design/new-property-from-link.md):
@@ -544,14 +544,13 @@ source. `mapPointerPublishedAt` (= `soldAt` + 27–31 days) is the only correct 
 sale is a state change on an arbitrarily old ad record, so the freshest sale the feed can show is
 ~30 days old.
 **The fetch unit is a municipality CELL, and the deal pipeline is what makes a cell worth fetching.**
-The box is the obec's `admin_boundaries` envelope widened by `sold_db.MAX_READ_RADIUS_M` (5,000 m —
-the read surface's largest radius, so any subject inside the obec is covered out to its full radius
-by construction, with no second fetch). `admin_boundaries.id` IS the ČÚZK/RÚIAN code of the unit
-(migration 017; `sreality_id` is the separate bridge into sreality's own id space), so it joins
-directly to `listing_location.obec_kod` and to the source's `municipalityId` — three spellings of one
-number. The work-list (`sold_db.sold_comp_cells`) is a QUERY, not a queue: the obec cells of
+The box is the envelope of the obec's RÚIAN render polygon (`ruian_unit_render`, migration 725: the
+current registry version) widened by `sold_db.MAX_READ_RADIUS_M` (5,000 m — the read surface's largest
+radius, so any subject inside the obec is covered out to its full radius by construction, with no
+second fetch). The unit is looked up by its RÚIAN code, which `listing_location.obec_kod` and the
+source's `municipalityId` both carry — three spellings of one number. The work-list (`sold_db.sold_comp_cells`) is a QUERY, not a queue: the obec cells of
 properties carrying ANY account's pipeline card at a non-terminal, non-archived stage, active,
-`byt`/`dum`, with a resolved point, **and an `admin_boundaries` polygon** — DISTINCT over accounts,
+`byt`/`dum`, with a resolved point, **and a `ruian_unit_render` polygon** — DISTINCT over accounts,
 minus the cells whose NEWEST `sold_transaction_fetches` row is `ok` within 35 days or `failed` within
 6 hours. That last join is load-bearing: a cell with no polygon cannot be boxed, so a fetch can only
 skip it, a skip writes no ledger row, and `ORDER BY fetched_at NULLS FIRST` would then re-offer it
@@ -584,9 +583,9 @@ where some account holds a live deal-pipeline card, so the set of fetched cells 
 tenant state, not market data — `sold_transaction_fetches` is registered in
 `tests/_admin_gate_registry.py::ADMIN_ONLY_RELATIONS`. Its one reader is
 `sold_coverage(p_lat, p_lng)`, SECURITY DEFINER and scoped to the MUNICIPALITY containing the point,
-resolved through the same `admin_boundaries` obec polygon W2 builds the cell from: the cell is that
-polygon's envelope expanded by 5 km, so overlapping boxes would otherwise answer with whichever town
-happened to be walked last. It returns that obec's name, its newest successful fetch (`fetched_at`,
+resolved through the register's lossless `pip` pieces of that obec at the current version (W8-3,
+migration 725): the cell is its render polygon's envelope expanded by 5 km, so overlapping boxes would
+otherwise answer with whichever town happened to be walked last. It returns that obec's name, its newest successful fetch (`fetched_at`,
 `record_count`, `source_total`) and its newest attempt of ANY status, so the surface can separate
 four answers — never looked, tried and FAILED (our outage, not operator inaction), looked and found
 nothing, looked and hold N. A radius control, a filter panel and a "no registered sale matches these
@@ -625,7 +624,7 @@ the API serves the registry (`GET /map-overlays`) and the tile bytes (`GET
 `require_token`; the SPA's `lib/mapOverlayDraw` (lazy, map chunks only) registers one `overlay://` MapLibre protocol over
 `apiGetBlob` and one hook that builds the style layers from the registry's legend — no per-layer
 frontend code. The four tables are a MIRROR (rules 10/11's class): service-role only, rebuilt by the
-quarterly `map_overlays` job on the job runner (`ingest_boundaries.yml`'s last step re-renders `--sections kraje`).
+quarterly `map_overlays` job on the job runner.
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
 it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP national flood-zone register
@@ -642,8 +641,8 @@ indicative, ignoring flood defences (Karlín shows as Q100 although the city pro
 only locally, bands nested so overlaps render darker. The selection is one URL knob (`layers=`, a
 sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.layers`); the Browse/Explore map, the listing-detail header map and the comparables map mount the
 same hook and chip control. The MF rent choropleth is the `rent_map` section (one layer, the four VK
-size categories as variants; an SQL source over `admin_boundaries` × the latest `rent_map_values`
-revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
+size categories as variants; an SQL source over the RÚIAN mirror's render polygons × the latest
+`rent_map_values` revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
 transaction; a refused guard keeps the revision and the previous tiles) and by the monthly `rent_map`
 job's last step (`scripts/fetch_rent_map.py`); migration 601 drops `rent_map_choropleth_public`,
 `rent_map_kraje_public` and the `rent_map_choropleth` matview it replaced.
@@ -714,7 +713,8 @@ rules. Identify which one a task belongs to before you start.
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  matview `location_pin_audit_mv` (no RLS); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  matview `location_pin_audit_mv` (no RLS) and its successor, the admin-gated view `location_position_audit_public` over the
+  service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -880,16 +880,22 @@ rules. Identify which one a task belongs to before you start.
   sheet keeps its admin Health row: system alerts never reach the bell (R2b).
   The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b;
   `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, imported eagerly so a sheet opened
-  offline cannot hit the last-resort boundary, hidden where the bell is). Its state is read, never
+  offline cannot hit the last-resort boundary, hidden where the bell is). **Push is on by default**
+  (2026-11-04): the feed, the start screen, carries a notice row (`components/phone/PushNotice.tsx`,
+  the same hook) only while this iPhone could receive notifications and does not — off: the whole
+  row is the tap; denied: the Settings hint — so the one tap Apple requires is asked for where the
+  app opens, and the re-sync below subscribes by itself wherever notifications are already allowed;
+  the switch's off holds for that account alone (a per-device `sreality.push.off` mark, cleared by
+  its next enable). Its state is read, never
   assumed: unsupported first for anything but an iPhone or iPad (by UA or `navigator.standalone`;
   an Android phone is never prompted, and the server takes Apple's push service only), then not
   installed (a Safari tab has no `PushManager`: "Přidejte aplikaci na plochu"), unsupported (an
   installed app without Web Push), denied, unavailable (the server gave no key; a 503 never ends a
-  subscription), off, on (a subscription exists here), busy. Opening the sheet runs
-  `registration.update()` and fetches `GET /push/key` (no `VITE_` key), so the tap only calls
-  `Notification.requestPermission()` inside the click and, on `granted`,
-  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (a failed PUT
-  unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
+  subscription), off, on (a subscription exists here), busy. Mounting either surface runs
+  `registration.update()`, fetches `GET /push/key` (no `VITE_` key) and re-syncs (below), so the tap
+  only calls `Notification.requestPermission()` inside the click and, on `granted`,
+  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (one path,
+  `lib/push` `subscribePushHere`: a failed PUT unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
   identity-transition effect over `lib/push.ts`): any change of user, sign-out included, and a launch
   with CERTAINLY nobody signed in end this device's subscription locally (no JWT needed; the
   server's row ends "gone" at its next push) and clear the badge — a launch whose token refresh
@@ -899,10 +905,13 @@ rules. Identify which one a task belongs to before you start.
   (`notificationsVisible` in `lib/auth.tsx`, handed to `lib/push` `setPushGate` once the plan is
   read): opening it (a launch, a sign-in) re-sends the subscription, shutting it (a plan without
   notifications) ends it here, and while it is not open nothing is re-sent. The re-send
-  (`resyncPush`, also on the hourly resume check; iOS never fires `pushsubscriptionchange`) ends the
+  (`resyncPush`, also on the hourly resume check and on each mount of the switch or the notice;
+  runs that overlap share one; iOS never fires `pushsubscriptionchange`) ends the
   subscription instead when another account switched it on here (a per-device owner in
   `localStorage`) or when `GET /push/key` answers a key other than the one it was made with (a
-  rotated VAPID key; a failed read is no verdict). A tapped push lands on `/n/:dispatchId`
+  rotated VAPID key; a failed read is no verdict) — and then, as whenever this iPhone already
+  allows notifications (`Notification.permission` is `granted`) and holds none, subscribes the
+  signed-in account at once, never prompting, unless that account switched push off here. A tapped push lands on `/n/:dispatchId`
   (`pages/NotificationOpen.tsx`, lazy): mark-seen under RLS, then `dispatchTarget(row)` by
   replace (404 → `/notifications`); `?d=` there and on the coalesced `/notifications?d=` is
   reported once to `POST /push/opened`, never awaited.
@@ -1280,7 +1289,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
   (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
   row reading SUCCESS, not SKIPPED. `scripts/rollout_wait.sh`, a merger's wait, prints each description so a skip
-  shows; its exit 0 means every status green, never that every service deployed.
+  shows; its exit 0 means every status green, never that every service deployed. The worker beats the commit it runs
+  (`worker_heartbeats.details.version`); `scripts/check_worker_version.py <that sha>` says whether it is at or after
+  main's newest commit touching `BACKEND_WATCH` (`main` instead falls back on commit statuses, walking past skips).
 - **The wizard's modes** (#2025 deleted M0's one-shot `window1`/`window2`; their evidence is on #2060):
   - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
     CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
@@ -1438,7 +1449,9 @@ renumber.** Navigate by area:
    `hashing.digest`; unifying the documents is a data event (≈1.5M snapshots), not a refactor.
    A page that states its price in a foreign currency hashes that (`price_native`, never a column)
    IN PLACE OF `price_czk`: idnes re-converts it to Kč daily, which re-snapshotted its whole
-   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed.
+   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed. Our own
+   fixed EUR rate (rule 23, `scraper/price_reading.py`) rides the same field, so its quarterly
+   review re-prices a row on its next fetch without a snapshot.
    **Sanctioned exceptions — payload-free, no snapshot.** Writers of derived, enrichment, link
    or lifecycle columns: condition levels (`toolkit/condition_scoring.py`), the stored `mf_*`
    columns (their SQL recompute, last redefined in migration 507, is no longer called — MF is
@@ -1699,14 +1712,26 @@ renumber.** Navigate by area:
    reads gone keeps its row (accepted: nothing re-enqueues it, since the walk retries only
    failures still in the index). A given-up
    queue row is not dropped either: `enqueue_presence_checks` re-arms up to
-   `PRESENCE_REARM_PER_WALK` = 50 given-up rows per nominating scope, source-wide, at VERIFY
-   priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
+   `PRESENCE_REARM_PER_WALK` = 50 given-up rows of ACTIVE listings per nominating scope,
+   source-wide, at VERIFY priority, since only an active listing has a page check owed. Any other
+   given-up row stays recorded and out of every claim; an ad we hold no listing for comes back when
+   the index sights it, at most once per `RECHECK_THROTTLE` (`reconcile_sightings` →
+   `db.rearm_sighted_given_up`, logged `REARM source=… sighted_given_up=N`; #1851: sreality 615387212, no listing, answered 409 through 1,035
+   failed fetches in 11 days and has since turned 404). Neither path reads the status a row failed
+   with, and a 409 stays a failed fetch, never a gone signal (rule #3). Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`. A page
    that parses to NO listing content (no price, no area, no params, no images, no description) is a
    failed fetch too, never a write: `portal_runner.content_free` turns such an item into an error
-   before the flush (2026-10-31; ceskereality's anti-bot interstitial had been written into 51 live
-   ads as content, blanking them and bumping `last_seen_at`; realitymix served a category page at a
-   detail URL the same way). Shape-keyed on the parsed `ScrapedListing`, never portal-keyed; sreality's
-   API payload fails JSON parsing instead.
+   before the flush (2026-10-31; written as content, such a page blanks the ad and bumps
+   `last_seen_at`; realitymix served a category page at a detail URL this way). Shape-keyed on the
+   parsed `ScrapedListing`, never portal-keyed; sreality's API payload fails JSON parsing instead.
+   The index side of the same block: a walk that fetched `portal_runner.EMPTY_WALK_MIN_PAGES` (100)
+   pages or more and collected no ad exits 1 with `errors` + 1 and logs `CHECK empty_walk status=fail`,
+   its reason line, so the workflow and its `gh/<stem>` cell read red (2026-11-02, #2348: 8 walks of
+   HTTP 200 pages with no listings had read `success` with `errors` 0). It keys on `collected`, never
+   `declared`, since a page without listings can echo the site's "Máme tady N" meta text, and it runs
+   after nomination, so rule #3 is untouched: such a walk still finalizes (`ended_at`)
+   and reached no end. Measured over 30 days of `scrape_runs`: no walk of 100+ pages that collected an
+   ad collected under 1,681.
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,
@@ -2073,9 +2098,10 @@ renumber.** Navigate by area:
     `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
     the place moves: price, area, photos, link and every fact stay the canonical advert's, and
     past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
-    terrace, garage, cellar) are a union over every advert, active or not (MS6); every other
-    physical fact (building type, ownership, energy rating, estate/usable/garden area, parking
-    spaces) is the first non-empty value in the canonical order. The price figures are the
+    terrace, garage, cellar) are a union over every advert, active or not, and the energy rating
+    is the best class any advert states (MS6, ruling 2026-11-05); every other physical fact
+    (building type, ownership, estate/usable/garden area, parking spaces) is the first non-empty
+    value in the canonical order. The price figures are the
     canonical advert's LINEAGE (MS10): its own and its same-portal predecessors'
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
@@ -2083,7 +2109,8 @@ renumber.** Navigate by area:
     the shown price. The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
-    The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
+    The city figures follow the LOCATION advert (since 636): `near_*` its point, `home_obec_pop`
+    the latest `obec_population` of its bound town (`ll.obec_kod`, since 726):
     the rollup clears `city_proximity_computed_at` when the location advert changes, and the
     hourly `recompute_city_proximity` (pg_cron job `recompute-city-proximity` since 674; the full
     rebuild, `scripts/recompute_city_proximity.py --full`, ends the population load and the
@@ -2108,8 +2135,10 @@ renumber.** Navigate by area:
     advert's own facts, broker and stored portal link in its row; the broker card lists no advert
     -- under each broker's contact it quotes the AD REFERENCE of the ads that broker advertises
     (`ad_reference`, migration 667: one `<portál> · <číslo>` line per ad, a dash when the ad prints
-    none, never the portal id in its place), on both shells through ONE `BrokerContactCard` and
-    ONE copy behaviour (`lib/clipboard`). Every property-grain surface links
+    none, never the portal id in its place), on both shells through ONE `BrokerContactCard`,
+    ONE copy behaviour (`lib/clipboard`) and ONE saved contact ("Uložit kontakt": `lib/brokerContact`
+    → `lib/vcard`, a vCard 3.0 file built in the browser, its note naming the property and the ads;
+    the phone page's `BrokerStrip` under the price dials and saves the lead broker, #2428). Every property-grain surface links
     `propertyPath(property_id)` (`lib/listingUrl`). Old advert addresses -- `/listing/{source}/
     {native}` (emails, the extension), `/listing/{sreality_id}`, `/listing?property=` -- are
     aliases (`AdvertRedirect`) that resolve the advert's property and open its row
@@ -2131,9 +2160,10 @@ renumber.** Navigate by area:
     (desktop: "Naplánovat prohlídku" in the heading) adds a Prague day + time (`lib/viewings`), the
     property's upcoming viewings lead the list under a calendar leaf, and the phone's sixth tab,
     Prohlídky (`pages/phone/PhoneViewings`, `GET /viewings` = the acting identity's own), lists them
-    one day at a time — arrows, swipe, a date wheel, Nadcházející / Vše, jumps to the nearest day
-    with one. No table, carrier or registry of its own: a viewing is shared, carried and split as
-    the note it is (the split copy keeps the date). Under it,
+    one day at a time — arrows, swipe, a date wheel, jumps to the nearest day with one either way;
+    one calendar, past days as reachable as coming ones (no scope). No table, carrier or registry
+    of its own: a viewing is shared, carried and split as the note it is (the split copy keeps the
+    date). Under it,
     `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our
@@ -2641,8 +2671,8 @@ renumber.** Navigate by area:
     overcounted 12 to 22 %). Saving from Browse offers the viewport box through one checkbox (ticked;
     the preset dialog's question, because a stale viewport would fire forever) and takes a circle
     always; the editor's `MapAreaControl` shows either and sets the box to the mini-map's view. Open divergence: the six amenities are the property's union
-    (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
-    estimation cohort, until MS20
+    and the energy rating its best class (MS6) for the Watchdog, Browse and Stats but the
+    canonical advert's own flags and letter in an estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the
     WATCHDOG agenda (and `ComparableFilters`' the cohort agendas) by an equality test in
     `tests/toolkit/test_filter_registry.py`, because `extra='ignore'` drops a missing field on
@@ -3088,8 +3118,9 @@ renumber.** Navigate by area:
     fixed cards and the LLM box-plot annotations (summarize-1, deleted with them; migration 627
     drops their cache table and settings).
 17. **City-quality indexes are a normalized, operator-curated time series.** `curated_cities`
-    + `city_index_revisions` + `city_index_values` + `city_index_definitions` +
-    `city_population` (migration 078 onward) store per-city indexes long-form, so a new index
+    + `city_index_revisions` + `city_index_values` + `city_index_definitions` (migration 078
+    onward) store per-city indexes long-form, and a city's population is `obec_population`'s for
+    its town (migration 726), so a new index
     on next upload needs no migration; each upload appends a `source_revision` and the latest
     is the default query target. On the Watchdog, population and `near_*` compile as plain
     bounds and `city_index_rules` as one hook in `toolkit/filter_compiler`. Browse resolves
@@ -3099,7 +3130,7 @@ renumber.** Navigate by area:
     deliberately never sees them, preserving deterministic estimate semantics. **Curated-city
     *membership* (which city, if any, a property falls in) resolves through ONE SQL function,
     `curated_cities_matching()` (migration 436), to an `obec_id` allowlist** — `curated_cities
-    .admin_boundary_id` already IS the obec's RÚIAN code, so membership is equality on a code
+    .obec_kod` IS the obec's RÚIAN code (migration 726), so membership is equality on a code
     every consumer already carries, and `browse_stats_properties`, the compiler's
     `city_index_rules` hook and the SPA prefilter cannot drift on the containment test the way they once did (one evaluated
     radius-only and silently disagreed with the other two's boundary-aware version on
@@ -3666,8 +3697,7 @@ renumber.** Navigate by area:
     `scraper/job_lease.py` with the mode in its holder prefix (`incremental:` / `full:`): one 15-minute TTL
     renewed every batch/slice, each write transaction ending in the commit fence, so a killed job freezes
     maintenance for minutes, not hours, and a pass whose lease lapsed cannot commit beside the next holder.
-    Until gate #2110 passes every writer also takes migration 279's row, first, because merged code meets a
-    still-running older worker; #2267 drops that acquire. (There is no scheduled dedup job any more — the automatic decision
+    (There is no scheduled dedup job any more — the automatic decision
     layer was removed in the 2026-08 cutoff, rule #15.) The
     worker's lane and the daily sweep never mutate `properties` concurrently because both take
     that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
@@ -4125,8 +4155,8 @@ renumber.** Navigate by area:
     /pipeline/stages` create — the `key` slug is derived server-side from the label; `PATCH
     /pipeline/stages/{id}` rename/recolor/retag/crown-entry; `POST /pipeline/stages/reorder`
     rewrite left-to-right order; `DELETE /pipeline/stages/{id}` soft-archive via `archived_at`).
-    Two invariants the API enforces (not just the DB): a stage can't be **both** the entry and
-    terminal, and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
+    Three invariants the API enforces (not just the DB): a stage can't be **both** the entry and
+    terminal, the viewing stage is never terminal (or archived; `role` below), and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
     another stage, never by un-crowning the only one — the partial unique index needs exactly one).
     Archive is refused (409) for the entry stage or any stage still holding cards — the FK is
     `ON DELETE RESTRICT`, so cards must be moved off a stage before it retires; archived stages
@@ -4135,6 +4165,16 @@ renumber.** Navigate by area:
     filter-preset save modal, the tag pickers, and this stage editor — the single colour-picking
     control app-wide; don't re-inline a swatch grid), and the entry-star / "konec" (terminal)
     controls carry `<InfoIcon>` (i) hints (native `title=`, the codebase's tooltip convention).
+    **A stage's meaning is its `role` (migration 734), never its key or label:** keys are minted
+    once and never follow a rename (the operator's key `viewing` is "2. For Call"). One role today,
+    `viewing` (the stage set-up's calendar toggle): at most one per account (partial unique index),
+    never terminal, cleared on archive; `PATCH {role}` moves it off the stage that held it in one
+    transaction, `{role: null}` clears it. Adding a viewing date to a property offers its card that
+    stage (`lib/viewingStage` decides: off the board → add, an earlier open or a closed stage → move;
+    silent at it, at a later open stage, with no viewing stage, or with the board not yet read;
+    `components/pipeline/ViewingStageOffer` asks). The add is `POST /pipeline/cards {stage_id}` —
+    a live, open stage of the account — through `usePipelineCard().addAt`, so the ledger holds one
+    event at that stage, never an entry-stage hop plus a move.
     **Undoing a proposal's card is not a remove toggle (#2072, ADR-0004).** A run may propose a card at the entry stage; the user's
     Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
     while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,
@@ -4158,6 +4198,26 @@ renumber.** Navigate by area:
     price below its per-basis floor (sale 100 000 CZK, rent 1 000 CZK, land deliberately
     unfloored) all yield NULL — a visible gap, never a guess. Rounded to 2dp so all five
     publishing relations return byte-identical figures.
+
+    **The numerator is a stored TOTAL, never a rate** (#2355; operator rulings 2026-11-03 and
+    2026-11-05). Where a portal states a price per m², per m² per month or in EUR, its card reader
+    and its detail parser both read `PriceReading(amount, currency, basis)`, and ONE conversion,
+    `scraper/price_reading.resolve`, stores the total: per m² times `area_m2` at its column scale
+    (this measure's own denominator, so the plot on pozemek), per m² per month as the monthly rent,
+    EUR at a FIXED 24.5 CZK (`EUR_CZK_RATE`: reviewed quarterly, changed only when the market rate
+    moves more than 0.5 CZK), and a yearly per m² rent as the monthly rent (÷ 12, ruling
+    2026-11-07). No area, a yearly rate on a sale, a rent rate naming no period, or another
+    currency stores nothing. The walk resolves a card against the stored row's area and category,
+    so a card matching the stored total reads unchanged and a real move still refetches. The
+    portal's label is overridden only when its reading is impossible (past five times the
+    category's p0.1 or p99 of this measure, `PPM2_BANDS`: sreality's rows alone, read 2026-11-05,
+    since the text portals' stored rates-as-totals sank the all-source land p0.1 to 0.15 Kč/m²) and
+    the other reading normal (p1..p99); each override the DETAIL parse makes logs one
+    `PRICE basis_override` line (the card resolves silently). What was stated and the EUR rate used sit in
+    `raw_json.price_reading`, so every snapshot keeps the rate it was converted at, and a EUR amount
+    is hashed as `price_native` in place of `price_czk` (rule 2). remax, realitymix and bezrealitky
+    read prices this way; the other text portals still refuse a rate
+    (`scraper/price_text.is_per_area_price`).
 
     **Its sibling, the MF reference rent** (migration 565): one inlinable SQL function,
     `mf_reference(...)`, over the ingest-refreshed `rent_map_cells` matview — a value, the town's
@@ -4205,7 +4265,7 @@ renumber.** Navigate by area:
     operator's flat answers, 2026-10-01; rebuilt on current main on the operator's go-ahead of
     2026-10-25 — the original PRs #1668 / #1669 never merged and are superseded). On 14 of 14
     live pages the readers opened
-    (idnes, realitymix, mmreality; ceskereality answered 403 and was read from its stored
+    (idnes, realitymix, mmreality; ceskereality was read from its stored
     pages) the portal itself prints ONE figure in the plot box and the floor-area box — a
     10 m² cellar with a 10 m² "plot", an 852 m² hall whose "Plocha parcely" is its own
     footprint while the real 6 841 m² parcel sits only in the prose. We stored what the page
@@ -5047,9 +5107,8 @@ fetched again: our one detail fetch read the page while its location fields were
 index card never changed afterwards, so nothing ever re-enqueued them and the listing had no claims
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
-`scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
-after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
-— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 717) splits the town cells with,
+`scraper/realtime_worker.py` ticks hourly (`LOCATION_REFETCH_TICK_SECONDS`, a constant), selects the active ads rule 25 calls town-less
+— `location_steps.town_missing_sql()`, the fragment the scorecard view (migrations 698, 733, 717) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
@@ -5057,17 +5116,24 @@ missed both). It keeps the ones whose newest stored page or payload is older tha
 `LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered today gets its second look on tomorrow's
 tick; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
 `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched first, into
-`listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. It enqueues and nothing else: the drain
+`listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. An ad the drain gave up on rests
+`delist_policy.RECHECK_THROTTLE` (24 h) unless a page or payload has landed since the give-up, read from
+the `given_up` row in `detail_queue_completions`: a failed fetch stores no page, so the 6 h clock never
+moves for it, and an hourly tick re-armed it straight after each give-up, five fetches an hour
+(2026-11-02, #2375: 26 ceskereality ads, 650 give-ups in 24 h, all `town_withheld`). They are
+throttled rather than stopped because a late-geocoding page is what this lane exists to catch; an operator's re-paste (`rearm_given_up`) and a nominating walk's re-arm stay unthrottled.
+It enqueues and nothing else: the drain
 re-fetches and rewrites the page, the archive appends it (every changed body: the 7-day per-listing
 floor W2a-7 put on `payloads.append_payload` discarded exactly this refetch and was removed
 2026-10-22), the fast intake lane mines it within a minute, the resolver answers.
 `enqueue_location_refetch` is its own writer rather than `enqueue_detail` because the two directions
 differ — `LEAST` on priority (a second look must never promote a row above the new listings the
-drain is fetching) and `given_up=false, attempts=0`, since the rows it most wants are exactly the
-ones the drain gave up on and no claim can see (rule #5). The bound is what makes it polite: bazos's
+drain is fetching) and `given_up=false`, restarting `attempts` only on a given-up row, since the rows it
+most wants are exactly the ones the drain gave up on and no claim can see (rule #5), while a row still in
+its five tries must keep its count or it would never give up. The bound is what makes it polite: bazos's
 share of that bucket is dead ads whose page answers with the category listing, which raises
 `ListingGoneError` and delists the row, so a portal carrying thousands of them drains over days
-instead of flooding one drain pass. A daily lane never reads as a dead one: the `jobs` check calls a
+instead of flooding one drain pass. A quiet lane never reads as a dead one: the `jobs` check calls a
 lane late only past max(3 × its interval, its interval + 2 × its last pass's duration, 15 min) since
 its last pass.
 
@@ -5392,6 +5458,26 @@ it. Its KÚ cell (MF PR-B; out of the town cell since W1) is the same kind of ze
 row with a town written by the current `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is
 missing at the registry version; KÚ coverage of the coarser grains is a fact, never judged.
 
+**Where each point came from** (W6-c1, migration 733; rulings Q2 and Q3 of 2026-11-02): `location_position_mv`
+(listing grain, every active ad plus every ad in any status the consumer rule refuses; pg_cron
+`refresh-location-position` at :07 through `refresh_matview`) decides each point's KIND by geometric identity within
+1e-7° against the points the resolver could have used, in its own precedence (`location_steps.position_kind_sql`:
+RÚIAN door, street point, own pin, část point, town point, unit point; `foreign` and `none` have no point; anything
+else is `unexplained`, shown and not judged until ruled); a DB-lane replay over the mini mirror holds each kind to the
+resolver's `Position.origin`. The scorecard's `position` metric (class `kind/grain`) counts the listing cohort by the
+READING's kind (`location_steps.position_reading_kind_sql`: the matview's kind while the row's `resolved_at` is
+unchanged, else `unclassified`) and by its LIVE grain (`location_steps.position_grain_sql`, the four `grain` classes
+first, so a grid's column totals are the `grain` counts); the gauge stores it as the `positions` fact on each
+`{portal}/town` cell (ruling Q7: the grid is that stored reading, never a count of its own). The page draws it as the
+"Positions" grid (each grain head in the map's own `pinPrecisionShort` words, so a portal pin below address grain
+reads "Přibližná poloha") and the "By kind" strip; every number opens the "Ads" list from the admin-gated
+`location_position_audit_public`, which applies the reading's own cohort (`in_reading`, the scorecard's edge
+verbatim), kind rule and live grain to live listings, so a cell's list differs from its number only by churn since the
+reading, whose time the list shows beside its own exact count. A separate entry, "No location answer · every status",
+carries its list's exact count and opens the matview's `none` rows in every status and portal (`snapshot_kind`; town
+evidence, a sibling with a point, a queued re-resolve), the rows the old audit page lists. That page and
+`location_pin_audit_mv` stay until the operator has compared the two (W6-c2 deletes them).
+
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
 obec, else část obce + obec, else obec, else NULL. It is published by `browse_projection`,
@@ -5409,21 +5495,28 @@ tested against ONE table, `tests/fixtures/district_chip_plan.json`.
 A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
 draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
-and the quarter or street is bound BY NAME inside the PIP'd obec. The street is indexed twice
+and the quarter or street is bound BY NAME inside the PIP'd obec. **A městská část is no level and no
+chip (ruling 2026-11-02, #2380):** `/maps/resolve` binds "Praha 6" or "Brno-střed" by name, after a část
+of that name, and answers no code plus `parts`, every část its doors stand in (`ruian_address_points`,
+joined on the unit's stable `code`, as a load re-points doors in place). The typeahead adds one
+ordinary `cast_obce` chip per part, so URLs, presets, the Watchdog, the RPCs and the rows gain nothing,
+and a saved filter keeps the set it was saved with. A část straddling several městské části counts for
+each it touches, by ruling; an ad holding no část in that town is not matched, as with any část chip.
+There is no chip for the whole městská část: it is removed or excluded part by part. The street is indexed twice
 (migration 605: `browse_list_ulice_idx` via the rebuild, `listing_location_ulice_kod_idx` for the
 feed lane) because without them one street read its whole category band and the feed seq-scanned
 `listing_location` for 4.97 s; `cast_obce` on the feed lane has the same shape and is not indexed.
 
 `browse_projection` re-sources `obec_id` / `okres_id` / `region_id` from
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends
-`cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The last two are what the map DRAWS: a
+`cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The map reads only `granularity_rank`: a
 pin the resolver placed **at or above building level** (rank ≥ 90, `location_granularity_rank`) carries
 a black outer contour and a coarser one does not (an active pin is magenta with a white contour, an inactive
 one white-transparent with a magenta contour), so "middle of the village" and "this front door" stop looking
-identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
-popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
-such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)
-A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
+identical; the popup says "Přesná poloha" or "Přibližná poloha" and names the rung in its tooltip. No
+surface draws or prints the radius (ruling 2026-11-01, "retire the radius"; W6-b removed the clicked pin's
+circle, the popup's "±" figure and the API's radius field).
+A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin rung, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
 since 618), and so to both read models of the time (one since 631) — served for the street chip level, read by no filter
@@ -5494,10 +5587,6 @@ entirely for 3.5 h with no run row and no log line. A starved job looks exactly 
 
 **WHAT REMAINS OUTSIDE THE STORE, AND WHY.**
 
-* `admin_boundaries` — price stats, the rent-map choropleth (not the MF calc, since 565) and city
-  proximity read its geometry and population. Its LOCATION role died with trigger 289; re-keying
-  those three onto `ruian_admin_unit_geometries` is a later wave. `curated_cities.admin_boundary_id`
-  is an FK to it, and already the RÚIAN obec code.
 * `portal_raw_pages` / `portal_raw_payloads` — the preservation substrate, and the intake's second
   source; not a location path (`tests/test_portal_raw_pages_guard.py` fails CI on any DROP naming
   it). With it `listings.raw_json`, the content-hash substrate (rule 2) and the resolver's evidence,

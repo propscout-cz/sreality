@@ -165,3 +165,26 @@ describe('chip identity and badge', () => {
     expect(isLocationLevel(null)).toBe(false);
   });
 });
+
+/* Ruling 2026-11-02, #2380: a městská část is the set of its části, as ordinary chips, so nothing
+ * below the typeahead knows it exists and the union is every rendering's own OR. */
+describe('a městská část picked as its části', () => {
+  const parts: DistrictChip[] = [
+    { name: 'Bubeneč', context: 'Praha', level: 'cast_obce', id: 400301 },
+    { name: 'Dejvice', context: 'Praha', level: 'cast_obce', id: 400302 },
+  ];
+  const row = (cast_obce_id: number | null) => ({
+    obec_id: 554782, okres_id: null, region_id: 19, cast_obce_id, ulice_id: null,
+  });
+
+  it('compiles to one any(codes) at the část level', () => {
+    expect(districtsFilterClause(parts)).toBe('and(or(cast_obce_id.in.(400301,400302)))');
+  });
+
+  it('matches the union of its části and no row without a část', () => {
+    expect(matchesDistricts(row(400301), parts)).toBe(true);
+    expect(matchesDistricts(row(400302), parts)).toBe(true);
+    expect(matchesDistricts(row(400303), parts)).toBe(false);
+    expect(matchesDistricts(row(null), parts)).toBe(false);
+  });
+});

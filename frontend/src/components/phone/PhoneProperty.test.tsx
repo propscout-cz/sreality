@@ -15,6 +15,7 @@ import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as queries from '@/lib/queries';
+import * as shareFiles from '@/lib/shareFiles';
 import type { PropertyPublic } from '@/lib/queries';
 import type { ImagePublic, PropertySource } from '@/lib/types';
 import PropertyDetail, { AdvertRedirect } from '@/pages/PropertyDetail';
@@ -70,6 +71,10 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
+}));
+vi.mock('@/lib/shareFiles', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/shareFiles')>()),
+  saveBlob: vi.fn(),
 }));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
@@ -413,5 +418,66 @@ describe('the phone property page', () => {
     expect(screen.queryByRole('article', { name: 'Nemovitost' })).toBeNull();
     expect(await screen.findByTestId('detail-map')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Poloha' })).toBeNull();
+  });
+});
+
+/* Operator 2026-11-06: the broker one tap away under the price: the dialer, not a copy,
+ * and the contact saved as a .vcf (lib/vcard) naming the property it came from. */
+describe('the broker strip', () => {
+  const broker = (over: Partial<brokers.ListingBroker>): brokers.ListingBroker => ({
+    primary_email: 'jan@reality.cz',
+    primary_phone: '420731404040',
+    sreality_id: null,
+    listing_id: 9001,
+    broker_id: 7,
+    broker_display_name: 'Ing. Jan Novák',
+    broker_firm_label: 'Reality Praha',
+    ...over,
+  });
+
+  it('calls the lead broker and saves the contact, the other brokers one tap away', async () => {
+    const user = userEvent.setup();
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([
+      ad({ ad_reference: 'RP-123' }),
+      ad({ id: 9002, source: 'idnes', source_url: 'https://reality.idnes.cz/detail/x/', source_id_native: 'x' }),
+    ]);
+    vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(
+      new Map([
+        [9001, broker({})],
+        [9002, broker({ listing_id: 9002, broker_id: 8, broker_display_name: 'Eva Malá', primary_phone: null })],
+      ]),
+    );
+    renderAt('/property/304388');
+    const strip = await screen.findByRole('region', { name: 'Makléř' }, LOADED);
+    expect(within(strip).getByText('Ing. Jan Novák')).toBeInTheDocument();
+    expect(within(strip).getByRole('link', { name: 'Zavolat' })).toHaveAttribute('href', 'tel:+420731404040');
+    expect(within(strip).getByRole('link', { name: '+ 1 další makléř' })).toHaveAttribute('href', '#makleri');
+
+    await user.click(within(strip).getByRole('button', { name: 'Uložit kontakt' }));
+    const [blob, name] = vi.mocked(shareFiles.saveBlob).mock.calls[0];
+    expect(name).toBe('Ing. Jan Novák.vcf');
+    expect(blob.type).toBe('text/vcard;charset=utf-8');
+    /* jsdom's Blob has no text(): read it the way FileReader does. */
+    const card = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsText(blob);
+    });
+    expect(card).toContain('N:Novák;Jan;;Ing.;');
+    expect(card).toContain('TEL;TYPE=WORK,VOICE:+420731404040');
+    expect(card).toContain('ORG:Reality Praha');
+    expect(card).toContain('URL:http://localhost:3000/property/304388');
+    expect(card.replace(/\r\n /g, '')).toMatch(/NOTE:Nemovitost: .*\\nSreality: č\. zakázky RP-123/);
+  });
+
+  it('draws nothing when the broker left no number and no e-mail', async () => {
+    vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(
+      new Map([[9001, broker({ primary_phone: null, primary_email: null })]]),
+    );
+    renderAt('/property/304388');
+    await screen.findByRole('region', { name: 'Makléři' }, LOADED);
+    await waitFor(() => expect(screen.queryByText('Načítám…')).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Makléř' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Zavolat' })).toBeNull();
   });
 });

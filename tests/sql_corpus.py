@@ -35,6 +35,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 # Every executed-SQL constant and execute() site lives under these (verified);
 # migrations/ is *.sql applied by CI, tests/ are fakes, frontend/ is TS.
 RUNTIME_DIRS = ("scraper", "toolkit", "api", "scripts", "location_data", "autodedup")
+# A statement a person pastes into production instead of the code running it.
+PASTED_SQL_FILES = ("scripts/coordinator/engine_reading.sql",)
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,9 @@ def discover(*, include_inline: bool = True, resolve_imports: bool = False) -> l
                 ):
                     add(SqlItem(f"{rel}:{node.lineno}", None, node.args[0].value, "inline"))
 
+    for rel in PASTED_SQL_FILES:
+        add(SqlItem(rel, None, (_ROOT / rel).read_text(encoding="utf-8"), "const"))
+
     if resolve_imports:
         for path in sorted(composed_modules):
             rel = path.relative_to(_ROOT).as_posix()
@@ -163,3 +168,25 @@ def to_prepare_form(sql: str) -> str:
                 counter += 1
                 out.append(f"${counter}")
     return "".join(out)
+
+
+def _invalid_placeholder(sql: str) -> str | None:
+    """psycopg's error if `sql` has an invalid `%` placeholder, else None.
+
+    Prefers psycopg's own tokenizer (authoritative — the exact code path that
+    raises at execute() time); falls back to a self-contained model of the same
+    rule if psycopg restructures its internals, so the guard never goes dark.
+    """
+    try:
+        from psycopg._queries import _split_query  # type: ignore[attr-defined]
+    except Exception:
+        _split_query = None
+    if _split_query is not None:
+        try:
+            _split_query(sql.encode())
+            return None
+        except Exception as exc:  # psycopg.ProgrammingError on a bad placeholder
+            return str(exc)
+    # Fallback: strip every valid placeholder token; any leftover `%` is invalid.
+    leftover = re.sub(r"%%|%\([^)]*\)s|%[sbt]", "", sql)
+    return "bare '%' is not a valid placeholder" if "%" in leftover else None

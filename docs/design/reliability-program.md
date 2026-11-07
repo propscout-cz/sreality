@@ -61,7 +61,7 @@ the program's thesis restated:
 **Fire 1 — the location claim-intake lane, dead since 2026-08-27 22:32 UTC (14
 consecutive failures).** PR #1209 (the walk-coverage sprint's ceskereality kraj
 partition) edited two *prose* fields in `contracts/portals/ceskereality.yaml`
-(`fetch.robots_note`, one `extractions[].notes`). Both sit inside the bytes
+(a `fetch` note, one `extractions[].notes`). Both sit inside the bytes
 `contract_sha256` governs (everything minus `persistence:`/`shadow:`, W2a-3e), the
 version was not bumped, and `project()` — correctly — refuses the mismatch at startup,
 killing intake for **all** portals, not just ceskereality. There is **no CI gate** over

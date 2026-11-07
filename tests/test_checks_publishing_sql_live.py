@@ -14,7 +14,8 @@ the check sends, then the cells it feeds. The rules pinned:
   location or publication is one browse_projection does not serve.
 - The location ad is the rollup's location rank 1 of property_canonical_listings (migration 635), never the ad being
   counted and not necessarily the canonical ad.
-- stock: an active property counts once per portal it holds an active ad on, and once for the fleet.
+- stock: an active property counts once per portal it holds an active ad on (its rolled-up active_sources), and
+  once for the fleet.
 - photos: of ads first written 1-24 h ago, a taken-down ad's photos are out, not stored is every NULL storage_path,
   narrow is a stored width under 600 px (no width is unmeasured), and the top reason drops the URL.
 - ingest: the oldest NEW row not given up, claimed or not, whose ad this portal does not hold; changes: the oldest
@@ -148,6 +149,12 @@ def _listed(conn: Any, pid: int) -> None:
                         (pid,)).rowcount == 1
 
 
+def _rolled_up(conn: Any) -> None:
+    """The rollup's portal list (recompute_property_stats child_agg): each property's portals of its active ads."""
+    conn.execute("update properties p set active_sources = coalesce((select array_agg(distinct l.source order by "
+                 "l.source) from listings l where l.property_id = p.id and l.is_active), '{}'::text[])")
+
+
 def _projected(conn: Any, pids: Iterable[int]) -> set[int]:
     """Those of `pids` that browse_projection serves."""
     rows = conn.execute("select property_id from browse_projection where property_id = any(%s)", (list(pids),))
@@ -267,6 +274,7 @@ def test_stock_counts_an_active_property_once_per_portal_it_holds_an_active_ad_o
     _held(conn, "bazos", born=10 * _MIN)                                 # waiting for the next rebuild
     _held(conn, "remax", status="merged_away")
     _held(conn, "remax", active=False)
+    _rolled_up(conn)
 
     rows = {source: tuple(counts) for source, *counts in conn.execute(pub._STOCK_SQL).fetchall()}
     assert rows == {"remax": (3, 1, 1, 0, 0), "bazos": (2, 0, 0, 1, 0), None: (4, 1, 1, 1, 0)}
@@ -285,6 +293,18 @@ def test_stock_counts_an_active_property_once_per_portal_it_holds_an_active_ad_o
     assert cells["idnes/stock"]["status"] == "unknown"
 
 
+def test_a_portal_holds_a_property_by_its_rollup_so_one_waiting_for_it_counts_for_the_fleet_only(conn: Any) -> None:
+    """The one difference from a join to the ads, the dirty-queue lag that fleet/dirty reports: a property's portals
+    are its rolled-up active_sources, so one born since its rollup ran is fleet stock and no portal's yet."""
+    _rebuilt(conn, 20 * _MIN)
+    _held(conn, "remax")
+    _rolled_up(conn)
+    _held(conn, "idnes")
+
+    rows = {source: tuple(counts) for source, *counts in conn.execute(pub._STOCK_SQL).fetchall()}
+    assert rows == {"remax": (1, 0, 1, 0, 0), None: (2, 0, 2, 0, 0)}
+
+
 def test_a_property_not_yet_published_when_the_rebuild_started_is_unpublished_never_a_blocker(conn: Any) -> None:
     """Judged after the location and before the rebuild's lag, on the newest rebuild's start: a fresh property not
     settled (browse_projection does not serve it) and one settled after that start (served now, not in that rebuild)
@@ -299,6 +319,7 @@ def test_a_property_not_yet_published_when_the_rebuild_started_is_unpublished_ne
     assert _visible(conn) == {("remax", True, "unpublished"): 2, ("remax", True, "not_in_browse_list"): 1,
                               ("remax", True, "location_not_served"): 1}
     assert _projected(conn, (fresh, late, early, unresolved)) == {late, early}
+    _rolled_up(conn)
     rows = {source: tuple(counts) for source, *counts in conn.execute(pub._STOCK_SQL).fetchall()}
     assert rows == {"remax": (4, 1, 1, 0, 2), None: (4, 1, 1, 0, 2)}
 
