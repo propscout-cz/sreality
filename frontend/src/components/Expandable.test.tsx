@@ -5,7 +5,8 @@
  *     including when it grows AFTER mount (a note added);
  *   * the toggle names the region it opens (aria-controls) and says its state;
  *   * a text cut is a line clamp, a block cut a max height, both gone when open;
- *   * focus landing below the cut opens it; focus above it does not;
+ *   * focus landing below the cut opens it (its row, the fade included); focus above it does not;
+ *   * the toggle and the focus on it survive open and close;
  *   * the accessible name, when given, replaces the bare word.
  * jsdom lays nothing out, so each test sets the content's heights by hand. */
 
@@ -22,17 +23,17 @@ function heights(scroll: number, client: number) {
   vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(client);
 }
 
-describe('<Expandable>', () => {
+describe('<Expandable toggleClassName="toggle">', () => {
   it('shows no toggle while nothing is cut', () => {
     heights(40, 40);
-    render(<Expandable lines={4}>Krátký text.</Expandable>);
+    render(<Expandable toggleClassName="toggle" lines={4}>Krátký text.</Expandable>);
     expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('opens and closes a cut text, naming what it controls', () => {
     heights(200, 80);
     render(
-      <Expandable as="p" lines={6} words={['Celý popis', 'Zkrátit']}>
+      <Expandable toggleClassName="toggle" as="p" lines={6} words={['Celý popis', 'Zkrátit']}>
         Dlouhý popis.
       </Expandable>,
     );
@@ -55,7 +56,7 @@ describe('<Expandable>', () => {
   it('cuts a block at its max height until opened', () => {
     heights(900, 384);
     render(
-      <Expandable maxHeight="24rem">
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
         <ul data-testid="list">
           <li>poznámka</li>
         </ul>
@@ -73,7 +74,7 @@ describe('<Expandable>', () => {
     vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(() => scroll);
     vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(100);
     const { rerender } = render(
-      <Expandable maxHeight="24rem">
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
         <ul>
           <li>jedna</li>
         </ul>
@@ -83,7 +84,7 @@ describe('<Expandable>', () => {
 
     scroll = 600;
     rerender(
-      <Expandable maxHeight="24rem">
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
         <ul>
           <li>jedna</li>
           <li>dvě</li>
@@ -98,7 +99,7 @@ describe('<Expandable>', () => {
   it('opens when focus lands below the cut, not above it', () => {
     heights(900, 384);
     render(
-      <Expandable maxHeight="24rem">
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
         <button type="button">nahoře</button>
         <button type="button">dole</button>
       </Expandable>,
@@ -116,10 +117,69 @@ describe('<Expandable>', () => {
     expect(screen.getByRole('button', { name: 'Zobrazit méně' })).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('keeps the toggle, and the focus on it, through open and close', () => {
+    /* Open, nothing overflows: a reading then would unmount the toggle under the user's focus. */
+    vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
+      return (this as HTMLElement).style?.maxHeight ? 900 : 384;
+    });
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(384);
+    render(
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
+        <p>dlouhý seznam</p>
+      </Expandable>,
+    );
+    const toggle = screen.getByRole('button', { name: 'Zobrazit více' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toBeInTheDocument();
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it('judges focus by its row, and counts the fade as hidden', () => {
+    heights(900, 384);
+    render(
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
+        <ul>
+          <li data-testid="row">
+            <button type="button">upravit</button>
+          </li>
+          <li data-testid="faded">
+            <button type="button">v přechodu</button>
+          </li>
+        </ul>
+      </Expandable>,
+    );
+    const region = screen.getByRole('list').parentElement!;
+    const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+    vi.spyOn(region, 'getBoundingClientRect').mockReturnValue(rect(0, 384));
+    vi.spyOn(screen.getByRole('button', { name: 'upravit' }), 'getBoundingClientRect').mockReturnValue(rect(0, 30));
+    /* The editor's row: its button shows, its Save does not. */
+    vi.spyOn(screen.getByTestId('row'), 'getBoundingClientRect').mockReturnValue(rect(0, 420));
+    fireEvent.focus(screen.getByRole('button', { name: 'upravit' }));
+    expect(screen.getByRole('button', { name: 'Zobrazit méně' })).toBeInTheDocument();
+  });
+
+  it('opens when focus lands in the fade at the cut', () => {
+    heights(900, 384);
+    render(
+      <Expandable toggleClassName="toggle" maxHeight="24rem">
+        <button type="button">v přechodu</button>
+      </Expandable>,
+    );
+    const button = screen.getByRole('button', { name: 'v přechodu' });
+    vi.spyOn(button.parentElement!, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 384 } as DOMRect);
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({ top: 340, bottom: 370 } as DOMRect);
+    fireEvent.focus(button);
+    expect(screen.getByRole('button', { name: 'Zobrazit méně' })).toBeInTheDocument();
+  });
+
   it('takes an accessible name that keeps the visible word', () => {
     heights(80, 40);
     render(
-      <Expandable lines={2} words={['more', 'less']} names={['Show more of the message', 'Show less of the message']}>
+      <Expandable toggleClassName="toggle" lines={2} words={['more', 'less']} names={['Show more of the message', 'Show less of the message']}>
         A long message.
       </Expandable>,
     );

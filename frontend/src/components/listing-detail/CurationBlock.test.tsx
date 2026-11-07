@@ -206,9 +206,9 @@ describe('<CurationBlock> a long notes list', () => {
       expect(list).toHaveStyle({ maxHeight: '24rem', overflow: 'hidden' });
       expect(screen.queryByRole('button', { name: /Zobrazit všechny poznámky/ })).toBeNull();
 
-      await user.click(screen.getByRole('button', { name: 'Zobrazit více' }));
+      await user.click(screen.getByRole('button', { name: 'Zobrazit více poznámek' }));
       expect(list).not.toHaveStyle({ maxHeight: '24rem' });
-      expect(screen.getByRole('button', { name: 'Zobrazit méně' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: 'Zobrazit méně poznámek' })).toHaveAttribute('aria-expanded', 'true');
     } finally {
       tall.mockRestore();
       cut.mockRestore();
@@ -220,7 +220,7 @@ describe('<CurationBlock> a long notes list', () => {
     vi.mocked(listPropertyNotes).mockResolvedValue({ data: notes } as never);
     renderWithReads();
     expect(await screen.findByText('Poznámka 5')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Zobrazit více' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Zobrazit více poznámek' })).toBeNull();
   });
 });
 

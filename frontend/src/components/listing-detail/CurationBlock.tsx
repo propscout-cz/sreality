@@ -447,7 +447,11 @@ export function NotesRow({
         ) : notesQ.isLoading ? (
           <p className="text-sm text-[var(--color-ink-3)]">Načítám…</p>
         ) : notes.length === 0 ? null : (
-          <Expandable maxHeight={NOTES_MAX_HEIGHT} toggleClassName={`mt-2 scroll-mt-20 ${QUIET}`}>
+          <Expandable
+            maxHeight={NOTES_MAX_HEIGHT}
+            names={['Zobrazit více poznámek', 'Zobrazit méně poznámek']}
+            toggleClassName={`mt-2 ${QUIET}`}
+          >
             <ul className="space-y-2">
               {ordered.map((n) => (
                 <li key={n.id}>

@@ -20,11 +20,18 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 const LINE_CLAMP = { 2: 'line-clamp-2', 4: 'line-clamp-4', 6: 'line-clamp-6' } as const;
 
 /* A block's cut fades out rather than ending mid-line. A mask, not an overlay, so
- * it works on any card background. */
-const FADE = 'linear-gradient(to bottom, #000 calc(100% - 3rem), transparent)';
+ * it works on any card background. What sits in the fade counts as hidden. */
+const FADE_PX = 48;
+const FADE = `linear-gradient(to bottom, #000 calc(100% - ${FADE_PX}px), transparent)`;
 
-const DEFAULT_TOGGLE =
-  'mt-2 inline-flex scroll-mt-20 items-center text-[0.8rem] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors';
+/* Focus is hidden when its row (a list item, else the element itself) ends below the
+ * cut, the fade included: an editor opened near the cut puts its Save there. */
+function belowCut(node: HTMLElement, el: Element, fades: boolean): boolean {
+  const row = el.closest('li');
+  const unit = row && node.contains(row) ? row : el;
+  const edge = node.getBoundingClientRect().bottom - (fades ? FADE_PX : 0);
+  return unit.getBoundingClientRect().bottom > edge + 1;
+}
 
 type Cut = { lines: keyof typeof LINE_CLAMP; maxHeight?: never } | { maxHeight: string; lines?: never };
 
@@ -38,7 +45,8 @@ export type ExpandableProps = Cut & {
   /* The wrapper (a flex row puts the toggle beside the content). */
   className?: string;
   contentClassName?: string;
-  toggleClassName?: string;
+  /* Each surface draws its toggle in its own voice; only the behaviour is shared. */
+  toggleClassName: string;
   children: ReactNode;
 };
 
@@ -50,7 +58,7 @@ export default function Expandable({
   as: Content = 'div',
   className,
   contentClassName = '',
-  toggleClassName = DEFAULT_TOGGLE,
+  toggleClassName,
   children,
 }: ExpandableProps) {
   const id = useId();
@@ -59,10 +67,19 @@ export default function Expandable({
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
 
-  /* Layout effect: the first reading lands before paint, so the toggle never pops in a frame late. */
+  /* Measured only while cut: open, nothing overflows, and a reading then would drop the
+   * toggle the user just pressed (and their focus with it). The layout effect lands the
+   * first reading before paint, so the toggle never pops in a frame late. A change inside
+   * that pushes the focused row below the cut (an editor's buttons, an error line) opens it. */
+  const fades = maxHeight != null;
   useLayoutEffect(() => {
-    if (!node) return;
-    const measure = () => setOverflows(node.scrollHeight - node.clientHeight > 1);
+    if (!node || expanded) return;
+    const measure = () => {
+      const cut = node.scrollHeight - node.clientHeight > 1;
+      setOverflows(cut);
+      const focused = document.activeElement;
+      if (cut && focused && focused !== node && node.contains(focused) && belowCut(node, focused, fades)) setExpanded(true);
+    };
     measure();
     const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
     resize?.observe(node);
@@ -72,15 +89,12 @@ export default function Expandable({
       resize?.disconnect();
       mutation.disconnect();
     };
-  }, [node, expanded]);
+  }, [node, expanded, fades]);
 
+  /* Closing a long read leaves the toggle where the reader is: brought into view below the
+   * sticky header (its scroll margin) when the content above it shrank away. */
   const toggle = () => {
-    if (expanded) {
-      requestAnimationFrame(() => {
-        const button = toggleRef.current;
-        if (button && button.getBoundingClientRect().top < 0) button.scrollIntoView({ block: 'nearest' });
-      });
-    }
+    if (expanded) requestAnimationFrame(() => toggleRef.current?.scrollIntoView?.({ block: 'nearest' }));
     setExpanded(!expanded);
   };
 
@@ -103,8 +117,7 @@ export default function Expandable({
         className={`${contentClassName} ${cut}`.trim()}
         style={style}
         onFocus={(e) => {
-          if (expanded || !overflows || !node) return;
-          if (e.target.getBoundingClientRect().bottom > node.getBoundingClientRect().bottom + 1) setExpanded(true);
+          if (!expanded && overflows && node && belowCut(node, e.target, fades)) setExpanded(true);
         }}
       >
         {children}
@@ -118,6 +131,7 @@ export default function Expandable({
           aria-label={names?.[expanded ? 1 : 0]}
           onClick={toggle}
           className={toggleClassName}
+          style={{ scrollMarginTop: '5rem' }}
         >
           {words[expanded ? 1 : 0]}
         </button>
