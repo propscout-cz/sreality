@@ -28,8 +28,9 @@ import uuid
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -41,8 +42,9 @@ LOG = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
 
-# The admin Sign-ups page's read (frontend/src/pages/Signups.tsx): e-mails are personal data, so admin-only, and the
-# table is service-role only (mig 700), so it is served here, never read by the browser.
+# The admin Waitlist page (frontend/src/pages/Signups.tsx): e-mails are personal data, so admin-only, and the table is
+# service-role only (mig 700), so it is served here, never read by the browser. Inviting sends first and stamps after: a
+# failed send changes nothing, and the admin who clicks is the only writer, so the cap needs no claim.
 admin_router = APIRouter(prefix="/admin/waitlist", tags=["waitlist"], dependencies=[Depends(deps.require_admin)])
 
 DEFAULT_LANDING_ORIGIN = "https://propscout.cz"
@@ -236,3 +238,41 @@ def get_waitlist_signups(conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any
     """Every signup, newest first, with `truncated` when the list hit its cap."""
     rows = waitlist.list_signups(conn, waitlist.LIST_MAX + 1)
     return {"data": rows[: waitlist.LIST_MAX], "truncated": len(rows) > waitlist.LIST_MAX}
+
+
+class InviteArgs(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=waitlist.INVITE_BATCH_MAX)
+
+
+@admin_router.post("/invite")
+def post_invite(args: InviteArgs) -> dict[str, Any]:
+    """Send a waitlist invitation to each entry (again, if already invited); says what went and why the rest did not."""
+    if not resend_client.is_configured():
+        raise HTTPException(503, "RESEND_API_KEY is not set")
+    sent: list[int] = []
+    skipped: list[dict[str, Any]] = []
+    with deps.open_background_conn() as conn:
+        room = waitlist.INVITATION_DAILY_CAP - waitlist.invitations_sent_today(conn)
+        for entry in waitlist.invitation_entries(conn, args.ids):
+            reason = "unsubscribed" if entry["unsubscribed"] else "account" if entry["has_account"] else None
+            if reason is None and len(sent) >= room:
+                reason = "cap"
+            if reason is None:
+                try:
+                    resend_client.send(
+                        sender=waitlist_email.SENDER, to=entry["email"], reply_to=waitlist_email.REPLY_TO,
+                        subject=waitlist_email.INVITATION_SUBJECT,
+                        html=waitlist_email.invitation_html(entry["token"], entry["email"]),
+                        text=waitlist_email.invitation_text(entry["token"], entry["email"]),
+                        headers=waitlist_email.unsubscribe_headers(entry["token"]),
+                    )
+                except HttpJsonError as exc:
+                    LOG.warning("WAITLIST invitation failed id=%s %s", entry["id"], exc)
+                    reason = "failed"
+            if reason is None:
+                waitlist.stamp_invitation(conn, entry["id"])
+                sent.append(entry["id"])
+            else:
+                skipped.append({"id": entry["id"], "reason": reason})
+    LOG.info("WAITLIST invitations sent=%d skipped=%d", len(sent), len(skipped))
+    return {"sent": sent, "skipped": skipped}

@@ -300,7 +300,7 @@ def test_the_landing_page_shows_the_recorded_consent_wording_under_every_form() 
 
 def _signup_row(i: int) -> tuple[Any, ...]:
     return (i, f"a{i}@example.cz", "2026-10-31T17:53:57+00:00", waitlist.CONSENT_VERSION, "flip",
-            {"utm_source": "facebook"}, "rent", "Brno", None, None, None)
+            {"utm_source": "facebook"}, "rent", "Brno", None, None, None, False)
 
 
 def test_the_signups_list_is_admin_only(client: Any) -> None:
@@ -309,7 +309,7 @@ def test_the_signups_list_is_admin_only(client: Any) -> None:
 
 
 def test_an_admin_reads_every_signup_newest_first(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    conn = ScriptConn([(lambda q: q.startswith("SELECT id, email"), [_signup_row(2), _signup_row(1)])])
+    conn = ScriptConn([(lambda q: q.startswith("SELECT w.id, w.email"), [_signup_row(2), _signup_row(1)])])
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
     api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
     try:
@@ -318,14 +318,14 @@ def test_an_admin_reads_every_signup_newest_first(client: Any, monkeypatch: pyte
         api_main.app.dependency_overrides.clear()
     assert body["truncated"] is False
     assert [r["email"] for r in body["data"]] == ["a2@example.cz", "a1@example.cz"]
-    assert set(body["data"][0]) == set(waitlist.SIGNUP_COLUMNS)
+    assert set(body["data"][0]) == {*waitlist.SIGNUP_COLUMNS, "has_account"}
     sql, params = conn.executed[0]
-    assert "ORDER BY created_at DESC, id DESC" in sql and params == (waitlist.LIST_MAX + 1,)
+    assert "ORDER BY w.created_at DESC, w.id DESC" in sql and params == (waitlist.LIST_MAX + 1,)
 
 
 def test_the_signups_list_says_when_it_hit_its_cap(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(waitlist, "LIST_MAX", 2)
-    conn = ScriptConn([(lambda q: q.startswith("SELECT id, email"), [_signup_row(3), _signup_row(2), _signup_row(1)])])
+    conn = ScriptConn([(lambda q: q.startswith("SELECT w.id, w.email"), [_signup_row(3), _signup_row(2), _signup_row(1)])])
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
     api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
     try:
@@ -333,3 +333,80 @@ def test_the_signups_list_says_when_it_hit_its_cap(client: Any, monkeypatch: pyt
     finally:
         api_main.app.dependency_overrides.clear()
     assert body["truncated"] is True and len(body["data"]) == 2
+
+
+def _inviting(monkeypatch: pytest.MonkeyPatch, entries: list[tuple[Any, ...]], today: int = 0) -> ScriptConn:
+    conn = ScriptConn([(lambda q: q.startswith("SELECT count(*) FROM waitlist_signups"), [(today,)]),
+                       (lambda q: q.startswith("SELECT w.id, w.email"), entries),
+                       (lambda q: q.startswith("UPDATE waitlist_signups SET invited_at"), [])])
+    _install(monkeypatch, conn)
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
+    return conn
+
+
+@pytest.fixture()
+def admin_overrides() -> Any:
+    yield
+    api_main.app.dependency_overrides.clear()
+
+
+def test_inviting_is_admin_only(client: Any) -> None:
+    assert client.post("/admin/waitlist/invite", json={"ids": [1]}).status_code in (401, 403)
+
+
+def test_an_invitation_goes_then_stamps_and_names_the_address(
+    client: Any, monkeypatch: pytest.MonkeyPatch, admin_overrides: Any,
+) -> None:
+    sent = _resend(monkeypatch)
+    conn = _inviting(monkeypatch, [(7, "jana@seznam.cz", TOKEN, False, False)])
+    assert client.post("/admin/waitlist/invite", json={"ids": [7]}).json() == {"sent": [7], "skipped": []}
+    mail = sent[0]
+    assert mail["to"] == "jana@seznam.cz" and mail["subject"] == "Jste na řadě: vaše pozvánka do PropScoutu"
+    assert "https://app.propscout.cz/login?signup=1" in mail["html"] and "jana@seznam.cz" in mail["text"]
+    assert "399 Kč měsíčně včetně DPH" in mail["text"] and "Dnes nic neplatíte." in mail["html"]
+    assert f"unsubscribe?t={TOKEN}" in mail["html"] and "List-Unsubscribe" in mail["headers"]
+    assert sum(q.startswith("UPDATE waitlist_signups SET invited_at") for q, _ in conn.executed) == 1
+
+
+def test_who_cannot_be_invited_gets_nothing_and_says_why(
+    client: Any, monkeypatch: pytest.MonkeyPatch, admin_overrides: Any,
+) -> None:
+    sent = _resend(monkeypatch)
+    conn = _inviting(monkeypatch, [(1, "out@example.cz", TOKEN, True, False), (2, "in@example.cz", TOKEN, False, True)])
+    body = client.post("/admin/waitlist/invite", json={"ids": [1, 2]}).json()
+    assert body == {"sent": [], "skipped": [{"id": 1, "reason": "unsubscribed"}, {"id": 2, "reason": "account"}]}
+    assert sent == [] and not any(q.startswith("UPDATE") for q, _ in conn.executed)
+
+
+def test_the_daily_cap_stops_a_batch_and_counts_earlier_sends(
+    client: Any, monkeypatch: pytest.MonkeyPatch, admin_overrides: Any,
+) -> None:
+    sent = _resend(monkeypatch)
+    entries = [(n, f"a{n}@example.cz", TOKEN, False, False) for n in (1, 2, 3)]
+    _inviting(monkeypatch, entries, today=waitlist.INVITATION_DAILY_CAP - 2)
+    body = client.post("/admin/waitlist/invite", json={"ids": [1, 2, 3]}).json()
+    assert body == {"sent": [1, 2], "skipped": [{"id": 3, "reason": "cap"}]} and len(sent) == 2
+
+
+def test_a_failed_send_stamps_nothing_so_no_permission_is_given(
+    client: Any, monkeypatch: pytest.MonkeyPatch, admin_overrides: Any,
+) -> None:
+    _resend(monkeypatch, fail=True)
+    conn = _inviting(monkeypatch, [(1, "a@example.cz", TOKEN, False, False)])
+    assert client.post("/admin/waitlist/invite", json={"ids": [1]}).json() == {
+        "sent": [], "skipped": [{"id": 1, "reason": "failed"}],
+    }
+    assert not any(q.startswith("UPDATE") for q, _ in conn.executed)
+
+
+def test_without_a_key_inviting_says_so_and_opens_nothing(
+    client: Any, monkeypatch: pytest.MonkeyPatch, admin_overrides: Any,
+) -> None:
+    opener = _install(monkeypatch, ScriptConn([]))
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"is_admin": True}
+    assert client.post("/admin/waitlist/invite", json={"ids": [1]}).status_code == 503 and opener.opened == 0
+
+
+def test_an_address_is_escaped_in_the_invitation() -> None:
+    assert "&lt;b&gt;@example.cz" in waitlist_email.invitation_html(TOKEN, "<b>@example.cz")
+

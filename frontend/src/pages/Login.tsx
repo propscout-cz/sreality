@@ -8,6 +8,7 @@ import {
   type To,
 } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { authErrorCs, redirectError } from '@/lib/authErrors';
 import { ROUTES } from '@/lib/routes';
 
 /**
@@ -20,12 +21,17 @@ export default function Login() {
   const { signInWithPassword, signUpWithPassword, signInWithGoogle, session, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  // A waitlist invitation's button opens on account creation (api/waitlist_email.py SIGNUP_URL).
+  const [mode, setMode] = useState<'signin' | 'signup'>(
+    new URLSearchParams(location.search).has('signup') ? 'signup' : 'signin',
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const stashed = (location.state as { from?: Partial<Location> } | null)?.from;
+  // A Google sign-in the invitation check refused returns here with its reason on the address.
+  const refused = redirectError(location.search, location.hash, stashed?.search, stashed?.hash);
+  const [error, setError] = useState<string | null>(refused);
 
   // guards.tsx stashes the whole location (`state={{ from: location }}`), so
   // carry search AND hash through the round trip. A shared Browse cohort lives
@@ -36,8 +42,7 @@ export default function Login() {
   // the app's root: its index route starts each shell where it starts — the
   // feed on a phone, Browse on a desktop (HomeRedirect, #1767). Only this
   // in-app target; Google's redirectTo (lib/auth.tsx) is allowlisted in Supabase.
-  const stashed = (location.state as { from?: Partial<Location> } | null)?.from;
-  const from: To = stashed?.pathname
+  const from: To = stashed?.pathname && !refused
     ? { pathname: stashed.pathname, search: stashed.search ?? '', hash: stashed.hash ?? '' }
     : '/';
 
@@ -45,17 +50,15 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setNotice(null);
     try {
       if (mode === 'signin') {
         await signInWithPassword(email, password);
-        navigate(from, { replace: true });
       } else {
         await signUpWithPassword(email, password);
-        setNotice('Check your email to confirm your account, then sign in.');
       }
+      navigate(from, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed');
+      setError(authErrorCs(err));
     } finally {
       setBusy(false);
     }
@@ -69,35 +72,34 @@ export default function Login() {
   return (
     <AuthShell>
       <h1 className="text-lg font-semibold">
-        {mode === 'signin' ? 'Sign in' : 'Create account'}
+        {mode === 'signin' ? 'Přihlášení' : 'Vytvořit účet'}
       </h1>
       <form className="flex flex-col gap-3" onSubmit={onSubmit}>
         <label className="flex flex-col gap-1 text-sm">
-          Email
+          E-mail
           <input className={input} type="email" autoComplete="email" required
             value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          Password
+          Heslo
           <input className={input} type="password"
             autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
             required value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {notice && <p className="text-sm text-emerald-600">{notice}</p>}
         <button className={btn} type="submit" disabled={busy}>
-          {busy ? '…' : mode === 'signin' ? 'Sign in' : 'Create account'}
+          {busy ? '…' : mode === 'signin' ? 'Přihlásit se' : 'Vytvořit účet'}
         </button>
       </form>
       <button className={btnGhost} onClick={() => void signInWithGoogle()} disabled={busy}>
-        Continue with Google
+        Pokračovat přes Google
       </button>
       <div className="flex justify-between text-sm">
         <button className={link} type="button"
           onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}>
-          {mode === 'signin' ? 'Create an account' : 'Have an account? Sign in'}
+          {mode === 'signin' ? 'Vytvořit účet' : 'Už máte účet? Přihlaste se'}
         </button>
-        <Link className={link} to={ROUTES.forgotPassword.build()}>Forgot password?</Link>
+        <Link className={link} to={ROUTES.forgotPassword.build()}>Zapomenuté heslo</Link>
       </div>
     </AuthShell>
   );

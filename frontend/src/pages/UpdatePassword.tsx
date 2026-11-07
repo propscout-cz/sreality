@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { authErrorCs } from '@/lib/authErrors';
 import { ROUTES } from '@/lib/routes';
 import { useAuth } from '../lib/auth';
 import { AuthShell } from './Login';
@@ -26,7 +27,7 @@ export default function UpdatePassword() {
       setDone(true);
       setTimeout(() => navigate(ROUTES.browse.build()), 1200);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update password');
+      setError(authErrorCs(err));
     } finally {
       setBusy(false);
     }
@@ -34,13 +35,13 @@ export default function UpdatePassword() {
 
   return (
     <AuthShell>
-      <h1 className="text-lg font-semibold">Set a new password</h1>
+      <h1 className="text-lg font-semibold">Nové heslo</h1>
       {done ? (
-        <p className="text-sm text-emerald-600">Password updated. Taking you in…</p>
+        <p className="text-sm text-emerald-600">Heslo je změněné. Pouštíme vás dovnitř…</p>
       ) : (
         <form className="flex flex-col gap-3" onSubmit={onSubmit}>
           <label className="flex flex-col gap-1 text-sm">
-            New password
+            Nové heslo
             <input
               className="rounded border border-neutral-300 dark:border-neutral-600 bg-transparent px-3 py-2 text-sm"
               type="password" autoComplete="new-password" required minLength={8}
@@ -50,7 +51,7 @@ export default function UpdatePassword() {
           <button
             className="rounded bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 px-3 py-2 text-sm font-medium disabled:opacity-50"
             type="submit" disabled={busy}>
-            {busy ? '…' : 'Update password'}
+            {busy ? '…' : 'Uložit heslo'}
           </button>
         </form>
       )}

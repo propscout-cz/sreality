@@ -7,9 +7,6 @@ import Skeleton from './components/Skeleton';
 import { RequireAdmin, RequireAuth } from './components/guards';
 import HomeRedirect from './components/phone/HomeRedirect';
 import { PhoneSuspense } from './components/phone/RollParts';
-import Login from './pages/Login';
-import ForgotPassword from './pages/ForgotPassword';
-import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
 import EstimationList from './pages/EstimationList';
@@ -23,6 +20,10 @@ import WatchdogManage from './pages/WatchdogManage';
 const Health = lazyChunk(() => import('./pages/Health'));
 const Costs = lazyChunk(() => import('./pages/Costs'));
 const Signups = lazyChunk(() => import('./pages/Signups'));
+// The sign-in screens: a signed-in visit, most of them, never opens one, so they stay off the first visit's bundle.
+const Login = lazyChunk(() => import('./pages/Login'));
+const ForgotPassword = lazyChunk(() => import('./pages/ForgotPassword'));
+const UpdatePassword = lazyChunk(() => import('./pages/UpdatePassword'));
 const AgentPlatform = lazyChunk(() => import('./pages/AgentPlatform'));
 const Scrapers = lazyChunk(() => import('./pages/Scrapers'));
 const Settings = lazyChunk(() => import('./pages/Settings'));
@@ -95,9 +96,9 @@ function AdminPage({ children }: { children: ReactNode }) {
 export const routes: RouteObject[] = [
   // Full-page auth screens (outside the app Shell, so they stay reachable
   // while logged out — everything under the Shell requires a session).
-  { path: ROUTES.login.pattern, element: <Login />, handle: { title: 'Sign in' } },
-  { path: ROUTES.forgotPassword.pattern, element: <ForgotPassword />, handle: { title: 'Reset password' } },
-  { path: ROUTES.resetPassword.pattern, element: <UpdatePassword />, handle: { title: 'New password' } },
+  { path: ROUTES.login.pattern, element: <Suspense fallback={null}><Login /></Suspense>, handle: { title: 'Přihlášení' } },
+  { path: ROUTES.forgotPassword.pattern, element: <Suspense fallback={null}><ForgotPassword /></Suspense>, handle: { title: 'Obnovení hesla' } },
+  { path: ROUTES.resetPassword.pattern, element: <Suspense fallback={null}><UpdatePassword /></Suspense>, handle: { title: 'Nové heslo' } },
   {
     path: '/',
     element: (
@@ -149,7 +150,7 @@ export const routes: RouteObject[] = [
       { path: ROUTES.listingLegacy.childPath, element: <AdvertRedirect />, handle: { title: 'Property' } },
       { path: ROUTES.health.childPath, element: <AdminPage><Health /></AdminPage>, handle: { title: 'Health' } },
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
-      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
+      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Waitlist' } },
       { path: ROUTES.agentPlatform.childPath, element: <AdminPage><AgentPlatform /></AdminPage>, handle: { title: 'Agent platform' } },
       {
         path: ROUTES.runs.childPath,
