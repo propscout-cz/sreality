@@ -234,6 +234,8 @@ SPA's `detailText` and the extension render `message`): psycopg's busy classes (
 57014 — a lock-blocked read dying at the 120 s budget — `LockNotAvailable`, `DeadlockDetected`) →
 **503 `db_busy` + `Retry-After`**; everything else → **500 `internal_error` + logged `ref` id**,
 never raw exception text. Route-owned refusals (property_split's 409) stay.
+**No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings); `/maps/resolve`
+logs level and reason, never the typed name.
 `frontend/src/lib/api.ts` is the ONE transport (uploads + blob downloads, no raw `fetch()` beside
 it): `REQUEST_DEADLINE_MS` (130 s) sits above the server's 120 s budget and under Railway's ~300 s
 close — keep that ordering — a deadline abort (`ApiError.kind === 'timeout'`) is NEVER retried;
@@ -409,8 +411,8 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
   explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
-  `scripts/seed_curated_cities.py`. Display-only Mapy use
-  (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
+  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`, the static map) is not gated: the prohibition
+  is on persistence.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
 - `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
 - `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding, `/maps/suggest` and the static map fail over

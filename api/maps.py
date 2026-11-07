@@ -306,14 +306,14 @@ def _bind_momc(
         matches = cur.fetchall()
     if len({code for code, _nm in matches}) != 1:
         if matches:
-            LOG.info("maps.resolve: %r names %d městské části of obec %s — refusing to guess",
-                     name, len(matches), obec_code)
+            LOG.info("maps.resolve: momc pick names %d městské části of obec %s — refusing to guess",
+                     len(matches), obec_code)
         return None
     momc_code, momc_name = matches[0]
     parts = _momc_part_codes(conn, momc_code=int(momc_code), obec_code=obec_code)
     if not parts:
-        LOG.info("maps.resolve: městská část %r of obec %s has no část on any door — no code",
-                 momc_name, obec_code)
+        LOG.info("maps.resolve: městská část %s of obec %s has no část on any door — no code",
+                 momc_code, obec_code)
         return None
     return _Momc(name=momc_name, parts=parts)
 
@@ -359,8 +359,8 @@ def _resolve_cast_obce(
             return matches[0]
         if len(codes) > 1:
             LOG.info(
-                "maps.resolve: %r names %d parts of obec %s — refusing to guess",
-                variant, len(codes), obec_code,
+                "maps.resolve: cast_obce pick names %d parts of obec %s — refusing to guess",
+                len(codes), obec_code,
             )
             return None
         momc = _bind_momc(
@@ -419,17 +419,15 @@ def _resolve_street(
     registry = CachedRegistryView(SqlRegistryView(conn, version), RunCache())
     street, tier = _bind_street(name, obec_code, registry)
     if street is None:
-        LOG.info("maps.resolve: street %r in obec %s not bound (%s) — no code",
-                 name, obec_code, tier)
+        LOG.info("maps.resolve: ulice pick in obec %s not bound (%s) — no code", obec_code, tier)
         return None
     point = registry.street_point(street)
     if point is not None:
         off_m = haversine_m(lat, lng, point.lat, point.lon)
         if off_m > point.extent_m + _STREET_SLACK_M:
             LOG.info(
-                "maps.resolve: street %r (%s) of obec %s lies %.0f m from the pick "
-                "(extent %.0f m) — no code", name, street.code, obec_code, off_m,
-                point.extent_m,
+                "maps.resolve: ulice pick binds street %s of obec %s, %.0f m from the pick "
+                "(extent %.0f m) — no code", street.code, obec_code, off_m, point.extent_m,
             )
             return None
     return street
@@ -479,7 +477,7 @@ def _resolve_address_point(
     slots = normalize_house_number(_entry_name(regional_structure, "regional.address") or "")
     number, typ = house_number(slots)
     if obec is None or number is None:
-        LOG.info("maps.resolve: address %r has no obec or number — no code", name)
+        LOG.info("maps.resolve: adresni_misto pick has no obec or number — no code")
         return None
     street = None
     street_name = _street_of("regional.address", name, regional_structure)
@@ -499,8 +497,8 @@ def _resolve_address_point(
             and d.lat is not None and d.lon is not None
             and haversine_m(lat, lng, d.lat, d.lon) <= REGISTRY_PIN_CONFLICT_M]
     if len(near) != 1:
-        LOG.info("maps.resolve: address %r has %d doors within %.0f m of the pick — no code",
-                 name, len(near), REGISTRY_PIN_CONFLICT_M)
+        LOG.info("maps.resolve: adresni_misto pick has %d doors within %.0f m of the pick — no code",
+                 len(near), REGISTRY_PIN_CONFLICT_M)
         return None
     with conn.cursor() as cur:
         cur.execute(_DOOR_LABEL_SQL, (near[0].kod_adm,))
@@ -558,8 +556,7 @@ def _resolve_admin(
             if momc is not None:
                 return "cast_obce", momc, obec_name
     if unit is None:
-        LOG.info("maps.resolve: %s pick %r names no single unit of its chain — no code",
-                 level, name)
+        LOG.info("maps.resolve: %s pick names no single unit of its chain — no code", level)
         return level, None, None
     return unit[0], (unit[1], unit[2]), None
 

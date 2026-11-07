@@ -92,4 +92,6 @@ RUN case ",${EXTRAS}," in *,clip,*) \
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# No access log: a line holds the request URL, query string and all, so a place typed into suggest would reach the
+# deploy log (#2444). Railway's HTTP log keeps the path without the query.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]
