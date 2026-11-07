@@ -79,7 +79,7 @@ _MODEL = "w6-live-model"
 # Made-up RÚIAN codes no ad carries: two towns and a KÚ of each.
 _TOWN, _DEGENERATE_TOWN, _KU, _DEGENERATE_KU = 990_401, 990_402, 990_501, 990_502
 # The property waterfall's one table, shared with the Location quality page's vitest.
-_WATERFALL = json.loads((Path(__file__).parent / "fixtures" / "property_waterfall.json").read_text())
+_WATERFALL = json.loads((Path(__file__).parent / "fixtures" / "property_waterfall.json").read_text(encoding="utf-8"))
 
 live = pytest.mark.skipif(not _DB_URL and not _REQUIRED,
                           reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane")
@@ -801,6 +801,8 @@ def test_served_reads_published_properties_at_their_location_ad(seed: _Seed) -> 
     assert _counts(served["idnes"], "town")["has_town"] == (1, 1)
     cells = _whole(q.check_location_town_coverage(seed.conn, THRESHOLDS), q._LOCATION)
     assert cells["served/town"]["facts"]["ads"] == 1
+    assert cells["served/town"]["facts"]["grains"] == {"address": 0, "street": 0, "quarter": 0, "obec": 1}, (
+        "the waterfall counts the location ad's answer, not the canonical ad's; the unpublished and merged-away not")
 
 
 @live

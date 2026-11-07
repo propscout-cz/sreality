@@ -188,9 +188,15 @@ describe('LocationQuality scorecard', () => {
 
 /* The property waterfall's one table (ruling Q18), shared with the gauge's DB-lane test: the cells the gauge stores
  * there are the cells rendered here, and `steps` is what the page must show. */
+interface WaterfallTable {
+  cells: Record<string, { value: number; facts?: Record<string, unknown> }>;
+  steps: [string, number][];
+}
+
 const WATERFALL = JSON.parse(
   readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'property_waterfall.json'), 'utf-8'),
-) as { cells: Record<string, { value: number; facts?: Record<string, unknown> }>; steps: [string, number][] };
+) as WaterfallTable;
+const waterfallPanel = () => screen.findByRole('region', { name: 'Property waterfall' });
 
 const withWaterfall = (over: Partial<HealthRow> = {}): HealthRow => stored({
   details: {
@@ -210,20 +216,22 @@ describe('LocationQuality property waterfall (Q18)', () => {
   it('shows the stored waterfall: every step in order, labelled from the grid and the Health cells', async () => {
     vi.mocked(pgRead).mockResolvedValue({ data: [withWaterfall()], count: null });
     renderPage();
-    const panel = await screen.findByTestId('property-waterfall');
+    const panel = await waterfallPanel();
     expect(stepsShown(panel)).toEqual(WATERFALL.steps.map(([label, n]) => [label, String(n)]));
+    /* The published total beside the title is the cell's stored `ads`, never a sum the page makes. */
+    expect(within(panel).getByText(String(WATERFALL.cells['served/town'].facts?.ads))).toBeInTheDocument();
   });
 
   it('withholds the waterfall of a stale reading, as Health withholds its facts', async () => {
     vi.mocked(pgRead).mockResolvedValue({ data: [withWaterfall({ effective_status: 'unknown' })], count: null });
     renderPage();
     await screen.findByTestId('location-matrix-bazos');
-    expect(screen.queryByTestId('property-waterfall')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Property waterfall' })).toBeNull();
   });
 
   it('says so when the reading stored no waterfall', async () => {
     renderPage();
-    const panel = await screen.findByTestId('property-waterfall');
+    const panel = await waterfallPanel();
     expect(panel).toHaveTextContent('The gauge has stored no waterfall in this reading.');
     expect(within(panel).queryAllByRole('listitem')).toEqual([]);
   });

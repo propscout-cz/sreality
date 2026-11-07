@@ -40,10 +40,8 @@ import {
 
 const CHECK_KEY = 'location_town_coverage';
 
-/* A cell's counts by class (`facts.disputed`) as bars, in the matrix's figures. */
-function BarList({ counts }: { counts: unknown }) {
-  const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
-    .filter((e): e is [string, number] => typeof e[1] === 'number');
+/* Counts by class as bars, in the matrix's figures: a cell's `facts.disputed`, or the waterfall's steps. */
+function BarList({ rows }: { rows: [string, number][] }) {
   const total = rows.reduce((a, [, n]) => a + n, 0);
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--color-ink-3)]">No rows.</p>;
@@ -73,42 +71,51 @@ function BarList({ counts }: { counts: unknown }) {
   );
 }
 
+/* A cell fact's numeric entries, in stored order. */
+const numberEntries = (fact: unknown): [string, number][] =>
+  Object.entries(fact && typeof fact === 'object' ? fact : {}).filter((e): e is [string, number] => typeof e[1] === 'number');
+
 /* ---------- the property waterfall (ruling Q18) ---------- */
 
 /* Every published property once, at its location ad's finest level: the no-town steps are the served cells themselves
  * (Health's figures, by their own names), then served/town's stored `grains` coarse to fine in the position grid's
- * words. Only stored counts, never a remainder; null when the reading stored no waterfall. */
-function waterfall(fleet: HealthCell[]): Record<string, number> | null {
+ * words. Only stored counts, never a remainder; null when the reading stored no complete waterfall. */
+function waterfall(fleet: HealthCell[]): { published: number; steps: [string, number][] } | null {
   const town = fleet.find((c) => c.subject === 'served/town');
   const withheld = fleet.find((c) => c.subject === 'served/town_withheld');
   const grains = town?.facts.grains as Record<string, number> | undefined;
-  if (!town || !withheld || !grains) return null;
+  const { ads, foreign } = town?.facts ?? {};
+  if (!town || town.value == null || !withheld || withheld.value == null || !grains
+      || typeof ads !== 'number' || typeof foreign !== 'number') return null;
   return {
-    [KIND_LABEL.foreign.label]: Number(town.facts.foreign),
-    [town.subject]: Number(town.value),
-    [withheld.subject]: Number(withheld.value),
-    ...Object.fromEntries(
-      POSITION_GRAINS.filter((g) => g.key in grains).reverse().map((g) => [`ends at ${g.label}`, grains[g.key]]),
-    ),
+    published: ads,
+    steps: [
+      [KIND_LABEL.foreign.label, foreign],
+      [town.subject, town.value],
+      [withheld.subject, withheld.value],
+      ...POSITION_GRAINS.filter((g) => g.key in grains).reverse()
+        .map((g): [string, number] => [`ends at ${g.label}`, grains[g.key]]),
+    ],
   };
 }
 
 function PropertyWaterfall({ fleet }: { fleet: HealthCell[] }) {
-  const steps = waterfall(fleet);
+  const shown = waterfall(fleet);
   return (
-    <Panel title="Property waterfall">
-      <div data-testid="property-waterfall">
-        <p className="mb-3 text-sm text-[var(--color-ink-2)]">
-          Published properties, each counted once at its location ad’s finest level. Published, not all active: a young
-          property counts once it is published. Browse also applies the consumer location rule, so its count is not this
-          total.
-        </p>
-        {steps ? (
-          <BarList counts={steps} />
-        ) : (
-          <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no waterfall in this reading.</p>
-        )}
-      </div>
+    <Panel
+      title="Property waterfall"
+      count={shown ? fmtNumber(shown.published) : null}
+      lede={
+        'Published properties, each counted once at its location ad’s finest level: published, not all active (a ' +
+        'young property counts once it is published). Browse also applies the consumer rule (rule 25), so its count ' +
+        'is not this total.'
+      }
+    >
+      {shown ? (
+        <BarList rows={shown.steps} />
+      ) : (
+        <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no waterfall in this reading.</p>
+      )}
     </Panel>
   );
 }
@@ -237,7 +244,7 @@ function Scorecard({
       ) : null}
       {disputed ? (
         <Panel title={`Disputed classes · ${portalShort(source)}`}>
-          <BarList counts={disputed} />
+          <BarList rows={numberEntries(disputed)} />
         </Panel>
       ) : null}
     </>
