@@ -152,7 +152,7 @@ ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice; W5b, #2338: the sa
 `wave=w5b`, `all_blocks=true` and the ids_sql of `w5b-pin-door.md` § Rollout, whose pass rule also reads
 `shadow.json`'s `door`, `autodedup.shadow.door_report`: blockers, flips, new `addr` pairs, cap displacement,
 merge gains and losses, block-key splits, two doors in one building, with the pair ids; its gate samples at most
-20 groups). A block costs what its town does (Pardubice:
+16 groups, stage 1 by Q23 losers and part gains). A block costs what its town does (Pardubice:
 7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about
 2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
 

@@ -693,48 +693,89 @@ def test_the_door_report_splits_a_block_key_and_marks_the_part_gained():
 _MOVER = {"listing_id": 1, "source": "ceskereality", "old": {"obec_kod": 11}, "new": {"obec_kod": 11, "cast_obce_kod": 5}}
 
 
+def _loser(listing_id: int, kod: int, obec: int = 11, source: str = "sreality") -> dict[str, Any]:
+    """A Q23 loser: a door in the stored row, none in the candidate."""
+    return {"listing_id": listing_id, "source": source, "old": {"obec_kod": obec, "ruian_adm_kod": kod},
+            "new": {"obec_kod": obec, "ruian_adm_kod": None}}
+
+
 def test_each_mover_counts_once_at_the_group_that_exports_its_stored_row():
-    """Old block town:11 in group 1, new block quarter:99 in group 2; an unquartered mover at the `ids` block."""
-    moved = {"listing_id": 2, "source": "idnes", "old": {"obec_kod": 11},
-             "new": {"obec_kod": PRAHA, "cast_obce_kod": 99}}
+    """Old block town:11 in group 1, new block quarter:99 in group 2; an unquartered mover at the `ids` block. Q23
+    losers count twice over: every one, and those on a č.p. spanning 2+ části (`spanning`, the registry's answer)."""
+    moved = {"listing_id": 2, "source": "idnes", "old": {"obec_kod": 11, "ruian_adm_kod": 70},
+             "new": {"obec_kod": PRAHA, "cast_obce_kod": 99, "ruian_adm_kod": 71}}
     bare = {"listing_id": 3, "source": "remax", "old": {"obec_kod": PRAHA},
             "new": {"obec_kod": PRAHA, "cast_obce_kod": 99}}
     lost = {"listing_id": 4, "source": "idnes", "old": {"obec_kod": 77}, "new": {"obec_kod": 77}}
-    counts = shadow.movers_by_group([_MOVER, moved, bare, lost],
-                                    [["ids:3", "town:11"], ["quarter:99"]], {2})
-    assert counts[1]["movers"] == 3 and counts[1]["rental"] == 1 and 2 not in counts
+    counts = shadow.movers_by_group([_MOVER, moved, bare, lost, _loser(5, 72), _loser(6, 73)],
+                                    [["ids:3", "town:11"], ["quarter:99"]], {6})
+    assert counts[1]["movers"] == 5 and 2 not in counts
+    assert (counts[1]["q23"], counts[1]["q23_spanning"]) == (2, 1), "a door kept or moved is no loser"
+    assert "rental" not in counts[1]
     assert counts[1]["part"]["ceskereality"] == 1 and counts[1]["sources"]["remax"] == 1
     assert counts[None]["movers"] == 1
 
 
-def test_the_gate_sample_takes_stage_one_then_the_hash_order_and_states_its_cover():
-    rows = {i: {"movers": 10, "rental": 0, "sources": Counter(idnes=10), "part": Counter()} for i in range(1, 31)}
-    for i, n in ((7, 50), (8, 40), (9, 30), (10, 20), (11, 10)):
-        rows[i]["part"]["ceskereality"] = n
-    for i, n in ((7, 90), (20, 9), (21, 8), (22, 7), (23, 6)):
-        rows[i]["rental"] = n
+def _gate_rows() -> dict[int, dict[str, Any]]:
+    return {i: {"movers": 10, "q23": 0, "q23_spanning": 0, "sources": Counter(idnes=10), "part": Counter()}
+            for i in range(1, 31)}
+
+
+def test_the_gate_sample_takes_three_q23_groups_and_the_part_group_then_the_hash_order():
+    """The engine owner's stage 1 (2026-11-07, F1 + Q23): up to 3 groups by the Q23 losers on a č.p. spanning 2+
+    části, then by all Q23 losers, ties to the lowest group; then the 1 group with the most part-gaining movers of any
+    portal. The ceskereality and rental picks are gone: group 7 (most ceskereality part-gainers) is not picked."""
+    rows = _gate_rows()
+    for i, spanning, losers in ((5, 3, 10), (6, 3, 20), (3, 1, 50), (9, 1, 50), (12, 0, 80)):
+        rows[i]["q23_spanning"], rows[i]["q23"] = spanning, losers
+    rows[7]["part"]["ceskereality"] = 44
+    rows[14]["part"].update(sreality=40, idnes=5)
     sample = shadow.gate_sample(rows, 30)
-    assert sample["stage_1"] == [7, 8, 9, 10, 20, 21, 22]
+    assert sample["stage_1"] == [6, 5, 3, 14]
     order = sorted((i for i in range(1, 31) if i not in sample["stage_1"]),
                    key=lambda i: hashlib.sha256(f"w5b-gate-{i}".encode()).hexdigest())
-    assert sample["stage_2"] == order[:12] and sample["remaining"] == 23
-    assert sample["covered"] == {"idnes": [190, 300]} and sample["covered_all"] == [190, 300]
+    assert sample["stage_2"] == order[:12] and sample["remaining"] == 26
+    assert sample["covered"] == {"idnes": [160, 300]} and sample["covered_all"] == [160, 300]
+    held = {i for i in [*sample["stage_1"], *sample["stage_2"]]}
+    assert sample["q23"] == [sum(rows[i]["q23"] for i in held), 210]
+    assert sample["q23_spanning"] == [sum(rows[i]["q23_spanning"] for i in held), 8]
+
+
+def test_the_part_group_already_picked_for_q23_is_not_picked_twice():
+    rows = _gate_rows()
+    rows[4]["q23"] = 1
+    rows[4]["part"]["bazos"] = 9
+    assert shadow.gate_sample(rows, 30)["stage_1"] == [4]
 
 
 def test_a_refused_scoping_run_prints_the_groups_and_the_sample(monkeypatch, tmp_path, capsys):
+    """The one registry read is bounded by the Q23 losers: their ids and their old doors' kódy, nobody else's."""
     _jsonl(tmp_path / shadow.MOVERS_FILE, [
         {"listing_id": 1, "source": "ceskereality", "old": {"obec_kod": BEROUN},
          "new": {"obec_kod": BEROUN, "cast_obce_kod": 5}},
-        {"listing_id": 2, "source": "idnes", "old": {"obec_kod": BRNO, "cast_obce_kod": 7},
-         "new": {"obec_kod": BRNO, "cast_obce_kod": 7}}])
-    monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([(2,)]))
+        {"listing_id": 2, "source": "idnes", "old": {"obec_kod": BRNO, "cast_obce_kod": 7, "ruian_adm_kod": 71},
+         "new": {"obec_kod": BRNO, "cast_obce_kod": 7, "ruian_adm_kod": None}}])
+    conn = _Conn([(2,)])
+    monkeypatch.setattr("scraper.db.connect_read_only", lambda: conn)
     monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {block: 40_000 for block in blocks})
     monkeypatch.setattr(shadow, "export_cohort", lambda *a, **k: pytest.fail("exported past the cap"))
     assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     out = capsys.readouterr().out
-    assert "[shadow] group 1/2: 1 movers, 1 rental; sources idnes=1; part-gaining -" in out
-    assert "[shadow] group 2/2: 1 movers, 0 rental; sources ceskereality=1; part-gaining ceskereality=1" in out
-    assert "[shadow] gate sample: stage 1 [2, 1]; stage 2 [] of the 0 remaining; covers 2 of 2 movers" in out
+    assert ("[shadow] group 1/2: 1 movers, 1 Q23 losers (1 on a č.p. spanning 2+ části); sources idnes=1; "
+            "part-gaining -") in out
+    assert ("[shadow] group 2/2: 1 movers, 0 Q23 losers (0 on a č.p. spanning 2+ části); sources ceskereality=1; "
+            "part-gaining ceskereality=1") in out
+    assert ("[shadow] gate sample: stage 1 [1, 2]; stage 2 [] of the 0 remaining; covers 2 of 2 movers: "
+            "ceskereality=1/1 idnes=1/1; Q23 losers 1/1, spanning 1/1") in out
+    assert conn.executed[-1][1:] == ({"ids": [2], "kods": [71]}, True)
+    assert "ruian_address_points" in conn.executed[-1][0] and "category_type" not in conn.executed[-1][0]
+
+
+def test_no_q23_loser_asks_the_registry_nothing():
+    conn = _Conn([])
+    movers = [{"listing_id": 1, "old": {"ruian_adm_kod": 5}, "new": {"ruian_adm_kod": 6}},
+              {"listing_id": 2, "old": {"ruian_adm_kod": None}, "new": {"ruian_adm_kod": None}}]
+    assert shadow.spanning_losers(conn, movers) == set() and conn.executed == []
 
 
 def test_the_door_log_names_the_pieces_first_and_last_block_and_their_count(tmp_path: Path):

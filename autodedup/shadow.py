@@ -39,7 +39,6 @@ from autodedup.features import haversine_m
 from autodedup.fingerprint import Fingerprint, pin_key_of
 from autodedup.incremental import GENERATION
 from autodedup.indistinguishable import (
-    RENTAL_TYPE,
     _cp_of,
     _filed_apart,
     stored_house_number_conflict,
@@ -257,7 +256,18 @@ def groups_needed(sizes: dict[str, int], max_blocks: int, max_ads: int) -> int |
     return None
 
 
-_CATEGORY_TYPE_SQL = "SELECT id FROM listings WHERE id = ANY(%s::bigint[]) AND category_type = %s"
+# Which Q23 losers stood on a č.p. spanning 2+ části of its obec: the old door by kód ADM, then the distinct části of the
+# valid points sharing its obec, number and typ_so (`ruian_ap_obec_hn` serves the count). Bounded by the losers.
+_SPANNING_SQL = """
+select l.listing_id
+  from unnest(%(ids)s::bigint[], %(kods)s::bigint[]) as l (listing_id, kod_adm)
+  join ruian_address_points d on d.kod_adm = l.kod_adm
+ where (select count(distinct p.cast_obce_unit_id) from ruian_address_points p
+         where p.valid_to is null
+           and p.obec_unit_id in (select u.id from ruian_admin_units u
+                                   where u.level = 'obec'::ruian_level and u.code = d.obec_kod)
+           and p.cislo_domovni = d.cislo_domovni and p.typ_so = d.typ_so) >= 2
+"""
 
 
 # Both arms ride an index (`autodedup_pairs_pkey`, `autodedup_pairs_gen_hi_idx`): never a scan.
@@ -301,67 +311,94 @@ def _gained_part(mover: dict[str, Any]) -> bool:
     return old.get("cast_obce_kod") is None and new.get("cast_obce_kod") is not None
 
 
+def _q23_loser(mover: dict[str, Any]) -> bool:
+    """Ruling Q23 (a): a door in the stored row and none in the candidate."""
+    return (mover.get("old") or {}).get("ruian_adm_kod") is not None and \
+        (mover.get("new") or {}).get("ruian_adm_kod") is None
+
+
+def spanning_losers(conn: psycopg.Connection, movers: Iterable[dict[str, Any]]) -> set[int]:
+    """The Q23 losers whose old door's č.p. spans 2+ části of its obec (`_SPANNING_SQL`); no loser, no read."""
+    losers = {int(m["listing_id"]): int(m["old"]["ruian_adm_kod"]) for m in movers
+              if m.get("listing_id") is not None and _q23_loser(m)}
+    if not losers:
+        return set()
+    ids = sorted(losers)
+    _, rows = read(conn, _SPANNING_SQL, {"ids": ids, "kods": [losers[i] for i in ids]})
+    return {int(row[0]) for row in rows}
+
+
 def movers_by_group(movers: Iterable[dict[str, Any]], groups: list[list[str]],
-                    rentals: set[int]) -> dict[int | None, dict[str, Any]]:
+                    spanning: set[int]) -> dict[int | None, dict[str, Any]]:
     """Each mover counted once, at the group that exports its stored row: its OLD block's, else
     (unquartered) the `ids` block's. A new block elsewhere holds only its counterparts. `None` = no
-    kept block exports it. `rentals`: the movers whose `category_type` is `pronajem`."""
+    kept block exports it. `spanning`: the Q23 losers on a č.p. spanning 2+ části (`spanning_losers`)."""
     at = {block: i for i, chunk in enumerate(groups, 1) for block in chunk}
     listed = next((i for block, i in at.items() if block.startswith("ids:")), None)
     out: dict[int | None, dict[str, Any]] = {}
     for mover in movers:
         group = at.get(side_block(mover.get("old")), listed if _unquartered(mover) else None)
-        row = out.setdefault(group, {"movers": 0, "rental": 0, "sources": Counter(),
+        row = out.setdefault(group, {"movers": 0, "q23": 0, "q23_spanning": 0, "sources": Counter(),
                                      "part": Counter()})
         source = mover.get("source") or "?"
         row["movers"] += 1
         row["sources"][source] += 1
         row["part"][source] += _gained_part(mover)
-        row["rental"] += mover.get("listing_id") in rentals
+        row["q23"] += _q23_loser(mover)
+        row["q23_spanning"] += _q23_loser(mover) and mover.get("listing_id") in spanning
     return out
 
 
-def gate_sample(counts: Mapping[int | None, Mapping[str, Any]], groups: int,
-                part_source: str = "ceskereality", salt: str = "w5b-gate-",
-                per_kind: int = 4, ranked: int = 12) -> dict[str, Any]:
-    """W5b's sampled gate: the groups holding the most `part_source` movers gaining a část and the
-    most rental movers (ties to the lowest group), then the rest by sha256(salt + group number)."""
-    def top(score: Callable[[Mapping[str, Any]], int]) -> list[int]:
-        scored = [(score(row), i) for i, row in counts.items() if i is not None and score(row) > 0]
-        return [i for _, i in sorted(scored, key=lambda item: (-item[0], item[1]))[:per_kind]]
+def gate_sample(counts: Mapping[int | None, Mapping[str, Any]], groups: int, salt: str = "w5b-gate-",
+                q23_picks: int = 3, part_picks: int = 1, ranked: int = 12) -> dict[str, Any]:
+    """W5b's sampled gate (the engine owner, 2026-11-07, for F1 + Q23): up to `q23_picks` groups by the Q23 losers on a
+    č.p. spanning 2+ části, then by all Q23 losers, and the `part_picks` groups with the most part-gaining movers (ties
+    to the lowest group); then the rest by sha256(salt + group number)."""
+    def top(score: Callable[[Mapping[str, Any]], tuple[int, ...]], picks: int) -> list[int]:
+        scored = [(score(row), i) for i, row in counts.items() if i is not None and any(score(row))]
+        return [i for _, i in sorted(scored, key=lambda item: (*(-n for n in item[0]), item[1]))[:picks]]
 
-    first = list(dict.fromkeys([*top(lambda row: row["part"][part_source]),
-                                *top(lambda row: row["rental"])]))
+    first = list(dict.fromkeys([*top(lambda row: (row["q23_spanning"], row["q23"]), q23_picks),
+                                *top(lambda row: (sum(row["part"].values()),), part_picks)]))
     rest = sorted((i for i in range(1, groups + 1) if i not in first),
                   key=lambda i: hashlib.sha256(f"{salt}{i}".encode()).hexdigest())
     chosen = {*first, *rest[:ranked]}
     total: Counter[str] = Counter()
     held: Counter[str] = Counter()
+    losers: Counter[str] = Counter()
+    kept: Counter[str] = Counter()
     for i, row in counts.items():
+        kinds = Counter(q23=row["q23"], q23_spanning=row["q23_spanning"])
         total.update(row["sources"])
+        losers.update(kinds)
         if i in chosen:
             held.update(row["sources"])
+            kept.update(kinds)
     return {"stage_1": first, "stage_2": rest[:ranked], "remaining": len(rest),
             "covered": {source: [held[source], n] for source, n in sorted(total.items())},
-            "covered_all": [sum(held.values()), sum(total.values())]}
+            "covered_all": [sum(held.values()), sum(total.values())],
+            **{kind: [kept[kind], losers[kind]] for kind in ("q23", "q23_spanning")}}
 
 
-def _print_groups(movers: list[dict[str, Any]], groups: list[list[str]], rentals: set[int]) -> None:
+def _print_groups(movers: list[dict[str, Any]], groups: list[list[str]], spanning: set[int]) -> None:
     """The per-group counts a sampled gate picks from, and the sample itself. `i/n` holds exactly
     these blocks: `chunks` cuts the sorted keys, whatever the ad counts read."""
-    counts = movers_by_group(movers, groups, rentals)
+    counts = movers_by_group(movers, groups, spanning)
     for i in range(1, len(groups) + 1):
-        row = counts.get(i) or {"movers": 0, "rental": 0, "sources": {}, "part": {}}
+        row = counts.get(i) or {"movers": 0, "q23": 0, "q23_spanning": 0, "sources": {}, "part": {}}
         spell = lambda items: " ".join(f"{k}={v}" for k, v in sorted(items.items()) if v)  # noqa: E731
-        print(f"[shadow] group {i}/{len(groups)}: {row['movers']} movers, {row['rental']} rental; "
-              f"sources {spell(row['sources']) or '-'}; part-gaining {spell(row['part']) or '-'}")
+        print(f"[shadow] group {i}/{len(groups)}: {row['movers']} movers, {row['q23']} Q23 losers "
+              f"({row['q23_spanning']} on a č.p. spanning 2+ části); sources {spell(row['sources']) or '-'}; "
+              f"part-gaining {spell(row['part']) or '-'}")
     if None in counts:
         print(f"[shadow] {counts[None]['movers']} movers in no kept block")
     sample = gate_sample(counts, len(groups))
     print(f"[shadow] gate sample: stage 1 {sample['stage_1']}; stage 2 {sample['stage_2']} of the "
           f"{sample['remaining']} remaining; covers {sample['covered_all'][0]} of "
           f"{sample['covered_all'][1]} movers: "
-          + " ".join(f"{source}={held}/{n}" for source, (held, n) in sample["covered"].items()))
+          + " ".join(f"{source}={held}/{n}" for source, (held, n) in sample["covered"].items())
+          + f"; Q23 losers {sample['q23'][0]}/{sample['q23'][1]}, spanning "
+            f"{sample['q23_spanning'][0]}/{sample['q23_spanning'][1]}")
 
 
 def outside_group(movers: Path, group: dict[str, Any]) -> set[int]:
@@ -719,11 +756,10 @@ def main(argv: list[str] | None = None) -> int:
         if needed:
             conn = db.connect_read_only()
             try:
-                ids = [int(m["listing_id"]) for m in movers if m.get("listing_id") is not None]
-                _, rows = read(conn, _CATEGORY_TYPE_SQL, (ids, RENTAL_TYPE))
+                spanning = spanning_losers(conn, movers)
             finally:
                 conn.close()
-            _print_groups(movers, chunks(sizes, needed), {int(row[0]) for row in rows})
+            _print_groups(movers, chunks(sizes, needed), spanning)
         return 2
     summary = export_cohort(db.connect_read_only, shadow_dir, chunk)
     conn = db.connect_read_only()

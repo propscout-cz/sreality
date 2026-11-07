@@ -80,31 +80,37 @@ The gauge reads the view in one statement and loses `{p}/accuracy` with its two 
 
 Prerequisites: W5 merged and swept; W4's realitymix@8 re-mine done (otherwise hidden server geocodes on doors would refine).
 
-1. Shadow from the W5b branch, once it has merged `main`. `ids_sql` (claims none, `wave-shadow.md`):
+1. Shadow from the W5b branch, once it has merged `main`. `ids_sql` (claims none, `wave-shadow.md`), one arm per amendment. Measured on production 2026-11-07: the F1 arm 28,054 ads; the Q23 arms 1,187 low-graded doors, 3,468 numbered ads not at a door and 1,057 doors whose words carry a lettered č.o.:
 ```sql
 SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
- WHERE l.is_active AND l.category_main IN ('byt', 'dum') AND ll.country_status = 'cz'
-   AND ll.granularity = 'street'
-   AND coalesce(ll.disputed, '') NOT IN ('pin_outside_obec', 'pin_outside_cz', 'country_conflict')
-   AND NOT EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id
-                    AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co'))
-   AND EXISTS (SELECT 1 FROM location_claims c
-                WHERE c.listing_id = l.id AND c.claim_type = 'coordinate' AND c.value_geom IS NOT NULL
-                  AND EXISTS (SELECT 1 FROM ruian_address_points ap WHERE ap.valid_to IS NULL
-                                AND ap.geom && ST_Expand(c.value_geom, 1 / 60000.0)
-                                AND ST_DWithin(ap.geom::geography, c.value_geom::geography, 1)))
+ WHERE l.is_active AND ll.country_status = 'cz' AND (
+   (l.category_main IN ('byt', 'dum') AND ll.granularity = 'street'
+    AND coalesce(ll.disputed, '') NOT IN ('pin_outside_obec', 'pin_outside_cz', 'country_conflict')
+    AND NOT EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id
+                     AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co'))
+    AND EXISTS (SELECT 1 FROM location_claims c
+                 WHERE c.listing_id = l.id AND c.claim_type = 'coordinate' AND c.value_geom IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM ruian_address_points ap WHERE ap.valid_to IS NULL
+                                 AND ap.geom && ST_Expand(c.value_geom, 1 / 60000.0)
+                                 AND ST_DWithin(ap.geom::geography, c.value_geom::geography, 1))))
+   OR (ll.granularity = 'address_point' AND ll.match_confidence = 'low')
+   OR (ll.granularity <> 'address_point' AND EXISTS (SELECT 1 FROM location_claims h WHERE h.listing_id = l.id
+         AND (h.claim_type IN ('house_number_cp', 'house_number_co')
+              OR (h.claim_type = 'street_name' AND h.value_text ~ '[0-9]'))))
+   OR (ll.granularity = 'address_point' AND EXISTS (SELECT 1 FROM location_claims h WHERE h.listing_id = l.id
+         AND h.claim_type IN ('house_number_co', 'street_name') AND coalesce(h.value_text, '') ~ '[0-9][[:alpha:]]')))
 ```
    `what_if` keeps real movers. Dispatch `location_wave_shadow.yml --ref feature/location-w5b-pin-door -f wave=w5b -f claims=none -f scope=apply -f all_blocks=true -f group=1/1 -f ids_sql="…"`, then the printed `i/n` groups with `positions_run_id`. **`all_blocks=true` is required here:** by default only blocks holding a ruling are exported, and most of this wave's movers have none, so the door report would not see them. No gate runs until W5's sweep ends.
 
    **Scope.** `scope=apply`, `all_blocks=true`, nothing outside the apply scope. The gate result says nothing about blocks outside it, and the run prints so.
 
-   **The gate is a sample of at most 20 of the 63 groups** (engine owner, 2026-11-02; scoping run 41465914419: 18,482 ids, 17,950 movers, 1,819 blocks, 443,435 ads, 63 groups needed under the caps). The refused scoping run prints every group's counts and the picks, reproducible by re-running step 2 with `positions_run_id`:
-   - **Stage 1:** up to 4 groups holding the most ceskereality movers that gain a část, plus up to 4 groups holding the most rental movers (`listings.category_type = 'pronajem'`). A stage 1 fail stops the gate and goes to the operator.
+   **The gate is a sample of at most 16 groups** (engine owner, 2026-11-02; stage 1 restated for F1 and Q23, 2026-11-07). The refused scoping run prints the ids, movers, blocks, ads and groups needed under the caps, every group's counts and the picks, reproducible by re-running step 2 with `positions_run_id`:
+   - **Stage 1** (`shadow.gate_sample`): up to 3 groups ranked by the Q23 losers (a door in the stored row, none in the candidate) whose old obec holds their old č.p., same `typ_so`, in 2 or more current části, then by all Q23 losers, ties to the lowest group number; and 1 group with the most part-gaining movers, any portal. Deduplicated. The spanning read (`shadow.spanning_losers`) is one read-only registry query in the REFUSED branch, bounded by the losers' ids. A stage 1 fail stops the gate and goes to the operator.
    - **Stage 2:** the remaining groups ranked by `sha256("w5b-gate-" + group number)`, the first 12, one at a time.
 
-   **What it does and does not say.** The result states that it is a sample. Stage 2 covers about 22 % of the remaining groups. If it finds nothing harmful, roughly a dozen independent harmful pairs in those groups could still be missed at about 5 % ((1 − 0.22)^12), and more if they cluster, because a group is one contiguous run of block keys. `addr_new` and `cap_displaced` are seen only inside the groups run. The result states the share of the 17,950 movers covered, per source, from the run's `gate sample` line. Without the rental picks, which need that re-run, the 4 ceskereality groups and 12 by hash hold 5,167 of 17,950 (28.8 %): ceskereality 1,125 of 3,524, idnes 2,575 of 9,217, realitymix 830 of 3,114, mmreality 429 of 1,446, remax 155 of 464, sreality 47 of 173, bezrealitky 6 of 12. A rental pick replaces any hash pick it overlaps.
+   **What it does and does not say.** The result states that it is a sample. Stage 2 runs 12 of the remaining groups. If it finds nothing harmful, harmful pairs in the groups not run can still be missed, more so if they cluster, because a group is one contiguous run of block keys. `addr_new` and `cap_displaced` are seen only inside the groups run. The result states the share of the movers and of both kinds of Q23 loser covered, per source, from the run's `gate sample` line.
 
-   **Group counts** (`[shadow] group i/n: …`, printed when step 2 is REFUSED): movers, rental movers, movers per source, part-gaining movers per source. A mover counts once, at the group that exports its stored row: its old block's, else (unquartered) the `ids` block's; a new block in another group holds only its counterparts. `chunks` cuts the sorted block keys, so a dispatched `i/63` holds exactly those blocks. A block that does not fit the caps waits for the engine owner.
+   **Group counts** (`[shadow] group i/n: …`, printed when step 2 is REFUSED): movers, Q23 losers and those of them on a č.p. spanning 2+ části, movers per source, part-gaining movers per source. A mover counts once, at the group that exports its stored row: its old block's, else (unquartered) the `ids` block's; a new block in another group holds only its counterparts. `chunks` cuts the sorted block keys, so a dispatched `i/n` holds exactly those blocks. A block that does not fit the caps waits for the engine owner.
 
    **Guard.** If `e242` and `e272` read 0 for both `base` and `new` in every group, that is not a pass: the report is tested on a real pair first.
 
