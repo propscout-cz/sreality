@@ -4152,8 +4152,8 @@ renumber.** Navigate by area:
     /pipeline/stages` create — the `key` slug is derived server-side from the label; `PATCH
     /pipeline/stages/{id}` rename/recolor/retag/crown-entry; `POST /pipeline/stages/reorder`
     rewrite left-to-right order; `DELETE /pipeline/stages/{id}` soft-archive via `archived_at`).
-    Two invariants the API enforces (not just the DB): a stage can't be **both** the entry and
-    terminal, and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
+    Three invariants the API enforces (not just the DB): a stage can't be **both** the entry and
+    terminal, the viewing stage is never terminal (or archived; `role` below), and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
     another stage, never by un-crowning the only one — the partial unique index needs exactly one).
     Archive is refused (409) for the entry stage or any stage still holding cards — the FK is
     `ON DELETE RESTRICT`, so cards must be moved off a stage before it retires; archived stages

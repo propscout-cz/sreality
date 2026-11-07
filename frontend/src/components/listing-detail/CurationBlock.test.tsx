@@ -945,14 +945,20 @@ describe('<CurationBlock> the viewing stage offer', () => {
     expect(movePipelineCard).not.toHaveBeenCalled();
   });
 
-  it('changes nothing on no', async () => {
+  it('changes nothing on no, and starts and ends its focus where no key can move a deal', async () => {
     const user = userEvent.setup();
     vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
     renderWithReads();
     await bookViewing(user);
-    await user.click(await screen.findByRole('button', { name: 'Ne, nechat' }));
+    /* It opens as the save lands: focus starts on "no", so a key still pressed never moves a deal. */
+    const no = await screen.findByRole('button', { name: 'Ne, nechat' });
+    await waitFor(() => expect(no).toHaveFocus());
+    await user.keyboard('{Enter}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(movePipelineCard).not.toHaveBeenCalled();
+    /* The save that asked has gone: focus comes back to the notes section, not into a field. */
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('DIV'));
+    expect(document.activeElement?.contains(screen.getByRole('textbox', { name: 'Poznámky' }))).toBe(true);
   });
 
   it('stays silent at a later open stage', async () => {

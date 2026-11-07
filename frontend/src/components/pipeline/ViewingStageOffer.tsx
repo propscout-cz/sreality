@@ -5,7 +5,7 @@
  * asking from the shared board reads, so inside <ActingAs> it is the owner's board,
  * as the note is the owner's. Declining changes nothing. */
 
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import Dialog, { DialogClose } from '@/components/Dialog';
@@ -21,7 +21,11 @@ const PRIMARY =
 const QUIET =
   'inline-flex h-10 items-center px-3 text-[0.85rem] rounded-[var(--radius-sm)] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] transition-colors';
 
-export function useViewingStageOffer(propertyId: number): { offer: () => void; dialog: ReactNode } {
+export function useViewingStageOffer(
+  propertyId: number,
+  /* Where focus goes back to: the save that asked has gone with its form. */
+  returnFocus: RefObject<HTMLElement | null>,
+): { offer: () => void; dialog: ReactNode } {
   const qc = useQueryClient();
   const actAs = useActAs();
   /* Mounted so the two reads are there when a date is saved; each is the page's shared entry. */
@@ -36,16 +40,25 @@ export function useViewingStageOffer(propertyId: number): { offer: () => void; d
     setAsked(viewingStageOffer(stages, members === undefined ? undefined : (members.get(propertyId) ?? null)));
   };
 
+  const close = () => {
+    setAsked(null);
+    requestAnimationFrame(() => {
+      if (!document.activeElement || document.activeElement === document.body) {
+        returnFocus.current?.focus({ preventScroll: true });
+      }
+    });
+  };
+
   const accept = (o: ViewingStageOffer) => {
     const vars = { propertyId, stageId: o.stage.id };
     if (o.kind === 'add') addAt.mutate(vars);
     else move.mutate(vars);
-    setAsked(null);
+    close();
   };
 
   return {
     offer,
-    dialog: asked && <OfferDialog offer={asked} onAccept={() => accept(asked)} onDecline={() => setAsked(null)} />,
+    dialog: asked && <OfferDialog offer={asked} onAccept={() => accept(asked)} onDecline={close} />,
   };
 }
 
@@ -59,11 +72,12 @@ function OfferDialog({
   onDecline: () => void;
 }) {
   const titleId = useId();
-  const acceptRef = useRef<HTMLButtonElement>(null);
+  /* It opens as a save lands: focus starts on "no", so a key still pressed never moves a deal. */
+  const declineRef = useRef<HTMLButtonElement>(null);
   const to = `„${offer.stage.label}“`;
   const adding = offer.kind === 'add';
   return (
-    <Dialog open onClose={onDecline} labelledBy={titleId} initialFocus={acceptRef} className="w-full max-w-sm p-5">
+    <Dialog open onClose={onDecline} labelledBy={titleId} initialFocus={declineRef} className="w-full max-w-sm p-5">
       <div className="mb-2 flex items-start justify-between gap-3">
         <h2 id={titleId} className="font-display text-[17px] font-semibold leading-6 text-[var(--color-ink)]">
           {adding ? 'Přidat do fáze prohlídky?' : 'Přesunout do fáze prohlídky?'}
@@ -78,10 +92,10 @@ function OfferDialog({
             : `Nemovitost je ve fázi „${offer.from?.label}“. Přesunout ji do fáze ${to}?`}
       </p>
       <div className="mt-5 flex justify-end gap-2">
-        <button type="button" onClick={onDecline} className={QUIET}>
+        <button ref={declineRef} type="button" onClick={onDecline} className={QUIET}>
           Ne, nechat
         </button>
-        <button ref={acceptRef} type="button" onClick={onAccept} className={PRIMARY}>
+        <button type="button" onClick={onAccept} className={PRIMARY}>
           {adding ? 'Přidat' : 'Přesunout'}
         </button>
       </div>

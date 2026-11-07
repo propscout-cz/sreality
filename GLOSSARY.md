@@ -277,7 +277,8 @@ _Avoid_: fáze (in code), column
 
 **Viewing stage** (UI: "Fáze prohlídky"):
 The one stage an account marks as where a property waits for its viewing, whatever the stage is
-called; never a closed stage. Adding a viewing to a property offers to put its card there.
+called; never a closed stage. Adding a viewing to a property that is off the board, at an earlier
+stage or closed offers to put its card there.
 _Avoid_: visit stage, the stage's key or label as its meaning
 
 **Collection**:

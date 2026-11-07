@@ -29,7 +29,7 @@
  * retry and never drawn as an empty list or an unticked toggle (MS16).
  */
 
-import { useId, useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useMutation,
   useQuery,
@@ -227,8 +227,10 @@ export function NotesRow({
   const [showAll, setShowAll] = useState(false);
   const notesLabelId = useId();
 
-  /* A date added (a new viewing, or a date on a note) offers the board's viewing stage. */
-  const viewingOffer = useViewingStageOffer(property_id);
+  /* A date added (a new viewing, or a date on a note) offers the board's viewing stage;
+   * its dialog hands focus back to the section, never into a field (no keyboard pops up). */
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const viewingOffer = useViewingStageOffer(property_id, sectionRef);
 
   const notesQ = useQuery({
     queryKey: notesKey,
@@ -304,7 +306,7 @@ export function NotesRow({
    * it does not know), the viewing and the desktop's artifact link as its actions (C6). The
    * wrapper takes a dropped file anywhere on the card. */
   return (
-    <div className="relative" {...composerDrop.handlers}>
+    <div ref={sectionRef} tabIndex={-1} className="relative outline-none" {...composerDrop.handlers}>
       <Panel
         title={<span id={notesLabelId}>{label}</span>}
         count={failed ? '—' : notesQ.isSuccess ? notes.length : null}

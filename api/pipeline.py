@@ -86,7 +86,7 @@ def update_stage(
         # `WHERE id = %s` would 404-or-rename by id alone, so a stage id leaked
         # from another account would decide the row instead of RLS.
         cur.execute(
-            "SELECT is_entry, is_terminal, role FROM pipeline_stages "
+            "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages "
             "WHERE id = %s AND account_id = %s",
             (stage_id, account_id),
         )
@@ -94,6 +94,7 @@ def update_stage(
         if cur_row is None:
             raise HTTPException(404, "stage not found")
         cur_entry, cur_terminal, cur_role = bool(cur_row[0]), bool(cur_row[1]), cur_row[2]
+        archived = bool(cur_row[3])
 
         final_entry = body.is_entry if body.is_entry is not None else cur_entry
         final_terminal = (
@@ -106,6 +107,9 @@ def update_stage(
         if final_role == "viewing" and final_terminal:
             # Migration 734's pipeline_stages_viewing_open, said in words.
             raise HTTPException(422, "the viewing stage cannot be terminal")
+        if set_role and body.role is not None and archived:
+            # pipeline_stages_archived_no_role, said in words.
+            raise HTTPException(422, "an archived stage takes no role")
 
         if set_role and body.role is not None and body.role != cur_role:
             # One stage per role per account (pipeline_stages_one_role): the role
@@ -151,12 +155,17 @@ def update_stage(
         if sets:
             sets += ["updated_at = now()"]
             params += [stage_id, account_id]
-            cur.execute(
-                f"UPDATE pipeline_stages SET {', '.join(sets)} "
-                "WHERE id = %s AND account_id = %s "
-                f"RETURNING {_STAGE_COLUMNS}",
-                params,
-            )
+            try:
+                cur.execute(
+                    f"UPDATE pipeline_stages SET {', '.join(sets)} "
+                    "WHERE id = %s AND account_id = %s "
+                    f"RETURNING {_STAGE_COLUMNS}",
+                    params,
+                )
+            except psycopg.errors.UniqueViolation:
+                # Another request crowned the entry or marked a role on this board
+                # between our un-crown and this write (one per account).
+                raise HTTPException(409, "the board changed at the same time; reload and try again")
             row = cur.fetchone()
             if cur_terminal and not final_terminal:
                 # A closed stage re-opened: every card on it is a live deal again.
@@ -213,9 +222,12 @@ def archive_stage(
         # account-scoped throughout: on a bare `WHERE id = %s` the cards-check
         # would leak (via 409-vs-success) whether a foreign stage holds cards
         # even where RLS blocks the archive itself.
+        # FOR UPDATE: an add at this stage (add_card locks it too) either lands
+        # before this check, so the stage holds a card and stays, or waits and
+        # finds it retired.
         cur.execute(
             "SELECT is_entry, archived_at FROM pipeline_stages "
-            "WHERE id = %s AND account_id = %s",
+            "WHERE id = %s AND account_id = %s FOR UPDATE",
             (stage_id, account_id),
         )
         row = cur.fetchone()
@@ -261,6 +273,12 @@ def add_card(
             pid = resolve_active_property_id(conn, body.property_id)
             if pid is None:
                 raise HTTPException(422, "property not found")
+            # The stage row is locked before max(board_position) is read, so two
+            # members of the same account adding into the same stage concurrently
+            # can't both read the same max() and land on the same board_position:
+            # the row lock serializes them within each request's one tenant-pool
+            # transaction (Amendment A1), no advisory lock needed (those are unsound
+            # over the transaction pooler; mig-279 lesson).
             if body.stage_id is None:
                 cur.execute(
                     "SELECT id FROM pipeline_stages "
@@ -270,25 +288,23 @@ def add_card(
                 row = cur.fetchone()
                 if row is None:
                     raise HTTPException(500, "no entry stage configured")
+                target_stage_id = int(row[0])
+                cur.execute("SELECT 1 FROM pipeline_stages WHERE id = %s FOR UPDATE", (target_stage_id,))
             else:
-                # A closed stage is never where a card starts (it would be a live
-                # deal born closed), and a retired one is not on the board.
+                # A closed stage is never where a card starts (a live deal born
+                # closed), and a retired one is not on the board. Checked in the
+                # locking read itself: a stage archived or closed meanwhile is
+                # re-checked at its newest version and refused here.
                 cur.execute(
                     "SELECT id FROM pipeline_stages "
-                    "WHERE id = %s AND account_id = %s AND archived_at IS NULL AND NOT is_terminal",
+                    "WHERE id = %s AND account_id = %s AND archived_at IS NULL AND NOT is_terminal "
+                    "FOR UPDATE",
                     (body.stage_id, account_id),
                 )
                 row = cur.fetchone()
                 if row is None:
                     raise HTTPException(422, "stage not found or not an open stage")
-            target_stage_id = int(row[0])
-            # Lock the stage row first so two members of the same account
-            # adding into the same stage concurrently can't both read the
-            # same max() and land on the same board_position — the row lock
-            # serializes them within each request's one tenant-pool transaction
-            # (Amendment A1), no advisory lock needed (those are unsound over the
-            # transaction pooler; mig-279 lesson).
-            cur.execute("SELECT 1 FROM pipeline_stages WHERE id = %s FOR UPDATE", (target_stage_id,))
+                target_stage_id = int(row[0])
             # board_position is per (account, stage): scope the max by account so
             # the query is served by mig-357's (account_id, stage_id,
             # board_position) index.

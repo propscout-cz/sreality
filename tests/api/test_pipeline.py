@@ -378,7 +378,7 @@ def test_move_card_reorder_only_leaves_dismissals_alone():
 def test_reopening_a_closed_stage_lifts_its_cards_dismissals():
     """A stage flipped terminal -> live re-opens every card on it at once."""
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages" in q, [(False, True, None)]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages" in q, [(False, True, None, False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q,
          [(9, "passed", "9. Passed", 9, "slate", False, False, "9", None)]),
         (lambda q: "SELECT property_id FROM property_pipeline WHERE stage_id" in q, [(42,), (43,)]),
@@ -397,8 +397,8 @@ def test_stage_edits_that_reopen_nothing_leave_dismissals_alone():
         (False, s.UpdateStageIn(label="For Call")),         # live stays live
     ]:
         conn = _FakeConn([
-            (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages" in q,
-             [(False, current_terminal, None)]),
+            (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages" in q,
+             [(False, current_terminal, None, False)]),
             (lambda q: "UPDATE pipeline_stages SET" in q,
              [(9, "x", "x", 9, "slate", True, False, "9", None)]),
         ])
@@ -504,8 +504,8 @@ def test_update_stage_clears_the_code_when_sent_explicit_null():
     # `is not None` check would silently swallow — hence model_fields_set.
     updated = (2, "viewing", "Prohlídka", 2, "ochre", False, False, None, None)
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, False, None)]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q and "RETURNING" in q, [updated]),
     ])
     out = pipeline_module.update_stage(
@@ -522,8 +522,8 @@ def test_update_stage_clears_the_code_when_sent_explicit_null():
 def test_update_stage_leaves_the_code_alone_when_absent():
     updated = (2, "viewing", "Prohlídka", 2, "ochre", False, False, "9", None)
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, False, None)]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q and "RETURNING" in q, [updated]),
     ])
     pipeline_module.update_stage(
@@ -538,8 +538,8 @@ def test_update_stage_leaves_the_code_alone_when_absent():
 def test_update_stage_crowning_entry_demotes_the_others():
     updated = (2, "viewing", "Prohlídka", 2, "ochre", False, True, "2", None)
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, False, None)]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q and "RETURNING" in q, [updated]),
     ])
     out = pipeline_module.update_stage(conn, 2, s.UpdateStageIn(is_entry=True), account_id=_ACCT)
@@ -568,8 +568,8 @@ def test_update_stage_rejects_uncrowning_entry():
 
 def test_update_stage_rejects_entry_that_is_terminal():
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, True, None)]),  # already terminal
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, True, None, False)]),  # already terminal
     ])
     with pytest.raises(fastapi.HTTPException) as ei:
         pipeline_module.update_stage(conn, 4, s.UpdateStageIn(is_entry=True), account_id=_ACCT)
@@ -678,8 +678,8 @@ def test_a_card_carries_its_delegated_stamp_keyed_like_the_ledger_trigger():
 def test_marking_the_viewing_stage_moves_the_role_off_the_old_one():
     updated = (3, "3_for_visit", "3. For Visit", 3, "slate", False, False, "3", "viewing")
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, False, None)]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q and "RETURNING" in q, [updated]),
     ])
     out = pipeline_module.update_stage(conn, 3, s.UpdateStageIn(role="viewing"), account_id=_ACCT)
@@ -695,8 +695,8 @@ def test_marking_the_viewing_stage_moves_the_role_off_the_old_one():
 def test_clearing_the_role_touches_no_other_stage():
     updated = (3, "3_for_visit", "3. For Visit", 3, "slate", False, False, "3", None)
     conn = _FakeConn([
-        (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q,
-         [(False, False, "viewing")]),
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, "viewing", False)]),
         (lambda q: "UPDATE pipeline_stages SET" in q and "RETURNING" in q, [updated]),
     ])
     out = pipeline_module.update_stage(
@@ -708,11 +708,11 @@ def test_clearing_the_role_touches_no_other_stage():
 
 def test_the_viewing_stage_is_never_terminal():
     for current, patch in [
-        ((False, False, "viewing"), s.UpdateStageIn(is_terminal=True)),  # closing the viewing stage
-        ((False, True, None), s.UpdateStageIn(role="viewing")),          # marking a closed stage
+        ((False, False, "viewing", False), s.UpdateStageIn(is_terminal=True)),  # closing the viewing stage
+        ((False, True, None, False), s.UpdateStageIn(role="viewing")),          # marking a closed stage
     ]:
         conn = _FakeConn([
-            (lambda q: "SELECT is_entry, is_terminal, role FROM pipeline_stages WHERE id" in q, [current]),
+            (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q, [current]),
         ])
         with pytest.raises(fastapi.HTTPException) as ei:
             pipeline_module.update_stage(conn, 3, patch, account_id=_ACCT)
@@ -749,8 +749,9 @@ def test_add_card_at_a_named_open_stage_logs_one_event_there():
     )
     assert out["added"] is True and out["stage_id"] == 3
     assert not any("WHERE is_entry" in q for q, _ in conn.executed)
-    lookup = next(p for q, p in conn.executed if "NOT is_terminal" in q and "SELECT id FROM" in q)
+    lookup_sql, lookup = next((q, p) for q, p in conn.executed if "NOT is_terminal" in q and "SELECT id FROM" in q)
     assert lookup == (3, _ACCT)  # this account's stage only
+    assert lookup_sql.endswith("FOR UPDATE")  # checked at the locked, newest version
     events = [p for q, p in conn.executed if "INSERT INTO property_pipeline_events" in q]
     assert events == [(42, 3, _ACCT)]  # one event, at the named stage: no entry hop
 
@@ -764,3 +765,48 @@ def test_add_card_refuses_a_closed_retired_or_foreign_stage():
         pipeline_module.add_card(conn, s.AddPipelineCardIn(property_id=42, stage_id=9), account_id=_ACCT)
     assert ei.value.status_code == 422
     assert not any("INSERT" in q for q, _ in conn.executed)
+
+
+def test_an_archived_stage_takes_no_role():
+    conn = _FakeConn([
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, True)]),
+    ])
+    with pytest.raises(fastapi.HTTPException) as ei:
+        pipeline_module.update_stage(conn, 7, s.UpdateStageIn(role="viewing"), account_id=_ACCT)
+    assert ei.value.status_code == 422
+    assert not any(q.startswith("UPDATE") for q, _ in conn.executed)
+
+
+def test_a_role_marked_at_the_same_time_elsewhere_is_a_409():
+    import psycopg
+
+    class _Racing(_FakeConn):
+        def cursor(self) -> _Cur:
+            cur = _Cur(self)
+            real = cur.execute
+
+            def execute(sql: str, params: Any = None) -> None:
+                if "RETURNING" in sql and "UPDATE pipeline_stages SET" in sql:
+                    raise psycopg.errors.UniqueViolation("pipeline_stages_one_role")
+                real(sql, params)
+            cur.execute = execute  # type: ignore[method-assign]
+            return cur
+
+    conn = _Racing([
+        (lambda q: "SELECT is_entry, is_terminal, role, archived_at IS NOT NULL FROM pipeline_stages WHERE id" in q,
+         [(False, False, None, False)]),
+    ])
+    with pytest.raises(fastapi.HTTPException) as ei:
+        pipeline_module.update_stage(conn, 3, s.UpdateStageIn(role="viewing"), account_id=_ACCT)
+    assert ei.value.status_code == 409
+
+
+def test_archive_locks_the_stage_before_counting_its_cards():
+    conn = _FakeConn([
+        (lambda q: "SELECT is_entry, archived_at FROM pipeline_stages WHERE id" in q, [(False, None)]),
+    ])
+    pipeline_module.archive_stage(conn, 3, account_id=_ACCT)
+    sqls = [q for q, _ in conn.executed]
+    assert sqls[0].endswith("FOR UPDATE")
+    assert sqls.index(next(q for q in sqls if "FROM property_pipeline" in q)) > 0

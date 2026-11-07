@@ -30,6 +30,10 @@ set lock_timeout = '5s';
 
 begin;
 
+-- Both locks up front, the view first (it locks pipeline_stages with it): a reader holding the view
+-- while it waits on the table can then never deadlock against the ALTER below.
+lock table pipeline_stages_public in access exclusive mode;
+
 alter table pipeline_stages
   add column if not exists role text
   check (role is null or role in ('viewing'));
