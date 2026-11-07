@@ -854,16 +854,13 @@ def bind(
             # An okres word that is really a MOMC ("Praha 5", the portals' old district).
             words_momc_ids=tuple(sorted({
                 u.unit_id for u in _units_named(constraints.okres_keys, "momc", registry)})),
-            # A part claim that matched no část (a MOMC is none), a street line that bound nothing
-            # and names no part (`ambiguous_streets` too), a locality line the town was only
+            # A part claim that matched no část (a MOMC is none), a locality line the town was only
             # composed from ("Praha 4", "Praha 4 - Podolí"), a town word the town did not come from
             # (the PSČ or a part claim bound it), an okres or kraj word the town is not in.
             words_unchecked=(
                 part_claim_unmatched or towns.composite.bound
                 or (bool(constraints.obec_keys) and not towns.named)
-                or any(_region_disagrees(town, constraints, registry) for town in obec_units)
-                or (bool(constraints.street_line or place_line) and top.ulice_kod is None
-                    and line.named_part is None)),
+                or any(_region_disagrees(town, constraints, registry) for town in obec_units)),
         ),
         constraints,
     )
@@ -1104,21 +1101,21 @@ def pin_door(
     pin_inside_bound_obec: bool | None,
     registry: RegistryView,
 ) -> Binding:
-    """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house, its exact pin inside
-    the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there, the words not disagreeing:
-    the door agrees with every word that can check it (obec, street, each část claimed, PSČ), and
-    what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
+    """WHAT IS CERTAIN GETS A DOOR (W5b, ruling Q8 (a)): a flat or a house whose words bound a street
+    (F1, ruling Q24: a town or a část alone is how a village centre shared by many ads became their
+    door), its exact pin inside the bound town and within `PIN_DOOR_M` of the ONE RÚIAN door there,
+    on that street: the door agrees with every word that can check it (obec, street, each část
+    claimed, PSČ), and what none can be checked against refuses (`names_a_door`, `Binding.words_unchecked`).
     A refusal is silent; the words stand. The binding carries no point, so `place` keeps the ad's
     own pin: two pins within 1 m of one door must not read as one exact pin to the engine."""
     # "Exact" = not declared blurred: an undeclared pin counts, where `core`'s `pin_is_precise` wants a label.
     if (ad_type not in PIN_DOOR_AD_TYPES or pin_claim is None or pin_claim.point is None
             or declared.blurred or pin_inside_bound_obec is not True or binding.words_unchecked
-            or binding.target_kind not in ("street", "admin_unit") or names_a_door(stored)):
+            or binding.target_kind != "street" or names_a_door(stored)):
         return binding
     near = registry.doors_near(*pin_claim.point)
     door = registry.address_point(near[0]) if len(near) == 1 else None
-    if (door is None or door.obec_kod != binding.obec_kod
-            or (binding.ulice_kod is not None and door.ulice_kod != binding.ulice_kod)
+    if (door is None or door.obec_kod != binding.obec_kod or door.ulice_kod != binding.ulice_kod
             or any(part != door.cast_obce_unit_id for part in binding.words_part_ids)
             or (binding.words_momc_ids and door.momc_unit_id not in binding.words_momc_ids)
             or (constraints.psc is not None and door.psc != constraints.psc)):

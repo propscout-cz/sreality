@@ -4,14 +4,14 @@
 
 ## The rule
 
-**A flat or a house, its pin within 1 m of the door, the words not disagreeing.** Commercial, plots and other get no door from a pin. No bands, flags or estimates.
+**A flat or a house, its words naming the street, its pin within 1 m of the door, the words not disagreeing.** Commercial, plots and other get no door from a pin. No bands, flags or estimates.
 
 `bind.pin_door` runs in `core` between `pin_inside_bound_obec` and `place`. It reads the ad type first and refines the row when all of these hold:
 - `listings.category_main` is `byt` or `dum` (`PIN_DOOR_AD_TYPES`; NULL gets no door);
-- the words bound a town, a street or a část (`target_kind` street or admin_unit; the pin-derived rungs R7/R8 refuse). A pin may still settle which town a shared name means (`narrow_towns`): the name matched, so the word bound;
+- the words bound a street (`target_kind` street). **F1, the operator's ruling Q24 (2026-11-07):** a town or a část alone gets no door. The known false doors were geocoded village-centre points shared by many ads (1,251 shared points under 4,755 ads); the cost is about 4,183 village ads that keep their pin, labelled approximate. A street line naming a část (`street_names_part`) binds that část, so it gets none either. A pin may still settle which town a shared name means (`narrow_towns`): the name matched, so the word bound;
 - the pin is exact (`declared.blurred` false, so area markers and W4's `estimated` are out; an undeclared pin counts, unlike `core`'s `pin_is_precise`) and inside the bound town;
 - exactly one valid RÚIAN door lies within `PIN_DOOR_M` (1 m) of it;
-- the door agrees with the words' obec and street, every část they claim and their PSČ;
+- the door is on that street and agrees with the words' obec, every část they claim and their PSČ;
 - the words state nothing a door cannot be checked against.
 
 The row gets that address point's keys at rung `R5`: `ruian_adm_kod`, house number, street, PSČ, KÚ, část, address grain. **Its position stays the ad's own pin** (origin `portal_pin`; engine owner's review, 2026-11-02): on the door point, two ads with different pins within 1 m of one door would share one `pin_key` (6 decimals), so `same_exact_pin` and pin population would fire on nothing the ads said. So a mover's position does not move, since an exact pin inside the words' town already placed it, with one exception: a row on its street's point because its exact pin was off the street (`pin_off_street`) now lands on that pin, and the flag goes. The shadow's `position_moved` lists these. No reader needs a pin-door row on the door: nothing outside the resolver reads `Position.origin`, and no surface compares a row's `geom` with its door. Any refusal is silent: the words stand. The door's část is adopted where the words claimed none. A pin cannot corroborate the door it named (`grade._pin_corroborates` requires `registry_point`), so such a row never grades `exact`.
@@ -22,7 +22,6 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 |---|---|
 | Any stored claim of a door type (`WORD_DOOR_CLAIM_TYPES`), parsed or not | A door the words named |
 | A digit in the street line, parsed or not (`12a`, `12-14`, `12,`) | A number R1 could not bind. `28. října` pays for this one rule |
-| A street line that bound nothing, `ambiguous_streets` included | The door may be on another street. A line naming a část (`street_names_part`) works as that část |
 | A locality line the town was only composed from (`Praha 4`, `Praha 4 - Podolí`, `Praha - Vokovice`) | Closes a MOMC: its borders cross části and nothing here checks it |
 | A part claim that matched no část (a MOMC is none) | Nothing to check against |
 | A část the door is not in, at every rung | R2 takes the register's část and R3 carries none, so BIND keeps what the words claimed |
@@ -31,7 +30,7 @@ The refusals from the words (`names_a_door` reads the stored claims; `Binding.wo
 | An okres word naming a MOMC the door is not in (`Praha 5` on a Praha 4 door; a word naming the door's own MOMC keeps it) | The door's `momc_unit_id` rides the door read, no second lookup. Measured 2026-11-02: of 4,230 lone doors (1 in 10), 22 carry such a word, 11 on their own MOMC, 11 refused, ≈ 110 rows. A portal's `Praha N` can mean the wider správní obvod; such an ad loses a door, which costs nothing |
 | A PSČ the door does not carry | `door.psc` is on the read FILL makes anyway. A claim the normalizer rejected states no PSČ and is not read |
 
-**Why ceskereality gains části.** Its contract declares no část: its words are the town, the okres and rarely a street. Of the scoping run's 2,405 ceskereality movers gaining one (2,311 at obec grain, 94 at street grain), a 1-in-12 id sample of 213 held no `cast_obce_name` claim, a town word equal to the row's town on all 213, no KÚ word, and 7 street claims naming no část. So the door names a část where the words were silent, and none disagrees with a stated one. On 30 sampled non-main-part ads the page title and locality name the door's část on none. On the 21 of them whose title states a street, the door's street is that street. The door's část is the town's main část by name on 1,428 of the 2,405 and another on 977.
+**Why ceskereality gains části.** Its contract declares no část: its words are the town, the okres and rarely a street. Of the scoping run's 2,405 ceskereality movers gaining one (2,311 at obec grain, 94 at street grain), a 1-in-12 id sample of 213 held no `cast_obce_name` claim, a town word equal to the row's town on all 213, no KÚ word, and 7 street claims naming no část. So the door names a část where the words were silent, and none disagrees with a stated one. On 30 sampled non-main-part ads the page title and locality name the door's část on none. On the 21 of them whose title states a street, the door's street is that street. The door's část is the town's main část by name on 1,428 of the 2,405 and another on 977. Since F1 only the 94 at street grain still move.
 
 ## Why 1 m, and why flats and houses
 
@@ -73,7 +72,7 @@ Prerequisites: W5 merged and swept; W4's realitymix@8 re-mine done (otherwise hi
 ```sql
 SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
  WHERE l.is_active AND l.category_main IN ('byt', 'dum') AND ll.country_status = 'cz'
-   AND ll.granularity IN ('street', 'cast_obce_or_quarter', 'obec')
+   AND ll.granularity = 'street'
    AND coalesce(ll.disputed, '') NOT IN ('pin_outside_obec', 'pin_outside_cz', 'country_conflict')
    AND NOT EXISTS (SELECT 1 FROM location_claims w WHERE w.listing_id = l.id
                     AND w.claim_type IN ('address_point_id', 'house_number_cp', 'house_number_co'))
@@ -121,12 +120,12 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
 
 ## Acceptance (W1 cells; read after `freshness/version` clears)
 
-**The fire count.** Read on production 2026-11-02 by SQL, not by the resolver, on 1 in 10 active flats and houses at street, quarter or obec grain with an exact pin, no door claim and no dispute: 7,371 candidates, 4,230 with one door within 1 m, 242 of those refused by the words (the part and locality checks compare names, so approximately), **3,988 fire**. The town-word refusal added after review takes about 113 per 1 in 10 (≈ 1.1k rows, a name comparison): all of them were already inside that 242, because the read refused every town line that is not the row's town by name, so the figure stands. So **≈ 40k rows gain a door**: flats ≈ 21.9k, houses ≈ 18.0k; from street ≈ 24.5k, quarter ≈ 8.1k, obec ≈ 7.3k. The read's rows were not all at v5.10. The shadow's mover count is the real figure.
+**The fire count.** Read on production 2026-11-02 by SQL, not by the resolver, on 1 in 10 active flats and houses at street, quarter or obec grain with an exact pin, no door claim and no dispute: 7,371 candidates, 4,230 with one door within 1 m, 242 of those refused by the words (the part and locality checks compare names, so approximately), **3,988 fire**. The town-word refusal added after review takes about 113 per 1 in 10 (≈ 1.1k rows, a name comparison): all of them were already inside that 242, because the read refused every town line that is not the row's town by name, so the figure stands. So **≈ 40k rows gain a door**: flats ≈ 21.9k, houses ≈ 18.0k; from street ≈ 24.5k, quarter ≈ 8.1k, obec ≈ 7.3k. The read's rows were not all at v5.10. The shadow's mover count is the real figure. **F1 (Q24, 2026-11-07) removes the quarter and obec movers**: the operator's count is about 4,183 village ads that keep their pin, labelled approximate.
 
 | Measure | After |
 |---|---|
-| Address-grain rows | +≈ 40k (the shadow's mover count decides) |
-| `{p}/street` | up by the quarter and obec movers |
+| Address-grain rows | up by the street movers (the shadow's mover count decides) |
+| `{p}/street` | unchanged: since F1 every mover was at street grain |
 | `{p}/ku` | up (a door carries its KÚ) |
 | `{p}/outside` | no higher |
 | Pin-named doors on a non-flat, non-house ad, over 1 m from their pin, on another street than the bound one, or in another část than the claimed one | 0, once the queue has drained |

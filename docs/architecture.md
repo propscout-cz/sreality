@@ -5338,8 +5338,8 @@ portal's payload or its own page, and every other stamp is class E outright.
 
 **WHERE THE ROW IS PLACED IS ONE LADDER, AND THE POSITION LIES INSIDE THE TOWN THE WORDS BIND**
 (`bind.place`, v5.10, ruling Q3): registry ADDRESS POINT named by the words > **the door an exact pin names
-(`bind.pin_door`, v5.11, ruling Q8 (a): what is certain gets a door: a flat or a house, its pin within 1 m of the
-one door there, the words not disagreeing; the door gives the keys and numbers, the row keeps the ad's own pin)** > bound STREET point > portal pin *inside the bound town* > FILL's
+(`bind.pin_door`, v5.11, ruling Q8 (a): what is certain gets a door: a flat or a house, its words naming the street
+(F1, ruling Q24), its pin within 1 m of the one door there, the words not disagreeing; the door gives the keys and numbers, the row keeps the ad's own pin)** > bound STREET point > portal pin *inside the bound town* > FILL's
 entity point. The 1 m is where a pin-named door agrees with a sibling ad's as often as two stated doors do (flats
 96.99 % vs 95.70 %, houses 99.33 % vs 99.47 %). Same obec, street, claimed část and PSČ; words no door can be
 checked against, a town word that bound nothing among them, an okres or kraj word the town is not in, and an okres word naming a MOMC the door is not in, refuse silently. Such a door is never graded `exact`, since a pin cannot corroborate the door

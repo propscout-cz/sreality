@@ -199,6 +199,7 @@ def test_the_door_an_exact_pin_names_carries_its_ku():
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+        mm.claim(3, "street_name", value_text="Nad Bořislavkou"),
     ], ad_type="dum")
     assert resolution.ruian_adm_kod == 21690278
     assert resolution.katastr_kod == VOKOVICE_KU

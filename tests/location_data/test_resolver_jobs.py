@@ -762,12 +762,14 @@ class _BulkMirror:
 
 def _warm_claims():
     """A PIN-positioned listing, which is the shape the warm exists for: the three point-keyed
-    questions are asked of the pin, and the pin is a claim coordinate."""
+    questions are asked of the pin, and the pin is a claim coordinate. The words name a street, so
+    `pin_door` asks its question (F1)."""
     return [
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "psc", value_text="160 00"),
         mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
         mm.claim(4, "cast_obce_name", value_text="Vokovice"),
+        mm.claim(5, "street_name", value_text="Nad Bořislavkou"),
     ]
 
 
