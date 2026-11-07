@@ -1169,12 +1169,12 @@ def test_a_letter_no_entrance_carries_is_no_door(words, doors):
     assert (row.ruian_adm_kod, row.granularity) == (None, "street")
 
 
-def test_the_co_claim_outranks_the_street_lines_number_with_its_letter():
-    """`collect_constraints`: a house-number claim outranks the number written in the street line, and the č.o.
-    travels with its own letter: "Stočesova 3389/8" beside a č.o. claim "8b" is 8b, never the line's 8."""
+def test_the_street_lines_co_comes_first_and_keeps_its_own_letter():
+    """R1 reads the street line's č.o. first, as it reads its č.p., and the letter travels with its own number:
+    "Stočesova 3389/8" beside a č.o. claim "8b" is the line's plain 8, never the line's 8 with the claim's b."""
     mirror = _stocesova(_entrance(1001, 3389, 8), _entrance(1002, 3389, 8, "a", at=10), _entrance(1003, 3389, 8, "b", at=20))
     assert _resolve(_stated("Stočesova 3389/8", mm.claim(7, "house_number_co", value_text="8b")), mirror
-                    ).ruian_adm_kod == 1003
+                    ).ruian_adm_kod == 1001
 
 
 @pytest.mark.parametrize(("co", "kod"), [("8b", 6002), ("8", None), ("9", None)])

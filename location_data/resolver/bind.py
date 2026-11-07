@@ -663,14 +663,12 @@ def bind(
     if line.street is not None:
         # The street claim's own number first; a listing-wide `house_number_*` claim behind it
         # (the portals that state the street and the číslo in separate fields). The number
-        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits. The č.o.
-        # travels with its letter, from ONE source as `collect_constraints` ranks them (a claim
-        # outranks the line); the line's own parse only where the constraints read none.
+        # travels WITH its type, so a č.ev. can never join a č.p. of the same digits, and the č.o.
+        # with its letter, so one source's 8 never takes another's b.
         cislo_domovni, typ_so = ((line.cislo_domovni, line.typ_so) if line.cislo_domovni
                                  else (constraints.cislo_domovni, constraints.typ_so))
-        cislo_orientacni, znak = (
-            (constraints.cislo_orientacni, constraints.znak_orientacniho)
-            if constraints.cislo_orientacni is not None else (line.cislo_orientacni, line.znak_orientacniho))
+        cislo_orientacni, znak = ((line.cislo_orientacni, line.znak_orientacniho) if line.cislo_orientacni
+                                  else (constraints.cislo_orientacni, constraints.znak_orientacniho))
         doors = _stated_doors(
             registry.address_points_by_number(
                 obec_kod=line.street.obec_kod, street_name_norm=line.street.name_norm,
