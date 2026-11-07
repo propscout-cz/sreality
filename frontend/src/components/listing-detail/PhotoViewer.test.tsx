@@ -6,7 +6,7 @@
  *     to the Fotky tab below the fold, which looked like nothing happened);
  *   * the Fotky tab's grid and the phone swiper open on the photo tapped;
  *   * an off-market property's photos are dimmed in the viewer too;
- *   * closing returns to the page. */
+ *   * closing returns to the page, and a viewer open on one property never reopens on the next. */
 
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -43,6 +43,17 @@ describe('the header mosaic', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fotka 1 z 3' }));
     expect(viewer().querySelector('img')).toHaveClass('opacity-70');
     fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('a viewer left open', () => {
+  it('does not reopen on another property\'s photos', () => {
+    const other = photos(4).map((p) => ({ ...p, id: p.id + 100 }));
+    const { rerender } = render(<PhotoMosaic images={photos(25)} loading={false} isActive />);
+    fireEvent.click(screen.getByRole('button', { name: 'Fotka 3 z 25' }));
+    expect(viewer()).toHaveAccessibleName('3 / 25');
+    rerender(<PhotoMosaic images={other} loading={false} isActive />);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

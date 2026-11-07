@@ -20,15 +20,19 @@ export function usePhotoViewer(
   images: ImagePublic[],
   isActive: boolean,
 ): { open: (index: number) => void; viewer: ReactNode } {
-  const [openAt, setOpenAt] = useState<number | null>(null);
+  /* Opened on THIS photo set: the page stays mounted when the address moves to another
+   * property (Back), and a viewer left open must not reopen itself on the next one's photos. */
+  const set = images[0]?.id ?? null;
+  const [opened, setOpened] = useState<{ set: number | null; at: number } | null>(null);
+  const openAt = opened != null && opened.set === set ? opened.at : null;
   return {
-    open: setOpenAt,
+    open: (at) => setOpened({ set, at }),
     viewer:
       openAt != null ? (
         <ImageLightbox
           images={images}
           startIndex={openAt}
-          onClose={() => setOpenAt(null)}
+          onClose={() => setOpened(null)}
           dim={isActive ? '' : OFF_MARKET_DIM}
         />
       ) : null,
