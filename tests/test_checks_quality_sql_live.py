@@ -45,6 +45,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -77,6 +78,8 @@ _KEYS = (q._PARSING, q._DATA_QUALITY, q._LOCATION, q._TEXT)
 _MODEL = "w6-live-model"
 # Made-up RÚIAN codes no ad carries: two towns and a KÚ of each.
 _TOWN, _DEGENERATE_TOWN, _KU, _DEGENERATE_KU = 990_401, 990_402, 990_501, 990_502
+# The property waterfall's one table, shared with the Location quality page's vitest.
+_WATERFALL = json.loads((Path(__file__).parent / "fixtures" / "property_waterfall.json").read_text(encoding="utf-8"))
 
 live = pytest.mark.skipif(not _DB_URL and not _REQUIRED,
                           reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane")
@@ -798,6 +801,39 @@ def test_served_reads_published_properties_at_their_location_ad(seed: _Seed) -> 
     assert _counts(served["idnes"], "town")["has_town"] == (1, 1)
     cells = _whole(q.check_location_town_coverage(seed.conn, THRESHOLDS), q._LOCATION)
     assert cells["served/town"]["facts"]["ads"] == 1
+    assert cells["served/town"]["facts"]["grains"] == {"address": 0, "street": 0, "quarter": 0, "obec": 1}, (
+        "the waterfall counts the location ad's answer, not the canonical ad's; the unpublished and merged-away not")
+
+
+@live
+def test_the_served_town_cell_stores_the_property_waterfall(seed: _Seed) -> None:
+    """Ruling Q18: every published property once, at its location ad's finest level, so the steps add up to the
+    published total. The fixture is the page's too (LocationQuality.test.tsx): the cells stored equal it literally."""
+    seed.no_registry()
+    seed.version("current", age_d=19, current=True)
+    for member in _WATERFALL["cohort"]:
+        ad = seed.ads("idnes", seen_h=48)[0]
+        if member["ends_at"] == "abroad":
+            seed.located(ad, country="foreign", granularity="country", point=False)
+        elif member["ends_at"] == "unresolved":
+            seed.claim(ad, "obec_name")
+        else:
+            seed.located(ad, granularity=member["ends_at"], obec=_TOWN)
+        seed.property(ad)
+
+    cells = _whole(q.check_location_town_coverage(seed.conn, THRESHOLDS), q._LOCATION)
+    for subject, want in _WATERFALL["cells"].items():
+        assert cells[subject]["value"] == want["value"], subject
+        assert _picked(cells[subject], *want.get("facts", {})) == want.get("facts", {}), subject
+
+
+@live
+def test_an_empty_served_fleet_stores_no_waterfall(seed: _Seed) -> None:
+    """No published property: the served town cell is Not measured and stores no waterfall, so the page says so."""
+    seed.no_registry()
+    seed.version("current", age_d=19, current=True)
+    town = _whole(q.check_location_town_coverage(seed.conn, THRESHOLDS), q._LOCATION)["served/town"]
+    assert town["status"] == "unknown" and "grains" not in town["facts"]
 
 
 @live

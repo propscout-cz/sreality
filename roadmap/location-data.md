@@ -1379,6 +1379,10 @@ component is slimmed twice — each wave rewrites one component and slims its st
   unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
   with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
   artifact row.
+- **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
+  `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
+  published property once at its location ad's finest level, one table pinning gauge and page. The four unread
+  `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
