@@ -16,7 +16,7 @@ name: "Ops: Location wave shadow (the engine gate)"
 # `ids_sql` names (`scope=apply`: only those the live apply scope admits, by `apply_scope.Scope`'s own
 # predicate) with this ref's resolver after the wave's claim change (`remine` re-mines the stored
 # pages under the contract at `contract_ref`, read with `git show`); `autodedup.shadow` sizes the
-# movers' old and new blocks, refusing more than 40 blocks or 60,000 ads (exit 2), then exports
+# movers' old and new blocks, refusing more than 40 blocks or 20,000 ads (exit 2), then exports
 # them, the rulings and the live scorer; `harness shadow` judges base vs candidate and exits 1 on
 # FAIL (PARTIAL when `limit` cut the ids or a mover sat outside the cohort). `ids_sql` runs as one
 # wrapped, read-only statement (`what_if.select_ids`). No movers: nothing to judge, the run ends

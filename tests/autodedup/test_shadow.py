@@ -160,12 +160,12 @@ def test_an_oversized_shadow_is_refused_before_anything_is_exported(monkeypatch,
         {"old": {"obec_kod": BEROUN}, "new": {"obec_kod": PRAHA, "cast_obce_kod": 490245}}])
     monkeypatch.setattr("scraper.db.connect_read_only", lambda: _Conn([]))
     monkeypatch.setattr(shadow, "block_sizes",
-                        lambda conn, blocks: {block: 40_000 for block in blocks})
+                        lambda conn, blocks: {block: 15_000 for block in blocks})
     monkeypatch.setattr(shadow, "export_cohort",
                         lambda *a, **k: pytest.fail("exported past the cap"))
     assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     printed = capsys.readouterr()
-    assert f"town:{BEROUN} 40000 ads" in printed.out
+    assert f"town:{BEROUN} 15000 ads" in printed.out
     assert "groups needed under the caps: 2" in printed.out
     assert "dispatch --block-group i/2 for i in 1..2" in printed.err
     assert shadow.main([str(tmp_path), "--all-blocks", "--max-ads", "1000000",
@@ -757,7 +757,7 @@ def test_a_refused_scoping_run_prints_the_groups_and_the_sample(monkeypatch, tmp
          "new": {"obec_kod": BRNO, "cast_obce_kod": 7, "ruian_adm_kod": None}}])
     conn = _Conn([(2,)])
     monkeypatch.setattr("scraper.db.connect_read_only", lambda: conn)
-    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {block: 40_000 for block in blocks})
+    monkeypatch.setattr(shadow, "block_sizes", lambda conn, blocks: {block: 15_000 for block in blocks})
     monkeypatch.setattr(shadow, "export_cohort", lambda *a, **k: pytest.fail("exported past the cap"))
     assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     out = capsys.readouterr().out

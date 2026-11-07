@@ -55,7 +55,8 @@ SCORER_FILE: str = "scorer.json"
 SHADOW_FILE: str = "shadow.json"
 GROUP_FILE: str = "group.json"
 D83_EDGES: tuple[str, ...] = ("merge_gained", "merge_lost", "copairs_gained", "copairs_lost")
-MAX_ADS: int = 60_000
+# The harness judges ~20k ads in well under an hour; W5b's 57k-ad group 3/22 died after 3 h 12 min of judging (2026-11-07).
+MAX_ADS: int = 20_000
 MAX_BLOCKS: int = 40
 # The operator's Browse merges since 2026-10-27: 413 `same` rulings at scoping, reported apart.
 RECENT_SINCE: str = "2026-10-27"

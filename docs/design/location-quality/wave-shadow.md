@@ -70,7 +70,7 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    never reaches the export, which would read it as the trial cohort). W4's full gate (run 41226328406)
    printed 515 blocks / 319,731 ads, 14 groups, before this filter.
    `--block-group i/n` (default 1/1) sorts the blocks by key, cuts them into n contiguous groups and
-   exports and judges group i only; `--max-blocks` (40) and `--max-ads` (60,000) apply to that group, and
+   exports and judges group i only; `--max-blocks` (40) and `--max-ads` (20,000: the harness died judging a 57k group) apply to that group, and
    a group over them is refused with exit 2, naming the n to dispatch. Then the group's cohort, the rulings
    and the live generation's scorer (`RT_CALIBRATION_SCORER_SQL`, generation `rt`) into `scorer.json`, and
    the group into `group.json`.
