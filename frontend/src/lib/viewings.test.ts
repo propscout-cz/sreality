@@ -8,6 +8,8 @@ import {
   byDay,
   dayTitle,
   defaultSlot,
+  hasPassed,
+  isDayKey,
   neighbours,
   relativeDay,
   sectionOrder,
@@ -75,6 +77,7 @@ describe('the words', () => {
     expect(dayTitle('2026-10-24', '2026-10-23')).toBe('Zítra');
     expect(dayTitle('2026-10-22', '2026-10-23')).toBe('Včera');
     expect(dayTitle('2026-10-27', '2026-10-23')).toBe('úterý 27. října');
+    expect(dayTitle('2025-11-27', '2026-01-05')).toBe('čt 27. listopadu 2025');
   });
 });
 
@@ -102,5 +105,14 @@ describe('the order and the days', () => {
     expect(neighbours([...days.keys()], '2026-10-22')).toEqual({ prev: '2026-10-20', next: '2026-10-23' });
     expect(neighbours([...days.keys()], '2026-10-23')).toEqual({ prev: '2026-10-20', next: '2026-10-24' });
     expect(neighbours([...days.keys()], '2026-10-25')).toEqual({ prev: '2026-10-24', next: null });
+  });
+
+  it('knows a passed viewing to the minute and a real day key from a lookalike', () => {
+    expect(hasPassed('2026-10-23T07:59:00Z', now)).toBe(true);
+    expect(hasPassed('2026-10-23T08:00:00Z', now)).toBe(true);
+    expect(hasPassed('2026-10-23T08:01:00Z', now)).toBe(false);
+    expect(isDayKey('2026-10-23')).toBe(true);
+    expect(isDayKey('2028-02-29')).toBe(true);
+    for (const bad of ['2026-00-10', '2026-13-01', '2026-02-30', '2026-1-01', 'dnes']) expect(isDayKey(bad)).toBe(false);
   });
 });

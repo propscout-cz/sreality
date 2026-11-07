@@ -85,13 +85,16 @@ export function shortDay(day: string, todayKey: string): string {
   return `${WEEKDAY_SHORT.format(dayDate(day))} ${d}. ${m}.${year}`;
 }
 
-/* The Prohlídky tab's day title: "Dnes", "Zítra", "Včera", else "čtvrtek 24. října". */
+/* The Prohlídky tab's day title: "Dnes", "Zítra", "Včera", else "čtvrtek 24. října"; another
+ * year's day trades the long weekday for its year ("čt 24. října 2025"), so the longest title
+ * stays the width of this year's longest beside the arrows and "Dnes". */
 export function dayTitle(day: string, todayKey: string): string {
   if (day === todayKey) return 'Dnes';
   if (day === shiftDay(todayKey, 1)) return 'Zítra';
   if (day === shiftDay(todayKey, -1)) return 'Včera';
-  const year = day.slice(0, 4) === todayKey.slice(0, 4) ? '' : ` ${day.slice(0, 4)}`;
-  return `${WEEKDAY_LONG.format(dayDate(day))} ${MONTH_LONG.format(dayDate(day))}${year}`;
+  const date = MONTH_LONG.format(dayDate(day));
+  if (day.slice(0, 4) === todayKey.slice(0, 4)) return `${WEEKDAY_LONG.format(dayDate(day))} ${date}`;
+  return `${WEEKDAY_SHORT.format(dayDate(day))} ${date} ${day.slice(0, 4)}`;
 }
 
 /* The full date under a relative title: "čtvrtek 24. října" (always, so "Zítra" names its date). */
@@ -124,9 +127,17 @@ export function viewingWhen(iso: string, now: Date = new Date()): string {
   return `${shortDay(day, pragueDayKey(now))} v ${time}`;
 }
 
-/* Upcoming = on today's Prague day or later: today's morning viewing stays on today's page. */
+/* Upcoming = on today's Prague day or later: a property's notes keep this morning's viewing on top
+ * until the day ends. */
 export const isUpcoming = (iso: string, now: Date = new Date()): boolean =>
   viewingSlot(iso).day >= pragueDayKey(now);
+
+/* Passed = its minute has come: the Prohlídky tab dims it on any day and counts only the rest as
+ * planned, so its header ("2 v plánu") and its rows say the same thing. */
+export const hasPassed = (iso: string, now: Date = new Date()): boolean => new Date(iso) <= now;
+
+/* A real Prague day key: a URL can carry '2026-00-10', which the shape passes and no formatter takes. */
+export const isDayKey = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s) && shiftDay(s, 0) === s;
 
 /* A property's notes as its Poznámky section lists them: its upcoming viewings first, the
  * nearest on top, then every other note in the order it came (newest written first). */

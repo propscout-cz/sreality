@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
 import type { Note } from '@/lib/types';
@@ -17,6 +18,10 @@ import PhoneViewings from './PhoneViewings';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listViewings: vi.fn(),
+}));
+vi.mock('@/components/phone/PhoneShell', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/phone/PhoneShell')>()),
+  usePhoneHeaderAside: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
@@ -72,6 +77,11 @@ function renderAt(path = '/viewings') {
 
 const rows = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'));
 const PAST = 'text-[var(--color-ink-3)]';
+const LEAD = 'bg-[var(--color-copper)]';
+const lastAside = (): string | null => {
+  const calls = vi.mocked(usePhoneHeaderAside).mock.calls;
+  return calls[calls.length - 1][0];
+};
 const timeOf = (text: string) => screen.getByText(text, { selector: 'time' });
 
 beforeEach(() => {
@@ -112,6 +122,8 @@ describe('<PhoneViewings>', () => {
     expect(items.map((li) => (li.querySelector('a') ? 'row' : 'now'))).toEqual(['row', 'now', 'row']);
     expect(timeOf('09:00')).toHaveClass(PAST);
     expect(timeOf('14:30')).not.toHaveClass(PAST);
+    // The header counts what the rows show as ahead: 14:30 today and the 27th.
+    expect(lastAside()).toBe('2 v plánu');
   });
 
   it('steps a day either way and offers the nearest days that hold a viewing', async () => {
@@ -123,8 +135,10 @@ describe('<PhoneViewings>', () => {
     expect(screen.getByText('Včera')).toBeInTheDocument();
     expect(screen.getByTestId('search')).toHaveTextContent('?day=2026-10-22');
     expect(screen.getByText('Tento den nic. Nejbližší prohlídka je níže.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Další prohlídka · pá 23\. 10\./ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Předchozí · út 20\. 10\./ }));
+    expect(screen.getByRole('button', { name: /Další prohlídka · pá 23\. 10\./ })).toHaveClass(LEAD);
+    const back = screen.getByRole('button', { name: 'Předchozí prohlídka · út 20. 10.' });
+    expect(back).not.toHaveClass(LEAD);
+    fireEvent.click(back);
     expect(await screen.findByText('Krátká, Brno')).toBeInTheDocument();
     expect(rows()).toEqual(['/property/45']);
     // A day gone by: every viewing on it reads as past, and no now rule.
@@ -143,8 +157,11 @@ describe('<PhoneViewings>', () => {
     vi.setSystemTime(new Date('2026-11-07T09:00:00Z'));
     renderAt();
     expect(await screen.findByText('Tento den nic a dál už žádná naplánovaná.')).toBeInTheDocument();
+    expect(lastAside()).toBe('0 v plánu');
     expect(screen.queryByRole('button', { name: /^Další prohlídka/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Předchozí prohlídka · út 27. 10.' }));
+    const back = screen.getByRole('button', { name: 'Předchozí prohlídka · út 27. 10.' });
+    expect(back).toHaveClass(LEAD);
+    fireEvent.click(back);
     expect(await screen.findByText('Dlouhá, Praha 1')).toBeInTheDocument();
     expect(screen.getByTestId('search')).toHaveTextContent('?day=2026-10-27');
     expect(timeOf('10:00')).toHaveClass(PAST);
@@ -156,7 +173,7 @@ describe('<PhoneViewings>', () => {
     renderAt();
     await screen.findByText('Seifertova, Praha 3 – Žižkov');
     // The day's page, which outlives the rows a flip replaces.
-    const page = document.querySelector('[class~="min-h-[60dvh]"]')!;
+    const page = screen.getByTestId('viewings-day');
     const swipe = (dx: number, dy: number) => {
       fireEvent.touchStart(page, { touches: [{ clientX: 200, clientY: 300 }] });
       fireEvent.touchEnd(page, { changedTouches: [{ clientX: 200 + dx, clientY: 300 + dy }] });
@@ -168,6 +185,12 @@ describe('<PhoneViewings>', () => {
     swipe(120, 10);
     swipe(120, 10);
     expect(screen.getByText('Včera')).toBeInTheDocument();
+  });
+
+  it('opens on today when the URL names no real day', async () => {
+    renderAt('/viewings?day=2026-00-10');
+    expect(await screen.findByText('Seifertova, Praha 3 – Žižkov')).toBeInTheDocument();
+    expect(screen.getByText('Dnes')).toBeInTheDocument();
   });
 
   it('says where a viewing is booked when there is none', async () => {

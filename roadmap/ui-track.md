@@ -163,7 +163,7 @@ toolkit work.
   gone (its default barred every day before today, so with every viewing behind the operator the tab showed
   nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
   (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
-  the upcoming ones.
+  the ones still ahead ("2 v plánu"); another year's day title is "čt 27. listopadu 2025".
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 

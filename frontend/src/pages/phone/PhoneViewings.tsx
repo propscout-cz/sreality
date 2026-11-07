@@ -36,15 +36,13 @@ import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf } from '@/lib/measure';
 import { curationKeys, fetchPropertySummaries, type PropertySummary } from '@/lib/queries';
 import type { Note } from '@/lib/types';
-import { byDay, dayLine, dayTitle, isUpcoming, neighbours, shortDay, viewingSlot } from '@/lib/viewings';
+import { byDay, dayLine, dayTitle, hasPassed, isDayKey, neighbours, shortDay, viewingSlot } from '@/lib/viewings';
 
 const NO_NOTES: Note[] = [];
 const NO_SUMMARIES = new Map<number, PropertySummary>();
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SWIPE_PX = 60;
 
 export const viewingsWord = (n: number): string => `${n} ${czPlural(n, 'prohlídka', 'prohlídky', 'prohlídek')}`;
-const upcomingWord = (n: number): string => `${n} ${czPlural(n, 'nadcházející', 'nadcházející', 'nadcházejících')}`;
 
 const reducedMotion = (): boolean =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -64,7 +62,7 @@ export default function PhoneViewings() {
   const todayKey = pragueDayKey(now);
   const [params, setParams] = useSearchParams();
   const asked = params.get('day');
-  const day = asked && DAY_RE.test(asked) ? asked : todayKey;
+  const day = asked && isDayKey(asked) ? asked : todayKey;
 
   const go = (d: string) => {
     const p = new URLSearchParams(params);
@@ -81,7 +79,7 @@ export default function PhoneViewings() {
   });
   const all = viewingsQ.data?.data ?? NO_NOTES;
   const days = useMemo(() => byDay(all), [all]);
-  const upcoming = useMemo(() => all.filter((v) => isUpcoming(v.viewing_at!, now)).length, [all, now]);
+  const upcoming = useMemo(() => all.filter((v) => !hasPassed(v.viewing_at!, now)).length, [all, now]);
   const rows = days.get(day) ?? NO_NOTES;
   const { prev, next } = neighbours([...days.keys()], day);
 
@@ -100,7 +98,7 @@ export default function PhoneViewings() {
 
   const loaded = viewingsQ.data !== undefined;
   const failed = readFailed(viewingsQ);
-  usePhoneHeaderAside(loaded && !failed ? upcomingWord(upcoming) : null);
+  usePhoneHeaderAside(loaded && !failed ? `${upcoming} v plánu` : null);
 
   /* A sideways swipe flips the day: wide enough, and more across than down. */
   const touch = useRef<{ x: number; y: number } | null>(null);
@@ -152,10 +150,10 @@ export default function PhoneViewings() {
           </button>
           {/* The title is the date wheel's face: the transparent field over it opens the picker. */}
           <label className="relative flex min-w-0 flex-1 flex-col items-center justify-center text-center">
-            <span className="truncate font-display text-[20px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)] first-letter:uppercase">
+            <span className="max-w-full truncate font-display text-[20px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)] first-letter:uppercase">
               {title}
             </span>
-            <span className="truncate font-mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
+            <span className="max-w-full truncate font-mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
               {[relativeTitle ? dayLine(day) : null, countLine].filter(Boolean).join(' · ')}
             </span>
             <input
@@ -164,19 +162,18 @@ export default function PhoneViewings() {
               value={day}
               onChange={(e) => {
                 const picked = e.target.value;
-                if (DAY_RE.test(picked)) go(picked);
+                if (isDayKey(picked)) go(picked);
               }}
               className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             />
           </label>
-          {/* Beside the next arrow, so leaving today moves neither arrow under a tapping thumb. */}
+          {/* Beside the next arrow, so leaving today moves neither arrow under a tapping thumb; the
+           * hit area is the arrows' 44px around the 32px pill. */}
           {day !== todayKey && (
-            <button
-              type="button"
-              onClick={() => go(todayKey)}
-              className="inline-flex h-8 shrink-0 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-2.5 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-            >
-              Dnes
+            <button type="button" onClick={() => go(todayKey)} className="group flex h-11 shrink-0 items-center px-0.5">
+              <span className="inline-flex h-8 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-2.5 text-[13px] text-[var(--color-ink-2)] group-active:bg-[var(--color-inset)]">
+                Dnes
+              </span>
             </button>
           )}
           <button
@@ -190,7 +187,13 @@ export default function PhoneViewings() {
         </div>
       </div>
 
-      <div ref={pageRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="min-h-[60dvh]">
+      <div
+        ref={pageRef}
+        data-testid="viewings-day"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+        className="min-h-[60dvh]"
+      >
         {failed ? (
           <div className="pt-4">
             <RollEmpty
@@ -227,7 +230,7 @@ function DayList({
 }) {
   /* Rows before the first viewing still ahead are past, on any day; today's "now" rule sits
    * there (after the last row when none is ahead). */
-  const ahead = rows.findIndex((v) => new Date(v.viewing_at!) > now);
+  const ahead = rows.findIndex((v) => !hasPassed(v.viewing_at!, now));
   const pastUntil = ahead === -1 ? rows.length : ahead;
   const nowAt = isToday ? pastUntil : -1;
   return (
@@ -401,7 +404,7 @@ function EmptyDay({
       {prev && (
         <button type="button" onClick={() => onGo(prev)} className={next ? QUIET : PRIMARY}>
           <BackIcon className="h-4 w-4" />
-          {next ? 'Předchozí' : 'Předchozí prohlídka'} · {shortDay(prev, todayKey)}
+          Předchozí prohlídka · {shortDay(prev, todayKey)}
         </button>
       )}
     </div>
