@@ -452,6 +452,6 @@ def test_a_mestska_cast_pick_reads_the_name_index_and_answers_its_parts(conn):
     conn.execute("INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, "
                  "name_norm, name_kind, parent_obec_unit_id) VALUES ('momc', %s, %s, 'Praha 6', "
                  "'praha 6', 'official', %s)", (new_momc, m.v2, new_praha))
-    momc = _bind_momc(conn, version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
+    momc = _bind_momc(conn, level="obec", version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
     assert momc is not None and momc.name == "Praha 6" and momc.parts == [(PART, "Vokovice")]
-    assert _bind_momc(conn, version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None
+    assert _bind_momc(conn, level="obec", version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None
