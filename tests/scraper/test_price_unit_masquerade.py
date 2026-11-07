@@ -28,7 +28,7 @@ from scraper.bazos_parser import _parse_price as bazos_price
 from scraper.ceskereality_parser import _parse_price as ceskereality_price
 from scraper.idnes_parser import _parse_price as idnes_price
 from scraper.maxima_parser import _parse_price as maxima_price
-from scraper.price_reading import PER_M2, PER_M2_MONTH, TOTAL, read_price_text
+from scraper.price_reading import PER_M2, PER_M2_MONTH, PER_M2_YEAR, TOTAL, read_price_text
 from scraper.price_text import is_per_area_price
 
 # Every portal whose price arrives as TEXT and still refuses a rate. One shared parse rail,
@@ -101,11 +101,9 @@ def test_per_area_cell_yields_null(parse, cell: str) -> None:
 
 @pytest.mark.parametrize("cell", PER_AREA_CELLS + PER_AREA_PREFIX_CELLS)
 def test_the_reader_reads_every_per_area_cell_as_a_rate_never_a_total(cell: str) -> None:
-    # remax and realitymix (#2355): a rate is read as a rate, or not at all ("/rok")
+    # remax and realitymix (#2355): a rate is read as a rate, a yearly one included (ruling 2026-11-07)
     reading = read_price_text(cell)
-    assert reading is None or reading.basis in (PER_M2, PER_M2_MONTH)
-    if "rok" not in cell:
-        assert reading is not None
+    assert reading is not None and reading.basis in (PER_M2, PER_M2_MONTH, PER_M2_YEAR)
 
 
 @pytest.mark.parametrize("parse", TEXT_PRICE_PARSERS)

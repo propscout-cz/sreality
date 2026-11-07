@@ -12,6 +12,7 @@ from scraper.price_reading import (
     EUR_CZK_RATE,
     PER_M2,
     PER_M2_MONTH,
+    PER_M2_YEAR,
     TOTAL,
     PriceReading,
     read_price_text,
@@ -58,6 +59,9 @@ def _r(amount: str, currency: str = "CZK", basis: str = TOTAL) -> PriceReading:
     ("4 990 000 Kč (4 008 Kč za m²)", _r("4990000")),
     # the unit BEFORE the amount; the "2" of "m2" must not become the amount
     ("Cena za m2: 7 759 Kč", _r("7759", basis=PER_M2)),
+    # a yearly rent rate (operator ruling 2026-11-07: stored as the monthly rent)
+    ("1 000 Kč / (za m 2 /rok)", _r("1000", basis=PER_M2_YEAR)),
+    ("1 100 CZK / m2/rok", _r("1100", basis=PER_M2_YEAR)),
 ])
 def test_reads_amount_currency_and_basis(text: str, expected: PriceReading) -> None:
     assert read_price_text(text) == expected
@@ -65,8 +69,6 @@ def test_reads_amount_currency_and_basis(text: str, expected: PriceReading) -> N
 
 @pytest.mark.parametrize("text", [
     None, "", "Cena na vyžádání", "Dohodou", "Prodáno",
-    # a yearly rate has no basis we store: price_czk is a total or a MONTHLY rent
-    "1 000 Kč / (za m 2 /rok)", "1 100 CZK / m2/rok",
     # a currency we do not convert
     "250 000 USD",
 ])
@@ -226,6 +228,19 @@ def test_a_rent_rate_that_names_no_period_stores_nothing() -> None:
     # per m² on a rent could be monthly or yearly (12x apart): only "per m² per month" is stored
     out = resolve(_r("150", basis=PER_M2), area_m2=200.0, category_main="komercni",
                   category_type="pronajem")
+    assert out.total_czk is None
+
+
+def test_a_yearly_rent_rate_is_stored_as_the_monthly_rent() -> None:
+    out = resolve(_r("1200", basis=PER_M2_YEAR), area_m2=100.0, category_main="komercni",
+                  category_type="pronajem")
+    assert out.total_czk == 10_000
+    assert out.record == {"amount": 1200.0, "currency": "CZK", "basis": PER_M2_YEAR}
+
+
+def test_a_yearly_rate_on_a_sale_stores_nothing() -> None:
+    out = resolve(_r("1200", basis=PER_M2_YEAR), area_m2=100.0, category_main="komercni",
+                  category_type="prodej")
     assert out.total_czk is None
 
 

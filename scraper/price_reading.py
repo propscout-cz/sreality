@@ -20,6 +20,7 @@ LOG = logging.getLogger(__name__)
 TOTAL = "total"
 PER_M2 = "per_m2"
 PER_M2_MONTH = "per_m2_month"
+PER_M2_YEAR = "per_m2_year"  # a rent rate per year: stored as the monthly rent (ruling 2026-11-07)
 
 # THE EUR rate, fixed on purpose (operator ruling 2026-11-05). A daily rate would re-price
 # every EUR ad daily. Reviewed quarterly and changed only when the market rate has moved
@@ -94,7 +95,7 @@ def _unit_text(rest: str) -> str:
 def read_price_text(text: str | None) -> PriceReading | None:
     """The first amount in a price cell with its currency and basis; None when it states none we store."""
     # The unit sits right after the currency (bare, bracketed, behind "bez DPH,") or before the
-    # amount ("Cena za m2: 7 759"). A yearly rate and an unconverted currency read as None.
+    # amount ("Cena za m2: 7 759"). An unconverted currency reads as None.
     if not text:
         return None
     match = _AMOUNT_RE.search(text)
@@ -117,8 +118,9 @@ def read_price_text(text: str | None) -> PriceReading | None:
     basis = TOTAL
     if _PER_AREA_RE.search(marked):
         if _YEAR_RE.search(marked):
-            return None
-        basis = PER_M2_MONTH if _MONTH_RE.search(marked) else PER_M2
+            basis = PER_M2_YEAR
+        else:
+            basis = PER_M2_MONTH if _MONTH_RE.search(marked) else PER_M2
     amount = Decimal(repr(area_token_to_float(match.group(1))))
     return PriceReading(amount, currency, basis)
 
@@ -202,11 +204,16 @@ def resolve(
     if reading is None or rate is None:
         return ResolvedPrice(None)
     czk = reading.amount * rate
+    stated = reading.basis
+    if stated == PER_M2_YEAR:
+        if category_type != "pronajem":
+            return ResolvedPrice(None)
+        czk, stated = czk / 12, PER_M2_MONTH
     # The area as `listings.area_m2` (numeric(7,1)) holds it, so the detail parse and the
     # card, which reads the stored column, multiply by the same number.
     area = (Decimal(repr(area_m2)).quantize(_AREA_SCALE, rounding=ROUND_HALF_UP)
             if area_m2 is not None and area_m2 > 0 else None)
-    used = _basis_used(reading.basis, czk, area, category_main, category_type, label)
+    used = _basis_used(stated, czk, area, category_main, category_type, label)
     total: Decimal | None = None
     if used == TOTAL:
         total = czk
@@ -221,7 +228,7 @@ def resolve(
                   "basis": reading.basis}
         if reading.currency != "CZK":
             record |= {"czk_per_eur": float(rate), "rate_set": EUR_CZK_RATE_SET}
-        if used != reading.basis:
+        if used != stated:
             record["read_as"] = used or "none"
     native = None
     if reading.currency != "CZK":

@@ -4192,7 +4192,8 @@ renumber.** Navigate by area:
     `scraper/price_reading.resolve`, stores the total: per m² times `area_m2` at its column scale
     (this measure's own denominator, so the plot on pozemek), per m² per month as the monthly rent,
     EUR at a FIXED 24.5 CZK (`EUR_CZK_RATE`: reviewed quarterly, changed only when the market rate
-    moves more than 0.5 CZK). No area, a yearly rate, a rent rate naming no month, or another
+    moves more than 0.5 CZK), and a yearly per m² rent as the monthly rent (÷ 12, ruling
+    2026-11-07). No area, a yearly rate on a sale, a rent rate naming no period, or another
     currency stores nothing. The walk resolves a card against the stored row's area and category,
     so a card matching the stored total reads unchanged and a real move still refetches. The
     portal's label is overridden only when its reading is impossible (past five times the
