@@ -64,6 +64,7 @@ import {
 import { CalendarIcon } from '@/components/phone/phoneIcons';
 import DelegatedStamp from '@/components/DelegatedStamp';
 import ErrorBanner from '@/components/ErrorBanner';
+import Expandable from '@/components/Expandable';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
@@ -167,8 +168,10 @@ const WORDS = {
   edited: 'upraveno',
 } as const;
 
-/* The newest few; the rest one click away, so the section stays a glance on every tab. */
-const NOTES_SHOWN = 3;
+/* A list taller than this (about three short notes, or one long one) is cut with a fade and
+ * "Zobrazit více", so the section stays a glance on every tab (operator ruling 2026-11-06:
+ * by height, not by count). */
+const NOTES_MAX_HEIGHT = '24rem';
 const NO_NOTES: Note[] = [];
 const BODY_MAX = 4000;
 
@@ -222,7 +225,6 @@ export function NotesRow({
   /* Opened by a focus, closed only by Zrušit or a save — never by a blur: a file
    * picker's dialog blurs the page, and the pick must land in an open composer. */
   const [opened, setOpened] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const notesLabelId = useId();
 
   const notesQ = useQuery({
@@ -292,7 +294,6 @@ export function NotesRow({
   const expanded =
     alwaysOpen || opened || body.length > 0 || staged.length > 0 || slot != null || create.isPending;
   const ordered = useMemo(() => sectionOrder(notes), [notes]);
-  const shown = showAll ? ordered : ordered.slice(0, NOTES_SHOWN);
 
   /* A section card (C1–C10): the title and a bare count ("—" when the read failed, never a 0
    * it does not know), the viewing and the desktop's artifact link as its actions (C6). The
@@ -446,9 +447,9 @@ export function NotesRow({
         ) : notesQ.isLoading ? (
           <p className="text-sm text-[var(--color-ink-3)]">Načítám…</p>
         ) : notes.length === 0 ? null : (
-          <>
+          <Expandable maxHeight={NOTES_MAX_HEIGHT} toggleClassName={`mt-2 scroll-mt-20 ${QUIET}`}>
             <ul className="space-y-2">
-              {shown.map((n) => (
+              {ordered.map((n) => (
                 <li key={n.id}>
                   <NoteRow
                     property_id={property_id}
@@ -468,12 +469,7 @@ export function NotesRow({
                 </li>
               ))}
             </ul>
-            {notes.length > NOTES_SHOWN && (
-              <button type="button" onClick={() => setShowAll((v) => !v)} className={QUIET}>
-                {showAll ? 'Zobrazit méně' : `Zobrazit všechny poznámky (${notes.length})`}
-              </button>
-            )}
-          </>
+          </Expandable>
         )}
       </Panel>
       {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
