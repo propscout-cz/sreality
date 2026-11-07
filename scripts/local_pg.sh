@@ -116,9 +116,10 @@ build_template() {
         510_*) continue ;;  # retired by 513; see migrations.yml
       esac
       psql_q -f "$f" >/dev/null || die "build failed at $f"
+      # 656's retry contract, straight after its first run as CI runs it (migrations.yml).
+      if [[ "$(basename "$f")" == 656_* ]]; then psql_q -f "$f" >/dev/null || die "re-run failed at $f"; fi
     done
     psql_q -c "select 'listings'::regclass, 'properties_public'::regclass, 'image_clip_embeddings'::regclass" >/dev/null
-    psql_q -f migrations/656_notifications_w6_prune.sql >/dev/null
   ) >&2
   if psql_q -d postgres -c "alter database $build rename to $TEMPLATE"; then
     psql_q -d postgres -c "alter database $TEMPLATE is_template true"

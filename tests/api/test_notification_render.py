@@ -38,13 +38,36 @@ def test_the_bells_english_map_has_the_same_keys() -> None:
     assert set(re.findall(r"^\s*(\w+):\s*\{\s*label:", block, re.MULTILINE)) == set(nr.TITLES)
 
 
+def test_every_match_reason_has_one_label_here_and_in_the_bell() -> None:
+    """Migration 735's reasons, each worded once in Czech (the push) and once in English (the bell); a price
+    reason is worded from its frozen prices."""
+    from api.notifications import MATCH_REASONS
+
+    assert set(nr.REASONS) == set(MATCH_REASONS) - {"price"}
+    src = (REPO / "frontend" / "src" / "lib" / "changeKinds.ts").read_text(encoding="utf-8")
+    block = src.split("const MATCH_REASON_LABELS", 1)[1].split("};", 1)[0]
+    assert set(re.findall(r"^\s*(\w+):\s*'", block, re.MULTILINE)) == set(MATCH_REASONS) - {"price"}
+
+
 @pytest.mark.parametrize(("row", "title", "body"), [
+    # A New match before migration 735 carries no reason: every one was newly listed.
     ({"change_kind": "new", "display_label": "Praha 5 – Smíchov", "category_main": "byt", "disposition": "2+kk",
       "price_unit": "za nemovitost", "trigger_price_czk": 6_490_000},
-     "Nový inzerát · Praha 5 – Smíchov", f"Byt 2+kk · 6{NBSP}490{NBSP}000{NBSP}Kč"),
-    ({"change_kind": "new", "display_label": "Brno", "category_main": "byt", "disposition": "3+1",
-      "price_unit": "za mesic", "trigger_price_czk": 24_500},
-     "Nový inzerát · Brno", f"Byt 3+1 · 24{NBSP}500{NBSP}Kč/měs"),
+     "Nová shoda · Praha 5 – Smíchov", f"Nový inzerát · Byt 2+kk · 6{NBSP}490{NBSP}000{NBSP}Kč"),
+    ({"change_kind": "new", "match_reason": "listed", "display_label": "Brno", "category_main": "byt",
+      "disposition": "3+1", "price_unit": "za mesic", "trigger_price_czk": 24_500},
+     "Nová shoda · Brno", f"Nový inzerát · Byt 3+1 · 24{NBSP}500{NBSP}Kč/měs"),
+    ({"change_kind": "new", "match_reason": "price", "display_label": "Kolín", "category_main": "byt",
+      "disposition": "2+kk", "trigger_price_czk": 4_200_000, "prev_price_czk": 4_500_000},
+     "Nová shoda · Kolín", f"Zlevněno 4{NBSP}500{NBSP}000{NBSP}Kč → 4{NBSP}200{NBSP}000{NBSP}Kč · Byt 2+kk"),
+    ({"change_kind": "new", "match_reason": "price", "display_label": "Kolín", "trigger_price_czk": 21_000,
+      "prev_price_czk": 20_000, "price_unit": "za mesic"},
+     "Nová shoda · Kolín", f"Zdraženo 20{NBSP}000{NBSP}Kč/měs → 21{NBSP}000{NBSP}Kč/měs"),
+    ({"change_kind": "new", "match_reason": "back", "display_label": "Beroun", "category_main": "dum",
+      "subtype": "vila", "trigger_price_czk": 9_900_000},
+     "Nová shoda · Beroun", f"Znovu na trhu · Vila · 9{NBSP}900{NBSP}000{NBSP}Kč"),
+    ({"change_kind": "new", "match_reason": "other", "display_label": "Brno"}, "Nová shoda · Brno",
+     "Nově odpovídá"),
     ({"change_kind": "price_drop", "display_label": "Kolín", "trigger_price_czk": 4_200_000,
       "prev_price_czk": 4_500_000},
      "Zlevněno · Kolín", f"4{NBSP}500{NBSP}000{NBSP}Kč → 4{NBSP}200{NBSP}000{NBSP}Kč"),
@@ -57,7 +80,7 @@ def test_the_bells_english_map_has_the_same_keys() -> None:
      "Znovu na trhu · Beroun", "Pozemek"),
     ({"change_kind": "new_source", "display_label": None, "category_main": "byt", "disposition": "1+kk"},
      "Nový portál", "Byt 1+kk"),
-    ({"change_kind": "new", "display_label": "Ostrava"}, "Nový inzerát · Ostrava", ""),
+    ({"change_kind": "new", "display_label": "Ostrava"}, "Nová shoda · Ostrava", "Nový inzerát"),
     ({"change_kind": "price_drop", "display_label": "Kolín", "trigger_price_czk": 4_200_000, "category_main": "byt"},
      "Zlevněno · Kolín", "Byt"),
     ({"change_kind": "shared_collection", "display_label": "Praha", "actor_email": "a@b.cz", "share_name": "x"},

@@ -239,7 +239,7 @@ describe('<CollectionDetail>', () => {
     });
   });
 
-  /* Migration 720: a watched collection chooses the events it tells, under the switch. */
+  /* Migration 735: a watched collection chooses the events it tells, under the switch. */
   describe('the events a watched collection tells', () => {
     const watched = (kinds = COLLECTION_KINDS.map((k) => k.kind)) => ({
       ...DATA, collection: { ...DATA.collection, monitoring_enabled: true, notify_kinds: kinds },

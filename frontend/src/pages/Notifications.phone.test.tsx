@@ -48,6 +48,7 @@ const row: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: 11_900_000,
   prev_price_czk: 12_500_000,
+  match_reason: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 11_900_000,
@@ -160,7 +161,7 @@ describe('<Notifications> at phone width', () => {
     expect(await screen.findByRole('link', { name: /^Price drop Praha 2/ })).toHaveAttribute('href', '/property/999');
     /* In place, not a new tab: that would leave the installed app. */
     expect(screen.getByRole('link', { name: /^Price drop Praha 2/ })).not.toHaveAttribute('target');
-    for (const name of ['Monitoring', 'Watchdogs', 'Shared', 'Unread', 'Mark all read']) {
+    for (const name of ['Collections', 'Watchdogs', 'Shared', 'Unread', 'Mark all read']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.getAllByRole('button', { name: 'All' })).toHaveLength(2);

@@ -584,7 +584,7 @@ def test_list_and_get_map_the_same_shape_as_create():
 # regression here is silent (rows land unreachable, or worse, unscoped).
 
 def test_a_collection_keeps_the_events_it_is_set_to_tell_and_a_new_one_takes_the_default():
-    """notify_kinds (migration 720): left out of a create it is the column DEFAULT (every event a
+    """notify_kinds (migration 735): left out of a create it is the column DEFAULT (every event a
     collection tells); set, it is stored once each in order; a patch of it alone is an update."""
     conn = ScriptConn([(lambda q: "INSERT INTO collections" in q, [_COLL])])
     curation.create_collection(conn, _s.CreateCollectionIn(name="x"), account_id=_ACCT)

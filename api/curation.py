@@ -67,7 +67,7 @@ _COLLECTION_PROJECTION = (
     "c.notify_kinds"
 )
 
-# `{kinds}` is %s, or DEFAULT when the body leaves notify_kinds out (migration 720's column default).
+# `{kinds}` is %s, or DEFAULT when the body leaves notify_kinds out (migration 735's column default).
 _CREATE_COLLECTION_SQL = (
     "INSERT INTO collections AS c "
     "  (name, description, monitoring_enabled, account_id, notify_kinds) "

@@ -41,7 +41,7 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
-import { CHANGE_META } from '@/lib/changeKinds';
+import { CHANGE_META, matchReasonLabel } from '@/lib/changeKinds';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
@@ -63,7 +63,7 @@ const FEED = ROUTES.notifications.build();
  * tone inside the phone frame (chosen = ink on the inset well, never copper). */
 const SOURCE_OPTS: ReadonlyArray<SegmentOption<SourceFilter>> = [
   { value: 'all', label: 'All' },
-  { value: 'collection_monitor', label: 'Monitoring' },
+  { value: 'collection_monitor', label: 'Collections' },
   { value: 'watchdog', label: 'Watchdogs' },
   { value: 'share', label: 'Shared' },
 ];
@@ -339,6 +339,13 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
         </p>
         <p className={`mt-0.5 text-[0.78rem] text-[var(--color-ink-3)] truncate ${PHONE_FIGURES}`}>
           {sourceLabel}
+          {/* A New match names why it entered the watchdog's slice (migration 735). */}
+          {d.change_kind === 'new' && (
+            <span className="whitespace-nowrap">
+              <span className="max-md:hidden">{' '}· </span>
+              {matchReasonLabel(d)}
+            </span>
+          )}
           {d.prev_price_czk != null && d.trigger_price_czk != null && (
             <span className="font-mono tabular-nums text-[var(--color-ink-4)] whitespace-nowrap">
               <span className="max-md:hidden">{' '}· </span>

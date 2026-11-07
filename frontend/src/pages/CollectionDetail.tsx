@@ -493,7 +493,7 @@ function MonitorSwitch({
   );
 }
 
-/* What a watched collection tells (migration 720), under the header while Sledovat is on. Each
+/* What a watched collection tells (migration 735), under the header while Sledovat is on. Each
  * click saves; the chips show the set being saved until the collection reads it back. The API
  * refuses an empty set, so the last chip stays on and says why. */
 function MonitorKinds({

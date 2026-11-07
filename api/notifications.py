@@ -9,8 +9,8 @@ Two responsibilities:
 2. The three producer steps (`match_once`, `match_changes_once`, `match_lifecycle_once`),
    run every 300 s by the realtime worker's `notifications` lane, their one caller and
    clock (the API runs none since W2b). They write one `notification_dispatches` row per
-   event over fixed windows (a watchdog's 'new' over properties first seen in the last
-   24 h), a watchdog only for the kinds it tells (`notify_kinds`); the one identity index
+   event (a watchdog's 'new' each time a property enters its slice, migration 735), a
+   watchdog only for the kinds it tells (`notify_kinds`); the one identity index
    (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent. A watchdog tells a
    property only once it is PUBLISHED — settled by the pipeline or 6 h old, the rule
    Browse serves by (`toolkit/publication.py`, migrations 668/669).
@@ -34,7 +34,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException
@@ -44,6 +44,7 @@ from api.cursor import decode_cursor, encode_cursor
 from api.location_filter import DistrictChip, MapBounds, MapCircle, area_where, district_where, one_area
 from location_data.claims_common import served_location_predicate
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
+from toolkit.filter_registry import CATEGORY_CITY_QUALITY, CATEGORY_CURATION, CATEGORY_VELOCITY, REGISTRY
 from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 from toolkit.publication import published_property_predicate, visible_since_sql
 
@@ -58,21 +59,26 @@ SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
 # The six property events the producers detect, in the order a watchdog or a collection stores the
-# ones it tells (migration 720, `notify_kinds` on each). A collection chooses from every kind but
-# 'new': a property it holds is never new to it.
-WatchdogKind = Literal["new", "price_drop", "price_rise", "inactive", "reactivated", "new_source"]
+# ones it tells (migration 735, `notify_kinds` on each). A watchdog tells a return as a New match (the
+# property re-enters its slice), so it never chooses 'reactivated'; a collection chooses from every
+# kind but 'new': a property it holds is never new to it.
+KIND_ORDER = ("new", "price_drop", "price_rise", "inactive", "reactivated", "new_source")
+WatchdogKind = Literal["new", "price_drop", "price_rise", "inactive", "new_source"]
 WATCHDOG_KINDS: tuple[str, ...] = get_args(WatchdogKind)
 CollectionKind = Literal["price_drop", "price_rise", "inactive", "reactivated", "new_source"]
 COLLECTION_KINDS: tuple[str, ...] = get_args(CollectionKind)
 PRICE_KINDS = ("price_drop", "price_rise")
-LIFECYCLE_KINDS = ("inactive", "reactivated", "new_source")
+LIFECYCLE_KINDS = ("inactive", "new_source")
+# Why a New match entered its watchdog's slice (`notification_dispatches.match_reason`, migration 735),
+# in the order the pass names one when several hold. NULL on a 'new' written before 735 = 'listed'.
+MATCH_REASONS = ("listed", "back", "price", "portal", "changed", "other")
 
 
 def normalize_notify_kinds(kinds: list[str]) -> list[str]:
-    """The kinds as a watchdog or collection stores them: each once, in WATCHDOG_KINDS order. Refused when
-    empty, and 'reactivated' without 'inactive': Back on the market answers a Left the market the same
-    source told."""
-    out = [k for k in WATCHDOG_KINDS if k in kinds]
+    """The kinds as a watchdog or collection stores them: each once, in KIND_ORDER. Refused when empty,
+    and 'reactivated' without 'inactive': a collection's Back on the market answers the Left the market
+    it told."""
+    out = [k for k in KIND_ORDER if k in kinds]
     if not out:
         raise ValueError("choose at least one event to be notified about")
     if "reactivated" in out and "inactive" not in out:
@@ -354,10 +360,12 @@ NEW_WINDOW = "24 hours"
 #     on its (property_id, account_id) index: the service role bypasses RLS, so the account is
 #     named, never left to the caller's policy);
 #   - not from a retired watchdog (a delete retires it, F21; its rows stay for analysis).
-# And not RETRACTED (operator ruling 2026-10-23, Q5): a 'new' is hidden exactly when the property
-# it now names was first seen more than NEW_WINDOW before the alert was told. No 'new' is told so
+# And not RETRACTED (operator ruling 2026-10-23, Q5): a 'new' told as newly listed (match_reason
+# 'listed', or NULL: every 'new' before migration 735) is hidden exactly when the property it now
+# names was first seen more than NEW_WINDOW before the alert was told. No newly listed one is told so
 # (the producer's window), but a merge re-points alerts to the oldest property, so a 'new' the 6 h
-# cap released for a duplicate hides itself once the engine merges it. Derived, no column: it
+# cap released for a duplicate hides itself once the engine merges it; a New match for any other
+# reason names an older property by design, and stays. Derived, no column: it
 # survives a split (a detach leaves alerts where they are), and a survivor first seen 6 to 24 h
 # before the alert keeps it (a known residue). The interval is a literal, so every statement
 # embedding the fragment keeps its own parameters. A retraction withdraws an alert from attention —
@@ -375,7 +383,8 @@ REACHABLE_SQL = (
     "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))"
 )
 RETRACTED_SQL = (
-    "(d.change_kind = 'new' AND EXISTS (SELECT 1 FROM properties rp WHERE rp.id = d.property_id"
+    "(d.change_kind = 'new' AND coalesce(d.match_reason, 'listed') = 'listed'"
+    " AND EXISTS (SELECT 1 FROM properties rp WHERE rp.id = d.property_id"
     f" AND rp.first_seen_at <= d.dispatched_at - interval '{NEW_WINDOW}'))"
 )
 VISIBLE_SQL = f"{REACHABLE_SQL} AND NOT {RETRACTED_SQL}"
@@ -443,7 +452,7 @@ def create_subscription(
     # account_id is NOT NULL (migration 364) and REQUIRED here (no default): the
     # route resolves exactly one via tenant_pool.require_account_id, which 400s
     # when the caller has none, so this INSERT can never bind a silent NULL.
-    # notify_kinds left unnamed takes the column default (migration 720).
+    # notify_kinds left unnamed takes the column default (migration 735).
     _refuse_unrenderable(filter_spec)
     kinds = (notify_kinds,) if notify_kinds is not None else ()
     with conn.cursor() as cur:
@@ -611,7 +620,7 @@ _DISPATCH_SELECT = (
     "  END AS share_name, "
     "CASE WHEN d.change_kind = 'shared_pipeline' THEN d.event_ref END AS share_mode, "
     "d.dispatched_at, d.seen_at, "
-    "d.trigger_price_czk, d.prev_price_czk, "
+    "d.trigger_price_czk, d.prev_price_czk, d.match_reason, "
     f"{_LISTING_PROJECTION}"
 )
 
@@ -875,7 +884,7 @@ def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) ->
 
 
 # The watchdogs a step serves: switched on, not retired (migration 652; deleting a watchdog retires
-# it, `delete_subscription`) and telling at least one of the step's kinds (migration 720), each
+# it, `delete_subscription`) and telling at least one of the step's kinds (migration 735), each
 # with the kinds it tells.
 _LIVE_WATCHDOGS_SQL = (
     "SELECT id, filter_spec, active_since, notify_kinds FROM notification_subscriptions "
@@ -928,48 +937,252 @@ def _insert_per_watchdog(
         tally.failed += 1
 
 
-# Step watchdog_new: a published property the spec matches, first seen inside NEW_WINDOW, that became
-# visible after the watchdog last started (`toolkit/publication.py`). `l` is properties_public:
-# `listing_id` is the canonical advert (migration 561). 'new' carries no event_ref (program § 3.2:
-# once ever per property).
-_WATCHDOG_NEW_SQL = (
-    "INSERT INTO notification_dispatches "
-    "  (subscription_id, source_kind, property_id, listing_id, "
-    "   change_kind, trigger_price_czk, event_ref) "
-    "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.listing_id, "
-    "       'new', l.price_czk, NULL "
-    "FROM properties_public l "
-    "WHERE {where} "
-    "  AND l.first_seen_at > now() - %(new_window)s::interval "
-    "  AND EXISTS (SELECT 1 FROM properties pp WHERE pp.id = l.property_id AND "
-    f"             {visible_since_sql('pp')} > %(active_since)s) "
-    f"{ON_EVENT_CONFLICT}"
+# --- step watchdog_new: a watchdog's slice and its New matches (migration 735) ---------------
+#
+# A watchdog telling 'new' keeps its SLICE (GLOSSARY.md: Watchdog): the properties on the market its
+# spec matches now (`{where}` over properties_public, rule 16, and `is_active`), as members of
+# watchdog_slice_members. Each pass diffs the slice against them: a property not a member ENTERS, a
+# member no longer in it LEAVES (never told, ruling Q15). An entry is a New match (ruling Q2 (b),
+# Q12: newly listed, a price change, back on the market, a new ad, an ad's facts, its place), told
+# with the reason it names, except when
+#   - it is back within SLICE_BLINK of leaving: a portal blink, a re-resolved place or a price
+#     bouncing across a cap re-enters silently and keeps its first entry;
+#   - it is the merge survivor of a member: it takes the member's place;
+#   - nothing about the property changed since the last pass and the spec uses a filter on our own
+#     data (`_always_told`, ruling Q11): a city index, the rent map or a proximity revised.
+# A start (created, switched on, edited: `active_since`) takes the slice afresh, silently, telling
+# only what was published after the start, as the matcher before the slice did (R6 (a)).
+
+# A property back in the slice within this of leaving re-enters silently; a member gone longer is
+# forgotten, so its next entry is a New match again. The delist pipeline's dwell (INACTIVE_DWELL).
+SLICE_BLINK = "24 hours"
+# How far before the last pass a change still names an entry's reason: a change is stamped when it is
+# fetched and reaches the slice once its write commits and the rollup has run (30 s, dirty-set).
+SLICE_SETTLE = timedelta(minutes=30)
+# The filters that answer from our own data, not the property's: an entry through one of them alone
+# is not told (Q11)...
+_OUTSIDE_DATA_FIELDS = frozenset(
+    {k for k, f in REGISTRY.items() if f.category in (CATEGORY_CITY_QUALITY, CATEGORY_CURATION)}
+    | {"min_mf_gross_yield_pct", "max_mf_gross_yield_pct", "near_city_proximity",
+       "building_condition_level_min", "building_condition_level_max",
+       "apartment_condition_level_min", "apartment_condition_level_max"}
+) & set(WatchdogFilterSpec.model_fields)
+# ...unless the spec uses a Velocity filter, where time passing brings a property in (Q11, the
+# operator's addition): such an entry cannot be told apart, so every one is told.
+_VELOCITY_FIELDS = frozenset(
+    k for k, f in REGISTRY.items() if f.category == CATEGORY_VELOCITY) & set(WatchdogFilterSpec.model_fields)
+
+
+def _always_told(spec: WatchdogFilterSpec) -> bool:
+    """Whether every entry into this spec's slice is a New match, a change seen or not."""
+    used = {field for field, value in spec if value not in (None, [], {})}
+    return bool(used & _VELOCITY_FIELDS) or not used & _OUTSIDE_DATA_FIELDS
+
+
+# The slice: `l` is properties_public, `listing_id` its canonical advert (migration 561).
+_SLICE_CTE = (
+    "slice AS ("
+    "  SELECT l.property_id, l.listing_id, l.price_czk FROM properties_public l "
+    "  WHERE l.is_active AND {where}"
+    ")"
+)
+# A New match's event_ref: the epoch of the pass it entered at, so each entry is its own event.
+_ENTRY_REF = "floor(extract(epoch FROM now()))::bigint::text"
+_NEW_COLUMNS = (
+    "(subscription_id, source_kind, property_id, listing_id, change_kind, trigger_price_czk, "
+    " prev_price_czk, event_ref, match_reason)"
+)
+
+# The pass's lock: one row per watchdog, created by its first pass; a pass holds it FOR UPDATE, and a
+# second (a deploy overlap's other worker) skips the watchdog. Each later statement reads a fresh
+# snapshot, so a pass that waited on the claim sees the members the first one wrote.
+_SLICE_CLAIM_SQL = (
+    "INSERT INTO watchdog_slices (subscription_id, started_at) "
+    "VALUES (%(subscription_id)s, %(active_since)s) ON CONFLICT (subscription_id) DO NOTHING"
+)
+_SLICE_LOCK_SQL = (
+    "SELECT started_at, sliced_at FROM watchdog_slices "
+    "WHERE subscription_id = %(subscription_id)s FOR UPDATE SKIP LOCKED"
+)
+_SLICE_RESTART_SQL = "DELETE FROM watchdog_slice_members WHERE subscription_id = %(subscription_id)s"
+
+# A start: every property in the slice becomes a member. Told: one first seen inside NEW_WINDOW that
+# became visible after the start (`toolkit/publication.py`; held while unpublished, the 6 h cap ends
+# every hold inside the window), unless this watchdog already told it a 'new' since the start (the
+# matcher before the slice wrote no event_ref).
+_SLICE_SEED_SQL = (
+    f"WITH {_SLICE_CTE}, "
+    "entered AS ("
+    "  INSERT INTO watchdog_slice_members (subscription_id, property_id, entered_at) "
+    "  SELECT %(subscription_id)s, s.property_id, now() FROM slice s RETURNING 1"
+    "), "
+    "told AS ("
+    f"  INSERT INTO notification_dispatches {_NEW_COLUMNS} "
+    "  SELECT %(subscription_id)s, 'watchdog', s.property_id, s.listing_id, 'new', s.price_czk, NULL, "
+    f"         {_ENTRY_REF}, 'listed' "
+    "  FROM slice s JOIN properties p ON p.id = s.property_id "
+    "  WHERE p.first_seen_at > now() - %(new_window)s::interval "
+    f"   AND {visible_since_sql('p')} > %(active_since)s::timestamptz "
+    "    AND NOT EXISTS (SELECT 1 FROM notification_dispatches d "
+    "      WHERE d.source_kind = 'watchdog' AND d.subscription_id = %(subscription_id)s::uuid "
+    "        AND d.property_id = s.property_id AND d.change_kind = 'new' AND d.duplicate_of IS NULL "
+    "        AND d.dispatched_at >= %(active_since)s::timestamptz) "
+    f"  {ON_EVENT_CONFLICT} RETURNING 1"
+    "), "
+    "stamped AS ("
+    "  UPDATE watchdog_slices SET started_at = %(active_since)s, sliced_at = now() "
+    "  WHERE subscription_id = %(subscription_id)s RETURNING 1"
+    ") "
+    "SELECT (SELECT count(*) FROM told)"
+)
+
+# Why an entry entered, of what changed about the property since `since` (the last pass, less
+# SLICE_SETTLE), in MATCH_REASONS order: published; back on the market (migration 735's stamp); its
+# canonical advert's price step (`listing_price_steps`, migration 559, as the price step reads it);
+# an ad on a portal the property had none on; an ad's content (`last_change_at`, the newest
+# snapshot), a new ad, a merge into it, or a re-resolved place. NULL: nothing (time passed, or our own
+# data was revised).
+_SINCE = "%(since)s::timestamptz"
+_ENTRY_SIGNAL = (
+    "CASE "
+    f"  WHEN {visible_since_sql('p')} > {_SINCE} THEN 'listed' "
+    f"  WHEN p.back_on_market_at > {_SINCE} THEN 'back' "
+    "  WHEN st.price_czk IS NOT NULL THEN 'price' "
+    "  WHEN EXISTS (SELECT 1 FROM listings c WHERE c.property_id = p.id "
+    f"               AND c.first_seen_at > {_SINCE} "
+    "               AND NOT EXISTS (SELECT 1 FROM listings o WHERE o.property_id = p.id "
+    f"                               AND o.source = c.source AND o.first_seen_at <= {_SINCE})) "
+    "   AND EXISTS (SELECT 1 FROM listings o WHERE o.property_id = p.id "
+    f"               AND o.first_seen_at <= {_SINCE}) THEN 'portal' "
+    f"  WHEN p.last_change_at > {_SINCE} "
+    "    OR EXISTS (SELECT 1 FROM listings c WHERE c.property_id = p.id "
+    f"               AND c.first_seen_at > {_SINCE}) "
+    "    OR EXISTS (SELECT 1 FROM properties x WHERE x.merged_into = p.id "
+    f"               AND x.merged_at > {_SINCE}) "
+    "    OR EXISTS (SELECT 1 FROM listings c JOIN listing_location ll ON ll.listing_id = c.id "
+    f"               WHERE c.property_id = p.id AND ll.resolved_at > {_SINCE}) THEN 'changed' "
+    "END"
+)
+
+# A later pass: the diff. The four writes touch disjoint member rows (a stayer is untouched, a leaver
+# is stamped, one gone past SLICE_BLINK is forgotten, an entrant is upserted), so one statement
+# carries them, the alerts and the stamp.
+_SLICE_PASS_SQL = (
+    f"WITH {_SLICE_CTE}, "
+    "members AS ("
+    "  SELECT w.property_id, w.entered_at, w.left_at FROM watchdog_slice_members w "
+    "  WHERE w.subscription_id = %(subscription_id)s::uuid"
+    "), "
+    "entering AS ("
+    "  SELECT s.property_id, s.listing_id, s.price_czk, w.entered_at AS was_entered_at, "
+    "         coalesce(w.left_at > now() - %(blink)s::interval, false) AS blinked "
+    "  FROM slice s LEFT JOIN members w ON w.property_id = s.property_id "
+    "  WHERE w.property_id IS NULL OR w.left_at IS NOT NULL"
+    "), "
+    "left_now AS ("
+    "  UPDATE watchdog_slice_members w SET left_at = now() "
+    "  WHERE w.subscription_id = %(subscription_id)s::uuid AND w.left_at IS NULL "
+    "    AND NOT EXISTS (SELECT 1 FROM slice s WHERE s.property_id = w.property_id) RETURNING 1"
+    "), "
+    "forgotten AS ("
+    "  DELETE FROM watchdog_slice_members w "
+    "  WHERE w.subscription_id = %(subscription_id)s::uuid AND w.left_at <= now() - %(blink)s::interval "
+    "    AND NOT EXISTS (SELECT 1 FROM slice s WHERE s.property_id = w.property_id) RETURNING 1"
+    "), "
+    "entered AS ("
+    "  INSERT INTO watchdog_slice_members (subscription_id, property_id, entered_at) "
+    "  SELECT %(subscription_id)s, e.property_id, "
+    "         CASE WHEN e.blinked THEN e.was_entered_at ELSE now() END FROM entering e "
+    "  ON CONFLICT (subscription_id, property_id) "
+    "  DO UPDATE SET entered_at = excluded.entered_at, left_at = NULL RETURNING 1"
+    "), "
+    "told AS ("
+    f"  INSERT INTO notification_dispatches {_NEW_COLUMNS} "
+    "  SELECT %(subscription_id)s, 'watchdog', e.property_id, e.listing_id, 'new', "
+    "         CASE WHEN sig.reason = 'price' THEN st.price_czk ELSE e.price_czk END, "
+    "         CASE WHEN sig.reason = 'price' THEN st.prev_price_czk END, "
+    f"         {_ENTRY_REF}, coalesce(sig.reason, 'other') "
+    "  FROM entering e "
+    "  JOIN properties p ON p.id = e.property_id "
+    "  LEFT JOIN LATERAL (SELECT ps.price_czk, ps.prev_price_czk FROM listing_price_steps ps "
+    "                     WHERE ps.listing_id = p.repr_listing_ref_id "
+    f"                      AND ps.scraped_at > greatest(p.repr_since, {_SINCE}) "
+    "                     ORDER BY ps.scraped_at DESC, ps.snapshot_id DESC LIMIT 1) st ON true "
+    f"  CROSS JOIN LATERAL (SELECT {_ENTRY_SIGNAL} AS reason) sig "
+    "  WHERE NOT e.blinked "
+    "    AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
+    "                    WHERE x.merged_into = e.property_id "
+    "                      AND (w.left_at IS NULL OR w.left_at > now() - %(blink)s::interval)) "
+    "    AND (sig.reason IS NOT NULL OR %(always_told)s) "
+    f"  {ON_EVENT_CONFLICT} RETURNING 1"
+    "), "
+    "stamped AS ("
+    "  UPDATE watchdog_slices SET sliced_at = now() "
+    "  WHERE subscription_id = %(subscription_id)s RETURNING 1"
+    ") "
+    "SELECT (SELECT count(*) FROM told)"
+)
+
+# The slices no live watchdog telling 'new' keeps (switched off, retired, 'new' turned off): their
+# next start takes them afresh anyway. The members go with them (ON DELETE CASCADE).
+_SLICE_FORGET_SQL = (
+    "DELETE FROM watchdog_slices ws WHERE NOT EXISTS ("
+    "  SELECT 1 FROM notification_subscriptions s WHERE s.id = ws.subscription_id "
+    "  AND s.is_active AND s.retired_at IS NULL AND 'new' = ANY(s.notify_kinds))"
 )
 
 
-def match_once(conn: "psycopg.Connection") -> dict[str, int]:
-    """Step watchdog_new: one 'new' dispatch per (live watchdog telling 'new', matching published
-    property first seen inside the last 24 h that became visible after the watchdog last started).
+def _slice_pass(
+    conn: "psycopg.Connection", tally: _Tally, sub_id: Any, raw_spec: Any, active_since: datetime,
+) -> None:
+    """One watchdog's pass in ONE transaction under the bound (`_commit_one`'s shape: the events lock
+    first, SHARED), so its members and its alerts land together and a failing watchdog rolls back
+    alone. A pass another worker holds is skipped; its next pass reads what that one wrote."""
+    try:
+        spec = WatchdogFilterSpec(**(raw_spec or {}))
+        where, spec_params = _build_match_clauses(spec)
+    except SPEC_REJECTIONS as exc:
+        LOG.warning("matcher: subscription %s has a spec the matcher refuses: %s", sub_id, exc)
+        tally.invalid += 1
+        return
+    params = {**spec_params, "subscription_id": str(sub_id), "active_since": active_since,
+              "new_window": NEW_WINDOW, "blink": SLICE_BLINK, "always_told": _always_told(spec)}
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(f"SET LOCAL statement_timeout = '{PRODUCER_STATEMENT_TIMEOUT}'")
+            cur.execute(NOTIFICATION_EVENTS_SHARED_LOCK_SQL)
+            cur.execute(_SLICE_CLAIM_SQL, params)
+            cur.execute(_SLICE_LOCK_SQL, params)
+            held = cur.fetchone()
+            if held is None:
+                LOG.info("matcher: subscription %s is being sliced by another pass", sub_id)
+                return
+            started_at, sliced_at = held
+            if sliced_at is None or started_at != active_since:
+                cur.execute(_SLICE_RESTART_SQL, params)
+                sql = _SLICE_SEED_SQL
+            else:
+                sql = _SLICE_PASS_SQL
+                params["since"] = sliced_at - SLICE_SETTLE
+            cur.execute(sql.replace("{where}", " AND ".join(where)), params)
+            row = cur.fetchone()
+            tally.inserted += int(row[0]) if row else 0
+    except Exception as exc:  # noqa: BLE001 — isolate one sub, keep loop alive
+        LOG.exception("matcher: subscription %s failed, skipping: %s", sub_id, exc)
+        tally.failed += 1
 
-    ONE INSERT per watchdog over a fixed window, `first_seen_at > now() − 24 h` and
-    `visible_since > active_since` (F1; `toolkit/publication.py`): a property whose match facts
-    arrive late (its location resolves an hour on) still fires while it is under a day old, and
-    a watchdog created, switched back on or given a new filter or new kinds (each restamps
-    `active_since`, migrations 652 and 720) alerts only on what becomes VISIBLE afterwards, never
-    a backfill (R6 (a)). Keyed on visibility, not first seen (the publication gate's critique,
-    2026-10-23): a property first seen up to 6 h before a watchdog starts and published after it is
-    still told. One not yet published (`_build_match_clauses`) is HELD and told by the first pass
-    after it is; the 6 h cap ends every hold inside the 24 h window, so none is lost. The identity
-    (watchdog, 'new', property; no event_ref) is once ever and the only idempotence — no cursor, no
-    lookback.
+
+def match_once(conn: "psycopg.Connection") -> dict[str, int]:
+    """Step watchdog_new: each live watchdog telling 'new' takes its slice and tells a New match for
+    every property that entered it since its last pass (`_slice_pass`), after the slices no such
+    watchdog keeps are dropped. The identity (watchdog, 'new', property, the entry's epoch) and the
+    pass lock are the idempotence; a re-run after a pass finds no entry.
     """
+    _commit_one(conn, _SLICE_FORGET_SQL, {})
     subs = _live_watchdogs(conn, ("new",))
     tally = _Tally(evaluated=len(subs))
     for sub_id, raw_spec, active_since, _ in subs:
-        _insert_per_watchdog(
-            conn, tally, sub_id, raw_spec, [_WATCHDOG_NEW_SQL],
-            {"new_window": NEW_WINDOW, "active_since": active_since}, label="matcher",
-        )
+        _slice_pass(conn, tally, sub_id, raw_spec, active_since)
     return tally.stats("matches_inserted")
 
 
@@ -980,7 +1193,7 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
 # ad's price steps, the recent delistings, the ads that brought a new portal), never off a cohort,
 # and a `_Source` says who is told: `join` gives each event row `e` its `m` (source_id, listing_id
 # — the canonical advert —, since and kinds), so a detector fires only for a change after `since`,
-# of a kind in `kinds` (migration 720: what that watchdog or collection is set to tell), and a
+# of a kind in `kinds` (migration 735: what that watchdog or collection is set to tell), and a
 # change that predates the watching never notifies. Detection never consults dismissals;
 # VISIBLE_SQL hides a dismissed property's alerts at read time.
 
@@ -995,10 +1208,10 @@ class _Source:
 
 
 # A collection with monitoring_enabled tells each property it holds the kinds it is set to
-# (collections.notify_kinds, migration 720), from the later of when it was added
+# (collections.notify_kinds, migration 735), from the later of when it was added
 # (collection_properties.added_at) and when the collection last started telling
 # (collections.monitoring_enabled_at: monitoring switched on or its kinds changed, migrations 230
-# and 720). status='active' skips merged-away properties. Set-based: one statement serves every
+# and 735). status='active' skips merged-away properties. Set-based: one statement serves every
 # monitored collection.
 _MONITOR = _Source(
     kind="collection_monitor",
@@ -1037,6 +1250,27 @@ _WATCHDOG = _Source(
         "CROSS JOIN LATERAL (SELECT %(subscription_id)s::uuid AS source_id, l.listing_id, "
         "                           %(active_since)s::timestamptz AS since, %(kinds)s::text[] AS kinds) m"
     ),
+    scope="source_kind = 'watchdog' AND subscription_id = %(subscription_id)s::uuid",
+)
+# A watchdog telling 'new' tells its Price drop / Price rise and New portal only about a member of its
+# slice as its last pass took it, of a change after the property entered (ruling Q13): the change that
+# brought a property in is told once, as its New match. Only a slice taken for the watchdog's current
+# start counts, so a restart's stale members tell nothing.
+_WATCHDOG_SLICE = _Source(
+    kind="watchdog",
+    column="subscription_id",
+    ctes=(
+        "members AS ("
+        "  SELECT w.subscription_id AS source_id, w.property_id, p.repr_listing_ref_id AS listing_id, "
+        "         w.entered_at AS since, %(kinds)s::text[] AS kinds "
+        "  FROM watchdog_slice_members w "
+        "  JOIN watchdog_slices ws ON ws.subscription_id = w.subscription_id "
+        "   AND ws.started_at = %(active_since)s::timestamptz "
+        "  JOIN properties p ON p.id = w.property_id "
+        "  WHERE w.subscription_id = %(subscription_id)s::uuid AND w.left_at IS NULL"
+        "), "
+    ),
+    join="JOIN members m ON m.property_id = e.property_id",
     scope="source_kind = 'watchdog' AND subscription_id = %(subscription_id)s::uuid",
 )
 
@@ -1170,17 +1404,27 @@ def _new_source_sql(src: _Source) -> str:
 
 _MONITOR_PRICE_SQL = _price_sql(_MONITOR)
 _WATCHDOG_PRICE_SQL = _price_sql(_WATCHDOG)
+_WATCHDOG_SLICE_PRICE_SQL = _price_sql(_WATCHDOG_SLICE)
 _MONITOR_INACTIVE_SQL = _inactive_sql(_MONITOR)
 _WATCHDOG_INACTIVE_SQL = _inactive_sql(_WATCHDOG)
 _MONITOR_REACTIVATED_SQL = _reactivated_sql(_MONITOR)
-_WATCHDOG_REACTIVATED_SQL = _reactivated_sql(_WATCHDOG)
 _MONITOR_NEW_SOURCE_SQL = _new_source_sql(_MONITOR)
 _WATCHDOG_NEW_SOURCE_SQL = _new_source_sql(_WATCHDOG)
-# kind -> its watchdog statement, in this order, each committed before the next: reactivated reads
-# the inactive rows.
-_WATCHDOG_LIFECYCLE = (("inactive", _WATCHDOG_INACTIVE_SQL),
-                       ("reactivated", _WATCHDOG_REACTIVATED_SQL),
-                       ("new_source", _WATCHDOG_NEW_SOURCE_SQL))
+_WATCHDOG_SLICE_NEW_SOURCE_SQL = _new_source_sql(_WATCHDOG_SLICE)
+
+
+def _watchdog_statements(kinds: list[str], step_kinds: tuple[str, ...]) -> list[str]:
+    """The statements a step runs for one watchdog: those of its kinds the step detects, over its
+    slice when it tells 'new' (`_WATCHDOG_SLICE`). Left the market stays on the spec (a property
+    leaving the market leaves the slice with it)."""
+    sliced = "new" in kinds
+    by_kind = {
+        "price_drop": _WATCHDOG_SLICE_PRICE_SQL if sliced else _WATCHDOG_PRICE_SQL,
+        "inactive": _WATCHDOG_INACTIVE_SQL,
+        "new_source": _WATCHDOG_SLICE_NEW_SOURCE_SQL if sliced else _WATCHDOG_NEW_SOURCE_SQL,
+    }
+    by_kind["price_rise"] = by_kind["price_drop"]
+    return list(dict.fromkeys(by_kind[k] for k in step_kinds if k in kinds))
 
 
 def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
@@ -1189,7 +1433,8 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
 
     - Watchdog: one `price_drop` / `price_rise` per (live watchdog telling that kind x matching
       property x step after its `active_since`). The spec matches the property's CURRENT state
-      through `_build_match_clauses` (rule 16).
+      through `_build_match_clauses` (rule 16); a watchdog telling 'new' reads its slice instead,
+      a step after the property entered it (`_WATCHDOG_SLICE`).
     - Collection monitor: the kinds each collection tells, per (monitored collection x member
       property x step after `monitor_since`), set-based across every monitored collection.
     """
@@ -1198,7 +1443,7 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
     tally = _Tally(evaluated=len(subs))
     for sub_id, raw_spec, active_since, kinds in subs:
         _insert_per_watchdog(
-            conn, tally, sub_id, raw_spec, [_WATCHDOG_PRICE_SQL],
+            conn, tally, sub_id, raw_spec, _watchdog_statements(kinds, PRICE_KINDS),
             {**params, "active_since": active_since, "kinds": [k for k in kinds if k in PRICE_KINDS]},
             label="change matcher",
         )
@@ -1210,15 +1455,17 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
 
 def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
     """Step lifecycle: 'Left the market' (`inactive`, gone for a day, F14), 'Back on the market'
-    (`reactivated`) and 'New portal' (`new_source`, a sibling listing appeared on another portal), one detector per kind
-    for both producers; the price kinds are step price (`match_changes_once`).
+    (`reactivated`, a collection's only: a watchdog tells a return as a New match) and 'New portal'
+    (`new_source`, a sibling listing appeared on another portal), one detector per kind for both
+    producers; the price kinds are step price (`match_changes_once`).
 
     The collection monitor tells each monitored property the ones its collection is set to,
     set-based (one INSERT per kind across ALL monitored collections), so a property in N monitored
-    collections fires up to N times: monitoring is per collection by design. A watchdog tells the ones it is set to, one INSERT per
-    kind over the properties its spec matches now. Each dispatch carries its source and a per-event
-    `event_ref`, so re-runs over an overlapping window are idempotent and a 2nd real change is its
-    own event.
+    collections fires up to N times: monitoring is per collection by design. A watchdog tells the
+    ones it is set to, one INSERT per kind over the properties its spec matches now (New portal over
+    its slice when it tells 'new', `_watchdog_statements`). Each dispatch carries its source and a
+    per-event `event_ref`, so re-runs over an overlapping window are idempotent and a 2nd real change
+    is its own event.
 
     There is no broker change: no property-level broker nor a broker-change timestamp keys a
     stable event (migration 656 dropped the never-emitted kind from the CHECK).
@@ -1235,7 +1482,7 @@ def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
     tally = _Tally(evaluated=len(subs))
     for sub_id, raw_spec, active_since, kinds in subs:
         _insert_per_watchdog(
-            conn, tally, sub_id, raw_spec, [sql for kind, sql in _WATCHDOG_LIFECYCLE if kind in kinds],
+            conn, tally, sub_id, raw_spec, _watchdog_statements(kinds, LIFECYCLE_KINDS),
             {**params, "active_since": active_since, "kinds": list(kinds)}, label="lifecycle matcher",
         )
     tally.inserted += collection_inserted

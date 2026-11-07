@@ -48,7 +48,7 @@ function subscriptions(): WatchdogSubscription[] {
       is_active: false,
       created_at: created,
       updated_at: created,
-      notify_kinds: ['inactive', 'reactivated', 'new_source'],
+      notify_kinds: ['inactive', 'new_source'],
       dispatch_count: 0,
     },
   ];
@@ -91,7 +91,7 @@ describe('<WatchdogManage> alerts', () => {
   it('says under each filter summary which events the watchdog notifies about, in the feed words', async () => {
     await renderPage();
     expect(within(rowOf('Praha 2+kk')).getByText('New match · Price drop')).toBeInTheDocument();
-    expect(within(rowOf('Brno 3+1')).getByText('Left the market · Back on the market · New portal')).toBeInTheDocument();
+    expect(within(rowOf('Brno 3+1')).getByText('Left the market · New portal')).toBeInTheDocument();
   });
 });
 

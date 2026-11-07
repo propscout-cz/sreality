@@ -40,6 +40,7 @@ const baseDispatch: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: null,
   prev_price_czk: null,
+  match_reason: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 8_900_000,
@@ -150,6 +151,24 @@ describe('<Notifications> row names', () => {
   });
 });
 
+describe('<Notifications> New match rows', () => {
+  it('name why the property entered the slice, a price cut with its two prices', () => {
+    const cut: WatchdogDispatch = {
+      ...baseDispatch,
+      id: 'cut',
+      match_reason: 'price',
+      trigger_price_czk: 8_400_000,
+      prev_price_czk: 9_000_000,
+    };
+    renderPage({ ...feed, data: [cut, { ...baseDispatch, id: 'old', display_label: 'Kolín' }], total: 2 });
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveTextContent('Watchdog · Praha 2+kk · Price cut');
+    expect(row).toHaveTextContent(/9\s000\s000.*→.*8\s400\s000/);
+    /* Told before reasons existed: newly listed, as every New match then was. */
+    expect(screen.getByRole('link', { name: /^New match Kolín/ })).toHaveTextContent('Newly listed');
+  });
+});
+
 describe('<Notifications> listing rows', () => {
   it('open the property page by property_id, whatever portal the ad is on', () => {
     renderPage();
@@ -208,9 +227,9 @@ describe('<Notifications> listing rows', () => {
 });
 
 describe('<Notifications> source filter', () => {
-  it('offers All, Monitoring, Watchdogs and Shared, and no System option', () => {
+  it('offers All, Collections, Watchdogs and Shared, and no System option', () => {
     renderPage();
-    for (const name of ['Monitoring', 'Watchdogs', 'Shared']) {
+    for (const name of ['Collections', 'Watchdogs', 'Shared']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
@@ -233,7 +252,7 @@ describe('<Notifications> filters are the one joined bar', () => {
   it('draws Source and Read state as joined tracks, the chosen segment filled copper', () => {
     renderPage();
     for (const [name, labels] of [
-      ['Source', ['All', 'Monitoring', 'Watchdogs', 'Shared']],
+      ['Source', ['All', 'Collections', 'Watchdogs', 'Shared']],
       ['Read state', ['All', 'Unread']],
     ] as const) {
       const bar = screen.getByRole('group', { name });

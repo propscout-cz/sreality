@@ -539,8 +539,10 @@ PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the two-model comparison samples only what Browse may serve"),
     ("api/notifications.py", "_build_match_clauses", 'published_property_predicate("l.property_id")'):
         ("property", "both watchdog producers over properties_public, published as browse_projection publishes"),
-    ("api/notifications.py", "_WATCHDOG_NEW_SQL", 'visible_since_sql("pp")'):
-        ("property", "the 'new' window: a watchdog tells what became visible after it started"),
+    ("api/notifications.py", "_SLICE_SEED_SQL", 'visible_since_sql("p")'):
+        ("property", "a start's slice tells only what became visible after the watchdog started"),
+    ("api/notifications.py", "_ENTRY_SIGNAL", 'visible_since_sql("p")'):
+        ("property", "an entry into a slice is 'newly listed' when it became visible since the last pass"),
     ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "CAP_SQL"):
         ("property", "the stamper reads only properties the cap has not yet published"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):

@@ -536,7 +536,7 @@ export interface Collection {
   updated_at: string;
   listing_count: number;
   /* Monitored collections raise change alerts on their member properties,
-   * of the kinds in `notify_kinds` (migration 720). `is_system` marks the
+   * of the kinds in `notify_kinds` (migration 735). `is_system` marks the
    * protected default "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
   is_system: boolean;
@@ -1073,7 +1073,7 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /* The property events this watchdog tells, once each in WATCHDOG_KINDS order (migration 720). */
+  /* The property events this watchdog tells, once each in KIND_ORDER (migration 735). */
   notify_kinds: WatchdogKind[];
   dispatch_count: number;
 }
@@ -1158,15 +1158,26 @@ export type DispatchChangeKind =
   | 'shared_dashboard'
   | 'shared_pipeline';
 
-/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
+/* The property events a watchdog can tell (api/notifications.WatchdogKind): a property back on the
+ * market re-enters its slice, so it is told as a New match, never as Back on the market. */
 export type WatchdogKind = Extract<
   DispatchChangeKind,
-  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'new_source'
 >;
 
 /* The ones a watched collection can tell: all but New match, as a property it holds is never new
  * to it (api/notifications.CollectionKind). */
-export type CollectionKind = Exclude<WatchdogKind, 'new'>;
+export type CollectionKind = Extract<
+  DispatchChangeKind,
+  'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* Any kind a watchdog or a collection can be set to tell. */
+export type NotifyKind = WatchdogKind | CollectionKind;
+
+/* Why a New match entered its watchdog's slice (api/notifications.MATCH_REASONS, migration 735);
+ * null on every other kind, and on a New match told before 735 (each newly listed). */
+export type MatchReason = 'listed' | 'back' | 'price' | 'portal' | 'changed' | 'other';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1203,6 +1214,8 @@ export interface WatchdogDispatch {
    * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
+  /* A New match's why (a price reason carries both prices above). */
+  match_reason: MatchReason | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */

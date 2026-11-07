@@ -115,11 +115,11 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              the next begins, which is when a raised pass's memory goes (E949).
 - notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
              notification producers of api/notifications (notifications push program
-             W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
-             once published: migrations 668/669), price (the canonical advert's price
+             W2a): watchdog_new (each property entering a watchdog's slice, once
+             published: migrations 668/669, 735), price (the canonical advert's price
              steps of the last 7 days) and lifecycle (a property gone for a day, back,
              or on a new portal), the last two for monitored collections and for the
-             watchdogs set to tell them (migration 720).
+             watchdogs set to tell them (migration 735).
              Each step its own connection and transaction; a failing step is its own
              `portal_errors` cell.
              The producers' one clock: the API runs none since W2b.

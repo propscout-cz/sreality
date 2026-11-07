@@ -259,7 +259,7 @@ def test_a_delegate_cannot_switch_on_the_owners_collection_monitoring(client, mo
                        headers=acting).status_code == 403
     assert client.patch("/collections/1", json={"monitoring_enabled": False},
                         headers=acting).status_code == 403
-    # The events a collection tells are monitoring too (migration 720): the owner's alone.
+    # The events a collection tells are monitoring too (migration 735): the owner's alone.
     assert client.patch("/collections/1", json={"notify_kinds": ["price_drop"]},
                         headers=acting).status_code == 403
     assert client.post("/collections", json={"name": "n", "notify_kinds": ["price_drop"]},

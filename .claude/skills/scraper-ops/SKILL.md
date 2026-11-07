@@ -379,9 +379,9 @@ Per-lane notes:
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
-  a live watchdog's published matches first seen in the last 24 h and visible since after its `active_since` (create, switch-on,
-  filter or kinds edit; rule 16); no cursor), `price` (`match_changes_once`: canonical-ad steps, 7 days) and `lifecycle`
-  (inactive after 24 h gone, reactivated, new_source); one detector per kind for both (`notify_kinds`: mig 720),
+  a watchdog telling New match diffs its slice (`watchdog_slice_members`), telling each entry's reason; a start
+  (create, switch-on, filter/kinds edit) takes it silently; rule 16), `price` (`match_changes_once`: canonical-ad steps, 7 days) and
+  `lifecycle` (inactive after 24 h gone, a collection's reactivated, new_source); one detector per kind (mig 735),
   each on its own connection, committing per statement (one watchdog's
   INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a

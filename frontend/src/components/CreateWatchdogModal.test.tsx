@@ -158,14 +158,14 @@ describe('<CreateWatchdogModal> notify me about', () => {
     expect(await lastSavedKinds()).toEqual(['new', 'price_drop']);
   });
 
-  it('saves the events picked, Back on the market bringing Left the market with it', async () => {
+  it('saves the events picked, and offers no Back on the market: a return is a New match', async () => {
     renderHost();
     open();
     fireEvent.click(kind('Price drop'));
-    fireEvent.click(kind('Back on the market'));
-    expect(kind('Left the market')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(kind('Left the market'));
+    expect(screen.queryByRole('button', { name: 'Back on the market' })).toBeNull();
     create();
-    expect(await lastSavedKinds()).toEqual(['new', 'inactive', 'reactivated']);
+    expect(await lastSavedKinds()).toEqual(['new', 'inactive']);
   });
 
   it('will not create a watchdog that notifies about nothing, and says why', () => {

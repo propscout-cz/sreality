@@ -327,7 +327,7 @@ class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
     description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool = False
-    # Left out = the column default, every event a collection can tell (migration 720).
+    # Left out = the column default, every event a collection can tell (migration 735).
     notify_kinds:       CollectionNotifyKinds | None = None
 
 

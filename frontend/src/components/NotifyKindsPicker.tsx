@@ -1,16 +1,17 @@
-/* "Notify me about": the property events a watchdog or a watched collection tells (migration 720). A
+/* "Notify me about": the property events a watchdog or a watched collection tells (migration 735). A
  * pick-several, so chips (system.md § Option groups), drawn as MultiselectChips draws them, with the
- * one click rule of lib/notifyKinds (`toggleNotifyKind`: Back on the market comes with Left the market).
+ * one click rule of lib/notifyKinds (`toggleNotifyKind`: a collection's Back on the market comes with
+ * its Left the market).
  * The words are the feed's own labels, so the chip a user turned on reads like the alerts it sends.
  * An empty set tells nothing: the hosting form refuses to save it, and this says why. */
 import { PickButton } from '@/components/controls';
 import { CHANGE_META } from '@/lib/changeKinds';
 import { WATCHDOG_KINDS, toggleNotifyKind } from '@/lib/notifyKinds';
-import type { WatchdogKind } from '@/lib/types';
+import type { NotifyKind, WatchdogKind } from '@/lib/types';
 
 export const NOTIFY_KINDS_EMPTY = 'Choose at least one event to be notified about.';
 
-export default function NotifyKindsPicker<K extends WatchdogKind = WatchdogKind>({
+export default function NotifyKindsPicker<K extends NotifyKind = WatchdogKind>({
   value,
   onChange,
   labelledBy,
@@ -21,7 +22,7 @@ export default function NotifyKindsPicker<K extends WatchdogKind = WatchdogKind>
   value: ReadonlyArray<K>;
   onChange: (next: K[]) => void;
   labelledBy: string;
-  /* The kinds this source can tell, in stored order: a watchdog's six by default. */
+  /* The kinds this source can tell, in stored order: a watchdog's five by default. */
   kinds?: ReadonlyArray<{ kind: K; hint: string }>;
   /* Whose properties the events are about, the helper line's first sentence. */
   about?: string;
@@ -48,7 +49,11 @@ export default function NotifyKindsPicker<K extends WatchdogKind = WatchdogKind>
         className={`mt-1.5 text-[0.75rem] ${value.length ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-brick)]'}`}
         role={value.length ? undefined : 'alert'}
       >
-        {value.length ? `${about} Back on the market comes with Left the market.` : NOTIFY_KINDS_EMPTY}
+        {value.length
+          ? kinds.some((k) => k.kind === 'reactivated')
+            ? `${about} Back on the market comes with Left the market.`
+            : about
+          : NOTIFY_KINDS_EMPTY}
       </p>
     </div>
   );

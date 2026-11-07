@@ -2802,8 +2802,8 @@ renumber.** Navigate by area:
     the publishing health check counts a held property in its expected `unpublished` stage, judged
     at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
     push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
-    retracted: a 'new' is retracted when the property it now names was first seen more than
-    `NEW_WINDOW` (24 h) before the alert was told — a merge re-points alerts to the survivor, the
+    retracted: a 'new' told as newly listed (`match_reason` 'listed', or NULL before migration 735) is retracted
+    when the property it now names was first seen more than `NEW_WINDOW` (24 h) before the alert was told — a merge re-points alerts to the survivor, the
     oldest property, so a cap-fired 'new' for a duplicate leaves the feed, the badge and push once the
     engine merges it; a tap on a push already sent reads `REACHABLE_SQL` and still lands on the
     survivor. Residue: a survivor first seen 6–24 h before the alert keeps it; a split leaves alerts
@@ -2835,7 +2835,7 @@ renumber.** Navigate by area:
     `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (`api/notifications.py`) =
     `(account_id, source_kind, subscription_id, collection_id, change_kind, property_id, event_ref,
     actor_account_id)`, NULLS NOT DISTINCT, partial on `duplicate_of IS NULL` — a watchdog's `new`
-    once ever per property, a price step **once per snapshot** (`event_ref`), so a property that keeps
+    once per entry into its slice (the entry's epoch), a price step **once per snapshot** (`event_ref`), so a property that keeps
     dropping fires once per real cut — and so does the collection-monitor producer. Every producer
     INSERT and the share grant end in `ON CONFLICT (<EVENT_IDENTITY>) WHERE duplicate_of IS NULL DO
     NOTHING` (`ON_EVENT_CONFLICT`, a test pins all of them and the index to one tuple); the pre-W3
@@ -2849,22 +2849,31 @@ renumber.** Navigate by area:
     deleted the API's `matcher_loop`, its lease, interval readers and daily gates (migration 656 dropped
     the lease table and the six settings rows), and the jobs check reads a registered lane missing from the
     heartbeat as an older process beating beside a new one, a deploy overlap (Watch, then Problem; a
-    lone worker on old code runs the old check too, so Railway's per-service commit status is its signal). **The cursor is gone:** a watchdog's `new` is ONE INSERT
-    over published properties first seen in the last 24 h and visible since after its `active_since` (stamped by a trigger on
-    create, on every switch-on and on every filter or kinds edit: an edited watchdog is a new start; keyed on visibility, the publication
-    rule above, so a property first seen up to 6 h before a watchdog starts and published after it is still told), so a
-    late-matching property under a day old still fires and a resumed watchdog never floods. **A watchdog tells only the
-    kinds it is set to** (`notification_subscriptions.notify_kinds`, migration 720: any of the six property events, default
-    `new` + `price_drop`, Back on the market only beside Left the market because it answers that dispatch); a step reads
-    only the watchdogs telling one of its kinds. A watched collection chooses likewise (`collections.notify_kinds`, any
-    of the five but `new`, default all five; a kinds edit while watching restamps `monitoring_enabled_at`, its start), and
+    lone worker on old code runs the old check too, so Railway's per-service commit status is its signal). **A watchdog's
+    `new` is an entry into its slice** (migration 735, grill rulings 2026-11-03; GLOSSARY.md: Watchdog, New match): each
+    watchdog telling `new` keeps its slice, the published properties on the market its spec matches, as
+    `watchdog_slice_members`, and each pass diffs it (`_slice_pass`, one transaction per watchdog holding its
+    `watchdog_slices` row FOR UPDATE SKIP LOCKED, so a deploy overlap never tells one entry twice). An entry is told with
+    its `match_reason` (listed, back, price, portal, changed, other: what changed about the property since the last pass,
+    `properties.back_on_market_at` stamped by a trigger on every return), except a return within 24 h of leaving (a blink
+    re-enters silently, keeping its first entry), a member's merge survivor, and an entry nothing about the property
+    explains while the spec uses a filter on our own data (city index or population, proximity, the rent map:
+    `_always_told`) and no Velocity filter. A start (`active_since`, stamped by a trigger on create, on every switch-on and
+    on every filter or kinds edit: an edited watchdog is a new start) takes the slice afresh, silently, telling only what
+    was first seen inside 24 h and published after it, so a resumed watchdog never floods. **A watchdog tells only the
+    kinds it is set to** (`notification_subscriptions.notify_kinds`: any of five property events, default `new` +
+    `price_drop`; a return is a New match, so no `reactivated`); a step reads only the watchdogs telling one of its kinds,
+    and one telling `new` tells `price_drop`/`price_rise` and `new_source` only for a slice member, of a change after it
+    entered (`_WATCHDOG_SLICE`): one change, one notification. A watched collection chooses likewise (`collections.notify_kinds`, any
+    of the five but `new`, default all five, Back on the market only beside the Left the market it answers; a kinds edit
+    while watching restamps `monitoring_enabled_at`, its start), and
     every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
     (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
     events off the market (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
     that brought a new portal) and the source says who is told, a collection by joining its members (from
     `monitor_since`), a watchdog by joining its spec to each event directly (from `active_since`; behind a CTE of
     matching properties the planner scanned a broad watchdog's cohort once per step). `inactive` waits out 24 h gone (a
-    portal blink sends neither Delisted nor Relisted). Every row writes `event_ref` (the discriminator within
+    portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
     inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
     `actor_account_id`; each producer's `event_ref` is what migration 652 backfilled from the old key
@@ -2943,7 +2952,7 @@ renumber.** Navigate by area:
     the collection monitor (its lifecycle kinds in `match_lifecycle_once`, its price half in `match_changes_once`,
     both on the lane's 300 s clock over a 7-day window, the same detectors a watchdog set to those kinds runs) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
-    collection, of the kinds that collection keeps (`notify_kinds`, migration 720) — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
+    collection, of the kinds that collection keeps (`notify_kinds`, migration 735) — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
     `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),

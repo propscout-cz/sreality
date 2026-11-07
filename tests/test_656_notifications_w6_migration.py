@@ -161,8 +161,8 @@ def test_no_guard_reads_a_dropped_object_outside_its_own_existence_if() -> None:
     x)` fails to parse (42P01 / 42703) once x is gone, and the lock-timeout retry, which re-runs the file after its
     transaction committed, would die as a non-lock error. Every statement that names a dropped object sits in the
     BODY of an outer IF whose condition only asks whether that object exists (the inner statement is prepared only
-    when reached). CI's migrations job also re-runs the file over the replayed schema ("Migration 656 re-runs
-    clean")."""
+    when reached). CI's migrations job also re-runs the file straight after it applied (the replay loop's 656
+    re-run)."""
     blocks = _do_blocks(SQL)
     assert set(blocks) == {"pre", "system", "post"}
     reads = 0
@@ -179,13 +179,18 @@ def test_no_guard_reads_a_dropped_object_outside_its_own_existence_if() -> None:
     assert "and column_name = 'sreality_id') then if exists" in CODE
 
 
-def test_ci_re_runs_the_file_after_the_replay() -> None:
+def test_ci_re_runs_the_file_straight_after_it_applied() -> None:
+    """Inside the replay loop, before any later migration (whose additions its $post$ would refuse: 735's column on
+    notification_dispatches) and so before every live test."""
     workflow = (MIGRATIONS.parent / ".github" / "workflows" / "migrations.yml").read_text(encoding="utf-8")
     replay = workflow.index("name: Apply migrations in numeric order")
-    rerun = workflow.index("name: Migration 656 re-runs clean after it applied")
+    loop_end = workflow.index("          done", replay)
     first_live = workflow.index("name: PREPARE every SQL statement against the replayed schema")
-    assert replay < rerun < first_live
-    assert "run: psql -v ON_ERROR_STOP=1 -q -f migrations/656_notifications_w6_prune.sql" in workflow[rerun:first_live]
+    assert replay < loop_end < first_live
+    body = " ".join(workflow[replay:loop_end].split())
+    assert ('psql -v ON_ERROR_STOP=1 -q -f "$f" # Migration 656' in body
+            and 'if [[ "$(basename "$f")" == 656_* ]]; then echo ">>> re-running $f (the lock-timeout retry contract)" '
+                'psql -v ON_ERROR_STOP=1 -q -f "$f" fi' in body)
 
 
 def test_the_tenant_readers_indexes_stay() -> None:
