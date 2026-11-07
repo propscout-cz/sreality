@@ -202,11 +202,11 @@ class Claimed:
 
 def _claimed(row: tuple[Any, ...]) -> Claimed:
     (delivery_id, device_id, attempts, dispatch_id, account_id, change_kind, seen, visible, stale, ttl_left,
-     device_ended, endpoint, p256dh, auth, origin, trigger, prev, reason, label, category, subtype, disposition,
-     unit) = row
+     device_ended, endpoint, p256dh, auth, origin, trigger, prev, reason, label, category, subtype,
+     disposition, unit) = row
     text = {"change_kind": change_kind, "trigger_price_czk": trigger, "prev_price_czk": prev,
-            "match_reason": reason, "display_label": label, "category_main": category, "subtype": subtype, "disposition": disposition,
-            "price_unit": unit}
+            "match_reason": reason, "display_label": label, "category_main": category, "subtype": subtype,
+            "disposition": disposition, "price_unit": unit}
     return Claimed(delivery_id, device_id, attempts, dispatch_id, account_id, bool(seen), bool(visible),
                    bool(stale), int(ttl_left or 0), bool(device_ended), endpoint, p256dh, auth, origin, text)
 

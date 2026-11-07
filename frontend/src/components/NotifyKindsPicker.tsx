@@ -28,6 +28,10 @@ export default function NotifyKindsPicker<K extends NotifyKind = WatchdogKind>({
   about?: string;
   disabled?: boolean;
 }) {
+  /* A collection's Back on the market comes with its Left the market (toggleNotifyKind). */
+  const helper = kinds.some((k) => k.kind === 'reactivated')
+    ? `${about} Back on the market comes with Left the market.`
+    : about;
   return (
     <div>
       <div role="group" aria-labelledby={labelledBy} className="flex flex-wrap gap-1">
@@ -49,11 +53,7 @@ export default function NotifyKindsPicker<K extends NotifyKind = WatchdogKind>({
         className={`mt-1.5 text-[0.75rem] ${value.length ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-brick)]'}`}
         role={value.length ? undefined : 'alert'}
       >
-        {value.length
-          ? kinds.some((k) => k.kind === 'reactivated')
-            ? `${about} Back on the market comes with Left the market.`
-            : about
-          : NOTIFY_KINDS_EMPTY}
+        {value.length ? helper : NOTIFY_KINDS_EMPTY}
       </p>
     </div>
   );

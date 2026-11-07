@@ -798,11 +798,12 @@ def test_a_start_takes_the_slice_and_tells_only_what_was_published_after_it() ->
     assert subs_sql == ("SELECT id, filter_spec, active_since, notify_kinds FROM notification_subscriptions "
                         "WHERE is_active = true AND retired_at IS NULL AND notify_kinds && %s::text[]")
     assert subs_params == (["new"],), "only the watchdogs that tell 'new'"
-    at = statements.index(nf._SLICE_CLAIM_SQL)
-    assert statements[at - 2:at] == ["SET LOCAL statement_timeout = '120s'", NOTIFICATION_EVENTS_SHARED_LOCK_SQL]
-    assert statements[at + 1:at + 3] == [nf._SLICE_LOCK_SQL, nf._SLICE_RESTART_SQL]
+    at = statements.index(nf._SLICE_ENSURE_SQL)
+    assert statements[at - 1] == "SET LOCAL statement_timeout = '120s'"
+    # The events lock, SHARED, just before the one statement that writes alerts: a merge waits one statement.
+    assert statements[at + 1:at + 4] == [nf._SLICE_LOCK_SQL, nf._SLICE_RESTART_SQL, NOTIFICATION_EVENTS_SHARED_LOCK_SQL]
     [(sql, params)] = _slice_statements(conn)
-    assert statements[at + 3] == sql and sql.startswith(" ".join(nf._SLICE_SEED_SQL.split())[:40])
+    assert statements[at + 4] == sql and sql.startswith(" ".join(nf._SLICE_SEED_SQL.split())[:40])
     assert "FROM properties_public l WHERE l.is_active AND " in sql
     assert "WHERE p.first_seen_at > now() - %(new_window)s::interval " in sql
     assert f"AND {visible_since_sql('p')} > %(active_since)s::timestamptz " in sql
@@ -826,9 +827,10 @@ def test_a_start_takes_the_slice_and_tells_only_what_was_published_after_it() ->
 
 def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None:
     """A pass after the start keeps the members and diffs them in ONE statement: a leaver is stamped, one
-    gone past SLICE_BLINK forgotten, an entrant upserted (back within the blink: its first entry kept), and
-    an entry is told unless it blinked, is a member's merge survivor, or nothing about it changed since the
-    last pass (less SLICE_SETTLE) while its spec reads our own data (`_always_told`)."""
+    gone past SLICE_BLINK forgotten, an entrant upserted as entering now (so nothing that changed while a
+    blinking property was out is told later), and an entry is told unless it blinked, is a member's merge
+    survivor or split off a member, or nothing about it changed since the last pass (less SLICE_SETTLE)
+    while its spec reads our own data (`_always_told`)."""
     from api import notifications as nf
 
     sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
@@ -853,7 +855,9 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
         "DELETE FROM watchdog_slice_members w WHERE w.subscription_id = %(subscription_id)s::uuid "
         "AND w.left_at <= now() - %(blink)s::interval",
         "coalesce(w.left_at > now() - %(blink)s::interval, false) AS blinked",
-        "CASE WHEN e.blinked THEN e.was_entered_at ELSE now() END",
+        "SELECT %(subscription_id)s, e.property_id, now() FROM entering e",
+        "JOIN property_merge_events pe ON pe.listing_ref_id = c.id AND pe.undone_at > now() - %(blink)s::interval "
+        "JOIN members w ON w.property_id = pe.survivor_property_id",
         "DO UPDATE SET entered_at = excluded.entered_at, left_at = NULL",
         "WHERE NOT e.blinked AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
         "WHERE x.merged_into = e.property_id",
@@ -867,6 +871,7 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     order = [signal.index(f"THEN '{reason}'") for reason in nf.MATCH_REASONS[:-1]]
     assert order == sorted(order)
     assert "p.back_on_market_at > %(since)s::timestamptz THEN 'back'" in signal
+    assert "WHEN p.first_seen_at > now() - %(new_window)s::interval OR " in signal, "new, whatever let it in late"
     assert "x.merged_at > %(since)s::timestamptz" in signal and "ll.resolved_at > %(since)s::timestamptz" in signal
 
 
@@ -1645,15 +1650,22 @@ def test_both_watchdog_producers_tell_only_a_published_property() -> None:
 def test_the_retraction_arm_hides_a_new_its_property_now_predates() -> None:
     """Ruling 5: a 'new' told as newly listed (or written before migration 735, when every one was)
     is hidden exactly when the property it now names was first seen more than NEW_WINDOW before the
-    alert was told; a New match for any other reason names an older property by design — derived,
-    no placeholder (every statement embedding VISIBLE keeps its own parameters)."""
+    alert was told; a New match for any other reason names an older property by design. And a 'new'
+    its watchdog already told, unretracted, about the same property inside NEW_WINDOW: merge twins
+    (the executed cases: tests/test_735_watchdog_notify_kinds_live.py). Derived, no placeholder
+    (every statement embedding VISIBLE keeps its own parameters)."""
     from api.notifications import NEW_WINDOW, RETRACTED_SQL, VISIBLE_SQL
 
     assert NEW_WINDOW == "24 hours"
+    stale = ("(coalesce({a}.match_reason, 'listed') = 'listed' AND EXISTS (SELECT 1 FROM properties rp "
+             "WHERE rp.id = {a}.property_id AND rp.first_seen_at <= {a}.dispatched_at - interval '24 hours'))")
     assert RETRACTED_SQL == (
-        "(d.change_kind = 'new' AND coalesce(d.match_reason, 'listed') = 'listed'"
-        " AND EXISTS (SELECT 1 FROM properties rp WHERE rp.id = d.property_id"
-        " AND rp.first_seen_at <= d.dispatched_at - interval '24 hours'))")
+        f"(d.change_kind = 'new' AND ({stale.format(a='d')}"
+        " OR EXISTS (SELECT 1 FROM notification_dispatches tw WHERE tw.account_id = d.account_id"
+        " AND tw.subscription_id = d.subscription_id AND tw.collection_id IS NULL"
+        " AND tw.change_kind = 'new' AND tw.property_id = d.property_id AND tw.duplicate_of IS NULL"
+        " AND tw.dispatched_at < d.dispatched_at AND tw.dispatched_at > d.dispatched_at - interval '24 hours'"
+        f" AND NOT {stale.format(a='tw')})))")
     assert "%" not in VISIBLE_SQL
 
 

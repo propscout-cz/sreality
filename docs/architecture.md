@@ -2803,7 +2803,9 @@ renumber.** Navigate by area:
     at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
     push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
     retracted: a 'new' told as newly listed (`match_reason` 'listed', or NULL before migration 735) is retracted
-    when the property it now names was first seen more than `NEW_WINDOW` (24 h) before the alert was told — a merge re-points alerts to the survivor, the
+    when the property it now names was first seen more than `NEW_WINDOW` (24 h) before the alert was told, and a
+    'new' its watchdog already told about the same property inside `NEW_WINDOW` (twins a merge joined: each entry
+    has its own `event_ref`, so the carrier marks none) — a merge re-points alerts to the survivor, the
     oldest property, so a cap-fired 'new' for a duplicate leaves the feed, the badge and push once the
     engine merges it; a tap on a push already sent reads `REACHABLE_SQL` and still lands on the
     survivor. Residue: a survivor first seen 6–24 h before the alert keeps it; a split leaves alerts
@@ -2845,7 +2847,8 @@ renumber.** Navigate by area:
     `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
     `match_lifecycle_once` (`lifecycle`) every 300 s, each step in its own transaction; a
     failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
-    every statement commits on its own, so no INSERT's locks outlive it). It is their ONE clock: W2b
+    every statement commits on its own, a watchdog's slice pass with the one statement that writes its alerts, so
+    no INSERT's locks outlive it). It is their ONE clock: W2b
     deleted the API's `matcher_loop`, its lease, interval readers and daily gates (migration 656 dropped
     the lease table and the six settings rows), and the jobs check reads a registered lane missing from the
     heartbeat as an older process beating beside a new one, a deploy overlap (Watch, then Problem; a
@@ -2856,7 +2859,8 @@ renumber.** Navigate by area:
     `watchdog_slices` row FOR UPDATE SKIP LOCKED, so a deploy overlap never tells one entry twice). An entry is told with
     its `match_reason` (listed, back, price, portal, changed, other: what changed about the property since the last pass,
     `properties.back_on_market_at` stamped by a trigger on every return), except a return within 24 h of leaving (a blink
-    re-enters silently, keeping its first entry), a member's merge survivor, and an entry nothing about the property
+    re-enters silently, and nothing that changed while it was out is told), a member's merge survivor, a property an ad
+    was detached to from a member within the day (a split or an engine undo), and an entry nothing about the property
     explains while the spec uses a filter on our own data (city index or population, proximity, the rent map:
     `_always_told`) and no Velocity filter. A start (`active_since`, stamped by a trigger on create, on every switch-on and
     on every filter or kinds edit: an edited watchdog is a new start) takes the slice afresh, silently, telling only what

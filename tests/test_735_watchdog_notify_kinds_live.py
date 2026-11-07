@@ -272,6 +272,110 @@ def test_a_merge_survivor_of_a_member_takes_its_place_silently(cur: Any) -> None
     assert _new_matches(cur, sid, retired, survivor) == []
 
 
+def test_a_price_bouncing_across_the_cap_inside_the_day_sends_nothing(cur: Any) -> None:
+    """Out on a rise, back on a cut, inside SLICE_BLINK: no New match, and neither step is told afterwards."""
+    from api import notifications as nf
+
+    sid = _watchdog(cur, _account(cur), ["new", "price_drop", "price_rise"],
+                    '{"category_type": "prodej", "max_price_czk": 5000000}')
+    pid, lid = _old(cur, 4_900_000)
+    nf.match_once(cur.connection)
+    cur.execute("UPDATE watchdog_slice_members SET entered_at = now() - interval '2 days' "
+                "WHERE subscription_id = %s AND property_id = %s", (sid, pid))
+    _snapshot(cur, lid, 4_900_000, hours_ago=30)
+    for price, hours_ago in ((5_200_000, 0.8), (4_900_000, 0.5)):
+        _snapshot(cur, lid, price, hours_ago=hours_ago)
+        cur.execute("UPDATE listings SET price_czk = %s WHERE id = %s", (price, lid))
+        _recompute(cur, pid)
+        _later_pass(cur, sid)
+        nf.match_once(cur.connection)
+        nf.match_changes_once(cur.connection)
+    assert _members(cur, sid, pid) == {pid: True}
+    assert _told(cur, pid) == [], "a blink sends nothing"
+
+
+def test_a_property_split_off_a_member_enters_silently(cur: Any) -> None:
+    """A detach (an operator split, an engine undo) closes the ad's ledger row: the slice already showed the ad."""
+    from api import notifications as nf
+
+    sid = _watchdog(cur, _account(cur), None)
+    parent, lid = _old(cur)
+    long_ago = datetime.now(timezone.utc) - timedelta(days=20)
+    moved = _advert(cur, parent, source="sreality", first_seen_at=long_ago)
+    cur.execute("INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, "
+                "  uncertainty_radius_m, country_status, resolver_version, claim_set_hash, registry_version, "
+                "  resolved_at) "
+                "VALUES (%s, ST_SetSRID(ST_MakePoint(14.42, 50.08), 4326), 'exact', 'building', 5, 'cz', 'test', "
+                "  '\\x00'::bytea, 'test', %s)", (moved, long_ago))
+    _recompute(cur, parent)
+    nf.match_once(cur.connection)
+
+    split = _property(cur)
+    cur.execute("UPDATE listings SET property_id = %s WHERE id = %s", (split, moved))
+    cur.execute("INSERT INTO property_merge_events (merge_group_id, survivor_property_id, retired_property_id, "
+                "  listing_ref_id, prev_property_id, reason, source, undone_at, undone_by) "
+                "VALUES (gen_random_uuid(), %s, %s, %s, %s, 'split_new', 'operator', now(), 'test')",
+                (parent, split, moved, split))
+    _recompute(cur, parent)
+    _recompute(cur, split)
+    cur.execute("UPDATE properties SET settled_at = %s WHERE id = %s", (long_ago, split))
+    _later_pass(cur, sid)
+    nf.match_once(cur.connection)
+    assert _members(cur, sid, parent, split) == {parent: True, split: True}
+    assert _new_matches(cur, sid, parent, split) == []
+
+
+def test_a_property_first_seen_within_the_day_enters_as_newly_listed_whatever_let_it_in(cur: Any,
+                                                                                         monkeypatch: Any) -> None:
+    """Published hours ago but let in only now (its place or a proximity filled in late): still newly listed, so a
+    watchdog on our own data tells it too."""
+    from api import notifications as nf
+
+    sid = _watchdog(cur, _account(cur), None)
+    monkeypatch.setattr(nf, "_always_told", lambda spec: False)
+    pid = _property(cur)
+    lid = _advert(cur, pid, source="bezrealitky", first_seen_at=datetime.now(timezone.utc) - timedelta(hours=8))
+    _recompute(cur, pid)
+    cur.execute("UPDATE properties SET settled_at = now() - interval '7 hours' WHERE id = %s", (pid,))
+    nf.match_once(cur.connection)
+    _later_pass(cur, sid)
+    _served(cur, pid, lid, datetime.now(timezone.utc) - timedelta(hours=7))
+    nf.match_once(cur.connection)
+    assert _new_matches(cur, sid, pid) == [(pid, "listed", 5_000_000, None)]
+
+
+def test_two_new_matches_of_one_property_inside_the_day_are_merge_twins_and_the_later_is_withdrawn(cur: Any) -> None:
+    """Each entry carries its own event_ref, so a merge marks no twin; VISIBLE withdraws the later one, unless the
+    earlier is itself withdrawn (newly listed about a property first seen long before)."""
+    from api import notifications as nf
+
+    sid = _watchdog(cur, _account(cur), None)
+    pid, lid = _old(cur)
+    recent, old = _property(cur), _old(cur)[0]
+    cur.execute("UPDATE properties SET first_seen_at = now() - interval '3 hours' WHERE id = %s", (recent,))
+
+    def told(prop: int, hours_ago: float, reason: str) -> None:
+        cur.execute("INSERT INTO notification_dispatches (subscription_id, source_kind, property_id, listing_id, "
+                    "  change_kind, event_ref, match_reason, dispatched_at) "
+                    "VALUES (%s, 'watchdog', %s, %s, 'new', %s, %s, now() - make_interval(secs => %s))",
+                    (sid, prop, lid, str(hours_ago), reason, hours_ago * 3600))
+
+    def visible(prop: int) -> list[str]:
+        cur.execute(f"SELECT d.event_ref FROM notification_dispatches d WHERE d.property_id = %s AND {nf.VISIBLE_SQL} "
+                    "ORDER BY d.dispatched_at", (prop,))
+        return [row[0] for row in cur.fetchall()]
+
+    told(recent, 2, "listed")
+    told(recent, 1, "listed")
+    assert visible(recent) == ["2"], "the twin told an hour later is withdrawn"
+    told(old, 2, "listed")  # first seen 20 days before it: withdrawn itself (ruling 5)
+    told(old, 1, "price")
+    assert visible(old) == ["1"], "a withdrawn earlier one withdraws nothing"
+    told(pid, 30, "price")
+    told(pid, 1, "back")
+    assert visible(pid) == ["30", "1"], "a day apart: two entries"
+
+
 def test_a_watchdog_set_to_left_the_market_is_told_it_and_a_default_one_not(cur: Any) -> None:
     from api import notifications as nf
 
