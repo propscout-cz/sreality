@@ -9,7 +9,7 @@ import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/s
 import { MF_YIELD_LABEL, MF_YIELD_TITLE, mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
 import { h } from './dom';
 import { lineIcon, moveBadge } from './glyphs';
-import { factChips } from './panel_logic';
+import { factChips, type PropertyLink } from './panel_logic';
 import type { PortalListing } from './types';
 
 function mfTitle(l: PortalListing): string {
@@ -24,7 +24,26 @@ export function titleText(l: PortalListing): string {
   return l.area_m2 == null ? kind : `${kind}, ${fmtArea(l.area_m2, areaKindOf(l.category_main))}`;
 }
 
-export function header(l: PortalListing, move: number | null): HTMLElement {
+/* A quiet row under the price. Held open while the links load, so the cards don't jump. */
+function linkRow(links: readonly PropertyLink[] | null): HTMLElement | null {
+  if (links?.length === 0) return null;
+  const row = h('nav', 'links');
+  row.setAttribute('aria-label', 'Odkazy');
+  row.appendChild(h('span', 'meta', 'Odkazy'));
+  for (const link of links ?? []) {
+    const a = h('a', 'link-out', link.label);
+    a.dataset.key = `link-${link.key}`;
+    a.href = link.href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.title = link.title;
+    a.insertAdjacentHTML('beforeend', lineIcon('out'));
+    row.appendChild(a);
+  }
+  return row;
+}
+
+export function header(l: PortalListing, move: number | null, links: readonly PropertyLink[] | null): HTMLElement {
   const head = h('header', 'head');
   const ident = h('div', 'ident');
 
@@ -92,5 +111,7 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
     pricing.appendChild(box);
   }
   head.appendChild(pricing);
+  const row = linkRow(links);
+  if (row != null) head.appendChild(row);
   return head;
 }

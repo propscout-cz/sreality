@@ -17,6 +17,7 @@ import type {
   PortalListing,
   PortalLookupItem,
   PriceHistory,
+  PropertyLocation,
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
@@ -211,6 +212,11 @@ export async function getEstimation(
  * snapshots, for the panel's "Vývoj ceny" chart. */
 export function getPriceHistory(property_id: number): Promise<ApiResult<PriceHistory>> {
   return requestData(`/properties/${property_id}/price-history`);
+}
+
+/* GET /properties/:id/location — where the property stands, for the header's links. */
+export function getPropertyLocation(property_id: number): Promise<ApiResult<PropertyLocation>> {
+  return request<PropertyLocation>(`/properties/${property_id}/location`);
 }
 
 /* POST /dismissals / DELETE /dismissals/:property_id — hide the property from

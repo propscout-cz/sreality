@@ -16,6 +16,7 @@ import {
   getBillingMe,
   getEstimation,
   getPriceHistory,
+  getPropertyLocation,
   ingestListing,
   ingestState,
   listCollections,
@@ -94,6 +95,8 @@ async function handleMessage(
       return getEstimation(message.run_id);
     case 'get_price_history':
       return getPriceHistory(message.property_id);
+    case 'get_property_location':
+      return getPropertyLocation(message.property_id);
     case 'add_pipeline_card':
       return addPipelineCard(message.property_id);
     case 'remove_pipeline_card':

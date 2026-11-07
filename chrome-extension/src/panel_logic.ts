@@ -5,7 +5,7 @@
  * panel_logic.test.ts runs it under node; formatters are handed in. */
 
 import type { PriceSeries } from '../../frontend/src/lib/priceHistory';
-import type { PanelSubject, PortalListing } from './types';
+import type { PanelSubject, PortalListing, PropertyLocation } from './types';
 
 /* A pipeline of at most this many open stages draws them as a step bar. */
 export const STEP_BAR_MAX = 4;
@@ -114,6 +114,33 @@ export function fmtDate(at: string | number | null | undefined): string {
  * this ad's price DROP (a rise is no news on a tab), MF. */
 export function tabMarkList<N>(stage: N | null, move: number | null, mf: N | null, drop: (pct: number) => N): N[] {
   return [stage, move != null && move < 0 ? drop(move) : null, mf].filter((n): n is N => n != null);
+}
+
+export interface PropertyLink {
+  key: string;
+  label: string;
+  title: string;
+  href: string;
+}
+
+/* The header's links out, in the order shown; a new one is one more entry here. Valuo's map
+ * takes `#zoom/lat/lon` and covers Czechia only. */
+export function propertyLinks(at: PropertyLocation): PropertyLink[] {
+  if (at.country_status === 'foreign') return [];
+  return [{
+    key: 'valuo',
+    label: 'Valuo',
+    title: 'Otevřít tuto lokalitu na mapě Valuo',
+    href: `https://app.valuo.cz/mapa#${at.zoom}/${at.lat.toFixed(5)}/${at.lon.toFixed(5)}`,
+  }];
+}
+
+/* The edge tab stays this clear of the window's ends. */
+const TAB_END_GAP = 8;
+
+/* Where the edge tab can sit in this window: a window too short for it keeps its top in reach. */
+export function clampTabTop(top: number, tabHeight: number, windowHeight: number): number {
+  return Math.max(TAB_END_GAP, Math.min(top, windowHeight - tabHeight - TAB_END_GAP));
 }
 
 export function cutChips<T>(items: readonly T[], max = CHIPS_MAX): { shown: T[]; more: number } {

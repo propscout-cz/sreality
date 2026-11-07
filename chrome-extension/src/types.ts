@@ -193,6 +193,15 @@ export interface PriceHistory {
   snapshots: ListingSnapshotPublic[];
 }
 
+/* GET /properties/{id}/location, the fields the panel reads: the property's point (its
+ * location ad's) and the zoom its precision earns (api/property_location.PRECISIONS). */
+export interface PropertyLocation {
+  lat: number;
+  lon: number;
+  zoom: number;
+  country_status: 'cz' | 'foreign' | 'disputed' | 'undetermined';
+}
+
 export interface PortalLookupItem {
   source: string;
   source_id: string;
@@ -233,6 +242,7 @@ export type ApiMessage =
     }
   | { type: 'get_estimation'; run_id: number }
   | { type: 'get_price_history'; property_id: number }
+  | { type: 'get_property_location'; property_id: number }
   | { type: 'add_pipeline_card'; property_id: number }
   | { type: 'remove_pipeline_card'; property_id: number }
   | { type: 'move_pipeline_card'; property_id: number; stage_id: number }
