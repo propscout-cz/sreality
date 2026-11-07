@@ -9,6 +9,8 @@ import {
 import { COPY_WORDS, copyText, type CopyWords } from '@/lib/clipboard';
 import { portalBadge } from '@/lib/portals';
 import type { PropertySource } from '@/lib/types';
+import type { VCardContact } from '@/lib/vcard';
+import SaveContactButton from './SaveContactButton';
 
 /* An ad as the card names it: its portal, and the number it prints for callers. */
 export type CardAd = Pick<PropertySource, 'id' | 'source' | 'source_url' | 'ad_reference'>;
@@ -19,15 +21,20 @@ export type CardAd = Pick<PropertySource, 'id' | 'source' | 'source_url' | 'ad_r
    shells, so the same broker reads identically everywhere. Typed on BrokerContactFields,
    not BrokerPublic: the masked pair is all the card consumes. The property page's rows
    always carry the values; /brokers/:id sends has_* in their place to a non-admin. An ad
-   that prints no number reads "<portál> —": no other number is ever put in its place. */
+   that prints no number reads "<portál> —": no other number is ever put in its place.
+   `saveAs` (lib/brokerContact) adds "uložit kontakt" to the card's head: the same .vcf the
+   phone page's contact strip saves. */
 export default function BrokerContactCard({
   broker,
   ads = [],
   bare = false,
+  saveAs,
   className,
 }: {
   broker: BrokerContactFields;
   ads?: ReadonlyArray<CardAd>;
+  /* The broker as a contact; null or absent when there is nothing to save (a masked contact). */
+  saveAs?: VCardContact | null;
   /* Inside a section card: no frame of its own (no box in a box, system.md § Section cards). */
   bare?: boolean;
   className?: string;
@@ -43,9 +50,19 @@ export default function BrokerContactCard({
         .filter(Boolean)
         .join(' ')}
     >
-      <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-3)]">
-        Kontakt pro oslovení
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-3)]">
+          Kontakt pro oslovení
+        </p>
+        {saveAs && (
+          <SaveContactButton
+            contact={saveAs}
+            className="shrink-0 py-1.5 md:py-0 text-[0.6rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
+          >
+            uložit kontakt
+          </SaveContactButton>
+        )}
+      </div>
       <div className="mt-2 space-y-1.5">
         <ContactRow
           label="telefon"

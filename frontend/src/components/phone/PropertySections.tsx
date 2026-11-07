@@ -14,6 +14,7 @@ import { useQuery } from '@tanstack/react-query';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
+import { brokerContact, type ContactAbout } from '@/lib/brokerContact';
 import { propertyBrokers } from '@/lib/brokers';
 import { listingKindParts } from '@/lib/enums';
 import {
@@ -38,6 +39,8 @@ import { ROUTES } from '@/lib/routes';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import type { ListingPublic, PropertySource, SoldComparable, SoldCoverage } from '@/lib/types';
 
+import BrokerAvatar from './BrokerAvatar';
+import { BROKERS_SECTION_ID } from './BrokerStrip';
 import LocationBody from './LocationBody';
 import { ExternalIcon } from './phoneIcons';
 
@@ -276,14 +279,6 @@ const portalsAside = (n: number): string =>
 /* Makléři                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const initials = (name: string | null): string =>
-  (name ?? '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('') || '?';
-
 /* MS7 (lib/brokers.propertyBrokers) over the batched read the desktop list uses,
  * and the desktop's own contact card under each name — the same channels, the
  * same ad references, the same copy behaviour (lib/clipboard) on both shells.
@@ -294,17 +289,20 @@ export function BrokersSection({
   canonicalId,
   advertsFailed,
   onRetryAdverts,
+  about,
 }: {
   adverts: PropertySource[];
   canonicalId: number;
   advertsFailed: boolean;
   onRetryAdverts: () => void;
+  /* The property a saved contact names (lib/brokerContact). */
+  about: ContactAbout;
 }) {
   const ids = useMemo(() => adverts.map((a) => a.id), [adverts]);
   const read = useListingBrokers(ids);
   if (advertsFailed || read.isError) {
     return (
-      <PhoneSection label="Makléři">
+      <PhoneSection label="Makléři" id={BROKERS_SECTION_ID}>
         <p className="text-[13px] text-[var(--color-brick)]">
           Makléře se nepodařilo načíst.
           <button
@@ -321,7 +319,7 @@ export function BrokersSection({
   /* A property always has an ad: an empty list is one not read yet. */
   if (read.isPending || adverts.length === 0) {
     return (
-      <PhoneSection label="Makléři">
+      <PhoneSection label="Makléři" id={BROKERS_SECTION_ID}>
         <p className="text-[13px] text-[var(--color-ink-3)]">Načítám…</p>
       </PhoneSection>
     );
@@ -329,7 +327,7 @@ export function BrokersSection({
   const { brokers, fromInactive } = propertyBrokers(adverts, read.brokers, canonicalId);
   if (brokers.length === 0) {
     return (
-      <PhoneSection label="Makléři" count={0}>
+      <PhoneSection label="Makléři" count={0} id={BROKERS_SECTION_ID}>
         <PanelEmpty>Makléř není uveden.</PanelEmpty>
       </PhoneSection>
     );
@@ -337,6 +335,7 @@ export function BrokersSection({
   return (
     <PhoneSection
       label="Makléři"
+      id={BROKERS_SECTION_ID}
       count={brokers.length}
       note={fromInactive ? 'z neaktivních inzerátů' : undefined}
     >
@@ -344,12 +343,7 @@ export function BrokersSection({
         {brokers.map((b) => (
           <li key={b.broker_id}>
             <div className="flex items-center gap-3">
-              <span
-                aria-hidden
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--color-rule-strong)] font-display text-[15px] text-[var(--color-ink-2)]"
-              >
-                {initials(b.broker_display_name)}
-              </span>
+              <BrokerAvatar name={b.broker_display_name} />
               <div className="min-w-0">
                 <Link
                   to={ROUTES.brokerDetail.build({ id: b.broker_id })}
@@ -362,7 +356,21 @@ export function BrokersSection({
                 </p>
               </div>
             </div>
-            <BrokerContactCard broker={b} ads={b.ads} bare className="mt-3" />
+            <BrokerContactCard
+              broker={b}
+              ads={b.ads}
+              bare
+              className="mt-3"
+              saveAs={brokerContact({
+                brokerId: b.broker_id,
+                name: b.broker_display_name,
+                firm: b.broker_firm_label,
+                phone: b.primary_phone,
+                email: b.primary_email,
+                ads: b.ads,
+                about,
+              })}
+            />
           </li>
         ))}
       </ul>
