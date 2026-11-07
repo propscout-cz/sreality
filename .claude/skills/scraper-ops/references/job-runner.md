@@ -82,13 +82,14 @@ The runner's own stop decides before the exit code.
 | exit 75 | `ok` | now + 60 s |
 | deploy stop, fence | `interrupted` | now (DB-heavy too) |
 | any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
-| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row |
+| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row; a pure request: unchanged (one exception, below) |
 
-A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run's
-release never moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to
-it; a request that also took a due slot advances it. **A `lost` request does move it** (#2317, the reaper cannot tell):
-a `lost` `map_overlays` request schedules a live run at the next 22:00Z, so read `due_at` after every `map_overlays`
-request and never start one between 20:00 and 22:00Z.
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run never
+moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to it; a request
+that also took a due slot advances it. Its loss keeps `due_at` too, but `job_runs` keeps no due slot, so the reaper
+reads one from the run: a request run whose row's `due_at` is still after its `started_at` (the claim's own now())
+took none (#2317), so a slot that came due while it ran stays due. One exception: a request on a paused row that was
+already due counts at its loss as having taken its slot, so its loss moves `due_at` on, never earlier.
 
 ## Reading `job_runs`
 
@@ -225,8 +226,9 @@ up to about 10 s. One drill at a time, with no other request run open.
   15:59Z: create the deployment 20 s before the slot, for a SIGTERM at slot + 17 s. It closed `interrupted` (exit 143) 4.9 s
   after the SIGTERM, and a new replica re-claimed it 4.1 s later (limit 60 s).
 - **E. Self-fence:** six writes, each one guarded on the ticket. Pause the row 14 days, so a moved `due_at` cannot start a
-  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap, then restore `due_at` (the reaper
-  overwrites an earlier restore). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat
-  entry does not prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
+  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap: `due_at` reads unchanged, or later
+  if the row was already due (a pure request's loss keeps it since #2317; before it, the reaper moved it and the drill
+  restored it). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat entry does not
+  prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
   `LEASE lost`, never `LEASE race lost`. The gate's overlap query cannot see a second holder here, because the reaper sets
   `ended_at` before the child dies: compare started_at with the kill line.
