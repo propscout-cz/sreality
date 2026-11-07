@@ -48,15 +48,26 @@ _Avoid_: address point (in prose), house number, door (alone, where a physical d
 
 **Place** (UI: "Lokalita"):
 One named area of the Czech register that a search, a watchdog or the map can be limited to: a kraj,
-an okres, a town (obec), a quarter (část obce) or a street. A property is in a place only when its
-location ad is known to lie inside it; a property known only at a coarser level is in none of the
-finer places below that level, never assumed to be.
+an okres, a town (obec), a quarter (část obce), a settlement unit (not built yet) or a street. A
+property is in a place only when its location ad is known to lie inside it. It is never assumed to be
+in a smaller place inside the one it is known at.
 _Avoid_: location (for the area), area, region, locality
 
 **Place shortcut** (UI: "zkratka lokality"):
-One pick that stands for several places at once, such as Praha 6 for every quarter inside it.
-Choosing it adds each of those places; nothing is ever limited by the shortcut itself.
+One pick that stands for several places at once, such as Praha 6 for every quarter inside it, or (not
+built yet) every settlement unit of one town whose name matches what was typed. Choosing it adds each
+of those places; nothing is ever limited by the shortcut itself.
 _Avoid_: alias, place group, district (for Praha 6)
+
+**Settlement unit** (UI: "Sídelní jednotka"):
+One of the named areas the state register divides every town into (officially "základní sídelní
+jednotka"), such as Barrandov or Spořilov in Praha. The register ties each to one cadastral area (KÚ)
+of one town, not to a quarter, and a small town is often a single one. A property is in a settlement
+unit only when the most precise location its location ad has (its RÚIAN door, or else its street,
+quarter or town) lies wholly inside that one settlement unit, and a portal's map pin alone never
+places it. A property known only at a place that spans several settlement units is in none of them.
+Not built yet (ADR 0009, ruled 2026-11-06): no search, watchdog or map can be limited to one today.
+_Avoid_: quarter or čtvrť (a quarter is a část obce), neighbourhood, district, unit (alone), ZSJ (in UI)
 
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
