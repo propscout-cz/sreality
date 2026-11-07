@@ -576,11 +576,16 @@ from typing import Any
 from uuid import UUID
 
 from api.notifications import (
+    COLLECTION_KINDS,
+    WATCHDOG_KINDS,
     get_unread_count,
     mark_all_seen,
-    match_monitored_collections_once,
+    match_lifecycle_once,
     match_once,
 )
+
+# What a watchdog tells unless its owner changed it (migration 720's column default).
+_DEFAULT_KINDS = ["new", "price_drop"]
 
 
 class _FakeCursor:
@@ -691,7 +696,8 @@ def test_deleting_a_watchdog_retires_it_and_keeps_its_alerts() -> None:
     assert "WHERE retired_at IS NULL AND is_active = true ORDER BY" in active
     assert got.endswith("FROM notification_subscriptions WHERE id = %s AND retired_at IS NULL")
     assert updated.endswith("WHERE id = %s AND retired_at IS NULL")
-    assert nf._LIVE_WATCHDOGS_SQL.endswith("WHERE is_active = true AND retired_at IS NULL")
+    assert nf._LIVE_WATCHDOGS_SQL.endswith(
+        "WHERE is_active = true AND retired_at IS NULL AND notify_kinds && %s::text[]")
 
 
 def test_the_delete_route_keeps_its_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -725,10 +731,10 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (dead, {"districts": [{"name": "Jihlava"}]}, since),
+                (dead, {"districts": [{"name": "Jihlava"}]}, since, _DEFAULT_KINDS),
                 (healthy, {"districts": [{"name": "Na Rybníčkách", "context": "Pardubice",
                                           "level": "ulice", "id": 666742}]},
-                 since),
+                 since, _DEFAULT_KINDS),
             ],
             2,
         ),
@@ -755,7 +761,7 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [(sub_id, {"category_main": "byt", "category_type": "pronajem",
                        "districts": [{"name": "Praha", "level": "obec", "id": 554782}]},
-              since)],
+              since, _DEFAULT_KINDS)],
             1,
         ),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 3),
@@ -765,9 +771,10 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
 
     assert stats == {"subscriptions_evaluated": 1, "subscriptions_invalid": 0,
                      "subscriptions_failed": 0, "matches_inserted": 3}
-    subs_sql = next(s for s, _ in conn.executed if "FROM notification_subscriptions" in s)
-    assert subs_sql == ("SELECT id, filter_spec, active_since FROM notification_subscriptions "
-                        "WHERE is_active = true AND retired_at IS NULL")
+    subs_sql, subs_params = next((s, p) for s, p in conn.executed if "FROM notification_subscriptions" in s)
+    assert subs_sql == ("SELECT id, filter_spec, active_since, notify_kinds FROM notification_subscriptions "
+                        "WHERE is_active = true AND retired_at IS NULL AND notify_kinds && %s::text[]")
+    assert subs_params == (["new"],), "only the watchdogs that tell 'new'"
     [(sql, params)] = [(s, p) for s, p in conn.executed
                        if "INSERT INTO notification_dispatches" in s]
     assert "l.first_seen_at > now() - %(new_window)s::interval AND " in sql
@@ -803,7 +810,7 @@ def test_a_quiet_pass_writes_nothing_and_never_touches_the_watchdog() -> None:
     conn = _FakeConn([
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
          [(UUID("00000000-0000-0000-0000-000000000001"), {},
-           datetime(2030, 1, 1, tzinfo=timezone.utc))], 1),
+           datetime(2030, 1, 1, tzinfo=timezone.utc), _DEFAULT_KINDS)], 1),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
     ])
     stats = match_once(conn)  # type: ignore[arg-type]
@@ -811,22 +818,26 @@ def test_a_quiet_pass_writes_nothing_and_never_touches_the_watchdog() -> None:
     assert not any("UPDATE notification_subscriptions" in s for s, _ in conn.executed)
 
 
-def test_collection_monitor_noop_when_nothing_monitored() -> None:
-    """No monitored collection → cheap early-out, no INSERT attempted."""
+def test_lifecycle_noop_when_nothing_monitored_and_no_watchdog_tells_it() -> None:
+    """No monitored collection → no collection INSERT; no watchdog telling a lifecycle kind → none."""
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(0,)], 0),
     ]
     conn = _FakeConn(script)
-    stats = match_monitored_collections_once(conn)  # type: ignore[arg-type]
-    assert stats == {"monitored_collections": 0, "events_inserted": 0}
+    stats = match_lifecycle_once(conn)  # type: ignore[arg-type]
+    assert stats == {"subscriptions_evaluated": 0, "subscriptions_invalid": 0,
+                     "subscriptions_failed": 0, "events_inserted": 0,
+                     "monitored_collections": 0, "collection_events_inserted": 0}
     assert not any(
         "INSERT INTO notification_dispatches" in s for s, _ in conn.executed
     )
+    subs_params = next(p for s, p in conn.executed if "FROM notification_subscriptions" in s)
+    assert subs_params == (["inactive", "reactivated", "new_source"],)
 
 
 def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     """One set-based INSERT per detector across all monitored collections — inactive,
-    reactivated and new_source in step monitor, price_drop / price_rise (one CASE) in
+    reactivated and new_source in step lifecycle, price_drop / price_rise (one CASE) in
     step price; every dispatch is source_kind='collection_monitor', idempotent on the one
     identity. broker_change is reserved, not emitted."""
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
@@ -834,52 +845,9 @@ def test_collection_monitor_emits_the_five_clean_kinds() -> None:
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
     ]
     conn = _FakeConn(script)
-    stats = match_monitored_collections_once(conn)  # type: ignore[arg-type]
-    assert stats == {"monitored_collections": 2, "events_inserted": 6}
+    stats = match_lifecycle_once(conn)  # type: ignore[arg-type]
+    assert stats["monitored_collections"] == 2 and stats["collection_events_inserted"] == 6
     assert conn.transactions == 3, "each detector commits before the next reads it"
-    match_changes_once(conn)  # type: ignore[arg-type]
-
-    inserts = [
-        sql for sql, _ in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    ]
-    assert len(inserts) == 4
-    joined = " ".join(inserts)
-    assert "'collection_monitor'" in joined
-    for kind in ("'price_drop'", "'price_rise'", "'inactive'", "'reactivated'", "'new_source'"):
-        assert kind in joined
-    assert "'cm:'" not in joined                   # no key grammar since W3
-    assert joined.count(ON_EVENT_CONFLICT) == 4
-    assert "'broker_change'" not in joined          # reserved, no clean signal yet
-
-
-def test_new_source_names_one_introducing_ad_on_every_pass() -> None:
-    """`new_source`'s event_ref is the introducing ad's id, so the ad the window picks must not
-    change between passes or the identity would, and the same portal arrival would be told twice.
-    The legacy handle breaks a first-seen tie as the pre-W3 key did; the surrogate breaks the
-    rest (a non-sreality ad has no handle)."""
-    from api import notifications as nf
-
-    new_source = " ".join(nf._MONITOR_NEW_SOURCE_SQL.split())
-    assert ("row_number() OVER (PARTITION BY m.collection_id, l.property_id, l.source "
-            "ORDER BY l.first_seen_at, l.sreality_id, l.id) AS rn") in new_source
-    assert "src.listing_id::text" in new_source
-
-
-def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
-    """Each detector fires only for changes AFTER monitoring began for the
-    (collection, property) pair. The shared `monitored` CTE computes the anchor
-    `monitor_since = greatest(added_at, monitoring_enabled_at)`, and price /
-    inactive / new_source gate their change-time on it (reactivated is gated
-    transitively via the inactive dispatch). This is the false-positive the fix
-    closes: a price drop that predates membership must not notify. 'inactive' also
-    waits out the delist dwell (F14): a blink sends neither Delisted nor Relisted."""
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
-    ]
-    conn = _FakeConn(script)
-    match_monitored_collections_once(conn)  # type: ignore[arg-type]
     match_changes_once(conn)  # type: ignore[arg-type]
 
     inserts = [
@@ -887,37 +855,197 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
         if "INSERT INTO notification_dispatches" in sql
     ]
     assert len(inserts) == 4
-    anchor = (
-        "greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) "
-        "AS monitor_since"
-    )
-    for sql, _ in inserts:
-        assert anchor in sql  # every detector shares the anchored CTE
+    joined = " ".join(sql for sql, _ in inserts)
+    assert "'collection_monitor'" in joined and "'watchdog'" not in joined
+    for kind in ("'price_drop'", "'price_rise'", "'inactive'", "'reactivated'", "'new_source'"):
+        assert kind in joined
+    assert "'cm:'" not in joined                   # no key grammar since W3
+    assert joined.count(ON_EVENT_CONFLICT) == 4
+    assert "'broker_change'" not in joined          # reserved, no clean signal yet
+    # Each collection tells the kinds it is set to (migration 720), read off its own row: no
+    # statement passes the monitor a kind list.
+    assert all("kinds" not in params for _, params in inserts)
+    assert all("c.notify_kinds AS kinds" in sql for sql, _ in inserts)
 
-    price_sql = next(s for s, _ in inserts if "'price_drop'" in s)
-    assert "st.scraped_at > m.monitor_since" in price_sql
 
-    # The inactive insert references 'inactive' but not 'reactivated'.
-    inactive_sql, params = next(
-        (s, p) for s, p in inserts if "'inactive'" in s and "'reactivated'" not in s
-    )
-    assert "max(l.inactive_at) > m.monitor_since" in inactive_sql
-    assert "max(l.inactive_at) < now() - %(inactive_dwell)s::interval" in inactive_sql
-    assert "max(l.inactive_at) > now() - %(monitor_window)s::interval" in inactive_sql
-    assert params == {"monitor_window": "7 days", "inactive_dwell": "24 hours"}
+def test_new_source_names_one_introducing_ad_on_every_pass() -> None:
+    """`new_source`'s event_ref is the introducing ad's id, so the ad the window picks must not
+    change between passes or the identity would, and the same portal arrival would be told twice.
+    The legacy handle breaks a first-seen tie as the pre-W3 key did; the surrogate breaks the
+    rest (a non-sreality ad has no handle). Its portal's first ad that is not the property's first
+    ad: another portal was there before it."""
+    from api import notifications as nf
 
-    new_source_sql = next(s for s, _ in inserts if "'new_source'" in s)
-    assert "src.first_seen_at > src.monitor_since" in new_source_sql
-    # new_source must NOT use count(DISTINCT ...) OVER (...): Postgres rejects it
-    # (0A000), which threw on every producer run pre-fix. The distinct-source
-    # count is a filtered window count over the rn=1 rows instead.
-    assert "count(DISTINCT" not in new_source_sql
-    assert "count(*) FILTER (WHERE rn = 1)" in new_source_sql
+    for sql in (nf._MONITOR_NEW_SOURCE_SQL, nf._WATCHDOG_NEW_SOURCE_SQL):
+        new_source = " ".join(sql.split())
+        assert ("row_number() OVER (PARTITION BY l.property_id, l.source "
+                "ORDER BY l.first_seen_at, l.sreality_id, l.id) AS rn") in new_source
+        assert "WHERE x.rn = 1 AND x.first_seen_at > x.prop_first" in new_source
+        assert "e.listing_id::text" in new_source
+        # count(DISTINCT ...) OVER (...) is 0A000 in Postgres; it threw on every run once.
+        assert "count(DISTINCT" not in new_source
 
-    # reactivated is hardened: the prior 'inactive' dispatch it keys on must
-    # itself postdate monitor_since (no leak off a pre-fix ungated dispatch).
-    reactivated_sql = next(s for s, _ in inserts if "'reactivated'" in s)
-    assert "nd.dispatched_at > m.monitor_since" in reactivated_sql
+
+@pytest.mark.parametrize("source", ["MONITOR", "WATCHDOG"])
+def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str) -> None:
+    """Each kind is ONE detector rendered for both producers: the two statements differ only in
+    the source's own text (its CTE, its join, its column and kind). Each fires only for changes
+    AFTER the source began watching (`m.since`: a collection's greatest(added_at,
+    monitoring_enabled_at), a watchdog's active_since), reactivated through the inactive dispatch
+    it answers, which must itself postdate it. 'inactive' also waits out the delist dwell (F14):
+    a blink sends neither Left the market nor Back on the market."""
+    from api import notifications as nf
+
+    sql = {k: " ".join(getattr(nf, f"_{source}_{k}_SQL").split())
+           for k in ("PRICE", "INACTIVE", "REACTIVATED", "NEW_SOURCE")}
+    assert "WHERE e.scraped_at > m.since AND " in sql["PRICE"]
+    assert "WHERE e.inactive_at > m.since" in sql["INACTIVE"]
+    assert "max(g.inactive_at) < now() - %(inactive_dwell)s::interval" in sql["INACTIVE"]
+    assert "g.inactive_at > now() - %(monitor_window)s::interval" in sql["INACTIVE"]
+    assert "WHERE m.source_id = e.told_source AND e.told_at > m.since" in sql["REACTIVATED"]
+    assert "WHERE e.first_seen_at > m.since" in sql["NEW_SOURCE"]
+    # Each fires only for a kind its source tells (migration 720), from the one `m.kinds`.
+    assert "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'price_rise' END = ANY(m.kinds)" \
+        in sql["PRICE"]
+    for name, kind in (("INACTIVE", "inactive"), ("REACTIVATED", "reactivated"), ("NEW_SOURCE", "new_source")):
+        assert f"AND '{kind}' = ANY(m.kinds)" in sql[name], name
+    src = getattr(nf, f"_{source}")
+    for name, render in (("PRICE", nf._price_sql), ("INACTIVE", nf._inactive_sql),
+                         ("REACTIVATED", nf._reactivated_sql), ("NEW_SOURCE", nf._new_source_sql)):
+        assert getattr(nf, f"_{source}_{name}_SQL") == render(src), name
+    if source == "MONITOR":
+        anchor = "greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) AS since, " \
+                 "c.notify_kinds AS kinds"
+        assert all(anchor in s for s in sql.values())
+    else:
+        # The spec joins each event directly (`{where}` on properties_public), never behind a CTE of
+        # matching properties: that plan scanned a broad watchdog's cohort once per price step.
+        for s in sql.values():
+            assert "JOIN properties_public l ON l.property_id = e.property_id AND {where} " in s
+            assert "%(active_since)s::timestamptz AS since, %(kinds)s::text[] AS kinds" in s and "members" not in s
+
+
+def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
+    """notify_kinds (migration 720) picks each watchdog's statements: step price passes its kinds
+    to the one CASE, step lifecycle runs only its detectors, inactive before reactivated, and a
+    watchdog that tells none of a step's kinds is not read by it at all."""
+    from api import notifications as nf
+
+    lister = UUID("13131313-1313-1313-1313-131313131313")
+    since = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    row = (lister, {}, since, ["price_rise", "inactive", "reactivated"])
+    conn = _FakeConn([
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [row], 1),
+        (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(0,)], 0),
+        (lambda s: "INSERT INTO notification_dispatches" in s and "'watchdog'" in s, [], 1),
+    ])
+    nf.match_changes_once(conn)  # type: ignore[arg-type]
+    stats = nf.match_lifecycle_once(conn)  # type: ignore[arg-type]
+    assert stats["events_inserted"] == 2 and stats["subscriptions_evaluated"] == 1
+    watchdog = [(s, p) for s, p in conn.executed
+                if "INSERT INTO notification_dispatches" in s and "'watchdog'" in s]
+    assert [p["kinds"] for s, p in watchdog if "canonical_steps" in s] == [["price_rise"]]
+    lifecycle = [s for s, _ in watchdog if "canonical_steps" not in s]
+    assert len(lifecycle) == 2
+    assert "'inactive'" in lifecycle[0] and "'reactivated'" in lifecycle[1]
+    assert not any("'new_source'" in s for s in lifecycle)
+    assert all(p["active_since"] == since and p["subscription_id"] == str(lister) for _, p in watchdog)
+    assert [p["kinds"] for s, p in watchdog if "canonical_steps" not in s] == [
+        ["price_rise", "inactive", "reactivated"]] * 2
+
+
+def test_the_kinds_a_watchdog_stores_are_one_ordered_set() -> None:
+    """Once each in WATCHDOG_KINDS order, so re-saving the same set is no change (no restamp of
+    active_since); never empty; and Back on the market only beside Left the market, whose dispatch it answers."""
+    from api.notifications import normalize_notify_kinds
+
+    assert WATCHDOG_KINDS == ("new", "price_drop", "price_rise", "inactive", "reactivated", "new_source")
+    assert normalize_notify_kinds(["new_source", "new", "new"]) == ["new", "new_source"]
+    with pytest.raises(ValueError, match="at least one"):
+        normalize_notify_kinds([])
+    with pytest.raises(ValueError, match="needs 'inactive'"):
+        normalize_notify_kinds(["reactivated"])
+    assert normalize_notify_kinds(["reactivated", "inactive"]) == ["inactive", "reactivated"]
+
+
+def test_migration_720_checks_what_the_api_refuses() -> None:
+    """The column's CHECK holds the same three rules as normalize_notify_kinds, its default is what
+    every watchdog told before it, and the active_since stamp restarts a watchdog on a kinds change."""
+    from tests.migration_defs import MIGRATIONS
+
+    sql = " ".join((MIGRATIONS / "720_watchdog_notify_kinds.sql").read_text().split())
+    assert "add column if not exists notify_kinds text[] not null default array['new', 'price_drop']" in sql
+    allowed = sql.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"'(\w+)'", allowed)) == WATCHDOG_KINDS
+    assert "cardinality(notify_kinds) > 0" in sql
+    assert "('inactive' = any(notify_kinds) or not 'reactivated' = any(notify_kinds))" in sql
+    assert "or new.notify_kinds is distinct from old.notify_kinds then new.active_since := now();" in sql
+    assert "before insert or update of is_active, filter_spec, notify_kinds" in sql
+    # A collection: the same three rules over every kind but 'new', all five by default (what each
+    # told before), and a kinds change while watching restarts it as switching it on does.
+    collection = sql.split("alter table public.collections", 1)[1]
+    assert ("add column if not exists notify_kinds text[] not null default array['price_drop', 'price_rise', "
+            "'inactive', 'reactivated', 'new_source']") in collection
+    allowed = collection.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"'(\w+)'", allowed)) == COLLECTION_KINDS == WATCHDOG_KINDS[1:]
+    assert "cardinality(notify_kinds) > 0" in collection
+    assert "('inactive' = any(notify_kinds) or not 'reactivated' = any(notify_kinds))" in collection
+    assert ("if NEW.monitoring_enabled and (TG_OP = 'INSERT' or OLD.monitoring_enabled is distinct from true "
+            "or NEW.notify_kinds is distinct from OLD.notify_kinds) then NEW.monitoring_enabled_at := now();") \
+        in collection
+
+
+@pytest.mark.parametrize(("body", "detail"), [
+    ({"notify_kinds": []}, "at least one"),
+    ({"notify_kinds": ["reactivated"]}, "needs 'inactive'"),
+    ({"notify_kinds": ["sold"]}, "literal_error"),
+])
+def test_the_routes_refuse_a_kind_set_the_check_would(
+    body: dict[str, Any], detail: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from api import notifications as nf
+    from api import tenant_pool
+    from api.main import app
+
+    written: list[Any] = []
+    monkeypatch.setattr(nf, "update_subscription", lambda _c, sid, **kw: written.append(kw) or {"id": sid})
+    app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
+    try:
+        client = TestClient(app)
+        bad = client.put("/notifications/subscriptions/s-1", json=body)
+        good = client.put("/notifications/subscriptions/s-1",
+                          json={"notify_kinds": ["new_source", "price_drop", "price_drop"]})
+    finally:
+        app.dependency_overrides.pop(tenant_pool.tenant_conn, None)
+    assert bad.status_code == 422 and detail in bad.text
+    assert good.status_code == 200
+    assert [kw["notify_kinds"] for kw in written] == [["price_drop", "new_source"]]
+
+
+def test_create_and_update_write_the_kinds_or_leave_the_default() -> None:
+    from api.notifications import create_subscription, update_subscription
+
+    acct = UUID("11111111-1111-1111-1111-111111111111")
+    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
+        (lambda s: "INSERT INTO notification_subscriptions" in s,
+         [(UUID("22222222-2222-2222-2222-222222222222"),)], 1),
+        (lambda s: s.startswith("UPDATE notification_subscriptions"), [], 1),
+    ]
+    conn = _FakeConn(script)
+    create_subscription(conn, name="a", filter_spec=WatchdogFilterSpec(), account_id=acct)
+    create_subscription(conn, name="b", filter_spec=WatchdogFilterSpec(), account_id=acct,
+                        notify_kinds=["inactive"])
+    update_subscription(conn, "s-1", notify_kinds=["new_source"])  # type: ignore[arg-type]
+    default, chosen, updated = [(s, p) for s, p in conn.executed
+                                if s.startswith(("INSERT INTO notification_subscriptions",
+                                                 "UPDATE notification_subscriptions"))]
+    assert "notify_kinds) VALUES (%s, %s::jsonb, %s, %s, DEFAULT)" in default[0]
+    assert "notify_kinds) VALUES (%s, %s::jsonb, %s, %s, %s)" in chosen[0]
+    assert chosen[1][-1] == ["inactive"] and len(default[1]) == 4
+    assert updated[0].startswith("UPDATE notification_subscriptions SET notify_kinds = %s ")
+    assert updated[1] == [["new_source"], "s-1"]
 
 
 # notification_dispatches' columns after migration 656 (its $post$ pins the same 15).
@@ -936,18 +1064,18 @@ def test_every_producer_writes_only_the_columns_migration_656_keeps() -> None:
     from api.notifications import match_changes_once
 
     sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
-               datetime(2026, 5, 14, tzinfo=timezone.utc))
+               datetime(2026, 5, 14, tzinfo=timezone.utc), list(WATCHDOG_KINDS))
     conn = _FakeConn([
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
     ])
     match_once(conn)  # type: ignore[arg-type]
     match_changes_once(conn)  # type: ignore[arg-type]
-    match_monitored_collections_once(conn)  # type: ignore[arg-type]
+    match_lifecycle_once(conn)  # type: ignore[arg-type]
     statements = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
     statements.append(" ".join(shares._INSERT_SHARE_DISPATCH_SQL.split()))
     columns = [re.search(r"INSERT INTO notification_dispatches \(([^)]*)\)", s) for s in statements]
-    assert len(columns) == 7 and all(columns), statements
+    assert len(columns) == 10 and all(columns), statements
     for match in columns:
         named = {c.strip() for c in match.group(1).split(",")}
         assert named <= _DISPATCH_COLUMNS, named - _DISPATCH_COLUMNS
@@ -1177,14 +1305,18 @@ def test_mark_seen_follows_a_duplicate_to_the_row_it_duplicates() -> None:
 def test_reactivated_is_anchored_on_events_never_on_a_merges_duplicates() -> None:
     """A merge re-points the retired property's 'inactive' (and 'reactivated') rows and marks the
     ones the survivor already holds; such a duplicate must neither anchor a 'reactivated' (the
-    LATERAL's latest 'inactive') nor stand in for one already told (the NOT EXISTS)."""
+    latest 'inactive' it told) nor stand in for one already told (the NOT EXISTS)."""
     from api import notifications as nf
 
-    sql = " ".join(nf._MONITOR_REACTIVATED_SQL.split())
-    lateral = sql.split("JOIN LATERAL (", 1)[1].split(") nd ON", 1)[0]
-    assert "AND change_kind = 'inactive' AND duplicate_of IS NULL ORDER BY dispatched_at DESC LIMIT 1" in lateral
-    told = sql.split("WHERE NOT EXISTS (", 1)[1].split(") ) INSERT", 1)[0]
-    assert "AND r.change_kind = 'reactivated' AND r.duplicate_of IS NULL AND r.dispatched_at > nd.dispatched_at" in told
+    for source in (nf._MONITOR, nf._WATCHDOG):
+        sql = " ".join(nf._reactivated_sql(source).split())
+        told = sql.split("told AS (", 1)[1].split(") INSERT", 1)[0]
+        assert (f"WHERE {source.scope} AND change_kind = 'inactive' AND duplicate_of IS NULL "
+                f"ORDER BY {source.column}, property_id, dispatched_at DESC") in told
+        again = sql.split("AND NOT EXISTS (", 1)[1]
+        assert ("AND r.change_kind = 'reactivated' AND r.duplicate_of IS NULL "
+                "AND r.dispatched_at > e.told_at") in again
+    assert nf._WATCHDOG.scope.endswith("subscription_id = %(subscription_id)s::uuid"), "its own alerts only"
 
 
 def test_detection_never_consults_dismissals() -> None:
@@ -1195,12 +1327,13 @@ def test_detection_never_consults_dismissals() -> None:
 
     from api import notifications as nf
 
-    for fn in (nf.match_once, nf.match_changes_once, nf.match_monitored_collections_once):
+    for fn in (nf.match_once, nf.match_changes_once, nf.match_lifecycle_once):
         assert "dismiss" not in inspect.getsource(fn), fn.__name__
-    for sql in (nf._MONITORED_CTE, nf._CANONICAL_PRICE_STEPS, nf._WATCHDOG_NEW_SQL,
+    for sql in (nf._CANONICAL_PRICE_STEPS, nf._WATCHDOG_NEW_SQL,
                 nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL,
                 nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
-                nf._MONITOR_NEW_SOURCE_SQL):
+                nf._MONITOR_NEW_SOURCE_SQL, nf._WATCHDOG_INACTIVE_SQL,
+                nf._WATCHDOG_REACTIVATED_SQL, nf._WATCHDOG_NEW_SOURCE_SQL):
         assert "dismiss" not in sql
 
 
@@ -1216,9 +1349,10 @@ def test_match_once_skips_invalid_filter_spec() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 # Invalid: a map box with west >= east.
-                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, since),
+                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, since,
+                 _DEFAULT_KINDS),
                 # Valid spec
-                (good_id, {}, since),
+                (good_id, {}, since, _DEFAULT_KINDS),
             ],
             2,
         ),
@@ -1259,8 +1393,8 @@ def test_a_spec_the_compiler_refuses_is_invalid_never_failed(
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since, _DEFAULT_KINDS),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since, _DEFAULT_KINDS),
             ],
             2,
         ),
@@ -1288,7 +1422,7 @@ def test_a_watchdog_whose_statement_fails_rolls_back_alone() -> None:
 
     conn = _FakeConn([
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-         [(bad, {}, since), (good, {}, since)], 2),
+         [(bad, {}, since, _DEFAULT_KINDS), (good, {}, since, _DEFAULT_KINDS)], 2),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 4),
     ])
     conn.cursor = lambda: _Raising(conn)  # type: ignore[method-assign]
@@ -1309,8 +1443,8 @@ def test_match_changes_once_counts_a_refused_spec_as_invalid(
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since, _DEFAULT_KINDS),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since, _DEFAULT_KINDS),
             ],
             2,
         ),
@@ -1351,7 +1485,7 @@ def test_both_watchdog_producers_tell_only_a_published_property() -> None:
 
     rule = published_property_predicate("l.property_id")
     sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
-               datetime(2026, 10, 23, tzinfo=timezone.utc))
+               datetime(2026, 10, 23, tzinfo=timezone.utc), list(WATCHDOG_KINDS))
     conn = _FakeConn([
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
     ])
@@ -1394,7 +1528,7 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"category_main": "byt", "category_type": "pronajem"}, since)],
+            [(sub_id, {"category_main": "byt", "category_type": "pronajem"}, since, _DEFAULT_KINDS)],
             1,
         ),
         (lambda s: "INSERT INTO notification_dispatches" in s and "'watchdog'" in s, [], 2),
@@ -1411,18 +1545,20 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     watchdog, collection = [(s, p) for s, p in conn.executed
                             if "INSERT INTO notification_dispatches" in s]
     fragment = " ".join(nf._CANONICAL_PRICE_STEPS.split())
+    kind = "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'price_rise' END"
     for sql, params in (watchdog, collection):
-        assert sql.startswith(f"WITH {fragment}")
+        assert f"{fragment} INSERT" in sql
+        assert f"WHERE e.scraped_at > m.since AND {kind} = ANY(m.kinds)" in sql
         assert params["price_window"] == "7 days"
         assert sql.endswith(ON_EVENT_CONFLICT)
     sql, params = watchdog
-    assert "'price_drop'" in sql and "'price_rise'" not in sql
-    assert "st.price_czk < st.prev_price_czk AND st.scraped_at > %(active_since)s" in sql
+    assert params["kinds"] == ["price_drop"], "the default tells drops only"
     assert params["active_since"] == since and params["category_type"] == "pronajem"
-    assert "JOIN properties_public l ON l.property_id = st.property_id" in sql
+    assert "FROM canonical_steps e JOIN properties_public l ON l.property_id = e.property_id AND " in sql
+    assert "%(kinds)s::text[] AS kinds) m" in sql
     sql, params = collection
-    assert "JOIN canonical_steps st ON st.property_id = m.property_id" in sql
-    assert "WHERE st.scraped_at > m.monitor_since" in sql
+    assert "kinds" not in params, "a collection's kinds are its own column"
+    assert "FROM canonical_steps e JOIN members m ON m.property_id = e.property_id" in sql
 
 
 def test_match_changes_once_with_no_live_watchdog_runs_only_the_collection_half() -> None:
@@ -1579,8 +1715,8 @@ def _pre_w3(kind: str, r: dict[str, Any]) -> str:
         step = "price_drop" if r["price_czk"] < r["prev_price_czk"] else "price_rise"
         return f"cm:{r['collection_id']}:{step}:{r['snapshot_id']}"
     if kind in ("inactive", "reactivated"):
-        return (f"cm:{r['collection_id']}:{kind}:{r['property_id']}:"
-                f"{int(_math.floor(r['inactive_at'].timestamp()))}")
+        at = r["inactive_at"] if kind == "inactive" else r["told_at"]
+        return f"cm:{r['collection_id']}:{kind}:{r['property_id']}:{int(_math.floor(at.timestamp()))}"
     if kind == "new_source":
         handle = r["sreality_id"] if r["sreality_id"] is not None else f"l{r['listing_id']}"
         return f"cm:{r['collection_id']}:new_source:{handle}"
@@ -1588,31 +1724,31 @@ def _pre_w3(kind: str, r: dict[str, Any]) -> str:
 
 
 _PRICE_ROW = {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000,
-              "prev_price_czk": 5_000_000, "snapshot_id": 5001, "collection_id": 7}
+              "prev_price_czk": 5_000_000, "snapshot_id": 5001, "collection_id": 7, "source_id": 7}
 
 
 @pytest.mark.parametrize(("statement", "kind", "row", "event_ref"), [
     ("_WATCHDOG_NEW_SQL", "new", {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000},
      None),
-    ("_WATCHDOG_PRICE_SQL", "wd_price", _PRICE_ROW, "5001"),
+    ("_WATCHDOG_PRICE_SQL", "wd_price", {**_PRICE_ROW, "source_id": _SUB}, "5001"),
     ("_MONITOR_PRICE_SQL", "cm_price", _PRICE_ROW, "5001"),
     ("_MONITOR_PRICE_SQL", "cm_price",
      {**_PRICE_ROW, "price_czk": 5_100_000, "snapshot_id": 5002}, "5002"),
     ("_MONITOR_INACTIVE_SQL", "inactive",
-     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
       "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
     ("_MONITOR_REACTIVATED_SQL", "reactivated",
-     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
-      "inactive_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
+      "told_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
      "402678"),
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
      "402678"),
     # A legacy handle is signed (2026-10-21: the one live new_source row keys on -248427).
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
      "402678"),
 ], ids=["new", "wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
         "new-source-no-sreality", "new-source-legacy-handle"])
@@ -1632,27 +1768,27 @@ def _backfilled_652(kind: str, key: str, row: dict[str, Any]) -> str | None:
 @pytest.mark.parametrize(("statement", "kind", "row", "event_ref"), [
     ("_WATCHDOG_NEW_SQL", "new", {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000},
      None),
-    ("_WATCHDOG_PRICE_SQL", "wd_price", _PRICE_ROW, "5001"),
+    ("_WATCHDOG_PRICE_SQL", "wd_price", {**_PRICE_ROW, "source_id": _SUB}, "5001"),
     ("_MONITOR_PRICE_SQL", "cm_price", _PRICE_ROW, "5001"),
     ("_MONITOR_PRICE_SQL", "cm_price",
      {**_PRICE_ROW, "price_czk": 5_100_000, "snapshot_id": 5002}, "5002"),
     ("_MONITOR_INACTIVE_SQL", "inactive",
-     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
       "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
     # event_ref = the epoch of the inactive dispatch it answers, as the key always was (it
     # supersedes the program's "the id of the inactive dispatch": production's grammar wins).
     ("_MONITOR_REACTIVATED_SQL", "reactivated",
-     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
-      "inactive_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
+      "told_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
      "402678"),
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
      "402678"),
     # A legacy handle is signed (2026-10-21: the one live new_source row keys on -248427).
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
+     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
      "402678"),
 ], ids=["new", "wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
         "new-source-no-sreality", "new-source-legacy-handle"])

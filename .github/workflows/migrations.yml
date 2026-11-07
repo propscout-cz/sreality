@@ -847,6 +847,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
+      # Migration 720: a watchdog tells the events it is set to -- its CHECK and restart, and the
+      # Delisted / Relisted / price / new-source detectors run for a watchdog end to end.
+      - name: A watchdog tells the events it is set to
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_720_watchdog_notify_kinds_live.py -q
+
       # The broker book (migration 692): one row per (property, canonical broker), kept by the
       # property maintenance pass on every path that changes one -- a delist, a revival, a merge and
       # its detach, a re-attribution, and every broker re-point (operator merge and unmerge, the

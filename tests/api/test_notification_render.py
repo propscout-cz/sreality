@@ -33,7 +33,7 @@ def test_every_check_value_has_one_label_and_every_label_one_value() -> None:
 
 
 def test_the_bells_english_map_has_the_same_keys() -> None:
-    src = (REPO / "frontend" / "src" / "pages" / "Notifications.tsx").read_text(encoding="utf-8")
+    src = (REPO / "frontend" / "src" / "lib" / "changeKinds.ts").read_text(encoding="utf-8")
     block = src.split("const CHANGE_META", 1)[1].split("};", 1)[0]
     assert set(re.findall(r"^\s*(\w+):\s*\{\s*label:", block, re.MULTILINE)) == set(nr.TITLES)
 
@@ -52,11 +52,11 @@ def test_the_bells_english_map_has_the_same_keys() -> None:
       "price_unit": "za mesic"},
      "Zdraženo · Kolín", f"20{NBSP}000{NBSP}Kč/měs → 21{NBSP}000{NBSP}Kč/měs"),
     ({"change_kind": "inactive", "display_label": "Beroun", "category_main": "dum", "subtype": "vila"},
-     "Staženo z nabídky · Beroun", "Vila"),
+     "Opustilo trh · Beroun", "Vila"),
     ({"change_kind": "reactivated", "display_label": "Beroun", "category_main": "pozemek"},
-     "Znovu v nabídce · Beroun", "Pozemek"),
+     "Znovu na trhu · Beroun", "Pozemek"),
     ({"change_kind": "new_source", "display_label": None, "category_main": "byt", "disposition": "1+kk"},
-     "Nový zdroj nabídky", "Byt 1+kk"),
+     "Nový portál", "Byt 1+kk"),
     ({"change_kind": "new", "display_label": "Ostrava"}, "Nový inzerát · Ostrava", ""),
     ({"change_kind": "price_drop", "display_label": "Kolín", "trigger_price_czk": 4_200_000, "category_main": "byt"},
      "Zlevněno · Kolín", "Byt"),

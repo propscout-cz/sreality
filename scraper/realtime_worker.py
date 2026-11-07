@@ -117,8 +117,9 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              notification producers of api/notifications (notifications push program
              W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
              once published: migrations 668/669), price (the canonical advert's price
-             steps of the last 7 days, for watchdogs and monitored collections) and
-             monitor (a monitored property gone for a day, back, or on a new portal).
+             steps of the last 7 days) and lifecycle (a property gone for a day, back,
+             or on a new portal), the last two for monitored collections and for the
+             watchdogs set to tell them (migration 720).
              Each step its own connection and transaction; a failing step is its own
              `portal_errors` cell.
              The producers' one clock: the API runs none since W2b.
@@ -566,7 +567,7 @@ NOTIFICATIONS_TICK_SECONDS = 300.0
 NOTIFICATIONS_STEPS: dict[str, str] = {
     "watchdog_new": "match_once",
     "price": "match_changes_once",
-    "monitor": "match_monitored_collections_once",
+    "lifecycle": "match_lifecycle_once",
 }
 # A step's producers share one pass, so an abandoned pass must never overlap the next.
 _NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")

@@ -26,6 +26,7 @@ import { revalidate } from '@/lib/revalidate';
 import { propertyPath } from '@/lib/listingUrl';
 import { cardRow } from '@/test/cardRow';
 import { watchReads } from '@/test/reads';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -73,6 +74,7 @@ const DATA: CollectionWithProperties = {
     is_system: false,
     owner_email: null,
     shared_with: [],
+    notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
   },
   properties: [],
 };
@@ -234,6 +236,52 @@ describe('<CollectionDetail>', () => {
       expect(screen.queryByRole('switch')).toBeNull();
       expect(screen.getByRole('button', { name: 'Sdílet' })).toBeInTheDocument();
       expect(actions()).toBeInTheDocument();
+    });
+  });
+
+  /* Migration 720: a watched collection chooses the events it tells, under the switch. */
+  describe('the events a watched collection tells', () => {
+    const watched = (kinds = COLLECTION_KINDS.map((k) => k.kind)) => ({
+      ...DATA, collection: { ...DATA.collection, monitoring_enabled: true, notify_kinds: kinds },
+    });
+    const group = () => screen.findByRole('group', { name: 'Notify me about' });
+
+    it('offers every event but New match, and only while the collection is watched', async () => {
+      renderPage();
+      expect(await heading()).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Notify me about' })).toBeNull();
+
+      vi.mocked(api.getCollection).mockResolvedValue(watched());
+      renderPage();
+      const chips = within(await group()).getAllByRole('button');
+      expect(chips.map((c) => c.textContent)).toEqual(
+        ['Price drop', 'Price rise', 'Left the market', 'Back on the market', 'New portal']);
+      expect(chips.every((c) => c.getAttribute('aria-pressed') === 'true')).toBe(true);
+      expect(screen.getByText(/^About the properties in this collection, from now on\./)).toBeInTheDocument();
+    });
+
+    it('saves each click, Back on the market bringing Left the market with it', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(watched(['price_drop']));
+      vi.mocked(api.updateCollection).mockResolvedValue(watched().collection);
+      renderPage();
+      fireEvent.click(within(await group()).getByRole('button', { name: 'Back on the market' }));
+      await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(
+        1, { notify_kinds: ['price_drop', 'inactive', 'reactivated'] }));
+    });
+
+    it('keeps the last event on and says why', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(watched(['price_drop']));
+      renderPage();
+      fireEvent.click(within(await group()).getByRole('button', { name: 'Price drop' }));
+      expect(await screen.findByText('Choose at least one event to be notified about.')).toBeInTheDocument();
+      expect(api.updateCollection).not.toHaveBeenCalled();
+    });
+
+    it('is hidden while acting as a pipeline owner', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(watched());
+      renderPage({ acting: ACTING });
+      expect(await heading()).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Notify me about' })).toBeNull();
     });
   });
 

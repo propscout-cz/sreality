@@ -36,7 +36,7 @@ def test_every_price_step_reader_reads_the_one_view_and_none_keeps_a_window():
         "notifications": nf._CANONICAL_PRICE_STEPS,
     }
     for statement in (nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL):
-        assert statement.startswith(f"WITH {nf._CANONICAL_PRICE_STEPS}")
+        assert statement.count(f"{nf._CANONICAL_PRICE_STEPS} INSERT") == 1
     for name, source in readers.items():
         assert "listing_price_steps" in source, f"the {name} must read the one step view"
         assert "lag(" not in source, f"the {name} keeps its own price-step window"

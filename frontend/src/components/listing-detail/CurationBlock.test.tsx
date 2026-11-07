@@ -59,6 +59,7 @@ import { revalidateTables, type SyncTable } from '@/lib/curationSync';
 import { isOwed } from '@/lib/revalidate';
 import { slotInstant, viewingSlot, viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 const TAG: Tag = {
   id: 3, name: 'k prohlídce', color: 'copper', created_at: '2026-05-01T00:00:00+00:00',
@@ -533,6 +534,7 @@ describe('<CurationBlock> shared notes', () => {
     updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
     is_system: false, owner_email: null,
     shared_with: [{ account_id: 'b', email: 'petr@example.cz' }],
+    notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
   };
   /* The property sits in one of my collections that I share with petr@. */
   const withAudience = () => {

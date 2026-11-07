@@ -380,8 +380,9 @@ Per-lane notes:
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
   a live watchdog's published matches first seen in the last 24 h and visible since after its `active_since` (create, switch-on,
-  filter edit; the publication rule, rule 16); no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
-  `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
+  filter or kinds edit; rule 16); no cursor), `price` (`match_changes_once`: canonical-ad steps, 7 days) and `lifecycle`
+  (inactive after 24 h gone, reactivated, new_source); one detector per kind for both (`notify_kinds`: mig 720),
+  each on its own connection, committing per statement (one watchdog's
   INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a
   failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the

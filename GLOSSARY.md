@@ -276,7 +276,8 @@ One step of one account's pipeline, drawn as a board column; every account gets 
 _Avoid_: fáze (in code), column
 
 **Collection**:
-A named set of properties an account keeps, optionally watched for changes. It may be shared
+A named set of properties an account keeps, optionally watched: its owner is told the property
+events it chose about the properties in it. It may be shared
 read-only with other accounts. As a filter: in any chosen collection, in none of the excluded
 ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me count alike.
 _Avoid_: list, folder, favourites, saved list
@@ -397,8 +398,46 @@ the list's own reads never park.
 _Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
 
 **Watchdog**:
-A saved filter that alerts an account when a property newly matches it or drops its price.
+A saved filter that watches its slice of the market, the properties on the market that match it, and
+tells its account the property events the account chose about any property in that slice. Editing it
+starts it afresh.
 _Avoid_: alert (for the saved filter), subscription, notification
+
+**Velocity filter**:
+A filter on how a property has moved on the market over time: its time on market, when it was first
+or last seen, and how often or how much its price changed.
+_Avoid_: speed filter, TOM filter (alone)
+
+**Notification**:
+One notice in an account's feed: one property event from one watchdog or one watched collection,
+or one share. It names the watchdog or collection it came from.
+_Avoid_: alert (alone), message, dispatch (in prose)
+
+**Property event**:
+Something that happens to a property which a watchdog or a watched collection can be set to tell:
+a new match, a price drop, a price rise, left the market, back on the market, or a new portal.
+_Avoid_: change kind, alert kind, event (alone)
+
+**New match** (UI: "Nová shoda"):
+A property event: a property enters a watchdog's slice because something about it changed (newly
+listed, its price, back on the market, a new ad, an ad's facts) or, for a watchdog with a velocity
+filter, because time passed. It names why; a property that leaves and later re-enters is a new match
+again.
+_Avoid_: new listing, new ad (for this)
+
+**Left the market** (UI: "Opustilo trh"):
+A property event: every ad of the property became inactive and stayed so for a day. Sold or
+withdrawn; the platform cannot tell which, and an ad may still come back.
+_Avoid_: delisted, withdrawn, sold, removed
+
+**Back on the market** (UI: "Znovu na trhu"):
+A property event of a watched collection: a property told as having left the market has an active
+ad again, by a revival or a re-list. A watchdog tells the same return as a new match.
+_Avoid_: relisted, reactivated
+
+**New portal** (UI: "Nový portál"):
+A property event: a portal that had no ad on the property now has one.
+_Avoid_: new source
 
 **Broker contact record**:
 A broker's email and phone that one account captured from one ad's portal page after showing

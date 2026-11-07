@@ -2855,7 +2855,7 @@ renumber.** Navigate by area:
     parses a key (F24). **The producers run on ONE
     clock (notifications W2a, migration 652):** the realtime worker's `notifications` lane runs
     `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
-    `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction; a
+    `match_lifecycle_once` (`lifecycle`) every 300 s, each step in its own transaction; a
     failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
     every statement commits on its own, so no INSERT's locks outlive it). It is their ONE clock: W2b
     deleted the API's `matcher_loop`, its lease, interval readers and daily gates (migration 656 dropped
@@ -2863,12 +2863,20 @@ renumber.** Navigate by area:
     heartbeat as an older process beating beside a new one, a deploy overlap (Watch, then Problem; a
     lone worker on old code runs the old check too, so Railway's per-service commit status is its signal). **The cursor is gone:** a watchdog's `new` is ONE INSERT
     over published properties first seen in the last 24 h and visible since after its `active_since` (stamped by a trigger on
-    create, on every switch-on and on every filter edit: an edited watchdog is a new start; keyed on visibility, the publication
+    create, on every switch-on and on every filter or kinds edit: an edited watchdog is a new start; keyed on visibility, the publication
     rule above, so a property first seen up to 6 h before a watchdog starts and published after it is still told), so a
-    late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
-    ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
-    `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
-    sends neither Delisted nor Relisted). Every row writes `event_ref` (the discriminator within
+    late-matching property under a day old still fires and a resumed watchdog never floods. **A watchdog tells only the
+    kinds it is set to** (`notification_subscriptions.notify_kinds`, migration 720: any of the six property events, default
+    `new` + `price_drop`, Back on the market only beside Left the market because it answers that dispatch); a step reads
+    only the watchdogs telling one of its kinds. A watched collection chooses likewise (`collections.notify_kinds`, any
+    of the five but `new`, default all five; a kinds edit while watching restamps `monitoring_enabled_at`, its start), and
+    every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
+    (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
+    events off the market (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
+    that brought a new portal) and the source says who is told, a collection by joining its members (from
+    `monitor_since`), a watchdog by joining its spec to each event directly (from `active_since`; behind a CTE of
+    matching properties the planner scanned a broad watchdog's cohort once per step). `inactive` waits out 24 h gone (a
+    portal blink sends neither Delisted nor Relisted). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
     inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
     `actor_account_id`; each producer's `event_ref` is what migration 652 backfilled from the old key
@@ -2944,10 +2952,10 @@ renumber.** Navigate by area:
     label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
     `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
     SQL, never logged, never in an error. **A SECOND producer is live (Sprint C):
-    the collection monitor (`match_monitored_collections_once`, its price half in `match_changes_once`,
-    both on the lane's 300 s clock over a 7-day window) emits
+    the collection monitor (its lifecycle kinds in `match_lifecycle_once`, its price half in `match_changes_once`,
+    both on the lane's 300 s clock over a 7-day window, the same detectors a watchdog set to those kinds runs) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
-    collection — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
+    collection, of the kinds that collection keeps (`notify_kinds`, migration 720) — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
     `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),

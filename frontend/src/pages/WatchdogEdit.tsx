@@ -14,11 +14,14 @@ import {
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { usePageTitle } from '@/lib/pageTitle';
+import { DEFAULT_NOTIFY_KINDS } from '@/lib/notifyKinds';
 import {
   DEFAULT_WATCHDOG_FILTER_SPEC,
   type WatchdogFilterSpec,
+  type WatchdogKind,
 } from '@/lib/types';
 import { FilterForm } from '@/components/FilterForm';
+import NotifyKindsPicker from '@/components/NotifyKindsPicker';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
 import { LocationTypeahead } from '@/components/filter-controls';
@@ -47,6 +50,7 @@ export default function WatchdogEdit() {
     DEFAULT_WATCHDOG_FILTER_SPEC,
   );
   const [isActive, setIsActive] = useState(true);
+  const [kinds, setKinds] = useState<WatchdogKind[]>(DEFAULT_NOTIFY_KINDS);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -54,6 +58,7 @@ export default function WatchdogEdit() {
       setName(existingQ.data.name);
       setSpec({ ...DEFAULT_WATCHDOG_FILTER_SPEC, ...existingQ.data.filter_spec });
       setIsActive(existingQ.data.is_active);
+      setKinds(existingQ.data.notify_kinds);
       setHydrated(true);
     }
   }, [existingQ.data, hydrated]);
@@ -64,6 +69,7 @@ export default function WatchdogEdit() {
         name,
         filter_spec: spec,
         is_active: isActive,
+        notify_kinds: kinds,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: watchdogKeys.all });
@@ -71,7 +77,7 @@ export default function WatchdogEdit() {
     },
   });
 
-  const canSave = name.trim().length > 0 && !saveMut.isPending;
+  const canSave = name.trim().length > 0 && kinds.length > 0 && !saveMut.isPending;
   const submitError = saveMut.error?.message ?? null;
 
   // Read the loaded original name (not the per-keystroke `name` state, which
@@ -114,6 +120,12 @@ export default function WatchdogEdit() {
               labelOn="Active"
               labelOff="Paused"
             />
+          </Row>
+        </Section>
+
+        <Section title="Alerts">
+          <Row label="Notify me about">
+            {(labelId) => <NotifyKindsPicker value={kinds} onChange={setKinds} labelledBy={labelId} />}
           </Row>
         </Section>
 
@@ -247,8 +259,8 @@ function Header() {
         Edit watchdog
       </h1>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-        Set the filter once; the matcher fires a notification whenever
-        a newly scraped listing matches.
+        Set the filter once, then choose which events on a matching
+        property notify you.
       </p>
     </header>
   );

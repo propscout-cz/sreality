@@ -535,9 +535,9 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise change alerts on their member properties
-   * (price moves, delisting). `is_system` marks the protected default
-   * "monitoring" collection (can't be renamed or deleted). */
+  /* Monitored collections raise change alerts on their member properties,
+   * of the kinds in `notify_kinds` (migration 720). `is_system` marks the
+   * protected default "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
@@ -547,6 +547,8 @@ export interface Collection {
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
   shared_with: CollectionShare[];
+  /* The property events it tells while monitored; all five by default. */
+  notify_kinds: CollectionKind[];
 }
 
 export interface CollectionShare {
@@ -1071,6 +1073,8 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /* The property events this watchdog tells, once each in WATCHDOG_KINDS order (migration 720). */
+  notify_kinds: WatchdogKind[];
   dispatch_count: number;
 }
 
@@ -1153,6 +1157,16 @@ export type DispatchChangeKind =
   | 'shared_collection'
   | 'shared_dashboard'
   | 'shared_pipeline';
+
+/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
+export type WatchdogKind = Extract<
+  DispatchChangeKind,
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* The ones a watched collection can tell: all but New match, as a property it holds is never new
+ * to it (api/notifications.CollectionKind). */
+export type CollectionKind = Exclude<WatchdogKind, 'new'>;
 
 export interface WatchdogDispatch {
   id: string;
