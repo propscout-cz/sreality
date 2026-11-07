@@ -179,7 +179,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from scraper import (
-    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch,
+    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch, stop,
 )
 from scraper.cgroup import memory_limit_mb as _memory_limit_mb
 from scraper.portal import PortalConfig
@@ -1928,8 +1928,8 @@ def _sold_comps_sync() -> dict[str, Any]:
     No lease (the location_refetch lane's reason: one SELECT and a handful of
     idempotent cell writes), but one in-process lock — an abandoned pass has written
     no ledger row, so nothing else can stop the next tick re-walking its cells beside
-    it. `fetch_cell` raises only the shared ledger's refusal, which ends the tick; any
-    other bad cell costs its own ledger row.
+    it. `fetch_cell` raises only the shared ledger's refusal or a stop, which end the tick;
+    any other bad cell costs its own ledger row.
     """
     global _SOLD_COMPS_STORE_WARNED
 
@@ -1960,6 +1960,8 @@ def _sold_comps_sync() -> dict[str, Any]:
                     except RateBudgetUnavailable:
                         # Sticky for the client: every later cell would be refused too.
                         refused = True
+                        break
+                    except stop.StopRequested:
                         break
             return {
                 "ran": True,
@@ -2399,9 +2401,12 @@ def _autodedup_release_on_stop() -> threading.Thread | None:
 
 
 def _on_stop_signal(stop_event: asyncio.Event) -> None:
-    """SIGTERM / SIGINT: no lane starts another pass, and the autodedup lease of a pass in
-    flight is released at once (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
+    """SIGTERM / SIGINT: no lane starts another pass, a pass in flight stops at its next
+    portal-client request (`scraper.stop`: a drain hands back the claims it has not fetched and
+    flushes the rest, #2438), and the autodedup lease of a pass in flight is released at once
+    (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
     stop_event.set()
+    stop.EVENT.set()
     _autodedup_release_on_stop()
 
 
@@ -2906,11 +2911,13 @@ def _new_state() -> dict[str, Any]:
 async def _amain() -> int:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    stop.arm()  # the loop owns the signals, so `scraper.stop` is armed, never installed
     for sig in (signal.SIGTERM, signal.SIGINT):
         # Railway sends SIGTERM on redeploy and SIGKILL `drainingSeconds` later: no lane starts
         # another pass, one in flight finishes if the drain lets it — the autodedup pass stops
-        # at its next checkpoint and rolls back instead — and the autodedup lease is released
-        # at once (E941; why, at `_AUTODEDUP_HOLDER`).
+        # at its next checkpoint and rolls back instead, a probe, drain or sold_comps pass at
+        # its next request (#2438) — and the autodedup lease is released at once (E941; why, at
+        # `_AUTODEDUP_HOLDER`).
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _on_stop_signal, stop_event)
     loop.set_default_executor(ThreadPoolExecutor(max_workers=LANE_EXECUTOR_THREADS))

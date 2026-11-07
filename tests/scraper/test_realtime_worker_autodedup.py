@@ -23,6 +23,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import weakref
 from dataclasses import replace
 from datetime import timedelta
@@ -43,6 +44,7 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_sql import RT_STORE_PRESENT_SQL
 from scraper import realtime_worker as rw
+from scraper import stop as scraper_stop
 from tests._railway_iac import RAILWAY_IAC, iac_constant, iac_entry
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.lane_world import seed_lane
@@ -947,13 +949,32 @@ WORKER_START_COMMAND = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker
 
 
 def test_the_shutdown_signal_is_the_one_path_that_releases(monkeypatch) -> None:
-    """SIGTERM and SIGINT set the loop's stop event, as before, and start the release."""
+    """SIGTERM and SIGINT set the loop's stop event, as before, the process's stop (`scraper.stop`, #2438), and
+    start the release."""
     src = inspect.getsource(rw._amain)
     assert "loop.add_signal_handler(sig, _on_stop_signal, stop_event)" in src
     assert "signal.SIGTERM, signal.SIGINT" in src
     stop = asyncio.Event()
     rw._on_stop_signal(stop)
-    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set()
+    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set() and scraper_stop.requested()
+
+
+def test_the_worker_arms_the_process_stop_so_a_wait_in_flight_ends_at_once() -> None:
+    """#2438: the event loop owns SIGTERM and SIGINT, so the worker arms `scraper.stop` before it takes them, never
+    installs it, and a limiter's or a backoff's wait already running on a lane thread ends as the signal lands."""
+    src = inspect.getsource(rw._amain)
+    assert -1 < src.find("stop.arm()") < src.find("loop.add_signal_handler")
+    scraper_stop.arm()
+
+    async def deploy() -> tuple[bool, float]:
+        stop_event = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.05, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        stopped = await asyncio.to_thread(scraper_stop.wait, 30.0)
+        return stopped, time.monotonic() - started
+
+    stopped, waited = asyncio.run(deploy())
+    assert stopped and waited < 5.0
 
 
 def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> None:

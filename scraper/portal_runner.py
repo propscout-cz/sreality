@@ -961,7 +961,7 @@ def run_index_probe(
         "listings_enqueued": total_enqueued,
         "early_stopped": early_stopped,
         "errors": failed_categories,
-        "budget_refused": int(limiter.refused),
+        "budget_refused": int(limiter.refused and limiter.refused_reason not in OUR_REFUSALS),
         "by_category": by_category,
     }
     return (rc, agg)

@@ -28,6 +28,7 @@ from psycopg.types.json import Jsonb
 from scraper import job_lease, portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
+from scraper.stop import StopRequested
 
 
 def _probe_agg(**over: Any) -> dict[str, Any]:
@@ -2397,6 +2398,23 @@ def test_a_ledger_refusal_ends_the_sold_comps_tick_at_once(
 
     assert captured["fetched"] == [1, 2]
     assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 1)
+    assert captured["conn_obj"].closed is True
+
+
+def test_a_deploy_stop_ends_the_sold_comps_tick_at_the_cell_in_hand(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # #2438: the worker's SIGTERM sets `scraper.stop`, and every later cell's first request would raise it again:
+    # a `failed` ledger row apiece for cells nothing was wrong with. The cell in hand wrote nothing; it is walked again.
+    captured = _patch_sold_comps(monkeypatch, [1, 2, 3], results=[
+        {"obec_kod": 1, "status": "ok", "records": 5, "new": 5, "pages": 1,
+         "source_total": 625, "dropped": 0, "error": None},
+        StopRequested("a stop signal arrived"),
+    ])
+
+    out = rw._sold_comps_sync()
+
+    assert captured["fetched"] == [1, 2]
+    assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 0)
     assert captured["conn_obj"].closed is True
 
 
