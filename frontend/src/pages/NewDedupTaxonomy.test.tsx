@@ -446,6 +446,21 @@ describe('<NewDedupTaxonomy>', () => {
 
   // --- editor --------------------------------------------------------------
 
+  it('first shows the form already holding the tag\'s definition', async () => {
+    // After a commit from a query resolving, a MutationObserver runs before a passive effect.
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      const means = screen.queryByLabelText<HTMLTextAreaElement>('means');
+      if (means) seen.push(means.value);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    renderPage();
+    await selectKuchyne();
+    observer.disconnect();
+
+    expect(seen[0]).toBe('A room whose primary function is cooking.');
+  });
+
   it('loads the selected tag\'s definition into the form', async () => {
     renderPage();
     await selectKuchyne();

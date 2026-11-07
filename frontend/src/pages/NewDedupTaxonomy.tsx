@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -353,7 +353,9 @@ export default function NewDedupTaxonomy() {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  useEffect(() => {
+  // Before the paint: when the definition arrives, a passive effect would leave
+  // the editor on screen empty until it ran.
+  useLayoutEffect(() => {
     if (loadedStamp.current === loadStamp) return;
     // Only within ONE tag: switching tags has already passed the discard
     // confirm, so there the reload is what the operator asked for.
