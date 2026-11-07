@@ -84,7 +84,7 @@ export default function PropertyOverview({
           label="Popis"
           empty="Inzerát nemá popis."
           className="min-w-0"
-          clamp="line-clamp-6"
+          lines={6}
           words={['Celý popis', 'Méně']}
         />
         <AdvertsPriceCard

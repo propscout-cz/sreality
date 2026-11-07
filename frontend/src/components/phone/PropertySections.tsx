@@ -7,11 +7,12 @@
  * sections the phone reuses whole (price history, estimates, freshness, tags +
  * notes) are mounted by PhoneProperty. */
 
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import BrokerContactCard from '@/components/BrokerContactCard';
+import Expandable from '@/components/Expandable';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { propertyBrokers } from '@/lib/brokers';
@@ -152,39 +153,21 @@ export function FactsSection({ property }: { property: ListingPublic }) {
 
 export function DescriptionSection({ text }: { text: string | null }) {
   const body = text?.trim() ?? '';
-  const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const ref = useRef<HTMLParagraphElement | null>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el) setOverflows(el.scrollHeight - el.clientHeight > 1);
-  }, [body]);
-  if (!body) {
-    return (
-      <PhoneSection label="Popis">
-        <PanelEmpty>Inzerát nemá popis.</PanelEmpty>
-      </PhoneSection>
-    );
-  }
   return (
     <PhoneSection label="Popis">
-      <div>
-        <p
-          ref={ref}
-          className={`whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)] ${open ? '' : 'line-clamp-6'}`}
+      {body ? (
+        <Expandable
+          as="p"
+          lines={6}
+          words={['Celý popis', 'Zkrátit']}
+          contentClassName="whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)]"
+          toggleClassName="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
         >
           {body}
-        </p>
-        {(overflows || open) && (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
-          >
-            {open ? 'Zkrátit' : 'Celý popis'}
-          </button>
-        )}
-      </div>
+        </Expandable>
+      ) : (
+        <PanelEmpty>Inzerát nemá popis.</PanelEmpty>
+      )}
     </PhoneSection>
   );
 }

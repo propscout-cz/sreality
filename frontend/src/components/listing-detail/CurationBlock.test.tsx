@@ -187,6 +187,43 @@ describe('<CurationBlock> note counts', () => {
   });
 });
 
+/* Operator ruling 2026-11-06: the list is cut by HEIGHT (components/Expandable), not to the
+ * newest three, so every note is on the page and a tall list carries "Zobrazit více". */
+describe('<CurationBlock> a long notes list', () => {
+  const notes = Array.from({ length: 5 }, (_, i) => ({ ...NOTE, id: 20 + i, body: `Poznámka ${i + 1}` }));
+
+  it('keeps every note on the page and cuts a tall list until opened', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: notes } as never);
+    /* jsdom lays nothing out: the list reports more content than its cut shows. */
+    const tall = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(900);
+    const cut = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(384);
+    try {
+      renderWithReads();
+      for (const n of notes) expect(await screen.findByText(n.body)).toBeInTheDocument();
+      const list = screen.getByText('Poznámka 5').closest('ul')!.parentElement!;
+      expect(list).toHaveStyle({ maxHeight: '24rem', overflow: 'hidden' });
+      expect(screen.queryByRole('button', { name: /Zobrazit všechny poznámky/ })).toBeNull();
+
+      await user.click(screen.getByRole('button', { name: 'Zobrazit více poznámek' }));
+      expect(list).not.toHaveStyle({ maxHeight: '24rem' });
+      expect(screen.getByRole('button', { name: 'Zobrazit méně poznámek' })).toHaveAttribute('aria-expanded', 'true');
+    } finally {
+      tall.mockRestore();
+      cut.mockRestore();
+    }
+  });
+
+  it('offers no toggle when the list fits', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: notes } as never);
+    renderWithReads();
+    expect(await screen.findByText('Poznámka 5')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zobrazit více poznámek' })).toBeNull();
+  });
+});
+
 /* MS16: a failed read says so and reads again; it is never drawn as "no notes"
  * or "no tags". */
 describe('<CurationBlock> failed reads', () => {

@@ -9,15 +9,24 @@
  *     invisible on screen;
  *   * a town is not a compass point ("Jihlava" is not "jih"): a highlight that
  *     cries wolf teaches the operator to ignore the highlights;
- *   * a short advert carries NO toggle, a long one collapses and expands;
+ *   * a short advert carries NO toggle, a long one collapses and expands (the clamp is
+ *     measured by components/Expandable; jsdom lays nothing out, so tests set the heights);
  *   * nothing is scrubbed here — the API already did it (E28).
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-import MemberText, { isLongText, markUnitTokens } from './MemberText';
+import MemberText, { markUnitTokens } from './MemberText';
+
+afterEach(() => vi.restoreAllMocks());
+
+/* The paragraph's heights: its whole text, and what the six-line clamp shows. */
+function heights(scroll: number, client: number) {
+  vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(scroll);
+  vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(client);
+}
 
 const marked = (text: string) =>
   markUnitTokens(text)
@@ -77,14 +86,6 @@ describe('markUnitTokens', () => {
   });
 });
 
-describe('isLongText', () => {
-  it('is false for an absent or short advert', () => {
-    expect(isLongText(null)).toBe(false);
-    expect(isLongText('Byt 2+kk v centru.')).toBe(false);
-    expect(isLongText('a'.repeat(400))).toBe(true);
-  });
-});
-
 describe('<MemberText>', () => {
   it('renders the title and marks the discriminating tokens', () => {
     render(<MemberText title="Prodej bytu 3+kk" text="Byt č. 14 ve 4. patře, 68 m²." />);
@@ -94,6 +95,7 @@ describe('<MemberText>', () => {
   });
 
   it('shows no toggle for an advert short enough to read whole', () => {
+    heights(40, 40);
     render(<MemberText text="Byt 2+kk v centru." />);
     expect(screen.queryByRole('button')).toBeNull();
   });
@@ -101,6 +103,7 @@ describe('<MemberText>', () => {
   it('collapses a long advert and expands it on the toggle', async () => {
     const user = userEvent.setup();
     const long = `Byt č. 14 ve 4. patře. ${'Klidná lokalita, jižní orientace. '.repeat(20)}`;
+    heights(400, 120);
     render(<MemberText text={long} />);
     const toggle = screen.getByRole('button', { name: /zobrazit celý popis/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -123,6 +126,7 @@ describe('<MemberText>', () => {
      * — so this pins a real <button> (Enter AND Space) that survives its own state
      * change, which a div with an onClick would not. */
     const user = userEvent.setup();
+    heights(400, 120);
     render(<MemberText text={`Byt č. 14 ve 4. patře. ${'Klidná lokalita. '.repeat(30)}`} />);
     const toggle = screen.getByRole('button', { name: /zobrazit celý popis/ });
 

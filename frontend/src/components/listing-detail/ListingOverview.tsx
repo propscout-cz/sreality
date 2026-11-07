@@ -5,7 +5,7 @@
  * with ListingOverview below: the SAME pieces, one surface, not two. Driven by a
  * ListingPublic-shaped row: the property page passes the property as its Browse
  * card shows it, the estimation page the subject's resolved listings row. */
-import { Suspense, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { fmtCzk, fmtArea, fmtFloor, fmtMeasuredPricePerM2, fmtAbsolute } from '@/lib/format';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
@@ -17,6 +17,7 @@ import {
   FactsList,
   AmenityChips,
 } from '@/lib/listingFacts';
+import Expandable from '@/components/Expandable';
 import Panel, { PanelEmpty } from '@/components/Panel';
 
 const DetailMap = lazyChunk(() => import('@/components/listing-detail/DetailMap'));
@@ -317,50 +318,29 @@ export function DescriptionBody({
   label = 'Description',
   empty,
   className,
-  clamp = 'line-clamp-4',
+  lines = 4,
   words = ['Show more', 'Show less'],
 }: {
   text: string;
   label?: string;
   empty?: string;
   className?: string;
-  /* The collapsed height, as a Tailwind line-clamp class. */
-  clamp?: string;
+  /* How many lines show until opened. */
+  lines?: 4 | 6;
   words?: readonly [more: string, less: string];
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const ref = useRef<HTMLParagraphElement | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setOverflows(el.scrollHeight - el.clientHeight > 1);
-  }, [text, clamp]);
-
   return (
     <Panel title={label} className={className}>
       {text ? (
-        <div>
-          <p
-            ref={ref}
-            className={
-              'text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap ' +
-              (expanded ? '' : clamp)
-            }
-          >
-            {text}
-          </p>
-          {(overflows || expanded) && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-            >
-              {expanded ? words[1] : words[0]}
-            </button>
-          )}
-        </div>
+        <Expandable
+          as="p"
+          lines={lines}
+          words={words}
+          contentClassName="text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap"
+          toggleClassName="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
+        >
+          {text}
+        </Expandable>
       ) : (
         <PanelEmpty>{empty}</PanelEmpty>
       )}
