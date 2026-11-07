@@ -98,7 +98,8 @@ function PropertyWaterfall({ fleet }: { fleet: HealthCell[] }) {
       <div data-testid="property-waterfall">
         <p className="mb-3 text-sm text-[var(--color-ink-2)]">
           Published properties, each counted once at its location ad’s finest level. Published, not all active: a young
-          property counts once it is published. Browse also applies the consumer location rule, so its count can differ.
+          property counts once it is published. Browse also applies the consumer location rule, so its count is not this
+          total.
         </p>
         {steps ? (
           <BarList counts={steps} />

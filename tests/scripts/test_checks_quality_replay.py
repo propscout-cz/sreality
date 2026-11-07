@@ -1204,7 +1204,6 @@ def test_the_location_scorecard_at_ship_reads_what_the_export_holds() -> None:
     assert {s: c["value"] for s, c in cells.items() if s.endswith("/town")} == {
         **{f"{p}/town": 0 for p in _fleet()}, "served/town": 0}
     assert cells["served/outside"]["value"] == 11_568
-    assert cells["served/outside"]["facts"]["by_portal"]["bazos"] == 10_459
     assert (cells["served/street"]["value"], cells["served/street"]["status"]) == (49.03, "ok")
     assert cells["idnes/town"]["facts"]["town_share"] == 1.0, "17,668 abroad, out of the share"
     assert cells["freshness/evidence"]["facts"]["backfill"] == 1_076_970

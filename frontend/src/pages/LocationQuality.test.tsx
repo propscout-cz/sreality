@@ -213,6 +213,20 @@ describe('LocationQuality property waterfall (Q18)', () => {
     const panel = await screen.findByTestId('property-waterfall');
     expect(stepsShown(panel)).toEqual(WATERFALL.steps.map(([label, n]) => [label, String(n)]));
   });
+
+  it('withholds the waterfall of a stale reading, as Health withholds its facts', async () => {
+    vi.mocked(pgRead).mockResolvedValue({ data: [withWaterfall({ effective_status: 'unknown' })], count: null });
+    renderPage();
+    await screen.findByTestId('location-matrix-bazos');
+    expect(screen.queryByTestId('property-waterfall')).toBeNull();
+  });
+
+  it('says so when the reading stored no waterfall', async () => {
+    renderPage();
+    const panel = await screen.findByTestId('property-waterfall');
+    expect(panel).toHaveTextContent('The gauge has stored no waterfall in this reading.');
+    expect(within(panel).queryAllByRole('listitem')).toEqual([]);
+  });
 });
 
 describe('LocationQuality positions (W6-c)', () => {

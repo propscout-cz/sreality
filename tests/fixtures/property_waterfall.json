@@ -9,20 +9,26 @@
     "`abroad` (determined foreign) or `unresolved` (no town, a town-bearing claim)."
   ],
   "cohort": [
-    {"ends_at": "address_point"}
+    {"ends_at": "address_point"},
+    {"ends_at": "street"},
+    {"ends_at": "street"},
+    {"ends_at": "cast_obce_or_quarter"},
+    {"ends_at": "obec"},
+    {"ends_at": "abroad"},
+    {"ends_at": "unresolved"}
   ],
   "cells": {
-    "served/town": {"value": 0, "facts": {"ads": 1, "foreign": 0,
-                                          "grains": {"address": 1, "street": 0, "quarter": 0, "obec": 0}}},
+    "served/town": {"value": 1, "facts": {"ads": 7, "foreign": 1,
+                                          "grains": {"address": 1, "street": 2, "quarter": 1, "obec": 1}}},
     "served/town_withheld": {"value": 0}
   },
   "steps": [
-    ["Abroad", 0],
-    ["served/town", 0],
+    ["Abroad", 1],
+    ["served/town", 1],
     ["served/town_withheld", 0],
-    ["ends at obec", 0],
-    ["ends at část", 0],
-    ["ends at street", 0],
+    ["ends at obec", 1],
+    ["ends at část", 1],
+    ["ends at street", 2],
     ["ends at address", 1]
   ]
 }

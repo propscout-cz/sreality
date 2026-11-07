@@ -826,6 +826,15 @@ def test_the_served_town_cell_stores_the_property_waterfall(seed: _Seed) -> None
 
 
 @live
+def test_an_empty_served_fleet_stores_no_waterfall(seed: _Seed) -> None:
+    """No published property: the served town cell is Not measured and stores no waterfall, so the page says so."""
+    seed.no_registry()
+    seed.version("current", age_d=19, current=True)
+    town = _whole(q.check_location_town_coverage(seed.conn, THRESHOLDS), q._LOCATION)["served/town"]
+    assert town["status"] == "unknown" and "grains" not in town["facts"]
+
+
+@live
 def test_the_sample_takes_its_truth_from_the_address_point_and_its_pin_from_the_newest_coordinate(seed: _Seed) -> None:
     """Every tenth listing-cohort ad (id % 10 = 0) whose own row, or its property's location ad, is an address point:
     the pin error is the coordinate claim's distance to it (one per ad since W3's key), per the declared label
