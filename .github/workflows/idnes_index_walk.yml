@@ -15,8 +15,7 @@ name: "Scraping: iDNES Reality index walk"
 # cadence.
 #
 # Categories live in the `portals` registry row (migrations 110/111); coverage is
-# tuned with a SQL update, no workflow edit. Coordinates come from the page, so no
-# MAPY_CZ_API_KEY is needed. Required secret: SUPABASE_DB_URL.
+# tuned with a SQL update, no workflow edit. Required secret: SUPABASE_DB_URL.
 
 on:
   schedule:
