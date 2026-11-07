@@ -14,7 +14,8 @@
  * A viewing is a note with a date (migration 666, lib/viewings): the composer's
  * "Prohlídka" adds a day and time and makes the text optional, and the property's
  * upcoming viewings lead the list under a calendar leaf; the phone's Prohlídky
- * tab reads the same notes.
+ * tab reads the same notes. Adding a date offers to put the card at the board's
+ * viewing stage (components/pipeline/ViewingStageOffer).
  *
  * Notes cross a share only when their author marks them shared (migration 610,
  * docs/design/collection-sharing.md §3.7): the composer offers the mark when the
@@ -28,7 +29,7 @@
  * retry and never drawn as an empty list or an unticked toggle (MS16).
  */
 
-import { useId, useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useMutation,
   useQuery,
@@ -63,6 +64,7 @@ import {
 } from '@/lib/viewings';
 import { CalendarIcon } from '@/components/phone/phoneIcons';
 import DelegatedStamp from '@/components/DelegatedStamp';
+import { useViewingStageOffer } from '@/components/pipeline/ViewingStageOffer';
 import ErrorBanner from '@/components/ErrorBanner';
 import Expandable from '@/components/Expandable';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
@@ -227,6 +229,11 @@ export function NotesRow({
   const [opened, setOpened] = useState(false);
   const notesLabelId = useId();
 
+  /* A date added (a new viewing, or a date on a note) offers the board's viewing stage;
+   * its dialog hands focus back to the section, never into a field (no keyboard pops up). */
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const viewingOffer = useViewingStageOffer(property_id, sectionRef);
+
   const notesQ = useQuery({
     queryKey: notesKey,
     queryFn: () => listPropertyNotes(property_id, ...actOpts(actAs)),
@@ -258,7 +265,8 @@ export function NotesRow({
       }
       return failed;
     },
-    onSuccess: (failed) => {
+    onSuccess: (failed, { viewing_at }) => {
+      if (viewing_at) viewingOffer.offer();
       setBody('');
       setSlot(null);
       setShareNew(false);
@@ -299,7 +307,7 @@ export function NotesRow({
    * it does not know), the viewing and the desktop's artifact link as its actions (C6). The
    * wrapper takes a dropped file anywhere on the card. */
   return (
-    <div className="relative" {...composerDrop.handlers}>
+    <div ref={sectionRef} tabIndex={-1} className="relative outline-none" {...composerDrop.handlers}>
       <Panel
         title={<span id={notesLabelId}>{label}</span>}
         count={failed ? '—' : notesQ.isSuccess ? notes.length : null}
@@ -460,7 +468,10 @@ export function NotesRow({
                     note={n}
                     audience={audience}
                     onSave={(patch) =>
-                      updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(refreshNotes)
+                      updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(() => {
+                        if (patch.viewing_at && !n.viewing_at) viewingOffer.offer();
+                        return refreshNotes();
+                      })
                     }
                     onToggleShared={() =>
                       updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
@@ -477,6 +488,7 @@ export function NotesRow({
         )}
       </Panel>
       {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
+      {viewingOffer.dialog}
     </div>
   );
 }
