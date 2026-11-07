@@ -14,7 +14,8 @@
  * A viewing is a note with a date (migration 666, lib/viewings): the composer's
  * "Prohlídka" adds a day and time and makes the text optional, and the property's
  * upcoming viewings lead the list under a calendar leaf; the phone's Prohlídky
- * tab reads the same notes.
+ * tab reads the same notes. Adding a date offers to put the card at the board's
+ * viewing stage (components/pipeline/ViewingStageOffer).
  *
  * Notes cross a share only when their author marks them shared (migration 610,
  * docs/design/collection-sharing.md §3.7): the composer offers the mark when the
@@ -63,6 +64,7 @@ import {
 } from '@/lib/viewings';
 import { CalendarIcon } from '@/components/phone/phoneIcons';
 import DelegatedStamp from '@/components/DelegatedStamp';
+import { useViewingStageOffer } from '@/components/pipeline/ViewingStageOffer';
 import ErrorBanner from '@/components/ErrorBanner';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
@@ -225,6 +227,9 @@ export function NotesRow({
   const [showAll, setShowAll] = useState(false);
   const notesLabelId = useId();
 
+  /* A date added (a new viewing, or a date on a note) offers the board's viewing stage. */
+  const viewingOffer = useViewingStageOffer(property_id);
+
   const notesQ = useQuery({
     queryKey: notesKey,
     queryFn: () => listPropertyNotes(property_id, ...actOpts(actAs)),
@@ -256,7 +261,8 @@ export function NotesRow({
       }
       return failed;
     },
-    onSuccess: (failed) => {
+    onSuccess: (failed, { viewing_at }) => {
+      if (viewing_at) viewingOffer.offer();
       setBody('');
       setSlot(null);
       setShareNew(false);
@@ -455,7 +461,10 @@ export function NotesRow({
                     note={n}
                     audience={audience}
                     onSave={(patch) =>
-                      updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(refreshNotes)
+                      updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(() => {
+                        if (patch.viewing_at && !n.viewing_at) viewingOffer.offer();
+                        return refreshNotes();
+                      })
                     }
                     onToggleShared={() =>
                       updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
@@ -477,6 +486,7 @@ export function NotesRow({
         )}
       </Panel>
       {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
+      {viewingOffer.dialog}
     </div>
   );
 }

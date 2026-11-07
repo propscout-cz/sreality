@@ -4162,6 +4162,16 @@ renumber.** Navigate by area:
     filter-preset save modal, the tag pickers, and this stage editor — the single colour-picking
     control app-wide; don't re-inline a swatch grid), and the entry-star / "konec" (terminal)
     controls carry `<InfoIcon>` (i) hints (native `title=`, the codebase's tooltip convention).
+    **A stage's meaning is its `role` (migration 734), never its key or label:** keys are minted
+    once and never follow a rename (the operator's key `viewing` is "2. For Call"). One role today,
+    `viewing` (the stage set-up's calendar toggle): at most one per account (partial unique index),
+    never terminal, cleared on archive; `PATCH {role}` moves it off the stage that held it in one
+    transaction, `{role: null}` clears it. Adding a viewing date to a property offers its card that
+    stage (`lib/viewingStage` decides: off the board → add, an earlier open or a closed stage → move;
+    silent at it, at a later open stage, with no viewing stage, or with the board not yet read;
+    `components/pipeline/ViewingStageOffer` asks). The add is `POST /pipeline/cards {stage_id}` —
+    a live, open stage of the account — through `usePipelineCard().addAt`, so the ledger holds one
+    event at that stage, never an entry-stage hop plus a move.
     **Undoing a proposal's card is not a remove toggle (#2072, ADR-0004).** A run may propose a card at the entry stage; the user's
     Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
     while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,

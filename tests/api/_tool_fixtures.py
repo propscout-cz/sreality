@@ -126,7 +126,7 @@ NOTES = [(12, 8, "a colleague's", True, _at(5), _at(5), None, COLLEAGUE, None, N
 COLLECTIONS = [(6, "Mine", None, _at(0), _at(2), 1, True, True, None, [{"account_id": "x", "email": COLLEAGUE}]),
                (5, "Shared with me", None, _at(0), _at(1), 3, False, False, COLLEAGUE, [])]
 TAGS = [(2, "balkon", "slate", _at(0), 4)]
-STAGES = [(3, "zajem", "Zájem", 1, "sky", False, True, "Z"), (4, "konec", "Konec", 2, "slate", True, False, None)]
+STAGES = [(3, "zajem", "Zájem", 1, "sky", False, True, "Z", None), (4, "konec", "Konec", 2, "slate", True, False, None, None)]
 
 
 def script(props: dict[int, tuple[Any, ...]] = PROPS, runs: list[tuple[Any, ...]] = RUNS,

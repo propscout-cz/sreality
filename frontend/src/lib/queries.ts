@@ -2021,7 +2021,9 @@ export const fetchPipelineStages = async (
       .select(
         'id, key, label, position, color, is_terminal, is_entry, code, ' +
           /* The stage's delegated stamp (migration 641), for the stage editor. */
-          'edited_by_account_id, edited_at',
+          'edited_by_account_id, edited_at, ' +
+          /* The stage role (migration 734): the viewing stage a viewing date offers. */
+          'role',
       )
       .order('position'),
     { signal, actAs },

@@ -294,6 +294,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_pipeline_shares_live.py -q
 
+      # The stage role (migration 734): a signup's board marks its visit stage; one viewing stage per
+      # account, never closed or archived; the API moves the role in one transaction and a card added
+      # at a named stage writes one ledger event there. Only the replayed constraints can show it.
+      - name: A board has one viewing stage, never closed (migration 734)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_pipeline_stage_role_live.py -q
+
       # The curation clock (migration 696) moves only at COMMIT, through twelve deferred constraint triggers: only a
       # real schema committing as each writer (a tenant, a delegate, the service role, a cascade, a signup) shows one
       # bump per transaction and family, nothing on a rollback, a failed commit when the counter cannot be locked,

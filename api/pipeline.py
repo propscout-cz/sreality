@@ -32,7 +32,7 @@ def list_stages(conn: "psycopg.Connection") -> dict[str, Any]:
     """The caller's stages — RLS-only: no account argument, because reading is
     "what may I see" (`acting_account_ids()`), not "which account am I writing"."""
     sql = (
-        "SELECT id, key, label, position, color, is_terminal, is_entry, code "
+        f"SELECT {_STAGE_COLUMNS} "
         "FROM pipeline_stages WHERE archived_at IS NULL ORDER BY position"
     )
     with conn.cursor() as cur:
@@ -60,7 +60,7 @@ def create_stage(
             "INSERT INTO pipeline_stages "
             "  (key, label, position, color, is_terminal, account_id, code) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING id, key, label, position, color, is_terminal, is_entry, code",
+            f"RETURNING {_STAGE_COLUMNS}",
             (
                 key, body.label, position, body.color, body.is_terminal,
                 account_id, body.code,
@@ -74,7 +74,7 @@ def update_stage(
     conn: "psycopg.Connection", stage_id: int, body: s.UpdateStageIn, *,
     account_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Rename / recolor / recode / retag a stage, or move the entry crown onto it."""
+    """Rename / recolor / recode / retag a stage, or move the entry crown or a role onto it."""
     _validate_color(body.color)
     _validate_code(body.code)
     if body.is_entry is False:
@@ -86,21 +86,35 @@ def update_stage(
         # `WHERE id = %s` would 404-or-rename by id alone, so a stage id leaked
         # from another account would decide the row instead of RLS.
         cur.execute(
-            "SELECT is_entry, is_terminal FROM pipeline_stages "
+            "SELECT is_entry, is_terminal, role FROM pipeline_stages "
             "WHERE id = %s AND account_id = %s",
             (stage_id, account_id),
         )
         cur_row = cur.fetchone()
         if cur_row is None:
             raise HTTPException(404, "stage not found")
-        cur_entry, cur_terminal = bool(cur_row[0]), bool(cur_row[1])
+        cur_entry, cur_terminal, cur_role = bool(cur_row[0]), bool(cur_row[1]), cur_row[2]
 
         final_entry = body.is_entry if body.is_entry is not None else cur_entry
         final_terminal = (
             body.is_terminal if body.is_terminal is not None else cur_terminal
         )
+        set_role = "role" in body.model_fields_set
+        final_role = body.role if set_role else cur_role
         if final_entry and final_terminal:
             raise HTTPException(422, "the entry stage cannot also be terminal")
+        if final_role == "viewing" and final_terminal:
+            # Migration 734's pipeline_stages_viewing_open, said in words.
+            raise HTTPException(422, "the viewing stage cannot be terminal")
+
+        if set_role and body.role is not None and body.role != cur_role:
+            # One stage per role per account (pipeline_stages_one_role): the role
+            # leaves its old stage in the same transaction.
+            cur.execute(
+                "UPDATE pipeline_stages SET role = NULL, updated_at = now() "
+                "WHERE role = %s AND id <> %s AND account_id = %s",
+                (body.role, stage_id, account_id),
+            )
 
         if body.is_entry:  # move the single-entry crown onto this stage
             # account-scoped: `pipeline_stages_one_entry` is unique PER
@@ -131,13 +145,16 @@ def update_stage(
         if body.is_entry is not None:
             sets += ["is_entry = %s"]
             params += [body.is_entry]
+        if set_role:
+            sets += ["role = %s"]
+            params += [body.role]
         if sets:
             sets += ["updated_at = now()"]
             params += [stage_id, account_id]
             cur.execute(
                 f"UPDATE pipeline_stages SET {', '.join(sets)} "
                 "WHERE id = %s AND account_id = %s "
-                "RETURNING id, key, label, position, color, is_terminal, is_entry, code",
+                f"RETURNING {_STAGE_COLUMNS}",
                 params,
             )
             row = cur.fetchone()
@@ -153,7 +170,7 @@ def update_stage(
                     lift_dismissals_of_live_deals(cur, reopened)
         else:
             cur.execute(
-                "SELECT id, key, label, position, color, is_terminal, is_entry, code "
+                f"SELECT {_STAGE_COLUMNS} "
                 "FROM pipeline_stages WHERE id = %s AND account_id = %s",
                 (stage_id, account_id),
             )
@@ -190,7 +207,8 @@ def archive_stage(
     conn: "psycopg.Connection", stage_id: int, *,
     account_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Soft-retire a stage. Refused if it is the entry stage or still holds cards."""
+    """Soft-retire a stage. Refused if it is the entry stage or still holds cards; a
+    retired stage keeps no role (migration 734), so another can take it."""
     with conn.transaction(), conn.cursor() as cur:
         # account-scoped throughout: on a bare `WHERE id = %s` the cards-check
         # would leak (via 409-vs-success) whether a foreign stage holds cards
@@ -215,7 +233,7 @@ def archive_stage(
         if cur.fetchone() is not None:
             raise HTTPException(409, "stage still holds cards; move them first")
         cur.execute(
-            "UPDATE pipeline_stages SET archived_at = now(), updated_at = now() "
+            "UPDATE pipeline_stages SET archived_at = now(), role = NULL, updated_at = now() "
             "WHERE id = %s AND account_id = %s",
             (stage_id, account_id),
         )
@@ -226,7 +244,9 @@ def add_card(
     conn: "psycopg.Connection", body: s.AddPipelineCardIn, *,
     account_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Bookmark a property: insert a card at the entry stage. Idempotent.
+    """Bookmark a property: insert a card at the entry stage, or at the live, open
+    stage the body names (the viewing prompt's "add it there"). Idempotent: a
+    property already on the board keeps its card where it is.
 
     Lifts the caller's dismissal when the card is live — a new card always is
     (the entry stage can't be terminal, migration 357); an existing card closed
@@ -241,22 +261,34 @@ def add_card(
             pid = resolve_active_property_id(conn, body.property_id)
             if pid is None:
                 raise HTTPException(422, "property not found")
-            cur.execute(
-                "SELECT id FROM pipeline_stages "
-                "WHERE is_entry AND account_id = %s LIMIT 1",
-                (account_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                raise HTTPException(500, "no entry stage configured")
-            entry_stage_id = int(row[0])
+            if body.stage_id is None:
+                cur.execute(
+                    "SELECT id FROM pipeline_stages "
+                    "WHERE is_entry AND account_id = %s LIMIT 1",
+                    (account_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(500, "no entry stage configured")
+            else:
+                # A closed stage is never where a card starts (it would be a live
+                # deal born closed), and a retired one is not on the board.
+                cur.execute(
+                    "SELECT id FROM pipeline_stages "
+                    "WHERE id = %s AND account_id = %s AND archived_at IS NULL AND NOT is_terminal",
+                    (body.stage_id, account_id),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(422, "stage not found or not an open stage")
+            target_stage_id = int(row[0])
             # Lock the stage row first so two members of the same account
-            # bookmarking into the entry stage concurrently can't both read the
+            # adding into the same stage concurrently can't both read the
             # same max() and land on the same board_position — the row lock
             # serializes them within each request's one tenant-pool transaction
             # (Amendment A1), no advisory lock needed (those are unsound over the
             # transaction pooler; mig-279 lesson).
-            cur.execute("SELECT 1 FROM pipeline_stages WHERE id = %s FOR UPDATE", (entry_stage_id,))
+            cur.execute("SELECT 1 FROM pipeline_stages WHERE id = %s FOR UPDATE", (target_stage_id,))
             # board_position is per (account, stage): scope the max by account so
             # the query is served by mig-357's (account_id, stage_id,
             # board_position) index.
@@ -264,7 +296,7 @@ def add_card(
                 "SELECT coalesce(max(board_position), 0) + 1 "
                 "FROM property_pipeline "
                 "WHERE account_id = %s AND stage_id = %s",
-                (account_id, entry_stage_id),
+                (account_id, target_stage_id),
             )
             next_pos = cur.fetchone()[0]
             cur.execute(
@@ -272,7 +304,7 @@ def add_card(
                 "  (property_id, stage_id, board_position, account_id) "
                 "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING "
                 "RETURNING property_id",
-                (pid, entry_stage_id, next_pos, account_id),
+                (pid, target_stage_id, next_pos, account_id),
             )
             added = cur.fetchone() is not None
             if added:
@@ -280,7 +312,7 @@ def add_card(
                     "INSERT INTO property_pipeline_events "
                     "  (property_id, to_stage_id, reason, account_id) "
                     "VALUES (%s, %s, 'operator', %s)",
-                    (pid, entry_stage_id, account_id),
+                    (pid, target_stage_id, account_id),
                 )
             lift_dismissals_of_live_deals(cur, [pid])
     except psycopg.errors.ForeignKeyViolation:
@@ -510,6 +542,9 @@ def _fetch_card(
     }
 
 
+_STAGE_COLUMNS = "id, key, label, position, color, is_terminal, is_entry, code, role"
+
+
 def _to_stage(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "id":          int(row[0]),
@@ -520,6 +555,7 @@ def _to_stage(row: tuple[Any, ...]) -> dict[str, Any]:
         "is_terminal": bool(row[5]),
         "is_entry":    bool(row[6]),
         "code":        row[7],
+        "role":        row[8],
     }
 
 

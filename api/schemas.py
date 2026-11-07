@@ -433,6 +433,10 @@ class AttachTagIn(BaseModel):
 
 class AddPipelineCardIn(BaseModel):
     property_id: int
+    # The stage the new card lands at: absent = the entry stage (the bookmark). A
+    # named stage must be one of the account's live, open stages: "add it at the
+    # viewing stage" is then one write and one ledger event, never an add plus a move.
+    stage_id: int | None = None
 
 
 class DismissPropertyIn(BaseModel):
@@ -463,6 +467,10 @@ class CreateStageIn(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=4)
 
 
+# What a stage means to the app, whatever its label (migration 734).
+PipelineStageRole = Literal["viewing"]
+
+
 class UpdateStageIn(BaseModel):
     # All optional; an absent field is left unchanged. `is_entry` may only be
     # set True (move the entry crown to this stage) — you re-home the entry by
@@ -474,6 +482,9 @@ class UpdateStageIn(BaseModel):
     # Sent explicitly as null to clear the badge back to the ordinal fallback,
     # so this one is read via model_fields_set, not `is not None`.
     code: str | None = Field(default=None, min_length=1, max_length=4)
+    # A role moves onto this stage from whichever held it; null clears it here.
+    # Read via model_fields_set, like `code`.
+    role: PipelineStageRole | None = None
 
 
 class ReorderStagesIn(BaseModel):

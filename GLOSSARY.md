@@ -275,6 +275,11 @@ _Avoid_: deal, card (alone)
 One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
 _Avoid_: fáze (in code), column
 
+**Viewing stage** (UI: "Fáze prohlídky"):
+The one stage an account marks as where a property waits for its viewing, whatever the stage is
+called; never a closed stage. Adding a viewing to a property offers to put its card there.
+_Avoid_: visit stage, the stage's key or label as its meaning
+
 **Collection**:
 A named set of properties an account keeps, optionally watched for changes. It may be shared
 read-only with other accounts. As a filter: in any chosen collection, in none of the excluded

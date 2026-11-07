@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery, type QueryKey } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { ArtifactLink, Collection, Note, Tag } from '@/lib/types';
+import type { ArtifactLink, Collection, Note, PipelineStage, Tag } from '@/lib/types';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -27,15 +27,20 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchAttachmentBlob: vi.fn(),
   deleteAttachment: vi.fn(),
   listCollections: vi.fn(),
+  addPipelineCard: vi.fn(),
+  movePipelineCard: vi.fn(),
 }));
 
 vi.mock('@/lib/queries', async (orig) => ({
   ...(await orig<typeof import('@/lib/queries')>()),
   fetchPropertyTagMemberSet: vi.fn(),
   fetchPropertyCollectionMemberSet: vi.fn(),
+  fetchPipelineStages: vi.fn(),
+  fetchPipelineMembers: vi.fn(),
 }));
 
 import {
+  addPipelineCard,
   createPropertyNote,
   deleteAttachment,
   deletePropertyArtifactLink,
@@ -45,14 +50,18 @@ import {
   listCollections,
   listPropertyNotes,
   listTags,
+  movePipelineCard,
   setPropertyArtifactLink,
   updatePropertyNote,
   uploadAttachment,
 } from '@/lib/api';
 import {
   curationKeys,
+  fetchPipelineMembers,
+  fetchPipelineStages,
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
+  type PipelineMembership,
 } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { revalidateTables, type SyncTable } from '@/lib/curationSync';
@@ -87,6 +96,8 @@ function mockReads() {
   vi.mocked(fetchPropertyTagMemberSet).mockResolvedValue(new Map());
   vi.mocked(listCollections).mockResolvedValue({ data: [], total: 0 });
   vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  vi.mocked(fetchPipelineStages).mockResolvedValue([]);
+  vi.mocked(fetchPipelineMembers).mockResolvedValue(new Map());
 }
 
 function renderBlock() {
@@ -882,6 +893,93 @@ describe('<CurationBlock> viewings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     expect(screen.getByText('Smazat prohlídku?')).toBeInTheDocument();
+  });
+});
+
+/* Operator 2026-11-06 (#2429): a viewing date added to a property whose card is not at the
+ * board's viewing stage (the stage marked `viewing`, migration 734) offers to put it there. */
+describe('<CurationBlock> the viewing stage offer', () => {
+  const stage = (id: number, position: number, over: Partial<PipelineStage> = {}): PipelineStage => ({
+    id, key: `s${id}`, label: `${position}. Stage`, position, color: null,
+    is_terminal: false, is_entry: position === 1, code: null, role: null, ...over,
+  });
+  const BOARD = [stage(1, 1, { label: '1. For Review' }), stage(3, 3, { role: 'viewing', label: '3. For Visit' }), stage(4, 4)];
+  const at = (stage_id: number): Map<number, PipelineMembership> =>
+    new Map([[42, { property_id: 42, stage_id, stage_label: '', stage_color: null, stage_code: null, stage_position: stage_id, is_terminal: false }]]);
+
+  async function bookViewing(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'Naplánovat prohlídku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Den prohlídky'), { target: { value: '2030-05-14' } });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '14:30' } });
+    await user.click(screen.getByRole('button', { name: 'Uložit prohlídku' }));
+  }
+
+  beforeEach(() => {
+    mockReads();
+    vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
+    vi.mocked(fetchPipelineStages).mockResolvedValue(BOARD);
+    vi.mocked(movePipelineCard).mockReset().mockResolvedValue({ property_id: 42, stage_id: 3, stage_key: 's3' });
+    vi.mocked(addPipelineCard).mockReset().mockResolvedValue({ property_id: 42, stage_key: 's3', added: true });
+  });
+
+  it('offers to move a card from an earlier stage, and moves it on yes', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    renderWithReads();
+    await bookViewing(user);
+    const dialog = await screen.findByRole('dialog', { name: 'Přesunout do fáze prohlídky?' });
+    expect(dialog).toHaveTextContent('Nemovitost je ve fázi „1. For Review“. Přesunout ji do fáze „3. For Visit“?');
+    await user.click(within(dialog).getByRole('button', { name: 'Přesunout' }));
+    await waitFor(() => expect(movePipelineCard).toHaveBeenCalledWith(42, 3));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('adds a property that is not on the board straight at the viewing stage', async () => {
+    const user = userEvent.setup();
+    renderWithReads();
+    await bookViewing(user);
+    const dialog = await screen.findByRole('dialog', { name: 'Přidat do fáze prohlídky?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Přidat' }));
+    await waitFor(() => expect(addPipelineCard).toHaveBeenCalledWith(42, { actAs: undefined, stage_id: 3 }));
+    expect(movePipelineCard).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing on no', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    renderWithReads();
+    await bookViewing(user);
+    await user.click(await screen.findByRole('button', { name: 'Ne, nechat' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(movePipelineCard).not.toHaveBeenCalled();
+  });
+
+  it('stays silent at a later open stage', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(4));
+    renderWithReads();
+    await bookViewing(user);
+    await waitFor(() => expect(createPropertyNote).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers it when a date is added to a plain note, and not for a plain note saved', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    vi.mocked(updatePropertyNote).mockReset().mockResolvedValue(NOTE as never);
+    renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    await user.type(screen.getByRole('textbox', { name: 'Upravit poznámku' }), ' Znovu.');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    await user.click(screen.getByRole('button', { name: 'Prohlídka' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('dialog', { name: 'Přesunout do fáze prohlídky?' })).toBeInTheDocument();
   });
 });
 
