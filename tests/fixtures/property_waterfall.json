@@ -1,0 +1,28 @@
+{
+  "_why": [
+    "THE table for the property waterfall (ruling Q18, spec #2441 Part 2). The location gauge",
+    "(scripts/checks/quality.py, pytest: tests/test_checks_quality_sql_live.py) seeds `cohort` as",
+    "published properties and must store `cells` exactly; the Location quality page",
+    "(frontend/src/pages/LocationQuality.tsx, vitest: LocationQuality.test.tsx) renders those cells",
+    "and must show `steps` exactly. One table read by both languages, so the stored fact and the",
+    "page cannot drift apart. `ends_at` is the location ad's answer: a location_granularity, or",
+    "`abroad` (determined foreign) or `unresolved` (no town, a town-bearing claim)."
+  ],
+  "cohort": [
+    {"ends_at": "address_point"}
+  ],
+  "cells": {
+    "served/town": {"value": 0, "facts": {"ads": 1, "foreign": 0,
+                                          "grains": {"address": 1, "street": 0, "quarter": 0, "obec": 0}}},
+    "served/town_withheld": {"value": 0}
+  },
+  "steps": [
+    ["Abroad", 0],
+    ["served/town", 0],
+    ["served/town_withheld", 0],
+    ["ends at obec", 0],
+    ["ends at část", 0],
+    ["ends at street", 0],
+    ["ends at address", 1]
+  ]
+}

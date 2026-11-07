@@ -1149,7 +1149,10 @@ def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[
     served = {s: cards[(c, s)] for c, s in sorted(k for k in cards
                                                   if k[0] == "served" and k[1] is not None)}
     fleet = _summed(list(served.values()))
-    cells += _town_cells("served", None, fleet, _SERVED, served)
+    town, withheld = _town_cells("served", None, fleet, _SERVED, served)
+    if _n(fleet, "town", "ads"):
+        town["facts"]["grains"] = {g: _n(fleet, "grain", g) for g in _GRAINS}
+    cells += [town, withheld]
     cells += [_outside_cell("served/outside", None, fleet, _SERVED, served),
               _street_cell("served/street", None, fleet,
                            float(thresholds["location_served_street_floor"]),

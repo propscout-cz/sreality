@@ -6,6 +6,8 @@
  * that no control sits inside another. W3b deleted the inspector: the page calls no `/location/*`.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -181,6 +183,35 @@ describe('LocationQuality scorecard', () => {
     renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent(/Empty read:/);
     expect(screen.queryByTestId('location-matrix-bazos')).toBeNull();
+  });
+});
+
+/* The property waterfall's one table (ruling Q18), shared with the gauge's DB-lane test: the cells the gauge stores
+ * there are the cells rendered here, and `steps` is what the page must show. */
+const WATERFALL = JSON.parse(
+  readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'property_waterfall.json'), 'utf-8'),
+) as { cells: Record<string, { value: number; facts?: Record<string, unknown> }>; steps: [string, number][] };
+
+const withWaterfall = (over: Partial<HealthRow> = {}): HealthRow => stored({
+  details: {
+    cells: [
+      ...CELLS.filter((c) => c.portal != null),
+      ...Object.entries(WATERFALL.cells).map(([subject, c]) => cell(subject, null, 'ok', { value: c.value, facts: c.facts ?? {} })),
+    ],
+    message: '1 Problem',
+  },
+  ...over,
+});
+
+const stepsShown = (panel: HTMLElement) =>
+  within(panel).getAllByRole('listitem').map((li) => [li.firstElementChild?.textContent, li.lastElementChild?.textContent]);
+
+describe('LocationQuality property waterfall (Q18)', () => {
+  it('shows the stored waterfall: every step in order, labelled from the grid and the Health cells', async () => {
+    vi.mocked(pgRead).mockResolvedValue({ data: [withWaterfall()], count: null });
+    renderPage();
+    const panel = await screen.findByTestId('property-waterfall');
+    expect(stepsShown(panel)).toEqual(WATERFALL.steps.map(([label, n]) => [label, String(n)]));
   });
 });
 

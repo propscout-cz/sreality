@@ -27,8 +27,10 @@ import { portalShort } from '@/lib/portals';
 import { LOCATION_SOURCES } from '../lib/locationQuality';
 import { KindStrip, NoAnswerEntry, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
 import {
+  KIND_LABEL,
   listFromParams,
   paramsForList,
+  POSITION_GRAINS,
   positionGrid,
   type PositionCell,
   type PositionListSpec,
@@ -45,11 +47,11 @@ function BarList({ counts }: { counts: unknown }) {
     return <p className="text-sm text-[var(--color-ink-3)]">No rows.</p>;
   }
   return (
-    <div className="space-y-1.5">
+    <ul className="space-y-1.5">
       {rows.map(([value, n]) => {
         const pct = total ? (100 * n) / total : 0;
         return (
-          <div key={value} className="flex items-center gap-2">
+          <li key={value} className="flex items-center gap-2">
             <span className="w-44 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
               {value}
             </span>
@@ -62,10 +64,49 @@ function BarList({ counts }: { counts: unknown }) {
             <span className="text-right font-mono tabular-nums text-[0.78rem]">
               {fmtNumber(n)}
             </span>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
+  );
+}
+
+/* ---------- the property waterfall (ruling Q18) ---------- */
+
+/* Every published property once, at its location ad's finest level: the no-town steps are the served cells themselves
+ * (Health's figures, by their own names), then served/town's stored `grains` coarse to fine in the position grid's
+ * words. Only stored counts, never a remainder; null when the reading stored no waterfall. */
+function waterfall(fleet: HealthCell[]): Record<string, number> | null {
+  const town = fleet.find((c) => c.subject === 'served/town');
+  const withheld = fleet.find((c) => c.subject === 'served/town_withheld');
+  const grains = town?.facts.grains as Record<string, number> | undefined;
+  if (!town || !withheld || !grains) return null;
+  return {
+    [KIND_LABEL.foreign.label]: Number(town.facts.foreign),
+    [town.subject]: Number(town.value),
+    [withheld.subject]: Number(withheld.value),
+    ...Object.fromEntries(
+      POSITION_GRAINS.filter((g) => g.key in grains).reverse().map((g) => [`ends at ${g.label}`, grains[g.key]]),
+    ),
+  };
+}
+
+function PropertyWaterfall({ fleet }: { fleet: HealthCell[] }) {
+  const steps = waterfall(fleet);
+  return (
+    <Panel title="Property waterfall">
+      <div data-testid="property-waterfall">
+        <p className="mb-3 text-sm text-[var(--color-ink-2)]">
+          Published properties, each counted once at its location ad’s finest level. Published, not all active: a young
+          property counts once it is published. Browse also applies the consumer location rule, so its count can differ.
+        </p>
+        {steps ? (
+          <BarList counts={steps} />
+        ) : (
+          <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no waterfall in this reading.</p>
+        )}
+      </div>
+    </Panel>
   );
 }
 
@@ -119,6 +160,7 @@ function Scorecard({
     : [];
   return (
     <>
+      {current ? <PropertyWaterfall fleet={fleet} /> : null}
       <Panel title="By portal">
         <div className="overflow-x-auto">
           <table className="block w-full border-collapse text-sm md:table">
