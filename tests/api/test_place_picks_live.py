@@ -137,3 +137,49 @@ def test_a_refused_pick_keeps_its_text_and_typed_level_with_no_code(conn: psycop
     answer = _resolve(client, PART_BARRANDOV, "Barrandov", 3)
     assert answer == {"level": "cast_obce", "id": None, "name": None, "context": "Praha"}
     assert _stored(conn) == [("Barrandov", 3, "cast_obce", None)]
+
+
+@pytest.mark.parametrize("body", [
+    {"lat": 49.8, "lng": 15.3, "type": "regional.country", "name": "Česko"},
+    {"lat": 49.2, "lng": 16.6, "type": "poi", "name": "Brno"},
+    # The address picker's door: it never sends a pick, and one sent anyway records nothing.
+    {"lat": 50.101, "lng": 14.348, "type": "regional.address", "name": "Nad Bořislavkou 487", "address_point": True,
+     "regional_structure": [{"name": "487", "type": "regional.address"}]},
+], ids=["country", "unknown type", "door"])
+def test_a_pick_with_no_place_to_record_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                                       body: dict[str, Any]) -> None:
+    _resolve(client, body, "Brno", 1)
+    assert _stored(conn) == []
+
+
+def test_a_resolve_without_a_current_registry_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
+    conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
+    assert _resolve(client, TOWN_BRNO, "Brno", 1) == {"level": "obec", "id": None, "name": None, "context": None}
+    assert _stored(conn) == []
+
+
+def test_a_failed_resolve_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
+    conn.execute("SAVEPOINT broken")
+    conn.execute("ALTER TABLE ruian_admin_unit_geometries RENAME TO ruian_admin_unit_geometries_gone")
+    failing = TestClient(api_main.app, headers=client.headers, raise_server_exceptions=False)
+    res = failing.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}})
+    assert res.status_code == 500
+    conn.execute("ROLLBACK TO SAVEPOINT broken")
+    assert _stored(conn) == []
+
+
+def test_an_unverified_caller_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local-dev opt-out answers with no claims, so an agent's or a local server's picks never reach the holdout."""
+    monkeypatch.setenv("API_AUTH_OPTIONAL", "1")
+    res = TestClient(api_main.app).post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}})
+    assert res.status_code == 200
+    assert _stored(conn) == []
+
+
+def test_an_automation_account_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
+    token = mint({"sub": str(uuid.uuid4()), "app_metadata": {"automation": True}})
+    res = client.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}},
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert _stored(conn) == []
