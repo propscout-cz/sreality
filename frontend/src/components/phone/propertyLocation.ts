@@ -1,13 +1,10 @@
-/* The phone's Poloha reads: where the property is (its location ad's point, its
- * granularity, precision, label and a note when the point is coarse) and Mapy's static map
- * of it, which the API streams on every view and never stores (Mapy's terms). An <img>
- * cannot send the JWT, so the PNG comes through the transport as bytes and is shown
- * from a blob URL that dies with the component. */
+/* The phone's Poloha read: where the property is (its location ad's point, its
+ * granularity, precision, label and a note when the point is coarse), the zoom its map
+ * opens at, and the map apps it hands the point to. */
 
-import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { ApiError, apiGet, apiGetBlob } from '@/lib/api';
+import { apiGet } from '@/lib/api';
 import { appleMapsPointUrl, googleMapsPointUrl, mapyCzPointUrl } from '@/lib/geoLinks';
 import { ZOOM_BY_LEVEL, type ZoomLevel } from '@/lib/zoomByLevel';
 
@@ -33,31 +30,16 @@ const PRECISION_LEVEL: Record<Precision, ZoomLevel> = {
 
 export const mapZoom = (precision: Precision): number => ZOOM_BY_LEVEL[PRECISION_LEVEL[precision]];
 
-/* The one map size the API serves: a 4:3 box 1080 px wide. */
-export const STATIC_MAP_W = 1080;
-export const STATIC_MAP_H = 810;
-
-/* The two reads' keys: the address picker (W3b) invalidates both after a pick. */
+/* The read's key: the address picker (W3b) invalidates it after a pick. */
 export const propertyLocationKeys = {
   location: (propertyId: number) => ['property-location', propertyId] as const,
-  staticMap: (propertyId: number) => ['property-static-map', propertyId] as const,
 };
 
-/* An hour, as the API's private Cache-Control. */
+/* An hour: a property's place rarely moves, and a pick re-reads it at once. */
 const HOUR = 60 * 60_000;
 
 export const fetchPropertyLocation = (propertyId: number, signal?: AbortSignal) =>
   apiGet<PropertyLocation>(`/properties/${propertyId}/location`, undefined, signal);
-
-export const fetchPropertyStaticMap = (propertyId: number, w: number, signal?: AbortSignal) =>
-  apiGetBlob(`/properties/${propertyId}/static-map.png`, { w }, signal);
-
-/* The API's refusal reason (`{detail: {reason}}`), when it gave one. */
-export function refusalReason(err: unknown): string | null {
-  if (!(err instanceof ApiError)) return null;
-  const detail = (err.body as { detail?: { reason?: unknown } } | null)?.detail;
-  return typeof detail?.reason === 'string' ? detail.reason : null;
-}
 
 export function usePropertyLocation(propertyId: number, enabled: boolean) {
   return useQuery({
@@ -66,29 +48,6 @@ export function usePropertyLocation(propertyId: number, enabled: boolean) {
     staleTime: HOUR,
     enabled,
   });
-}
-
-/* The map as a blob URL, minted per mount and revoked on unmount. A sheet reopened within
- * the hour is served from the query cache or the browser's private hour of HTTP cache,
- * never a second Mapy credit. */
-export function useStaticMap(propertyId: number, enabled: boolean) {
-  const q = useQuery({
-    queryKey: [...propertyLocationKeys.staticMap(propertyId), STATIC_MAP_W],
-    queryFn: ({ signal }) => fetchPropertyStaticMap(propertyId, STATIC_MAP_W, signal),
-    staleTime: HOUR,
-    enabled,
-  });
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!q.data) {
-      setUrl(null);
-      return;
-    }
-    const next = URL.createObjectURL(q.data);
-    setUrl(next);
-    return () => URL.revokeObjectURL(next);
-  }, [q.data]);
-  return { url, isPending: q.isPending && enabled, isError: q.isError, error: q.error };
 }
 
 /* The three map apps an iPhone hands a point to, at the zoom the point's precision allows

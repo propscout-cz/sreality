@@ -81,7 +81,6 @@ function Picker({ propertyId, label, adCount, onDone }: Props & { onDone: () => 
     onSuccess: ({ data }) => {
       void qc.invalidateQueries({ queryKey: propertyKeys.row(propertyId) });
       void qc.invalidateQueries({ queryKey: propertyLocationKeys.location(propertyId) });
-      void qc.invalidateQueries({ queryKey: propertyLocationKeys.staticMap(propertyId) });
       const said = outcome(data);
       if (said == null) onDone();
       else setNotice(said);

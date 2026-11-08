@@ -26,9 +26,6 @@ LEDGER: frozenset[str] = frozenset({
     ".railway/railway.ts",                                  # the worker's key copy (#2454), the API's keys (#2455)
     "api/maps.py",                                          # the suggest proxy: the switch-over (#2453)
     "frontend/src/components/filter-controls/LocationTypeahead.tsx",  # the place box: the switch-over (#2453)
-    "frontend/src/components/listing-detail/AddressPicker.test.tsx",  # the static map's invalidation (#2446)
-    "frontend/src/components/listing-detail/AddressPicker.tsx",       # the static map's invalidation (#2446)
-    "frontend/src/components/phone/propertyLocation.ts",    # the static map (#2446)
     "scraper/geocoding.py",                                 # Stage A (#2454); its key helpers move to the API first
     "scripts/seed_curated_cities.py",                       # Stage A (#2454)
     "tests/api/test_http_json.py",                          # pins suggest's key-free log: the switch-over (#2453)

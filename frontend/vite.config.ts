@@ -24,7 +24,7 @@ export default defineConfig({
      * amount of lazy-importing the chart components could help: recharts was on the
      * critical path of every route because React was inside it.
      *
-     * With all three chart consumers and all five map consumers behind `lazyChunk`,
+     * With all three chart consumers and all six map consumers behind `lazyChunk`,
      * Rollup's automatic splitting gets this exactly right on its own: the entry ends up
      * with ZERO static chunk imports, index.html emits ZERO modulepreload links, and both
      * libraries become single shared async chunks pulled only by the components that draw

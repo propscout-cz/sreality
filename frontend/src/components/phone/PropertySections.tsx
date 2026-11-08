@@ -1,7 +1,7 @@
 /* The phone property page's own sections (#1767, the prototype's "Nemovitost"):
  * each a section card (components/Panel, operator ruling 2026-10-28: one pattern
  * for the app), the same card the desktop tabs draw. Where it is (Poloha: a
- * streamed Mapy static image, never a WebGL map), facts, description, the ads
+ * small lazy map at the location ad's point), facts, description, the ads
  * with their portal links, the brokers and the registered sales near the
  * property — the desktop page's reads and rules, drawn at phone width. The
  * sections the phone reuses whole (price history, estimates, freshness, tags +
