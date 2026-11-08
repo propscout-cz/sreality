@@ -1,26 +1,17 @@
 /* Poloha on the phone: where the property is, drawn the same in the feed card's sheet and
- * on the property page. A 4:3 plate holding Mapy's static map of the location ad's point
- * (streamed by the API on every view, never stored; dimmed after dusk like the photos),
- * under it the place as the page names it, a muted note when the point is only a town or a
- * part of one, and the three map apps an iPhone hands the point to.
- *
- * Never a WebGL map on the phone. The image degrades, the place does not: a failed map
- * leaves the label and the links with a quiet line, a switched-off one leaves them alone,
- * and a property with no point says "Bez polohy" and nothing else. */
+ * on the property page. A 4:3 plate holding a map of the location ad's point (a lazy
+ * chunk, so the place never waits for it), under it the place as the page names it, a muted
+ * note when the point is only a town or a part of one, and the three map apps an iPhone
+ * hands the point to. A property with no point says "Bez polohy" and nothing else. */
 
+import MapSlot from '@/components/MapSlot';
 import { ApiError } from '@/lib/api';
+import { lazyChunk } from '@/lib/lazyChunk';
 
-import { PHOTO_DARK } from './CardPhotoStrip';
 import { ExternalIcon } from './phoneIcons';
-import {
-  STATIC_MAP_H,
-  STATIC_MAP_W,
-  mapZoom,
-  phoneMapLinks,
-  refusalReason,
-  usePropertyLocation,
-  useStaticMap,
-} from './propertyLocation';
+import { mapZoom, phoneMapLinks, usePropertyLocation } from './propertyLocation';
+
+const PhoneMap = lazyChunk(() => import('./PhoneMap'));
 
 const PLATE = 'relative isolate aspect-[4/3] w-full overflow-hidden bg-[var(--color-inset)]';
 const QUIET = 'text-[13px] text-[var(--color-ink-3)]';
@@ -44,7 +35,6 @@ export default function LocationBody({
   enabled?: boolean;
 }) {
   const loc = usePropertyLocation(propertyId, enabled);
-  const map = useStaticMap(propertyId, enabled);
 
   if (loc.isError) {
     if (loc.error instanceof ApiError && loc.error.status === 404) {
@@ -65,31 +55,21 @@ export default function LocationBody({
   }
 
   const data = loc.data;
-  const disabled = refusalReason(map.error) === 'disabled';
-  const mapFailed = map.isError && !disabled;
-  const showPlate = !disabled && !mapFailed;
 
   return (
     <div className="flex flex-col gap-3">
-      {showPlate && (
-        <div className={PLATE} aria-busy={map.url ? undefined : true}>
-          {map.url && (
-            <img
-              src={map.url}
-              width={STATIC_MAP_W}
-              height={STATIC_MAP_H}
-              alt={data?.label ? `Mapa: ${data.label}` : 'Mapa polohy'}
-              className={`block h-full w-full object-cover ${PHOTO_DARK}`}
-            />
-          )}
-          <PlateRule />
-        </div>
-      )}
+      <div className={PLATE}>
+        {data && (
+          <MapSlot>
+            <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} />
+          </MapSlot>
+        )}
+        <PlateRule />
+      </div>
       {data ? (
         <div className="flex flex-col gap-0.5">
           {data.label && <p className="text-[15px] text-[var(--color-ink)]">{data.label}</p>}
           {data.note && <p className="text-[12px] text-[var(--color-ink-3)]">{data.note}</p>}
-          {mapFailed && <p className="pt-1 text-[12px] text-[var(--color-ink-3)]">Mapu se nepodařilo načíst</p>}
         </div>
       ) : (
         <div aria-hidden className="flex flex-col gap-1.5">

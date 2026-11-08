@@ -16,6 +16,7 @@ import { CardHydrationProvider } from '@/lib/hydration';
 import * as queries from '@/lib/queries';
 import type { CardRow, PipelineMembers } from '@/lib/queries';
 import type { ImagePublic, PipelineStage } from '@/lib/types';
+import { fakeCreateMap, resetFakeMaps } from '@/test/fakeMap';
 
 import FeedCard, { feedDelta, feedLine2, feedPricePerM2, portalsWord } from './FeedCard';
 
@@ -37,7 +38,10 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
   apiGet: vi.fn(),
-  apiGetBlob: vi.fn(),
+}));
+vi.mock('@/lib/basemap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/basemap')>()),
+  createMap: (await import('@/test/fakeMap')).fakeCreateMap,
 }));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
@@ -168,7 +172,7 @@ beforeEach(() => {
   vi.mocked(queries.fetchIsDismissed).mockResolvedValue(false);
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
   vi.mocked(api.apiGet).mockReset();
-  vi.mocked(api.apiGetBlob).mockReset();
+  resetFakeMaps();
 });
 
 describe('<FeedCard> — the per-m² figure carries its basis (rule 23)', () => {
@@ -392,12 +396,10 @@ describe('<FeedCard> — Poloha', () => {
     }
     /* Nothing is read until the sheet opens. */
     expect(api.apiGet).not.toHaveBeenCalled();
-    expect(api.apiGetBlob).not.toHaveBeenCalled();
+    expect(fakeCreateMap).not.toHaveBeenCalled();
   });
 
   it('opens the Poloha sheet with the map, the place and the three map apps', async () => {
-    URL.createObjectURL = vi.fn(() => 'blob:map');
-    URL.revokeObjectURL = vi.fn();
     vi.mocked(api.apiGet).mockResolvedValue({
       lat: 50.105,
       lon: 14.5,
@@ -407,23 +409,23 @@ describe('<FeedCard> — Poloha', () => {
       precision: 'street',
       note: null,
     });
-    vi.mocked(api.apiGetBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
     renderCard(base);
     await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
     const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
     expect(api.apiGet).toHaveBeenCalledWith('/properties/304388/location', undefined, expect.anything());
-    expect(await within(sheet).findByRole('img')).toHaveAttribute('src', 'blob:map');
+    expect(await within(sheet).findByText('Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
     expect(within(sheet).getAllByRole('link').map((a) => a.textContent)).toEqual([
       'Apple Maps',
       'Google Maps',
       'Mapy.cz',
     ]);
-  });
+    await waitFor(() => expect(fakeCreateMap).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(sheet).toContainElement(fakeCreateMap.mock.calls[0][0]);
+  }, 15_000);
 
   it('says "Bez polohy" when the property has no point', async () => {
     const none = new api.ApiError('no_location', 404, { detail: { reason: 'no_location' } });
     vi.mocked(api.apiGet).mockRejectedValue(none);
-    vi.mocked(api.apiGetBlob).mockRejectedValue(none);
     renderCard(base);
     await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
     const sheet = await screen.findByRole('dialog', { name: 'Poloha' });

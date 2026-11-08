@@ -1,9 +1,8 @@
 /* The property page on the phone (#1767): the same route and reads as the
  * desktop page, drawn as the prototype's "Nemovitost" — and rule 23 holds on it:
  * the per-m² figure is the server's measure under the server's basis label, a
- * sale in Kč/m² and a rent in Kč/m²/měs. No WebGL map is mounted on the phone (Poloha
- * is the API's streamed static image) and no estimation can be started from it
- * (#1760 Q10). */
+ * sale in Kč/m² and a rent in Kč/m²/měs. No desktop map is mounted on the phone (Poloha
+ * draws its own) and no estimation can be started from it (#1760 Q10). */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -19,6 +18,7 @@ import * as shareFiles from '@/lib/shareFiles';
 import type { PropertyPublic } from '@/lib/queries';
 import type { ImagePublic, PropertySource } from '@/lib/types';
 import PropertyDetail, { AdvertRedirect } from '@/pages/PropertyDetail';
+import { fakeCreateMap, resetFakeMaps } from '@/test/fakeMap';
 
 /* Czech formatting uses no-break spaces; compare as the eye reads it. */
 const plain = (s: string | null | undefined) => s?.replace(/ /g, ' ') ?? '';
@@ -33,16 +33,19 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
     listEstimations: vi.fn(empty),
-    /* Poloha: the location JSON and the static map's bytes. */
+    /* Poloha: the location JSON. */
     apiGet: vi.fn(async (path: string) =>
       path.endsWith('/location')
         ? { lat: 50.105, lon: 14.5, granularity: 'street', granularity_rank: 60,
             label: 'Freyova, Praha 9 – Vysočany', precision: 'street', note: null }
         : null,
     ),
-    apiGetBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
   };
 });
+vi.mock('@/lib/basemap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/basemap')>()),
+  createMap: (await import('@/test/fakeMap')).fakeCreateMap,
+}));
 vi.mock('@/lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/queries')>();
   return {
@@ -80,7 +83,8 @@ vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
     `/images/${img.storage_path}${opts.w ? `?w=${opts.w}` : ''}`,
 }));
-/* The maps and the estimation starters: mounting any of them on the phone fails a test. */
+/* The desktop maps and the estimation starters: mounting any of them on the phone fails a
+ * test. The phone draws its own Poloha map. */
 vi.mock('@/components/listing-detail/DetailMap', () => ({
   default: () => <div data-testid="detail-map" />,
 }));
@@ -218,8 +222,7 @@ function renderAt(path: string | { pathname: string; state?: unknown }) {
 }
 
 beforeEach(() => {
-  URL.createObjectURL = vi.fn(() => 'blob:map');
-  URL.revokeObjectURL = vi.fn();
+  resetFakeMaps();
   localStorage.clear();
   setNarrow(true);
   vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: false } as ReturnType<typeof auth.useAuth>);
@@ -235,10 +238,11 @@ afterEach(() => {
   window.matchMedia = originalMatchMedia;
 });
 
-/* PhoneProperty is a lazy chunk (the first-visit budget): import it once up front so
- * no test pays the module load inside a findBy window on a loaded runner. */
+/* PhoneProperty and Poloha's map are lazy chunks (the first-visit budget): import them once
+ * up front so no test pays the module load inside a findBy window on a loaded runner. */
 beforeAll(async () => {
   await import('./PhoneProperty');
+  await import('./PhoneMap');
 }, 30_000);
 
 const LOADED = { timeout: 5_000 };
@@ -298,25 +302,21 @@ describe('the phone property page', () => {
     /* The whole page with its lazy chunks: slower than one card on a loaded runner. */
   }, 15_000);
 
-  it('puts Poloha first after the curation row: the map plate, the place and the map apps', async () => {
+  it('puts Poloha first after the curation row: the map, the place and the map apps', async () => {
     renderAt('/property/304388');
     const section = await screen.findByRole('region', { name: 'Poloha' }, LOADED);
     /* The first of the hairline-separated sections, straight under the curation row. */
     expect(section.parentElement?.firstElementChild).toBe(section);
-    const img = await within(section).findByRole('img', {}, LOADED);
-    expect(img).toHaveAttribute('src', 'blob:map');
-    expect(img).toHaveAttribute('width', '1080');
-    expect(within(section).getByText('Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
+    expect(await within(section).findByText('Freyova, Praha 9 – Vysočany', {}, LOADED)).toBeInTheDocument();
     expect(within(section).getAllByRole('link').map((a) => a.textContent)).toEqual([
       'Apple Maps',
       'Google Maps',
       'Mapy.cz',
     ]);
-    expect(api.apiGetBlob).toHaveBeenCalledWith(
-      '/properties/304388/static-map.png',
-      { w: 1080 },
-      expect.anything(),
-    );
+    await waitFor(() => expect(fakeCreateMap).toHaveBeenCalledTimes(1), LOADED);
+    const [container, options] = fakeCreateMap.mock.calls[0];
+    expect(section).toContainElement(container);
+    expect(options).toMatchObject({ center: [14.5, 50.105], zoom: 15, cooperativeGestures: true });
     noMaps();
   });
 
