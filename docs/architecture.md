@@ -1127,7 +1127,7 @@ rules. Identify which one a task belongs to before you start.
   member row of that code, at that version, `ON CONFLICT DO NOTHING`, `coverage_fraction` NULL; a retired door gives no
   pair and a re-run adds none. Doors are updated in place, not versioned, so the pairs are true for the doors as they
   stand when finish runs. The type reads `<from>_<to>` (a quarter can straddle two městské části, so neither contains
-  the other; #2461's `zsj_cast_obce` follows it), not `katastr_in_obec`'s `<from>_in_<to>`. The pairs are register
+  the other; #2461's settlement-unit pairs follow it), not `katastr_in_obec`'s `<from>_in_<to>`. The pairs are register
   facts, not a location store (rule 25). Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
