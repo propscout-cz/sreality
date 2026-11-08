@@ -25,9 +25,9 @@ Origin: the operator's follow-up on the location refactoring sprint (2026-10-30)
 | Q14 | Order: W0 → W1 → W2 → W7 → W8 → W4 → W3 → W3b → W5 → W5b → W6. | Sequencing. |
 | — | **The legacy `admin_boundaries` table is retired and removed entirely; its eleven consumers are rebuilt on the RÚIAN mirror; cleanup is a deliverable.** It is the same ČÚZK RÚIAN boundary pack loaded in May 2026 by a simpler script, so "pre-mirror RÚIAN table" is the honest name. Only `population` (ČSÚ) and the sreality locality crosswalk were not RÚIAN data. | New wave W8 after W7 (Praha's okres must exist in the mirror first; brokers and the Datasets tree read parents). |
 
-### Rulings of 2026-11-01 and 2026-11-02
+### Rulings since 2026-11-01
 
-These replace any earlier text they contradict. Q numbers restart: they are the questions of that grill, not the table above.
+These replace any earlier text they contradict. Q numbers restart with each grill: a row's Q is its own day's question, not the table above's.
 
 | Date | Ruling | Effect |
 |---|---|---|
@@ -50,6 +50,16 @@ These replace any earlier text they contradict. Q numbers restart: they are the 
 | 11-02 | Q3: an ad below address level that stands on a portal pin keeps its pin and reads as approximate. The audit view shows this with enough breakdown to see it. | W6 stays deletion only, plus the view. |
 | 11-02 | Q4: clear the end month on Sreality Datasets 9, 11, 13 and 14 (each was stored as 2026-06 by the creation form). | Done 11-02. |
 | 11-03 | W5b stage 1 (A, via the engine session): accept stage 1's losses (16 pair-level merges of 15,609; at cluster level only the Putimská mill changes, and only as a proposed split). The engine fixes ride #2056. This is not a merge order for #2339, and the Okružní pair 18579817×18734646 stays unjudged. | W5b stage 2 runs. A new loss class goes to the engine session first. |
+| 11-07 | Precision grill Q1 (b): **three precision levels.** "Přesná poloha · RÚIAN adresní bod": a certain RÚIAN door, from the words or from W5b's pin door. "Přesná poloha · podle portálu": no door, and the portal explicitly declares its pin exact. "Přibližná poloha · ulice / část obce / obec / okres / stát": every other ad, at its finest certain place. One new stored value in `listing_location` (rule 25 ruling given). | W5c (#2474). |
+| 11-07 | Precision grill Q2 and Q3: the door step is W5b as ruled (1 m, F1, Q23 (a)); the label names the level in its text, with the word "Přibližná". | W5b, W5c. |
+| 11-07 | Precision grill Q4: a door or an address gives every level above it; a street gives a část or KÚ only when it lies wholly inside that one unit, and keeps the část the portal names when the street has doors in it. This is today's rule (09-30, W5's Q2): measured 11-07, 12,820 active ads keep a named část on a street that crosses several. | No build. |
+| 11-07 | Precision grill Q5: W5b unchanged. An undeclared pin counts; a pin declared approximate does not. | W5b. |
+| 11-07 | Precision grill Q6 (a): only an explicit portal label makes "podle portálu": sreality `gps`/`address`, mmreality `accurate`, maxima `Point` (≈ 27.9k active ads with no door). **No portal contract changes.** ceskereality's `exact` flag on its `/mapa/` pages is a candidate only. | W5c. |
+| 11-07 | Precision grill Q8 (a): both "Přesná" levels get the map's black contour. The SPA rungs the resolver never produces (budova, parcela, úsek ulice, kraj) are deleted. | W5c. |
+| 11-07 | Precision grill Q9 (a): a new slice, W5c, builds the three levels after W5b. | Sequencing. |
+| 11-08 | Precision grill Q7 (a): a "podle portálu" pin writes no KÚ code and, later, no settlement-unit code; place codes come from RÚIAN facts only. ADR 0009's "a portal's map pin alone never places it" stands. | W5c, #2424. |
+| 11-08 | Order W5b → W5c → #2458 confirmed (#2456); #2457 may start any time. | Sequencing. |
+| 11-08 | **W5b's deploy waits for the engine.** Its shadow (24 groups) found one harm class: the engine's unit-designator veto compares block keys, so an ad given a door on street S and a partner left at street S are two blocks, and the veto is lost (12 real losses, 1 wrong merge of two flats). Deploy nothing now; the next engine deploy carries the common-grain fix; W5b deploys after it, once the engine owner has re-read the class. Existing wrong merges of that class go to the operator as split proposals. | #2339 held; engine fix by the engine owner. W5c and #2458 follow later, same order. |
 
 ### W8: one registry (added 2026-10-31)
 Consumers of `admin_boundaries` and what each takes from the mirror instead: brokers leaderboard and count book (migrations 580, 609: parents and names → `ruian_admin_units` chain); Datasets page and price statistics (obec → okres tree → the chain; sreality locality id → a view over current sreality ads' payload ids and their `listing_location.obec_kod`); sold comparables (`sold_db`, `sold_fetch`: the obec polygon envelope → `ruian_admin_unit_geometries` render geometry); map overlays (kraje outline, rent-map choropleth, migration 601 → render geometry); city proximity and curated city indexes (migrations 636, 674: polygon + population → geometry + `obec_population`); admin pages for CLIP tagging and condition scoring (kraj list → the mirror). `curated_cities.admin_boundary_id` is renamed to the RÚIAN code it already holds.
@@ -63,6 +73,9 @@ On the property page, a pencil on the address line (admin-gated) opens a RÚIAN-
 
 ### W5b: the pin refines within the words (added 2026-10-31)
 After W5 binds the town from words, an exact pin inside that town resolves to the RÚIAN address point within a calibrated distance (one street, one point, else nothing) and refines the row: street, house number, address point. It never contradicts the words: a derived address on another street than the words name is dropped. Reverse resolution was refused since W2-a ("a pin never yields a street"); this ruling reverses that for exact pins only, and the tolerance is measured against address points before it ships.
+
+### W5c: three precision levels (added 2026-11-08; #2474)
+The resolver writes one value per row: RÚIAN door (address-point grain), portal-exact (no door; the ad's own pin, declared exact by sreality `gps`/`address`, mmreality `accurate` or maxima `Point`, never a blurred one) or approximate (the rest). `browse_list` and the map and detail reads project it, and the SPA's own rank test (`isPinExact`) goes. Labels and contour follow Q8 (a). It moves no position and no place code, and changes no portal contract. After W5b's sweep, as the next resolver version.
 
 ---
 
