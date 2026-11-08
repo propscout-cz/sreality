@@ -1102,15 +1102,33 @@ rules. Identify which one a task belongs to before you start.
   behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
   `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
   register name, the parent unit's name (an obec's okres, an okres's kraj, a quarter's or street's obec; none for a
-  kraj) and the fly-to `{lat, lng}` or null. It answers kraj, okres, obec, část obce and street only: never a KÚ,
-  městská část, region soudržnosti, the country, a PSČ (a key with no letter answers `[]` before any read) or a place
-  outside the current registry version (a unit is read at the gazetteer's version, a street by version membership).
+  kraj) and the fly-to `{lat, lng}` or null. It answers kraj, okres, obec, část obce and street, and a městská část as
+  a place shortcut (below): never a KÚ, region soudržnosti, the country, a PSČ (a key with no letter answers `[]`
+  before any read) or a place outside the current registry version (a unit is read at the gazetteer's version, a
+  street by version membership).
   One read, three tiers: exact (`name_norm` equal on a gazetteer row that is not `qualifier_stripped`), prefix
   (`LIKE`; each arm is gated on its own normalised key, so `ulice .` never becomes `LIKE '%'`), then fuzzy (pg_trgm
   word similarity at a pinned 0.6, ≥ 3 characters, only while the first two fall short of the limit). Within a tier:
   served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
   counts rank rows and are never returned. So on an exact tie an okres outranks its same-name town whenever it serves
-  more properties (68 of 77 okresy share a town's name); the gate (#2465) measures it. Two read models (migration 738,
+  more properties (68 of 77 okresy share a town's name); the gate (#2465) measures it. **Place shortcuts** (#2450;
+  #2380: městská část is no served level). A městská část answers one row, `{level: 'momc', id, name, context, point,
+  places}`, its context its obec and its point its open doors' mean; `places` are its quarters' chips `{level, id,
+  name, context}` (no point), in name order with ties by code, never itself. Only a shortcut carries `places`, so
+  every other row stays as it was and a box adds `row.places ?? [row]`: the chips and `<level>_id = any(codes)` are
+  unchanged (rule 16), so a watchdog saved on Praha 6's quarters keeps matching. A shortcut ranks in its tier by the
+  sum of its quarters' `place_served_counts`; a quarter in two městské části counts for each; no count is returned.
+  Its quarters are the register pairs in `ruian_admin_unit_relations` of type `momc_cast_obce` at the gazetteer's
+  version, keyed on the index's momc row: the next version a load writes (its reopened rows, its pairs) is never read.
+  A momc with no pair at that version is no candidate in any arm, so it never takes a row from fuzzy; older pairs never
+  stand in. That holds after the pointer swap until the finish step lands the pairs, after a failed finish, and on a
+  vintage published before #2450 until a finishing-only re-dispatch of it. The finish step writes them
+  (`ruian_load.write_momc_quarters`): open doors' momc and quarter rows → the stable code → the finished version's
+  member row of that code, at that version, `ON CONFLICT DO NOTHING`, `coverage_fraction` NULL; a retired door gives no
+  pair and a re-run adds none. Doors are updated in place, not versioned, so the pairs are true for the doors as they
+  stand when finish runs. The type reads `<from>_<to>` (a quarter can straddle two městské části, so neither contains
+  the other; #2461's `zsj_cast_obce` follows it), not `katastr_in_obec`'s `<from>_in_<to>`. The pairs are register
+  facts, not a location store (rule 25). Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
   (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,
@@ -5684,8 +5702,10 @@ merge → boundaries (the state SHP pack is the vintage's third archived artifac
 all three from R2; three geometries per unit — authoritative, subdivided pip, render — an unchanged
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
 member okres, obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
-The finish step after it, which is all a re-dispatch of a current vintage redoes, drops staging, then refreshes
-`rent_map_cells` and own place search's `place_facts`.
+The finish step after it, which is all a re-dispatch of a current vintage redoes, drops staging, then lands the
+městská část → quarter pairs (`momc_cast_obce`, at that version; own place search's shortcuts), then refreshes
+`rent_map_cells` and own place search's `place_facts`. A failing step skips every step after it (a failed pair insert
+leaves both refreshes undone, a failed drop the pairs too); a re-dispatch heals them all.
 **Levels loaded = levels bound, served or used as match keys** (W7, `docs/design/location-quality/w7-registry.md`):
 stát, region soudržnosti, kraj, okres, obec, MOMC, část obce, KÚ. Správní obvod, ZSJ, ORP and POU were closed by
 SCD-2 (migration 718), never deleted; the loader never closes a unit it stops staging, so retiring a level is a
