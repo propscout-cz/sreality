@@ -536,3 +536,19 @@ def test_a_retired_door_gives_a_mestska_cast_no_quarter_pair(conn):
     ruian_load.publish(conn, m.v2)
     ruian_load.finish(conn, m.v2, keep_staging=False)
     assert _pairs(conn) == []
+
+
+def test_finishing_the_current_version_while_a_later_one_sits_staged_lands_its_pairs_on_its_own_rows(conn):
+    """A re-dispatch of the current vintage while a later load sits staged, killed before its pointer swap: v2 has
+    closed Praha 6 and Vokovice and reopened them, but v1's name index names the rows v2 closed, so v1's pair is on
+    those, the rows that are members of v1."""
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), _ = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    ruian_load.publish(conn, m.v1)
+    ruian_load.finish(conn, m.v1, keep_staging=False)
+    assert _pairs(conn) == [(m.v1, MOMC, PART, False)]
+    assert conn.execute(
+        "SELECT from_id, to_id FROM ruian_admin_unit_relations "
+        "WHERE relation_type = 'momc_cast_obce' AND registry_version_id = %s", (m.v1,),
+    ).fetchall() == [(old_momc, old_part)]

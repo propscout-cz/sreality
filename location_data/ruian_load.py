@@ -731,14 +731,23 @@ def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) 
         )
 
 
+# A městská část's quarters are the části its open doors stand in (#2380: no polygon, no share). A load re-points doors
+# in place while it closes and reopens units, so a door may hold either row of one: both ends go door -> row -> stable
+# CODE -> the row that is a MEMBER of this version (ruian_boundaries' predicate), the row its name index names, even
+# while a later version sits staged. The type reads `<from>_<to>`, not `katastr_in_obec`'s `<from>_in_<to>`: a quarter
+# can straddle two městské části, so neither contains the other (#2461's zsj pairs follow it).
 _MOMC_QUARTERS_SQL = """
 INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)
 SELECT DISTINCT m.id, q.id, 'momc_cast_obce', %(v)s::bigint
   FROM (SELECT DISTINCT momc_unit_id, cast_obce_unit_id FROM ruian_address_points WHERE valid_to IS NULL) d
   JOIN ruian_admin_units dm ON dm.id = d.momc_unit_id
   JOIN ruian_admin_units dq ON dq.id = d.cast_obce_unit_id
-  JOIN ruian_admin_units m ON m.level = 'momc' AND m.code = dm.code AND m.valid_to IS NULL
-  JOIN ruian_admin_units q ON q.level = 'cast_obce' AND q.code = dq.code AND q.valid_to IS NULL
+  JOIN ruian_admin_units m ON m.level = 'momc' AND m.code = dm.code
+   AND m.first_version_id <= %(v)s::bigint AND m.last_version_id >= %(v)s::bigint
+   AND (m.valid_to IS NULL OR m.last_version_id > %(v)s::bigint)
+  JOIN ruian_admin_units q ON q.level = 'cast_obce' AND q.code = dq.code
+   AND q.first_version_id <= %(v)s::bigint AND q.last_version_id >= %(v)s::bigint
+   AND (q.valid_to IS NULL OR q.last_version_id > %(v)s::bigint)
 ON CONFLICT DO NOTHING
 """
 
