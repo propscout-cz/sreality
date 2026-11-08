@@ -280,6 +280,23 @@ def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mi
     ]
 
 
+def test_a_mestska_cast_with_no_pairs_at_the_index_s_version_answers_no_row_and_takes_no_row_s_place(mirror, client):
+    """Between a load's pointer swap and its finish step the new version has no pairs yet, and an older version's do
+    not stand in. Praha 6 answers nothing, and what "praha" reaches by similarity still fills the rows, even the one
+    row a limit of one leaves."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), version=mirror.old)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6")) == [
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
+        ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+    ]
+    res = client.post("/places/suggest", json={"query": "Praha 6", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert _chips(res.json()["items"]) == [("kraj", PRAHA_KRAJ, "Hlavní město Praha", None)]
+
+
 def test_a_shortcut_reads_its_quarters_at_the_index_s_version_while_a_load_writes_the_next(mirror, client):
     """Ported from the re-parent tests: a load writes the next version for hours before its pointer swap. Praha 6
     and Vokovice survive into it on their rows, Dejvice closes and reopens renamed, Bubeneč is born, the next version's

@@ -44,6 +44,9 @@ units AS (
      AND n.name_norm LIKE %(unit_prefix)s
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
+     AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
+                                        WHERE rel.from_id = u.id AND rel.relation_type = 'momc_cast_obce'
+                                          AND rel.registry_version_id = (SELECT id FROM cur)))
    ORDER BY u.level, u.code, tier, u.valid_from DESC),
 streets AS (
   SELECT DISTINCT ON (s.code) 'ulice'::ruian_level AS level, s.code, s.name, s.obec_unit_id AS parent_id,
@@ -63,6 +66,9 @@ fuzzy AS (
      AND n.registry_version_id = (SELECT id FROM cur)
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
+     AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
+                                        WHERE rel.from_id = u.id AND rel.relation_type = 'momc_cast_obce'
+                                          AND rel.registry_version_id = (SELECT id FROM cur)))
   UNION ALL
   SELECT 'ulice'::ruian_level, s.code, s.name, s.obec_unit_id, NULL::bigint, 2
     FROM ruian_streets s
