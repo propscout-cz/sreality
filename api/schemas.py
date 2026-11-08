@@ -294,6 +294,13 @@ class RegionalEntry(BaseModel):
     type: str | None = None
 
 
+class PlacePickIn(BaseModel):
+    """The place typeahead's pick (ruling Q10): the text its list answered and the row's 1-based rank."""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=200)
+    rank: int = Field(ge=1, le=10)
+
+
 class ResolveLocationIn(BaseModel):
     """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
     lat: float
@@ -303,6 +310,7 @@ class ResolveLocationIn(BaseModel):
     regional_structure: list[RegionalEntry] = Field(default_factory=list)
     # The address picker's flag (W3b): an address pick answers its ONE door, not its street.
     address_point: bool = False
+    pick: PlacePickIn | None = None
 
 
 # --- curation -------------------------------------------------------------

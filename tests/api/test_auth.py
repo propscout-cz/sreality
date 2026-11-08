@@ -245,7 +245,7 @@ def client(monkeypatch):
     monkeypatch.setattr(
         api_maps,
         "resolve",
-        lambda *a, **kw: {"level": None, "id": None, "name": None, "context": None},
+        lambda *a, **kw: ({"level": None, "id": None, "name": None, "context": None}, None),
     )
 
     yield TestClient(api_main.app)
