@@ -1,9 +1,11 @@
 """Own place search (#2449; spec #2441 Part 4): typed text to register places that are already chips.
 
 One read over the current registry version, by name: tiers exact, prefix, then fuzzy (word similarity, only while the
-first two fall short of the limit). A row is a chip: level, RÚIAN code, register name, context (the parent's name) and
-a fly-to point from `place_facts`, or none. It answers kraj, okres, obec, část obce and street, never a cadastral
-area, městská část, cohesion region or the country (Q6 a, Q9). Never reads `place_picks`: they are its holdout.
+first two fall short of the limit); within a tier, served properties of any deal type (`place_served_counts`), then the
+town's latest population, then code (Q12 a: one ranking for every place box). Counts rank rows and are never returned.
+A row is a chip: level, RÚIAN code, register name, context (the parent's name) and a fly-to point from `place_facts`,
+or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, městská část, cohesion region or
+the country (Q6 a, Q9). Never reads `place_picks`: they are its holdout.
 """
 
 from __future__ import annotations
@@ -71,13 +73,21 @@ fuzzy AS (
 hits AS (
   SELECT DISTINCT ON (a.level, a.code) a.*
     FROM (SELECT * FROM near UNION ALL SELECT * FROM fuzzy) a
-   ORDER BY a.level, a.code, a.tier)
-SELECT h.level::text, h.code, h.name, par.name, f.lat, f.lng
-  FROM hits h
-  LEFT JOIN ruian_admin_units par ON par.id = h.parent_id AND par.level IN ('kraj', 'okres', 'obec')
-  LEFT JOIN place_facts f ON f.level = h.level AND f.code = h.code
- ORDER BY h.tier, h.code, h.level
- LIMIT %(limit)s
+   ORDER BY a.level, a.code, a.tier),
+ranked AS (
+  SELECT h.*, coalesce(c.n, 0) AS served, pop.population
+    FROM hits h
+    LEFT JOIN place_served_counts c ON c.level = h.level AND c.code = h.code
+    LEFT JOIN LATERAL (SELECT p.population FROM obec_population p
+                        WHERE h.level = 'obec' AND p.obec_kod = h.code
+                        ORDER BY p.year DESC LIMIT 1) pop ON true
+   ORDER BY h.tier, served DESC, pop.population DESC NULLS LAST, h.code, h.level
+   LIMIT %(limit)s)
+SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng
+  FROM ranked r
+  LEFT JOIN ruian_admin_units par ON par.id = r.parent_id AND par.level IN ('kraj', 'okres', 'obec')
+  LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code
+ ORDER BY r.tier, r.served DESC, r.population DESC NULLS LAST, r.code, r.level
 """
 
 

@@ -100,6 +100,18 @@ class _Mirror:
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
                 (next(self.doors), obec, self.codes[obec], code, *door, self.v, self.v))
 
+    def served(self, *, region: int | None = None, okres: int | None = None, obec: int | None = None,
+               part: int | None = None, active: bool = True, deal: str = "prodej") -> None:
+        """One property as Browse serves it: a browse_list row naming its places by RÚIAN code."""
+        self.conn.execute(
+            "INSERT INTO browse_list (property_id, is_active, category_type, region_id, okres_id, obec_id,"
+            " cast_obce_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (next(self.properties), active, deal, region, okres, obec, part))
+
+    def population(self, obec_code: int, people: int, *, year: int = 2025) -> None:
+        self.conn.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, %s, %s)",
+                          (obec_code, year, people))
+
     def publish(self) -> None:
         name_index.rebuild(self.conn, self.v)
         db.refresh_matview(self.conn, "place_facts")
@@ -229,3 +241,54 @@ def test_brez_still_finds_breznice_by_the_start_of_its_name_typed_without_accent
     mirror.unit("obec", 540153, "Březnice", okres)
     mirror.publish()
     assert _chips(_suggest(client, "brez")) == [("obec", 540153, "Březnice", "Příbram")]
+
+
+def _lhoty(m: _Mirror) -> None:
+    """Three towns named Lhota, each in its okres: one has a served property for rent, one has only inactive ones and
+    the most people, one has the lowest code and fewer people now than in 2020."""
+    stredocesky = m.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    m.unit("obec", 534986, "Lhota", m.unit("okres", 3209, "Praha-východ", stredocesky))
+    m.unit("obec", 513041, "Lhota", m.unit("okres", 3203, "Kladno", stredocesky))
+    m.unit("obec", 500101, "Lhota", m.unit("okres", 3808, "Přerov", m.unit("kraj", 124, "Olomoucký kraj")))
+    m.served(region=STREDOCESKY, okres=3209, obec=534986, deal="pronajem")
+    m.served(region=STREDOCESKY, okres=3203, obec=513041, active=False)
+    m.served(region=STREDOCESKY, okres=3203, obec=513041, active=False)
+    m.population(534986, 548)
+    m.population(513041, 663)
+    m.population(500101, 1000, year=2020)
+    m.population(500101, 312)
+
+
+def test_two_towns_called_lhota_answer_the_one_with_served_properties_first_each_with_its_okres(mirror, client):
+    """Q12 a: served properties of any deal type, then the latest population, then code. The Lhota in Kladno has no
+    served property (story 46: still findable) and comes before the Lhota in Přerov, whose code is lower."""
+    _lhoty(mirror)
+    mirror.publish()
+    assert _chips(_suggest(client, "Lhota")) == [
+        ("obec", 534986, "Lhota", "Praha-východ"),
+        ("obec", 513041, "Lhota", "Kladno"),
+        ("obec", 500101, "Lhota", "Přerov"),
+    ]
+
+
+def test_a_town_answers_before_its_quarter_of_the_same_name_when_both_serve_the_same_properties(mirror, client):
+    """A quarter has no population, so on equal served properties the town goes first although its code is higher."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    mirror.unit("cast_obce", 70971, "Lhota", mirror.unit("obec", 513041, "Lhota", okres))
+    mirror.served(region=STREDOCESKY, okres=3203, obec=513041, part=70971)
+    mirror.population(513041, 663)
+    mirror.publish()
+    assert _chips(_suggest(client, "Lhota")) == [
+        ("obec", 513041, "Lhota", "Kladno"),
+        ("cast_obce", 70971, "Lhota", "Lhota"),
+    ]
+
+
+def test_zizkov_answers_the_quarter_in_praha_first_once_it_serves_a_property(mirror, client):
+    _zizkov(mirror)
+    mirror.served(region=PRAHA_KRAJ, okres=PRAHA_OKRES, obec=PRAHA, part=ZIZKOV_PRAHA)
+    mirror.publish()
+    assert _chips(_suggest(client, "zizkov")) == [
+        ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
+        ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
+    ]
