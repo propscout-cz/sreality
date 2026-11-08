@@ -101,6 +101,11 @@ select g.level, g.code, g.n
 
 create unique index if not exists place_served_counts_pk on public.place_served_counts (level, code);
 
+-- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back at once, so a later
+-- statement that fails cannot leave this one readable.
+revoke all on public.place_served_counts from public, anon, authenticated;
+grant select on public.place_served_counts to service_role;
+
 -- Item 3.
 create materialized view if not exists public.place_facts as
 with
@@ -128,15 +133,12 @@ select d.level, d.code, d.lat, d.lng from doors d where d.code is not null;
 
 create unique index if not exists place_facts_pk on public.place_facts (level, code);
 
+revoke all on public.place_facts from public, anon, authenticated;
+grant select on public.place_facts to service_role;
+
 comment on materialized view public.place_facts is
   'Where own place search flies to (mig 738): a fact table about register places, not a location store (rule 25). '
   'Refreshed by the registry load''s finish step.';
-
--- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back.
-revoke all on public.place_served_counts from public, anon, authenticated;
-grant select on public.place_served_counts to service_role;
-revoke all on public.place_facts from public, anon, authenticated;
-grant select on public.place_facts to service_role;
 
 -- Item 4. The registry load's own cron (location_registry_load.yml); its producer is the file, never the workflow, and
 -- the PR that moves ruian_load to the job runner re-hosts the row.
@@ -145,7 +147,9 @@ values ('place_served_counts', 'refresh_matview', 'pg_cron', '37 * * * *', inter
        ('place_facts', 'location_data/ruian_load.py', 'github-actions', '0 10 1 * *', interval '40 days', true)
 on conflict (name) do nothing;
 
--- Born populated, so stamped now: Health would otherwise read "never succeeded" until the next monthly load.
+-- Both are born populated, so stamped now: Health would otherwise read "never succeeded" until their first refresh
+-- (the :37 cron for the counts, the next monthly load for the facts).
+select public.stamp_derived_artifact('place_served_counts', (select count(*) from public.place_served_counts), null);
 select public.stamp_derived_artifact('place_facts', (select count(*) from public.place_facts), null);
 
 do $cron$
@@ -219,8 +223,8 @@ begin
   if exists (select 1 from pg_depend d
               where d.refclassid = 'pg_class'::regclass and d.refobjid = 'public.browse_list'::regclass
                 and d.classid in ('pg_rewrite'::regclass, 'pg_proc'::regclass)) then
-    raise exception '738 refused: a view, matview or BEGIN ATOMIC function depends on browse_list, '
-                    'so its rebuild would fail';
+    raise exception '738 landed, but a view, matview or BEGIN ATOMIC function depends on browse_list: '
+                    'the next rebuild_browse_list() will fail -- drop it';
   end if;
   if to_regclass('cron.job') is null then
     raise notice '738: no pg_cron here; the schedule is not asserted';
