@@ -538,6 +538,19 @@ def test_a_retired_door_gives_a_mestska_cast_no_quarter_pair(conn):
     assert _pairs(conn) == []
 
 
+def test_after_the_finish_step_own_place_search_answers_praha_6_as_a_shortcut_with_its_quarter(conn):
+    """The whole path: the load, its gazetteer, the pointer swap, the finish step, then the search (#2450)."""
+    from location_data import place_search
+
+    m = _load_w7_over_old_shape(conn)
+    name_index.rebuild(conn, m.v2)
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert [p.item() for p in place_search.suggest(conn, "Praha 6", limit=10) if p.level == "momc"] == [
+        {"level": "momc", "id": MOMC, "name": "Praha 6", "context": "Praha", "point": {"lat": 50.08, "lng": 14.39},
+         "places": [{"level": "cast_obce", "id": PART, "name": "Vokovice", "context": "Praha"}]}]
+
+
 def test_finishing_the_current_version_while_a_later_one_sits_staged_lands_its_pairs_on_its_own_rows(conn):
     """A re-dispatch of the current vintage while a later load sits staged, killed before its pointer swap: v2 has
     closed Praha 6 and Vokovice and reopened them, but v1's name index names the rows v2 closed, so v1's pair is on
