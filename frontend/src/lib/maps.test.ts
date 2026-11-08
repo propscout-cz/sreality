@@ -69,6 +69,11 @@ describe('resolveSuggestion', () => {
     expect(placePick('', 1)).toBeUndefined();
   });
 
+  it('counts a pick text in characters, as the server does, not in UTF-16 units', () => {
+    expect(placePick('🏠'.repeat(200), 1)).toEqual({ text: '🏠'.repeat(200), rank: 1 });
+    expect(placePick('🏠'.repeat(201), 1)).toBeUndefined();
+  });
+
   /* The request is strict — no null coordinates — so such a pick fails like a
    * failed call, and the typeahead says "Couldn't verify this place". */
   it('never sends a pick without a position', async () => {

@@ -202,15 +202,9 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
 
 def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
     """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
-    admin, as a forced refresh is, or on the automation marker (`records_picks`); never a scope: identity routes take
+    admin, as a forced refresh is, or on the automation marker (`is_automation`); never a scope: identity routes take
     verify_jwt / `TenantConn` (tenant_pool)."""
     return _bearer(authorization)
-
-
-def records_picks(claims: dict | None) -> bool:
-    """A place pick is recorded (ruling Q10) only for a verified human: claims present (never the local-dev opt-out)
-    and no `app_metadata.automation` marker (the smoke accounts carry one)."""
-    return claims is not None and not (claims.get("app_metadata") or {}).get("automation")
 
 
 # Fixed system account id (mirrors migrations/286_accounts_foundation.sql). The
@@ -321,6 +315,11 @@ def is_admin(claims: dict) -> bool:
     """The is_admin claim, top-level or under app_metadata — require_admin's test."""
     meta = claims.get("app_metadata") or {}
     return claims.get("is_admin") is True or meta.get("is_admin") is True
+
+
+def is_automation(claims: dict) -> bool:
+    """The smoke accounts' `app_metadata.automation` marker; any truthy value counts, so a malformed one still marks."""
+    return bool((claims.get("app_metadata") or {}).get("automation"))
 
 
 def require_admin(claims: dict = Depends(verify_jwt)) -> dict:

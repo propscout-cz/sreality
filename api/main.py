@@ -406,7 +406,7 @@ def post_maps_resolve(
     claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
     """A pick's record (ruling Q10) is written after the answer, on its own connection, for a verified caller who is
-    not automation; the answer never waits for it or hears of its failure."""
+    not automation and not the address picker; the answer never waits for it or hears of its failure."""
     answer, place = maps.resolve(
         conn,
         lat=body.lat,
@@ -416,7 +416,8 @@ def post_maps_resolve(
         regional_structure=[e.model_dump() for e in body.regional_structure],
         address_point=body.address_point,
     )
-    if body.pick is not None and place is not None and deps.records_picks(claims):
+    if (body.pick is not None and not body.address_point and place is not None
+            and claims is not None and not deps.is_automation(claims)):
         background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
                                   rank=body.pick.rank, level=place.level, code=place.code)
     return answer

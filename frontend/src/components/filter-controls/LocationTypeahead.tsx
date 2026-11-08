@@ -58,16 +58,16 @@ const sameChip = (a: DistrictChip, b: DistrictChip): boolean =>
 /* The chips a resolve answer makes, or why it makes none. `res` null = the
  * resolve call threw, which says nothing about the place. */
 const chipsFromResolve = (
-  pick: MapySuggestion,
+  suggestion: MapySuggestion,
   res: LocationResolution | null,
 ): DistrictChip[] | string => {
   if (res == null) return PICK_NOTICE.failed;
-  if (res.level == null && pick.type === 'regional.country') return PICK_NOTICE.country;
+  if (res.level == null && suggestion.type === 'regional.country') return PICK_NOTICE.country;
   const units = res.parts ?? [res];
   const chips = units
     .map((u) => ({ name: u.name, context: res.context, level: res.level, id: u.id }))
     .filter(isDistrictChip);
-  return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(pick.name);
+  return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(suggestion.name);
 };
 
 /* The Mapy suggest read behind a place box: the typed query, debounced, and its answer.

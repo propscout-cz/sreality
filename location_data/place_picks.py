@@ -15,7 +15,7 @@ from datetime import datetime
 
 import psycopg
 
-LOG = logging.getLogger("location.place_picks")
+LOG = logging.getLogger("location_data.place_picks")
 
 _INSERT_SQL = "INSERT INTO place_picks (text, rank, level, code) VALUES (%s, %s, %s::ruian_level, %s)"
 _WINDOW_SQL = """
@@ -27,7 +27,7 @@ SELECT created_at, text, rank, level::text, code
 
 
 @dataclass(frozen=True)
-class PlacePick:
+class StoredPick:
     created_at: datetime
     text: str | None
     rank: int
@@ -49,8 +49,8 @@ def record(open_conn: Callable[[], contextlib.AbstractContextManager[psycopg.Con
         LOG.warning("place_picks: write failed (SQLSTATE %s)", getattr(exc, "sqlstate", None))
 
 
-def picks_between(conn: psycopg.Connection, start: datetime, end: datetime) -> list[PlacePick]:
+def picks_between(conn: psycopg.Connection, start: datetime, end: datetime) -> list[StoredPick]:
     """Every pick made in [start, end), as stored."""
     with conn.cursor() as cur:
         cur.execute(_WINDOW_SQL, (start, end))
-        return [PlacePick(*row) for row in cur.fetchall()]
+        return [StoredPick(*row) for row in cur.fetchall()]

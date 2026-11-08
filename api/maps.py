@@ -567,7 +567,7 @@ def _resolve_admin(
 
 
 @dataclass(frozen=True)
-class PickPlace:
+class PickedUnit:
     """What a pick named, for its record (ruling Q10): the bound level and code, the typed level and no code when
     refused, `momc` and its code for a městská část."""
 
@@ -584,12 +584,12 @@ def resolve(
     name: str,
     regional_structure: Sequence[Any],
     address_point: bool = False,
-) -> tuple[dict[str, Any], PickPlace | None]:
+) -> tuple[dict[str, Any], PickedUnit | None]:
     """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level.
     With `address_point` (the address picker) an address pick answers its ONE door. A městská
     část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips.
     Beside the answer, the place a pick's record names; None when there is nothing to record (no level, no
-    registry, or a door, which the address picker never records)."""
+    registry)."""
     door = address_point and type_ == "regional.address"
     level = "adresni_misto" if door else _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
@@ -606,12 +606,12 @@ def resolve(
             conn, version=version, lat=lat, lng=lng, level=level,
             name=_street_of(type_, name, regional_structure),
         )
-    place = PickPlace(level, None)
+    place = PickedUnit(level, None)
     if isinstance(unit, _Momc):
         out["name"] = unit.name
         out["parts"] = [{"id": code, "name": nm} for code, nm in unit.parts]
-        place = PickPlace("momc", unit.code)
+        place = PickedUnit("momc", unit.code)
     elif unit is not None:
         out["id"], out["name"] = unit
-        place = PickPlace(out["level"], out["id"])
-    return out, None if door else place
+        place = PickedUnit(out["level"], out["id"])
+    return out, place

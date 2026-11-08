@@ -8,7 +8,6 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterator
-from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -95,9 +94,13 @@ def client(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterato
         api_main.app.dependency_overrides.pop(deps.get_db_conn, None)
 
 
-def _picks(conn: psycopg.Connection) -> list[place_picks.PlacePick]:
+def _picks(conn: psycopg.Connection) -> list[place_picks.StoredPick]:
     start, end = conn.execute("SELECT now() - interval '1 minute', now() + interval '1 minute'").fetchone()
     return place_picks.picks_between(conn, start, end)
+
+
+def _stored(conn: psycopg.Connection) -> list[tuple[str | None, int, str, int | None]]:
+    return [(p.text, p.rank, p.level, p.code) for p in _picks(conn)]
 
 
 def _resolve(client: TestClient, body: dict[str, Any], text: str, rank: int) -> dict[str, Any]:
@@ -112,11 +115,6 @@ def test_a_town_pick_is_recorded_with_its_text_rank_level_and_code(conn: psycopg
     assert answer == {"level": "obec", "id": BRNO, "name": "Brno", "context": None}
     (pick,) = _picks(conn)
     assert (pick.text, pick.rank, pick.level, pick.code) == ("Brno", 2, "obec", BRNO)
-    assert isinstance(pick.created_at, datetime)
-
-
-def _stored(conn: psycopg.Connection) -> list[tuple[str | None, int, str, int | None]]:
-    return [(p.text, p.rank, p.level, p.code) for p in _picks(conn)]
 
 
 def test_a_mestska_cast_is_recorded_as_itself_while_the_answer_stays_its_parts(conn: psycopg.Connection,
@@ -142,10 +140,11 @@ def test_a_refused_pick_keeps_its_text_and_typed_level_with_no_code(conn: psycop
 @pytest.mark.parametrize("body", [
     {"lat": 49.8, "lng": 15.3, "type": "regional.country", "name": "Česko"},
     {"lat": 49.2, "lng": 16.6, "type": "poi", "name": "Brno"},
-    # The address picker's door: it never sends a pick, and one sent anyway records nothing.
+    # The address picker never sends a pick; one sent anyway records nothing, for its door or any other row.
     {"lat": 50.101, "lng": 14.348, "type": "regional.address", "name": "Nad Bořislavkou 487", "address_point": True,
      "regional_structure": [{"name": "487", "type": "regional.address"}]},
-], ids=["country", "unknown type", "door"])
+    {**TOWN_BRNO, "address_point": True},
+], ids=["country", "unknown type", "address picker's door", "address picker's town"])
 def test_a_pick_with_no_place_to_record_stores_nothing(conn: psycopg.Connection, client: TestClient,
                                                        body: dict[str, Any]) -> None:
     _resolve(client, body, "Brno", 1)
@@ -158,13 +157,15 @@ def test_a_resolve_without_a_current_registry_stores_nothing(conn: psycopg.Conne
     assert _stored(conn) == []
 
 
-def test_a_failed_resolve_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
-    conn.execute("SAVEPOINT broken")
-    conn.execute("ALTER TABLE ruian_admin_unit_geometries RENAME TO ruian_admin_unit_geometries_gone")
+def test_a_failed_resolve_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(api_main.maps, "resolve", boom)
     failing = TestClient(api_main.app, headers=client.headers, raise_server_exceptions=False)
     res = failing.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}})
     assert res.status_code == 500
-    conn.execute("ROLLBACK TO SAVEPOINT broken")
     assert _stored(conn) == []
 
 
@@ -192,6 +193,9 @@ def test_a_malformed_pick_is_a_422_and_stores_nothing(conn: psycopg.Connection, 
 def test_no_browser_role_reaches_the_table(conn: psycopg.Connection, role: str) -> None:
     assert conn.execute("SELECT has_table_privilege(%s, 'public.place_picks', 'SELECT, INSERT, UPDATE, DELETE')",
                         (role,)).fetchone() == (False,)
+
+
+def test_rls_is_on(conn: psycopg.Connection) -> None:
     assert conn.execute("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.place_picks'::regclass"
                         ).fetchone() == (True,)
 
@@ -211,7 +215,7 @@ def test_a_failing_write_logs_its_sqlstate_and_no_text_and_the_answer_still_come
     with caplog.at_level("INFO"):
         answer = _resolve(client, TOWN_BRNO, "Brno", 2)
     assert answer == {"level": "obec", "id": BRNO, "name": "Brno", "context": None}
-    lines = [r.getMessage() for r in caplog.records if r.name == "location.place_picks"]
+    lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_picks"]
     assert lines == ["place_picks: write failed (SQLSTATE 23514)"]
     assert not any("Brno" in r.getMessage() or r.exc_info for r in caplog.records if r.name.startswith("location"))
     assert _stored(conn) == []

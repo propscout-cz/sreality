@@ -49,6 +49,12 @@ interface SuggestResponse {
 
 export const SUGGEST_NOT_CONFIGURED = 'suggest_not_configured';
 
+/* The server's pick bounds (api/schemas.PlacePickIn, migration 737; a pytest holds them equal). The
+ * list is never longer than the highest rank a pick may record. */
+const PICK_TEXT_MAX = 200;
+const PICK_RANK_MAX = 10;
+const SUGGEST_LIMIT = PICK_RANK_MAX;
+
 export const fetchSuggest = async (
   query: string,
   signal?: AbortSignal,
@@ -56,7 +62,7 @@ export const fetchSuggest = async (
   try {
     const res = await apiGet<SuggestResponse>(
       '/maps/suggest',
-      { query, limit: 10, lang: 'cs' },
+      { query, limit: SUGGEST_LIMIT, lang: 'cs' },
       signal,
     );
     return res.items ?? [];
@@ -75,14 +81,14 @@ export interface PlacePick {
   rank: number;
 }
 
-/* The server's bounds; a pick outside them is not sent, so the resolve itself never 422s on it. */
-const PICK_TEXT_MAX = 200;
-const PICK_RANK_MAX = 10;
-
-export const placePick = (text: string, rank: number): PlacePick | undefined =>
-  text.length >= 1 && text.length <= PICK_TEXT_MAX && rank >= 1 && rank <= PICK_RANK_MAX
+/* A pick outside the server's bounds is not sent, so the resolve itself never 422s on it. Length
+ * counts code points, as the server does. */
+export const placePick = (text: string, rank: number): PlacePick | undefined => {
+  const length = [...text].length;
+  return length >= 1 && length <= PICK_TEXT_MAX && rank >= 1 && rank <= PICK_RANK_MAX
     ? { text, rank }
     : undefined;
+};
 
 /* The request is strict (no nulls), so a pick without a position is refused here,
  * the same way a failed call is. `addressPoint` (the address picker only) binds an
