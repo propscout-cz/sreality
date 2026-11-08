@@ -60,6 +60,9 @@ beforeAll(async () => {
 
 const LOADED = { timeout: 5_000 };
 
+const AERIAL = 'https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}';
+const bar = () => screen.getByRole('group', { name: 'Podklad mapy' });
+
 beforeEach(() => {
   resetFakeMaps();
   vi.mocked(api.apiGet).mockReset().mockResolvedValue(LOC);
@@ -134,15 +137,40 @@ describe('<LocationBody>', () => {
     expect(fakeCreateMap).not.toHaveBeenCalled();
   });
 
-  it('pins the point once the map has loaded', async () => {
+  it('pins the point over the aerial photo once the map has loaded', async () => {
     wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
-    fakeMaps[0].fire('load');
+    act(() => fakeMaps[0].fire('load'));
     expect(fakeMaps[0].sources.get('pin')).toMatchObject({
       type: 'geojson',
       data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
     });
-    expect(fakeMaps[0].layers).toEqual([expect.objectContaining({ id: 'pin', type: 'circle', source: 'pin' })]);
+    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['aerial', 'pin']);
+    expect(fakeMaps[0].layers[1]).toMatchObject({ type: 'circle', source: 'pin' });
+  }, 15_000);
+
+  /* Ortofoto ČR (CC BY 4.0): hidden, MapLibre fetches none of its tiles. */
+  it('lays ČÚZK’s aerial photo hidden from the start, and shows it on Letecká without a new map', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    const map = fakeMaps[0];
+    act(() => map.fire('load'));
+    const source = map.sources.get('aerial') as { attribution?: string } | undefined;
+    expect(source).toMatchObject({ type: 'raster', tiles: [AERIAL], tileSize: 256, maxzoom: 20 });
+    const credit = document.createRange().createContextualFragment(source?.attribution ?? '').querySelector('a');
+    expect(credit?.textContent).toBe('© ČÚZK, CC BY 4.0');
+    expect(credit).toHaveAttribute('href', 'https://geoportal.cuzk.gov.cz/');
+    expect(map.layers.find((l) => l.id === 'aerial')).toMatchObject({
+      type: 'raster',
+      source: 'aerial',
+      layout: { visibility: 'none' },
+    });
+
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    expect(map.layout.get('aerial')).toMatchObject({ visibility: 'visible' });
+    expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
+    expect(map.removed).toBe(false);
   }, 15_000);
 
   /* iOS caps the WebGL contexts a page may hold. */
