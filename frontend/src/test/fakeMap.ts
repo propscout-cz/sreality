@@ -1,8 +1,8 @@
 /* A fake MapLibre map for jsdom (which has no WebGL): `fakeCreateMap` stands in for
  * lib/basemap's createMap, keeps every map it built in `fakeMaps`, records what the map
  * was given (its container, options, sources and layers, in drawing order) and lets a test
- * fire the map's events. `layers` stays what the map was given; `getLayer` and
- * `setLayoutProperty` act on `layout`, each layer's live layout, so a test reads a layer's
+ * fire the map's events. `layers` stays what the map was given (`getLayer` reads it);
+ * `setLayoutProperty` acts on `layout`, each layer's live layout, so a test reads a layer's
  * birth state apart from its state now. `resetFakeMaps()` clears the record but keeps a
  * queued mockImplementationOnce. */
 import type { Map as MaplibreMap } from 'maplibre-gl';
