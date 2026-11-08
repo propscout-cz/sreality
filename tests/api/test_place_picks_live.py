@@ -177,6 +177,32 @@ def test_an_unverified_caller_stores_nothing(conn: psycopg.Connection, client: T
     assert _stored(conn) == []
 
 
+@pytest.mark.parametrize("pick", [
+    {"text": "Brno", "rank": 2, "row": "Brno"},
+    {"text": "Brno", "rank": 11},
+    {"text": "B" * 201, "rank": 2},
+], ids=["unknown field", "rank 11", "201 characters"])
+def test_a_malformed_pick_is_a_422_and_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                                      pick: dict[str, Any]) -> None:
+    assert client.post("/maps/resolve", json={**TOWN_BRNO, "pick": pick}).status_code == 422
+    assert _stored(conn) == []
+
+
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+def test_no_browser_role_reaches_the_table(conn: psycopg.Connection, role: str) -> None:
+    assert conn.execute("SELECT has_table_privilege(%s, 'public.place_picks', 'SELECT, INSERT, UPDATE, DELETE')",
+                        (role,)).fetchone() == (False,)
+    assert conn.execute("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.place_picks'::regclass"
+                        ).fetchone() == (True,)
+
+
+@pytest.mark.parametrize("text", ["Praha 2", "Praha ２"], ids=["ascii digit", "full-width digit"])
+def test_the_table_refuses_a_text_with_a_digit(conn: psycopg.Connection, text: str) -> None:
+    """The CHECK pins the ICU collation, so the full-width digit is refused on a libc-default image too."""
+    with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+        conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES (%s, 1, 'momc', %s)", (text, PRAHA_6))
+
+
 def test_an_automation_account_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
     token = mint({"sub": str(uuid.uuid4()), "app_metadata": {"automation": True}})
     res = client.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}},
