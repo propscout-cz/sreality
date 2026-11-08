@@ -953,13 +953,29 @@ rules. Identify which one a task belongs to before you start.
   only the caller's own collections, so a viewer can neither add to nor remove from it there.
   The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
   query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
-  `pages/Link` is, so the first-visit budget never pays for them; no WebGL maps, no estimation start —
-  RunPanel skips `ComparablesMap` under the shell), and the fifth tab `/link`
-  resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
+  `pages/Link` is, so the first-visit budget never pays for them; no desktop map (`DetailMap`,
+  `ComparablesMap`), no estimation start — RunPanel skips `ComparablesMap` under the shell), and the
+  fifth tab `/link` resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
   `/listing/:source/:nativeId` alias. Poloha (the feed card's fourth margin mark → a bottom sheet,
-  and the phone property page's first section, one `LocationBody`) is a Mapy static image the API
-  streams on every view (`api/routes/property_location.py`; Mapy's terms forbid storing it, so never
-  R2, only an hour of private browser cache) — never a WebGL map on the phone.
+  and the phone property page's first section, one `LocationBody`) reads
+  `GET /properties/{id}/location` (`api/routes/property_location.py`: the location ad's point,
+  precision, label and note) and shows the label, the note and the Apple/Google/Mapy.cz links first;
+  its 4:3 plate then mounts `PhoneMap` (#2446), a lazy chunk over `lib/basemap` `createMap`
+  (OpenFreeMap): cooperative gestures with the Czech hint "Mapou posunete dvěma prsty", no zoom
+  buttons, no scale bar, dimmed after dusk like the photos (`PHOTO_DARK`), DetailMap's pin
+  (`addPointPin`). Its zoom is `lib/zoomByLevel`'s by precision (street 15, quarter 13, town 11,
+  coarse 9); the links take one step more, since the map apps count 256 px tiles and MapLibre 512.
+  The map degrades, the place does not: `MapSlot` (an `ErrorBoundary` with `fallback={null}` and
+  `onError`, around Suspense) catches a `createMap` throw, and `guardMap` turns a lost WebGL context,
+  or an `error` before the first `style.load`, into one; the plate goes and "Mapu se nepodařilo
+  načíst" shows under the note. A later tile error leaves the map up. A chunk that fails online
+  still reloads the page (`lib/lazyChunk`); only an offline or blocked one reaches the slot. Each map
+  is released on unmount (iOS caps a page's WebGL contexts). `eslint.config.js`'s
+  `no-restricted-imports` keeps `maplibre-gl` and `lib/basemap` out of every module but the map
+  modules (type imports and `lazyChunk(() => import(...))` stay legal). The rule cannot see a static
+  import of a map module itself (`PhoneMap` from a first-visit module passes lint). Review and
+  `frontend/scripts/bundle-budget.mjs` (CI, which fails if MapLibre reaches the first-visit path)
+  catch that case.
 - **Acting as a pipeline's owner is one selection, one context, one option, one key segment**
   (`frontend/src/lib/acting.ts`, migration 641, `docs/design/pipeline-sharing.md` §3.5). The
   ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
@@ -5781,7 +5797,7 @@ Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own
 `position: relative` at equal specificity, `inset-0` then sizes nothing, and the container collapses
 to 0 height — no tiles, no points, an empty panel. Every map in the app (DetailMap, ListingMap,
-ComparablesMap) carries the same override for the same reason; the audit map shipped without it and
+ComparablesMap, the phone's PhoneMap) carries the same override for the same reason; the audit map shipped without it and
 rendered blank in production.
 
 ## Cross-reference map

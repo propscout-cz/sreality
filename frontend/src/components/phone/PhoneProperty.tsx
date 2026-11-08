@@ -5,13 +5,13 @@
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
  * curation row; the broker strip (Zavolat, Uložit kontakt: BrokerStrip); then the sections as section cards (components/Panel, the desktop
- * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (a streamed
- * Mapy static image through the API, never a WebGL map on the phone), then "Moje
- * fotky" (the camera and the user's own photos, PropertyPhotos).
+ * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (its own small
+ * lazy map, PhoneMap), then "Moje fotky" (the camera and the user's own photos,
+ * PropertyPhotos).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
- * header map (Poloha's static image stands in), Explore area, the comparables map (RunPanel skips it under the
+ * header map (Poloha's own map stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
 import { Suspense, useMemo, useState } from 'react';

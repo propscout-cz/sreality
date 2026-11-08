@@ -101,7 +101,7 @@ describe('<AddressPicker>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     await waitFor(() => expect(screen.queryByRole('group', { name: PENCIL })).toBeNull());
     expect(submitLocationPick).toHaveBeenCalledWith({ property_id: 7, pick: { level: 'adresni_misto', code: 21000001 } });
-    for (const key of [propertyKeys.row(7), propertyLocationKeys.location(7), propertyLocationKeys.staticMap(7)]) {
+    for (const key of [propertyKeys.row(7), propertyLocationKeys.location(7)]) {
       expect(invalidated).toHaveBeenCalledWith({ queryKey: key });
     }
   });

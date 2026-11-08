@@ -1,8 +1,9 @@
 /* Single source of truth for map construction across the whole app. Every
  * surface (Browse, listing detail, comparables, datasets choropleth, the
- * location-filter widget) builds its MapLibre map through `createMap` so the
- * basemap style, the standard controls, and the interaction posture are
- * defined once here — change them in one place and all surfaces follow.
+ * location-filter widget, the phone's Poloha) builds its MapLibre map through
+ * `createMap` so the basemap style, the standard controls, and the interaction
+ * posture are defined once here — change them in one place and all surfaces
+ * follow.
  *
  * Swap basemap styles via TILE_STYLE (positron | bright | liberty | dark |
  * fiord). */
@@ -60,4 +61,52 @@ export function createMap(
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
   }
   return map;
+}
+
+/* Tells `fail` when the map cannot draw: its WebGL context was lost, or it erred before
+ * its style first loaded. A later error (a tile that 404s) leaves the map up and stays
+ * MapLibre's to log. These arrive as MapLibre events, outside React's render, so no error
+ * boundary sees them on its own. Returns the unguard: call it before `map.remove()`, which
+ * drops the context itself. */
+export function guardMap(map: maplibregl.Map, fail: (error: Error) => void): () => void {
+  const onContextLost = () => fail(new Error('The map lost its WebGL context'));
+  const onError = (e: ErrorEvent) => fail(e.error);
+  const onStyleLoad = () => map.off('error', onError);
+  map.on('webglcontextlost', onContextLost);
+  map.on('error', onError);
+  map.once('style.load', onStyleLoad);
+  return () => {
+    map.off('webglcontextlost', onContextLost);
+    map.off('error', onError);
+    map.off('style.load', onStyleLoad);
+  };
+}
+
+/* The one pin for a property's point (DetailMap, the phone's Poloha), dimmed for an
+ * inactive one. Call it once the map's style has loaded. */
+export function addPointPin(
+  map: maplibregl.Map,
+  [lng, lat]: [number, number],
+  { active = true }: { active?: boolean } = {},
+): void {
+  map.addSource('pin', {
+    type: 'geojson',
+    data: {
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+    },
+  });
+  map.addLayer({
+    id: 'pin',
+    type: 'circle',
+    source: 'pin',
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#3c6e63',
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2,
+      'circle-opacity': active ? 1 : 0.6,
+    },
+  });
 }
