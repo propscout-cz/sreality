@@ -8,7 +8,7 @@
  * flies. Picks resolve asynchronously, so every edit lands on the latest chips.
  */
 import { useState } from 'react';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -322,6 +322,38 @@ describe('<LocationTypeahead> chip controls name their level', () => {
     expect(screen.getByRole('button', { name: 'Remove Jihlava (Okres)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove Jihlava (Obec)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Exclude Jihlava (Okres)' })).toBeInTheDocument();
+  });
+});
+
+describe('<LocationTypeahead> a pick carries what its list answered (ruling Q10)', () => {
+  const town = (name: string, type = 'regional.municipality'): MapySuggestion => ({
+    name, label: 'Obec', type, position: { lon: 16.6, lat: 49.2 },
+  });
+  const BRNO_ROWS = [town('Brno-město', 'regional.region.district'), town('Brno')];
+  const rows = () => within(screen.getByRole('listbox')).getAllByRole('button');
+
+  it('row 2 for "Brno" makes resolve carry {text "Brno", rank 2}', async () => {
+    const user = renderHost();
+    fetchSuggest.mockResolvedValue(BRNO_ROWS);
+    resolveSuggestion.mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+    await user.type(input(), 'Brno');
+    await screen.findByRole('listbox');
+    await user.click(rows()[1]);
+
+    expect(resolveSuggestion).toHaveBeenCalledWith(BRNO_ROWS[1], { pick: { text: 'Brno', rank: 2 } });
+  });
+
+  it('typing on after the list showed still sends the text the list answered', async () => {
+    const user = renderHost();
+    fetchSuggest.mockResolvedValue(BRNO_ROWS);
+    resolveSuggestion.mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+    await user.type(input(), 'Brno');
+    await screen.findByRole('listbox');
+    /* One synchronous keystroke and click: the list on screen is still the answer to "Brno". */
+    fireEvent.change(input(), { target: { value: 'Brno st' } });
+    fireEvent.click(rows()[1]);
+
+    expect(resolveSuggestion).toHaveBeenCalledWith(BRNO_ROWS[1], { pick: { text: 'Brno', rank: 2 } });
   });
 });
 

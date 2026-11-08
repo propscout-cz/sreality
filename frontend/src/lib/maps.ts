@@ -68,24 +68,42 @@ export const fetchSuggest = async (
   }
 };
 
+/* What the place typeahead tells resolve about a pick, which the server records (ruling Q10,
+ * migration 737): the text its list answered and the row's 1-based rank. */
+export interface PlacePick {
+  text: string;
+  rank: number;
+}
+
+/* The server's bounds; a pick outside them is not sent, so the resolve itself never 422s on it. */
+const PICK_TEXT_MAX = 200;
+const PICK_RANK_MAX = 10;
+
+export const placePick = (text: string, rank: number): PlacePick | undefined =>
+  text.length >= 1 && text.length <= PICK_TEXT_MAX && rank >= 1 && rank <= PICK_RANK_MAX
+    ? { text, rank }
+    : undefined;
+
 /* The request is strict (no nulls), so a pick without a position is refused here,
  * the same way a failed call is. `addressPoint` (the address picker only) binds an
- * address to its one door; without it, Browse's request is unchanged. */
+ * address to its one door; without it, Browse's request is unchanged. `pick` is the
+ * place typeahead's alone: the address picker sends none. */
 export const resolveSuggestion = (
-  pick: MapySuggestion,
-  { addressPoint = false }: { addressPoint?: boolean } = {},
+  suggestion: MapySuggestion,
+  { addressPoint = false, pick }: { addressPoint?: boolean; pick?: PlacePick } = {},
 ): Promise<LocationResolution> => {
-  if (!pick.position) return Promise.reject(new Error('suggestion has no position'));
+  if (!suggestion.position) return Promise.reject(new Error('suggestion has no position'));
   return apiPost<LocationResolution>('/maps/resolve', {
-    lat: pick.position.lat,
-    lng: pick.position.lon,
-    type: pick.type,
+    lat: suggestion.position.lat,
+    lng: suggestion.position.lon,
+    type: suggestion.type,
     /* Read server-side for the levels with no polygon to point-in-polygon
      * against: the quarter and the street (`name`, or an address pick's
      * `regional.street` entry). */
-    name: pick.name,
-    regional_structure: (pick.regionalStructure ?? []).map(({ name, type }) => ({ name, type })),
+    name: suggestion.name,
+    regional_structure: (suggestion.regionalStructure ?? []).map(({ name, type }) => ({ name, type })),
     ...(addressPoint ? { address_point: true } : {}),
+    ...(pick ? { pick } : {}),
   });
 };
 
