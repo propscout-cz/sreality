@@ -208,6 +208,14 @@ describe('<LocationBody>', () => {
     });
   }, 15_000);
 
+  /* The map's tiles come from OpenFreeMap: no view passes a map image through our API. */
+  it('asks the API for the location only, never for a map image', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    expect(vi.mocked(api.apiGet).mock.calls.map(([path]) => path)).toEqual(['/properties/7/location']);
+    expect(api.apiGetBlob).not.toHaveBeenCalled();
+  }, 15_000);
+
   it('prints no note for a street-level point', async () => {
     vi.mocked(api.apiGet).mockResolvedValue(STREET);
     wrap(<LocationBody propertyId={7} />);
