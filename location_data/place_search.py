@@ -9,6 +9,7 @@ area, městská část, cohesion region or the country (Q6 a, Q9). Never reads `
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,7 @@ from location_data.name_index import normalize_name, normalize_street_name
 LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
+_LETTER = re.compile(r"[a-z]")
 
 # The threshold is pinned, not inherited: "brno" reaches Brněnská at exactly 0.6.
 _BOUNDS_SQL = (
@@ -26,6 +28,9 @@ _BOUNDS_SQL = (
     " set_config('pg_trgm.word_similarity_threshold', '0.6', true)"
 )
 
+# A unit is read AT the index's version, as api/maps.py's part lookup reads it (a load closes a re-parented unit before
+# it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
+# prefix or fuzzy key switches its arm off.
 _SUGGEST_SQL = """
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 units AS (
@@ -36,12 +41,15 @@ units AS (
    WHERE n.registry_version_id = (SELECT id FROM cur)
      AND n.name_norm LIKE %(unit_prefix)s
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'cast_obce')
+     AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
    ORDER BY u.level, u.code, tier, u.valid_from DESC),
 streets AS (
   SELECT DISTINCT ON (s.code) 'ulice'::ruian_level AS level, s.code, s.name, s.obec_unit_id AS parent_id,
          CASE WHEN s.name_norm = %(street_key)s THEN 0 ELSE 1 END AS tier
     FROM ruian_streets s
    WHERE s.name_norm LIKE %(street_prefix)s
+     AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
+     AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
    ORDER BY s.code, tier, s.valid_from DESC),
 near AS (SELECT * FROM units UNION ALL SELECT * FROM streets),
 fuzzy AS (
@@ -52,11 +60,14 @@ fuzzy AS (
      AND %(unit_fuzzy)s <%% n.name_norm
      AND n.registry_version_id = (SELECT id FROM cur)
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'cast_obce')
+     AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
   UNION ALL
   SELECT 'ulice'::ruian_level, s.code, s.name, s.obec_unit_id, 2
     FROM ruian_streets s
    WHERE (SELECT count(*) FROM near) < %(limit)s
-     AND %(street_fuzzy)s <%% s.name_norm),
+     AND %(street_fuzzy)s <%% s.name_norm
+     AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
+     AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))),
 hits AS (
   SELECT DISTINCT ON (a.level, a.code) a.*
     FROM (SELECT * FROM near UNION ALL SELECT * FROM fuzzy) a
@@ -84,16 +95,23 @@ class Place:
         return {"level": self.level, "id": self.id, "name": self.name, "context": self.context, "point": point}
 
 
-def _fuzzy_key(key: str) -> str | None:
-    return key if len(key) >= _FUZZY_MIN_CHARS else None
+def _arm(key: str) -> tuple[str | None, str | None]:
+    """A key's prefix pattern and fuzzy key, both None once no letter is left (a PSČ; 'ulice .' to the street arms),
+    where the pattern would be LIKE '%' over every name. The key's alphabet is [0-9a-z ], so it needs no escaping."""
+    if not _LETTER.search(key):
+        return None, None
+    return key + "%", key if len(key) >= _FUZZY_MIN_CHARS else None
 
 
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
-    unit_key = normalize_name(query)
-    street_key = normalize_street_name(query)
+    unit_key, street_key = normalize_name(query), normalize_street_name(query)
+    unit_prefix, unit_fuzzy = _arm(unit_key)
+    if unit_prefix is None:
+        return []
+    street_prefix, street_fuzzy = _arm(street_key)
     params = {
-        "unit_key": unit_key, "unit_prefix": unit_key + "%", "unit_fuzzy": _fuzzy_key(unit_key),
-        "street_key": street_key, "street_prefix": street_key + "%", "street_fuzzy": _fuzzy_key(street_key),
+        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy,
+        "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
     with conn.transaction(), conn.cursor() as cur:

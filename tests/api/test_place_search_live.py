@@ -59,13 +59,16 @@ class _Mirror:
             (f"test:place-search:{uuid.uuid4().hex}", current)).fetchone()[0])
 
     def unit(self, level: str, code: int, name: str, parent: int | None = None, *,
-             point: tuple[float, float] | None = None) -> int:
+             point: tuple[float, float] | None = None, version: int | None = None,
+             valid_to: str | None = None) -> int:
+        """Drawn in `version` alone (the current one by default); `valid_to` closes it."""
+        version = self.v if version is None else version
         path = ".".join(p for p in (self.paths.get(parent) if parent else None, f"{LABEL_PREFIX[level]}{code}") if p)
         unit = int(self.conn.execute(
-            "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from,"
+            "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, valid_to,"
             " first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01',"
-            " %s, %s) RETURNING id",
-            (level, code, name, normalize_name(name), parent, path, self.v, self.v)).fetchone()[0])
+            " %s, %s, %s) RETURNING id",
+            (level, code, name, normalize_name(name), parent, path, valid_to, version, version)).fetchone()[0])
         self.paths[unit], self.codes[unit] = path, code
         if point is not None:
             lng, lat = point
@@ -76,11 +79,20 @@ class _Mirror:
                 "   FROM (SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS p) s", (unit, self.v, lng, lat))
         return unit
 
-    def street(self, code: int, name: str, obec: int, *, door: tuple[float, float] | None = None) -> None:
+    def index_at(self, unit: int, level: str, name: str, version: int) -> None:
+        """The unit's gazetteer row at `version`, as that version's load wrote it."""
+        self.conn.execute(
+            "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, name_norm, name_kind)"
+            " VALUES (%s::ruian_level, %s, %s, %s, %s, 'official')", (level, unit, version, name, normalize_name(name)))
+
+    def street(self, code: int, name: str, obec: int, *, door: tuple[float, float] | None = None,
+               version: int | None = None) -> None:
+        """Open, drawn in `version` alone (the current one by default)."""
+        version = self.v if version is None else version
         self.conn.execute(
             "INSERT INTO ruian_streets (code, name, name_norm, obec_unit_id, first_version_id, last_version_id,"
             " valid_from) VALUES (%s, %s, %s, %s, %s, %s, '2020-01-01')",
-            (code, name, normalize_street_name(name), obec, self.v, self.v))
+            (code, name, normalize_street_name(name), obec, version, version))
         if door is not None:
             self.conn.execute(
                 "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, ulice_kod, psc, geom, plati_od,"
@@ -140,13 +152,15 @@ def _zizkov(m: _Mirror) -> dict[str, int]:
     return {"praha": praha, "kutna_hora": kutna_hora}
 
 
-def _jihomoravsky(m: _Mirror) -> None:
-    """Brno in okres Brno-město; the street Brněnská in Vyškov, whose okres starts with no 'brno'."""
+def _jihomoravsky(m: _Mirror) -> dict[str, int]:
+    """Brno in okres Brno-město; the street Brněnská in Vyškov, whose okres starts with no 'brno'. Returns unit ids."""
     kraj = m.unit("kraj", JIHOMORAVSKY, "Jihomoravský kraj")
     brno_mesto = m.unit("okres", BRNO_MESTO, "Brno-město", kraj)
-    m.unit("obec", BRNO, "Brno", brno_mesto, point=(16.6068, 49.1951))
-    vyskov = m.unit("obec", VYSKOV, "Vyškov", m.unit("okres", VYSKOV_OKRES, "Vyškov", kraj))
+    brno = m.unit("obec", BRNO, "Brno", brno_mesto, point=(16.6068, 49.1951))
+    vyskov_okres = m.unit("okres", VYSKOV_OKRES, "Vyškov", kraj)
+    vyskov = m.unit("obec", VYSKOV, "Vyškov", vyskov_okres)
     m.street(BRNENSKA, "Brněnská", vyskov, door=(16.9978, 49.2786))
+    return {"kraj": kraj, "brno_mesto": brno_mesto, "brno": brno, "vyskov_okres": vyskov_okres, "vyskov": vyskov}
 
 
 def test_brno_answers_the_town_first_and_the_street_brnenska_later_as_chips_with_no_count(mirror, client):
@@ -191,3 +205,20 @@ def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_n
         ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
     ]
     assert _suggest(client, "ceska") == []
+
+
+@pytest.mark.parametrize("query", ["110 00", "ulice .", "Starý Dvůr", "Zábrdí", "Zaniklá"],
+                         ids=["a PSČ", "a bare street word", "a closed town", "an open town the latest vintage drops",
+                              "an open street the latest vintage drops"])
+def test_a_psc_a_bare_street_word_and_a_place_outside_the_current_version_answer_nothing(mirror, client, query):
+    """Starý Dvůr was closed in the older version and named only by its index; Zábrdí and Zaniklá are still open but
+    the current version no longer draws them (the gazetteer names every open unit, so Zábrdí is in it). 'ulice .' is
+    the street word and punctuation alone: nothing of a name is left, so it must not reach every open street."""
+    towns = _jihomoravsky(mirror)
+    closed = mirror.unit("obec", 594172, "Starý Dvůr", towns["vyskov_okres"], version=mirror.old,
+                         valid_to="2025-01-01")
+    mirror.index_at(closed, "obec", "Starý Dvůr", mirror.old)
+    mirror.unit("obec", 593338, "Zábrdí", towns["vyskov_okres"], version=mirror.old)
+    mirror.street(437171, "Zaniklá", towns["vyskov"], version=mirror.old)
+    mirror.publish()
+    assert _suggest(client, query) == []
