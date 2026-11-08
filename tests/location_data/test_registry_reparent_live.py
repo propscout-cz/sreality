@@ -483,3 +483,27 @@ def test_a_mestska_cast_pick_reads_the_name_index_and_answers_its_parts(conn):
     momc = _bind_momc(conn, level="obec", version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
     assert momc is not None and momc.name == "Praha 6" and momc.parts == [(PART, "Vokovice")]
     assert _bind_momc(conn, level="obec", version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None
+
+
+def _pairs(conn: Any) -> list[tuple]:
+    """Own place search's shortcut pairs (#2450): (version, momc code, quarter code, both rows open)."""
+    return [tuple(r) for r in conn.execute(
+        "SELECT r.registry_version_id, m.code, q.code, m.valid_to IS NULL AND q.valid_to IS NULL "
+        "FROM ruian_admin_unit_relations r JOIN ruian_admin_units m ON m.id = r.from_id "
+        "JOIN ruian_admin_units q ON q.id = r.to_id "
+        "WHERE r.relation_type = 'momc_cast_obce' AND m.code = ANY(%s) ORDER BY 1, 2, 3",
+        ([MOMC],)).fetchall()]
+
+
+def test_the_finish_step_lands_a_mestska_cast_s_quarters_at_its_version_and_a_rerun_lands_them_again(conn):
+    """Published without its pairs (as v4 was before #2450), the version gets them from the finish step that a
+    re-dispatch of a current vintage redoes; on the reopened rows, which the version's name index names. A second
+    finish adds nothing."""
+    m = _load_w7_over_old_shape(conn)
+    ruian_load.publish(conn, m.v2)
+    assert _pairs(conn) == []
+
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]

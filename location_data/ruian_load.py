@@ -18,7 +18,8 @@ Mechanism, in order (04 C1.7):
   7. Boundaries for this version (`ruian_boundaries.load_pack`), unchanged units carried.
   8. Rebuild the gazetteer for this version — once, after the pack has named the units.
   9. The completeness assertion: every member stát, okres, obec and KÚ has pip + authoritative.
- 10. Publish = flip `is_current` in one short transaction; refresh `rent_map_cells` and `place_facts`.
+ 10. Publish = flip `is_current` in one short transaction; land the městská část → quarter pairs;
+     refresh `rent_map_cells` and `place_facts`.
 
 What is NOT atomic: steps 6-8 write the mirror in place, so a reader keyed on `valid_to IS
 NULL` rather than on a pinned registry version sees a staged version's unit, street and
@@ -730,6 +731,24 @@ def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) 
         )
 
 
+_MOMC_QUARTERS_SQL = """
+INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)
+SELECT DISTINCT ap.momc_unit_id, ap.cast_obce_unit_id, 'momc_cast_obce', %(v)s::bigint
+  FROM ruian_address_points ap
+ WHERE ap.momc_unit_id IS NOT NULL AND ap.cast_obce_unit_id IS NOT NULL
+ON CONFLICT DO NOTHING
+"""
+
+
+def write_momc_quarters(conn: psycopg.Connection, version_id: int) -> int:
+    """Own place search's shortcut rows (#2450): each městská část's quarters at this version, from its doors."""
+    with conn.cursor() as cur:
+        cur.execute(_MOMC_QUARTERS_SQL, {"v": version_id})
+        landed = cur.rowcount
+    LOG.info("RUIAN momc quarter pairs version=%s new=%d", version_id, landed)
+    return landed
+
+
 def upsert_streets(conn: psycopg.Connection, stage: Staging, version_id: int,
                    source_date: datetime.date) -> int:
     """Streets, SCD-2 like units. Names normalized in Python with the street-word rule."""
@@ -1100,10 +1119,13 @@ def restore_artifacts(
 
 def finish(conn: psycopg.Connection, version_id: int, *, keep_staging: bool) -> None:
     """The steps after the pointer swap, redone by a re-dispatch of a current vintage:
-    drop the staging relations first, so a failing refresh cannot strand them, then
-    rebuild MF's rent cells and own place search's fly-to points."""
+    drop the staging relations first, so a failing step cannot strand them, land the
+    městská část → quarter pairs (own place search answers no shortcut until they do),
+    then rebuild MF's rent cells and own place search's fly-to points. A failing step
+    skips every one after it; a re-dispatch heals them all."""
     if not keep_staging:
         drop_staging(conn, Staging.for_version(version_id))
+    write_momc_quarters(conn, version_id)
     refresh_rent_map_cells(conn)
     refresh_place_facts(conn)
 
