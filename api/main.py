@@ -84,7 +84,7 @@ from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
-from location_data import place_picks
+from location_data import place_picks, place_search
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -419,6 +419,14 @@ def post_maps_resolve(
         background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
                                   rank=body.pick.rank, level=place.level, code=place.code)
     return answer
+
+
+@app.post("/places/suggest")
+def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
+    """Own place search (#2449): rows that are already chips. Ships with no caller until the switch-over (#2453)."""
+    with deps.open_background_conn() as conn:
+        places = place_search.suggest(conn, body.query, limit=body.limit)
+    return {"items": [p.item() for p in places]}
 
 
 def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:
