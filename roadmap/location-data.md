@@ -1387,6 +1387,13 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
   records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
   gate's eval over `picks_between` (#2452); the switch-over DELETE (#2453); Stage B drop (#2455).
+- **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
+  built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
+  point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
+  deal type, then population, then code; one ranking for every box, no count returned. Two service-role read models
+  (`place_served_counts` hourly at :37, `place_facts` in the registry load's finish step) and the gazetteer's btree
+  swapped for `text_pattern_ops` (net 0 indexes). No caller yet. **Next:** gate #2465 → switch-over #2453 (deletes the
+  Mapy search path, Q2 c); shortcuts #2450, addresses #2451, settlement units #2461 on the same module.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
