@@ -4,7 +4,7 @@
 
 import { useEffect, useRef } from 'react';
 
-import { createMap } from '@/lib/basemap';
+import { addPointPin, createMap } from '@/lib/basemap';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
 
@@ -13,10 +13,17 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
 
   useEffect(() => {
     if (!containerRef.current) return;
-    createMap(containerRef.current, {
+    const container = containerRef.current;
+    const map = createMap(container, {
       center: [lon, lat],
       zoom,
       cooperativeGestures: true,
+    });
+
+    map.on('load', () => {
+      // MapLibre opens the compact attribution; fold it to the (i), as on DetailMap.
+      container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
+      addPointPin(map, [lon, lat]);
     });
   }, [lat, lon, zoom]);
 

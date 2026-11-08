@@ -1,8 +1,9 @@
 /* Single source of truth for map construction across the whole app. Every
  * surface (Browse, listing detail, comparables, datasets choropleth, the
- * location-filter widget) builds its MapLibre map through `createMap` so the
- * basemap style, the standard controls, and the interaction posture are
- * defined once here — change them in one place and all surfaces follow.
+ * location-filter widget, the phone's Poloha) builds its MapLibre map through
+ * `createMap` so the basemap style, the standard controls, and the interaction
+ * posture are defined once here — change them in one place and all surfaces
+ * follow.
  *
  * Swap basemap styles via TILE_STYLE (positron | bright | liberty | dark |
  * fiord). */
@@ -60,4 +61,33 @@ export function createMap(
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
   }
   return map;
+}
+
+/* The one pin for a property's point (DetailMap, the phone's Poloha), dimmed for an
+ * inactive one. Call it once the map's style has loaded. */
+export function addPointPin(
+  map: maplibregl.Map,
+  [lng, lat]: [number, number],
+  { active = true }: { active?: boolean } = {},
+): void {
+  map.addSource('pin', {
+    type: 'geojson',
+    data: {
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+    },
+  });
+  map.addLayer({
+    id: 'pin',
+    type: 'circle',
+    source: 'pin',
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#3c6e63',
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2,
+      'circle-opacity': active ? 1 : 0.6,
+    },
+  });
 }

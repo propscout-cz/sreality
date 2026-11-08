@@ -9,7 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
-import { fakeCreateMap, resetFakeMaps } from '@/test/fakeMap';
+import { fakeCreateMap, fakeMaps, resetFakeMaps } from '@/test/fakeMap';
 
 import LocationBody from './LocationBody';
 import LocationSheet from './LocationSheet';
@@ -118,6 +118,17 @@ describe('<LocationBody>', () => {
     expect(container.textContent).toBe('Bez polohy');
     expect(fakeCreateMap).not.toHaveBeenCalled();
   });
+
+  it('pins the point once the map has loaded', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    fakeMaps[0].fire('load');
+    expect(fakeMaps[0].sources.get('pin')).toMatchObject({
+      type: 'geojson',
+      data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
+    });
+    expect(fakeMaps[0].layers).toEqual([expect.objectContaining({ id: 'pin', type: 'circle', source: 'pin' })]);
+  }, 15_000);
 
   it('prints no note for a street-level point', async () => {
     vi.mocked(api.apiGet).mockResolvedValue(STREET);
