@@ -24,9 +24,7 @@ _SELF = "tests/test_mapy_retirement_census.py"
 LEDGER: frozenset[str] = frozenset({
     ".github/workflows/seed_curated_cities.yml",            # Stage A (#2454)
     ".railway/railway.ts",                                  # the worker's key copy (#2454), the API's keys (#2455)
-    "api/main.py",                                          # the static-map route (#2446)
     "api/maps.py",                                          # the suggest proxy: the switch-over (#2453)
-    "api/routes/property_location.py",                      # the static map (#2446)
     "frontend/src/components/filter-controls/LocationTypeahead.tsx",  # the place box: the switch-over (#2453)
     "frontend/src/components/listing-detail/AddressPicker.test.tsx",  # the static map's invalidation (#2446)
     "frontend/src/components/listing-detail/AddressPicker.tsx",       # the static map's invalidation (#2446)
@@ -38,7 +36,6 @@ LEDGER: frozenset[str] = frozenset({
     "scripts/seed_curated_cities.py",                       # Stage A (#2454)
     "tests/api/test_http_json.py",                          # pins suggest's key-free log: the switch-over (#2453)
     "tests/api/test_maps.py",                               # the switch-over (#2453)
-    "tests/api/test_property_location.py",                  # the static map (#2446)
     "tests/scraper/test_geocoding.py",                      # Stage A (#2454)
 })
 

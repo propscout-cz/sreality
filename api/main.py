@@ -297,9 +297,7 @@ app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sig
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.
 app.include_router(property_download_router)
-# /properties/{id}/location + /static-map.png — the phone's Poloha: the canonical ad's point,
-# granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
-# terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
+# /properties/{id}/location — the phone's Poloha: the location ad's point, granularity, label and note. JWT-gated.
 app.include_router(property_location_router)
 # /properties/{id}/price-history — the extension's price chart: every ad of the property and its
 # price snapshots, the SPA property page's two reads. JWT-gated, service role (market data).

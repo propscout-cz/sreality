@@ -44,7 +44,7 @@ OFFICE = EMPTY | {"category_main": "komercni", "category_type": "pronajem", "sub
 STREET = {
     "lat": 50.08, "lon": 14.42, "granularity": "address_point", "granularity_rank": 100,
     "precision": "street", "country_status": "cz",
-    "label": "Vinohradská 12, Praha", "zoom": 16, "note": None,
+    "label": "Vinohradská 12, Praha", "note": None,
 }
 TOWN = STREET | {"granularity": "obec", "granularity_rank": 40, "precision": "town",
                  "note": "Poloha jen na úrovni obce"}

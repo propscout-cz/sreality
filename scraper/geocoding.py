@@ -1,8 +1,8 @@
 """Mapy.cz geocoding wrapper.
 
 `geocode()` serves scripts/seed_curated_cities.py; the Mapy key-failover
-helpers are shared by api/maps.py and api/routes/property_location.py. Uses
-Mapy.cz over Google / OSM for first-party Czech address coverage.
+helpers are shared by api/maps.py. Uses Mapy.cz over Google / OSM for
+first-party Czech address coverage.
 
 # Schema (confirmed against a live api.mapy.com response)
 
@@ -143,7 +143,7 @@ def with_mapy_key_failover(
 ) -> _T:
     """`call(key, last)` per Mapy key in priority order; a MapyKeyRefused from any key but the last
     logs `refused` (key n, key count, status) on the caller's logger and tries the next. The one
-    failover of geocode, /maps suggest and the static map; here, as scraper lanes never import api/."""
+    failover of geocode and /maps suggest; here, as scraper lanes never import api/."""
     for i, key in enumerate(keys[:-1]):
         try:
             return call(key, False)
