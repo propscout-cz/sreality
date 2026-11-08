@@ -235,7 +235,7 @@ SPA's `detailText` and the extension render `message`): psycopg's busy classes (
 **503 `db_busy` + `Retry-After`**; everything else → **500 `internal_error` + logged `ref` id**,
 never raw exception text. Route-owned refusals (property_split's 409) stay.
 **No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings); `/maps/resolve`
-logs level and reason, never the typed name.
+logs level and reason, never the typed name; a sent `pick` is recorded after it answers (architecture § the pick record).
 `frontend/src/lib/api.ts` is the ONE transport (uploads + blob downloads, no raw `fetch()` beside
 it): `REQUEST_DEADLINE_MS` (130 s) sits above the server's 120 s budget and under Railway's ~300 s
 close — keep that ordering — a deadline abort (`ApiError.kind === 'timeout'`) is NEVER retried;
@@ -272,10 +272,9 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
   one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
   non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
-  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
-  whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
-  allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
-  includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
+  too; the cached read stays open), and the route census reds on a body taking it without that call. The claim is
+  stamped in `auth.users.raw_app_meta_data` (`admins` is the allowlist). Both smoke accounts carry
+  `app_metadata.automation = true`: none of their place picks is recorded (`deps.records_picks`).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `TenantConn` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,

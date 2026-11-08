@@ -202,7 +202,8 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
 
 def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
     """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
-    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / `TenantConn` (tenant_pool)."""
+    admin, as a forced refresh is, or on the automation marker (`records_picks`); never a scope: identity routes take
+    verify_jwt / `TenantConn` (tenant_pool)."""
     return _bearer(authorization)
 
 

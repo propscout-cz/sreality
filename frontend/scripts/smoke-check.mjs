@@ -38,6 +38,16 @@
 //   from account_members m join auth.users u on u.id = m.user_id
 //   where u.email = :'email'
 //   on conflict (id) do nothing;
+//
+// 3. The automation marker, on BOTH smoke accounts (admin and non-admin), beside their admin flag in app metadata:
+//    `/maps/resolve` records no place pick for a caller carrying it (ruling Q10, api/dependencies.records_picks), so
+//    a smoke run may pick a place. An operator step; a session picks it up on its next token refresh. :'nonadmin'
+//    is $SMOKE_TEST_NONADMIN_EMAIL; the SELECT confirms it with 2.
+//
+//   update auth.users set raw_app_meta_data = raw_app_meta_data || '{"automation": true}'::jsonb
+//   where email in (:'email', :'nonadmin');
+//   select count(*) from auth.users
+//   where email in (:'email', :'nonadmin') and raw_app_meta_data->>'automation' = 'true';
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';

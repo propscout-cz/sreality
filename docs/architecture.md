@@ -1055,6 +1055,22 @@ rules. Identify which one a task belongs to before you start.
   level (an address binds its street), its register name, and `context` = the register obec
   name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
   `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
+- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10). Own place search may
+  replace Mapy only after a gate over questions its author did not write, so every place box's add sends
+  `pick: {text, rank}` on its resolve (the text its list ANSWERED, not what was typed on after, and the 1-based
+  row; `lib/maps.placePick` drops one outside the server's bounds, 1–200 characters and rank 1–10, so the resolve
+  never 422s on it). The address picker sends none. After the answer, `/maps/resolve` queues ONE background
+  INSERT (`location_data/place_picks.record`, on its own connection) only for verified claims without the
+  `app_metadata.automation` marker (the two smoke accounts carry it; the local-dev opt-out has no claims), and only
+  for a pick that resolved to a level: a failed resolve, no current registry, a country, an unknown type or a door
+  writes nothing, so an outage is never taken for a lost place. Stored: the text exactly as answered, or NULL when
+  any character `isdigit` ("Praha 2", "Praha ２"; the CHECK pins `und-x-icu`, since CI's default collation is libc
+  and only ICU classes "２" a digit); the rank; the bound level and code, the typed level with code NULL when refused,
+  `momc` and its code for a městská část (`_Momc.code`; the answer still lists its části). No account, nothing from
+  Mapy. A failed write logs only its SQLSTATE (the error's DETAIL quotes the row). RLS on, no policy, browser roles
+  revoked. `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452); own search
+  never reads the picks: they are its HOLDOUT. Retention: pg_cron `place-picks-retention` deletes rows over 12 months
+  daily; once the switch-over deploys, one DELETE empties the table (#2453) and Stage B drops it (#2455).
 - Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
   radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
   `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
