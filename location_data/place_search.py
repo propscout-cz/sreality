@@ -77,7 +77,7 @@ hits AS (
 quarters AS (
   SELECT rel.from_id AS unit_id, q.level, q.code, q.name, q.parent_id
     FROM ruian_admin_unit_relations rel JOIN ruian_admin_units q ON q.id = rel.to_id
-   WHERE rel.relation_type = 'momc_cast_obce'
+   WHERE rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = (SELECT id FROM cur)
      AND rel.from_id IN (SELECT h.unit_id FROM hits h WHERE h.level = 'momc')),
 ranked AS (
   SELECT h.*, coalesce(c.n, 0) AS served, pop.population

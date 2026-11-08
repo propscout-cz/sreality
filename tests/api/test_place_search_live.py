@@ -60,17 +60,22 @@ class _Mirror:
             " is_current) VALUES (%s, 'baseline', '2026-11-01', '{}', 'p', 'q', %s) RETURNING id",
             (f"test:place-search:{uuid.uuid4().hex}", current)).fetchone()[0])
 
+    def next_version(self) -> int:
+        """A later version a load is writing, not yet current."""
+        return self._version(current=False)
+
     def unit(self, level: str, code: int, name: str, parent: int | None = None, *,
              point: tuple[float, float] | None = None, version: int | None = None,
-             valid_to: str | None = None) -> int:
+             valid_from: str = "2020-01-01", valid_to: str | None = None) -> int:
         """Drawn in `version` alone (the current one by default); `valid_to` closes it."""
         version = self.v if version is None else version
         path = ".".join(p for p in (self.paths.get(parent) if parent else None, f"{LABEL_PREFIX[level]}{code}") if p)
         unit = int(self.conn.execute(
             "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, valid_to,"
-            " first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01',"
+            " first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, %s,"
             " %s, %s, %s) RETURNING id",
-            (level, code, name, normalize_name(name), parent, path, valid_to, version, version)).fetchone()[0])
+            (level, code, name, normalize_name(name), parent, path, valid_from, valid_to, version,
+             version)).fetchone()[0])
         self.paths[unit], self.codes[unit] = path, code
         if point is not None:
             lng, lat = point
@@ -80,6 +85,15 @@ class _Mirror:
                 " containment_radius_m) SELECT %s, %s, 'authoritative', 0, ST_Multi(ST_Expand(p, 0.01)), p, 0, p, 0"
                 "   FROM (SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS p) s", (unit, version, lng, lat))
         return unit
+
+    def touch(self, unit: int, version: int) -> None:
+        """The unit survives into `version`, as the load's unit upsert carries it."""
+        self.conn.execute("UPDATE ruian_admin_units SET last_version_id = %s WHERE id = %s", (version, unit))
+
+    def close(self, unit: int, version: int) -> None:
+        """`version` closes the unit, as the load's unit upsert does before it reopens a changed one."""
+        self.conn.execute("UPDATE ruian_admin_units SET valid_to = '2026-11-30', last_version_id = %s WHERE id = %s",
+                          (version, unit))
 
     def index_at(self, unit: int, level: str, name: str, version: int) -> None:
         """The unit's gazetteer row at `version`, as that version's load wrote it."""
@@ -263,6 +277,34 @@ def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mi
                     {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
         {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
         {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+    ]
+
+
+def test_a_shortcut_reads_its_quarters_at_the_index_s_version_while_a_load_writes_the_next(mirror, client):
+    """Ported from the re-parent tests: a load writes the next version for hours before its pointer swap. Praha 6
+    and Vokovice survive into it on their rows, Dejvice closes and reopens renamed, Bubeneč is born, the next version's
+    gazetteer is built and its pairs hang off the same Praha 6 row. The shortcut answers the index's version: Dejvice
+    by the name it has there, Vokovice, each once, and no Bubeneč."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    vokovice = mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha)
+    mirror.quarters(praha_6, dejvice, vokovice)
+    mirror.publish()
+
+    nxt = mirror.next_version()
+    mirror.touch(praha_6, nxt)
+    mirror.touch(vokovice, nxt)
+    mirror.close(dejvice, nxt)
+    new_dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice-Sever", praha, version=nxt, valid_from="2026-11-30")
+    bubenec = mirror.unit("cast_obce", BUBENEC, "Bubeneč", praha, version=nxt, valid_from="2026-11-30")
+    mirror.quarters(praha_6, new_dejvice, vokovice, bubenec, version=nxt)
+    name_index.rebuild(mirror.conn, nxt)
+
+    assert [i for i in _suggest(client, "Praha 6") if i["level"] == "momc"] == [
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
     ]
 
 
