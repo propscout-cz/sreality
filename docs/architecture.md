@@ -972,8 +972,10 @@ rules. Identify which one a task belongs to before you start.
   still reloads the page (`lib/lazyChunk`); only an offline or blocked one reaches the slot. Each map
   is released on unmount (iOS caps a page's WebGL contexts). `eslint.config.js`'s
   `no-restricted-imports` keeps `maplibre-gl` and `lib/basemap` out of every module but the map
-  modules (type imports and `lazyChunk(() => import(...))` stay legal), so MapLibre stays off the
-  first visit.
+  modules (type imports and `lazyChunk(() => import(...))` stay legal). The rule cannot see a static
+  import of a map module itself (`PhoneMap` from a first-visit module passes lint). Review and
+  `frontend/scripts/bundle-budget.mjs` (CI, which fails if MapLibre reaches the first-visit path)
+  catch that case.
 - **Acting as a pipeline's owner is one selection, one context, one option, one key segment**
   (`frontend/src/lib/acting.ts`, migration 641, `docs/design/pipeline-sharing.md` §3.5). The
   ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
