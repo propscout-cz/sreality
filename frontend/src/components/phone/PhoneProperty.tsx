@@ -4,14 +4,14 @@
  * affordance and the property's number; the canonical ad's photos as a swiper
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
- * curation row; then the sections as section cards (components/Panel, the desktop
- * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (a streamed
- * Mapy static image through the API, never a WebGL map on the phone), then "Moje
- * fotky" (the camera and the user's own photos, PropertyPhotos).
+ * curation row; the broker strip (Zavolat, Uložit kontakt: BrokerStrip); then the sections as section cards (components/Panel, the desktop
+ * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (its own small
+ * lazy map, PhoneMap), then "Moje fotky" (the camera and the user's own photos,
+ * PropertyPhotos).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
- * header map (Poloha's static image stands in), Explore area, the comparables map (RunPanel skips it under the
+ * header map (Poloha's own map stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
 import { Suspense, useMemo, useState } from 'react';
@@ -24,6 +24,7 @@ import DownloadPropertyButton from '@/components/listing-detail/DownloadProperty
 import { fmtShortDate, fmtTomDays } from '@/lib/format';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
+import { contactAbout } from '@/lib/brokerContact';
 import { buildPriceSeries, priceChangeEvents, type PriceAdvert } from '@/lib/priceHistory';
 import type { PropertyPublic } from '@/lib/queries';
 import type {
@@ -34,6 +35,7 @@ import type {
   PropertySource,
 } from '@/lib/types';
 
+import BrokerStrip from './BrokerStrip';
 import { NO_FOCUS_ZOOM } from './chips';
 import CurationRow from './CurationRow';
 import {
@@ -136,6 +138,7 @@ export default function PhoneProperty({
   const line2 = feedLine2(property);
   const portals = sources.length > 0 ? new Set(sources.map((s) => s.source)).size : 1;
   const priceText = price.text ? `${price.text}${price.perMonth ? ' /měs' : ''}` : null;
+  const about = useMemo(() => contactAbout(property), [property]);
 
   const toNotes = () => {
     const section = document.getElementById(NOTES_SECTION_ID);
@@ -198,6 +201,9 @@ export default function PhoneProperty({
 
       <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
 
+      {/* The broker one tap away: call, or save the contact (operator 2026-11-06). */}
+      <BrokerStrip sources={sources} sourcesFailed={sourcesFailed} canonicalId={property.id} about={about} />
+
       {/* Every section is its own card, reused blocks included; one that has nothing keeps its card
           and says so (C10). */}
       <div className="space-y-4 border-t border-[var(--color-rule)] px-4 pt-4">
@@ -221,6 +227,7 @@ export default function PhoneProperty({
           canonicalId={property.id}
           advertsFailed={sourcesFailed}
           onRetryAdverts={onRetrySources}
+          about={about}
         />
         <SoldSection property={property} />
         <Suspense fallback={<Skeleton height={140} />}>

@@ -343,7 +343,6 @@ export default function PropertyDetail() {
             images={images}
             loading={imagesQ.isLoading}
             isActive={property.is_active}
-            onAll={() => setTab('fotky')}
           />
         </Suspense>
         <div className="min-w-0 space-y-5">

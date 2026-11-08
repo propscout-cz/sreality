@@ -568,6 +568,13 @@ describe('Browse select-lists carry the measure with its published basis', () =>
   it('selects the ad count the card badge reads', () => {
     expect(cols(BROWSE_SELECT_COLUMNS.cards)).toContain('source_count');
   });
+
+  /* The map reads the rung (exact or approximate) and no radius: ruling 2026-11-01
+   * retired the drawn circle, and every map column is wire cost on every pin. */
+  it('selects the pin rung for the map and no uncertainty radius', () => {
+    expect(cols(BROWSE_SELECT_COLUMNS.map)).toContain('granularity_rank');
+    expect(cols(BROWSE_SELECT_COLUMNS.map)).not.toContain('uncertainty_radius_m');
+  });
 });
 
 /* The "~NaN" Browse header (2026-09-25). The count asks the dismissal-aware

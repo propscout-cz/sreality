@@ -13,12 +13,14 @@ answer) that a second read could not corroborate.
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from scraper import bezrealitky_main
 from scraper.portal import PortalConfig, walk_coverage
+from scraper.price_reading import PriceReading
 
 Answer = tuple[list[dict[str, Any]], int]
 
@@ -68,6 +70,31 @@ def _walk(
         {"offer_type": "PRODEJ", "estate_type": "BYT"}, None, True, None, deadline,
     )
     return result, client
+
+
+def test_the_index_reads_the_currency_beside_the_price(monkeypatch):
+    """#2355: the index asked for the price alone, so a EUR rent read as a CZK amount that no
+    stored price matched. The sighting carries what the advert states; reconcile converts."""
+    seen: dict[str, Any] = {}
+
+    def capture(conn: Any, source: str, sightings: Any, **_kw: Any) -> dict[str, int]:
+        seen.update(sightings)
+        return {"found_new": 0, "enqueued": 0}
+
+    monkeypatch.setattr(bezrealitky_main.portal_runner, "reconcile_sightings", capture)
+    ads = [{"id": "a", "price": 1124, "currency": "EUR"},
+           {"id": "b", "price": 3_290_000, "currency": "CZK"},
+           {"id": "c", "price": 0}]
+    _walk(monkeypatch, {0: [(ads, 3)]})
+    assert seen == {"a": (None, PriceReading(Decimal(1124), "EUR")),
+                    "b": (None, PriceReading(Decimal(3_290_000))),
+                    "c": (None, None)}
+
+
+def test_the_index_query_asks_for_the_currency():
+    from scraper.bezrealitky_client import _INDEX_QUERY
+
+    assert "list { id price currency uri }" in _INDEX_QUERY
 
 
 def test_catching_the_declared_total_reaches_the_portals_end(monkeypatch):

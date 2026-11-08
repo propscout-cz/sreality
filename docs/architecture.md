@@ -365,7 +365,8 @@ listings) served as STRUCTURED server-rendered HTML (no JSON API), so
 `remax_parser` is deterministic: the search cards are `<div class="pl-items__item"
 data-url=… data-price=… data-gps=… data-title=…>` (price, coordinates and title
 straight off the card), and the detail page is a `pd-detail-info__row` →
-`__label`/`__value` spec block + a clean integer `data-advert-price` + per-listing
+`__label`/`__value` spec block + a CZK total in `data-advert-price` (sometimes with a decimal point;
+absent on ~44% of pages, which read the `.pd-header__price` header: the card's own price and unit) + per-listing
 coordinates in `data-gps` (DMS, e.g. `50°05'26.1"N,14°29'33.4"E` — parsed to
 decimal, CZ-bbox-guarded, no geocoding step) + a `mlsf.remax-czech.cz/data//zs/{id}/`
 gallery (the `_th350` thumbnail strips to the full-resolution original). Typed
@@ -712,7 +713,8 @@ rules. Identify which one a task belongs to before you start.
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  matview `location_pin_audit_mv` (no RLS); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  matview `location_pin_audit_mv` (no RLS) and its successor, the admin-gated view `location_position_audit_public` over the
+  service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -951,13 +953,29 @@ rules. Identify which one a task belongs to before you start.
   only the caller's own collections, so a viewer can neither add to nor remove from it there.
   The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
   query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
-  `pages/Link` is, so the first-visit budget never pays for them; no WebGL maps, no estimation start —
-  RunPanel skips `ComparablesMap` under the shell), and the fifth tab `/link`
-  resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
+  `pages/Link` is, so the first-visit budget never pays for them; no desktop map (`DetailMap`,
+  `ComparablesMap`), no estimation start — RunPanel skips `ComparablesMap` under the shell), and the
+  fifth tab `/link` resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
   `/listing/:source/:nativeId` alias. Poloha (the feed card's fourth margin mark → a bottom sheet,
-  and the phone property page's first section, one `LocationBody`) is a Mapy static image the API
-  streams on every view (`api/routes/property_location.py`; Mapy's terms forbid storing it, so never
-  R2, only an hour of private browser cache) — never a WebGL map on the phone.
+  and the phone property page's first section, one `LocationBody`) reads
+  `GET /properties/{id}/location` (`api/routes/property_location.py`: the location ad's point,
+  precision, label and note) and shows the label, the note and the Apple/Google/Mapy.cz links first;
+  its 4:3 plate then mounts `PhoneMap` (#2446), a lazy chunk over `lib/basemap` `createMap`
+  (OpenFreeMap): cooperative gestures with the Czech hint "Mapou posunete dvěma prsty", no zoom
+  buttons, no scale bar, dimmed after dusk like the photos (`PHOTO_DARK`), DetailMap's pin
+  (`addPointPin`). Its zoom is `lib/zoomByLevel`'s by precision (street 15, quarter 13, town 11,
+  coarse 9); the links take one step more, since the map apps count 256 px tiles and MapLibre 512.
+  The map degrades, the place does not: `MapSlot` (an `ErrorBoundary` with `fallback={null}` and
+  `onError`, around Suspense) catches a `createMap` throw, and `guardMap` turns a lost WebGL context,
+  or an `error` before the first `style.load`, into one; the plate goes and "Mapu se nepodařilo
+  načíst" shows under the note. A later tile error leaves the map up. A chunk that fails online
+  still reloads the page (`lib/lazyChunk`); only an offline or blocked one reaches the slot. Each map
+  is released on unmount (iOS caps a page's WebGL contexts). `eslint.config.js`'s
+  `no-restricted-imports` keeps `maplibre-gl` and `lib/basemap` out of every module but the map
+  modules (type imports and `lazyChunk(() => import(...))` stay legal). The rule cannot see a static
+  import of a map module itself (`PhoneMap` from a first-visit module passes lint). Review and
+  `frontend/scripts/bundle-budget.mjs` (CI, which fails if MapLibre reaches the first-visit path)
+  catch that case.
 - **Acting as a pipeline's owner is one selection, one context, one option, one key segment**
   (`frontend/src/lib/acting.ts`, migration 641, `docs/design/pipeline-sharing.md` §3.5). The
   ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
@@ -1053,6 +1071,24 @@ rules. Identify which one a task belongs to before you start.
   level (an address binds its street), its register name, and `context` = the register obec
   name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
   `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
+- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10). Own place search may
+  replace Mapy only after a gate over questions its author did not write, so every place box's add sends
+  `pick: {text, rank}` on its resolve (the text its list ANSWERED, not what was typed on after, and the 1-based
+  row; `lib/maps.placePick` drops one outside the server's bounds, 1–200 code points and rank 1–10, so the resolve
+  never 422s on it; `tests/api/test_place_pick_bounds.py` holds the SPA, schema and CHECK copies equal). The request's
+  `pick` is optional and forbids unknown fields: a malformed one is a 422 before anything binds. The address picker sends none. After the answer, `/maps/resolve` queues ONE background
+  INSERT (`location_data/place_picks.record`, on its own connection) only for verified claims without the
+  `app_metadata.automation` marker (`deps.is_automation`; set on both smoke accounts by the operator before this
+  deploys, smoke-check.mjs fixture 3; the local-dev opt-out has no claims), never for an `address_point` resolve, and
+  only for a pick that resolved to a level: a failed resolve, no current registry, a country or an unknown type
+  writes nothing, so an outage is never taken for a lost place. Stored: the text exactly as answered, or NULL when
+  any character `isdigit` ("Praha 2", "Praha ２"; the CHECK pins `und-x-icu`, since CI's default collation is libc
+  and only ICU classes "２" a digit); the rank; the bound level and code, the typed level with code NULL when refused,
+  `momc` and its code for a městská část (`_Momc.code`; the answer still lists its části). No account, nothing from
+  Mapy. A failed write logs only its SQLSTATE (the error's DETAIL quotes the row). RLS on, no policy, browser roles
+  revoked. `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452); own search
+  never reads the picks: they are its HOLDOUT. Retention: pg_cron `place-picks-retention` deletes rows over 12 months
+  daily; once the switch-over deploys, one DELETE empties the table (#2453) and Stage B drops it (#2455).
 - Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
   radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
   `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
@@ -1449,7 +1485,9 @@ renumber.** Navigate by area:
    `hashing.digest`; unifying the documents is a data event (≈1.5M snapshots), not a refactor.
    A page that states its price in a foreign currency hashes that (`price_native`, never a column)
    IN PLACE OF `price_czk`: idnes re-converts it to Kč daily, which re-snapshotted its whole
-   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed.
+   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed. Our own
+   fixed EUR rate (rule 23, `scraper/price_reading.py`) rides the same field, so its quarterly
+   review re-prices a row on its next fetch without a snapshot.
    **Sanctioned exceptions — payload-free, no snapshot.** Writers of derived, enrichment, link
    or lifecycle columns: condition levels (`toolkit/condition_scoring.py`), the stored `mf_*`
    columns (their SQL recompute, last redefined in migration 507, is no longer called — MF is
@@ -2133,8 +2171,10 @@ renumber.** Navigate by area:
     advert's own facts, broker and stored portal link in its row; the broker card lists no advert
     -- under each broker's contact it quotes the AD REFERENCE of the ads that broker advertises
     (`ad_reference`, migration 667: one `<portál> · <číslo>` line per ad, a dash when the ad prints
-    none, never the portal id in its place), on both shells through ONE `BrokerContactCard` and
-    ONE copy behaviour (`lib/clipboard`). Every property-grain surface links
+    none, never the portal id in its place), on both shells through ONE `BrokerContactCard`,
+    ONE copy behaviour (`lib/clipboard`) and ONE saved contact ("Uložit kontakt": `lib/brokerContact`
+    → `lib/vcard`, a vCard 3.0 file built in the browser, its note naming the property and the ads;
+    the phone page's `BrokerStrip` under the price dials and saves the lead broker, #2428). Every property-grain surface links
     `propertyPath(property_id)` (`lib/listingUrl`). Old advert addresses -- `/listing/{source}/
     {native}` (emails, the extension), `/listing/{sreality_id}`, `/listing?property=` -- are
     aliases (`AdvertRedirect`) that resolve the advert's property and open its row
@@ -2156,9 +2196,10 @@ renumber.** Navigate by area:
     (desktop: "Naplánovat prohlídku" in the heading) adds a Prague day + time (`lib/viewings`), the
     property's upcoming viewings lead the list under a calendar leaf, and the phone's sixth tab,
     Prohlídky (`pages/phone/PhoneViewings`, `GET /viewings` = the acting identity's own), lists them
-    one day at a time — arrows, swipe, a date wheel, Nadcházející / Vše, jumps to the nearest day
-    with one. No table, carrier or registry of its own: a viewing is shared, carried and split as
-    the note it is (the split copy keeps the date). Under it,
+    one day at a time — arrows, swipe, a date wheel, jumps to the nearest day with one either way;
+    one calendar, past days as reachable as coming ones (no scope). No table, carrier or registry
+    of its own: a viewing is shared, carried and split as the note it is (the split copy keeps the
+    date). Under it,
     `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our
@@ -4149,8 +4190,8 @@ renumber.** Navigate by area:
     /pipeline/stages` create — the `key` slug is derived server-side from the label; `PATCH
     /pipeline/stages/{id}` rename/recolor/retag/crown-entry; `POST /pipeline/stages/reorder`
     rewrite left-to-right order; `DELETE /pipeline/stages/{id}` soft-archive via `archived_at`).
-    Two invariants the API enforces (not just the DB): a stage can't be **both** the entry and
-    terminal, and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
+    Three invariants the API enforces (not just the DB): a stage can't be **both** the entry and
+    terminal, the viewing stage is never terminal (or archived; `role` below), and `is_entry` may only be **set** (you re-home the single-entry crown by crowning
     another stage, never by un-crowning the only one — the partial unique index needs exactly one).
     Archive is refused (409) for the entry stage or any stage still holding cards — the FK is
     `ON DELETE RESTRICT`, so cards must be moved off a stage before it retires; archived stages
@@ -4159,6 +4200,16 @@ renumber.** Navigate by area:
     filter-preset save modal, the tag pickers, and this stage editor — the single colour-picking
     control app-wide; don't re-inline a swatch grid), and the entry-star / "konec" (terminal)
     controls carry `<InfoIcon>` (i) hints (native `title=`, the codebase's tooltip convention).
+    **A stage's meaning is its `role` (migration 734), never its key or label:** keys are minted
+    once and never follow a rename (the operator's key `viewing` is "2. For Call"). One role today,
+    `viewing` (the stage set-up's calendar toggle): at most one per account (partial unique index),
+    never terminal, cleared on archive; `PATCH {role}` moves it off the stage that held it in one
+    transaction, `{role: null}` clears it. Adding a viewing date to a property offers its card that
+    stage (`lib/viewingStage` decides: off the board → add, an earlier open or a closed stage → move;
+    silent at it, at a later open stage, with no viewing stage, or with the board not yet read;
+    `components/pipeline/ViewingStageOffer` asks). The add is `POST /pipeline/cards {stage_id}` —
+    a live, open stage of the account — through `usePipelineCard().addAt`, so the ledger holds one
+    event at that stage, never an entry-stage hop plus a move.
     **Undoing a proposal's card is not a remove toggle (#2072, ADR-0004).** A run may propose a card at the entry stage; the user's
     Apply writes it through `pipeline.add_card`, and an already held card gets no write. Undo takes back only that card, only
     while it is untouched at the entry stage (`pipeline.added_card_undo_refusal`: the Apply's own stamp on `added_at`,
@@ -4182,6 +4233,26 @@ renumber.** Navigate by area:
     price below its per-basis floor (sale 100 000 CZK, rent 1 000 CZK, land deliberately
     unfloored) all yield NULL — a visible gap, never a guess. Rounded to 2dp so all five
     publishing relations return byte-identical figures.
+
+    **The numerator is a stored TOTAL, never a rate** (#2355; operator rulings 2026-11-03 and
+    2026-11-05). Where a portal states a price per m², per m² per month or in EUR, its card reader
+    and its detail parser both read `PriceReading(amount, currency, basis)`, and ONE conversion,
+    `scraper/price_reading.resolve`, stores the total: per m² times `area_m2` at its column scale
+    (this measure's own denominator, so the plot on pozemek), per m² per month as the monthly rent,
+    EUR at a FIXED 24.5 CZK (`EUR_CZK_RATE`: reviewed quarterly, changed only when the market rate
+    moves more than 0.5 CZK), and a yearly per m² rent as the monthly rent (÷ 12, ruling
+    2026-11-07). No area, a yearly rate on a sale, a rent rate naming no period, or another
+    currency stores nothing. The walk resolves a card against the stored row's area and category,
+    so a card matching the stored total reads unchanged and a real move still refetches. The
+    portal's label is overridden only when its reading is impossible (past five times the
+    category's p0.1 or p99 of this measure, `PPM2_BANDS`: sreality's rows alone, read 2026-11-05,
+    since the text portals' stored rates-as-totals sank the all-source land p0.1 to 0.15 Kč/m²) and
+    the other reading normal (p1..p99); each override the DETAIL parse makes logs one
+    `PRICE basis_override` line (the card resolves silently). What was stated and the EUR rate used sit in
+    `raw_json.price_reading`, so every snapshot keeps the rate it was converted at, and a EUR amount
+    is hashed as `price_native` in place of `price_czk` (rule 2). remax, realitymix and bezrealitky
+    read prices this way; the other text portals still refuse a rate
+    (`scraper/price_text.is_per_area_price`).
 
     **Its sibling, the MF reference rent** (migration 565): one inlinable SQL function,
     `mf_reference(...)`, over the ingest-refreshed `rent_map_cells` matview — a value, the town's
@@ -5417,6 +5488,26 @@ it. Its KÚ cell (MF PR-B; out of the town cell since W1) is the same kind of ze
 row with a town written by the current `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is
 missing at the registry version; KÚ coverage of the coarser grains is a fact, never judged.
 
+**Where each point came from** (W6-c1, migration 733; rulings Q2 and Q3 of 2026-11-02): `location_position_mv`
+(listing grain, every active ad plus every ad in any status the consumer rule refuses; pg_cron
+`refresh-location-position` at :07 through `refresh_matview`) decides each point's KIND by geometric identity within
+1e-7° against the points the resolver could have used, in its own precedence (`location_steps.position_kind_sql`:
+RÚIAN door, street point, own pin, část point, town point, unit point; `foreign` and `none` have no point; anything
+else is `unexplained`, shown and not judged until ruled); a DB-lane replay over the mini mirror holds each kind to the
+resolver's `Position.origin`. The scorecard's `position` metric (class `kind/grain`) counts the listing cohort by the
+READING's kind (`location_steps.position_reading_kind_sql`: the matview's kind while the row's `resolved_at` is
+unchanged, else `unclassified`) and by its LIVE grain (`location_steps.position_grain_sql`, the four `grain` classes
+first, so a grid's column totals are the `grain` counts); the gauge stores it as the `positions` fact on each
+`{portal}/town` cell (ruling Q7: the grid is that stored reading, never a count of its own). The page draws it as the
+"Positions" grid (each grain head in the map's own `pinPrecisionShort` words, so a portal pin below address grain
+reads "Přibližná poloha") and the "By kind" strip; every number opens the "Ads" list from the admin-gated
+`location_position_audit_public`, which applies the reading's own cohort (`in_reading`, the scorecard's edge
+verbatim), kind rule and live grain to live listings, so a cell's list differs from its number only by churn since the
+reading, whose time the list shows beside its own exact count. A separate entry, "No location answer · every status",
+carries its list's exact count and opens the matview's `none` rows in every status and portal (`snapshot_kind`; town
+evidence, a sibling with a point, a queued re-resolve), the rows the old audit page lists. That page and
+`location_pin_audit_mv` stay until the operator has compared the two (W6-c2 deletes them).
+
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
 obec, else část obce + obec, else obec, else NULL. It is published by `browse_projection`,
@@ -5448,14 +5539,14 @@ feed lane) because without them one street read its whole category band and the 
 
 `browse_projection` re-sources `obec_id` / `okres_id` / `region_id` from
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends
-`cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The last two are what the map DRAWS: a
+`cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The map reads only `granularity_rank`: a
 pin the resolver placed **at or above building level** (rank ≥ 90, `location_granularity_rank`) carries
 a black outer contour and a coarser one does not (an active pin is magenta with a white contour, an inactive
 one white-transparent with a magenta contour), so "middle of the village" and "this front door" stop looking
-identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
-popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
-such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)
-A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
+identical; the popup says "Přesná poloha" or "Přibližná poloha" and names the rung in its tooltip. No
+surface draws or prints the radius (ruling 2026-11-01, "retire the radius"; W6-b removed the clicked pin's
+circle, the popup's "±" figure and the API's radius field).
+A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin rung, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
 since 618), and so to both read models of the time (one since 631) — served for the street chip level, read by no filter
@@ -5707,7 +5798,7 @@ Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own
 `position: relative` at equal specificity, `inset-0` then sizes nothing, and the container collapses
 to 0 height — no tiles, no points, an empty panel. Every map in the app (DetailMap, ListingMap,
-ComparablesMap) carries the same override for the same reason; the audit map shipped without it and
+ComparablesMap, the phone's PhoneMap) carries the same override for the same reason; the audit map shipped without it and
 rendered blank in production.
 
 ## Cross-reference map

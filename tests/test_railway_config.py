@@ -186,6 +186,15 @@ def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:
     assert "jobRunner(sreality)" in worker, "the runner is a resource of the worker's project"
 
 
+def test_the_api_runs_with_uvicorn_access_log_off() -> None:
+    """#2444: an access line holds the request URL, query string and all, so a place typed into suggest would reach
+    the deploy log. The API runs the image's own command (the test above), so that command is every deployed one;
+    Railway's HTTP log keeps the path without the query."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    [command] = [line for line in dockerfile.splitlines() if line.startswith("CMD ")]
+    assert "uvicorn api.main:app" in command and "--no-access-log" in command, command
+
+
 def test_the_runner_drain_outlasts_its_own_fallback() -> None:
     """The runner checks its own drain only between ticks, then forgets its heartbeat: Railway's SIGKILL comes after
     a guard poll, that drain, a tick, one stopping tick and the forget, and not much later (a deploy waits on it)."""

@@ -28,19 +28,16 @@ from scraper.bazos_parser import _parse_price as bazos_price
 from scraper.ceskereality_parser import _parse_price as ceskereality_price
 from scraper.idnes_parser import _parse_price as idnes_price
 from scraper.maxima_parser import _parse_price as maxima_price
-from scraper.realitymix_parser import _parse_price as realitymix_price
+from scraper.price_reading import PER_M2, PER_M2_MONTH, PER_M2_YEAR, TOTAL, read_price_text
 from scraper.price_text import is_per_area_price
-from scraper.remax_parser import _detail_price as remax_price
 
-# Every portal whose price arrives as TEXT. One shared parse rail, so the same
-# corpus must hold for all six (rule 21 — no per-portal branches).
+# Every portal whose price arrives as TEXT and still refuses a rate. One shared parse rail,
+# so the same corpus must hold for all four (rule 21 — no per-portal branches).
 TEXT_PRICE_PARSERS = [
     pytest.param(bazos_price, id="bazos"),
     pytest.param(ceskereality_price, id="ceskereality"),
     pytest.param(idnes_price, id="idnes"),
     pytest.param(maxima_price, id="maxima"),
-    pytest.param(realitymix_price, id="realitymix"),
-    pytest.param(remax_price, id="remax"),
 ]
 
 # Seeded from test_idnes_parser's six positives (incl. the spaced "18 500 Kč / m²")
@@ -86,9 +83,7 @@ TOTAL_CELLS = [
 
 # The after-amount slices the widened anchor must still REFUSE. `EUR za měsíc`
 # is a real ceskereality shape (46 priced rows) and a CURRENCY bug, not a unit
-# masquerade — convicting it would NULL a real price. remax's `_detail_price`
-# reads its digits only from the part before a literal `CZK`, so a EUR cell can
-# never ride the six-portal parametrization; the rail is where it belongs.
+# masquerade — convicting it would NULL a real price.
 NON_PER_AREA_SLICES = [
     " EUR za měsíc",
     " EUR Spočítat hypotéku",
@@ -98,32 +93,30 @@ NON_PER_AREA_SLICES = [
 ]
 
 
-def _for(parse, cell: str) -> str:
-    # remax reads the amount only from the part before "CZK"; its cell never
-    # carries a bare "Kč", so a Kč-spelled cell would bail before the rail and
-    # the parametrization would prove nothing for that portal.
-    return cell.replace("Kč", "CZK", 1) if parse is remax_price else cell
-
-
 @pytest.mark.parametrize("parse", TEXT_PRICE_PARSERS)
 @pytest.mark.parametrize("cell", PER_AREA_CELLS)
 def test_per_area_cell_yields_null(parse, cell: str) -> None:
-    assert parse(_for(parse, cell), "prodej")[0] is None
+    assert parse(cell, "prodej")[0] is None
 
 
-@pytest.mark.parametrize("cell", PER_AREA_PREFIX_CELLS)
-def test_remax_per_area_prefix_cell_yields_null(cell: str) -> None:
-    # remax only: its spec-table cell is the one that renders a LABEL before the
-    # amount, and it reads its digits from everything ahead of "CZK". The other
-    # five parse a bare amount (an index card's `data-price` or a lone price
-    # element), where a leading unit label is not an observed shape.
-    assert remax_price(_for(remax_price, cell), "prodej")[0] is None
+@pytest.mark.parametrize("cell", PER_AREA_CELLS + PER_AREA_PREFIX_CELLS)
+def test_the_reader_reads_every_per_area_cell_as_a_rate_never_a_total(cell: str) -> None:
+    # remax and realitymix (#2355): a rate is read as a rate, a yearly one included (ruling 2026-11-07)
+    reading = read_price_text(cell)
+    assert reading is not None and reading.basis in (PER_M2, PER_M2_MONTH, PER_M2_YEAR)
 
 
 @pytest.mark.parametrize("parse", TEXT_PRICE_PARSERS)
 @pytest.mark.parametrize("cell,expected", TOTAL_CELLS)
 def test_total_cell_survives(parse, cell: str, expected: int) -> None:
-    assert parse(_for(parse, cell), "prodej")[0] == expected
+    assert parse(cell, "prodej")[0] == expected
+
+
+@pytest.mark.parametrize("cell,expected", TOTAL_CELLS)
+def test_the_reader_keeps_a_total_a_total(cell: str, expected: int) -> None:
+    reading = read_price_text(cell)
+    assert reading is not None
+    assert (reading.amount, reading.basis) == (expected, TOTAL)
 
 
 @pytest.mark.parametrize("cell", PER_AREA_CELLS)

@@ -203,6 +203,8 @@ jobs:
       # test_connect_read_only_live joins because the wave shadow's "no write" is the server's refusal;
       # test_shadow_ties_live because which rulings tie a mover to the ids block is an executed answer.
       # test_description_extraction_walk_live because the text lane's archive cursor reaching a healed text is too.
+      # test_location_position_replay_live because the position audit's kind (migration 733) equals the resolver's
+      # origin only when its SQL runs over a loaded mirror.
       - name: PREPARE every SQL statement against the replayed schema
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -214,6 +216,7 @@ jobs:
                  tests/location_data/test_operator_pick_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/location_data/test_registry_reparent_live.py \
+                 tests/location_data/test_location_position_replay_live.py \
                  tests/test_map_overlays_live.py \
                  tests/scraper/test_connect_read_only_live.py \
                  tests/autodedup/test_shadow_ties_live.py \
@@ -291,6 +294,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_pipeline_shares_live.py -q
 
+      # The stage role (migration 734): a signup's board marks its visit stage; one viewing stage per
+      # account, never closed or archived; the API moves the role in one transaction and a card added
+      # at a named stage writes one ledger event there. Only the replayed constraints can show it.
+      - name: A board has one viewing stage, never closed (migration 734)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_pipeline_stage_role_live.py -q
+
       # The curation clock (migration 696) moves only at COMMIT, through twelve deferred constraint triggers: only a
       # real schema committing as each writer (a tenant, a delegate, the service role, a cascade, a signup) shows one
       # bump per transaction and family, nothing on a rollback, a failed commit when the counter cannot be locked,
@@ -350,6 +362,15 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_waitlist_live.py -q
+
+      # Place picks (migration 737, ruling Q10): /maps/resolve over a mirror the test seeds records one pick per
+      # verified human pick, after the answer, and the ICU-pinned CHECK refuses a digit this image's libc default
+      # would let through — only a real schema can answer either.
+      - name: Resolve records a place pick after its answer (migration 737)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/api/test_place_picks_live.py -q
 
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single

@@ -1,9 +1,8 @@
 /* The property page on the phone (#1767): the same route and reads as the
  * desktop page, drawn as the prototype's "Nemovitost" — and rule 23 holds on it:
  * the per-m² figure is the server's measure under the server's basis label, a
- * sale in Kč/m² and a rent in Kč/m²/měs. No WebGL map is mounted on the phone (Poloha
- * is the API's streamed static image) and no estimation can be started from it
- * (#1760 Q10). */
+ * sale in Kč/m² and a rent in Kč/m²/měs. No desktop map is mounted on the phone (Poloha
+ * draws its own) and no estimation can be started from it (#1760 Q10). */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -15,9 +14,11 @@ import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as queries from '@/lib/queries';
+import * as shareFiles from '@/lib/shareFiles';
 import type { PropertyPublic } from '@/lib/queries';
 import type { ImagePublic, PropertySource } from '@/lib/types';
 import PropertyDetail, { AdvertRedirect } from '@/pages/PropertyDetail';
+import { fakeCreateMap, resetFakeMaps } from '@/test/fakeMap';
 
 /* Czech formatting uses no-break spaces; compare as the eye reads it. */
 const plain = (s: string | null | undefined) => s?.replace(/ /g, ' ') ?? '';
@@ -32,16 +33,19 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
     listEstimations: vi.fn(empty),
-    /* Poloha: the location JSON and the static map's bytes. */
+    /* Poloha: the location JSON. */
     apiGet: vi.fn(async (path: string) =>
       path.endsWith('/location')
         ? { lat: 50.105, lon: 14.5, granularity: 'street', granularity_rank: 60,
-            label: 'Freyova, Praha 9 – Vysočany', zoom: 16, note: null }
+            label: 'Freyova, Praha 9 – Vysočany', precision: 'street', note: null }
         : null,
     ),
-    apiGetBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
   };
 });
+vi.mock('@/lib/basemap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/basemap')>()),
+  createMap: (await import('@/test/fakeMap')).fakeCreateMap,
+}));
 vi.mock('@/lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/queries')>();
   return {
@@ -71,11 +75,16 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
 }));
+vi.mock('@/lib/shareFiles', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/shareFiles')>()),
+  saveBlob: vi.fn(),
+}));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
     `/images/${img.storage_path}${opts.w ? `?w=${opts.w}` : ''}`,
 }));
-/* The maps and the estimation starters: mounting any of them on the phone fails a test. */
+/* The desktop maps and the estimation starters: mounting any of them on the phone fails a
+ * test. The phone draws its own Poloha map. */
 vi.mock('@/components/listing-detail/DetailMap', () => ({
   default: () => <div data-testid="detail-map" />,
 }));
@@ -213,8 +222,7 @@ function renderAt(path: string | { pathname: string; state?: unknown }) {
 }
 
 beforeEach(() => {
-  URL.createObjectURL = vi.fn(() => 'blob:map');
-  URL.revokeObjectURL = vi.fn();
+  resetFakeMaps();
   localStorage.clear();
   setNarrow(true);
   vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: false } as ReturnType<typeof auth.useAuth>);
@@ -230,15 +238,16 @@ afterEach(() => {
   window.matchMedia = originalMatchMedia;
 });
 
-/* PhoneProperty is a lazy chunk (the first-visit budget): import it once up front so
- * no test pays the module load inside a findBy window on a loaded runner. */
+/* PhoneProperty and Poloha's map are lazy chunks (the first-visit budget): import them once
+ * up front so no test pays the module load inside a findBy window on a loaded runner. */
 beforeAll(async () => {
   await import('./PhoneProperty');
+  await import('./PhoneMap');
 }, 30_000);
 
 const LOADED = { timeout: 5_000 };
 
-const noMaps = () => {
+const noDesktopMaps = () => {
   expect(screen.queryByTestId('detail-map')).toBeNull();
   expect(screen.queryByTestId('comparables-map')).toBeNull();
   expect(screen.queryByText('Explore area')).toBeNull();
@@ -289,30 +298,26 @@ describe('the phone property page', () => {
     expect(await screen.findByText('Poznámky', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Stáhnout \(PDF \+ fotky\)/ })).toBeInTheDocument();
     await waitFor(() => expect(api.listEstimations).toHaveBeenCalled());
-    noMaps();
+    noDesktopMaps();
     /* The whole page with its lazy chunks: slower than one card on a loaded runner. */
   }, 15_000);
 
-  it('puts Poloha first after the curation row: the map plate, the place and the map apps', async () => {
+  it('puts Poloha first after the curation row: the map, the place and the map apps', async () => {
     renderAt('/property/304388');
     const section = await screen.findByRole('region', { name: 'Poloha' }, LOADED);
     /* The first of the hairline-separated sections, straight under the curation row. */
     expect(section.parentElement?.firstElementChild).toBe(section);
-    const img = await within(section).findByRole('img', {}, LOADED);
-    expect(img).toHaveAttribute('src', 'blob:map');
-    expect(img).toHaveAttribute('width', '1080');
-    expect(within(section).getByText('Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
+    expect(await within(section).findByText('Freyova, Praha 9 – Vysočany', {}, LOADED)).toBeInTheDocument();
     expect(within(section).getAllByRole('link').map((a) => a.textContent)).toEqual([
       'Apple Maps',
       'Google Maps',
       'Mapy.cz',
     ]);
-    expect(api.apiGetBlob).toHaveBeenCalledWith(
-      '/properties/304388/static-map.png',
-      { w: 1080 },
-      expect.anything(),
-    );
-    noMaps();
+    await waitFor(() => expect(fakeCreateMap).toHaveBeenCalledTimes(1), LOADED);
+    const [container, options] = fakeCreateMap.mock.calls[0];
+    expect(section).toContainElement(container);
+    expect(options).toMatchObject({ center: [14.5, 50.105], zoom: 15, cooperativeGestures: true });
+    noDesktopMaps();
   });
 
   /* One pattern for the app (section cards, operator ruling 2026-10-28): every section of the
@@ -342,7 +347,7 @@ describe('the phone property page', () => {
     for (const name of ['Moje fotky', 'Fakta', 'Vývoj ceny', 'Prodané v okolí', 'Čerstvost', 'Štítky', 'Poznámky']) {
       expect(await card(name)).toBeInTheDocument();
     }
-    noMaps();
+    noDesktopMaps();
   }, 15_000);
 
   it('draws a rent: the monthly price and per-m² in Kč/m²/měs, no MF badge', async () => {
@@ -359,7 +364,7 @@ describe('the phone property page', () => {
     expect(head.queryByText(/Kč\/m²$/)).toBeNull();
     expect(head.queryByText(/^MF /)).toBeNull();
     expect(head.getByText(/Nová dnes · 1 portál/)).toBeInTheDocument();
-    noMaps();
+    noDesktopMaps();
   });
 
   it('shows no per-m² figure when the basis is missing — never a bare number', async () => {
@@ -413,5 +418,66 @@ describe('the phone property page', () => {
     expect(screen.queryByRole('article', { name: 'Nemovitost' })).toBeNull();
     expect(await screen.findByTestId('detail-map')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Poloha' })).toBeNull();
+  });
+});
+
+/* Operator 2026-11-06: the broker one tap away under the price: the dialer, not a copy,
+ * and the contact saved as a .vcf (lib/vcard) naming the property it came from. */
+describe('the broker strip', () => {
+  const broker = (over: Partial<brokers.ListingBroker>): brokers.ListingBroker => ({
+    primary_email: 'jan@reality.cz',
+    primary_phone: '420731404040',
+    sreality_id: null,
+    listing_id: 9001,
+    broker_id: 7,
+    broker_display_name: 'Ing. Jan Novák',
+    broker_firm_label: 'Reality Praha',
+    ...over,
+  });
+
+  it('calls the lead broker and saves the contact, the other brokers one tap away', async () => {
+    const user = userEvent.setup();
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([
+      ad({ ad_reference: 'RP-123' }),
+      ad({ id: 9002, source: 'idnes', source_url: 'https://reality.idnes.cz/detail/x/', source_id_native: 'x' }),
+    ]);
+    vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(
+      new Map([
+        [9001, broker({})],
+        [9002, broker({ listing_id: 9002, broker_id: 8, broker_display_name: 'Eva Malá', primary_phone: null })],
+      ]),
+    );
+    renderAt('/property/304388');
+    const strip = await screen.findByRole('region', { name: 'Makléř' }, LOADED);
+    expect(within(strip).getByText('Ing. Jan Novák')).toBeInTheDocument();
+    expect(within(strip).getByRole('link', { name: 'Zavolat' })).toHaveAttribute('href', 'tel:+420731404040');
+    expect(within(strip).getByRole('link', { name: '+ 1 další makléř' })).toHaveAttribute('href', '#makleri');
+
+    await user.click(within(strip).getByRole('button', { name: 'Uložit kontakt' }));
+    const [blob, name] = vi.mocked(shareFiles.saveBlob).mock.calls[0];
+    expect(name).toBe('Ing. Jan Novák.vcf');
+    expect(blob.type).toBe('text/vcard;charset=utf-8');
+    /* jsdom's Blob has no text(): read it the way FileReader does. */
+    const card = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsText(blob);
+    });
+    expect(card).toContain('N:Novák;Jan;;Ing.;');
+    expect(card).toContain('TEL;TYPE=WORK,VOICE:+420731404040');
+    expect(card).toContain('ORG:Reality Praha');
+    expect(card).toContain('URL:http://localhost:3000/property/304388');
+    expect(card.replace(/\r\n /g, '')).toMatch(/NOTE:Nemovitost: .*\\nSreality: č\. zakázky RP-123/);
+  });
+
+  it('draws nothing when the broker left no number and no e-mail', async () => {
+    vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(
+      new Map([[9001, broker({ primary_phone: null, primary_email: null })]]),
+    );
+    renderAt('/property/304388');
+    await screen.findByRole('region', { name: 'Makléři' }, LOADED);
+    await waitFor(() => expect(screen.queryByText('Načítám…')).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Makléř' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Zavolat' })).toBeNull();
   });
 });

@@ -1367,6 +1367,26 @@ component is slimmed twice — each wave rewrites one component and slims its st
   location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
   Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
   Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
+- **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
+  additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
+  :07) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
+  over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
+  stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality
+  draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
+  · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
+  cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
+  unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
+  with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
+  artifact row.
+- **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
+  `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
+  published property once at its location ad's finest level, one table pinning gauge and page. The four unread
+  `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
+  `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
+  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
+  gate's eval over `picks_between` (#2452); the switch-over DELETE (#2453); Stage B drop (#2455).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

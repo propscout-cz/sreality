@@ -150,7 +150,8 @@ production.
   DB-heavy job's failure, timeout and lost retries wait for its own hour (the next day at most); its interrupted
   run is due at once like any other (#2024 R-a), and no DB-heavy job starts while another's run is open (#2027). A SIGKILL the runner did not send (likely the OOM killer) is
   `failed`, with the peak in its error. A pure request run never moves the schedule (its exit 75 only pulls it to
-  60 s); a request that also took a due slot advances it; an interrupted or lost request is not re-filed.
+  60 s), nor does its loss (#2317) unless its row was paused and already due when it started: `due_at` then moves on,
+  never earlier. A request that also took a due slot advances it; an interrupted or lost request is not re-filed.
 - **Manual runs and pauses**: `python -m scraper.job_runner request <job> [--by WHO] -- <args>` writes a request
   row the runner executes on the same host (args appended to the registry's, so they override its flags
   unchecked; a second is refused while one waits; one filed during a run waits for it); one request-only GitHub

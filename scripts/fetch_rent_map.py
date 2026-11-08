@@ -2,9 +2,10 @@
 
 Downloads the current file from the MF infografika page (or a local
 `--source-path`), parses it, and appends a new `rent_map_revisions` row —
-unless the file's sha256 already exists, in which case it's a no-op. The MF
-data updates 4×/year, so the monthly job (scraper/jobs.py `rent_map`) mostly
-no-ops. Every run then re-renders the map's `rent_map` overlay.
+unless the file's sha256 already exists, in which case it's a no-op that stamps
+`rent_map_cells` current when the cells serve that file. The MF data updates
+4×/year, so the monthly job (scraper/jobs.py `rent_map`) mostly no-ops. Every
+run then re-renders the map's `rent_map` overlay.
 
     python -m scripts.fetch_rent_map                     # fetch + ingest live
     python -m scripts.fetch_rent_map --source-path f.xlsx

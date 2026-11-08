@@ -154,11 +154,16 @@ toolkit work.
   "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
   and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
-  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
-  "now" rule on today; a row opens its property.
+  arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a "now" rule on today; a
+  row opens its property.
 - **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
   under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
   full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
+- **Done** (operator ask 2026-11-07, #2436): past viewings are a day back. The Nadcházející / Vše scope is
+  gone (its default barred every day before today, so with every viewing behind the operator the tab showed
+  nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
+  (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
+  the ones still ahead ("2 v plánu"); another year's day title is "čt 27. listopadu 2025".
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
@@ -441,7 +446,7 @@ toolkit work.
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
   portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
-  install walk. Follow-up (PR open): **Poloha** — Mapy's static map streamed through the API (never stored), label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; `MAPY_STATIC_MAPS_ENABLED=0` turns the image off.
+  install walk. Follow-up: **Poloha** — label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; since #2446 over a lazy OpenFreeMap map at the location ad's point (zoom by precision, two-finger pan, dimmed after dusk); the Mapy image and its switch are gone.
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per

@@ -13,7 +13,7 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
 ## Adding a new scraper field without breaking existing data
 
 1. Add the column with a new numbered migration (`alter table listings add column ...`). Never touch `001_initial.sql`.
-   Content that is no column is hash-only (`locality`; `price_native`, a page's own foreign-currency price, hashed IN PLACE OF `price_czk` so the portal's daily FX re-conversion never snapshots).
+   Content that is no column is hash-only (`locality`; `price_native`, a page's foreign price, hashed IN PLACE OF `price_czk` so an FX re-conversion never snapshots).
 2. Declare the cell in `scraper/attribute_contract.py` for EVERY portal (producer, source-key
    precedence, absence semantics, sentinels) and read it in the parser through `source_value` /
    `source_label`; a label→value mapping belongs in `scraper/vocabulary.py`, never in the parser.
@@ -222,7 +222,7 @@ from the slow "download each ad" write:
   Never hand-roll it, and never add a portal without wiring the flag through —
   `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
-  never `changed`**) — and are **enqueued** into
+  never `changed`**; a rate or EUR card resolves like its detail: `scraper/price_reading.py`) — and are **enqueued** into
   `listing_detail_queue` in one of two service classes — ACQUISITION (never fetched) or REFRESH
   (failure-retry > price-changed > the location refetch lane). The drain reserves half of every
   claim for acquisition, so an unbounded refresh backlog can no longer starve new listings; unused

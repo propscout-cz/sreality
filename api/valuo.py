@@ -519,7 +519,7 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
             "label": " · ".join(p for p in (type_label_cs(subject["category_main"], subject["subtype"]),
                                             subject["disposition"]) if p),
             "location": None if location is None else {
-                k: location[k] for k in ("label", "granularity", "uncertainty_radius_m", "note")},
+                k: location[k] for k in ("label", "granularity", "note")},
         },
         "fields": [], "defaults": {}, "provenance": {}, "blocking": [],
         "history": [present(r) for r in _rows(conn, _HISTORY_SQL, (account_id, property_id, _HISTORY_LIMIT))],

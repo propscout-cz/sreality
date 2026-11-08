@@ -46,6 +46,29 @@ a house normally has its own, and a plot of land has none of its own. An ad has 
 when that door is certain; everything else stands at a coarser level and says so.
 _Avoid_: address point (in prose), house number, door (alone, where a physical door could be meant)
 
+**Place** (UI: "Lokalita"):
+One named area of the Czech register that a search, a watchdog or the map can be limited to: a kraj,
+an okres, a town (obec), a quarter (část obce), a settlement unit (not built yet) or a street. A
+property is in a place only when its location ad is known to lie inside it. It is never assumed to be
+in a smaller place inside the one it is known at.
+_Avoid_: location (for the area), area, region, locality
+
+**Place shortcut** (UI: "zkratka lokality"):
+One pick that stands for several places at once, such as Praha 6 for every quarter inside it, or (not
+built yet) every settlement unit of one town whose name matches what was typed. Choosing it adds each
+of those places; nothing is ever limited by the shortcut itself.
+_Avoid_: alias, place group, district (for Praha 6)
+
+**Settlement unit** (UI: "Sídelní jednotka"):
+One of the named areas the state register divides every town into (officially "základní sídelní
+jednotka"), such as Barrandov or Spořilov in Praha. The register ties each to one cadastral area (KÚ)
+of one town, not to a quarter, and a small town is often a single one. A property is in a settlement
+unit only when the most precise location its location ad has (its RÚIAN door, or else its street,
+quarter or town) lies wholly inside that one settlement unit, and a portal's map pin alone never
+places it. A property known only at a place that spans several settlement units is in none of them.
+Not built yet (ADR 0009, ruled 2026-11-06): no search, watchdog or map can be limited to one today.
+_Avoid_: quarter or čtvrť (a quarter is a část obce), neighbourhood, district, unit (alone), ZSJ (in UI)
+
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
 _Avoid_: dupe, match, twin
@@ -79,8 +102,9 @@ _Avoid_: native id (in prose), hash id, listing id
 The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
 Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
 broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
-portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
-quoted on a call; never replaced by another number when it is missing.
+portal id. An ad may print none (a private seller). Shown beside the broker's contact, and written
+into a saved contact's note, so it can be quoted on a call; never replaced by another number when it
+is missing.
 _Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
@@ -274,6 +298,12 @@ _Avoid_: deal, card (alone)
 **Stage**:
 One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
 _Avoid_: fáze (in code), column
+
+**Viewing stage** (UI: "Fáze prohlídky"):
+The one stage an account marks as where a property waits for its viewing, whatever the stage is
+called; never a closed stage. Adding a viewing to a property that is off the board, at an earlier
+stage or closed offers to put its card there.
+_Avoid_: visit stage, the stage's key or label as its meaning
 
 **Collection**:
 A named set of properties an account keeps, optionally watched for changes. It may be shared

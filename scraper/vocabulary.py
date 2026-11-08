@@ -204,8 +204,8 @@ def refuse(field: str, portal: str, label: str) -> None:
 
     The same channel as an unmapped label, because it is the same event: a value the
     portal published that reaches no column, visible in the run summary instead of
-    silently gone. bezrealitky's EUR rents are the first customer (W4) — a non-CZK amount
-    in `price_czk` reads ~25x low, and converting it would invent an exchange rate."""
+    silently gone. bezrealitky's prices in a currency we do not convert are the first
+    customer (W4; EUR converts at a fixed rate since #2355, `scraper.price_reading`)."""
     with _UNMAPPED_LOCK:
         UNMAPPED[f"{field}/{portal}/{fold(label)}"] += 1
 

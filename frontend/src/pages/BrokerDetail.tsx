@@ -15,6 +15,7 @@ import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
 import { portalBadge } from '../lib/portals';
 import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
+import { brokerContact } from '@/lib/brokerContact';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
 import { advertPath, propertyPath } from '@/lib/listingUrl';
@@ -137,7 +138,16 @@ function BrokerDetailDesktop() {
                 <span>Explore this broker's listings</span>
               </button>
             </div>
-            <BrokerContactCard broker={b} />
+            <BrokerContactCard
+              broker={b}
+              saveAs={brokerContact({
+                brokerId: b.broker_id,
+                name: b.display_name,
+                firm: b.firm_name ?? b.firm_domain,
+                phone: b.primary_phone,
+                email: b.primary_email,
+              })}
+            />
           </header>
 
           {/* Stats strip */}
