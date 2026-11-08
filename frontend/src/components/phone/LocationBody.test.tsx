@@ -186,6 +186,18 @@ describe('<LocationBody>', () => {
     expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
   }, 15_000);
 
+  it('hides the aerial photo again on Mapa, on the same map', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('load'));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Mapa' }));
+    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+    expect(within(bar()).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'true');
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
+    expect(fakeMaps[0].removed).toBe(false);
+  }, 15_000);
+
   /* iOS caps the WebGL contexts a page may hold. */
   it('releases the map when the user leaves', async () => {
     const { unmount } = wrap(<LocationBody propertyId={7} />);
