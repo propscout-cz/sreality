@@ -113,3 +113,27 @@ def test_a_town_pick_is_recorded_with_its_text_rank_level_and_code(conn: psycopg
     (pick,) = _picks(conn)
     assert (pick.text, pick.rank, pick.level, pick.code) == ("Brno", 2, "obec", BRNO)
     assert isinstance(pick.created_at, datetime)
+
+
+def _stored(conn: psycopg.Connection) -> list[tuple[str | None, int, str, int | None]]:
+    return [(p.text, p.rank, p.level, p.code) for p in _picks(conn)]
+
+
+def test_a_mestska_cast_is_recorded_as_itself_while_the_answer_stays_its_parts(conn: psycopg.Connection,
+                                                                             client: TestClient) -> None:
+    answer = _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
+    assert answer == {"level": "cast_obce", "id": None, "name": "Praha 6", "context": "Praha",
+                      "parts": [{"id": VOKOVICE, "name": "Vokovice"}]}
+    assert _stored(conn) == [(None, 1, "momc", PRAHA_6)]
+
+
+def test_a_full_width_digit_keeps_no_text(conn: psycopg.Connection, client: TestClient) -> None:
+    _resolve(client, TOWN_PRAHA, "Praha ２", 1)
+    assert _stored(conn) == [(None, 1, "obec", PRAHA)]
+
+
+def test_a_refused_pick_keeps_its_text_and_typed_level_with_no_code(conn: psycopg.Connection,
+                                                                     client: TestClient) -> None:
+    answer = _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    assert answer == {"level": "cast_obce", "id": None, "name": None, "context": "Praha"}
+    assert _stored(conn) == [("Barrandov", 3, "cast_obce", None)]
