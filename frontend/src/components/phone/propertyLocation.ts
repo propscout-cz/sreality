@@ -1,5 +1,5 @@
 /* The phone's Poloha reads: where the property is (its location ad's point, its
- * granularity, label, zoom and a note when the point is coarse) and Mapy's static map
+ * granularity, precision, label and a note when the point is coarse) and Mapy's static map
  * of it, which the API streams on every view and never stores (Mapy's terms). An <img>
  * cannot send the JWT, so the PNG comes through the transport as bytes and is shown
  * from a blob URL that dies with the component. */
@@ -9,6 +9,9 @@ import { useQuery } from '@tanstack/react-query';
 
 import { ApiError, apiGet, apiGetBlob } from '@/lib/api';
 import { appleMapsPointUrl, googleMapsPointUrl, mapyCzPointUrl } from '@/lib/geoLinks';
+import { ZOOM_BY_LEVEL, type ZoomLevel } from '@/lib/zoomByLevel';
+
+export type Precision = 'street' | 'quarter' | 'town' | 'coarse';
 
 export interface PropertyLocation {
   lat: number;
@@ -16,9 +19,19 @@ export interface PropertyLocation {
   granularity: string | null;
   granularity_rank: number | null;
   label: string | null;
-  zoom: number;
+  precision: Precision;
   note: string | null;
 }
+
+/* How finely the API knows the point, as the place level the map opens on. */
+const PRECISION_LEVEL: Record<Precision, ZoomLevel> = {
+  street: 'ulice',
+  quarter: 'cast_obce',
+  town: 'obec',
+  coarse: 'okres',
+};
+
+export const mapZoom = (precision: Precision): number => ZOOM_BY_LEVEL[PRECISION_LEVEL[precision]];
 
 /* The one map size the API serves: a 4:3 box 1080 px wide. */
 export const STATIC_MAP_W = 1080;
@@ -80,16 +93,18 @@ export function useStaticMap(propertyId: number, enabled: boolean) {
 
 /* The three map apps an iPhone hands a point to, at the zoom the point's precision allows
  * (Google's search form takes none). Here rather than in lib/geoLinks, which the first
- * visit already loads: only the phone's lazy chunks need it. */
+ * visit already loads: only the phone's lazy chunks need it. The apps count zoom on 256 px
+ * tiles, MapLibre on 512 px ones, so one step past the map's zoom shows the same ground. */
 export function phoneMapLinks(
   lat: number,
   lng: number,
   label: string | null,
   zoom: number,
 ): Array<{ key: 'apple' | 'google' | 'mapy'; label: string; url: string }> {
+  const appZoom = zoom + 1;
   return [
-    { key: 'apple', label: 'Apple Maps', url: appleMapsPointUrl(lat, lng, label, zoom) },
+    { key: 'apple', label: 'Apple Maps', url: appleMapsPointUrl(lat, lng, label, appZoom) },
     { key: 'google', label: 'Google Maps', url: googleMapsPointUrl(lat, lng) },
-    { key: 'mapy', label: 'Mapy.cz', url: mapyCzPointUrl(lat, lng, zoom) },
+    { key: 'mapy', label: 'Mapy.cz', url: mapyCzPointUrl(lat, lng, appZoom) },
   ];
 }

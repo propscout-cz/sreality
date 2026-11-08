@@ -37,7 +37,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     apiGet: vi.fn(async (path: string) =>
       path.endsWith('/location')
         ? { lat: 50.105, lon: 14.5, granularity: 'street', granularity_rank: 60,
-            label: 'Freyova, Praha 9 – Vysočany', zoom: 16, note: null }
+            label: 'Freyova, Praha 9 – Vysočany', precision: 'street', note: null }
         : null,
     ),
     apiGetBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),

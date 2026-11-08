@@ -404,7 +404,7 @@ describe('<FeedCard> — Poloha', () => {
       granularity: 'street',
       granularity_rank: 60,
       label: 'Freyova, Praha 9 – Vysočany',
-      zoom: 16,
+      precision: 'street',
       note: null,
     });
     vi.mocked(api.apiGetBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }));

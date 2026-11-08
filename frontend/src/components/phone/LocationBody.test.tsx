@@ -26,7 +26,7 @@ const LOC: PropertyLocation = {
   granularity: 'obec',
   granularity_rank: 40,
   label: 'Dvory',
-  zoom: 12,
+  precision: 'town',
   note: 'Poloha jen na úrovni obce',
 };
 
@@ -142,12 +142,47 @@ describe('<LocationBody>', () => {
       granularity: 'address_point',
       granularity_rank: 100,
       label: 'Freyova 534/2, Praha',
-      zoom: 16,
+      precision: 'street',
       note: null,
     });
     wrap(<LocationBody propertyId={7} />);
     expect(await screen.findByText('Freyova 534/2, Praha')).toBeInTheDocument();
     expect(screen.queryByText(/Poloha jen/)).toBeNull();
+  });
+
+  it.each([
+    [
+      'street',
+      null,
+      'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=16',
+      'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=16&marker=true',
+    ],
+    [
+      'quarter',
+      'Poloha jen na úrovni části obce',
+      'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=14',
+      'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=14&marker=true',
+    ],
+    [
+      'town',
+      'Poloha jen na úrovni obce',
+      'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=12',
+      'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=12&marker=true',
+    ],
+    [
+      'coarse',
+      'Poloha jen přibližná, hrubší než obec',
+      'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=10',
+      'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=10&marker=true',
+    ],
+  ] as const)('a %s point opens in Apple Maps and Mapy.cz at its own zoom', async (precision, note, apple, mapy) => {
+    vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, precision, note });
+    wrap(<LocationBody propertyId={7} />);
+    const nav = await screen.findByRole('navigation', { name: 'Otevřít v mapách' });
+    const links = within(nav).getAllByRole('link');
+    expect(links[0]).toHaveAttribute('href', apple);
+    expect(links[2]).toHaveAttribute('href', mapy);
+    expect(screen.queryByText(/^Poloha jen/)?.textContent ?? null).toBe(note);
   });
 
   it('revokes the blob URL when it goes away', async () => {

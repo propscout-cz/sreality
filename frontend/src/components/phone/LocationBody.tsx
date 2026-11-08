@@ -15,6 +15,7 @@ import { ExternalIcon } from './phoneIcons';
 import {
   STATIC_MAP_H,
   STATIC_MAP_W,
+  mapZoom,
   phoneMapLinks,
   refusalReason,
   usePropertyLocation,
@@ -98,7 +99,7 @@ export default function LocationBody({
       )}
       {data && (
         <nav aria-label="Otevřít v mapách" className="grid grid-cols-3 border-y border-[var(--color-rule-soft)]">
-          {phoneMapLinks(data.lat, data.lon, data.label, data.zoom).map((l) => (
+          {phoneMapLinks(data.lat, data.lon, data.label, mapZoom(data.precision)).map((l) => (
             <a
               key={l.key}
               href={l.url}
