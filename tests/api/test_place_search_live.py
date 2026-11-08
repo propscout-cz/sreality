@@ -280,6 +280,39 @@ def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mi
     ]
 
 
+def test_shortcuts_rank_by_the_sum_of_their_quarters_served_properties_a_shared_quarter_counting_for_each(
+        mirror, client):
+    """Hradčany is in Praha 1 and Praha 6 (#2380). Praha 6 serves 3 + 3 = 6 through Dejvice and Hradčany, Praha 1
+    2 + 3 = 5 through Josefov and Hradčany, Praha 7 4 through Holešovice, the largest quarter. Without Hradčany, or
+    by its largest quarter, Praha 7 would lead; by code, Praha 1. The town is exact, the shortcuts prefix; four rows
+    fill the limit, so nothing fuzzy is read."""
+    praha = _praha(mirror)
+    praha_1 = mirror.unit("momc", PRAHA_1, "Praha 1", praha)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    praha_7 = mirror.unit("momc", PRAHA_7, "Praha 7", praha)
+    hradcany = mirror.unit("cast_obce", HRADCANY, "Hradčany", praha)
+    mirror.quarters(praha_1, mirror.unit("cast_obce", JOSEFOV, "Josefov", praha), hradcany)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), hradcany)
+    mirror.quarters(praha_7, mirror.unit("cast_obce", HOLESOVICE, "Holešovice", praha))
+    for part, properties in ((JOSEFOV, 2), (DEJVICE, 3), (HRADCANY, 3), (HOLESOVICE, 4)):
+        for _ in range(properties):
+            mirror.served(obec=PRAHA, part=part)
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Praha", "limit": 4})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": HRADCANY, "name": "Hradčany", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_1, "name": "Praha 1", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": HRADCANY, "name": "Hradčany", "context": "Praha"},
+                    {"level": "cast_obce", "id": JOSEFOV, "name": "Josefov", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_7, "name": "Praha 7", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": HOLESOVICE, "name": "Holešovice", "context": "Praha"}]},
+    ]}
+
+
 def test_a_mestska_cast_with_no_pairs_at_the_index_s_version_answers_no_row_and_takes_no_row_s_place(mirror, client):
     """Between a load's pointer swap and its finish step the new version has no pairs yet, and an older version's do
     not stand in. Praha 6 answers nothing, and what "praha" reaches by similarity still fills the rows, even the one

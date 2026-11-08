@@ -86,9 +86,12 @@ quarters AS (
    WHERE rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = (SELECT id FROM cur)
      AND rel.from_id IN (SELECT h.unit_id FROM hits h WHERE h.level = 'momc')),
 ranked AS (
-  SELECT h.*, coalesce(c.n, 0) AS served, pop.population
+  SELECT h.*, coalesce(c.n, parts.n, 0) AS served, pop.population
     FROM hits h
     LEFT JOIN place_served_counts c ON c.level = h.level AND c.code = h.code
+    LEFT JOIN LATERAL (SELECT sum(qc.n) AS n FROM quarters q
+                         JOIN place_served_counts qc ON qc.level = q.level AND qc.code = q.code
+                        WHERE q.unit_id = h.unit_id) parts ON true
     LEFT JOIN LATERAL (SELECT p.population FROM obec_population p
                         WHERE h.level = 'obec' AND p.obec_kod = h.code
                         ORDER BY p.year DESC LIMIT 1) pop ON true
