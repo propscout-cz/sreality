@@ -1115,9 +1115,10 @@ rules. Identify which one a task belongs to before you start.
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
   (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,
   část and městská část average their open doors (FILL's centroid). Only the registry load's finish step refreshes
-  `place_facts`, so a new place has no fly-to point until the next load. `place_served_counts` reads `browse_list`
-  through the plain SQL function `place_served_rows()`, never a FROM, for `browse_list_visible`'s reason: a matview over
-  the rebuilt table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
+  `place_facts`, so a version's new places and doors get their fly-to point when that load finishes; a failed finish
+  leaves the previous version's points until a re-dispatch. `place_served_counts` reads `browse_list` through the plain
+  SQL function `place_served_rows()`, never a FROM, for `browse_list_visible`'s reason: a matview over the rebuilt
+  table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
   registry_version_id)`, which serves `=` and `LIKE 'p%'` under ICU (net 0 indexes). A failed read or an unreachable
   database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
   never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). It ships with no
@@ -3542,9 +3543,10 @@ renumber.** Navigate by area:
     inlinable SECURITY INVOKER SQL function (`NOT EXISTS` against `property_dismissals_public`);
     a function rather than a view because `browse_list` is blue-green rebuilt (a view or policy
     on it would block the DROP or vanish with it), and it returns `browse_projection`'s row type,
-    never the rebuilt relation's. `place_served_rows()` is its second function-shaped reader, for the
-    same reason: own place search's `place_served_counts` matview reads `browse_list` through it (migration 738). Since 629 it takes ten defaulted parameters: `hide_dismissed` (default true)
-    first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
+    never the rebuilt relation's. `place_served_rows()` (migration 738) reads `browse_list` through a
+    function for the same reason: own place search's `place_served_counts` matview would otherwise
+    block the DROP. Since 629 `browse_list_visible` takes ten defaulted parameters: `hide_dismissed`
+    (default true) first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
     zero-arg call keeps 537's answer). `browse_stats_properties` / `browse_map_cells` take the
     same `hide_dismissed` flag (default false) and the nine. The SPA's `queries.ts:readSource`
     is the one seam: every cohort read calls the twin with `hide_dismissed: !showDismissed` plus

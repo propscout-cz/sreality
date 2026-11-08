@@ -18,7 +18,7 @@ Mechanism, in order (04 C1.7):
   7. Boundaries for this version (`ruian_boundaries.load_pack`), unchanged units carried.
   8. Rebuild the gazetteer for this version — once, after the pack has named the units.
   9. The completeness assertion: every member stát, okres, obec and KÚ has pip + authoritative.
- 10. Publish = flip `is_current` in one short transaction; refresh `rent_map_cells`.
+ 10. Publish = flip `is_current` in one short transaction; refresh `rent_map_cells` and `place_facts`.
 
 What is NOT atomic: steps 6-8 write the mirror in place, so a reader keyed on `valid_to IS
 NULL` rather than on a pinned registry version sees a staged version's unit, street and

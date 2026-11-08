@@ -78,7 +78,7 @@ class _Mirror:
                 "INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose,"
                 " generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point,"
                 " containment_radius_m) SELECT %s, %s, 'authoritative', 0, ST_Multi(ST_Expand(p, 0.01)), p, 0, p, 0"
-                "   FROM (SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS p) s", (unit, self.v, lng, lat))
+                "   FROM (SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS p) s", (unit, version, lng, lat))
         return unit
 
     def index_at(self, unit: int, level: str, name: str, version: int) -> None:
@@ -100,15 +100,16 @@ class _Mirror:
                 "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, ulice_kod, psc, geom, plati_od,"
                 " first_version_id, last_version_id) VALUES (%s, %s, %s, %s, '68201',"
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
-                (next(self.doors), obec, self.codes[obec], code, *door, self.v, self.v))
+                (next(self.doors), obec, self.codes[obec], code, *door, version, version))
 
     def served(self, *, region: int | None = None, okres: int | None = None, obec: int | None = None,
-               part: int | None = None, active: bool = True, deal: str = "prodej") -> None:
+               part: int | None = None, street: int | None = None, active: bool = True,
+               deal: str = "prodej") -> None:
         """One property as Browse serves it: a browse_list row naming its places by RÚIAN code."""
         self.conn.execute(
             "INSERT INTO browse_list (property_id, is_active, category_type, region_id, okres_id, obec_id,"
-            " cast_obce_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (next(self.properties), active, deal, region, okres, obec, part))
+            " cast_obce_id, ulice_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (next(self.properties), active, deal, region, okres, obec, part, street))
 
     def population(self, obec_code: int, people: int, *, year: int = 2025) -> None:
         self.conn.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, %s, %s)",
@@ -293,6 +294,27 @@ def test_zizkov_answers_the_quarter_in_praha_first_once_it_serves_a_property(mir
     assert _chips(_suggest(client, "zizkov")) == [
         ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
         ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
+    ]
+
+
+PLZEN_MESTO, PLZEN, BEROUN_OKRES, BEROUN, PLZENSKA = 3405, 554791, 3202, 531057, 437180
+
+
+def test_the_exact_town_answers_before_a_prefix_street_that_serves_more_properties(mirror, client):
+    """'plzen' starts 'plzenska': the town is exact, the street and the okres are prefix. The street serves two
+    properties and the town one, yet the town answers first: the match tier ranks above served properties."""
+    plzen_mesto = mirror.unit("okres", PLZEN_MESTO, "Plzeň-město")
+    mirror.unit("obec", PLZEN, "Plzeň", plzen_mesto)
+    beroun = mirror.unit("obec", BEROUN, "Beroun", mirror.unit("okres", BEROUN_OKRES, "Beroun"))
+    mirror.street(PLZENSKA, "Plzeňská", beroun)
+    mirror.served(okres=PLZEN_MESTO, obec=PLZEN)
+    mirror.served(okres=BEROUN_OKRES, obec=BEROUN, street=PLZENSKA)
+    mirror.served(okres=BEROUN_OKRES, obec=BEROUN, street=PLZENSKA)
+    mirror.publish()
+    assert _chips(_suggest(client, "Plzeň")) == [
+        ("obec", PLZEN, "Plzeň", "Plzeň-město"),
+        ("ulice", PLZENSKA, "Plzeňská", "Beroun"),
+        ("okres", PLZEN_MESTO, "Plzeň-město", None),
     ]
 
 
