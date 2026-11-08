@@ -963,8 +963,17 @@ rules. Identify which one a task belongs to before you start.
   its 4:3 plate then mounts `PhoneMap` (#2446), a lazy chunk over `lib/basemap` `createMap`
   (OpenFreeMap): cooperative gestures with the Czech hint "Mapou posunete dvěma prsty", no zoom
   buttons, no scale bar, dimmed after dusk like the photos (`PHOTO_DARK`), DetailMap's pin
-  (`addPointPin`). Its zoom is `lib/zoomByLevel`'s by precision (street 15, quarter 13, town 11,
-  coarse 9); the links take one step more, since the map apps count 256 px tiles and MapLibre 512.
+  (`addPointPin`). Once the map has loaded, a "Mapa" / "Letecká" `SegmentedBar` (phone tone, top
+  right, on a paper backing) shows ČÚZK's aerial photo (#2447): `lib/basemap` `addAerialLayer`
+  adds Ortofoto ČR's `ORTOFOTO_WM` raster hidden, over the basemap and under the pin (256 px
+  tiles, y before x, source `maxzoom` 20 so deeper zooms overscale; "© ČÚZK, CC BY 4.0" linked to
+  the geoportal; CORS echoes the app's origin). Hidden, MapLibre fetches none of its tiles and
+  leaves its credit out of the (i). The bar flips the layer's visibility in its own effect, never
+  building a new map; a map rebuilt for a moved point takes the pick once it has loaded. Abroad
+  its tiles 404 and the map shows through: no abroad gate, no memory of the choice, no tile
+  stored, and the privacy page names ČÚZK. Its zoom is `lib/zoomByLevel`'s by precision (street
+  15, quarter 13, town 11, coarse 9); the links take one step more, since the map apps count
+  256 px tiles and MapLibre 512.
   The map degrades, the place does not: `MapSlot` (an `ErrorBoundary` with `fallback={null}` and
   `onError`, around Suspense) catches a `createMap` throw, and `guardMap` turns a lost WebGL context,
   or an `error` before the first `style.load`, into one; the plate goes and "Mapu se nepodařilo

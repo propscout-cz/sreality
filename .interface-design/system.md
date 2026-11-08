@@ -171,7 +171,8 @@ with `tabular-nums` on EVERY number.
     the caption: ChartBuilder's "Hodnota: Cena"); `disabled` for the whole control; `box` + `aria` make it the form
     box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
   - `tone="phone"` on the phone's own screens (Makléři Řadit and the horizon bar, the account sheet's
-    Vzhled, Notifications inside the phone frame): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
+    Vzhled, Notifications inside the phone frame, Poloha's Mapa / Letecká over the map, on a `--color-paper`
+    backing since the phone track has no fill): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
     `--color-inset` wearing the phone chip's pressed `ink-2` hairline as an inset ring (`chipState`; the well alone
     is ~1.05:1 on paper; a ring, so no width moves, and no weight); colour there only ever means a stage. The
     Filtry sheet hosts desktop controls and keeps the copper bar.
