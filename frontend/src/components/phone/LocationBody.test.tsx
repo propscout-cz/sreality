@@ -130,6 +130,15 @@ describe('<LocationBody>', () => {
     expect(fakeMaps[0].layers).toEqual([expect.objectContaining({ id: 'pin', type: 'circle', source: 'pin' })]);
   }, 15_000);
 
+  /* iOS caps the WebGL contexts a page may hold. */
+  it('releases the map when the user leaves', async () => {
+    const { unmount } = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    expect(fakeMaps[0].removed).toBe(false);
+    unmount();
+    expect(fakeMaps[0].removed).toBe(true);
+  }, 15_000);
+
   it('prints no note for a street-level point', async () => {
     vi.mocked(api.apiGet).mockResolvedValue(STREET);
     wrap(<LocationBody propertyId={7} />);

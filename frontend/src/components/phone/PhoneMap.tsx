@@ -25,6 +25,8 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
       container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
       addPointPin(map, [lon, lat]);
     });
+
+    return () => map.remove();
   }, [lat, lon, zoom]);
 
   return (
