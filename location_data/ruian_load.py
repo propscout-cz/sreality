@@ -734,8 +734,9 @@ def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) 
 # A městská část's quarters are the části its open doors stand in (#2380: no polygon, no share). A load re-points doors
 # in place while it closes and reopens units, so a door may hold either row of one: both ends go door -> row -> stable
 # CODE -> the row that is a MEMBER of this version (ruian_boundaries' predicate), the row its name index names, even
-# while a later version sits staged. The type reads `<from>_<to>`, not `katastr_in_obec`'s `<from>_in_<to>`: a quarter
-# can straddle two městské části, so neither contains the other (#2461's zsj pairs follow it).
+# while a later version sits staged (the doors themselves are unversioned: as the last load left them). The type
+# reads `<from>_<to>`, not `katastr_in_obec`'s `<from>_in_<to>`: a quarter can straddle two městské části, so neither
+# contains the other (#2461's zsj pairs follow it).
 _MOMC_QUARTERS_SQL = """
 INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)
 SELECT DISTINCT m.id, q.id, 'momc_cast_obce', %(v)s::bigint
@@ -753,7 +754,7 @@ ON CONFLICT DO NOTHING
 
 
 def write_momc_quarters(conn: psycopg.Connection, version_id: int) -> int:
-    """Own place search's shortcut rows (#2450): each městská část's quarters at this version, from its doors."""
+    """Own place search's shortcut rows (#2450): each městská část's quarters at this version, from its open doors."""
     with conn.cursor() as cur:
         cur.execute(_MOMC_QUARTERS_SQL, {"v": version_id})
         landed = cur.rowcount
