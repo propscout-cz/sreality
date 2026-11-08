@@ -222,3 +222,10 @@ def test_a_psc_a_bare_street_word_and_a_place_outside_the_current_version_answer
     mirror.street(437171, "Zaniklá", towns["vyskov"], version=mirror.old)
     mirror.publish()
     assert _suggest(client, query) == []
+
+
+def test_brez_still_finds_breznice_by_the_start_of_its_name_typed_without_accents(mirror, client):
+    okres = mirror.unit("okres", 3211, "Příbram", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    mirror.unit("obec", 540153, "Březnice", okres)
+    mirror.publish()
+    assert _chips(_suggest(client, "brez")) == [("obec", 540153, "Březnice", "Příbram")]
