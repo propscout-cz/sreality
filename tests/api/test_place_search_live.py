@@ -171,3 +171,23 @@ def test_zizkov_finds_both_quarters_named_zizkov_each_with_its_town_and_a_tie_br
         ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
         ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
     ]
+
+
+def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_never_answered(mirror, client):
+    """Q6 a, Q9. "praha 6" names the městská část exactly, yet answers only what its word "praha" reaches by
+    similarity, the kraj and the town; with no served property and no population the lower code answers first."""
+    towns = _zizkov(mirror)
+    mirror.unit("katastralni_uzemi", 727415, "Žižkov", towns["praha"])
+    mirror.unit("momc", 500178, "Praha 6", towns["praha"])
+    mirror.unit("region_soudrznosti", 11, "Praha")
+    mirror.unit("stat", 1, "Česká republika")
+    mirror.publish()
+    assert _chips(_suggest(client, "zizkov")) == [
+        ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
+        ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
+    ]
+    assert _chips(_suggest(client, "praha 6")) == [
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
+        ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+    ]
+    assert _suggest(client, "ceska") == []

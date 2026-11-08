@@ -2,7 +2,8 @@
 
 One read over the current registry version, by name: tiers exact, prefix, then fuzzy (word similarity, only while the
 first two fall short of the limit). A row is a chip: level, RÚIAN code, register name, context (the parent's name) and
-a fly-to point from `place_facts`, or none. Never reads `place_picks`: they are its holdout.
+a fly-to point from `place_facts`, or none. It answers kraj, okres, obec, část obce and street, never a cadastral
+area, městská část, cohesion region or the country (Q6 a, Q9). Never reads `place_picks`: they are its holdout.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ units AS (
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur)
      AND n.name_norm LIKE %(unit_prefix)s
+     AND n.entity_kind IN ('kraj', 'okres', 'obec', 'cast_obce')
    ORDER BY u.level, u.code, tier, u.valid_from DESC),
 streets AS (
   SELECT DISTINCT ON (s.code) 'ulice'::ruian_level AS level, s.code, s.name, s.obec_unit_id AS parent_id,
@@ -49,6 +51,7 @@ fuzzy AS (
    WHERE (SELECT count(*) FROM near) < %(limit)s
      AND %(unit_fuzzy)s <%% n.name_norm
      AND n.registry_version_id = (SELECT id FROM cur)
+     AND n.entity_kind IN ('kraj', 'okres', 'obec', 'cast_obce')
   UNION ALL
   SELECT 'ulice'::ruian_level, s.code, s.name, s.obec_unit_id, 2
     FROM ruian_streets s
