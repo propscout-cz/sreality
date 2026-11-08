@@ -1098,6 +1098,31 @@ rules. Identify which one a task belongs to before you start.
   revoked. `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452); own search
   never reads the picks: they are its HOLDOUT. Retention: pg_cron `place-picks-retention` deletes rows over 12 months
   daily; once the switch-over deploys, one DELETE empties the table (#2453) and Stage B drops it (#2455).
+- **Own place search** (#2449; spec #2441 Part 4, rulings Q2 c, Q6 a, Q9, Q12 a). `location_data/place_search.suggest`
+  behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
+  `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
+  register name, the parent unit's name (an obec's okres, an okres's kraj, a quarter's or street's obec; none for a
+  kraj) and the fly-to `{lat, lng}` or null. It answers kraj, okres, obec, část obce and street only: never a KÚ,
+  městská část, region soudržnosti, the country, a PSČ (a key with no letter answers `[]` before any read) or a place
+  outside the current registry version (a unit is read at the gazetteer's version, a street by version membership).
+  One read, three tiers: exact (`name_norm` equal on a gazetteer row that is not `qualifier_stripped`), prefix
+  (`LIKE`; each arm is gated on its own normalised key, so `ulice .` never becomes `LIKE '%'`), then fuzzy (pg_trgm
+  word similarity at a pinned 0.6, ≥ 3 characters, only while the first two fall short of the limit). Within a tier:
+  served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
+  counts rank rows and are never returned. So on an exact tie an okres outranks its same-name town whenever it serves
+  more properties (68 of 77 okresy share a town's name); the gate (#2465) measures it. Two read models (migration 738,
+  service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
+  ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
+  (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,
+  část and městská část average their open doors (FILL's centroid). Only the registry load's finish step refreshes
+  `place_facts`, so a version's new places and doors get their fly-to point when that load finishes; a failed finish
+  leaves the previous version's points until a re-dispatch. `place_served_counts` reads `browse_list` through the plain
+  SQL function `place_served_rows()`, never a FROM, for `browse_list_visible`'s reason: a matview over the rebuilt
+  table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
+  registry_version_id)`, which serves `=` and `LIKE 'p%'` under ICU (net 0 indexes). A failed read or an unreachable
+  database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
+  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). It ships with no
+  caller: the switch-over (#2453) points the place boxes at it after the gate and deletes the Mapy search path.
 - Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
   radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
   `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
@@ -3518,8 +3543,10 @@ renumber.** Navigate by area:
     inlinable SECURITY INVOKER SQL function (`NOT EXISTS` against `property_dismissals_public`);
     a function rather than a view because `browse_list` is blue-green rebuilt (a view or policy
     on it would block the DROP or vanish with it), and it returns `browse_projection`'s row type,
-    never the rebuilt relation's. Since 629 it takes ten defaulted parameters: `hide_dismissed` (default true)
-    first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
+    never the rebuilt relation's. `place_served_rows()` (migration 738) reads `browse_list` through a
+    function for the same reason: own place search's `place_served_counts` matview would otherwise
+    block the DROP. Since 629 `browse_list_visible` takes ten defaulted parameters: `hide_dismissed`
+    (default true) first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
     zero-arg call keeps 537's answer). `browse_stats_properties` / `browse_map_cells` take the
     same `hide_dismissed` flag (default false) and the nine. The SPA's `queries.ts:readSource`
     is the one seam: every cohort read calls the twin with `hide_dismissed: !showDismissed` plus
@@ -5657,6 +5684,8 @@ merge → boundaries (the state SHP pack is the vintage's third archived artifac
 all three from R2; three geometries per unit — authoritative, subdivided pip, render — an unchanged
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
 member okres, obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
+The finish step after it, which is all a re-dispatch of a current vintage redoes, drops staging, then refreshes
+`rent_map_cells` and own place search's `place_facts`.
 **Levels loaded = levels bound, served or used as match keys** (W7, `docs/design/location-quality/w7-registry.md`):
 stát, region soudržnosti, kraj, okres, obec, MOMC, část obce, KÚ. Správní obvod, ZSJ, ORP and POU were closed by
 SCD-2 (migration 718), never deleted; the loader never closes a unit it stops staging, so retiring a level is a

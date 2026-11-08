@@ -14,6 +14,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
+import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -84,7 +85,7 @@ from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
-from location_data import place_picks
+from location_data import place_picks, place_search
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -202,6 +203,8 @@ if _cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Starlette's default, pinned: a typeahead POSTs to one fixed path, so a cached preflight is one per 10 minutes.
+        max_age=600,
     )
 
 
@@ -419,6 +422,26 @@ def post_maps_resolve(
         background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
                                   rank=body.pick.rank, level=place.level, code=place.code)
     return answer
+
+
+def _place_search_unavailable() -> HTTPException:
+    return HTTPException(503, detail={"code": "place_search_unavailable",
+                                      "message": "Vyhledávání míst je teď nedostupné."})
+
+
+@app.post("/places/suggest")
+def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
+    """Own place search (#2449): rows that are already chips. Ships with no caller until the switch-over (#2453). The
+    connection opens here, not as a dependency, so a database it cannot reach is the same 503 as a failed read."""
+    try:
+        with deps.open_background_conn() as conn:
+            places = place_search.suggest(conn, body.query, limit=body.limit)
+    except place_search.SearchUnavailable:
+        raise _place_search_unavailable() from None
+    except psycopg.OperationalError as exc:
+        logging.warning("places/suggest: no database connection (%s)", type(exc).__name__)
+        raise _place_search_unavailable() from None
+    return {"items": [p.item() for p in places]}
 
 
 def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:

@@ -301,6 +301,14 @@ class PlacePickIn(BaseModel):
     rank: int = Field(ge=1, le=10)
 
 
+class PlaceSuggestIn(BaseModel):
+    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs; the limit is the SPA's pick
+    rank bound."""
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=10, ge=1, le=10)
+
+
 class ResolveLocationIn(BaseModel):
     """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
     lat: float

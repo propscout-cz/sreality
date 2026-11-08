@@ -372,6 +372,27 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/api/test_place_picks_live.py -q
 
+      # Own place search's read models (migration 738): place_served_counts reads browse_list through a function, so
+      # the */15 rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
+      # naming browse_list would refuse the DROP and freeze Browse); place_facts copies the current polygon points and
+      # averages the open doors; the text_pattern_ops name index bounds both `=` and `LIKE 'p%'`. Only a real schema
+      # can run the rebuild, the refreshes or the planner.
+      - name: Place search's read models survive the browse_list rebuild (migration 738)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/location_data/test_place_read_models_live.py -q
+
+      # Own place search (#2449): POST /places/suggest over a mirror the test seeds, its gazetteer built by the loader's
+      # own step and both read models refreshed, answers chips (the town Brno before the street Brněnská), never a KÚ,
+      # městská část, country, PSČ or closed place, ranks by served properties then population then code, and answers
+      # 503 on a failed read without logging the typed text. Only a real schema runs pg_trgm, the matviews and the read.
+      - name: Own place search answers chips from the register (#2449)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/api/test_place_search_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make

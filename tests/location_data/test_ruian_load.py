@@ -336,6 +336,7 @@ def test_the_phases_run_in_the_one_full_order():
     assert source.rindex("finish(conn, version_id") > positions[-1]
     finish = inspect.getsource(ruian_load.finish)
     assert finish.index("drop_staging(") < finish.index("refresh_rent_map_cells(conn)")
+    assert finish.index("refresh_rent_map_cells(conn)") < finish.index("refresh_place_facts(conn)")
     assert source.count("name_index.rebuild(") == 1
     # The boundaries phase no longer rebuilds the gazetteer on its own.
     from location_data import ruian_boundaries
@@ -475,6 +476,7 @@ class _Load:
         monkeypatch.setattr(ruian_boundaries, "missing_geometry", lambda conn, v: self.missing)
         monkeypatch.setattr(ruian_load, "publish", self._publish)
         monkeypatch.setattr(ruian_load, "refresh_rent_map_cells", hit("refresh_rent_map_cells"))
+        monkeypatch.setattr(ruian_load, "refresh_place_facts", hit("refresh_place_facts"))
 
     def _count(self, name: str) -> None:
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -557,6 +559,7 @@ def test_a_run_killed_mid_boundaries_resumes_and_publishes_exactly_once(monkeypa
     assert load.dispatch() == 0
     assert load.calls["publish"] == 1 and load.row["current"]
     assert load.calls["refresh_rent_map_cells"] == 1
+    assert load.calls["refresh_place_facts"] == 1
     # The resume re-enters the pack (it skips committed units itself) but not the
     # checkpointed CSV phases.
     assert load.calls["boundaries"] == 2
@@ -569,6 +572,7 @@ def test_a_run_killed_mid_boundaries_resumes_and_publishes_exactly_once(monkeypa
     assert load.calls["publish"] == 1 and load.calls["cuzk_download"] == 3
     assert load.calls["r2_restore"] == 3
     assert load.calls["refresh_rent_map_cells"] == 2
+    assert load.calls["refresh_place_facts"] == 2
     assert load.calls["drop_staging"] == 2
 
 
@@ -641,6 +645,7 @@ def test_an_incomplete_version_is_never_published(monkeypatch, tmp_path):
         load.dispatch()
     assert load.calls.get("publish", 0) == 0
     assert load.calls.get("refresh_rent_map_cells", 0) == 0
+    assert load.calls.get("refresh_place_facts", 0) == 0
     sql, params = load.conn.executed[-1]
     assert "registry_load_discrepancies" in sql
     detail = json.loads(params[4])
