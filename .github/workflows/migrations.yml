@@ -363,6 +363,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_waitlist_live.py -q
 
+      # Place picks (migration 737, ruling Q10): /maps/resolve over a mirror the test seeds records one pick per
+      # verified human pick, after the answer, and the ICU-pinned CHECK refuses a digit this image's libc default
+      # would let through — only a real schema can answer either.
+      - name: Resolve records a place pick after its answer (migration 737)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/api/test_place_picks_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make

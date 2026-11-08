@@ -206,6 +206,12 @@ def token_claims(authorization: str | None = Header(default=None)) -> dict | Non
     return _bearer(authorization)
 
 
+def records_picks(claims: dict | None) -> bool:
+    """A place pick is recorded (ruling Q10) only for a verified human: claims present (never the local-dev opt-out)
+    and no `app_metadata.automation` marker (the smoke accounts carry one)."""
+    return claims is not None and not (claims.get("app_metadata") or {}).get("automation")
+
+
 # Fixed system account id (mirrors migrations/286_accounts_foundation.sql). The
 # fallback owner for a run/write whose caller has no resolvable account.
 SYSTEM_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"

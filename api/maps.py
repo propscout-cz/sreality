@@ -277,8 +277,10 @@ def _lookup_part(
 
 @dataclass(frozen=True)
 class _Momc:
-    """A městská část a pick named: no code of its own (rows carry none), only its části."""
+    """A městská část a pick named: no code in the answer (rows carry none), only its části. `code` is for the
+    pick's record (location_data.place_picks) alone."""
 
+    code: int
     name: str
     parts: list[tuple[int, str]]
 
@@ -315,7 +317,7 @@ def _bind_momc(
         LOG.info("maps.resolve: %s pick binds městská část %s of obec %s, which has no část on any door "
                  "— no code", level, momc_code, obec_code)
         return None
-    return _Momc(name=momc_name, parts=parts)
+    return _Momc(code=int(momc_code), name=momc_name, parts=parts)
 
 
 def _name_variants(name: str) -> list[str]:
@@ -564,6 +566,15 @@ def _resolve_admin(
     return unit[0], (unit[1], unit[2]), None
 
 
+@dataclass(frozen=True)
+class PickPlace:
+    """What a pick named, for its record (ruling Q10): the bound level and code, the typed level and no code when
+    refused, `momc` and its code for a městská část."""
+
+    level: str
+    code: int | None
+
+
 def resolve(
     conn: Any,
     *,
@@ -573,18 +584,20 @@ def resolve(
     name: str,
     regional_structure: Sequence[Any],
     address_point: bool = False,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], PickPlace | None]:
     """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level.
     With `address_point` (the address picker) an address pick answers its ONE door. A městská
-    část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips."""
+    část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips.
+    Beside the answer, the place a pick's record names; None when there is nothing to record (no level, no
+    registry, or a door, which the address picker never records)."""
     door = address_point and type_ == "regional.address"
     level = "adresni_misto" if door else _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
     if level is None:
-        return out
+        return out, None
     version = _registry_version(conn)
     if version is None:
-        return out
+        return out, None
     if door:
         unit = _resolve_address_point(conn, version=version, lat=lat, lng=lng, name=name,
                                       regional_structure=regional_structure)
@@ -593,9 +606,12 @@ def resolve(
             conn, version=version, lat=lat, lng=lng, level=level,
             name=_street_of(type_, name, regional_structure),
         )
+    place = PickPlace(level, None)
     if isinstance(unit, _Momc):
         out["name"] = unit.name
         out["parts"] = [{"id": code, "name": nm} for code, nm in unit.parts]
+        place = PickPlace("momc", unit.code)
     elif unit is not None:
         out["id"], out["name"] = unit
-    return out
+        place = PickPlace(out["level"], out["id"])
+    return out, None if door else place
