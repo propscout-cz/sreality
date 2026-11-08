@@ -49,7 +49,7 @@ const refused = (status: number, reason: string) =>
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return { qc, ...render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>) };
 }
 
 /* The map is a lazy chunk over the real basemap module: load it once up front so no test
@@ -196,6 +196,22 @@ describe('<LocationBody>', () => {
     expect(within(bar()).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'true');
     expect(fakeCreateMap).toHaveBeenCalledTimes(1);
     expect(fakeMaps[0].removed).toBe(false);
+  }, 15_000);
+
+  /* A refetch can move the point under the open map, which builds a new one. */
+  it('keeps Letecká on the map built for a moved point, once that map has loaded', async () => {
+    const { qc } = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('load'));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+
+    vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, lat: 50.2 });
+    await act(() => qc.invalidateQueries());
+    await waitFor(() => expect(fakeMaps).toHaveLength(2), LOADED);
+    expect(fakeMaps[0].removed).toBe(true);
+    act(() => fakeMaps[1].fire('load'));
+    expect(fakeMaps[1].layout.get('aerial')).toEqual({ visibility: 'visible' });
+    expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
   }, 15_000);
 
   /* iOS caps the WebGL contexts a page may hold. */

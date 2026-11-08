@@ -48,15 +48,17 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
     return () => {
       unguard();
       map.remove();
+      setLoaded(false);
     };
   }, [lat, lon, zoom]);
 
-  /* Its own effect: a tap flips the photo's visibility and never builds a new map. */
+  /* Its own effect: a tap flips the photo's visibility and never builds a new map; a new
+   * map (a moved point) takes the pick once it has loaded. */
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.getLayer(AERIAL_LAYER)) return;
+    if (!loaded || !map?.getLayer(AERIAL_LAYER)) return;
     map.setLayoutProperty(AERIAL_LAYER, 'visibility', base === 'aerial' ? 'visible' : 'none');
-  }, [base]);
+  }, [base, loaded]);
 
   /* Thrown here, after every hook, so MapSlot's boundary takes the map down. */
   if (failure) throw failure;
