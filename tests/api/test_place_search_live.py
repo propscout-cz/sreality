@@ -33,6 +33,8 @@ from tests.api._jwt import mint  # noqa: E402
 pytestmark = REQUIRED_DB
 
 JIHOMORAVSKY, BRNO_MESTO, VYSKOV_OKRES, BRNO, VYSKOV, BRNENSKA = 116, 3702, 3712, 582786, 592889, 437158
+PRAHA_KRAJ, PRAHA_OKRES, PRAHA, ZIZKOV_PRAHA = 19, 3100, 554782, 490261
+STREDOCESKY, KUTNA_HORA_OKRES, KUTNA_HORA, ZIZKOV_KH = 27, 3205, 533955, 77747
 
 
 class _Mirror:
@@ -123,6 +125,21 @@ def _suggest(client: TestClient, query: str) -> list[dict[str, Any]]:
     return res.json()["items"]
 
 
+def _chips(items: list[dict[str, Any]]) -> list[tuple[str, int, str, str | None]]:
+    return [(i["level"], i["id"], i["name"], i["context"]) for i in items]
+
+
+def _zizkov(m: _Mirror) -> dict[str, int]:
+    """Two quarters named Žižkov: one in Praha, one in Kutná Hora. Returns their towns' unit ids."""
+    praha = m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
+                                                  m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+    kutna_hora = m.unit("obec", KUTNA_HORA, "Kutná Hora", m.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora",
+                                                               m.unit("kraj", STREDOCESKY, "Středočeský kraj")))
+    m.unit("cast_obce", ZIZKOV_PRAHA, "Žižkov", praha)
+    m.unit("cast_obce", ZIZKOV_KH, "Žižkov", kutna_hora)
+    return {"praha": praha, "kutna_hora": kutna_hora}
+
+
 def _jihomoravsky(m: _Mirror) -> None:
     """Brno in okres Brno-město; the street Brněnská in Vyškov, whose okres starts with no 'brno'."""
     kraj = m.unit("kraj", JIHOMORAVSKY, "Jihomoravský kraj")
@@ -142,4 +159,15 @@ def test_brno_answers_the_town_first_and_the_street_brnenska_later_as_chips_with
         {"level": "okres", "id": BRNO_MESTO, "name": "Brno-město", "context": "Jihomoravský kraj", "point": None},
         {"level": "ulice", "id": BRNENSKA, "name": "Brněnská", "context": "Vyškov",
          "point": {"lat": 49.2786, "lng": 16.9978}},
+    ]
+
+
+def test_zizkov_finds_both_quarters_named_zizkov_each_with_its_town_and_a_tie_breaks_by_code(mirror, client):
+    """Typed without its accents; neither quarter has a served property (story 46: still findable), so the lower
+    code answers first."""
+    _zizkov(mirror)
+    mirror.publish()
+    assert _chips(_suggest(client, "zizkov")) == [
+        ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
+        ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
     ]
