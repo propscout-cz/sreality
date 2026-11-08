@@ -984,6 +984,12 @@ def refresh_rent_map_cells(conn: psycopg.Connection) -> None:
     db.refresh_matview(conn, "rent_map_cells")
 
 
+def refresh_place_facts(conn: psycopg.Connection) -> None:
+    """Own place search's fly-to points (migration 738) read the current version's polygons and the open doors,
+    so they move only once that version is live. This is their only producer."""
+    db.refresh_matview(conn, "place_facts")
+
+
 # ---------- dry run ----------
 
 
@@ -1095,10 +1101,11 @@ def restore_artifacts(
 def finish(conn: psycopg.Connection, version_id: int, *, keep_staging: bool) -> None:
     """The steps after the pointer swap, redone by a re-dispatch of a current vintage:
     drop the staging relations first, so a failing refresh cannot strand them, then
-    rebuild MF's rent cells."""
+    rebuild MF's rent cells and own place search's fly-to points."""
     if not keep_staging:
         drop_staging(conn, Staging.for_version(version_id))
     refresh_rent_map_cells(conn)
+    refresh_place_facts(conn)
 
 
 def run(

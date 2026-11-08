@@ -273,6 +273,34 @@ def test_the_readers_answer_once_after_the_first_close(conn):
     ).fetchone() == (1,)
 
 
+def _place_facts(conn: Any) -> list[tuple]:
+    return [tuple(r) for r in conn.execute(
+        "SELECT f.level::text, f.code, f.lat, f.lng FROM place_facts f WHERE f.code = ANY(%s) "
+        "ORDER BY f.level::text, f.code",
+        ([KRAJ, PRAHA_OKRES, PRAHA, TOWN, PART, TOWN_PART, MOMC, STREET, TOWN_STREET],)).fetchall()]
+
+
+def test_the_finish_step_gives_own_place_search_the_new_versions_points(conn):
+    """Own place search flies to `place_facts` (#2449), which only the load's finish step refreshes: after the
+    pointer swap Praha's polygon point is read at the new version and the streets, parts and městská část at
+    the mean of their open doors (the staged door sits at 50.08 / 14.39)."""
+    m = _load_w7_over_old_shape(conn)
+    _, (praha, *_) = _unit(conn, "obec", PRAHA)
+    conn.execute(
+        "INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose, "
+        "generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point, "
+        "containment_radius_m) SELECT %s, %s, 'authoritative', 0, ST_Multi(ST_Expand(p, 0.01)), p, 0, p, 0 "
+        "FROM (SELECT ST_SetSRID(ST_MakePoint(14.4208, 50.088), 4326) AS p) s", (praha, m.v2))
+    ruian_load.publish(conn, m.v2)
+    assert _place_facts(conn) == []
+
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _place_facts(conn) == [
+        ("cast_obce", PART, 50.08, 14.39), ("cast_obce", TOWN_PART, 50.08, 14.39),
+        ("momc", MOMC, 50.08, 14.39), ("obec", PRAHA, 50.088, 14.4208),
+        ("ulice", TOWN_STREET, 50.08, 14.39), ("ulice", STREET, 50.08, 14.39)]
+
+
 def _walk_up(conn: Any, unit_id: int) -> list[tuple[str, int]]:
     """(level, code) from a unit up through `parent_id`, as the chain reads walk it."""
     return [tuple(r) for r in conn.execute(
