@@ -53,6 +53,19 @@ def test_mask_codes_hides_the_code_in_the_original_text() -> None:
         ("s označením B36", {"B36"}),
         ("apartmán č. A311", {"A311"}),
         ("prodej jednotku 4+kk", set()),  # a disposition is never a unit designator
+        # E982: a list of units is a price list, never this advert's unit (Šestajovice, 10-26).
+        ("Obec oznamuje záměr pronajmout byty č. 1, 5, 9, 11 v domě čp. 1678", set()),
+        ("Obec oznamuje záměr pronajmout byty č. 2, 6, 8, 10 a 11 v domě čp. 1678", set()),
+        ("byty č. 5 a 7, obě řádně pronajaté", set()),
+        ("Byty č. 2 a 3 jsou ve vlastnictví obce.", set()),
+        # ... but a disposition, an area or a storey after the number is no list.
+        ("byt č. 5, 2+kk, 51 m²", {"5"}),
+        ("byt č. 12, 1kk, 18 m²", {"12"}),
+        ("byt č. 7, 115 m2 obytné plochy", {"7"}),
+        ("byt č. 4, 1. np", {"4"}),
+        ("byt č. 9, 3np", {"9"}),
+        ("byt č. 3, 28. října", {"3"}),
+        ("jeden ze skupiny nevybavených bytů č. 905, kde si můžete", {"905"}),
     ],
 )
 def test_unit_designators(text: str, expected: set[str]) -> None:

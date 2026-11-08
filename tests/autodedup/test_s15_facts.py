@@ -754,7 +754,12 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
             and now[key][3] == "unit_designator_conflict"
             and address_block_key(ds.listings[key[0]]) != address_block_key(ds.listings[key[1]])}
     assert e981 == {(75782, 134859)}
+    # E982 hands two vetoes back to the reject they were: Gerstelova's `byty č. 235 a 238` is a
+    # list of two flats, so it names no unit against 233 and 234.
+    e982 = {key for key in moved if then[key][3] == "unit_designator_conflict"
+            and now[key][:2] == ("reject", "auto_reject:numeral_conflict")}
+    assert e982 == {(315734, 315979), (315735, 315979)}
     assert all(then[key][0] == "band" and then[key][1].endswith("d43_gate:total_floors")
                and now[key][0] == "merge"
                and printed_storeys_prevail(ds.listings[key[0]], ds.listings[key[1]])
-               for key in moved - e981)
+               for key in moved - e981 - e982)

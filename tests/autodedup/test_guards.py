@@ -323,6 +323,20 @@ def test_e981_a_door_against_a_street_side_of_its_street_is_one_block() -> None:
     assert unit_designator_conflict(b, a) == ("1005", "905")
 
 
+def test_e982_two_notices_listing_units_by_number_are_no_conflict() -> None:
+    """Šestajovice, Revoluční 1678 (10-26): one obec's two notices, each listing several flats
+    of one house, read as unit 1 against unit 2 at one door."""
+    door = Location(obec_kod=538493, street_key="revolucni", house_number="1678",
+                    ruian_adm_kod=1)
+    a = Listing(id=19007167, block="sestajovice", location=door,
+                description="Obec Šestajovice oznamuje záměr pronajmout byty č. 1, 5, 9, 11 v domě "
+                            "čp. 1678.")
+    b = Listing(id=19035038, block="sestajovice", location=door,
+                description="Obec Šestajovice oznamuje záměr pronajmout byty č. 2, 6, 8, 10 a 11 v "
+                            "domě čp. 1678.")
+    assert unit_designator_conflict(a, b) is None
+
+
 def test_a_price_list_of_several_units_is_not_this_advert_s_identity() -> None:
     a = _unit_listing(1, "Volné jednotky č. 3, jednotka č. 5 a jednotka č. 7.")
     b = _unit_listing(2, "Prodej bytu (č.5).")
