@@ -322,6 +322,15 @@ def test_unit_numbers_in_different_blocks_do_not_conflict() -> None:
     assert "unit_designator" not in names(a, b)
 
 
+def test_e981_a_door_and_a_street_side_of_one_street_are_one_block() -> None:
+    a = listing(1, description="Nabízíme jeden ze skupiny nevybavených bytů č. 905.")
+    a.location = Location(obec_kod=554782, street_key="mukarovskeho")
+    b = listing(2, description="Nabízíme jeden z nevybavených bytů, byt č. 1005.")
+    b.location = Location(obec_kod=554782, street_key="mukarovskeho", house_number="2590/2",
+                          ruian_adm_kod=26741831)
+    assert "unit_designator" in names(a, b)
+
+
 def test_a_price_list_of_several_units_conflicts_with_nothing() -> None:
     a = _at_block(1, "K dispozici jednotky c. 3, jednotky c. 5 a jednotky c. 7.")
     b = _at_block(2, "Prodej bytu (c.9).")

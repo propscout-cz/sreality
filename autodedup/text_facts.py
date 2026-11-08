@@ -1201,6 +1201,29 @@ def address_block_key(listing: "Listing") -> str:
     return f"obec:{obec}"
 
 
+def one_block(a: "Listing", b: "Listing") -> bool:
+    """E981: one address block, read at the COARSER side's grain on one street of one obec.
+
+    `address_block_key` is the finest key a side carries, so a door on Mukařovského and an
+    advert the resolver left at Mukařovského got two keys, and `bytů č. 905` against `byt č.
+    1005` read as two blocks (W5b g45: the door arrived on one side only and the two flats
+    merged). A street side meets anything on its street; two house numbers meet on the č.p.
+    when either lacks the č.o., else whole; two doors keep their own keys, as before."""
+    if address_block_key(a) == address_block_key(b):
+        return True
+    la, lb = a.location, b.location
+    if not (la.street_key and la.street_key == lb.street_key
+            and la.obec_kod is not None and la.obec_kod == lb.obec_kod):
+        return False
+    if la.ruian_adm_kod and lb.ruian_adm_kod:
+        return False
+    if not la.house_number or not lb.house_number:
+        return True
+    if "/" in la.house_number and "/" in lb.house_number:
+        return la.house_number == lb.house_number
+    return la.house_number.split("/")[0] == lb.house_number.split("/")[0]
+
+
 # --- what the advert says the tenant pays BESIDES the rent (E203) ---------------------------
 # D49 refused the bare co-live price limb and that refusal stands: two live adverts at two
 # prices may be one flat a portal has not re-read yet. What the co-live price gap has never

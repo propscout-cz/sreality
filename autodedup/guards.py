@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 
 from autodedup.dataset import Listing
 from autodedup.settings import Settings
-from autodedup.text_facts import address_block_key, unit_designators
+from autodedup.text_facts import one_block, unit_designators
 from toolkit.room_taxonomy import category_main_compatible
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -98,7 +98,8 @@ def unit_designator_conflict(
     Exactly one designator per side is required. A body listing several (`jednotky č. 3, 5 a 7`)
     is a project's price list, not this advert's identity, and two such lists overlapping proves
     nothing either way. The block must match too: two buildings number their flats independently,
-    so `byt č. 3` in one house and `byt č. 5` in another is not a conflict.
+    so `byt č. 3` in one house and `byt č. 5` in another is not a conflict. The block is read at
+    the coarser side's grain (E981, `one_block`): a door and a street side of one street are one.
 
     Honest about its evidence: this fires on 3 distinct (block, unit-pair) facts in ONE Zizkov
     building in the g5 cohort (ruian:21778370, units 1/3/5). It is a rule with a sound mechanism
@@ -110,7 +111,7 @@ def unit_designator_conflict(
     # only thing a stub side (`evaluate._SimSide`, everything None) can honestly answer.
     if len(left) != 1 or len(right) != 1 or left == right:
         return None
-    if address_block_key(a) != address_block_key(b):
+    if not one_block(a, b):
         return None
     return next(iter(left)), next(iter(right))
 

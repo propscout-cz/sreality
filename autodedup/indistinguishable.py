@@ -159,7 +159,7 @@ from autodedup.text_facts import (
     states_second_plot,
     states_top_storey,
     same_form_floor_gap,
-    address_block_key,
+    one_block,
     capacity_counts,
     fold,
     ground_or_upper,
@@ -2818,7 +2818,7 @@ def distinguishing_facts(
 
     units_a, units_b = unit_designators(a.description), unit_designators(b.description)
     if (len(units_a) == 1 and len(units_b) == 1 and units_a != units_b
-            and address_block_key(a) == address_block_key(b)):
+            and one_block(a, b)):
         add("unit_designator", next(iter(units_a)), next(iter(units_b)))
 
     # E140/E141/E142/E143: the four W15 readings. Every one of them is a fact the advert

@@ -9,6 +9,7 @@ from autodedup.text_facts import (
     address_block_key,
     compass_points,
     mask_codes,
+    one_block,
     orientations,
     printed_floors,
     printed_floors_by_form,
@@ -120,6 +121,43 @@ def test_address_block_key_falls_back_through_the_grains() -> None:
     loose = _listing(location=Location(obec_kod=9, street_key="hartigova", house_number="1116/83"))
     assert address_block_key(loose) == "addr:9:hartigova:1116/83"
     assert address_block_key(_listing(location=Location(obec_kod=9))) == "obec:9"
+
+
+def _at(**loc: object) -> Listing:
+    return _listing(location=Location(**loc))  # type: ignore[arg-type]
+
+
+STREET = dict(obec_kod=554782, street_key="mukarovskeho")
+DOOR = dict(STREET, house_number="2590/2", ruian_adm_kod=26741831)
+
+
+@pytest.mark.parametrize(
+    "left, right, expected",
+    [
+        # W5b g45: the door arrived on one side only; the other stays at the street.
+        (DOOR, STREET, True),
+        (dict(STREET, house_number="2590/2"), STREET, True),
+        # A door against an address: the č.p. decides when either side lacks the č.o.
+        (DOOR, dict(STREET, house_number="2590/2"), True),
+        (DOOR, dict(STREET, house_number="2590"), True),
+        (DOOR, dict(STREET, house_number="2592/4"), False),
+        (DOOR, dict(STREET, house_number="2590/4"), False),
+        # Two doors keep their own keys: two entrances stay two blocks.
+        (DOOR, dict(STREET, house_number="2590/4", ruian_adm_kod=26741849), False),
+        (DOOR, DOOR, True),
+        # Another street, another obec, or no street at all: the finest keys decide, as before.
+        (DOOR, dict(obec_kod=554782, street_key="pod pekarnami"), False),
+        (DOOR, dict(obec_kod=582786, street_key="mukarovskeho"), False),
+        (DOOR, dict(obec_kod=554782, lat=50.04, lon=14.32), False),
+        (dict(street_key="mukarovskeho"), dict(street_key="mukarovskeho"), True),
+        (dict(street_key="mukarovskeho", house_number="1"), dict(street_key="mukarovskeho"), False),
+    ],
+)
+def test_e981_one_block_reads_the_coarser_side_s_grain(
+    left: dict[str, object], right: dict[str, object], expected: bool
+) -> None:
+    assert one_block(_at(**left), _at(**right)) is expected
+    assert one_block(_at(**right), _at(**left)) is expected
 
 
 def test_live_end_stamp_prefers_the_sighting_over_the_detection_stamp() -> None:

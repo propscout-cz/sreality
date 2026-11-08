@@ -309,6 +309,20 @@ def test_two_buildings_number_their_flats_independently() -> None:
     assert unit_designator_conflict(a, b) is None
 
 
+def test_e981_a_door_against_a_street_side_of_its_street_is_one_block() -> None:
+    """W5b g45, Mukařovského, Stodůlky: v5.11 gave 19556362 the door 2590/2 while the inactive
+    1062 stayed at the street, so the two keys differed and flats 905 and 1005 merged."""
+    street = Location(obec_kod=554782, street_key="mukarovskeho")
+    door = Location(obec_kod=554782, street_key="mukarovskeho", house_number="2590/2",
+                    ruian_adm_kod=26741831)
+    a = Listing(id=1062, block="praha", location=street,
+                description="Nabízíme Vám jeden ze skupiny nevybavených bytů č. 905.")
+    b = Listing(id=19556362, block="praha", location=door,
+                description="Nabízíme Vám jeden z nevybavených bytů, byt č. 1005.")
+    assert unit_designator_conflict(a, b) == ("905", "1005")
+    assert unit_designator_conflict(b, a) == ("1005", "905")
+
+
 def test_a_price_list_of_several_units_is_not_this_advert_s_identity() -> None:
     a = _unit_listing(1, "Volné jednotky č. 3, jednotka č. 5 a jednotka č. 7.")
     b = _unit_listing(2, "Prodej bytu (č.5).")
