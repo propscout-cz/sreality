@@ -195,6 +195,19 @@ describe('<LocationBody>', () => {
     expect(screen.queryByText('Mapu se nepodařilo načíst')).toBeNull();
   }, 15_000);
 
+  /* Operator 2026-11-08: one finger scrolls the page, two move the map, and the map draws
+   * neither zoom buttons nor a scale bar. */
+  it('tells the phone in Czech to move the map with two fingers, and draws no zoom buttons or scale', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    expect(fakeMaps[0].options).toMatchObject({
+      cooperativeGestures: true,
+      locale: { 'CooperativeGesturesHandler.MobileHelpText': 'Mapou posunete dvěma prsty' },
+      navigationControl: false,
+      scaleControl: false,
+    });
+  }, 15_000);
+
   it('prints no note for a street-level point', async () => {
     vi.mocked(api.apiGet).mockResolvedValue(STREET);
     wrap(<LocationBody propertyId={7} />);

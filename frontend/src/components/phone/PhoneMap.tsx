@@ -19,6 +19,9 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
       center: [lon, lat],
       zoom,
       cooperativeGestures: true,
+      locale: { 'CooperativeGesturesHandler.MobileHelpText': 'Mapou posunete dvěma prsty' },
+      navigationControl: false,
+      scaleControl: false,
     });
     const unguard = guardMap(map, setFailure);
 
