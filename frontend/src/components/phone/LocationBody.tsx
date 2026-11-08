@@ -2,7 +2,12 @@
  * on the property page. A 4:3 plate holding a map of the location ad's point (a lazy
  * chunk, so the place never waits for it), under it the place as the page names it, a muted
  * note when the point is only a town or a part of one, and the three map apps an iPhone
- * hands the point to. A property with no point says "Bez polohy" and nothing else. */
+ * hands the point to.
+ *
+ * The map degrades, the place does not: a map that fails leaves the label and the links
+ * with a quiet line, and a property with no point says "Bez polohy" and nothing else. */
+
+import { useState } from 'react';
 
 import MapSlot from '@/components/MapSlot';
 import { ApiError } from '@/lib/api';
@@ -35,6 +40,7 @@ export default function LocationBody({
   enabled?: boolean;
 }) {
   const loc = usePropertyLocation(propertyId, enabled);
+  const [mapFailed, setMapFailed] = useState(false);
 
   if (loc.isError) {
     if (loc.error instanceof ApiError && loc.error.status === 404) {
@@ -58,18 +64,21 @@ export default function LocationBody({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className={PLATE}>
-        {data && (
-          <MapSlot>
-            <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} />
-          </MapSlot>
-        )}
-        <PlateRule />
-      </div>
+      {!mapFailed && (
+        <div className={PLATE}>
+          {data && (
+            <MapSlot onError={() => setMapFailed(true)}>
+              <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} />
+            </MapSlot>
+          )}
+          <PlateRule />
+        </div>
+      )}
       {data ? (
         <div className="flex flex-col gap-0.5">
           {data.label && <p className="text-[15px] text-[var(--color-ink)]">{data.label}</p>}
           {data.note && <p className="text-[12px] text-[var(--color-ink-3)]">{data.note}</p>}
+          {mapFailed && <p className="pt-1 text-[12px] text-[var(--color-ink-3)]">Mapu se nepodařilo načíst</p>}
         </div>
       ) : (
         <div aria-hidden className="flex flex-col gap-1.5">

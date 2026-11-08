@@ -70,6 +70,21 @@ afterEach(() => {
   vi.mocked(api.apiGet).mockReset();
 });
 
+/* What a failed map leaves: the place, its note and the three map apps, a quiet line under
+ * the note, and no plate. */
+async function expectMapFailed(container: HTMLElement) {
+  const line = await screen.findByText('Mapu se nepodařilo načíst', {}, LOADED);
+  const label = screen.getByText('Dvory');
+  const note = screen.getByText('Poloha jen na úrovni obce');
+  expect(line.parentElement).toBe(label.parentElement);
+  expect(note.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getAllByRole('link')).toHaveLength(3);
+  expect(container.querySelector('.aspect-\\[4\\/3\\]')).toBeNull();
+}
+
+/* React and the boundary log a caught map failure; keep the run quiet. */
+const quietConsole = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
 const SUBJECT = { property_id: 7, text: '2+kk · 54 m² · Dvory', figure: '7 490 000 Kč' };
 
 describe('<LocationSheet>', () => {
@@ -137,6 +152,16 @@ describe('<LocationBody>', () => {
     expect(fakeMaps[0].removed).toBe(false);
     unmount();
     expect(fakeMaps[0].removed).toBe(true);
+  }, 15_000);
+
+  it('keeps the place, its note and the links, with a quiet line, when the map cannot be built', async () => {
+    const quiet = quietConsole();
+    fakeCreateMap.mockImplementationOnce(() => {
+      throw new Error('Failed to initialize WebGL');
+    });
+    const { container } = wrap(<LocationBody propertyId={7} />);
+    await expectMapFailed(container);
+    quiet.mockRestore();
   }, 15_000);
 
   it('prints no note for a street-level point', async () => {
