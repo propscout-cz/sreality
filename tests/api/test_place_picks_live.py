@@ -203,6 +203,20 @@ def test_the_table_refuses_a_text_with_a_digit(conn: psycopg.Connection, text: s
         conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES (%s, 1, 'momc', %s)", (text, PRAHA_6))
 
 
+def test_a_failing_write_logs_its_sqlstate_and_no_text_and_the_answer_still_comes(
+    conn: psycopg.Connection, client: TestClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The refusal's own message quotes the failing row, so only the SQLSTATE is logged."""
+    conn.execute("ALTER TABLE place_picks ADD CONSTRAINT place_picks_refuse_all CHECK (false) NOT VALID")
+    with caplog.at_level("INFO"):
+        answer = _resolve(client, TOWN_BRNO, "Brno", 2)
+    assert answer == {"level": "obec", "id": BRNO, "name": "Brno", "context": None}
+    lines = [r.getMessage() for r in caplog.records if r.name == "location.place_picks"]
+    assert lines == ["place_picks: write failed (SQLSTATE 23514)"]
+    assert not any("Brno" in r.getMessage() or r.exc_info for r in caplog.records if r.name.startswith("location"))
+    assert _stored(conn) == []
+
+
 def test_an_automation_account_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
     token = mint({"sub": str(uuid.uuid4()), "app_metadata": {"automation": True}})
     res = client.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}},
