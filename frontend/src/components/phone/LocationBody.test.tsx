@@ -129,35 +129,45 @@ describe('<LocationBody>', () => {
   it.each([
     [
       'street',
+      15,
       null,
       'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=16',
       'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=16&marker=true',
     ],
     [
       'quarter',
+      13,
       'Poloha jen na úrovni části obce',
       'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=14',
       'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=14&marker=true',
     ],
     [
       'town',
+      11,
       'Poloha jen na úrovni obce',
       'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=12',
       'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=12&marker=true',
     ],
     [
       'coarse',
+      9,
       'Poloha jen přibližná, hrubší než obec',
       'https://maps.apple.com/?ll=50.105123,14.5&q=Dvory&z=10',
       'https://mapy.com/fnc/v1/showmap?center=14.5,50.105123&zoom=10&marker=true',
     ],
-  ] as const)('a %s point opens in Apple Maps and Mapy.cz at its own zoom', async (precision, note, apple, mapy) => {
-    vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, precision, note });
-    wrap(<LocationBody propertyId={7} />);
-    const nav = await screen.findByRole('navigation', { name: 'Otevřít v mapách' });
-    const links = within(nav).getAllByRole('link');
-    expect(links[0]).toHaveAttribute('href', apple);
-    expect(links[2]).toHaveAttribute('href', mapy);
-    expect(screen.queryByText(/^Poloha jen/)?.textContent ?? null).toBe(note);
-  });
+  ] as const)(
+    'a %s point opens the map at zoom %i, and Apple Maps and Mapy.cz one step closer',
+    async (precision, zoom, note, apple, mapy) => {
+      vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, precision, note });
+      wrap(<LocationBody propertyId={7} />);
+      const nav = await screen.findByRole('navigation', { name: 'Otevřít v mapách' });
+      const links = within(nav).getAllByRole('link');
+      expect(links[0]).toHaveAttribute('href', apple);
+      expect(links[2]).toHaveAttribute('href', mapy);
+      expect(screen.queryByText(/^Poloha jen/)?.textContent ?? null).toBe(note);
+      await waitFor(() => expect(fakeCreateMap).toHaveBeenCalledTimes(1), LOADED);
+      expect(fakeCreateMap.mock.calls[0][1]).toMatchObject({ zoom });
+    },
+    15_000,
+  );
 });
