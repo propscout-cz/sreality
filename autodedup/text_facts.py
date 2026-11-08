@@ -94,6 +94,12 @@ _UNIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"oznacen\w{0,3}\s+([a-z]\d{1,3})\b"),
     re.compile(r"apartman\w*\s*c\.?\s*([a-z]?\d{1,4})\b"),
 )
+# E982: a designator that runs on into another bare number is the head of a list. Šestajovice's
+# notice `byty č. 1, 5, 9, 11` read as unit 1 against `byty č. 2, 6, 8, 10 a 11` as unit 2.
+# A disposition (`, 2+kk`, `, 1kk`), an area (`, 115 m2`) or a storey (`, 1. np`, `, 3np`) is
+# not a list.
+_UNIT_LIST_TAIL = re.compile(
+    r"(?:\s*,\s*|\s+a\s+|\s+i\s+)\d{1,4}(?![\d+.]|,\d|\s*(?:kk|np\b|m(?:2|\b)))")
 
 # --- printed floor areas ------------------------------------------------------------------
 # A body text names the balcony, the plot and the cellar too; anything outside this window is
@@ -175,15 +181,18 @@ def mask_codes(text: str | None) -> str | None:
 
 
 def unit_designators(text: str | None) -> set[str]:
-    """Unit designators the body text names: `byt (č.3)`, `jednotka č. 12`, `označením B36`."""
+    """Unit designators the body text names: `byt (č.3)`, `jednotka č. 12`, `označením B36`.
+    A body that lists units by number (E982) is a price list and names none."""
     if not text:
         return set()
     folded = fold(text)
-    return {
-        match.group(1).upper()
-        for pattern in _UNIT_PATTERNS
-        for match in pattern.finditer(folded)
-    }
+    out: set[str] = set()
+    for pattern in _UNIT_PATTERNS:
+        for match in pattern.finditer(folded):
+            if _UNIT_LIST_TAIL.match(folded, match.end()):
+                return set()
+            out.add(match.group(1).upper())
+    return out
 
 
 # --- the printed unit CODE, read whole and in the bare form (E161) --------------------------
@@ -1199,6 +1208,29 @@ def address_block_key(listing: "Listing") -> str:
     if loc.lat is not None and loc.lon is not None:
         return f"pin:{obec}:{loc.lat:.3f}:{loc.lon:.3f}"
     return f"obec:{obec}"
+
+
+def one_block(a: "Listing", b: "Listing") -> bool:
+    """E981: one address block, read at the COARSER side's grain on one street of one obec.
+
+    `address_block_key` is the finest key a side carries, so a door on Mukařovského and an
+    advert the resolver left at Mukařovského got two keys, and `bytů č. 905` against `byt č.
+    1005` read as two blocks (W5b g45: the door arrived on one side only and the two flats
+    merged). A street side meets anything on its street; two house numbers meet on the č.p.
+    when either lacks the č.o., else whole; two doors keep their own keys, as before."""
+    if address_block_key(a) == address_block_key(b):
+        return True
+    la, lb = a.location, b.location
+    if not (la.street_key and la.street_key == lb.street_key
+            and la.obec_kod is not None and la.obec_kod == lb.obec_kod):
+        return False
+    if la.ruian_adm_kod and lb.ruian_adm_kod:
+        return False
+    if not la.house_number or not lb.house_number:
+        return True
+    if "/" in la.house_number and "/" in lb.house_number:
+        return la.house_number == lb.house_number
+    return la.house_number.split("/")[0] == lb.house_number.split("/")[0]
 
 
 # --- what the advert says the tenant pays BESIDES the rent (E203) ---------------------------

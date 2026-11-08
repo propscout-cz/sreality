@@ -726,6 +726,7 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
     from autodedup.dataset import load
     from autodedup.harness import load_must_not_link, named_model, read_pairs, run
     from autodedup.indistinguishable import printed_storeys_prevail
+    from autodedup.text_facts import address_block_key
 
     ds = load(TRIAL)
     ids = set(ds.listings)
@@ -747,8 +748,18 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
     # rows on this pack: Jablonec 41 m² x4, Mozartova x2, Kolmá), and nothing else moves. E966
     # and E968 move no row here, and the four rows E967's one-storey NP fact refused (Harfa
     # Living x2, Anenské náměstí, Čerpadlová) decide as S14 stored them since E969 withdrew it —
-    # against main with E967 that returns Čerpadlová to merge.
+    # against main with E967 that returns Čerpadlová to merge. E981 turns one reject into the
+    # designator veto: Jungmannova, a door against the street, `byt č. 106` against `č. 305`.
+    e981 = {key for key in moved if then[key][0] == "reject" and now[key][0] == "veto"
+            and now[key][3] == "unit_designator_conflict"
+            and address_block_key(ds.listings[key[0]]) != address_block_key(ds.listings[key[1]])}
+    assert e981 == {(75782, 134859)}
+    # E982 hands two vetoes back to the reject they were: Gerstelova's `byty č. 235 a 238` is a
+    # list of two flats, so it names no unit against 233 and 234.
+    e982 = {key for key in moved if then[key][3] == "unit_designator_conflict"
+            and now[key][:2] == ("reject", "auto_reject:numeral_conflict")}
+    assert e982 == {(315734, 315979), (315735, 315979)}
     assert all(then[key][0] == "band" and then[key][1].endswith("d43_gate:total_floors")
                and now[key][0] == "merge"
                and printed_storeys_prevail(ds.listings[key[0]], ds.listings[key[1]])
-               for key in moved)
+               for key in moved - e981 - e982)
