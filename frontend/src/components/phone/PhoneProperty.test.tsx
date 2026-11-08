@@ -247,7 +247,7 @@ beforeAll(async () => {
 
 const LOADED = { timeout: 5_000 };
 
-const noMaps = () => {
+const noDesktopMaps = () => {
   expect(screen.queryByTestId('detail-map')).toBeNull();
   expect(screen.queryByTestId('comparables-map')).toBeNull();
   expect(screen.queryByText('Explore area')).toBeNull();
@@ -298,7 +298,7 @@ describe('the phone property page', () => {
     expect(await screen.findByText('Poznámky', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Stáhnout \(PDF \+ fotky\)/ })).toBeInTheDocument();
     await waitFor(() => expect(api.listEstimations).toHaveBeenCalled());
-    noMaps();
+    noDesktopMaps();
     /* The whole page with its lazy chunks: slower than one card on a loaded runner. */
   }, 15_000);
 
@@ -317,7 +317,7 @@ describe('the phone property page', () => {
     const [container, options] = fakeCreateMap.mock.calls[0];
     expect(section).toContainElement(container);
     expect(options).toMatchObject({ center: [14.5, 50.105], zoom: 15, cooperativeGestures: true });
-    noMaps();
+    noDesktopMaps();
   });
 
   /* One pattern for the app (section cards, operator ruling 2026-10-28): every section of the
@@ -347,7 +347,7 @@ describe('the phone property page', () => {
     for (const name of ['Moje fotky', 'Fakta', 'Vývoj ceny', 'Prodané v okolí', 'Čerstvost', 'Štítky', 'Poznámky']) {
       expect(await card(name)).toBeInTheDocument();
     }
-    noMaps();
+    noDesktopMaps();
   }, 15_000);
 
   it('draws a rent: the monthly price and per-m² in Kč/m²/měs, no MF badge', async () => {
@@ -364,7 +364,7 @@ describe('the phone property page', () => {
     expect(head.queryByText(/Kč\/m²$/)).toBeNull();
     expect(head.queryByText(/^MF /)).toBeNull();
     expect(head.getByText(/Nová dnes · 1 portál/)).toBeInTheDocument();
-    noMaps();
+    noDesktopMaps();
   });
 
   it('shows no per-m² figure when the basis is missing — never a bare number', async () => {
