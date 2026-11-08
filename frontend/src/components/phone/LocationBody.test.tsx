@@ -173,6 +173,19 @@ describe('<LocationBody>', () => {
     expect(map.removed).toBe(false);
   }, 15_000);
 
+  it('offers Mapa / Letecká only once the map has loaded, with Mapa lit', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    expect(screen.queryByRole('group', { name: 'Podklad mapy' })).toBeNull();
+    act(() => fakeMaps[0].fire('load'));
+    const buttons = within(bar()).getAllByRole('button');
+    expect(buttons.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
+      ['Mapa', 'true'],
+      ['Letecká', 'false'],
+    ]);
+    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+  }, 15_000);
+
   /* iOS caps the WebGL contexts a page may hold. */
   it('releases the map when the user leaves', async () => {
     const { unmount } = wrap(<LocationBody propertyId={7} />);

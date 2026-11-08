@@ -20,6 +20,7 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<ReturnType<typeof createMap> | null>(null);
   const [failure, setFailure] = useState<Error | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [base, setBase] = useState<Base>('map');
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
       container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
       addAerialLayer(map);
       addPointPin(map, [lon, lat]);
+      setLoaded(true);
     });
 
     return () => {
@@ -66,10 +68,13 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
         className={`absolute inset-0 ${PHOTO_DARK}`}
         style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
       />
-      {/* Beside the map's container, never in it: MapLibre owns that one's children. */}
-      <div className="absolute right-2 top-2 z-10 rounded-[var(--radius-sm)] bg-[var(--color-paper)]">
-        <SegmentedBar tone="phone" label="Podklad mapy" options={BASES} value={base} onChange={setBase} />
-      </div>
+      {/* Once the map has loaded, as the photo exists only from then on; beside the map's
+        * container, never in it: MapLibre owns that one's children. */}
+      {loaded && (
+        <div className="absolute right-2 top-2 z-10 rounded-[var(--radius-sm)] bg-[var(--color-paper)]">
+          <SegmentedBar tone="phone" label="Podklad mapy" options={BASES} value={base} onChange={setBase} />
+        </div>
+      )}
     </>
   );
 }
