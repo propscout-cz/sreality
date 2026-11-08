@@ -528,3 +528,11 @@ def test_the_pairs_join_doors_on_the_stable_code_whichever_row_of_a_unit_a_door_
     ruian_load.publish(conn, m.v2)
     ruian_load.finish(conn, m.v2, keep_staging=False)
     assert _pairs(conn) == [(m.v2, MOMC, PART, True), (m.v2, MOMC, 9910068, True)]
+
+
+def test_a_retired_door_gives_a_mestska_cast_no_quarter_pair(conn):
+    m = _load_w7_over_old_shape(conn)
+    conn.execute("UPDATE ruian_address_points SET valid_to = %s WHERE kod_adm = %s", (V2_DATE, DOOR))
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == []
