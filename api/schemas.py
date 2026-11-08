@@ -302,9 +302,11 @@ class PlacePickIn(BaseModel):
 
 
 class PlaceSuggestIn(BaseModel):
-    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs."""
-    query: str
-    limit: int = 10
+    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs; the limit is the SPA's pick
+    rank bound."""
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=10, ge=1, le=10)
 
 
 class ResolveLocationIn(BaseModel):

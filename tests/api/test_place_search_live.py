@@ -292,3 +292,36 @@ def test_zizkov_answers_the_quarter_in_praha_first_once_it_serves_a_property(mir
         ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
         ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
     ]
+
+
+def test_the_limit_bounds_the_rows(mirror, client):
+    _lhoty(mirror)
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Lhota", "limit": 2})
+    assert res.status_code == 200, res.text
+    assert _chips(res.json()["items"]) == [("obec", 534986, "Lhota", "Praha-východ"), ("obec", 513041, "Lhota", "Kladno")]
+
+
+@pytest.mark.parametrize("body", [
+    {"query": "Brno", "foo": 1},
+    {"query": "Brno", "limit": 11},
+    {"query": "Brno", "limit": 0},
+    {"query": ""},
+    {"query": "B" * 201},
+], ids=["unknown field", "limit 11", "limit 0", "empty query", "201 characters"])
+def test_a_malformed_body_is_a_422(client, body):
+    assert client.post("/places/suggest", json=body).status_code == 422
+
+
+def test_no_token_is_a_401_and_opens_no_connection(monkeypatch):
+    opened: list[bool] = []
+
+    @contextlib.contextmanager
+    def service() -> Iterator[None]:
+        opened.append(True)
+        yield None
+
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.setattr(deps, "open_background_conn", service)
+    assert TestClient(api_main.app).post("/places/suggest", json={"query": "Brno"}).status_code == 401
+    assert opened == []
