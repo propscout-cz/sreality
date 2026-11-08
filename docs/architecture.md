@@ -5682,7 +5682,7 @@ merge → boundaries (the state SHP pack is the vintage's third archived artifac
 all three from R2; three geometries per unit — authoritative, subdivided pip, render — an unchanged
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
 member okres, obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
-The finish step after it (also all a re-dispatch of a current vintage does) drops staging, then refreshes
+The finish step after it, which is all a re-dispatch of a current vintage redoes, drops staging, then refreshes
 `rent_map_cells` and own place search's `place_facts`.
 **Levels loaded = levels bound, served or used as match keys** (W7, `docs/design/location-quality/w7-registry.md`):
 stát, region soudržnosti, kraj, okres, obec, MOMC, část obce, KÚ. Správní obvod, ZSJ, ORP and POU were closed by
