@@ -14,6 +14,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
+import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -421,11 +422,23 @@ def post_maps_resolve(
     return answer
 
 
+def _place_search_unavailable() -> HTTPException:
+    return HTTPException(503, detail={"code": "place_search_unavailable",
+                                      "message": "Vyhledávání míst je teď nedostupné."})
+
+
 @app.post("/places/suggest")
 def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
-    """Own place search (#2449): rows that are already chips. Ships with no caller until the switch-over (#2453)."""
-    with deps.open_background_conn() as conn:
-        places = place_search.suggest(conn, body.query, limit=body.limit)
+    """Own place search (#2449): rows that are already chips. Ships with no caller until the switch-over (#2453). The
+    connection opens here, not as a dependency, so a database it cannot reach is the same 503 as a failed read."""
+    try:
+        with deps.open_background_conn() as conn:
+            places = place_search.suggest(conn, body.query, limit=body.limit)
+    except place_search.SearchUnavailable:
+        raise _place_search_unavailable() from None
+    except psycopg.OperationalError as exc:
+        logging.warning("places/suggest: no database connection (%s)", type(exc).__name__)
+        raise _place_search_unavailable() from None
     return {"items": [p.item() for p in places]}
 
 

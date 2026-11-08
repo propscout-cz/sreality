@@ -105,6 +105,10 @@ class Place:
         return {"level": self.level, "id": self.id, "name": self.name, "context": self.context, "point": point}
 
 
+class SearchUnavailable(Exception):
+    """The read failed; its SQLSTATE is logged, never the typed text."""
+
+
 def _arm(key: str) -> tuple[str | None, str | None]:
     """A key's prefix pattern and fuzzy key, both None once no letter is left (a PSČ; 'ulice .' to the street arms),
     where the pattern would be LIKE '%' over every name. The key's alphabet is [0-9a-z ], so it needs no escaping."""
@@ -124,8 +128,13 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_BOUNDS_SQL)
-        cur.execute(_SUGGEST_SQL, params)
-        rows = cur.fetchall()
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(_BOUNDS_SQL)
+            cur.execute(_SUGGEST_SQL, params)
+            rows = cur.fetchall()
+    except psycopg.Error as exc:
+        # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
+        LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)
+        raise SearchUnavailable from None
     return [Place(level, int(code), name, context, lat, lng) for level, code, name, context, lat, lng in rows]

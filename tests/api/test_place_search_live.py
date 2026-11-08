@@ -32,6 +32,8 @@ from tests.api._jwt import mint  # noqa: E402
 
 pytestmark = REQUIRED_DB
 
+SERVICE_ROLE_OPENER = deps.open_background_conn
+
 JIHOMORAVSKY, BRNO_MESTO, VYSKOV_OKRES, BRNO, VYSKOV, BRNENSKA = 116, 3702, 3712, 582786, 592889, 437158
 PRAHA_KRAJ, PRAHA_OKRES, PRAHA, ZIZKOV_PRAHA = 19, 3100, 554782, 490261
 STREDOCESKY, KUTNA_HORA_OKRES, KUTNA_HORA, ZIZKOV_KH = 27, 3205, 533955, 77747
@@ -325,3 +327,31 @@ def test_no_token_is_a_401_and_opens_no_connection(monkeypatch):
     monkeypatch.setattr(deps, "open_background_conn", service)
     assert TestClient(api_main.app).post("/places/suggest", json={"query": "Brno"}).status_code == 401
     assert opened == []
+
+
+UNAVAILABLE = {"code": "place_search_unavailable", "message": "Vyhledávání míst je teď nedostupné."}
+
+
+def test_a_failed_read_is_a_503_and_no_log_line_carries_the_typed_text(mirror, client, conn, caplog):
+    """The module logs the SQLSTATE alone: a psycopg message can quote the statement's parameters."""
+    _jihomoravsky(mirror)
+    mirror.publish()
+    with caplog.at_level("INFO"):
+        assert _suggest(client, "Brnoxq") == []
+        conn.execute("ALTER MATERIALIZED VIEW place_facts RENAME TO place_facts_gone")
+        res = client.post("/places/suggest", json={"query": "Brnoxq"})
+    assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
+    lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
+    assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
+    assert not any("brnoxq" in r.getMessage().lower() or r.exc_info for r in caplog.records)
+
+
+def test_a_database_it_cannot_reach_is_the_same_503(client, monkeypatch, caplog):
+    """The connection opens inside the route, not as a dependency, so a refused one is not the generic 500."""
+    monkeypatch.setattr(deps, "open_background_conn", SERVICE_ROLE_OPENER)
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://postgres:postgres@127.0.0.1:1/none?connect_timeout=2")
+    with caplog.at_level("INFO"):
+        res = client.post("/places/suggest", json={"query": "Brnoxq"})
+    assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
+    assert "places/suggest: no database connection (OperationalError)" in [r.getMessage() for r in caplog.records]
+    assert not any("brnoxq" in r.getMessage().lower() or r.exc_info for r in caplog.records)
