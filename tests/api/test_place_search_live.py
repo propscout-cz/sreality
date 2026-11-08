@@ -102,6 +102,23 @@ class _Mirror:
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
                 (next(self.doors), obec, self.codes[obec], code, *door, version, version))
 
+    def quarters(self, momc: int, *parts: int, version: int | None = None) -> None:
+        """A městská část's quarter pairs at `version` (the current one by default), as the load's finish step writes
+        them: unit rows, not codes."""
+        version = self.v if version is None else version
+        for part in parts:
+            self.conn.execute(
+                "INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)"
+                " VALUES (%s, %s, 'momc_cast_obce', %s)", (momc, part, version))
+
+    def door(self, obec: int, *, momc: int, part: int, point: tuple[float, float]) -> None:
+        """An open door with no street, in `part` of `momc`."""
+        self.conn.execute(
+            "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, momc_unit_id, cast_obce_unit_id,"
+            " cast_obce_kod, psc, geom, plati_od, first_version_id, last_version_id) VALUES (%s, %s, %s, %s, %s, %s,"
+            " '16000', ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
+            (next(self.doors), obec, self.codes[obec], momc, part, self.codes[part], *point, self.v, self.v))
+
     def served(self, *, region: int | None = None, okres: int | None = None, obec: int | None = None,
                part: int | None = None, street: int | None = None, active: bool = True,
                deal: str = "prodej") -> None:
@@ -202,12 +219,10 @@ def test_zizkov_finds_both_quarters_named_zizkov_each_with_its_town_and_a_tie_br
     ]
 
 
-def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_never_answered(mirror, client):
-    """Q6 a, Q9. "praha 6" names the městská část exactly, yet answers only what its word "praha" reaches by
-    similarity, the kraj and the town; with no served property and no population the lower code answers first."""
+def test_a_cadastral_area_a_cohesion_region_and_the_country_are_never_answered(mirror, client):
+    """Q6 a, Q9. A městská část answers, as a shortcut (#2450): the shortcut tests below."""
     towns = _zizkov(mirror)
     mirror.unit("katastralni_uzemi", 727415, "Žižkov", towns["praha"])
-    mirror.unit("momc", 500178, "Praha 6", towns["praha"])
     mirror.unit("region_soudrznosti", 11, "Praha")
     mirror.unit("stat", 1, "Česká republika")
     mirror.publish()
@@ -215,11 +230,40 @@ def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_n
         ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
         ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
     ]
-    assert _chips(_suggest(client, "praha 6")) == [
-        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
-        ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
-    ]
     assert _suggest(client, "ceska") == []
+
+
+PRAHA_1, PRAHA_6, PRAHA_7 = 500054, 500178, 500186
+DEJVICE, VOKOVICE, BUBENEC, HRADCANY, JOSEFOV, HOLESOVICE = 400459, 400441, 490024, 490075, 127001, 490067
+
+
+def _praha(m: _Mirror) -> int:
+    """The town Praha under its okres and kraj. Returns its unit id."""
+    return m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
+                                                 m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+
+
+def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mirror, client):
+    """#2380: a městská část is no served level, so its row is a shortcut whose places are its quarters' chips, the
+    register's pairs, in name order; it flies to its doors. Then what the word "praha" reaches by similarity, the kraj
+    and the town, the lower code first."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    vokovice = mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha)
+    bubenec = mirror.unit("cast_obce", BUBENEC, "Bubeneč", praha)
+    mirror.quarters(praha_6, dejvice, vokovice, bubenec)
+    mirror.door(praha, momc=praha_6, part=dejvice, point=(14.3907, 50.1004))
+    mirror.publish()
+    assert _suggest(client, "Praha 6") == [
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha",
+         "point": {"lat": 50.1004, "lng": 14.3907},
+         "places": [{"level": "cast_obce", "id": BUBENEC, "name": "Bubeneč", "context": "Praha"},
+                    {"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
+        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+    ]
 
 
 @pytest.mark.parametrize("query", ["110 00", "ulice .", "Starý Dvůr", "Zábrdí", "Zaniklá"],
