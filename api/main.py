@@ -84,6 +84,7 @@ from api.routes.notifications import router as notifications_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
+from location_data import place_picks
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -398,10 +399,13 @@ def get_maps_sreality_price_map(
 @app.post("/maps/resolve")
 def post_maps_resolve(
     body: s.ResolveLocationIn,
+    background_tasks: BackgroundTasks,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
-    return maps.resolve(
+    """A pick's record (ruling Q10) is written after the answer, on its own connection, for a verified caller who is
+    not automation and not the address picker; the answer never waits for it or hears of its failure."""
+    answer, place = maps.resolve(
         conn,
         lat=body.lat,
         lng=body.lng,
@@ -410,6 +414,11 @@ def post_maps_resolve(
         regional_structure=[e.model_dump() for e in body.regional_structure],
         address_point=body.address_point,
     )
+    if (body.pick is not None and not body.address_point and place is not None
+            and claims is not None and not deps.is_automation(claims)):
+        background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
+                                  rank=body.pick.rank, level=place.level, code=place.code)
+    return answer
 
 
 def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:

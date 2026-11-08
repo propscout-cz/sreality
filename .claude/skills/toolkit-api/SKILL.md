@@ -220,8 +220,8 @@ it (`api/`). They do not apply to the scraper.
     velocity, the transit corridor, neighborhoods, the watchdog matcher), and
     `api/portal_lookup._MARKET_SQL` is a module-level constant the sweep DOES discover but
     then skips as a `.format()` template (`_is_format_template` matches its `{values}` slot).
-    A `*_SQL` constant is therefore NOT evidence of coverage — one unquoted `{slot}` and the
-    sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
+    A `*_SQL` constant is therefore NOT evidence of coverage.
+    `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
 - **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
   per call, every read recorded on the run; assistants over MCP stay masked. Built (#2063) as `get_property_brokers`, the
@@ -235,7 +235,8 @@ SPA's `detailText` and the extension render `message`): psycopg's busy classes (
 **503 `db_busy` + `Retry-After`**; everything else → **500 `internal_error` + logged `ref` id**,
 never raw exception text. Route-owned refusals (property_split's 409) stay.
 **No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings); `/maps/resolve`
-logs level and reason, never the typed name.
+logs level and reason, never the typed name. Its optional `pick` `{text 1–200, rank 1–10}` (extra=forbid: a
+malformed one 422s before any bind) is recorded after the answer (architecture § the pick record).
 `frontend/src/lib/api.ts` is the ONE transport (uploads + blob downloads, no raw `fetch()` beside
 it): `REQUEST_DEADLINE_MS` (130 s) sits above the server's 120 s budget and under Railway's ~300 s
 close — keep that ordering — a deadline abort (`ApiError.kind === 'timeout'`) is NEVER retried;
@@ -251,8 +252,8 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
 `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
 - `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Its twin `token_claims` (M0) is
   the same gate returning the claims (None under the opt-out) for a FLAG gated on admin, never a scope. Every client sends its
-  session JWT to every route, so a route moves between gates without a client change (the deploy-skew
-  class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
+  session JWT to every route, so a route moves between gates without a client change (deploy skew:
+  architecture § Territories).
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
   opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
   `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
@@ -266,16 +267,15 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   unset (an unconfigured auth backend must never authenticate anyone). Since M0 (#2059) only a session as Supabase Auth
   issues one passes: issuer `<SUPABASE_URL>/auth/v1`, `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, no
   `client_id` (an OAuth client's token); a refusal's 401 names `wrong issuer` / `missing claim` / `wrong role` / `client token`,
-  and `mint` fills those claims. History of the static key it once also accepted (2026-08-04 removal, 2026-10-13 deletion):
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
+  and `mint` fills those claims. Static-key history: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
   `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
   one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
   non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
-  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
-  whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
-  allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
-  includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
+  too; the cached read stays open), and the route census reds on a body taking it without that call. The claim is
+  stamped in `auth.users.raw_app_meta_data` (`admins` is the allowlist); Supabase puts `app_metadata` in every JWT, no
+  hook. Both smoke accounts must carry `app_metadata.automation = true` (operator step, smoke-check.mjs fixture 3)
+  before picks record: no pick of theirs is recorded (`deps.is_automation`).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `TenantConn` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,

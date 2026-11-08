@@ -106,6 +106,20 @@ describe('<AddressPicker>', () => {
     }
   });
 
+  it('sends no pick: row 2 for "Brno" resolves as a door and nothing more (ruling Q10)', async () => {
+    const town = (name: string): MapySuggestion => ({ name, label: 'Obec', type: 'regional.municipality',
+      position: { lon: 16.6, lat: 49.2 } });
+    fetchSuggest.mockResolvedValue([town('Brno-město'), town('Brno')]);
+    resolveSuggestion.mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: PENCIL }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' }), {
+      target: { value: 'Brno' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Brno\s*Obec$/ }));
+    expect(resolveSuggestion).toHaveBeenCalledWith(town('Brno'), { addressPoint: true });
+  });
+
   it.each([
     [{ level: 'cast_obce', id: 5, name: 'Žižkov', context: 'Praha' }, 'Vyberte adresu, ulici nebo obec'],
     [{ ...DOOR, id: null, name: null }, 'V RÚIAN nelze jednoznačně najít'],

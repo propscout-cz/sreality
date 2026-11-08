@@ -470,6 +470,8 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
   are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
+- **`place_picks` (mig 737, Q10): service-role-only telemetry**, one INSERT per `/maps/resolve` pick; pg_cron
+  `place-picks-retention` deletes rows >12 months daily. Architecture § the pick record.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
