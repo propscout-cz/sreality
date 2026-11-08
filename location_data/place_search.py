@@ -5,7 +5,7 @@ first two fall short of the limit); within a tier, served properties of any deal
 town's latest population, then code (Q12 a: one ranking for every place box). Counts rank rows and are never returned.
 A row is a chip: level, RÚIAN code, register name, context (the parent's name) and a fly-to point from `place_facts`,
 or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, městská část, cohesion region or
-the country (Q6 a, Q9). Never reads `place_picks`: they are its holdout.
+the country (Q6 a, Q9). Never reads the place picks (migration 737): they are its holdout.
 """
 
 from __future__ import annotations

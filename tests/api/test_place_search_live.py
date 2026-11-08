@@ -301,7 +301,10 @@ def test_the_limit_bounds_the_rows(mirror, client):
     mirror.publish()
     res = client.post("/places/suggest", json={"query": "Lhota", "limit": 2})
     assert res.status_code == 200, res.text
-    assert _chips(res.json()["items"]) == [("obec", 534986, "Lhota", "Praha-východ"), ("obec", 513041, "Lhota", "Kladno")]
+    assert _chips(res.json()["items"]) == [
+        ("obec", 534986, "Lhota", "Praha-východ"),
+        ("obec", 513041, "Lhota", "Kladno"),
+    ]
 
 
 @pytest.mark.parametrize("body", [
