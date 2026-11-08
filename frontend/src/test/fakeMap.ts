@@ -11,7 +11,7 @@ export class FakeMap {
   readonly sources = new Map<string, unknown>();
   readonly layers: Array<Record<string, unknown>> = [];
   removed = false;
-  private readonly listeners = new Map<string, Listener[]>();
+  private readonly listeners = new Map<string, Array<{ fn: Listener; once: boolean }>>();
 
   constructor(
     readonly container: HTMLElement,
@@ -19,28 +19,25 @@ export class FakeMap {
   ) {}
 
   on(type: string, fn: Listener): this {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), { fn, once: false }]);
+    return this;
+  }
+
+  /* As MapLibre's: `off` with the same listener takes a pending `once` back. */
+  once(type: string, fn: Listener): this {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), { fn, once: true }]);
     return this;
   }
 
   off(type: string, fn: Listener): this {
-    this.listeners.set(
-      type,
-      (this.listeners.get(type) ?? []).filter((l) => l !== fn),
-    );
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((l) => l.fn !== fn));
     return this;
   }
 
-  once(type: string, fn: Listener): this {
-    const wrapped: Listener = (event) => {
-      this.off(type, wrapped);
-      fn(event);
-    };
-    return this.on(type, wrapped);
-  }
-
   fire(type: string, event?: unknown): void {
-    for (const fn of this.listeners.get(type) ?? []) fn(event);
+    const heard = this.listeners.get(type) ?? [];
+    this.listeners.set(type, heard.filter((l) => !l.once));
+    for (const l of heard) l.fn(event);
   }
 
   addSource(id: string, source: unknown): this {

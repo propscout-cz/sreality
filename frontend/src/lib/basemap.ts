@@ -63,14 +63,22 @@ export function createMap(
   return map;
 }
 
-/* Tells `fail` when the map can no longer draw: its WebGL context was lost. These arrive
- * as MapLibre events, outside React's render, so no error boundary sees them on its own.
- * Returns the unguard: call it before `map.remove()`, which drops the context itself. */
+/* Tells `fail` when the map cannot draw: its WebGL context was lost, or it erred before
+ * its style first loaded. A later error (a tile that 404s) leaves the map up and stays
+ * MapLibre's to log. These arrive as MapLibre events, outside React's render, so no error
+ * boundary sees them on its own. Returns the unguard: call it before `map.remove()`, which
+ * drops the context itself. */
 export function guardMap(map: maplibregl.Map, fail: (error: Error) => void): () => void {
   const onContextLost = () => fail(new Error('The map lost its WebGL context'));
+  const onError = (e: ErrorEvent) => fail(e.error);
+  const onStyleLoad = () => map.off('error', onError);
   map.on('webglcontextlost', onContextLost);
+  map.on('error', onError);
+  map.once('style.load', onStyleLoad);
   return () => {
     map.off('webglcontextlost', onContextLost);
+    map.off('error', onError);
+    map.off('style.load', onStyleLoad);
   };
 }
 

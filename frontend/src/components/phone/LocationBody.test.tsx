@@ -174,6 +174,27 @@ describe('<LocationBody>', () => {
     quiet.mockRestore();
   }, 15_000);
 
+  it('falls back the same way when the map errs before its style has loaded', async () => {
+    const quiet = quietConsole();
+    const { container } = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('error', { error: new Error('style 503') }));
+    await expectMapFailed(container);
+    quiet.mockRestore();
+  }, 15_000);
+
+  it('leaves the map up when a tile fails after its style has loaded', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => {
+      fakeMaps[0].fire('style.load');
+      fakeMaps[0].fire('error', { error: new Error('tile 404') });
+    });
+    expect(fakeMaps[0].container).toBeInTheDocument();
+    expect(fakeMaps[0].removed).toBe(false);
+    expect(screen.queryByText('Mapu se nepodařilo načíst')).toBeNull();
+  }, 15_000);
+
   it('prints no note for a street-level point', async () => {
     vi.mocked(api.apiGet).mockResolvedValue(STREET);
     wrap(<LocationBody propertyId={7} />);
