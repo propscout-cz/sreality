@@ -733,9 +733,12 @@ def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) 
 
 _MOMC_QUARTERS_SQL = """
 INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)
-SELECT DISTINCT ap.momc_unit_id, ap.cast_obce_unit_id, 'momc_cast_obce', %(v)s::bigint
-  FROM ruian_address_points ap
- WHERE ap.momc_unit_id IS NOT NULL AND ap.cast_obce_unit_id IS NOT NULL
+SELECT DISTINCT m.id, q.id, 'momc_cast_obce', %(v)s::bigint
+  FROM (SELECT DISTINCT momc_unit_id, cast_obce_unit_id FROM ruian_address_points) d
+  JOIN ruian_admin_units dm ON dm.id = d.momc_unit_id
+  JOIN ruian_admin_units dq ON dq.id = d.cast_obce_unit_id
+  JOIN ruian_admin_units m ON m.level = 'momc' AND m.code = dm.code AND m.valid_to IS NULL
+  JOIN ruian_admin_units q ON q.level = 'cast_obce' AND q.code = dq.code AND q.valid_to IS NULL
 ON CONFLICT DO NOTHING
 """
 
