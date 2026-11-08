@@ -4,8 +4,11 @@ One read over the current registry version, by name: tiers exact, prefix, then f
 first two fall short of the limit); within a tier, served properties of any deal type (`place_served_counts`), then the
 town's latest population, then code (Q12 a: one ranking for every place box). Counts rank rows and are never returned.
 A row is a chip: level, RÚIAN code, register name, context (the parent's name) and a fly-to point from `place_facts`,
-or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, městská část, cohesion region or
-the country (Q6 a, Q9). Never reads the place picks (migration 737): they are its holdout.
+or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, cohesion region or the country
+(Q6 a, Q9). A městská část, no served level (#2380), answers as a place shortcut (#2450): its `places` are its
+quarters' chips, the register's `momc_cast_obce` pairs at the index's version, and it ranks by the sum of their served
+properties; with no pair at that version it answers nothing. Never reads the place picks (migration 737): they are its
+holdout.
 """
 
 from __future__ import annotations
@@ -32,7 +35,8 @@ _BOUNDS_SQL = (
 
 # A unit is read AT the index's version, as api/maps.py's part lookup reads it (a load closes a re-parented unit before
 # it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
-# prefix or fuzzy key switches its arm off.
+# prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
+# unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
 _SUGGEST_SQL = """
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 units AS (
