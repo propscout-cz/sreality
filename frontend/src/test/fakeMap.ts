@@ -1,7 +1,10 @@
 /* A fake MapLibre map for jsdom (which has no WebGL): `fakeCreateMap` stands in for
  * lib/basemap's createMap, keeps every map it built in `fakeMaps`, records what the map
- * was given (its container, options, sources and layers) and lets a test fire the map's
- * events. `resetFakeMaps()` clears the record but keeps a queued mockImplementationOnce. */
+ * was given (its container, options, sources and layers, in drawing order) and lets a test
+ * fire the map's events. `layers` stays what the map was given (`getLayer` reads it);
+ * `setLayoutProperty` acts on `layout`, each layer's live layout, so a test reads a layer's
+ * birth state apart from its state now. `resetFakeMaps()` clears the record but keeps a
+ * queued mockImplementationOnce. */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { vi } from 'vitest';
 
@@ -10,6 +13,7 @@ type Listener = (event?: unknown) => void;
 export class FakeMap {
   readonly sources = new Map<string, unknown>();
   readonly layers: Array<Record<string, unknown>> = [];
+  readonly layout = new Map<string, Record<string, unknown>>();
   removed = false;
   private readonly listeners = new Map<string, Array<{ fn: Listener; once: boolean }>>();
 
@@ -45,8 +49,24 @@ export class FakeMap {
     return this;
   }
 
-  addLayer(layer: Record<string, unknown>): this {
-    this.layers.push(layer);
+  /* A missing layer (a `beforeId`, a layer to style) throws here: stricter than MapLibre,
+   * which once its style has loaded only fires an error event for one. */
+  addLayer(layer: Record<string, unknown>, beforeId?: string): this {
+    const at = beforeId === undefined ? this.layers.length : this.layers.findIndex((l) => l.id === beforeId);
+    if (at < 0) throw new Error(`Cannot add layer "${String(layer.id)}" before non-existing layer "${beforeId}".`);
+    this.layers.splice(at, 0, { ...layer });
+    this.layout.set(String(layer.id), { ...(layer.layout as Record<string, unknown> | undefined) });
+    return this;
+  }
+
+  getLayer(id: string): Record<string, unknown> | undefined {
+    return this.layers.find((l) => l.id === id);
+  }
+
+  setLayoutProperty(id: string, name: string, value: unknown): this {
+    const layout = this.layout.get(id);
+    if (!layout) throw new Error(`Cannot style non-existing layer "${id}".`);
+    this.layout.set(id, { ...layout, [name]: value });
     return this;
   }
 

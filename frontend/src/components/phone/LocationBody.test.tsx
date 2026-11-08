@@ -49,7 +49,7 @@ const refused = (status: number, reason: string) =>
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return { qc, ...render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>) };
 }
 
 /* The map is a lazy chunk over the real basemap module: load it once up front so no test
@@ -59,6 +59,9 @@ beforeAll(async () => {
 }, 30_000);
 
 const LOADED = { timeout: 5_000 };
+
+const AERIAL = 'https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}';
+const bar = () => screen.getByRole('group', { name: 'Podklad mapy' });
 
 beforeEach(() => {
   resetFakeMaps();
@@ -134,15 +137,81 @@ describe('<LocationBody>', () => {
     expect(fakeCreateMap).not.toHaveBeenCalled();
   });
 
-  it('pins the point once the map has loaded', async () => {
+  it('pins the point over the aerial photo once the map has loaded', async () => {
     wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
-    fakeMaps[0].fire('load');
+    act(() => fakeMaps[0].fire('load'));
     expect(fakeMaps[0].sources.get('pin')).toMatchObject({
       type: 'geojson',
       data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
     });
-    expect(fakeMaps[0].layers).toEqual([expect.objectContaining({ id: 'pin', type: 'circle', source: 'pin' })]);
+    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['aerial', 'pin']);
+    expect(fakeMaps[0].layers[1]).toMatchObject({ type: 'circle', source: 'pin' });
+  }, 15_000);
+
+  /* Ortofoto ČR (CC BY 4.0): hidden, MapLibre fetches none of its tiles. */
+  it('lays ČÚZK’s aerial photo hidden from the start, and shows it on Letecká without a new map', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    const map = fakeMaps[0];
+    act(() => map.fire('load'));
+    const source = map.sources.get('aerial') as { attribution?: string } | undefined;
+    expect(source).toMatchObject({ type: 'raster', tiles: [AERIAL], tileSize: 256, maxzoom: 20 });
+    const credit = document.createRange().createContextualFragment(source?.attribution ?? '').querySelector('a');
+    expect(credit?.textContent).toBe('© ČÚZK, CC BY 4.0');
+    expect(credit).toHaveAttribute('href', 'https://geoportal.cuzk.gov.cz/');
+    expect(map.layers.find((l) => l.id === 'aerial')).toMatchObject({
+      type: 'raster',
+      source: 'aerial',
+      layout: { visibility: 'none' },
+    });
+
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    expect(map.layout.get('aerial')).toMatchObject({ visibility: 'visible' });
+    expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
+    expect(map.removed).toBe(false);
+  }, 15_000);
+
+  it('offers Mapa / Letecká only once the map has loaded, with Mapa lit', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    expect(screen.queryByRole('group', { name: 'Podklad mapy' })).toBeNull();
+    act(() => fakeMaps[0].fire('load'));
+    const buttons = within(bar()).getAllByRole('button');
+    expect(buttons.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
+      ['Mapa', 'true'],
+      ['Letecká', 'false'],
+    ]);
+    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+  }, 15_000);
+
+  it('hides the aerial photo again on Mapa, on the same map', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('load'));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Mapa' }));
+    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+    expect(within(bar()).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'true');
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
+    expect(fakeMaps[0].removed).toBe(false);
+  }, 15_000);
+
+  /* A refetch can move the point under the open map, which builds a new one. */
+  it('keeps Letecká on the map built for a moved point, once that map has loaded', async () => {
+    const { qc } = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('load'));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+
+    vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, lat: 50.2 });
+    await act(() => qc.invalidateQueries());
+    await waitFor(() => expect(fakeMaps).toHaveLength(2), LOADED);
+    expect(fakeMaps[0].removed).toBe(true);
+    act(() => fakeMaps[1].fire('load'));
+    expect(fakeMaps[1].layout.get('aerial')).toEqual({ visibility: 'visible' });
+    expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
   }, 15_000);
 
   /* iOS caps the WebGL contexts a page may hold. */

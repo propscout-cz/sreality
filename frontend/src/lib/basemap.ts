@@ -110,3 +110,21 @@ export function addPointPin(
     },
   });
 }
+
+export const AERIAL_LAYER = 'aerial';
+
+/* ČÚZK's aerial photo (Ortofoto ČR, CC BY 4.0), added HIDDEN: MapLibre fetches and credits
+ * only a source that a visible layer uses. Call it once the style has loaded and before
+ * addPointPin, so it draws over the basemap and under the pin. The tile path is ArcGIS's,
+ * y before x; tiles stop at zoom 20 (deeper zooms overscale), and abroad they 404 and the
+ * basemap shows through. */
+export function addAerialLayer(map: maplibregl.Map): void {
+  map.addSource(AERIAL_LAYER, {
+    type: 'raster',
+    tiles: ['https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256,
+    maxzoom: 20,
+    attribution: '<a href="https://geoportal.cuzk.gov.cz/" target="_blank">© ČÚZK, CC BY 4.0</a>',
+  });
+  map.addLayer({ id: AERIAL_LAYER, type: 'raster', source: AERIAL_LAYER, layout: { visibility: 'none' } });
+}
