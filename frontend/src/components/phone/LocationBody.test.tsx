@@ -2,7 +2,7 @@
  * The map is a lazy MapLibre map built through createMap, which is the one thing faked here
  * (jsdom has no WebGL); the place and the three map apps never wait for it, and a property
  * with no point says "Bez polohy" and nothing else. */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -161,6 +161,16 @@ describe('<LocationBody>', () => {
     });
     const { container } = wrap(<LocationBody propertyId={7} />);
     await expectMapFailed(container);
+    quiet.mockRestore();
+  }, 15_000);
+
+  it('falls back the same way, and releases the map, when its WebGL context is lost', async () => {
+    const quiet = quietConsole();
+    const { container } = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('webglcontextlost'));
+    await expectMapFailed(container);
+    expect(fakeMaps[0].removed).toBe(true);
     quiet.mockRestore();
   }, 15_000);
 

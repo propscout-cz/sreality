@@ -2,14 +2,15 @@
  * its precision allows. A lazy chunk (LocationBody), so MapLibre never joins the feed's
  * first visit. */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import { addPointPin, createMap } from '@/lib/basemap';
+import { addPointPin, createMap, guardMap } from '@/lib/basemap';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
 
 export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number; zoom: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [failure, setFailure] = useState<Error | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -19,6 +20,7 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
       zoom,
       cooperativeGestures: true,
     });
+    const unguard = guardMap(map, setFailure);
 
     map.on('load', () => {
       // MapLibre opens the compact attribution; fold it to the (i), as on DetailMap.
@@ -26,8 +28,14 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
       addPointPin(map, [lon, lat]);
     });
 
-    return () => map.remove();
+    return () => {
+      unguard();
+      map.remove();
+    };
   }, [lat, lon, zoom]);
+
+  /* Thrown here, after every hook, so MapSlot's boundary takes the map down. */
+  if (failure) throw failure;
 
   return (
     <div

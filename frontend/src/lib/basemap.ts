@@ -63,6 +63,17 @@ export function createMap(
   return map;
 }
 
+/* Tells `fail` when the map can no longer draw: its WebGL context was lost. These arrive
+ * as MapLibre events, outside React's render, so no error boundary sees them on its own.
+ * Returns the unguard: call it before `map.remove()`, which drops the context itself. */
+export function guardMap(map: maplibregl.Map, fail: (error: Error) => void): () => void {
+  const onContextLost = () => fail(new Error('The map lost its WebGL context'));
+  map.on('webglcontextlost', onContextLost);
+  return () => {
+    map.off('webglcontextlost', onContextLost);
+  };
+}
+
 /* The one pin for a property's point (DetailMap, the phone's Poloha), dimmed for an
  * inactive one. Call it once the map's style has loaded. */
 export function addPointPin(
