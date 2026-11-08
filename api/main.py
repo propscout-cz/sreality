@@ -203,6 +203,8 @@ if _cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Starlette's default, pinned: a typeahead POSTs to one fixed path, so a cached preflight is one per 10 minutes.
+        max_age=600,
     )
 
 
