@@ -100,7 +100,7 @@ it (`api/`). They do not apply to the scraper.
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (tenancy shape 3) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the phone's `GET /properties/{id}/location`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -411,16 +411,13 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
   explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
-  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`, the static map) is not gated: the prohibition
+  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`) is not gated: the prohibition
   is on persistence.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding, `/maps/suggest` and the static map fail over
+- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding and `/maps/suggest` fail over
   to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
   primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
-- `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
-  `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
-  `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
 - `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
   (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
   so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
