@@ -27,6 +27,24 @@ LOG = logging.getLogger("location_data.place_search")
 _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
 
+# The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
+# picker's preview (api/maps.py imports DOOR_LABEL_SQL until the Mapy path goes, #2454).
+_DOOR_LABEL = """location_display_label(
+         s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
+         ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
+         o.name, c.name, 'CZ', 'cz')"""
+_DOOR_LABEL_JOINS = """
+  LEFT JOIN ruian_streets s ON s.id = ap.street_id
+  LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
+  LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id"""
+
+# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
+DOOR_LABEL_SQL = f"""
+SELECT {_DOOR_LABEL}
+  FROM ruian_address_points ap{_DOOR_LABEL_JOINS}
+ WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
+"""
+
 # The threshold is pinned, not inherited: "brno" reaches Brněnská at exactly 0.6.
 _BOUNDS_SQL = (
     "SELECT set_config('statement_timeout', '2s', true),"

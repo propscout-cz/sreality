@@ -947,7 +947,7 @@ def _doors(obec: int, street: _Row | None, cp: int, co: int | None, *rows: tuple
 
 
 def _label(kod: int, text: str) -> _Expect:
-    return _Expect(maps._DOOR_LABEL_SQL, (kod,), (text,))
+    return _Expect(maps.DOOR_LABEL_SQL, (kod,), (text,))
 
 
 def _address(number: str, street: str | None, at: tuple[float, float], town: str = "Praha"
@@ -1026,7 +1026,7 @@ def test_anything_but_one_door_near_the_pick_binds_nothing(client, doors):
         _point_of(TYNSKA_ULICKA), _doors(554782, TYNSKA_ULICKA, 610, 7, *doors),
     ])
     assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
-    assert maps._DOOR_LABEL_SQL not in executed
+    assert maps.DOOR_LABEL_SQL not in executed
 
 
 def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client, caplog):
