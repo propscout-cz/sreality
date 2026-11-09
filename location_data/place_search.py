@@ -140,6 +140,13 @@ streets AS (
      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
    ORDER BY s.code, s.valid_from DESC),
+parts AS (
+  SELECT DISTINCT ON (u.code) u.code, u.parent_id
+    FROM ruian_name_index n
+    JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
+   WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(part_key)s::text
+     AND n.entity_kind = 'cast_obce' AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
+   ORDER BY u.code, u.valid_from DESC),
 doors AS (
   SELECT st.code AS street_code, st.name AS street_name, st.obec_unit_id AS street_obec, a.kod_adm
     FROM streets st
@@ -149,7 +156,15 @@ doors AS (
        WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.valid_to IS NULL
       UNION
       SELECT ap.kod_adm FROM ruian_address_points ap
-       WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer AND ap.valid_to IS NULL) a),
+       WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer AND ap.valid_to IS NULL) a
+  UNION ALL
+  SELECT NULL, NULL, NULL, ap.kod_adm
+    FROM parts p
+    JOIN ruian_admin_units po ON po.id = p.parent_id AND po.level = 'obec'
+    JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
+    JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
+   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.street_id IS NULL AND ap.cast_obce_kod = p.code
+     AND ap.valid_to IS NULL),
 top AS (SELECT * FROM doors ORDER BY kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
   FROM top d
@@ -231,8 +246,8 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
             rows = cur.fetchall()
             doors: list[tuple[Any, ...]] = []
             if street_keys:
-                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "domovni": domovni, "bare": domovni,
-                                         "limit": limit})
+                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "part_key": normalize_name(street_part),
+                                         "domovni": domovni, "bare": domovni, "limit": limit})
                 doors = cur.fetchall()
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.

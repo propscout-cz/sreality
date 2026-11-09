@@ -585,3 +585,22 @@ def test_a_street_and_its_co_answer_the_door_whose_orientation_number_it_is(mirr
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0281, "lng": 15.2011}},
     ]
+
+
+def test_a_village_and_its_cp_answer_its_streetless_door_whose_one_label_has_no_number(mirror, client):
+    """Story 53: "<village> <number>" is the Czech address of a house on no street, its village a část obce. The one
+    door label (rule 25) names no number for a streetless door, so the row reads as the village; its context, the
+    town's okres, tells it apart. The town and the část answer by similarity (0.67), the town first by its people."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.population(513041, 663)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25,
+                 point=(14.0021, 50.1703))
+    mirror.publish()
+    assert _suggest(client, "Lhota 25") == [
+        {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno",
+         "point": {"lat": 50.1703, "lng": 14.0021}, "street": None},
+        {"level": "obec", "id": 513041, "name": "Lhota", "context": "Kladno", "point": None},
+        {"level": "cast_obce", "id": 70971, "name": "Lhota", "context": "Lhota",
+         "point": {"lat": 50.1703, "lng": 14.0021}},
+    ]
