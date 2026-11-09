@@ -1,14 +1,16 @@
 /* The reference-overlay toggles: one per registry section, tri-state over the
- * section's layers, the settings under one that is on (per-layer toggles,
- * variant radios, zoom hint, note, provenance), the legend cards Browse's map
- * draws for the sections that are on, and the compact chips the small maps use.
+ * section's layers, the settings under one that is on (per-layer toggles, zoom
+ * hint, note, provenance), the legend cards Browse's map draws for the
+ * sections that are on (the rent map's an area card, which also picks the size
+ * category), and the compact chips the small maps use.
  * The registry is fixed here; the selection grammar itself is
  * lib/mapOverlays.test.ts's. */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 
 import MapOverlayControls, { MapOverlayLegends } from './MapOverlayControls';
+import type { OverlayPlaces } from '@/lib/mapOverlayDraw';
 import type { MapOverlayRegistry, OverlaySection } from '@/lib/mapOverlays';
 import { PPM2_UNIT } from '@/lib/measure';
 
@@ -96,10 +98,10 @@ const RENT: OverlaySection = {
         opacity: 0.62,
       },
       variants: [
-        { key: 'vk1', label: '1+kk, 1+1', prop: 'vk1' },
-        { key: 'vk2', label: '2+kk, 2+1', prop: 'vk2' },
-        { key: 'vk3', label: '3+kk, 3+1', prop: 'vk3' },
-        { key: 'vk4', label: '4+kk, 4+1', prop: 'vk4' },
+        { key: 'vk1', label: '1+kk, 1+1', prop: 'vk1', alt_prop: 'nov1', example_m2: 34 },
+        { key: 'vk2', label: '2+kk, 2+1', prop: 'vk2', alt_prop: 'nov2', example_m2: 54 },
+        { key: 'vk3', label: '3+kk, 3+1', prop: 'vk3', alt_prop: 'nov3', example_m2: 75 },
+        { key: 'vk4', label: '4+kk, 4+1', prop: 'vk4', alt_prop: 'nov4', example_m2: 106 },
       ],
       feature_count: 7630,
     },
@@ -125,8 +127,19 @@ function renderControls(
   return onChange;
 }
 
-const renderLegends = (selection: string, registry: MapOverlayRegistry = REGISTRY) =>
-  render(<MapOverlayLegends registry={registry} selection={selection} />);
+const renderLegends = (
+  selection: string,
+  registry: MapOverlayRegistry = REGISTRY,
+  extra: { places?: OverlayPlaces; onChange?: (next: string) => void } = {},
+) => render(<MapOverlayLegends registry={registry} selection={selection} {...extra} />);
+
+const PLZEN = {
+  name: 'Plzeň', kraj: 'Plzeňský kraj', level: 'ku',
+  vk1: 284, vk2: 238, vk3: 219, vk4: 209, nov1: 346, nov2: 290, nov3: 267, nov4: 254,
+};
+const at = (props: Record<string, unknown> | null): OverlayPlaces => new Map([['rent_map', props]]);
+const sizes = () => within(screen.getByRole('group', { name: 'Velikost bytu' })).getAllByRole('button');
+const size = (label: string) => sizes().find((b) => b.textContent?.startsWith(label))!;
 
 const chip = (name: string) => screen.getByRole('checkbox', { name });
 
@@ -188,28 +201,81 @@ describe('<MapOverlayControls> tri-state', () => {
   });
 });
 
-describe('<MapOverlayControls> variants and legend', () => {
-  it('offers the variants as radios, the first one shown by default', () => {
-    const onChange = renderControls('rent_map');
-    const group = screen.getByRole('radiogroup', { name: 'Velikost bytu' });
-    expect(within(group).getAllByRole('radio').map((radio) => radio.closest('label')?.textContent)).toEqual([
-      '1+kk, 1+1',
-      '2+kk, 2+1',
-      '3+kk, 3+1',
-      '4+kk, 4+1',
+describe('<MapOverlayLegends> the area card', () => {
+  it('names the place under the centre and gives both rents of every size, the shown size lit', () => {
+    renderLegends('rent_map', REGISTRY, { places: at(PLZEN) });
+    expect(screen.getByText('Katastrální území · Plzeňský kraj')).toBeInTheDocument();
+    expect(screen.getByText('Plzeň')).toBeInTheDocument();
+    expect(screen.getByText(`Nájemné (${PPM2_UNIT.rent})`)).toBeInTheDocument();
+    expect(screen.getByText('Novostavba')).toBeInTheDocument();
+    expect(sizes().map((b) => b.textContent)).toEqual([
+      '1+kk, 1+1284346', '2+kk, 2+1238290', '3+kk, 3+1219267', '4+kk, 4+1209254',
     ]);
-    expect(within(group).getByRole('radio', { name: '1+kk, 1+1' })).toBeChecked();
-    fireEvent.click(within(group).getByRole('radio', { name: '2+kk, 2+1' }));
-    expect(onChange).toHaveBeenCalledWith('rent_map:vk2');
+    expect(sizes().map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false']);
   });
 
-  it('spells a return to the first variant as the bare key', () => {
-    const onChange = renderControls('rent_map:vk2');
-    expect(screen.getByRole('radio', { name: '2+kk, 2+1' })).toBeChecked();
-    fireEvent.click(screen.getByRole('radio', { name: '1+kk, 1+1' }));
-    expect(onChange).toHaveBeenCalledWith('rent_map');
+  it('names a place the MF priced whole as an obec', () => {
+    renderLegends('rent_map', REGISTRY, { places: at({ name: 'Šanov', kraj: 'Jihomoravský kraj', level: 'obec', vk1: 272 }) });
+    expect(screen.getByText('Obec · Jihomoravský kraj')).toBeInTheDocument();
   });
 
+  it("works the shown size's example: its median area times its rent, per month", () => {
+    renderLegends('rent_map:vk2', REGISTRY, { places: at(PLZEN) });
+    expect(screen.getByText(/^Příklad:/)).toHaveTextContent('Příklad: 54 m² × 238 = 12 852 Kč/měs');
+    expect(screen.getByText(/^Příklad:/)).toHaveAttribute(
+      'title', '54 m² je medián plochy nabízených nájemních bytů 2+kk, 2+1',
+    );
+  });
+
+  it('paints the map by a clicked size, the first one spelled as the bare key', () => {
+    const onChange = vi.fn();
+    renderLegends('rent_map:vk2', REGISTRY, { places: at(PLZEN), onChange });
+    expect(size('2+kk, 2+1')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(size('3+kk, 3+1'));
+    expect(onChange).toHaveBeenLastCalledWith('rent_map:vk3');
+    fireEvent.click(size('1+kk, 1+1'));
+    expect(onChange).toHaveBeenLastCalledWith('rent_map');
+  });
+
+  it('cannot pick without a writer', () => {
+    renderLegends('rent_map', REGISTRY, { places: at(PLZEN) });
+    expect(sizes().every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  it('dashes what the place lacks, and says so when the centre is on no place', () => {
+    renderLegends('rent_map', REGISTRY, { places: at({ name: 'Plzeň', level: 'ku', vk1: 284, vk3: 219 }) });
+    expect(sizes().map((b) => b.textContent)).toEqual([
+      '1+kk, 1+1284—', '2+kk, 2+1——', '3+kk, 3+1219—', '4+kk, 4+1——',
+    ]);
+    cleanup();
+    renderLegends('rent_map', REGISTRY, { places: at(null) });
+    expect(screen.getByText('Střed mapy')).toBeInTheDocument();
+    expect(screen.getByText('Bez údajů')).toBeInTheDocument();
+    expect(screen.queryByText(/^Příklad:/)).toBeNull();
+  });
+
+  it('drops the second column and the example where the registry carries neither', () => {
+    const bare: OverlaySection = {
+      ...RENT,
+      layers: [{
+        ...RENT.layers[0],
+        variants: RENT.layers[0].variants!.map(({ key, label, prop }) => ({ key, label, prop })),
+      }],
+    };
+    renderLegends('rent_map', { sections: [bare] }, { places: at(PLZEN) });
+    expect(screen.queryByText('Novostavba')).toBeNull();
+    expect(sizes()[0]).toHaveTextContent('1+kk, 1+1284');
+    expect(screen.queryByText(/^Příklad:/)).toBeNull();
+  });
+
+  it('leaves the size pick to the card: the Vrstvy panel has none', () => {
+    renderControls('rent_map');
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Velikost bytu' })).toBeNull();
+  });
+});
+
+describe('<MapOverlayControls> legend', () => {
   /* The legend the rent map has always had: what is measured, the ramp, its ends —
    * on the map now, so it reads with the Vrstvy panel closed. */
   it('keys the rent scale by its caption and range, as the rent map always has', () => {
@@ -239,9 +305,10 @@ describe('<MapOverlayControls> variants and legend', () => {
     ]);
   });
 
-  it('keys only the sections that are on, naming the variant shown', () => {
+  it('keys only the sections that are on', () => {
     renderLegends('rent_map:vk2');
-    expect(screen.getByText(`${RENT.label} · 2+kk, 2+1`)).toBeInTheDocument();
+    expect(screen.getByText(RENT.label)).toBeInTheDocument();
+    expect(size('2+kk, 2+1')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText(METRO.label)).toBeNull();
   });
 

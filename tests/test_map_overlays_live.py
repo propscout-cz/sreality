@@ -258,18 +258,18 @@ def test_the_kraje_outline_is_the_registers_current_kraj_polygons_dated_by_its_v
 
 
 def _rent_revision(cur: Any, source_date: date,
-                   rows: list[tuple[int, str, str | None, int, int | None]]) -> int:
+                   rows: list[tuple[int, str, str | None, int, int | None, int | None]]) -> int:
     cur.execute(
         "INSERT INTO rent_map_revisions (source_date, source_filename, file_sha256, row_count) "
         "VALUES (%s, 'ci.xlsx', %s, %s) RETURNING source_revision",
         (source_date, f"ci-{uuid.uuid4().hex}", len(rows)),
     )
     revision = int(cur.fetchone()[0])
-    for code, level, kraj, vk, rent in rows:
+    for code, level, kraj, vk, rent, new_build in rows:
         cur.execute(
             "INSERT INTO rent_map_values (source_revision, ruian_code, level, kraj, vk, "
-            "ref_rent_per_m2) VALUES (%s, %s, %s, %s, %s, %s)",
-            (revision, code, level, kraj, vk, rent),
+            "ref_rent_per_m2, ref_rent_novostavba_per_m2) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (revision, code, level, kraj, vk, rent, new_build),
         )
     return revision
 
@@ -283,24 +283,26 @@ def _rent_overlay(cur: Any) -> tuple[Any, ...] | None:
 @pytest.mark.usefixtures("mvt")
 def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -> None:
     """One feature per territory the latest revision prices AND the register can draw, at
-    the level the MF priced it, its VK rents as flat numeric props (an unpriced VK and a NULL
-    kraj stripped); the stale revision, an undrawable code and an unpriced boundary are absent."""
+    the level the MF priced it, its VK rents and new-build rents as flat numeric props (an unpriced
+    VK and a NULL kraj stripped); the stale revision, an undrawable code and an unpriced boundary
+    are absent."""
     _boundary(cur, OBEC, "obec", "Obecov", 0)
     _boundary(cur, KU, "katastralni_uzemi", "KU Test", 1)
     _boundary(cur, NO_RENT, "obec", "Nikde", 2)
-    _rent_revision(cur, date(2026, 5, 15), [(OBEC, "obec", "Kraj Test", 1, 999)])
+    _rent_revision(cur, date(2026, 5, 15), [(OBEC, "obec", "Kraj Test", 1, 999, 1100)])
     _rent_revision(cur, date(2026, 8, 15), [
-        (OBEC, "obec", "Kraj Test", 1, 300), (OBEC, "obec", "Kraj Test", 2, 250),
-        (OBEC, "obec", "Kraj Test", 3, 220), (OBEC, "obec", "Kraj Test", 4, 180),
-        (KU, "ku", None, 2, 412), (KU, "ku", None, 3, None),
-        (NO_SHAPE, "obec", "Kraj Test", 1, 310),
+        (OBEC, "obec", "Kraj Test", 1, 300, 360), (OBEC, "obec", "Kraj Test", 2, 250, 300),
+        (OBEC, "obec", "Kraj Test", 3, 220, 265), (OBEC, "obec", "Kraj Test", 4, 180, 215),
+        (KU, "ku", None, 2, 412, None), (KU, "ku", None, 3, None, None),
+        (NO_SHAPE, "obec", "Kraj Test", 1, 310, 370),
     ])
 
     tiles = overlays.render_sql_section(cur.connection, "rent_map")
 
     section, layer = overlays.SOURCES["rent_map"], overlays.SOURCES["rent_map"].layers[0]
     obec_props = {"name": "Obecov", "kraj": "Kraj Test", "level": "obec",
-                  "vk1": 300, "vk2": 250, "vk3": 220, "vk4": 180}
+                  "vk1": 300, "vk2": 250, "vk3": 220, "vk4": 180,
+                  "nov1": 360, "nov2": 300, "nov3": 265, "nov4": 215}
     ku_props = {"name": "KU Test", "level": "ku", "vk2": 412}
     cur.execute("SELECT id, source_id, props FROM map_overlay_features "
                 "WHERE layer_key = 'rent_map' ORDER BY source_id")
@@ -344,7 +346,7 @@ def test_a_rent_map_ingest_re_renders_the_overlay_from_its_own_revision(cur: Any
     assert revision is not None
     cur.execute("SELECT props FROM map_overlay_features WHERE layer_key = 'rent_map'")
     assert cur.fetchall() == [({"name": "Obecov", "kraj": "Kraj Test", "level": "obec",
-                                "vk2": 260},)]
+                                "vk2": 260, "nov2": 300},)]
     assert _rent_overlay(cur)[2] == date(2026, 11, 15)
     cur.execute("SELECT to_regclass('public.rent_map_choropleth')")
     assert cur.fetchone() == (None,)

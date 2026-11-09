@@ -60,6 +60,11 @@ of the analytical and UI phases; runs alongside them.
   students at it (22 sites), through a curated faculty → site table in the ingest; F21 read live
   each run with two refusal rails (stale code, primary seat without a point). No SPA change, no
   migration; ingest `--sections universities`.
+- **Rent-map area card (#2489, 2026-11-09, operator picked variant D):** the rent map's legend reads the
+  place under the map's centre (marked by a small cross): standard and new-build rent per size category
+  (new tile props `nov1..nov4`), a click on a row repaints the map, a worked example in Kč/měs; the Vrstvy
+  panel's size radios are gone, and the click popup names a KÚ as "Katastrální území". No migration; owed
+  after deploy: re-render `--sections rent_map`.
 
 ### map-3: count marks — one count rule on world tiles (built 2026-10-15)
 - **Why:** the count discs hid the basemap on any dense cohort (232 discs at a 55 px median spacing

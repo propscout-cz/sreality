@@ -18,6 +18,7 @@ import { escapeHtml } from './escapeHtml';
 import {
   activeVariant,
   layersOf,
+  overlayHasAreaCard,
   parseLayers,
   type LayerSelection,
   type MapOverlayRegistry,
@@ -442,6 +443,54 @@ export function useMapOverlays(
   }, [map, ready, registry, selection, beforeId]);
 }
 
+/* The props of the place under the map's centre, per selected layer that keys
+ * the map with an area card; null where the centre is on no place of it. Read
+ * again each time the map settles, so a pan or a tile arriving updates it. */
+export type OverlayPlaces = ReadonlyMap<string, Record<string, unknown> | null>;
+
+const NO_PLACES: OverlayPlaces = new Map();
+
+const samePlaces = (a: OverlayPlaces, b: OverlayPlaces): boolean =>
+  a.size === b.size &&
+  [...b].every(([key, props]) => a.has(key) && JSON.stringify(a.get(key)) === JSON.stringify(props));
+
+export function useOverlayPlacesAtCenter(
+  map: MaplibreMap | null,
+  ready: boolean,
+  registry: MapOverlayRegistry | undefined,
+  selection: string,
+): OverlayPlaces {
+  const [places, setPlaces] = useState<OverlayPlaces>(NO_PLACES);
+  useEffect(() => {
+    const sel = layersOf(parseLayers(selection), registry);
+    const keys = (registry?.sections ?? [])
+      .flatMap((s) => s.layers)
+      .filter((l) => sel.has(l.key) && overlayHasAreaCard(l))
+      .map((l) => l.key);
+    if (!map || !ready || keys.length === 0) {
+      setPlaces(NO_PLACES);
+      return;
+    }
+    const read = () => {
+      const box = map.getContainer();
+      const centre: [number, number] = [box.clientWidth / 2, box.clientHeight / 2];
+      const next = new Map<string, Record<string, unknown> | null>();
+      for (const key of keys) {
+        const id = overlayFillId(key);
+        const hit = map.getLayer(id) ? map.queryRenderedFeatures(centre, { layers: [id] })[0] : undefined;
+        next.set(key, hit ? { ...hit.properties } : null);
+      }
+      setPlaces((prev) => (samePlaces(prev, next) ? prev : next));
+    };
+    read();
+    map.on('idle', read);
+    return () => {
+      map.off('idle', read);
+    };
+  }, [map, ready, registry, selection]);
+  return places;
+}
+
 /* The map's zoom, floored: the overlay hint compares it with an integer
  * minzoom, and the pin labels with an integer threshold. */
 export function useMapZoom(map: MaplibreMap | null, ready: boolean): number | null {
@@ -465,20 +514,49 @@ const czNumber = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 1 });
 export const formatOverlayNumber = (n: number): string => czNumber.format(n);
 
 /* What a scale's unit token reads as: the unit after a figure, the legend's
- * caption, and the popup's words for the place and the figure. `rent_per_m2`
- * is the MF reference rent — the shared monthly-rent unit (rule 23) and the
- * words its map has always used; any other token is just its own unit. */
+ * caption, the popup's words for the place (by the feature's `level`) and the
+ * figure, and the area card's column heads, the unit of its worked example and
+ * what the example's area is.
+ * `rent_per_m2` is the MF reference rent — the shared monthly-rent unit (rule
+ * 23) and the words its map has always used; the MF prices a big town by its
+ * katastrální území (level `ku`), any other place as a whole obec. Any other
+ * token is just its own unit. */
 export interface OverlayScaleWords {
   unit: string | null;
   caption: string | null;
   place: string | null;
   value: string | null;
+  variants: string | null;
+  main: string | null;
+  alt: string | null;
+  total: string | null;
+  example: string | null;
 }
 
-export const overlayScaleWords = (unit: string | null | undefined): OverlayScaleWords =>
+export const overlayScaleWords = (unit: string | null | undefined, level?: unknown): OverlayScaleWords =>
   unit === 'rent_per_m2'
-    ? { unit: PPM2_UNIT.rent, caption: `Nájemné (${PPM2_UNIT.rent})`, place: 'Obec', value: 'Nájemné referenčního bytu' }
-    : { unit: unit || null, caption: unit || null, place: null, value: null };
+    ? {
+        unit: PPM2_UNIT.rent,
+        caption: `Nájemné (${PPM2_UNIT.rent})`,
+        place: level === 'ku' ? 'Katastrální území' : 'Obec',
+        value: 'Nájemné referenčního bytu',
+        variants: 'Velikost bytu',
+        main: 'Běžný',
+        alt: 'Novostavba',
+        total: 'Kč/měs',
+        example: 'medián plochy nabízených nájemních bytů',
+      }
+    : {
+        unit: unit || null,
+        caption: unit || null,
+        place: null,
+        value: null,
+        variants: null,
+        main: null,
+        alt: null,
+        total: null,
+        example: null,
+      };
 
 const dateIn = (timeZone: string) =>
   new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', timeZone });
@@ -501,7 +579,8 @@ const textOf = (v: unknown): string | null =>
 /* The popup for a click on an overlay area: kicker = section, title = the
  * feature's name, meta = its class label — or, on a scale layer, the place and
  * the shown variant's figure with its unit ("—" when the place has none): for
- * the rent map "Obec: Brno, Jihomoravský, Nájemné referenčního bytu: 312 Kč/m²/měs". */
+ * the rent map "Obec: Brno, Jihomoravský, Nájemné referenčního bytu: 312 Kč/m²/měs"
+ * ("Katastrální území: …" where the MF priced a part of a town). */
 export function overlayPopupHtml(
   sectionLabel: string,
   props: Record<string, unknown>,
@@ -513,7 +592,7 @@ export function overlayPopupHtml(
   const title = textOf(props.name) ?? textOf(props.label) ?? classLabel ?? layer.label;
   let meta = classLabel && classLabel !== title ? classLabel : null;
   if (layer.scale) {
-    const words = overlayScaleWords(layer.scale.unit);
+    const words = overlayScaleWords(layer.scale.unit, props.level);
     const variant = activeVariant(layer, variantKey);
     const raw = props[variant?.prop ?? layer.scale.prop];
     const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
