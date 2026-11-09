@@ -664,3 +664,21 @@ def test_a_bare_number_answers_its_cp_door_and_its_co_door_on_one_street_ties_by
          "point": None, "street": street},
         {**street, "point": None},
     ]
+
+
+def test_a_typed_cp_and_co_answer_only_that_door_a_typed_letter_must_match_an_untyped_one_matches_any(mirror, client):
+    """12/3a is the č.p. 12 with the č.o. 3a: never 12/3b, the č.p. 3, or 99/12 (a typed č.o. ends the bare reading).
+    Typed without its letter, 12/3 answers both letters, by code. Doors only: 'nadrazni 12 3a' reaches the street at
+    exactly 0.6, which this test does not pin."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, co=3, znak="a")
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12, co=3, znak="b")
+    mirror.house(21000103, towns["kolin"], street=nadrazni, cp=3)
+    mirror.house(21000104, towns["kolin"], street=nadrazni, cp=99, co=12)
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní 12/3a")) == [(21000101, "Nádražní 12/3a, Kolín")]
+    assert _doors(_suggest(client, "Nádražní 12/3")) == [
+        (21000101, "Nádražní 12/3a, Kolín"),
+        (21000102, "Nádražní 12/3b, Kolín"),
+    ]
