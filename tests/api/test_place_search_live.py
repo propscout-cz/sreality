@@ -102,19 +102,36 @@ class _Mirror:
             " VALUES (%s::ruian_level, %s, %s, %s, %s, 'official')", (level, unit, version, name, normalize_name(name)))
 
     def street(self, code: int, name: str, obec: int, *, door: tuple[float, float] | None = None,
-               version: int | None = None) -> None:
-        """Open, drawn in `version` alone (the current one by default)."""
+               version: int | None = None) -> int:
+        """Open, drawn in `version` alone (the current one by default). Returns its row id."""
         version = self.v if version is None else version
-        self.conn.execute(
+        street = int(self.conn.execute(
             "INSERT INTO ruian_streets (code, name, name_norm, obec_unit_id, first_version_id, last_version_id,"
-            " valid_from) VALUES (%s, %s, %s, %s, %s, %s, '2020-01-01')",
-            (code, name, normalize_street_name(name), obec, version, version))
+            " valid_from) VALUES (%s, %s, %s, %s, %s, %s, '2020-01-01') RETURNING id",
+            (code, name, normalize_street_name(name), obec, version, version)).fetchone()[0])
         if door is not None:
             self.conn.execute(
                 "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, ulice_kod, psc, geom, plati_od,"
                 " first_version_id, last_version_id) VALUES (%s, %s, %s, %s, '68201',"
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
                 (next(self.doors), obec, self.codes[obec], code, *door, version, version))
+        return street
+
+    def house(self, kod: int, obec: int, *, cp: int, street: int | None = None, part: int | None = None,
+              typ: str = "č.p.", co: int | None = None, znak: str | None = None,
+              point: tuple[float, float] | None = None, version: int | None = None) -> None:
+        """A numbered door on `street` (a street ROW, as the load points a door) or, streetless, in `part`; born in
+        `version` (the current one by default)."""
+        version = self.v if version is None else version
+        lng, lat = point if point is not None else (None, None)
+        self.conn.execute(
+            "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, street_id, ulice_kod,"
+            " cast_obce_unit_id, cast_obce_kod, typ_so, cislo_domovni, cislo_orientacni, znak_orientacniho, psc,"
+            " geom, plati_od, first_version_id, last_version_id)"
+            " VALUES (%s, %s, %s, %s, (SELECT code FROM ruian_streets WHERE id = %s), %s, %s, %s, %s, %s, %s, '28002',"
+            " ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326), '2020-01-01', %s, %s)",
+            (kod, obec, self.codes[obec], street, street, part, self.codes[part] if part else None, typ, cp, co,
+             znak, lng, lat, version, version))
 
     def quarters(self, momc: int, *parts: int, version: int | None = None) -> None:
         """A městská část's quarter pairs at `version` (the current one by default), as the load's finish step writes
@@ -522,3 +539,34 @@ def test_own_search_never_reads_the_picks_its_holdout(mirror, client, conn):
     mirror.publish()
     conn.execute("ALTER TABLE place_picks RENAME TO place_picks_holdout")
     assert _chips(_suggest(client, "Brno"))[0] == ("obec", BRNO, "Brno", "Brno-město")
+
+
+KOLIN_OKRES, KOLIN, NADRAZNI_KOLIN, NADRAZNI_KH = 3204, 533165, 401001, 401002
+
+
+def _towns(m: _Mirror) -> dict[str, int]:
+    """Kolín and Kutná Hora, each in its okres of the same name, in one kraj. Returns their unit ids."""
+    kraj = m.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    return {"kolin": m.unit("obec", KOLIN, "Kolín", m.unit("okres", KOLIN_OKRES, "Kolín", kraj)),
+            "kutna_hora": m.unit("obec", KUTNA_HORA, "Kutná Hora",
+                                 m.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora", kraj))}
+
+
+def _doors(items: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    return [(i["id"], i["name"]) for i in items if i["level"] == "adresni_misto"]
+
+
+def test_a_street_and_its_cp_answer_the_door_with_its_label_street_and_point_before_the_street(mirror, client):
+    """Story 44: the door row is its level, kód ADM, the one door label, its town's okres, its point and the street's
+    chip. The street itself answers by similarity ('nadrazni 12' to 'nadrazni' is 0.75), after the door."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]

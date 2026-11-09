@@ -21,11 +21,13 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
+from location_data.resolver.normalize import house_number, split_street_and_number
 
 LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
+DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
 # picker's preview (api/maps.py imports DOOR_LABEL_SQL until the Mapy path goes, #2454).
@@ -129,6 +131,30 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
  ORDER BY r.tier, r.served DESC, r.population DESC NULLS LAST, r.code, r.level
 """
 
+_DOORS_SQL = f"""
+WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
+streets AS (
+  SELECT DISTINCT ON (s.code) s.code, s.name, s.obec_unit_id
+    FROM ruian_streets s
+   WHERE s.name_norm = ANY(%(street_keys)s::text[])
+     AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
+     AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
+   ORDER BY s.code, s.valid_from DESC),
+doors AS (
+  SELECT st.code AS street_code, st.name AS street_name, st.obec_unit_id AS street_obec, ap.kod_adm
+    FROM streets st
+    JOIN ruian_streets sr ON sr.code = st.code
+    JOIN ruian_address_points ap ON ap.street_id = sr.id
+   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.valid_to IS NULL),
+top AS (SELECT * FROM doors ORDER BY kod_adm LIMIT %(limit)s)
+SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
+  FROM top d
+  JOIN ruian_address_points ap ON ap.kod_adm = d.kod_adm{_DOOR_LABEL_JOINS}
+  LEFT JOIN ruian_admin_units tc ON tc.id = o.parent_id AND tc.level IN ('kraj', 'okres', 'obec')
+  LEFT JOIN ruian_admin_units so ON so.id = d.street_obec AND so.level IN ('kraj', 'okres', 'obec')
+ ORDER BY d.kod_adm
+"""
+
 
 @dataclass(frozen=True)
 class Place:
@@ -139,6 +165,7 @@ class Place:
     lat: float | None = None
     lng: float | None = None
     places: tuple[Place, ...] | None = None  # a shortcut's chips; None on every other row
+    street: Place | None = None  # a door's street chip; None on a streetless door and every other row
 
     def chip(self) -> dict[str, Any]:
         return {"level": self.level, "id": self.id, "name": self.name, "context": self.context}
@@ -148,6 +175,8 @@ class Place:
         item = {**self.chip(), "point": point}
         if self.places is not None:
             item["places"] = [p.chip() for p in self.places]
+        if self.level == DOOR_LEVEL:
+            item["street"] = None if self.street is None else self.street.chip()
         return item
 
 
@@ -171,6 +200,12 @@ def _arm(key: str) -> tuple[str | None, str | None]:
     return key + "%", key if len(key) >= _FUZZY_MIN_CHARS else None
 
 
+def _door(row: tuple[Any, ...]) -> Place:
+    kod, label, context, lat, lng, street_code, street_name, street_context = row
+    street = None if street_code is None else Place("ulice", int(street_code), street_name, street_context)
+    return Place(DOOR_LEVEL, int(kod), label, context, lat, lng, street=street)
+
+
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     unit_key, street_key = normalize_name(query), normalize_street_name(query)
     unit_prefix, unit_fuzzy = _arm(unit_key)
@@ -182,14 +217,22 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
+    street_part, slots = split_street_and_number(query)
+    domovni, _ = house_number(slots)
+    street_keys = [normalize_street_name(street_part)] if domovni is not None else []
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)
             cur.execute(_SUGGEST_SQL, params)
             rows = cur.fetchall()
+            doors: list[tuple[Any, ...]] = []
+            if street_keys:
+                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "domovni": domovni, "limit": limit})
+                doors = cur.fetchall()
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
         LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)
         raise SearchUnavailable from None
-    return [Place(level, int(code), name, context, lat, lng, _places(places))
-            for level, code, name, context, lat, lng, places in rows]
+    names = [Place(level, int(code), name, context, lat, lng, _places(places))
+             for level, code, name, context, lat, lng, places in rows]
+    return ([_door(row) for row in doors] + names)[:limit]
