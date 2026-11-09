@@ -187,10 +187,15 @@ def _chips(items: list[dict[str, Any]]) -> list[tuple[str, int, str, str | None]
     return [(i["level"], i["id"], i["name"], i["context"]) for i in items]
 
 
+def _praha(m: _Mirror) -> int:
+    """The town Praha under its okres and kraj. Returns its unit id."""
+    return m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
+                                                 m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+
+
 def _zizkov(m: _Mirror) -> dict[str, int]:
     """Two quarters named Žižkov: one in Praha, one in Kutná Hora. Returns their towns' unit ids."""
-    praha = m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
-                                                  m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+    praha = _praha(m)
     kutna_hora = m.unit("obec", KUTNA_HORA, "Kutná Hora", m.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora",
                                                                m.unit("kraj", STREDOCESKY, "Středočeský kraj")))
     m.unit("cast_obce", ZIZKOV_PRAHA, "Žižkov", praha)
@@ -249,12 +254,6 @@ def test_a_cadastral_area_a_cohesion_region_and_the_country_are_never_answered(m
 
 PRAHA_1, PRAHA_6, PRAHA_7 = 500054, 500178, 500186
 DEJVICE, VOKOVICE, BUBENEC, HRADCANY, JOSEFOV, HOLESOVICE = 400459, 400441, 490024, 490075, 127001, 490067
-
-
-def _praha(m: _Mirror) -> int:
-    """The town Praha under its okres and kraj. Returns its unit id."""
-    return m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
-                                                 m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
 
 
 def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mirror, client):
