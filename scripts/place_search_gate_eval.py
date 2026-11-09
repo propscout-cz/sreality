@@ -496,6 +496,17 @@ def _needs(percent: int, n: int) -> int:
     return -(-percent * n // 100)
 
 
+def _tally(ranks: list[int | None]) -> tuple[int, int, int, int]:
+    """Q2 c over own search's ranks: the top-5 and top-1 hits, and the ⌈0.97 N⌉ and ⌈0.90 N⌉ they need."""
+    n = len(ranks)
+    return (sum(1 for r in ranks if r is not None and r <= 5), sum(1 for r in ranks if r == 1),
+            _needs(97, n), _needs(90, n))
+
+
+def _word(ok: bool) -> str:
+    return "pass" if ok else "fail"
+
+
 def _wilson(hits: int, n: int) -> str:
     p = hits / n
     d = 1 + Z * Z / n
@@ -506,9 +517,7 @@ def _wilson(hits: int, n: int) -> str:
 
 def _block(say: _Out, label: str, scored: list[Scored]) -> tuple[bool, bool]:
     n = len(scored)
-    top5 = sum(1 for s in scored if s.own_rank is not None and s.own_rank <= 5)
-    top1 = sum(1 for s in scored if s.own_rank == 1)
-    needs5, needs1 = _needs(97, n), _needs(90, n)
+    top5, top1, needs5, needs1 = _tally([s.own_rank for s in scored])
     say(f"{label} · top-5: {top5} of {n} (needs {needs5}) · Wilson {_wilson(top5, n)}")
     say(f"{label} · top-1: {top1} of {n} (needs {needs1}) · Wilson {_wilson(top1, n)}")
     mapy1 = sum(1 for s in scored if s.question.best_rank == 1)
@@ -518,7 +527,7 @@ def _block(say: _Out, label: str, scored: list[Scored]) -> tuple[bool, bool]:
 
 
 def _rank(rows: list[Row] | None, place: tuple[str, int]) -> int | None:
-    found = [n for n, row in enumerate(rows or [], 1) if (row[0], row[1]) == place]
+    found = [n for n, (level, code, *_) in enumerate(rows or [], 1) if (level, code) == place]
     return found[0] if found else None
 
 
@@ -526,15 +535,13 @@ def _score_addresses(say: _Out, addresses: list[tuple[int, str]], answers: dict[
     """Q2 c's thresholds over the dictated questions: a hit is the house's door row; no strike, no Mapy figure."""
     ranks = [_rank(answers[text], (DOOR, kod)) for kod, text in addresses]
     n = len(ranks)
-    top5 = sum(1 for r in ranks if r is not None and r <= 5)
-    top1 = sum(1 for r in ranks if r == 1)
-    needs5, needs1 = _needs(97, n), _needs(90, n)
+    top5, top1, needs5, needs1 = _tally(ranks)
     say(f"addresses N = {n} · route errors {sum(1 for _, text in addresses if answers[text] is None)}")
     say(f"addresses · top-5: {top5} of {n} (needs {needs5})")
     say(f"addresses · top-1: {top1} of {n} (needs {needs1})")
-    verdict = "pass" if top5 >= needs5 and top1 >= needs1 else "fail"
-    say(f"addresses: top-5 {'pass' if top5 >= needs5 else 'fail'} · top-1 {'pass' if top1 >= needs1 else 'fail'}"
-        f" → {verdict}")
+    pass5, pass1 = top5 >= needs5, top1 >= needs1
+    verdict = _word(pass5 and pass1)
+    say(f"addresses: top-5 {_word(pass5)} · top-1 {_word(pass1)} → {verdict}")
     return verdict
 
 
@@ -571,8 +578,8 @@ def _label(level: str, name: str | None, context: str | None) -> str:
 def _top5(rows: list[Row] | None, place: tuple[str, int | None]) -> str:
     if rows is None:
         return "route error"
-    items = "".join(f"<li{' class=hit' if (r[0], r[1]) == place else ''}>{html.escape(_label(r[0], r[2], r[3]))}</li>"
-                    for r in rows[:5])
+    items = "".join(f"<li{' class=hit' if (level, code) == place else ''}>{html.escape(_label(level, name, context))}"
+                    "</li>" for level, code, name, context in rows[:5])
     return f"<ol>{items}</ol>" if items else "no row"
 
 
@@ -680,9 +687,9 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     unanswerable = [q for q in scorable if not registry.answerable[(q.level, q.code)]]
     if unanswerable:
         raise Stop(f"momc questions with no quarter pair at the current version: {len(unanswerable)} (pairs there:"
-                   f" {registry.pairs}); first confirm with a SELECT that no registry_versions row is newer than version"
-                   f" {registry.version} (doors are unversioned), then, with the operator's OK, re-dispatch the load's"
-                   f" finishing step (it writes to production): gh workflow run location_registry_load.yml"
+                   f" {registry.pairs}); first confirm with a SELECT that no registry_versions row is newer than"
+                   f" version {registry.version} (doors are unversioned), then, with the operator's OK, re-dispatch the"
+                   f" load's finishing step (it writes to production): gh workflow run location_registry_load.yml"
                    f" -f vintage={registry.vintage:%Y%m%d}; then confirm the pairs")
     numbers, scorable_numbers = {q.number for q in questions}, {q.number for q in scorable}
     for n in sorted(struck):
@@ -711,7 +718,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         if s.question.number in struck and s.own_rank == 1:
             say(f"strike {s.question.number} now answers top-1: strike dropped")
             struck.discard(s.question.number)
-    kept =[s for s in scored if s.question.number not in struck]
+    kept = [s for s in scored if s.question.number not in struck]
     say(f"route errors {sum(1 for q in scorable if answers[q.text] is None)}")
     say(f"struck {len(struck)}")
     say(f"N = {len(scored)} before strikes, {len(kept)} after")
@@ -721,9 +728,8 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     pass5, pass1 = _block(say, "after strikes", kept)
     say("Wilson: questions cluster by about four people, so this interval is too narrow")
     say("Mapy: biased upward: every pick is a row Mapy listed; a repeat keeps its best rank")
-    parts = {"questions": "pass" if pass5 and pass1 else "fail", "latency": "not measured",
-             "addresses": "not asked"}
-    say(f"questions: top-5 {'pass' if pass5 else 'fail'} · top-1 {'pass' if pass1 else 'fail'} → {parts['questions']}")
+    parts = {"questions": _word(pass5 and pass1), "latency": "not measured", "addresses": "not asked"}
+    say(f"questions: top-5 {_word(pass5)} · top-1 {_word(pass1)} → {parts['questions']}")
 
     if not args.no_latency:
         own_p50, complete = _own(io, say, ua, sent, run_start, run_end)
@@ -732,7 +738,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
             say("latency: incomplete: no verdict without both medians over their full spans and every request sent in"
                 " the log")
         else:
-            parts["latency"] = "pass" if own_p50 <= mapy_p50 else "fail"
+            parts["latency"] = _word(own_p50 <= mapy_p50)
             say(f"latency: own p50 {own_p50} ms {'≤' if own_p50 <= mapy_p50 else '>'} Mapy p50 {mapy_p50} ms →"
                 f" {'not slower' if own_p50 <= mapy_p50 else 'slower'} → {parts['latency']}")
     if addresses:
