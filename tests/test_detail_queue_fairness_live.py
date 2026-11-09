@@ -172,17 +172,18 @@ _MIN_AGE = 21600
 _CAP = 500
 
 
-def _seed_ad(conn: psycopg.Connection, source: str, nid: str) -> None:
+def _seed_ad(conn: psycopg.Connection, source: str, nid: str, *, page: bool = True) -> None:
     conn.execute(
         "INSERT INTO listings (source, source_id_native, source_url, raw_json, is_active) "
         "VALUES (%s, %s, %s, '{}'::jsonb, true)",
         (source, nid, f"https://x/{nid}"),
     )
-    conn.execute(
-        "INSERT INTO portal_raw_pages (source, source_id_native, source_url, page_kind, html, http_status, fetched_at) "
-        "VALUES (%s, %s, %s, 'detail', '<html></html>', 200, now() - interval '2 days')",
-        (source, nid, f"https://x/{nid}"),
-    )
+    if page:
+        conn.execute(
+            "INSERT INTO portal_raw_pages (source, source_id_native, source_url, page_kind, html, http_status, fetched_at) "
+            "VALUES (%s, %s, %s, 'detail', '<html></html>', 200, now() - interval '2 days')",
+            (source, nid, f"https://x/{nid}"),
+        )
 
 
 @pytest.fixture()
@@ -274,4 +275,10 @@ def test_an_ad_at_rest_does_not_hold_the_cap_from_one_that_can_be_read(conn, sou
         (source, other),
     )
     assert _candidates(conn, source, cap=1) == [other]
+
+
+def test_an_ad_with_no_stored_page_is_first_in_line_and_fails_nothing(conn, source, townless_ad):
+    # #2377: its fetch clock is -infinity, which psycopg cannot read; it failed the whole pass.
+    _seed_ad(conn, source, f"{source}-never", page=False)
+    assert _candidates(conn, source) == [f"{source}-never", townless_ad]
 

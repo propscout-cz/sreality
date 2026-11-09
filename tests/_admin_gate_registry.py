@@ -105,6 +105,9 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",
+    # The location position audit (migration 733): every ad's point kind, read by the admin list view and the
+    # service-role scorecard only.
+    "location_position_mv",
 )
 
 Kind = Literal["view", "matview", "function"]
@@ -215,6 +218,13 @@ UNGATED: dict[str, Ungated] = {
         ("630_one_browse_read_model.sql", "649_web_portal.sql", "658_rebuild_browse_list_without_notice.sql"),
         "Reads property_merge_events only to re-patch browse_list_next; EXECUTE revoked from public, anon and "
         "authenticated (590)."),
+    "location_position_mv": Ungated(
+        "matview", "acl", ("733_location_w6c_position_audit.sql",), _OPS_MATVIEW),
+    "location_quality_by_source": Ungated(
+        "view", "acl", ("733_location_w6c_position_audit.sql",),
+        "The location scorecard (698, restated by 733 with the position metric), read by the location gauge as "
+        "service_role; security invoker, every privilege revoked from public, anon and authenticated. The browser "
+        "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit_public."),
     "location_jobs": Ungated(
         "view", "acl", ("675_scheduled_jobs_expand.sql",),
         "The temporary alias of scheduled_jobs that keeps the pre-rename deployment on its lease; security invoker "

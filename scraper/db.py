@@ -559,10 +559,11 @@ def stamp_derived_artifact(
     rows: int | None = None,
     duration_ms: int | None = None,
 ) -> None:
-    """Stamp a registered NON-matview artifact (migration 441) from Python. Callers pass
-    the connection first and the artifact name as a string literal second — the one call
-    shape the stamping rail reads — so a name is checked against `derived_artifacts`
-    offline before it can stamp nothing."""
+    """Stamp a registered artifact that no refresh stamps (migration 441) from Python: a
+    non-matview, or a matview its producer found current without refreshing it (the rent
+    map's quiet month). Callers pass the connection first and the artifact name as a
+    string literal second — the one call shape the stamping rail reads — so a name is
+    checked against `derived_artifacts` offline before it can stamp nothing."""
     with conn.cursor() as cur:
         cur.execute(STAMP_DERIVED_ARTIFACT_SQL, (name, rows, duration_ms))
 
@@ -1213,13 +1214,14 @@ def index_summary_native(
     source: str,
     native_ids: Iterable[str],
 ) -> dict[str, dict[str, Any]]:
-    """Fetch (surrogate id, sreality_id, price_czk, last_seen_at) keyed by
-    source_id_native for one portal.
+    """Fetch (surrogate id, sreality_id, price_czk, last_seen_at, area_m2, category_main,
+    category_type) keyed by source_id_native for one portal.
 
     The index walk's sighting diff (`portal_runner.reconcile_sightings`) looks
     rows up by (source, source_id_native) to decide price-change refetch — and to
     resolve the surrogate `id` set for touch_listings_by_id. The `"id"` value is the identity
-    to carry forward; `"sreality_id"` is legacy (NULL for post-Gate-2 rows).
+    to carry forward; `"sreality_id"` is legacy (NULL for post-Gate-2 rows). The area and
+    category are what a card that states a rate is resolved against (#2355).
     Ids are deduped and looked up INDEX_SUMMARY_CHUNK at a time, so one huge
     category (ceskereality, ~21k) never becomes one statement.
     """
@@ -1231,15 +1233,18 @@ def index_summary_native(
         for start in range(0, len(ids), INDEX_SUMMARY_CHUNK):
             cur.execute(
                 """
-                SELECT source_id_native, id, sreality_id, price_czk, last_seen_at
+                SELECT source_id_native, id, sreality_id, price_czk, last_seen_at,
+                       area_m2, category_main, category_type
                 FROM listings
                 WHERE source = %s AND source_id_native = ANY(%s)
                 """,
                 (source, ids[start : start + INDEX_SUMMARY_CHUNK]),
             )
             out.update(
-                (native, {"id": lid, "sreality_id": pk, "price_czk": price, "last_seen_at": ls})
-                for native, lid, pk, price, ls in cur.fetchall()
+                (native, {"id": lid, "sreality_id": pk, "price_czk": price, "last_seen_at": ls,
+                          "area_m2": None if area is None else float(area),
+                          "category_main": cm, "category_type": ct})
+                for native, lid, pk, price, ls, area, cm, ct in cur.fetchall()
             )
     return out
 
@@ -1969,6 +1974,7 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 # day, unless a page or payload has landed since the give-up. Out of this set, not
 # just out of the enqueue: it is the oldest by that frozen clock, and would hold
 # the per-portal cap from ads that can still be read.
+# An ad with no page or payload sorts first; its -infinity clock is never returned (#2377).
 _LOCATION_REFETCH_CANDIDATES_SQL = """
 WITH cand AS (
     SELECT l.source,
@@ -2015,7 +2021,7 @@ old AS (
             AND dc.completed_at >= c.last_fetch_at
       )
 )
-SELECT source, source_id_native, source_url, price_czk, last_fetch_at, source_total
+SELECT source, source_id_native, source_url, price_czk, source_total
 FROM old
 WHERE rn <= %(cap)s::int
 ORDER BY source, rn
@@ -2054,8 +2060,7 @@ def location_refetch_candidates(
             "native_id": str(r[1]),
             "detail_ref": detail_ref(r[0], r[2]),
             "price_czk": r[3],
-            "last_fetch_at": r[4],
-            "source_total": int(r[5]),
+            "source_total": int(r[4]),
         }
         for r in rows
     ]

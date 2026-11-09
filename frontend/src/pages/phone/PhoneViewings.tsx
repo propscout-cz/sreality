@@ -4,14 +4,14 @@
  * this tab only reads: a viewing is booked, moved and dropped in its property's
  * Poznámky section.
  *
- * THE DAY. Today on first open; the arrows and a sideways swipe step one day,
- * the title opens the date wheel, "Dnes" comes back, and the foot of a day jumps
- * to the nearest day that holds a viewing either way (an empty day offers the
- * next one). Day and scope live in the URL, replaced rather than pushed, so
- * opening a property and coming back lands on the same day.
- *
- * THE SCOPE. Nadcházející (today on; the default) or Vše. Upcoming never steps
- * before today; today's page keeps its earlier viewings, under a "now" rule.
+ * THE DAY. Today on first open; the arrows and a sideways swipe step one day
+ * either way, the title opens the date wheel, "Dnes" comes back, and the foot of
+ * a day jumps to the nearest day that holds a viewing either way (an empty day
+ * offers both). It is one calendar: the viewings I have been to are a day back,
+ * never behind a mode (2026-11-07). The day lives in the URL, replaced rather
+ * than pushed, so opening a property and coming back lands on the same day. A
+ * viewing whose time has passed reads as past on any day; today's page draws a
+ * "now" rule between.
  *
  * THE READS. GET /viewings (the caller's own, earliest first), the rows'
  * properties from `properties_public`, their covers from the hydration layer,
@@ -22,7 +22,6 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { readFailed } from '@/components/ReadFailedMark';
-import { SegmentedBar } from '@/components/controls';
 import { PHOTO_DARK } from '@/components/phone/CardPhotoStrip';
 import { feedLayout, feedPrice } from '@/components/phone/FeedCard';
 import { usePipelineLook } from '@/components/phone/MarginMarks';
@@ -37,26 +36,11 @@ import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf } from '@/lib/measure';
 import { curationKeys, fetchPropertySummaries, type PropertySummary } from '@/lib/queries';
 import type { Note } from '@/lib/types';
-import {
-  byDay,
-  dayLine,
-  dayTitle,
-  neighbours,
-  scoped,
-  shortDay,
-  viewingSlot,
-  type ViewingScope,
-} from '@/lib/viewings';
+import { byDay, dayLine, dayTitle, hasPassed, isDayKey, neighbours, shortDay, viewingSlot } from '@/lib/viewings';
 
 const NO_NOTES: Note[] = [];
 const NO_SUMMARIES = new Map<number, PropertySummary>();
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SWIPE_PX = 60;
-
-const SCOPES: ReadonlyArray<{ value: ViewingScope; label: string }> = [
-  { value: 'upcoming', label: 'Nadcházející' },
-  { value: 'all', label: 'Vše' },
-];
 
 export const viewingsWord = (n: number): string => `${n} ${czPlural(n, 'prohlídka', 'prohlídky', 'prohlídek')}`;
 
@@ -77,25 +61,16 @@ export default function PhoneViewings() {
   const now = useMinuteClock();
   const todayKey = pragueDayKey(now);
   const [params, setParams] = useSearchParams();
-  const scope: ViewingScope = params.get('scope') === 'all' ? 'all' : 'upcoming';
   const asked = params.get('day');
-  const day = asked && DAY_RE.test(asked) && (scope === 'all' || asked >= todayKey) ? asked : todayKey;
-  const canBack = scope === 'all' || day > todayKey;
+  const day = asked && isDayKey(asked) ? asked : todayKey;
 
-  const go = (next: { day?: string; scope?: ViewingScope }) => {
+  const go = (d: string) => {
     const p = new URLSearchParams(params);
-    const sc = next.scope ?? scope;
-    const d = sc === 'upcoming' && (next.day ?? day) < todayKey ? todayKey : (next.day ?? day);
     if (d === todayKey) p.delete('day');
     else p.set('day', d);
-    if (sc === 'all') p.set('scope', 'all');
-    else p.delete('scope');
     setParams(p, { replace: true });
   };
-  const step = (by: number) => {
-    if (by < 0 && !canBack) return;
-    go({ day: shiftDay(day, by) });
-  };
+  const step = (by: number) => go(shiftDay(day, by));
 
   const viewingsQ = useQuery({
     queryKey: curationKeys.viewings,
@@ -103,8 +78,8 @@ export default function PhoneViewings() {
     staleTime: 30_000,
   });
   const all = viewingsQ.data?.data ?? NO_NOTES;
-  const inScope = useMemo(() => scoped(all, scope, now), [all, scope, now]);
-  const days = useMemo(() => byDay(inScope), [inScope]);
+  const days = useMemo(() => byDay(all), [all]);
+  const upcoming = useMemo(() => all.filter((v) => !hasPassed(v.viewing_at!, now)).length, [all, now]);
   const rows = days.get(day) ?? NO_NOTES;
   const { prev, next } = neighbours([...days.keys()], day);
 
@@ -123,7 +98,7 @@ export default function PhoneViewings() {
 
   const loaded = viewingsQ.data !== undefined;
   const failed = readFailed(viewingsQ);
-  usePhoneHeaderAside(loaded && !failed ? viewingsWord(inScope.length) : null);
+  usePhoneHeaderAside(loaded && !failed ? `${upcoming} v plánu` : null);
 
   /* A sideways swipe flips the day: wide enough, and more across than down. */
   const touch = useRef<{ x: number; y: number } | null>(null);
@@ -164,54 +139,43 @@ export default function PhoneViewings() {
   return (
     <div>
       <div className="sticky top-14 z-20 border-b border-[var(--color-rule)] bg-[var(--color-paper)]">
-        <div className="flex items-center gap-2 px-4 pt-3">
-          <SegmentedBar
-            tone="phone"
-            label="Které prohlídky"
-            options={SCOPES}
-            value={scope}
-            onChange={(v) => go({ scope: v })}
-          />
-          {day !== todayKey && (
-            <button
-              type="button"
-              onClick={() => go({ day: todayKey })}
-              className="ml-auto inline-flex h-8 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-            >
-              Dnes
-            </button>
-          )}
-        </div>
         <div className="flex h-16 items-center gap-1 px-1">
           <button
             type="button"
             aria-label="Předchozí den"
             onClick={() => step(-1)}
-            disabled={!canBack}
-            className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--color-copper)] disabled:text-[var(--color-ink-4)]"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--color-copper)]"
           >
             <BackIcon className="h-[22px] w-[22px]" />
           </button>
           {/* The title is the date wheel's face: the transparent field over it opens the picker. */}
           <label className="relative flex min-w-0 flex-1 flex-col items-center justify-center text-center">
-            <span className="truncate font-display text-[20px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)] first-letter:uppercase">
+            <span className="max-w-full truncate font-display text-[20px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)] first-letter:uppercase">
               {title}
             </span>
-            <span className="truncate font-mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
+            <span className="max-w-full truncate font-mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
               {[relativeTitle ? dayLine(day) : null, countLine].filter(Boolean).join(' · ')}
             </span>
             <input
               type="date"
               aria-label="Vybrat den"
               value={day}
-              min={scope === 'upcoming' ? todayKey : undefined}
               onChange={(e) => {
                 const picked = e.target.value;
-                if (DAY_RE.test(picked)) go({ day: picked });
+                if (isDayKey(picked)) go(picked);
               }}
               className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             />
           </label>
+          {/* Beside the next arrow, so leaving today moves neither arrow under a tapping thumb; the
+           * hit area is the arrows' 44px around the 32px pill. */}
+          {day !== todayKey && (
+            <button type="button" onClick={() => go(todayKey)} className="group flex h-11 shrink-0 items-center px-0.5">
+              <span className="inline-flex h-8 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-2.5 text-[13px] text-[var(--color-ink-2)] group-active:bg-[var(--color-inset)]">
+                Dnes
+              </span>
+            </button>
+          )}
           <button
             type="button"
             aria-label="Další den"
@@ -223,7 +187,13 @@ export default function PhoneViewings() {
         </div>
       </div>
 
-      <div ref={pageRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="min-h-[60dvh]">
+      <div
+        ref={pageRef}
+        data-testid="viewings-day"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+        className="min-h-[60dvh]"
+      >
         {failed ? (
           <div className="pt-4">
             <RollEmpty
@@ -235,17 +205,11 @@ export default function PhoneViewings() {
         ) : !loaded ? (
           <DaySkeleton />
         ) : rows.length === 0 ? (
-          <EmptyDay
-            hasAny={all.length > 0}
-            next={next}
-            prev={scope === 'all' ? prev : null}
-            todayKey={todayKey}
-            onGo={(d) => go({ day: d })}
-          />
+          <EmptyDay hasAny={all.length > 0} next={next} prev={prev} todayKey={todayKey} onGo={go} />
         ) : (
           <CardHydrationProvider listingIds={listingIds} renders={{ covers: true }}>
             <DayList rows={rows} summaries={summaries} now={now} isToday={day === todayKey} />
-            <DayJumps prev={canBack ? prev : null} next={next} todayKey={todayKey} onGo={(d) => go({ day: d })} />
+            <DayJumps prev={prev} next={next} todayKey={todayKey} onGo={go} />
           </CardHydrationProvider>
         )}
       </div>
@@ -264,15 +228,17 @@ function DayList({
   now: Date;
   isToday: boolean;
 }) {
-  /* Today's "now" rule sits before the first viewing still ahead (after the last when none is). */
-  const ahead = rows.findIndex((v) => new Date(v.viewing_at!) > now);
-  const nowAt = isToday ? (ahead === -1 ? rows.length : ahead) : -1;
+  /* Rows before the first viewing still ahead are past, on any day; today's "now" rule sits
+   * there (after the last row when none is ahead). */
+  const ahead = rows.findIndex((v) => !hasPassed(v.viewing_at!, now));
+  const pastUntil = ahead === -1 ? rows.length : ahead;
+  const nowAt = isToday ? pastUntil : -1;
   return (
     <ol>
       {rows.map((v, i) => (
         <Fragment key={v.id}>
           {i === nowAt && <NowRule now={now} />}
-          <ViewingRow note={v} summary={summaries.get(v.property_id) ?? null} past={isToday && i < nowAt} />
+          <ViewingRow note={v} summary={summaries.get(v.property_id) ?? null} past={i < pastUntil} />
         </Fragment>
       ))}
       {nowAt === rows.length && <NowRule now={now} />}
@@ -414,6 +380,10 @@ function EmptyDay({
   todayKey: string;
   onGo: (day: string) => void;
 }) {
+  /* The next viewing leads; with none ahead, the last one before is the way back. */
+  const PRIMARY =
+    'mt-5 inline-flex h-11 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]';
+  const QUIET = 'mt-2 inline-flex h-11 items-center gap-1 px-3 text-[13px] text-[var(--color-copper)]';
   return (
     <div className="flex flex-col items-center px-6 pb-6 pt-10 text-center">
       <CalendarIcon className="h-9 w-9 text-[var(--color-ink-4)]" />
@@ -426,23 +396,15 @@ function EmptyDay({
           : 'Prohlídku naplánujete na stránce nemovitosti v sekci Poznámky.'}
       </p>
       {next && (
-        <button
-          type="button"
-          onClick={() => onGo(next)}
-          className="mt-5 inline-flex h-11 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
-        >
+        <button type="button" onClick={() => onGo(next)} className={PRIMARY}>
           Další prohlídka · {shortDay(next, todayKey)}
           <ChevronIcon className="h-4 w-4" />
         </button>
       )}
       {prev && (
-        <button
-          type="button"
-          onClick={() => onGo(prev)}
-          className="mt-2 inline-flex h-11 items-center gap-1 px-3 text-[13px] text-[var(--color-copper)]"
-        >
+        <button type="button" onClick={() => onGo(prev)} className={next ? QUIET : PRIMARY}>
           <BackIcon className="h-4 w-4" />
-          Předchozí · {shortDay(prev, todayKey)}
+          Předchozí prohlídka · {shortDay(prev, todayKey)}
         </button>
       )}
     </div>

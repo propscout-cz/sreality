@@ -10,10 +10,15 @@ export function prettyPhone(p: string): string {
   return p;
 }
 
-/* The dialable form of a stored number: `tel:+420…` for the 12-digit Czech form the
- * store normalises to, the raw digits otherwise. */
+/* The dialable form of a stored number: `+420…` (E.164) for the 12-digit Czech form the
+ * store normalises to, the raw digits otherwise. The call link and the saved contact
+ * both dial this. */
+export function dialable(p: string): string {
+  return p.startsWith('420') && p.length === 12 ? `+${p}` : p;
+}
+
 export function telHref(p: string): string {
-  return p.startsWith('420') && p.length === 12 ? `tel:+${p}` : `tel:${p}`;
+  return `tel:${dialable(p)}`;
 }
 
 /* Broker intelligence read layer — every read goes through the FastAPI service

@@ -555,11 +555,27 @@ def test_every_count_cell_reads_the_count_that_colours_it() -> None:
     assert "withheld" not in town["facts"], "measured once, in its own cell"
     assert cells["ceskereality/outside"]["facts"]["disputed"] == {
         "pin_outside_obec": 157, "pin_off_street": 141, "country_conflict": 6, "pin_outside_cz": 4}
-    assert cells["served/outside"]["facts"]["by_portal"] == {"bazos": 10_545, "ceskereality": 113}
-    assert cells["served/town_withheld"]["facts"]["by_portal"] == {"ceskereality": 20}
     assert cells["sreality/ku"]["message"] == (
         f"1 Czech ads at address grain have no cadastral area (KÚ) at {RESOLVER_VERSION}: the "
         "registry's KÚ geometry is missing at its version")
+
+
+def test_the_town_cell_stores_the_position_grid_shown_not_judged() -> None:
+    """W6-c: the view's `position` rows (class `kind/grain`) land on the portal's town cell as {kind: {grain: n}},
+    whose sum is the cell's `ads`. Shown, not judged: an `unexplained` point colours nothing (until ruled)."""
+    grid = {"door/address": 40, "own_pin/street": 30, "own_pin/quarter": 20, "town_point/obec": 6,
+            "unexplained/street": 3, "none/unknown": 1}
+    rows = [("listing", "bazos", "position", cls, n, 100, None, None, None, None) for cls, n in grid.items()]
+    out, _ = _location(_stock(_portal("bazos", ads=100), rows))
+    town = _cells(out)["bazos/town"]
+    assert town["facts"]["positions"] == {
+        "door": {"address": 40}, "own_pin": {"street": 30, "quarter": 20}, "town_point": {"obec": 6},
+        "unexplained": {"street": 3}, "none": {"unknown": 1}}
+    assert sum(n for g in town["facts"]["positions"].values() for n in g.values()) == town["facts"]["ads"]
+    assert town["status"] == "ok" and out["status"] == "ok"
+    assert "positions" not in _cells(out)["bazos/town_withheld"]["facts"]
+    assert _cells(_location()[0])["sreality/town"]["facts"]["positions"] == {}, "no position rows: an empty grid"
+    assert "positions" not in _cells(out)["served/town"]["facts"], "the served cohort has no position metric"
 
 
 def test_the_town_share_leaves_foreign_ads_out_of_its_denominator() -> None:
@@ -611,14 +627,15 @@ def test_the_street_floor_is_judged_on_the_upper_bound_over_min_n(share: float, 
     assert cell["facts"]["share"] == round(hits / n, 4)
     if status != "unknown":
         assert cell["value"] == round(100 * hits / n, 2)
-    assert set(cell["facts"]["grains"]) == {"address", "street", "quarter", "obec"}
+    # W6-c: nothing reads the grain mix off this cell any more (the page draws the town cell's positions, whose
+    # column totals are these counts), so it is not stored twice.
+    assert "grains" not in cell["facts"]
 
 
 def test_served_street_is_the_fleet_share_against_its_own_floor() -> None:
     stock = _stock(*[_portal(p, cohort="served", ads=10_000, street_share=0.40) for p in _LIVE])
     cell = _cells(_location(stock)[0])["served/street"]
     assert (cell["status"], cell["value"], cell["facts"]["floor"]) == ("fail", 40.0, 0.44)
-    assert cell["facts"]["by_portal"]["bazos"] == 0.4
 
 
 @pytest.mark.parametrize("previous, status", [

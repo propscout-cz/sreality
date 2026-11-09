@@ -49,6 +49,7 @@ from scraper.portal import (
     walk_coverage,
 )
 from scraper.portal_identity import Resolved
+from scraper.price_reading import PriceReading, resolve
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
 from scraper.rate_limit import OUR_REFUSALS, RateLimiter
 from scraper.scraped_listing import ScrapedListing
@@ -263,8 +264,21 @@ class PortalDefaults:
         return None
 
 
+# What a card states: a CZK total, or a reading that may be a rate or in EUR (#2355).
+IndexPrice = int | PriceReading | None
 # What one walk (or one probe page) saw: native_id -> (detail_ref, index price).
-Sightings = Mapping[str, tuple[str | None, int | None]]
+Sightings = Mapping[str, tuple[str | None, IndexPrice]]
+
+
+def _index_total(price: IndexPrice, row: Mapping[str, Any] | None) -> int | None:
+    """The card's total, resolved like the detail against the row's stored area and category."""
+    if not isinstance(price, PriceReading):
+        return db.sane_price_czk(price)
+    row = row or {}
+    return db.sane_price_czk(resolve(
+        price, area_m2=row.get("area_m2"), category_main=row.get("category_main"),
+        category_type=row.get("category_type"),
+    ).total_czk)
 
 
 def reconcile_sightings(
@@ -277,11 +291,11 @@ def reconcile_sightings(
     retry_first: Callable[[Any, list[str]], set[str]] | None = None,
 ) -> dict[str, int]:
     """Touch every sighted listing we hold and enqueue new + repriced ids (rules #3/#4/#19); conn=None is a dry run."""
-    prices = {nid: db.sane_price_czk(price) for nid, (_, price) in sightings.items()}
     existing = (
         db.index_summary_native(conn, source, list(sightings))
         if conn is not None and sightings else {}
     )
+    prices = {nid: _index_total(price, existing.get(nid)) for nid, (_, price) in sightings.items()}
     if conn is not None and existing:
         db.touch_listings_by_id(conn, [row["id"] for row in existing.values()])
     new = [nid for nid in sightings if nid not in existing]

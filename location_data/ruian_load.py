@@ -18,7 +18,8 @@ Mechanism, in order (04 C1.7):
   7. Boundaries for this version (`ruian_boundaries.load_pack`), unchanged units carried.
   8. Rebuild the gazetteer for this version — once, after the pack has named the units.
   9. The completeness assertion: every member stát, okres, obec and KÚ has pip + authoritative.
- 10. Publish = flip `is_current` in one short transaction; refresh `rent_map_cells`.
+ 10. Publish = flip `is_current` in one short transaction; land the městská část → quarter pairs;
+     refresh `rent_map_cells` and `place_facts`.
 
 What is NOT atomic: steps 6-8 write the mirror in place, so a reader keyed on `valid_to IS
 NULL` rather than on a pinned registry version sees a staged version's unit, street and
@@ -731,6 +732,37 @@ def upsert_relations(conn: psycopg.Connection, stage: Staging, version_id: int) 
         )
 
 
+# A městská část's quarters are the části its open doors stand in (#2380: no polygon, no share). A load re-points doors
+# in place while it closes and reopens units, so a door may hold either row of one: both ends go door -> row -> stable
+# CODE -> the row that is a MEMBER of this version (ruian_boundaries' predicate), the row its name index names, even
+# while a later version sits staged (the doors themselves are unversioned: as the last load left them). The type
+# reads `<from>_<to>`, not `katastr_in_obec`'s `<from>_in_<to>`: a quarter can straddle two městské části, so neither
+# contains the other (#2461's zsj pairs follow it).
+_MOMC_QUARTERS_SQL = """
+INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)
+SELECT DISTINCT m.id, q.id, 'momc_cast_obce', %(v)s::bigint
+  FROM (SELECT DISTINCT momc_unit_id, cast_obce_unit_id FROM ruian_address_points WHERE valid_to IS NULL) d
+  JOIN ruian_admin_units dm ON dm.id = d.momc_unit_id
+  JOIN ruian_admin_units dq ON dq.id = d.cast_obce_unit_id
+  JOIN ruian_admin_units m ON m.level = 'momc' AND m.code = dm.code
+   AND m.first_version_id <= %(v)s::bigint AND m.last_version_id >= %(v)s::bigint
+   AND (m.valid_to IS NULL OR m.last_version_id > %(v)s::bigint)
+  JOIN ruian_admin_units q ON q.level = 'cast_obce' AND q.code = dq.code
+   AND q.first_version_id <= %(v)s::bigint AND q.last_version_id >= %(v)s::bigint
+   AND (q.valid_to IS NULL OR q.last_version_id > %(v)s::bigint)
+ON CONFLICT DO NOTHING
+"""
+
+
+def write_momc_quarters(conn: psycopg.Connection, version_id: int) -> int:
+    """Own place search's shortcut rows (#2450): each městská část's quarters at this version, from its open doors."""
+    with conn.cursor() as cur:
+        cur.execute(_MOMC_QUARTERS_SQL, {"v": version_id})
+        landed = cur.rowcount
+    LOG.info("RUIAN momc quarter pairs version=%s new=%d", version_id, landed)
+    return landed
+
+
 def upsert_streets(conn: psycopg.Connection, stage: Staging, version_id: int,
                    source_date: datetime.date) -> int:
     """Streets, SCD-2 like units. Names normalized in Python with the street-word rule."""
@@ -985,6 +1017,12 @@ def refresh_rent_map_cells(conn: psycopg.Connection) -> None:
     db.refresh_matview(conn, "rent_map_cells")
 
 
+def refresh_place_facts(conn: psycopg.Connection) -> None:
+    """Own place search's fly-to points (migration 738) read the current version's polygons and the open doors,
+    so they move only once that version is live. This is their only producer."""
+    db.refresh_matview(conn, "place_facts")
+
+
 # ---------- dry run ----------
 
 
@@ -1095,11 +1133,15 @@ def restore_artifacts(
 
 def finish(conn: psycopg.Connection, version_id: int, *, keep_staging: bool) -> None:
     """The steps after the pointer swap, redone by a re-dispatch of a current vintage:
-    drop the staging relations first, so a failing refresh cannot strand them, then
-    rebuild MF's rent cells."""
+    drop the staging relations first, so a failing step cannot strand them, land the
+    městská část → quarter pairs (own place search answers no shortcut until they do),
+    then rebuild MF's rent cells and own place search's fly-to points. A failing step
+    skips every one after it; a re-dispatch heals them all."""
     if not keep_staging:
         drop_staging(conn, Staging.for_version(version_id))
+    write_momc_quarters(conn, version_id)
     refresh_rent_map_cells(conn)
+    refresh_place_facts(conn)
 
 
 def run(

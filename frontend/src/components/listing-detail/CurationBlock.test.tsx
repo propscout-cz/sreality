@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider, useQuery, type QueryKey } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { ArtifactLink, Collection, Note, Tag } from '@/lib/types';
+import type { ArtifactLink, Collection, Note, PipelineStage, Tag } from '@/lib/types';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -27,15 +27,20 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchAttachmentBlob: vi.fn(),
   deleteAttachment: vi.fn(),
   listCollections: vi.fn(),
+  addPipelineCard: vi.fn(),
+  movePipelineCard: vi.fn(),
 }));
 
 vi.mock('@/lib/queries', async (orig) => ({
   ...(await orig<typeof import('@/lib/queries')>()),
   fetchPropertyTagMemberSet: vi.fn(),
   fetchPropertyCollectionMemberSet: vi.fn(),
+  fetchPipelineStages: vi.fn(),
+  fetchPipelineMembers: vi.fn(),
 }));
 
 import {
+  addPipelineCard,
   createPropertyNote,
   deleteAttachment,
   deletePropertyArtifactLink,
@@ -45,14 +50,18 @@ import {
   listCollections,
   listPropertyNotes,
   listTags,
+  movePipelineCard,
   setPropertyArtifactLink,
   updatePropertyNote,
   uploadAttachment,
 } from '@/lib/api';
 import {
   curationKeys,
+  fetchPipelineMembers,
+  fetchPipelineStages,
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
+  type PipelineMembership,
 } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { revalidateTables, type SyncTable } from '@/lib/curationSync';
@@ -87,6 +96,8 @@ function mockReads() {
   vi.mocked(fetchPropertyTagMemberSet).mockResolvedValue(new Map());
   vi.mocked(listCollections).mockResolvedValue({ data: [], total: 0 });
   vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  vi.mocked(fetchPipelineStages).mockResolvedValue([]);
+  vi.mocked(fetchPipelineMembers).mockResolvedValue(new Map());
 }
 
 function renderBlock() {
@@ -184,6 +195,43 @@ describe('<CurationBlock> note counts', () => {
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     await user.click(screen.getByRole('button', { name: 'Smazat' }));
     await waitFor(() => expect(counts).toHaveBeenCalledTimes(3));
+  });
+});
+
+/* Operator ruling 2026-11-06: the list is cut by HEIGHT (components/Expandable), not to the
+ * newest three, so every note is on the page and a tall list carries "Zobrazit více". */
+describe('<CurationBlock> a long notes list', () => {
+  const notes = Array.from({ length: 5 }, (_, i) => ({ ...NOTE, id: 20 + i, body: `Poznámka ${i + 1}` }));
+
+  it('keeps every note on the page and cuts a tall list until opened', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: notes } as never);
+    /* jsdom lays nothing out: the list reports more content than its cut shows. */
+    const tall = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(900);
+    const cut = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(384);
+    try {
+      renderWithReads();
+      for (const n of notes) expect(await screen.findByText(n.body)).toBeInTheDocument();
+      const list = screen.getByText('Poznámka 5').closest('ul')!.parentElement!;
+      expect(list).toHaveStyle({ maxHeight: '24rem', overflow: 'hidden' });
+      expect(screen.queryByRole('button', { name: /Zobrazit všechny poznámky/ })).toBeNull();
+
+      await user.click(screen.getByRole('button', { name: 'Zobrazit více poznámek' }));
+      expect(list).not.toHaveStyle({ maxHeight: '24rem' });
+      expect(screen.getByRole('button', { name: 'Zobrazit méně poznámek' })).toHaveAttribute('aria-expanded', 'true');
+    } finally {
+      tall.mockRestore();
+      cut.mockRestore();
+    }
+  });
+
+  it('offers no toggle when the list fits', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: notes } as never);
+    renderWithReads();
+    expect(await screen.findByText('Poznámka 5')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zobrazit více poznámek' })).toBeNull();
   });
 });
 
@@ -882,6 +930,99 @@ describe('<CurationBlock> viewings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
     expect(screen.getByText('Smazat prohlídku?')).toBeInTheDocument();
+  });
+});
+
+/* Operator 2026-11-06 (#2429): a viewing date added to a property whose card is not at the
+ * board's viewing stage (the stage marked `viewing`, migration 734) offers to put it there. */
+describe('<CurationBlock> the viewing stage offer', () => {
+  const stage = (id: number, position: number, over: Partial<PipelineStage> = {}): PipelineStage => ({
+    id, key: `s${id}`, label: `${position}. Stage`, position, color: null,
+    is_terminal: false, is_entry: position === 1, code: null, role: null, ...over,
+  });
+  const BOARD = [stage(1, 1, { label: '1. For Review' }), stage(3, 3, { role: 'viewing', label: '3. For Visit' }), stage(4, 4)];
+  const at = (stage_id: number): Map<number, PipelineMembership> =>
+    new Map([[42, { property_id: 42, stage_id, stage_label: '', stage_color: null, stage_code: null, stage_position: stage_id, is_terminal: false }]]);
+
+  async function bookViewing(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'Naplánovat prohlídku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Den prohlídky'), { target: { value: '2030-05-14' } });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '14:30' } });
+    await user.click(screen.getByRole('button', { name: 'Uložit prohlídku' }));
+  }
+
+  beforeEach(() => {
+    mockReads();
+    vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
+    vi.mocked(fetchPipelineStages).mockResolvedValue(BOARD);
+    vi.mocked(movePipelineCard).mockReset().mockResolvedValue({ property_id: 42, stage_id: 3, stage_key: 's3' });
+    vi.mocked(addPipelineCard).mockReset().mockResolvedValue({ property_id: 42, stage_key: 's3', added: true });
+  });
+
+  it('offers to move a card from an earlier stage, and moves it on yes', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    renderWithReads();
+    await bookViewing(user);
+    const dialog = await screen.findByRole('dialog', { name: 'Přesunout do fáze prohlídky?' });
+    expect(dialog).toHaveTextContent('Nemovitost je ve fázi „1. For Review“. Přesunout ji do fáze „3. For Visit“?');
+    await user.click(within(dialog).getByRole('button', { name: 'Přesunout' }));
+    await waitFor(() => expect(movePipelineCard).toHaveBeenCalledWith(42, 3));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('adds a property that is not on the board straight at the viewing stage', async () => {
+    const user = userEvent.setup();
+    renderWithReads();
+    await bookViewing(user);
+    const dialog = await screen.findByRole('dialog', { name: 'Přidat do fáze prohlídky?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Přidat' }));
+    await waitFor(() => expect(addPipelineCard).toHaveBeenCalledWith(42, { actAs: undefined, stage_id: 3 }));
+    expect(movePipelineCard).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing on no, and starts and ends its focus where no key can move a deal', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    renderWithReads();
+    await bookViewing(user);
+    /* It opens as the save lands: focus starts on "no", so a key still pressed never moves a deal. */
+    const no = await screen.findByRole('button', { name: 'Ne, nechat' });
+    await waitFor(() => expect(no).toHaveFocus());
+    await user.keyboard('{Enter}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(movePipelineCard).not.toHaveBeenCalled();
+    /* The save that asked has gone: focus comes back to the notes section, not into a field. */
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('DIV'));
+    expect(document.activeElement?.contains(screen.getByRole('textbox', { name: 'Poznámky' }))).toBe(true);
+  });
+
+  it('stays silent at a later open stage', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(4));
+    renderWithReads();
+    await bookViewing(user);
+    await waitFor(() => expect(createPropertyNote).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers it when a date is added to a plain note, and not for a plain note saved', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPipelineMembers).mockResolvedValue(at(1));
+    vi.mocked(updatePropertyNote).mockReset().mockResolvedValue(NOTE as never);
+    renderWithReads();
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    await user.type(screen.getByRole('textbox', { name: 'Upravit poznámku' }), ' Znovu.');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    await user.click(screen.getByRole('button', { name: 'Prohlídka' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('dialog', { name: 'Přesunout do fáze prohlídky?' })).toBeInTheDocument();
   });
 });
 

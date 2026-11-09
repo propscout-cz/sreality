@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
 from functools import partial
 from html import unescape
 from typing import Any
@@ -46,7 +47,7 @@ from scraper.area import (
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
 from scraper.portal_identity import native_id
-from scraper.price_text import is_per_area_price
+from scraper.price_reading import PriceReading, read_price_text, resolve
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import street_from_locality
 
@@ -161,7 +162,6 @@ _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
 _INT_RE = re.compile(r"(-?\d+)")
-_PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
 # data-gps DMS pair: "50°05'26.1"N,14°29'33.4"E" (entities already unescaped).
 # Seconds are optional and may read 60 (remax rounds oddly); deg+min/60+sec/3600
 # absorbs that without a bogus point.
@@ -181,7 +181,7 @@ _THUMB_SUFFIX_RE = re.compile(r"_th\d+(?=\.\w+$)")
 # match is a DIFFERENT listing in a different town (W0 item 0d; it reached
 # listings.street on live rows). The subject's own address line is the
 # `.pd-header__address` h2; data-address is kept only as raw evidence.
-_ADVERT_PRICE_RE = re.compile(r'data-advert-price="(\d+)"')
+_ADVERT_PRICE_RE = re.compile(r'data-advert-price="(\d+(?:\.\d+)?)"')
 _GPS_ATTR_RE = re.compile(r'data-gps="([^"]*)"')
 _ADDRESS_ATTR_RE = re.compile(r'data-address="([^"]*)"')
 
@@ -304,69 +304,35 @@ def parse_dms_pair(text: str | None) -> tuple[float | None, float | None]:
     return None, None
 
 
-def _parse_price(text: str | None, category_type: str | None) -> tuple[int | None, str | None]:
-    unit = "za mesic" if category_type == "pronajem" else "za nemovitost"
-    if not text:
-        return None, unit
+_NO_PRICE: tuple[str, ...] = (
+    "na vyzadani", "info o cene", "cena v rk", "dohodou", "neuvedena", "poptavce")
+# The price's unit ("( za měsíc)", "/ za nemovitost") names the price_unit column's.
+_DETAIL_PRICE_UNITS: tuple[str, ...] = ("za mesic", "za nemovitost")
+
+
+def read_price(text: str | None) -> PriceReading | None:
+    """A price as stated (the card's `data-price`, the detail header or cell), or None."""
+    # Tags are spaced out, never cut at: the unit is the `<small>`, and cutting at the first
+    # `<` read a rate as a total (#2355).
+    if not text or any(k in _norm_key(text) for k in _NO_PRICE):
+        return None
+    return read_price_text(re.sub(r"<[^>]*>", " ", text))
+
+
+def _detail_price_unit(text: str | None, category_type: str | None) -> str:
     low = _norm_key(text)
-    if any(k in low for k in ("info o cene", "cena v rk", "dohodou", "neuvedena", "poptavce")):
-        return None, unit
-    digits = re.sub(r"\D", "", re.split(r"<", text)[0])
-    if not digits:
-        return None, unit
-    value = int(digits)
-    return (value if value <= _PRICE_MAX else None), unit
+    return next((unit for unit in _DETAIL_PRICE_UNITS if unit in low),
+                "za mesic" if category_type == "pronajem" else "za nemovitost")
 
 
-# The detail spec-table cell renders "{amount} CZK/ {unit}" with three observed units;
-# the third is per-area, and a per-m² cell MUST yield NULL (see scraper.price_text).
-_DETAIL_PRICE_UNITS: tuple[tuple[str, str], ...] = (
-    ("za mesic", "za mesic"),
-    ("za nemovitost", "za nemovitost"),
-)
-# The per-area marker BEFORE the amount. Anchoring can't see it and the digit
-# scrape would fold its "2" into the number, so it gets its own narrow test.
-_PER_AREA_PREFIX_RE = re.compile(r"(?:za|/)\s*m\s*2|za\s*metr")
-
-
-def _detail_price(text: str | None, category_type: str | None) -> tuple[int | None, str | None]:
-    """Price from the detail spec table's price cell.
-
-    Separate from `_parse_price` on purpose: that one reads an index card's `data-price`
-    (a bare amount) and is shared with `index_price`. This cell carries a trailing unit,
-    and a naive digit scrape swallows it — `7 759 CZK/ za m2` becomes 77592, taking the
-    "2" from "m2" into the number. So the amount is read ONLY from the part before `CZK`.
-    """
-    default_unit = "za mesic" if category_type == "pronajem" else "za nemovitost"
-    if not text:
-        return None, default_unit
-    low = _norm_key(text)
-    if any(k in low for k in ("na vyzadani", "info o cene", "cena v rk", "dohodou", "neuvedena")):
-        return None, default_unit
-    head, sep, tail = low.partition("czk")
-    if not sep:
-        return None, default_unit
-    # per-area pricing has no representation in price_czk. The unit normally
-    # FOLLOWS the amount, so the shared anchored test applies to the tail; the
-    # prefix shape (`Cena za m2: 7 759 CZK`) has to be caught separately, because
-    # the digit scrape below would otherwise take the "2" out of "m2" into the
-    # number and store a FABRICATED 27759 — strictly worse than the NULL the
-    # deleted `_PER_AREA_MARKERS` used to produce, and there is no write-boundary
-    # backstop behind this.
-    if is_per_area_price(low[len(head):]) or _PER_AREA_PREFIX_RE.search(head):
-        return None, default_unit
-    digits = re.sub(r"\D", "", head)
-    if not digits:
-        return None, default_unit
-    value = int(digits)
-    unit = next((mapped for token, mapped in _DETAIL_PRICE_UNITS if token in tail), default_unit)
-    return (value if 0 < value <= _PRICE_MAX else None), unit
-
-
-def index_price(text: str | None) -> int | None:
-    """The Kč amount from an index card's data-price text, or None. Drives
-    price-change detection for the detail-refetch queue."""
-    return _parse_price(text, None)[0]
+def _header_price_text(tree: HTMLParser) -> str | None:
+    """The detail header's price and its `<small>` unit, without the energy badge beside them."""
+    node = tree.css_first(".pd-header__price")
+    if node is None:
+        return None
+    unit = tree.css_first(".pd-header__price > small")
+    text = f"{node.text(deep=False)} {unit.text() if unit is not None else ''}"
+    return re.sub(r"\s+", " ", text).strip() or None
 
 
 def _parse_total(html: str) -> int | None:
@@ -593,20 +559,21 @@ def parse_detail(
 
     price_match = _ADVERT_PRICE_RE.search(html)
     price_attr = price_match.group(1) if price_match else None
-    price_czk: int | None = None
     price_unit = "za mesic" if category_type == "pronajem" else "za nemovitost"
-    if price_attr:
-        value = int(price_attr)
-        price_czk = value if 0 < value <= _PRICE_MAX else None
-    if price_czk is None:
-        # `data-advert-price` is absent on 132/300 stored pages, and the previous
-        # `.pd-price` fallback on ALL 300 — so ~44% of remax listings had no price path at
-        # all. The spec-table cell carries it on 300/300 and, unlike `.pd-header__price`,
-        # is not polluted by the adjacent energy-rating glyphs. `_detail_price` (not
-        # `_parse_price`) because that cell carries a trailing unit.
-        price_czk, price_unit = _detail_price(
-            _text(tree.css_first(".pd-table__value--price")), category_type
-        )
+    # `data-advert-price` is a bare CZK total, sometimes with a decimal point: none of the
+    # 6,702 active pages carrying it (2026-11-05) states a rate or EUR in its price cell.
+    reading = PriceReading(Decimal(price_attr)) if price_attr and float(price_attr) > 0 else None
+    if reading is None:
+        # Absent on ~44% of pages. The header renders the card's own price: the same amount at
+        # the card's precision, with its unit. The spec cell hides the unit on a reserved ad
+        # ("140 CZK / Rezervováno") and gives a rate three decimals to the card's two, so its
+        # total missed the card's and re-queued the ad (#2355); it stays the fallback.
+        text = _header_price_text(tree)
+        reading = read_price(text)
+        if reading is None:
+            text = _text(tree.css_first(".pd-table__value--price"))
+            reading = read_price(text)
+        price_unit = _detail_price_unit(text, category_type)
 
     # Coordinates: the SUBJECT's own map element carries `data-gps` (`#printMap` /
     # `#listingMap` on the real page, `.pd-map` on the pinned fixture); the recommended
@@ -667,6 +634,8 @@ def parse_detail(
 
     disposition = vocabulary.disposition(SOURCE, read("disposition"), title)
     areas = areas_from_params(params, title=title, category_main=category_main)
+    price = resolve(reading, area_m2=areas.area_m2, category_main=category_main,
+                    category_type=category_type, label=f"{SOURCE}/{source_id}")
 
     image_urls = _detail_images(html, source_id)
 
@@ -683,6 +652,7 @@ def parse_detail(
         "image_urls": image_urls,
         "params": params,
         **({"coords": coords} if coords else {}),
+        **({"price_reading": price.record} if price.record is not None else {}),
     }
 
     return ScrapedListing(
@@ -693,8 +663,9 @@ def parse_detail(
         category_main=category_main,
         category_type=category_type,
         subtype=subtype_of(read("subtype"), source_url),
-        price_czk=price_czk,
+        price_czk=price.total_czk,
         price_unit=price_unit,
+        price_native=price.native,
         area_m2=areas.area_m2,
         area_basis=areas.area_basis,
         usable_area=areas.usable_area,

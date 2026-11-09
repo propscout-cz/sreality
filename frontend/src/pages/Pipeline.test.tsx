@@ -920,6 +920,35 @@ describe('<Pipeline> board', () => {
     expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
   });
 
+  /* Migration 734: the viewing role marks one stage whatever its name; the toggle sends the
+     role, a second press clears it, and a closed stage can be neither marked nor un-closed into one. */
+  it('marks a stage as the viewing stage and clears it again', async () => {
+    vi.mocked(api.updatePipelineStage).mockClear().mockResolvedValue({ ...STAGES[1], role: 'viewing' });
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const row = (await screen.findByDisplayValue('Nabídka')).closest('li')!;
+    const toggle = within(row).getByRole('button', { name: 'Fáze prohlídky' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { role: 'viewing' }));
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES_CLOSED.map((st) => (st.id === 3 ? { ...st, role: 'viewing' as const } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Fáze prohlídky' })).toHaveAttribute('aria-pressed', 'true'));
+    expect(within(row).getByRole('checkbox')).toBeDisabled();
+    fireEvent.click(within(row).getByRole('button', { name: 'Fáze prohlídky' }));
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { role: null }));
+
+    const closed = screen.getByDisplayValue('9. Lost').closest('li')!;
+    expect(within(closed).getByRole('button', { name: 'Fáze prohlídky' })).toBeDisabled();
+  });
+
   it('names the stage-manager create field by its visible words', async () => {
     renderBoard();
     fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));

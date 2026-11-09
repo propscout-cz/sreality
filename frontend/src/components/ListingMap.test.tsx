@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 
-import { PriceMetricControls } from './ListingMap';
+import { PinPrecisionKey, PriceMetricControls } from './ListingMap';
 
 describe('<PriceMetricControls>', () => {
   it('draws Celkem | Za m² as the joined bar, the chosen metric filled copper', () => {
@@ -29,5 +29,15 @@ describe('<PriceMetricControls>', () => {
     render(<PriceMetricControls priceMetric="per_m2" />);
     fireEvent.click(screen.getByRole('button', { name: 'Celkem' }));
     expect(screen.getByRole('button', { name: 'Za m²' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('<PinPrecisionKey>', () => {
+  it('names exact and approximate pins and promises no circle', () => {
+    render(<PinPrecisionKey exact={3} approx={5} inactive={1} />);
+    expect(within(screen.getByRole('list', { name: 'Legenda pinů' })).getAllByRole('listitem')
+      .map((li) => li.textContent)).toEqual(['Přesná poloha3', 'Přibližná poloha5', 'Neaktivní1']);
+    const hint = screen.getByText(/^Černý obrys/);
+    expect(hint.textContent).not.toMatch(/okruh|jak je velký/);
   });
 });

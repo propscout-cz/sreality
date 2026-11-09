@@ -56,9 +56,8 @@ recommended size.
 
 ## What a smaller size still costs
 
-Fixed so that nothing loops or stalls: the engine's row census (#2404), location refetch (#2405), and the Health
-checks' budgets and scans (#2406). Still open: the text-extraction claim re-hashes every read ad's
-text each pass (~9 GB of TOAST); on Large about a third of its passes time out and deliver nothing until the next pass.
-The publishing check's tag-cohort read (~1.2 M buffers; `image_clip_embeddings` not autovacuumed since 10-15) may
-still run past its 45 s on Large.
+Fixed so that nothing loops or stalls: the engine's row census (#2404), location refetch (#2405), the Health
+checks' budgets and scans (#2406), and text extraction's walk (#2408: the newest 24 h whole, then 25,000 older ads a
+pass, 215 k buffers at most). Still open: the publishing check's tag-cohort read (~1.2 M buffers;
+`image_clip_embeddings` not autovacuumed since 10-15) may still run past its 45 s on Large.
 Health cells can read "Not measured" during warm-up: that is a budget running out, not a fault.

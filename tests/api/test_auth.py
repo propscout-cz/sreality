@@ -27,6 +27,7 @@ from api import saved_sets as api_saved_sets
 from api import shares as api_shares
 from api.routes import stats_dashboards as api_stats_dashboards
 from api import tenant_pool
+from location_data import place_search
 
 
 @pytest.fixture()
@@ -242,10 +243,13 @@ def client(monkeypatch):
     )
 
     monkeypatch.setattr(api_maps, "suggest", lambda *a, **kw: {"items": []})
+    # Own place search opens its connection in the route, not as a dependency (a refused one is its own 503).
+    monkeypatch.setattr(deps, "open_background_conn", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(place_search, "suggest", lambda *a, **kw: [])
     monkeypatch.setattr(
         api_maps,
         "resolve",
-        lambda *a, **kw: {"level": None, "id": None, "name": None, "context": None},
+        lambda *a, **kw: ({"level": None, "id": None, "name": None, "context": None}, None),
     )
 
     yield TestClient(api_main.app)
@@ -280,6 +284,7 @@ def _gated_calls(client) -> list:
         ("GET", "/estimations", None),
         ("GET", "/maps/suggest?query=foo", None),
         ("POST", "/maps/resolve", _RESOLVE_BODY),
+        ("POST", "/places/suggest", {"query": "Brno"}),
     ]
 
 

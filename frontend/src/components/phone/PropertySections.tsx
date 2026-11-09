@@ -1,19 +1,21 @@
 /* The phone property page's own sections (#1767, the prototype's "Nemovitost"):
  * each a section card (components/Panel, operator ruling 2026-10-28: one pattern
  * for the app), the same card the desktop tabs draw. Where it is (Poloha: a
- * streamed Mapy static image, never a WebGL map), facts, description, the ads
+ * small lazy map at the location ad's point), facts, description, the ads
  * with their portal links, the brokers and the registered sales near the
  * property — the desktop page's reads and rules, drawn at phone width. The
  * sections the phone reuses whole (price history, estimates, freshness, tags +
  * notes) are mounted by PhoneProperty. */
 
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import BrokerContactCard from '@/components/BrokerContactCard';
+import Expandable from '@/components/Expandable';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
+import { brokerContact, type ContactAbout } from '@/lib/brokerContact';
 import { propertyBrokers } from '@/lib/brokers';
 import { listingKindParts } from '@/lib/enums';
 import {
@@ -38,6 +40,8 @@ import { ROUTES } from '@/lib/routes';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import type { ListingPublic, PropertySource, SoldComparable, SoldCoverage } from '@/lib/types';
 
+import BrokerAvatar from './BrokerAvatar';
+import { BROKERS_SECTION_ID } from './BrokerStrip';
 import LocationBody from './LocationBody';
 import { ExternalIcon } from './phoneIcons';
 
@@ -152,39 +156,21 @@ export function FactsSection({ property }: { property: ListingPublic }) {
 
 export function DescriptionSection({ text }: { text: string | null }) {
   const body = text?.trim() ?? '';
-  const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const ref = useRef<HTMLParagraphElement | null>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el) setOverflows(el.scrollHeight - el.clientHeight > 1);
-  }, [body]);
-  if (!body) {
-    return (
-      <PhoneSection label="Popis">
-        <PanelEmpty>Inzerát nemá popis.</PanelEmpty>
-      </PhoneSection>
-    );
-  }
   return (
     <PhoneSection label="Popis">
-      <div>
-        <p
-          ref={ref}
-          className={`whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)] ${open ? '' : 'line-clamp-6'}`}
+      {body ? (
+        <Expandable
+          as="p"
+          lines={6}
+          words={['Celý popis', 'Zkrátit']}
+          contentClassName="whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)]"
+          toggleClassName="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
         >
           {body}
-        </p>
-        {(overflows || open) && (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
-          >
-            {open ? 'Zkrátit' : 'Celý popis'}
-          </button>
-        )}
-      </div>
+        </Expandable>
+      ) : (
+        <PanelEmpty>Inzerát nemá popis.</PanelEmpty>
+      )}
     </PhoneSection>
   );
 }
@@ -276,14 +262,6 @@ const portalsAside = (n: number): string =>
 /* Makléři                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const initials = (name: string | null): string =>
-  (name ?? '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('') || '?';
-
 /* MS7 (lib/brokers.propertyBrokers) over the batched read the desktop list uses,
  * and the desktop's own contact card under each name — the same channels, the
  * same ad references, the same copy behaviour (lib/clipboard) on both shells.
@@ -294,17 +272,20 @@ export function BrokersSection({
   canonicalId,
   advertsFailed,
   onRetryAdverts,
+  about,
 }: {
   adverts: PropertySource[];
   canonicalId: number;
   advertsFailed: boolean;
   onRetryAdverts: () => void;
+  /* The property a saved contact names (lib/brokerContact). */
+  about: ContactAbout;
 }) {
   const ids = useMemo(() => adverts.map((a) => a.id), [adverts]);
   const read = useListingBrokers(ids);
   if (advertsFailed || read.isError) {
     return (
-      <PhoneSection label="Makléři">
+      <PhoneSection label="Makléři" id={BROKERS_SECTION_ID}>
         <p className="text-[13px] text-[var(--color-brick)]">
           Makléře se nepodařilo načíst.
           <button
@@ -321,7 +302,7 @@ export function BrokersSection({
   /* A property always has an ad: an empty list is one not read yet. */
   if (read.isPending || adverts.length === 0) {
     return (
-      <PhoneSection label="Makléři">
+      <PhoneSection label="Makléři" id={BROKERS_SECTION_ID}>
         <p className="text-[13px] text-[var(--color-ink-3)]">Načítám…</p>
       </PhoneSection>
     );
@@ -329,7 +310,7 @@ export function BrokersSection({
   const { brokers, fromInactive } = propertyBrokers(adverts, read.brokers, canonicalId);
   if (brokers.length === 0) {
     return (
-      <PhoneSection label="Makléři" count={0}>
+      <PhoneSection label="Makléři" count={0} id={BROKERS_SECTION_ID}>
         <PanelEmpty>Makléř není uveden.</PanelEmpty>
       </PhoneSection>
     );
@@ -337,6 +318,7 @@ export function BrokersSection({
   return (
     <PhoneSection
       label="Makléři"
+      id={BROKERS_SECTION_ID}
       count={brokers.length}
       note={fromInactive ? 'z neaktivních inzerátů' : undefined}
     >
@@ -344,12 +326,7 @@ export function BrokersSection({
         {brokers.map((b) => (
           <li key={b.broker_id}>
             <div className="flex items-center gap-3">
-              <span
-                aria-hidden
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--color-rule-strong)] font-display text-[15px] text-[var(--color-ink-2)]"
-              >
-                {initials(b.broker_display_name)}
-              </span>
+              <BrokerAvatar name={b.broker_display_name} />
               <div className="min-w-0">
                 <Link
                   to={ROUTES.brokerDetail.build({ id: b.broker_id })}
@@ -362,7 +339,21 @@ export function BrokersSection({
                 </p>
               </div>
             </div>
-            <BrokerContactCard broker={b} ads={b.ads} bare className="mt-3" />
+            <BrokerContactCard
+              broker={b}
+              ads={b.ads}
+              bare
+              className="mt-3"
+              saveAs={brokerContact({
+                brokerId: b.broker_id,
+                name: b.broker_display_name,
+                firm: b.broker_firm_label,
+                phone: b.primary_phone,
+                email: b.primary_email,
+                ads: b.ads,
+                about,
+              })}
+            />
           </li>
         ))}
       </ul>

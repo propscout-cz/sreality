@@ -16,12 +16,14 @@ Four shapes over one row:
   next slot of the epoch-anchored `cadence` grid, now (an interrupted run), a minute (exit 75), a
   backoff doubling from a minute and capped at the cadence and the next slot, a retry floored at the
   job's own `timeout_s` (a timeout), or the job's own hour (a DB-heavy job's retries); a pure request
-  run never moves the schedule. A cancelled, interrupted or skipped run is not a failure.
+  run (it took no due slot) never moves the schedule, nor does its loss unless its row was paused and
+  already due when it started (`due_at` then moves on, never earlier). A cancelled, interrupted or
+  skipped run is not a failure.
   The runner's boot `register`s its registry (adopting a lane-era row, skipping one the database
   refuses) and `retire`s only rows it registered; `due` lists free rows with no open run, oldest
   first; `reap_lost` closes a run whose lease lapsed as `lost` (a failure), re-run at once, then
-  backed off on a second loss in a row. Every runner-facing call is one transaction under
-  `STATEMENT_TIMEOUT_S` (`_bounded`).
+  backed off on a second loss in a row (a pure request's loss: as above). Every runner-facing call is
+  one transaction under `STATEMENT_TIMEOUT_S` (`_bounded`).
 * `held` — a leased lane with no schedule (the location resolver drain, run every few seconds by the realtime worker
   and by `location_resolve.yml`): no due time and no run history, just mutual exclusion and the last outcome. It yields
   a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
@@ -256,9 +258,9 @@ _BACKOFF_SQL = (
     f"least(now() + make_interval(secs => least({_BACKOFF_S}, extract(epoch from j.cadence))), {_NEXT_SLOT_SQL})"
 )
 
-# A pure request run (it took no due slot) never moves the schedule; an exit 75 only pulls it nearer. The SET
-# expressions read the old row, so the first failure waits BACKOFF_BASE_S, then twice that, never past the cadence
-# or the next slot; a timeout waits at least its own timeout_s.
+# A pure request run (it took no due slot) never moves the schedule (its loss: `_REAP_LOST_SQL`); an exit 75 only
+# pulls it nearer. The SET expressions read the old row, so the first failure waits BACKOFF_BASE_S, then twice
+# that, never past the cadence or the next slot; a timeout waits at least its own timeout_s.
 _RELEASE_RUN_SQL = f"""
 UPDATE scheduled_jobs j
    SET lease_holder = NULL,
@@ -331,11 +333,16 @@ RETURNING job_name
 # included), and any host's run on a resource: a workflow killed before its `held_job` release would otherwise hold
 # the resource's runner jobs off for good (`_DUE_SQL` lists none while a run on it is open). SKIP LOCKED: a claim
 # locks the row, then the runs, then its siblings, so a reaper that waited could deadlock with it. `again`: the job's
-# latest closed run (by id; a claim closes and opens at one now()) was lost too. `due_at` moves only for this
+# latest closed run (by id; a claim closes and opens at one now()) was lost too, a pure request's included: whoever
+# asked, the job lost its runner, as consecutive_failures counts a request's failure too. `due_at` moves only for this
 # deployment's names, so an old replica never reschedules a newer one's row.
+# `pure`: a request whose row was not due yet when it started took no slot (the run's started_at is its claim's now(),
+# and the claim leaves due_at as it was), so its loss keeps the schedule, as its release would (#2317), and a slot that
+# came due while it ran stays due. The pause can change mid-run, so it is not read: a request on a paused row that was
+# already due counts as having taken its slot, and its due_at moves on, never earlier.
 _REAP_LOST_SQL = f"""
 WITH lapsed AS MATERIALIZED (
-  SELECT r.id, r.job_name, r.holder
+  SELECT r.id, r.job_name, r.holder, r.requested_by IS NOT NULL AND j.due_at > r.started_at AS pure
     FROM job_runs r
     JOIN scheduled_jobs j ON j.job_name = r.job_name
    WHERE r.ended_at IS NULL
@@ -343,7 +350,7 @@ WITH lapsed AS MATERIALIZED (
      AND NOT (j.lease_holder IS NOT DISTINCT FROM r.holder AND coalesce(j.lease_expires_at >= now(), false))
      FOR UPDATE OF r, j SKIP LOCKED
 ), judged AS (
-  SELECT l.id, l.job_name, l.holder,
+  SELECT l.id, l.job_name, l.holder, l.pure,
          coalesce((SELECT p.outcome = 'lost' FROM job_runs p
                     WHERE p.job_name = l.job_name AND p.ended_at IS NOT NULL
                     ORDER BY p.id DESC LIMIT 1), false) AS again
@@ -361,7 +368,7 @@ UPDATE scheduled_jobs j
        lease_holder = CASE WHEN j.lease_holder IS NOT DISTINCT FROM x.holder THEN NULL ELSE j.lease_holder END,
        lease_expires_at = CASE WHEN j.lease_holder IS NOT DISTINCT FROM x.holder THEN NULL
                                ELSE j.lease_expires_at END,
-       due_at = CASE WHEN j.due_at IS NULL OR j.job_name <> ALL(%(names)s::text[]) THEN j.due_at
+       due_at = CASE WHEN j.due_at IS NULL OR x.pure OR j.job_name <> ALL(%(names)s::text[]) THEN j.due_at
                      WHEN j.job_name = ANY(%(on_hour)s::text[]) THEN least({_DAY_SLOT_SQL}, {_NEXT_SLOT_SQL})
                      WHEN x.again THEN {_BACKOFF_SQL}
                      ELSE now() END
@@ -625,7 +632,8 @@ def retire(conn: psycopg.Connection, names: Sequence[str], *, runner: str = RUNN
 def reap_lost(conn: psycopg.Connection, *, names: Sequence[str], on_hour: Sequence[str],
               runner: str = RUNNER) -> list[str]:
     """Closes every open run whose lease lapsed as `lost` (a failure): re-run at once, then back off on a second
-    loss in a row; an `on_hour` (DB-heavy) name waits for its own hour either way. Returns the jobs it closed."""
+    loss in a row; an `on_hour` (DB-heavy) name waits for its own hour either way, and a request whose row was not
+    yet due when it started keeps `due_at`. Returns the jobs it closed."""
     with _bounded(conn) as cur:
         cur.execute(_REAP_LOST_SQL, {"names": list(names), "on_hour": list(on_hour), "runner": runner})
         return [row[0] for row in cur.fetchall()]

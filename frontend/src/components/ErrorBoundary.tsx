@@ -10,6 +10,9 @@ interface Props {
   /* Tags the console.error so a future blank-screen is traceable to the
    * boundary that caught it. */
   label?: string;
+  /* Told once the boundary has caught, so the page around it can adjust (the
+   * phone's Poloha hides its map plate and says so under the place). */
+  onError?: (error: Error) => void;
 }
 
 interface State {
@@ -29,6 +32,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     const tag = this.props.label ? `[ErrorBoundary ${this.props.label}]` : '[ErrorBoundary]';
     console.error(tag, error, info.componentStack);
+    this.props.onError?.(error);
   }
 
   render() {

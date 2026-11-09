@@ -1367,6 +1367,51 @@ component is slimmed twice — each wave rewrites one component and slims its st
   location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
   Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
   Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
+- **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
+  additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
+  :07) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
+  over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
+  stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality
+  draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
+  · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
+  cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
+  unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
+  with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
+  artifact row.
+- **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
+  `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
+  published property once at its location ad's finest level, one table pinning gauge and page. The four unread
+  `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
+  `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
+  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
+  gate's eval over `picks_between` (#2452); the switch-over DELETE (#2453); Stage B drop (#2455).
+- **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
+  built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
+  point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
+  deal type, then population, then code; one ranking for every box, no count returned. Two service-role read models
+  (`place_served_counts` hourly at :37, `place_facts` in the registry load's finish step) and the gazetteer's btree
+  swapped for `text_pattern_ops` (net 0 indexes). No caller yet. **Next:** gate #2465 → switch-over #2453 (deletes the
+  Mapy search path, Q2 c); settlement units #2461 on the same module.
+- **Place shortcuts — built 2026-11-09** (#2450; spec #2441 Part 4, story 43; no migration; as built:
+  `docs/architecture.md` § own place search). The registry load's finish step writes each městská část's quarter
+  pairs (`ruian_admin_unit_relations`, type `momc_cast_obce`) at its version from open doors, on the stable code; a
+  retired door gives none, a re-run adds none. "Praha 6" answers one `momc` row whose `places` are its quarters' chips,
+  read at the gazetteer's version and ranked by the sum of their served properties; no pair at that version, no row.
+  **Next:** v4 has no pairs, so no shortcut answers until a finishing-only re-dispatch of `20261031` (first check that
+  no later `registry_versions` row exists: doors are unversioned) or the 12-01 load; verify 382 pairs at v4, 10 for
+  Praha 6, before gate eval #2452; the row label and "expanded" notice ride with #2453.
+- **Address rows — built 2026-11-09** (#2451; spec #2441 Part 4, stories 44, 53; no migration; as built:
+  `docs/architecture.md` § own place search). A street or a village with a house number also answers RÚIAN doors
+  (`adresni_misto`: the one label, its town's okres, the door's point, its street's chip or null) from ONE batched read
+  over every exact namesake street and část at the gazetteer's version; a bare number is tried as č.p. and as č.o.,
+  only a marked č.ev. is read as a č.ev. number (a č.ev. door's č.o. answers like any č.o.). Door rows follow the whole text's exact rows and precede its similar ones (a
+  builder decision for the operator), so they can fill the list. The door label moved from `api/maps.py` to
+  `place_search.DOOR_LABEL_SQL`, which the address picker imports. **Next:** gate #2465 with dictated address
+  questions (#2452): a town after the number ("Nádražní 12, Kolín") answers no door yet, and the eval must score
+  streetless and č.ev. doors by kód ADM, as their label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
+  picker saves `{adresni_misto, door code}` if addresses pass).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

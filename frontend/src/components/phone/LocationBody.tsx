@@ -1,25 +1,22 @@
 /* Poloha on the phone: where the property is, drawn the same in the feed card's sheet and
- * on the property page. A 4:3 plate holding Mapy's static map of the location ad's point
- * (streamed by the API on every view, never stored; dimmed after dusk like the photos),
- * under it the place as the page names it, a muted note when the point is only a town or a
- * part of one, and the three map apps an iPhone hands the point to.
+ * on the property page. A 4:3 plate holding a map of the location ad's point (a lazy
+ * chunk, so the place never waits for it), under it the place as the page names it, a muted
+ * note when the point is only a town or a part of one, and the three map apps an iPhone
+ * hands the point to.
  *
- * Never a WebGL map on the phone. The image degrades, the place does not: a failed map
- * leaves the label and the links with a quiet line, a switched-off one leaves them alone,
- * and a property with no point says "Bez polohy" and nothing else. */
+ * The map degrades, the place does not: a map that fails leaves the label and the links
+ * with a quiet line, and a property with no point says "Bez polohy" and nothing else. */
 
+import { useState } from 'react';
+
+import MapSlot from '@/components/MapSlot';
 import { ApiError } from '@/lib/api';
+import { lazyChunk } from '@/lib/lazyChunk';
 
-import { PHOTO_DARK } from './CardPhotoStrip';
 import { ExternalIcon } from './phoneIcons';
-import {
-  STATIC_MAP_H,
-  STATIC_MAP_W,
-  phoneMapLinks,
-  refusalReason,
-  usePropertyLocation,
-  useStaticMap,
-} from './propertyLocation';
+import { mapZoom, phoneMapLinks, usePropertyLocation } from './propertyLocation';
+
+const PhoneMap = lazyChunk(() => import('./PhoneMap'));
 
 const PLATE = 'relative isolate aspect-[4/3] w-full overflow-hidden bg-[var(--color-inset)]';
 const QUIET = 'text-[13px] text-[var(--color-ink-3)]';
@@ -43,7 +40,7 @@ export default function LocationBody({
   enabled?: boolean;
 }) {
   const loc = usePropertyLocation(propertyId, enabled);
-  const map = useStaticMap(propertyId, enabled);
+  const [mapFailed, setMapFailed] = useState(false);
 
   if (loc.isError) {
     if (loc.error instanceof ApiError && loc.error.status === 404) {
@@ -64,22 +61,15 @@ export default function LocationBody({
   }
 
   const data = loc.data;
-  const disabled = refusalReason(map.error) === 'disabled';
-  const mapFailed = map.isError && !disabled;
-  const showPlate = !disabled && !mapFailed;
 
   return (
     <div className="flex flex-col gap-3">
-      {showPlate && (
-        <div className={PLATE} aria-busy={map.url ? undefined : true}>
-          {map.url && (
-            <img
-              src={map.url}
-              width={STATIC_MAP_W}
-              height={STATIC_MAP_H}
-              alt={data?.label ? `Mapa: ${data.label}` : 'Mapa polohy'}
-              className={`block h-full w-full object-cover ${PHOTO_DARK}`}
-            />
+      {!mapFailed && (
+        <div className={PLATE}>
+          {data && (
+            <MapSlot onError={() => setMapFailed(true)}>
+              <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} />
+            </MapSlot>
           )}
           <PlateRule />
         </div>
@@ -98,7 +88,7 @@ export default function LocationBody({
       )}
       {data && (
         <nav aria-label="Otevřít v mapách" className="grid grid-cols-3 border-y border-[var(--color-rule-soft)]">
-          {phoneMapLinks(data.lat, data.lon, data.label, data.zoom).map((l) => (
+          {phoneMapLinks(data.lat, data.lon, data.label, mapZoom(data.precision)).map((l) => (
             <a
               key={l.key}
               href={l.url}

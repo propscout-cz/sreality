@@ -1,13 +1,13 @@
 /* The property page's photos at the top: the canonical advert's first photo large
- * and the next four beside it, any of them opening the app's one lightbox. When
- * there are more, the last tile says how many and opens the Fotky tab instead. */
+ * and the next four beside it, each opening the viewer on itself (PhotoViewer). When
+ * there are more, the last tile says how many; it opens the viewer on its photo too,
+ * from where the arrows walk all of them (operator 2026-11-06: it used to switch to
+ * the Fotky tab, whose bar sits at the screen's bottom edge, so nothing seemed to happen). */
 import { useState } from 'react';
 import type { ImagePublic } from '@/lib/types';
 import { imageSrc } from '@/lib/imageUrl';
-import { lazyChunk } from '@/lib/lazyChunk';
 import ImageTagBadge from '@/components/ImageTagBadge';
-
-const ImageLightbox = lazyChunk(() => import('@/components/ImageLightbox'));
+import { OFF_MARKET_DIM, usePhotoViewer } from './PhotoViewer';
 
 const SHOWN = 5;
 /* Beside the identity column on a wide screen it takes that column's height. */
@@ -26,15 +26,12 @@ export default function PhotoMosaic({
   images,
   loading,
   isActive,
-  onAll,
 }: {
   images: ImagePublic[];
   loading: boolean;
   isActive: boolean;
-  /* Opens every photo (the Fotky tab). */
-  onAll: () => void;
 }) {
-  const [openAt, setOpenAt] = useState<number | null>(null);
+  const { open, viewer } = usePhotoViewer(images, isActive);
 
   if (loading && images.length === 0) {
     return (
@@ -66,7 +63,7 @@ export default function PhotoMosaic({
               <Tile
                 image={img}
                 dim={!isActive}
-                onClick={last ? onAll : () => setOpenAt(i)}
+                onClick={() => open(i)}
                 label={last ? `Všech ${images.length} fotek` : `Fotka ${i + 1} z ${images.length}`}
                 overlay={last ? `Všech ${images.length} fotek` : null}
               />
@@ -74,14 +71,7 @@ export default function PhotoMosaic({
           );
         })}
       </ul>
-      {openAt != null && (
-        <ImageLightbox
-          images={images}
-          startIndex={openAt}
-          onClose={() => setOpenAt(null)}
-          dim={isActive ? '' : 'opacity-70'}
-        />
-      )}
+      {viewer}
     </>
   );
 }
@@ -118,7 +108,7 @@ function Tile({
             alt=""
             decoding="async"
             onError={() => setErrored(true)}
-            className={`h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02] ${dim ? 'opacity-70' : ''}`}
+            className={`h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02] ${dim ? OFF_MARKET_DIM : ''}`}
           />
           {overlay == null && (
             <ImageTagBadge

@@ -316,8 +316,8 @@ def post_rent_map_upload(
     file: UploadFile = File(...),
     conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
-    """Operator uploads a Cenová mapa XLSX from Settings. Re-uploading an
-    unchanged file (same sha256) is a no-op."""
+    """Operator uploads a Cenová mapa XLSX from Settings. Re-uploading a known file
+    (same sha256) writes no revision; it stamps `rent_map_cells` current when the cells serve it."""
     data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty upload")

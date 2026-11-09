@@ -186,3 +186,22 @@ export function DownloadIcon(p: IconProps) {
     </Svg>
   );
 }
+
+/* A handset: the call action. */
+export function PhoneCallIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6.6 3.5h2.6l1.5 4-2 1.3a11 11 0 0 0 6.5 6.5l1.3-2 4 1.5v2.6a2 2 0 0 1-2.2 2A17 17 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" />
+    </Svg>
+  );
+}
+
+/* A person with a plus: save to the phone's contacts. */
+export function ContactAddIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M3 20.5c.8-3.8 3.6-6 7-6 1.4 0 2.6.4 3.7 1M18.5 14v6M15.5 17h6" />
+    </Svg>
+  );
+}

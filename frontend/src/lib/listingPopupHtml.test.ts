@@ -8,7 +8,7 @@ import { fmtAbsolute } from './format';
 import { PPM2_BASIS_TOKEN } from './measure';
 import { listingPopupHtml } from './listingPopupHtml';
 import type { MapRow } from './queries';
-import { pinPrecisionLabel } from './uncertaintyCircle';
+import { pinPrecisionLabel } from './pinPrecision';
 
 const NOW = new Date('2026-10-27T12:00:00Z');
 const SEEN = new Date(NOW.getTime() - 2 * 3600 * 1000).toISOString();
@@ -25,7 +25,6 @@ const ROW: MapRow = {
   disposition: '2+kk',
   area_m2: 62,
   display_label: 'Sadová 12, Praha',
-  uncertainty_radius_m: 10,
   granularity_rank: 100,
   last_seen_at: SEEN,
   is_active: false,
@@ -58,12 +57,11 @@ describe('listingPopupHtml', () => {
     expect(el.textContent).not.toMatch(/last seen/);
   });
 
-  it('names an approximate pin with its rung and radius in the tooltip', () => {
-    const approx = { ...ROW, granularity_rank: 40, uncertainty_radius_m: 1000 };
+  it('names an approximate pin with its rung in the tooltip, and no radius', () => {
+    const approx = { ...ROW, granularity_rank: 40 };
     const line = popup(approx).querySelector('p.lp-precision');
     expect(words(line)).toBe('Přibližná poloha · viděno před 2 h');
-    expect(line!.querySelector('[title]')!.getAttribute('title')).toBe(pinPrecisionLabel(approx));
-    expect(pinPrecisionLabel(approx)).toMatch(/^Přibližná poloha: obec, ±1\skm$/);
+    expect(line!.querySelector('[title]')!.getAttribute('title')).toBe('Přibližná poloha: obec');
   });
 
   it('keeps the price, the Inactive badge, the meta and place lines and the link', () => {

@@ -386,7 +386,7 @@ def test_explicit_api_key_disables_failover(monkeypatch):
 
 
 def test_the_one_key_failover_logs_on_the_callers_logger_and_the_last_key_is_final(caplog):
-    """geocode, the /maps suggest proxy and the static map share this loop: a refusal moves
+    """geocode and the /maps suggest proxy share this loop: a refusal moves
     on and logs the caller's own line; the last key is called with last=True and its error
     (a refusal included) is the caller's to see."""
     import logging

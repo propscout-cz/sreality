@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-import { createMap } from '@/lib/basemap';
+import { addPointPin, createMap } from '@/lib/basemap';
 
 interface Props {
   lat: number;
@@ -33,26 +33,7 @@ export default function DetailMap({ lat, lng, isActive, heightClass }: Props) {
     map.on('load', () => {
       // MapLibre opens the compact attribution on a wide map; fold it to the (i).
       container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
-      map.addSource('pin', {
-        type: 'geojson',
-        data: {
-          type: 'Feature',
-          properties: {},
-          geometry: { type: 'Point', coordinates: [lng, lat] },
-        },
-      });
-      map.addLayer({
-        id: 'pin',
-        type: 'circle',
-        source: 'pin',
-        paint: {
-          'circle-radius': 7,
-          'circle-color': '#3c6e63',
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 2,
-          'circle-opacity': isActive ? 1 : 0.6,
-        },
-      });
+      addPointPin(map, [lng, lat], { active: isActive });
     });
 
     return () => map.remove();

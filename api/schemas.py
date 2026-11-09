@@ -294,6 +294,21 @@ class RegionalEntry(BaseModel):
     type: str | None = None
 
 
+class PlacePickIn(BaseModel):
+    """The place typeahead's pick (ruling Q10): the text its list answered and the row's 1-based rank."""
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=200)
+    rank: int = Field(ge=1, le=10)
+
+
+class PlaceSuggestIn(BaseModel):
+    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs; the limit is the SPA's pick
+    rank bound."""
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=10, ge=1, le=10)
+
+
 class ResolveLocationIn(BaseModel):
     """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
     lat: float
@@ -303,6 +318,7 @@ class ResolveLocationIn(BaseModel):
     regional_structure: list[RegionalEntry] = Field(default_factory=list)
     # The address picker's flag (W3b): an address pick answers its ONE door, not its street.
     address_point: bool = False
+    pick: PlacePickIn | None = None
 
 
 # --- curation -------------------------------------------------------------
@@ -433,6 +449,10 @@ class AttachTagIn(BaseModel):
 
 class AddPipelineCardIn(BaseModel):
     property_id: int
+    # The stage the new card lands at: absent = the entry stage (the bookmark). A
+    # named stage must be one of the account's live, open stages: "add it at the
+    # viewing stage" is then one write and one ledger event, never an add plus a move.
+    stage_id: int | None = None
 
 
 class DismissPropertyIn(BaseModel):
@@ -463,6 +483,10 @@ class CreateStageIn(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=4)
 
 
+# What a stage means to the app, whatever its label (migration 734).
+PipelineStageRole = Literal["viewing"]
+
+
 class UpdateStageIn(BaseModel):
     # All optional; an absent field is left unchanged. `is_entry` may only be
     # set True (move the entry crown to this stage) — you re-home the entry by
@@ -474,6 +498,9 @@ class UpdateStageIn(BaseModel):
     # Sent explicitly as null to clear the badge back to the ordinal fallback,
     # so this one is read via model_fields_set, not `is not None`.
     code: str | None = Field(default=None, min_length=1, max_length=4)
+    # A role moves onto this stage from whichever held it; null clears it here.
+    # Read via model_fields_set, like `code`.
+    role: PipelineStageRole | None = None
 
 
 class ReorderStagesIn(BaseModel):

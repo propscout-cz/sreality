@@ -100,7 +100,7 @@ it (`api/`). They do not apply to the scraper.
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (tenancy shape 3) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the phone's `GET /properties/{id}/location`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -220,8 +220,8 @@ it (`api/`). They do not apply to the scraper.
     velocity, the transit corridor, neighborhoods, the watchdog matcher), and
     `api/portal_lookup._MARKET_SQL` is a module-level constant the sweep DOES discover but
     then skips as a `.format()` template (`_is_format_template` matches its `{values}` slot).
-    A `*_SQL` constant is therefore NOT evidence of coverage — one unquoted `{slot}` and the
-    sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
+    A `*_SQL` constant is therefore NOT evidence of coverage.
+    `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
 - **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
   per call, every read recorded on the run; assistants over MCP stay masked. Built (#2063) as `get_property_brokers`, the
@@ -234,6 +234,13 @@ SPA's `detailText` and the extension render `message`): psycopg's busy classes (
 57014 — a lock-blocked read dying at the 120 s budget — `LockNotAvailable`, `DeadlockDetected`) →
 **503 `db_busy` + `Retry-After`**; everything else → **500 `internal_error` + logged `ref` id**,
 never raw exception text. Route-owned refusals (property_split's 409) stay.
+**No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings); `/maps/resolve`
+logs level and reason, never the typed name. Its optional `pick` `{text 1–200, rank 1–10}` (extra=forbid: a
+malformed one 422s before any bind) is recorded after the answer (architecture § the pick record).
+`POST /places/suggest` `{query 1–200, limit 1–10}` (extra=forbid) answers `{items}` from `location_data.place_search`:
+uncached, no count, a městská část as a shortcut whose `places` are its quarters' chips, a door (`adresni_misto`)
+with its `street` chip or null; preflight cached 600 s; a failed read or no connection is its own 503
+`place_search_unavailable`, logged by SQLSTATE or error class (architecture § own place search).
 `frontend/src/lib/api.ts` is the ONE transport (uploads + blob downloads, no raw `fetch()` beside
 it): `REQUEST_DEADLINE_MS` (130 s) sits above the server's 120 s budget and under Railway's ~300 s
 close — keep that ordering — a deadline abort (`ApiError.kind === 'timeout'`) is NEVER retried;
@@ -249,8 +256,8 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
 `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
 - `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Its twin `token_claims` (M0) is
   the same gate returning the claims (None under the opt-out) for a FLAG gated on admin, never a scope. Every client sends its
-  session JWT to every route, so a route moves between gates without a client change (the deploy-skew
-  class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
+  session JWT to every route, so a route moves between gates without a client change (deploy skew:
+  architecture § Territories).
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
   opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
   `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
@@ -264,16 +271,15 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   unset (an unconfigured auth backend must never authenticate anyone). Since M0 (#2059) only a session as Supabase Auth
   issues one passes: issuer `<SUPABASE_URL>/auth/v1`, `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, no
   `client_id` (an OAuth client's token); a refusal's 401 names `wrong issuer` / `missing claim` / `wrong role` / `client token`,
-  and `mint` fills those claims. History of the static key it once also accepted (2026-08-04 removal, 2026-10-13 deletion):
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
+  and `mint` fills those claims. Static-key history: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
   `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
   one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
   non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
-  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
-  whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
-  allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
-  includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
+  too; the cached read stays open), and the route census reds on a body taking it without that call. The claim is
+  stamped in `auth.users.raw_app_meta_data` (`admins` is the allowlist); Supabase puts `app_metadata` in every JWT, no
+  hook. Both smoke accounts must carry `app_metadata.automation = true` (operator step, smoke-check.mjs fixture 3)
+  before picks record: no pick of theirs is recorded (`deps.is_automation`).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `TenantConn` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,
@@ -409,16 +415,13 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
   explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
-  `scripts/seed_curated_cities.py`. Display-only Mapy use
-  (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
+  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`) is not gated: the prohibition
+  is on persistence.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding, `/maps/suggest` and the static map fail over
+- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding and `/maps/suggest` fail over
   to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
   primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
-- `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
-  `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
-  `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
 - `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
   (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
   so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
