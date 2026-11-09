@@ -31,6 +31,20 @@ EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 Z = 1.959964
 TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
+# A copy of own search's liveness (location_data/place_search.py) until Stage B: a unit is live when the current
+# version draws it, a street when that version holds it open.
+_LIVE_SQL = """
+SELECT a.level, a.code,
+       CASE WHEN a.level = 'ulice' THEN EXISTS (
+              SELECT 1 FROM ruian_streets s
+               WHERE s.code = a.code AND s.first_version_id <= %(cur)s AND s.last_version_id >= %(cur)s
+                 AND (s.valid_to IS NULL OR s.last_version_id > %(cur)s))
+            ELSE EXISTS (
+              SELECT 1 FROM ruian_admin_units u
+               WHERE u.level = a.level::ruian_level AND u.code = a.code
+                 AND %(cur)s BETWEEN u.first_version_id AND u.last_version_id) END
+  FROM unnest(%(levels)s::text[], %(codes)s::bigint[]) AS a(level, code)
+"""
 CREDENTIALS = ("SUPABASE_DB_URL", "SMOKE_TEST_NONADMIN_EMAIL", "SMOKE_TEST_NONADMIN_PASSWORD", "VITE_SUPABASE_URL",
                "VITE_SUPABASE_ANON_KEY")
 
@@ -94,6 +108,21 @@ def _questions(window: list[StoredPick]) -> list[Question]:
             for n, (text, level, code) in enumerate(ordered, 1)]
 
 
+def _share(part: int, whole: int) -> str:
+    return f"{100 * part / whole:.1f} %" if whole else "—"
+
+
+def _live(conn: psycopg.Connection, window: list[StoredPick]) -> dict[tuple[str, int], bool] | None:
+    """Whether the current version still holds each place the window's picks name; None with no current version."""
+    row = conn.execute("SELECT id FROM registry_versions WHERE is_current").fetchone()
+    if row is None:
+        return None
+    places = sorted({(p.level, p.code) for p in window if p.code is not None})
+    rows = conn.execute(_LIVE_SQL, {"cur": row[0], "levels": [lv for lv, _ in places],
+                                    "codes": [code for _, code in places]}).fetchall()
+    return {(level, int(code)): bool(live) for level, code, live in rows}
+
+
 def _sign_in(io: Boundaries) -> str | None:
     res = io.http.post(f"{os.environ['VITE_SUPABASE_URL'].rstrip('/')}/auth/v1/token?grant_type=password",
                        json={"email": os.environ["SMOKE_TEST_NONADMIN_EMAIL"],
@@ -149,9 +178,19 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     start, end = _midnight(args.window_first), _midnight(args.window_last + timedelta(days=1))
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
-    window = [p for p in picks if p.created_at >= start]
+        window = [p for p in picks if p.created_at >= start]
+        live = _live(conn, window)
+    if live is None:
+        print("no current registry version")
+        return 2
+    refused = sum(1 for p in window if p.code is None)
+    null_text = sum(1 for p in window if p.text is None)
+    not_live = sum(1 for p in window if p.code is not None and not live[(p.level, p.code)])
+    print(f"rows {len(window)} · refused {refused} · NULL text {null_text} · not live {not_live}")
+    print(f"digit share {null_text} of {len(window)} ({_share(null_text, len(window))})")
     questions = _questions(window)
-    print(f"questions N = {len(questions)}")
+    scorable = [q for q in questions if q.code is not None and live[(q.level, q.code)]]
+    print(f"questions N = {len(scorable)}")
 
     token = _sign_in(io)
     if token is None:
@@ -164,7 +203,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         answers[text] = _ask(io, args.api, headers, text)
 
     scored = []
-    for q in questions:
+    for q in scorable:
         rows = answers[q.text] or []
         place = (q.level, q.code)
         scored.append(Scored(q, rows.index(place) + 1 if place in rows else None))

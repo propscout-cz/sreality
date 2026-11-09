@@ -26,10 +26,12 @@ from scripts import place_search_gate_eval as gate  # noqa: E402
 from tests._live_property import REQUIRED_DB, _mirror_unit, db_url  # noqa: E402
 from tests.api._jwt import mint  # noqa: E402
 
-BRNO, PRAHA, PRAHA_6, VOKOVICE = 582786, 554782, 500178, 490067
+BRNO, PRAHA, PRAHA_6, VOKOVICE, LOMNICE = 582786, 554782, 500178, 490067, 581917
 BRNO_BOX = (16.50, 49.10, 16.70, 49.30)
 PRAHA_BOX = (14.20, 49.90, 14.70, 50.20)
 TOWN_BRNO = {"lat": 49.2, "lng": 16.6, "type": "regional.municipality", "name": "Brno"}
+MOMC_PRAHA_6 = {"lat": 50.1, "lng": 14.4, "type": "regional.municipality", "name": "Praha 6"}
+PART_BARRANDOV = {"lat": 50.03, "lng": 14.4, "type": "regional.municipality_part", "name": "Barrandov"}
 
 AUTH = "https://auth.test/auth/v1/token?grant_type=password"
 API = "http://testserver"
@@ -50,9 +52,29 @@ def _index(conn: psycopg.Connection, level: str, unit: int, name: str, version: 
         (level, unit, version, name, normalize_name(name), obec))
 
 
+def _unit(conn: psycopg.Connection, level: str, code: int, name: str, parent: int | None, version: int) -> int:
+    """A unit drawn with no polygon (a městská část, a část obce), named in the index inside its obec."""
+    unit = int(conn.execute(
+        "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, first_version_id,"
+        " last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01', %s, %s) RETURNING id",
+        (level, code, name, normalize_name(name), parent, f"x{code}", version, version)).fetchone()[0])
+    _index(conn, level, unit, name, version, parent)
+    return unit
+
+
+def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: int, part: int, part_code: int,
+          point: tuple[float, float], version: int) -> None:
+    """A door standing in `part` of `momc`: what makes resolve bind a městská část."""
+    conn.execute(
+        "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, cast_obce_unit_id, cast_obce_kod,"
+        " momc_unit_id, typ_so, cislo_domovni, psc, geom, plati_od, first_version_id, last_version_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, 'č.p.', 487, '16000', ST_SetSRID(ST_MakePoint(%s, %s), 4326),"
+        " '2020-01-01', %s, %s)", (kod, obec, obec_code, part, part_code, momc, *point, version, version))
+
+
 def _mirror(conn: psycopg.Connection) -> dict[str, int]:
     """Brno in its okres and kraj, Praha in its kraj: drawn (resolve places a point in them) and named in the index
-    (own search finds them by name)."""
+    (own search finds them by name); the městská část Praha 6 stands in Vokovice by one door."""
     conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
     version = conn.execute(
         "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
@@ -70,6 +92,9 @@ def _mirror(conn: psycopg.Connection) -> dict[str, int]:
                              ("brno", "obec", "Brno"), ("praha_kraj", "kraj", "Hlavní město Praha"),
                              ("praha", "obec", "Praha")):
         _index(conn, level, ids[key], name, version, None)
+    ids["praha_6"] = _unit(conn, "momc", PRAHA_6, "Praha 6", ids["praha"], version)
+    ids["vokovice"] = _unit(conn, "cast_obce", VOKOVICE, "Vokovice", ids["praha"], version)
+    _door(conn, 21000001, ids["praha"], PRAHA, ids["praha_6"], ids["vokovice"], VOKOVICE, (14.348, 50.101), version)
     return ids
 
 
@@ -153,4 +178,26 @@ def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
     assert "after strikes · top-5: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 1, top-5 1 of 1" in out
     assert out[-1] == "questions: top-5 pass · top-1 pass → pass"
+    assert code == 0
+
+
+@REQUIRED_DB
+def test_null_text_refused_and_not_live_rows_are_counted_and_left_out(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
+    _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    older = conn.execute(
+        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
+        " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
+        ).fetchone()[0]
+    _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
+    # Resolve cannot record a unit the current version no longer draws, so this one row is written as it once was.
+    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    assert "rows 4 · refused 1 · NULL text 1 · not live 1" in out
+    assert "digit share 1 of 4 (25.0 %)" in out
+    assert "questions N = 1" in out
+    assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert code == 0
