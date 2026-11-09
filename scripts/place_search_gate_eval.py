@@ -336,12 +336,19 @@ def _cli_time(at: datetime) -> str:
 
 def _page(io: Boundaries, deployment: str, method: str, path: str, since: datetime, until: datetime,
           ua: str | None) -> list[dict[str, Any]]:
-    """One deployment's rows in [since, until] (whole seconds)."""
+    """One deployment's rows in [since, until] (whole seconds); a range that fills a page is read again in halves."""
     argv = ["logs", deployment, "--http", "--json", *TARGET, "--method", method, "--path", path,
             "--since", _cli_time(since), "--until", _cli_time(until), "--lines", str(LOG_LINES)]
     if ua is not None:
         argv += ["--filter", f"@clientUa:{ua}"]
-    return [json.loads(line) for line in io.run_cli(argv).splitlines() if line.strip()]
+    rows = [json.loads(line) for line in io.run_cli(argv).splitlines() if line.strip()]
+    if len(rows) < LOG_LINES:
+        return rows
+    half = timedelta(seconds=int((until - since).total_seconds()) // 2)
+    if half < timedelta(seconds=1):
+        raise Stop(f"one second of the {method} {path} log holds {LOG_LINES} rows; read it by hand")
+    return (_page(io, deployment, method, path, since, since + half, ua)
+            + _page(io, deployment, method, path, since + half, until, ua))
 
 
 def _log(io: Boundaries, serving: list[Deployment], method: str, path: str, start: datetime, end: datetime,

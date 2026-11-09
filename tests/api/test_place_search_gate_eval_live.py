@@ -616,6 +616,25 @@ def test_mapys_side_reads_every_deployment_that_can_have_served_in_its_7_days(
     assert code == 0
 
 
+@REQUIRED_DB
+def test_a_log_range_that_fills_a_page_is_read_in_parts(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A page holds 5000 rows, the newest; the client abort is the oldest of 5001 and would fall off it."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    begin = clock.at - timedelta(days=7)
+    railway = _Railway([("dep-1", clock.at - timedelta(days=30), clock.at - timedelta(days=30))])
+    railway.log(begin + timedelta(hours=1), "GET", "/maps/suggest", 499, 1200)
+    for n in range(5000):
+        railway.log(begin + timedelta(hours=2, minutes=n), "GET", "/maps/suggest", 200, 300)
+    route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
+    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    assert ("Mapy · 200s n 5000 · p50 300 ms · p95 300 ms · aborts 1 of 5001 (0.0 %) · statuses 200: 5000, 499: 1"
+            in out)
+    assert code == 0
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")
