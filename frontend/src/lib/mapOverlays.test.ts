@@ -25,6 +25,7 @@ import {
   registerOverlayProtocol,
   useMapOverlays,
   useMapZoom,
+  useOverlayPlacesAtCenter,
 } from './mapOverlayDraw';
 import {
   type MapOverlayRegistry,
@@ -33,7 +34,9 @@ import {
   canonicalLayers,
   layersFromSearchParams,
   layersOf,
+  overlayHasAreaCard,
   parseLayers,
+  pickVariant,
   readRememberedLayers,
   readRememberedVariant,
   serializeLayers,
@@ -425,6 +428,13 @@ describe('overlayPopupHtml', () => {
     );
   });
 
+  it('names a place the MF priced as a katastrální území by that word, not as an obec', () => {
+    const props = { name: 'Lobzy', kraj: 'Plzeňský kraj', level: 'ku', vk1: 284 };
+    expect(overlayPopupHtml('Cenová mapa nájemného', props, RENT_LAYER, null)).toContain(
+      `<p class="lp-meta">Katastrální území: Lobzy, Plzeňský kraj, Nájemné referenčního bytu: 284\u00a0${PPM2_UNIT.rent}</p>`,
+    );
+  });
+
   it("names any other scale's figure by the shown variant, in its own unit", () => {
     const decibels = { ...RENT_LAYER, scale: { ...RENT_LAYER.scale!, unit: 'dB' } };
     const html = overlayPopupHtml('Hluk', { name: 'Brno', vk2: 55.5 }, decibels, 'vk2');
@@ -485,6 +495,15 @@ class FakeMap {
   }
   getZoom() {
     return this.zoom;
+  }
+  rendered = new Map<string, { properties: Record<string, unknown> }[]>();
+  queried: [number, number][] = [];
+  getContainer() {
+    return { clientWidth: 400, clientHeight: 300 };
+  }
+  queryRenderedFeatures(point: [number, number], opts: { layers: string[] }) {
+    this.queried.push(point);
+    return opts.layers.flatMap((id) => this.rendered.get(id) ?? []);
   }
   on(type: string, fn: () => void) {
     this.handlers.set(type, fn);
@@ -600,6 +619,59 @@ describe('useMapOverlays', () => {
   });
 });
 
+describe('useOverlayPlacesAtCenter', () => {
+  const PLZEN = { name: 'Plzeň', level: 'ku', vk1: 284, nov1: 346 };
+  const withRentFill = () => {
+    const fake = new FakeMap();
+    fake.layers.push({ id: 'ov-rent_map-fill', type: 'fill', layout: {}, paint: {} });
+    return fake;
+  };
+  const mount = (fake: FakeMap, selection: string) =>
+    renderHook(
+      (p: { selection: string }) => useOverlayPlacesAtCenter(asMap(fake), true, REGISTRY, p.selection),
+      { initialProps: { selection } },
+    );
+
+  it("reads the area card's place at the map's centre, and again each time the map settles", () => {
+    const fake = withRentFill();
+    fake.rendered.set('ov-rent_map-fill', [{ properties: PLZEN }]);
+    const { result } = mount(fake, 'rent_map');
+    expect(result.current.get('rent_map')).toEqual(PLZEN);
+    expect(fake.queried).toEqual([[200, 150]]);
+    fake.rendered.set('ov-rent_map-fill', [{ properties: { name: 'Lobzy', level: 'ku', vk1: 284 } }]);
+    act(() => fake.handlers.get('idle')!());
+    expect(result.current.get('rent_map')).toMatchObject({ name: 'Lobzy' });
+  });
+
+  it('keeps the same answer object while the place is the same', () => {
+    const fake = withRentFill();
+    fake.rendered.set('ov-rent_map-fill', [{ properties: PLZEN }]);
+    const { result } = mount(fake, 'rent_map');
+    const first = result.current;
+    act(() => fake.handlers.get('idle')!());
+    expect(result.current).toBe(first);
+  });
+
+  it('answers null off every place and before the fill is drawn', () => {
+    const fake = withRentFill();
+    expect(mount(fake, 'rent_map').result.current.get('rent_map')).toBeNull();
+    const undrawn = new FakeMap();
+    expect(mount(undrawn, 'rent_map').result.current.get('rent_map')).toBeNull();
+    expect(undrawn.queried).toEqual([]);
+  });
+
+  it('reads nothing, and listens to nothing, without a layer that has an area card', () => {
+    const fake = withRentFill();
+    const { result, rerender, unmount } = mount(fake, 'metro');
+    expect(result.current.size).toBe(0);
+    expect(fake.handlers.has('idle')).toBe(false);
+    rerender({ selection: 'metro,rent_map' });
+    expect([...result.current.keys()]).toEqual(['rent_map']);
+    unmount();
+    expect(fake.handlers.has('idle')).toBe(false);
+  });
+});
+
 describe('useMapZoom', () => {
   it('reports the floored zoom once ready, and again after each zoom', () => {
     const fake = new FakeMap();
@@ -644,6 +716,22 @@ describe('an outlined choropleth keeps its antialiased edge; subdivided fills do
     expect((rent?.spec as { paint: Record<string, unknown> }).paint['fill-antialias']).toBe(true);
     const flood = overlayStyleLayers(FLOOD_R, FLOOD_R.layers[0], true).find((l) => l.spec.id === 'ov-flood_q100-fill');
     expect((flood?.spec as { paint: Record<string, unknown> }).paint['fill-antialias']).toBe(false);
+  });
+});
+
+describe('the area card and its pick', () => {
+  it('belongs to a scale layer with several variants, and to no other', () => {
+    expect(overlayHasAreaCard(RENT_LAYER_R)).toBe(true);
+    expect(overlayHasAreaCard({ ...RENT_LAYER_R, variants: [RENT_LAYER_R.variants![0]] })).toBe(false);
+    expect(overlayHasAreaCard(FLOOD_R.layers[0])).toBe(false);
+  });
+
+  it('paints the layer by the picked variant, spells the first one bare, and remembers the pick', () => {
+    const registry = { sections: [RENT_SECTION_R, FLOOD_R] };
+    expect(pickVariant('flood_q100,rent_map', registry, 'rent_map', 'vk3')).toBe('flood_q100,rent_map:vk3');
+    expect(readRememberedVariant(RENT_LAYER_R)).toBe('vk3');
+    expect(pickVariant('rent_map:vk3', registry, 'rent_map', 'vk1')).toBe('rent_map');
+    expect(readRememberedVariant(RENT_LAYER_R)).toBeNull();
   });
 });
 

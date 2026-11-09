@@ -50,6 +50,7 @@ import {
   overlayPopupHtml,
   useMapOverlays,
   useMapZoom,
+  useOverlayPlacesAtCenter,
 } from '@/lib/mapOverlayDraw';
 import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import { isPinExact } from '@/lib/pinPrecision';
@@ -1373,6 +1374,7 @@ export default function ListingMap({
   useMapFeatureHover(mapRef.current, ready, 'listings', hoveredIds, rows);
 
   useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, OVERLAY_BEFORE_ID);
+  const overlayPlaces = useOverlayPlacesAtCenter(mapRef.current, ready, overlayRegistry, overlayLayers);
 
   /* A reference area answers a click (the popup above), so it shows the
    * pointer — over the whole country while the rent map is on, as it always
@@ -1629,6 +1631,8 @@ export default function ListingMap({
           </RailFlyout>
         )}
       </div>
+      {/* The point an area card reads, while one is on the map. */}
+      {overlayPlaces.size > 0 && !legendsFolded.value && <CentreMark />}
       {/* Bottom-left, over the scale: the key to every layer that is on, so a
           choropleth reads with the panel closed. It folds to one button (and
           stays folded in this browser) when the map is too narrow to spare it. */}
@@ -1638,7 +1642,12 @@ export default function ListingMap({
             <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
               {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
               {cityKey && <CityIndexLegend index={cityKey} />}
-              <MapOverlayLegends registry={overlayRegistry} selection={overlayLayers} />
+              <MapOverlayLegends
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                places={overlayPlaces}
+                onChange={onOverlayLayersChange}
+              />
             </div>
           )}
           <button
@@ -1655,6 +1664,22 @@ export default function ListingMap({
   );
 }
 
+
+/* A small cross at the map's centre, over the tiles and under every control. */
+function CentreMark() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="22"
+      height="22"
+      viewBox="0 0 22 22"
+      className="pointer-events-none absolute z-[2] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+    >
+      <path d="M1 11h6M15 11h6M11 1v6M11 15v6" stroke="#ffffff" strokeWidth="4" strokeLinecap="round" />
+      <path d="M1 11h6M15 11h6M11 1v6M11 15v6" stroke="#16181d" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 /* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
  * GrowthLegend, on the map. */

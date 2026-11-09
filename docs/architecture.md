@@ -645,7 +645,10 @@ size categories as variants; an SQL source over the RÚIAN mirror's render polyg
 `rent_map_values` revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
 transaction; a refused guard keeps the revision and the previous tiles) and by the monthly `rent_map`
 job's last step (`scripts/fetch_rent_map.py`); migration 601 drops `rent_map_choropleth_public`,
-`rent_map_kraje_public` and the `rent_map_choropleth` matview it replaced.
+`rent_map_kraje_public` and the `rent_map_choropleth` matview it replaced. Browse keys it with an area card
+(#2489): the place under the map's centre, the standard and new-build rent of each size category (tile
+props `vkN` / `novN`), a click on a row repaints the map by that category, and a worked example in Kč/měs
+(design doc § The area card).
 
 ## Territories — deep rationale
 

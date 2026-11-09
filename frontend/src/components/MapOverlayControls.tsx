@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
@@ -9,6 +9,7 @@ import {
   formatOverlayNumber,
   overlayDataDate,
   overlayScaleWords,
+  type OverlayPlaces,
 } from '@/lib/mapOverlayDraw';
 import {
   type LayerSelection,
@@ -19,18 +20,20 @@ import {
   type OverlaySection,
   activeVariant,
   layersOf,
+  overlayHasAreaCard,
   parseLayers,
+  pickVariant,
   readRememberedVariant,
   serializeLayers,
-  writeRememberedVariant,
 } from '@/lib/mapOverlays';
 
 type Edit = (apply: (next: Map<string, string | null>) => void) => void;
 
 /* The reference-overlay toggles: one chip per registry section, checked when
  * every layer of it is on. While any is on, the panel under the chip holds the
- * per-layer toggles, variant radios, the legend, the zoom hint, the source's
- * caveats and its provenance. `compact` is the chips alone. */
+ * per-layer toggles, the zoom hint, the source's caveats and its provenance (a
+ * layer's variant is picked on its area card, on the map). `compact` is the
+ * chips alone. */
 export default function MapOverlayControls({
   registry,
   selection,
@@ -143,27 +146,6 @@ function SectionPanel({
       ),
     });
   }
-  for (const layer of section.layers) {
-    if (!sel.has(layer.key)) continue;
-    if ((layer.variants?.length ?? 0) > 1) {
-      const pick = (variant: string) => {
-        writeRememberedVariant(layer.key, variant);
-        edit((next) => {
-          next.set(layer.key, variant);
-        });
-      };
-      blocks.push({
-        key: `variants-${layer.key}`,
-        node: (
-          <VariantRadios
-            layer={layer}
-            value={activeVariant(layer, sel.get(layer.key))?.key ?? null}
-            onChange={pick}
-          />
-        ),
-      });
-    }
-  }
   blocks.push({ key: 'about', node: <SectionAbout section={section} zoom={zoom} /> });
   return (
     <OverlayPanel>
@@ -175,14 +157,20 @@ function SectionPanel({
 }
 
 /* The keys of the layers that are on, one card per section for the map's
- * corner: a layer's scale, or its classes (a multi-layer section lists the
- * class of each layer drawn). The card names the variant shown. */
+ * corner: a layer's area card (a scale with variants), its scale, or its
+ * classes (a multi-layer section lists the class of each layer drawn).
+ * `places` = what lies under the map's centre; `onChange` lets an area card
+ * pick the variant the map is painted by. */
 export function MapOverlayLegends({
   registry,
   selection,
+  places,
+  onChange,
 }: {
   registry: MapOverlayRegistry | undefined;
   selection: string;
+  places?: OverlayPlaces;
+  onChange?: (next: string) => void;
 }) {
   const sel = layersOf(parseLayers(selection), registry);
   return (
@@ -191,23 +179,123 @@ export function MapOverlayLegends({
         const on = section.layers.filter((layer) => sel.has(layer.key));
         if (on.length === 0) return null;
         const classes = on.filter((layer) => !layer.scale).flatMap((layer) => layer.legend);
-        const scales = on.filter((layer) => layer.scale);
-        if (classes.length === 0 && scales.length === 0) return null;
-        const variants = on
-          .filter((layer) => (layer.variants?.length ?? 0) > 1)
-          .map((layer) => activeVariant(layer, sel.get(layer.key))?.label)
-          .filter(Boolean);
+        const cards = on.filter(overlayHasAreaCard);
+        const scales = on.filter((layer) => layer.scale && !overlayHasAreaCard(layer));
+        if (classes.length === 0 && scales.length === 0 && cards.length === 0) return null;
         return (
-          <MapLegendCard
-            key={section.key}
-            title={variants.length ? `${section.label} · ${variants.join(', ')}` : section.label}
-          >
+          <MapLegendCard key={section.key} title={section.label}>
+            {cards.map((layer) => (
+              <AreaCard
+                key={layer.key}
+                layer={layer}
+                variantKey={sel.get(layer.key) ?? null}
+                place={places?.get(layer.key) ?? null}
+                onPick={onChange && ((variant) => onChange(pickVariant(selection, registry, layer.key, variant)))}
+              />
+            ))}
             {scales.map((layer) => <ScaleLegend key={layer.key} scale={layer.scale!} />)}
             {classes.length > 0 && <ClassLegend legend={classes} />}
           </MapLegendCard>
         );
       })}
     </>
+  );
+}
+
+const figureOf = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+const textOf = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
+
+const NUMBER = 'font-mono tabular-nums text-right';
+
+/* A scale layer's key read where the map's centre is: the place, every
+ * variant's figure (and its second one, the rent map's new-build rent) under
+ * the scale's unit, the shown variant lit — a click on another paints the map
+ * by it — then the shown one's worked example and the ramp. */
+function AreaCard({
+  layer,
+  variantKey,
+  place,
+  onPick,
+}: {
+  layer: OverlayLayer;
+  variantKey: string | null;
+  place: Record<string, unknown> | null;
+  onPick?: (variant: string) => void;
+}) {
+  const scale = layer.scale!;
+  const variants = layer.variants ?? [];
+  const words = overlayScaleWords(scale.unit, place?.level);
+  const shown = activeVariant(layer, variantKey);
+  const name = textOf(place?.name);
+  const kraj = textOf(place?.kraj);
+  const alt = variants.some((v) => v.alt_prop);
+  const cols = alt ? 'grid-cols-[minmax(0,1fr)_2.25rem_3.6rem]' : 'grid-cols-[minmax(0,1fr)_2.25rem]';
+  const cell = (prop: string | null | undefined) => {
+    const n = prop ? figureOf(place?.[prop]) : null;
+    return n == null ? '—' : formatOverlayNumber(n);
+  };
+  const m2 = shown?.example_m2 ?? null;
+  const value = shown ? figureOf(place?.[shown.prop]) : null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col">
+        <span className="text-[0.62rem] text-[var(--color-ink-3)] leading-snug">
+          {name ? [words.place, kraj].filter(Boolean).join(' · ') : 'Střed mapy'}
+        </span>
+        <span className="text-[0.75rem] font-semibold text-[var(--color-ink)] leading-snug">{name ?? 'Bez údajů'}</span>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {words.caption && <span className="text-[0.62rem] text-[var(--color-ink-3)]">{words.caption}</span>}
+        <div
+          aria-hidden="true"
+          className={`grid ${cols} gap-x-1.5 px-1.5 text-[0.6rem] whitespace-nowrap text-[var(--color-ink-3)]`}
+        >
+          <span />
+          <span className="text-right">{words.main}</span>
+          {alt && <span className="text-right">{words.alt}</span>}
+        </div>
+        <div role="group" aria-label={words.variants ?? layer.label} className="flex flex-col gap-px">
+          {variants.map((variant) => {
+            const lit = variant.key === shown?.key;
+            return (
+              <button
+                key={variant.key}
+                type="button"
+                aria-pressed={lit}
+                disabled={!onPick}
+                onClick={() => onPick?.(variant.key)}
+                className={`grid ${cols} gap-x-1.5 items-baseline px-1.5 py-0.5 rounded-[var(--radius-sm)] text-left text-[0.7rem] ${
+                  lit
+                    ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
+                    : 'text-[var(--color-ink-2)] enabled:hover:text-[var(--color-ink)] enabled:hover:bg-[var(--color-inset)]'
+                }`}
+              >
+                <span>{variant.label}</span>
+                <span className={NUMBER}>{cell(variant.prop)}</span>
+                {alt && <span className={NUMBER}>{cell(variant.alt_prop)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {words.total && m2 != null && value != null && (
+        <p
+          className="text-[0.65rem] text-[var(--color-ink-2)]"
+          title={words.example ? `${formatOverlayNumber(m2)} m² je ${words.example} ${shown?.label}` : undefined}
+        >
+          Příklad: <span className="font-mono tabular-nums">{formatOverlayNumber(m2)}</span> m² ×{' '}
+          <span className="font-mono tabular-nums">{formatOverlayNumber(value)}</span> ={' '}
+          <span className="font-semibold text-[var(--color-ink)] whitespace-nowrap">
+            <span className="font-mono tabular-nums">{formatOverlayNumber(m2 * value)}</span> {words.total}
+          </span>
+        </p>
+      )}
+      <ScaleLegend scale={scale} compact />
+    </div>
   );
 }
 
@@ -267,37 +355,6 @@ function LayerToggle({
   );
 }
 
-function VariantRadios({
-  layer,
-  value,
-  onChange,
-}: {
-  layer: OverlayLayer;
-  value: string | null;
-  onChange: (variantKey: string) => void;
-}) {
-  // A literal radio `name` is page-global; two mounted maps would share one group.
-  const name = useId();
-  return (
-    <div role="radiogroup" aria-label={layer.label} className="flex flex-col gap-1">
-      {(layer.variants ?? []).map((variant) => (
-        <label
-          key={variant.key}
-          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer"
-        >
-          <input
-            type="radio"
-            name={name}
-            checked={value === variant.key}
-            onChange={() => onChange(variant.key)}
-          />
-          <span>{variant.label}</span>
-        </label>
-      ))}
-    </div>
-  );
-}
-
 function ClassLegend({ legend }: { legend: readonly OverlayLegendEntry[] }) {
   return (
     <ul aria-label="Legenda" className="flex flex-wrap gap-x-3 gap-y-1">
@@ -315,25 +372,41 @@ function ClassLegend({ legend }: { legend: readonly OverlayLegendEntry[] }) {
 }
 
 /* A scale's key: what it measures, the gradient, and the two ends of the
- * scale — for the rent map, word for word the legend it has always had. */
-function ScaleLegend({ scale }: { scale: OverlayScale }) {
+ * scale. `compact` (an area card, which names the unit above its figures): no
+ * caption, the ends beside the gradient. */
+function ScaleLegend({ scale, compact = false }: { scale: OverlayScale; compact?: boolean }) {
   const stops = [...scale.stops].sort((a, b) => a[0] - b[0]);
   if (stops.length === 0) return null;
   const colors = stops.map(([, color]) => color);
   const { caption } = overlayScaleWords(scale.unit);
+  const ends = 'text-[0.65rem] text-[var(--color-ink-3)] tabular-nums';
+  const low = <span className={ends}>{formatOverlayNumber(stops[0][0])}</span>;
+  const high = <span className={ends}>{formatOverlayNumber(stops[stops.length - 1][0])}</span>;
+  const ramp = (
+    <div
+      aria-hidden="true"
+      className={`h-1.5 rounded-sm ${compact ? 'flex-1' : ''}`}
+      style={{
+        background: `linear-gradient(to right, ${(colors.length > 1 ? colors : [colors[0], colors[0]]).join(', ')})`,
+      }}
+    />
+  );
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1.5">
+        {low}
+        {ramp}
+        {high}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1">
       {caption && <span className="text-[0.65rem] text-[var(--color-ink-3)]">{caption}</span>}
-      <div
-        aria-hidden="true"
-        className="h-1.5 rounded-sm"
-        style={{
-          background: `linear-gradient(to right, ${(colors.length > 1 ? colors : [colors[0], colors[0]]).join(', ')})`,
-        }}
-      />
-      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-        <span>{formatOverlayNumber(stops[0][0])}</span>
-        <span>{formatOverlayNumber(stops[stops.length - 1][0])}</span>
+      {ramp}
+      <div className="flex justify-between">
+        {low}
+        {high}
       </div>
     </div>
   );

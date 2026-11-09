@@ -42,6 +42,10 @@ export interface OverlayVariant {
   key: string;
   label: string;
   prop: string;
+  /* A second figure beside `prop` in the area card (the rent map: the new-build rent). */
+  alt_prop?: string | null;
+  /* The floor area of the card's worked example (the rent map: the median rent flat's). */
+  example_m2?: number | null;
 }
 
 export interface OverlayLayer {
@@ -155,6 +159,11 @@ export function layersOf(
   return out;
 }
 
+/* A scale layer with several variants keys the map with an area card: the place under
+ * the map's centre with every variant's figure, a click on one paints the map by it. */
+export const overlayHasAreaCard = (layer: OverlayLayer): boolean =>
+  layer.scale != null && (layer.variants?.length ?? 0) > 1;
+
 export function activeVariant(
   layer: OverlayLayer,
   variantKey: string | null | undefined,
@@ -215,6 +224,20 @@ export const readRememberedVariant = (layer: OverlayLayer): string | null => {
 
 export const writeRememberedVariant = (layerKey: string, variant: string): void =>
   writeValue(variantMemoryKey(layerKey), variant);
+
+/* The selection with `layerKey` painted by `variant`, the pick remembered for the
+ * layer's next switch-on. */
+export function pickVariant(
+  selection: string,
+  registry: MapOverlayRegistry | undefined,
+  layerKey: string,
+  variant: string,
+): string {
+  writeRememberedVariant(layerKey, variant);
+  const next = new Map(layersOf(parseLayers(selection), registry));
+  next.set(layerKey, variant);
+  return serializeLayers(layersOf(next, registry));
+}
 
 /* The remembered selection as live React state; `set` writes it for every subscriber. */
 export function useRememberedLayers(): [string, (next: string) => void] {

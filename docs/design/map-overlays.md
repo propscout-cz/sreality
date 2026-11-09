@@ -319,15 +319,20 @@ tile 200 (headers), 204, 404, 400, auth refused without a token.
   only updates the fill paint (no refetch). Layer ids are removed on unmount.
 - `overlayPopupHtml(sectionLabel, props, layer)` — one popup for click on a fill: kicker =
   section label, title = `name`, meta = the class label (and the variant value with its unit via
-  `lib/measure.ts` `PPM2_UNIT` when `scale.unit` is `rent_per_m2`). Browse's click handler keeps
+  `lib/measure.ts` `PPM2_UNIT` when `scale.unit` is `rent_per_m2`; the place word follows the
+  feature's `level`: "Katastrální území" for the MF's `ku`, else "Obec"). Browse's click handler keeps
   listing layers first (the existing `queryRenderedFeatures` precedence).
+- `useOverlayPlacesAtCenter(map, ready, registry, selection)` (#2489) — for each selected layer with an
+  area card (`overlayHasAreaCard`: a scale layer with > 1 variant), the props of its fill's feature at the
+  map container's centre pixel (`queryRenderedFeatures`), null off every place; re-read on every `idle`,
+  the same object kept while nothing changed.
 
 ### `components/MapOverlayControls.tsx`
 
 Same shape as `RentMapControls`: one chip per section in the bottom-right stack (checkbox +
 label); checked = every layer of the section on (variant = the first); the expanded panel below the
 chip (only when checked) holds per-layer checkboxes when the section has > 1 layer (the section
-checkbox is tri-state), variant radios when present, the legend (swatch per class: filled square,
+checkbox is tri-state), the legend (swatch per class: filled square,
 line, dashed line, dot), a hint "Přibližte mapu" when the map zoom < minzoom, the note, and a footer
 "Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (ComparablesMap): chips only,
 no panel. (The property page's header minimap, `DetailMap`, carries no overlays since 2026-10-23 —
@@ -345,7 +350,19 @@ toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, the
 above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
 (`OverlayPanel`). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
 draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
-panel closed; the stack folds to one button, remembered per browser. The count pill keeps the pin key
+panel closed; the stack folds to one button, remembered per browser.
+
+**The area card (#2489, variant D of the 2026-11-09 design page).** A scale layer with variants (the rent
+map) is keyed by an area card instead of a bare scale: the place under the map's centre (its `level` word and
+kraj, then its name; "Střed mapy · Bez údajů" off every place), the caption, then one row per variant with
+its `prop` and, when any variant names one, its `alt_prop` (the rent map: Běžný | Novostavba, both
+Kč/m²/měs), "—" for a value the place lacks. The shown variant's row is lit like a `SegmentedBar` segment
+(copper fill, `aria-pressed`, a `role="group"`); a click repaints the map by that variant (`pickVariant`,
+remembered like any pick), so the Vrstvy panel carries no variant radios. Under the rows the shown
+variant's worked example, `example_m2 × value = … Kč/měs` (title: what the area is), then the ramp with its
+ends beside it. While a card is on (and the legends unfolded), a small cross marks the map's centre
+(`CentreMark`, under every control). The card keeps the legends' 200 px, so on a 450 px Browse map the cross
+stays clear of it. The count pill keeps the pin key
 (swatch + count; the words from a 900 px map up); the full key and the pin limit live in Piny a ceny.
 
 ### State
@@ -369,7 +386,7 @@ panel closed; the stack folds to one button, remembered per browser. The count p
 
 `mapOverlays.test.ts` (grammar, legacy mapping, style-layer builders from a legend/scale, protocol
 URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy);
-`MapOverlayControls.test.tsx` (chips, tri-state, variant radio, hint, note, footer, compact);
+`MapOverlayControls.test.tsx` (chips, tri-state, area card, hint, note, footer, compact);
 `persistedFlag.test.ts` (string helpers); `geoRing.test.ts`.
 
 ## Cleanup PR (after the feature merges): the MF rent choropleth onto this path
@@ -402,9 +419,12 @@ Backend, as built (2026-10-15):
 - **Layer** `rent_map`: legend empty, store `plain`, `scale = {prop: 'vk1', stops: RENT_RAMP (150
   #eaf0f6 … 600 #1a1a5e), null_color: 'rgba(140, 140, 140, 0.35)', unit: 'rent_per_m2', opacity: 0.62}`
   — `opacity` is new to the scale contract (the SPA's `OverlayScale` had none); `variants` vk1..vk4
-  with the MF labels. `RENT_MAP_SQL` is migration 132's matview query without its GeoJSON column:
-  props `{name, kraj, level, vk1..vk4}` through `jsonb_strip_nulls` (an unpriced VK or a NULL kraj is
-  absent and paints `null_color`), geometry `st_transform(geom::geometry, 3857)`. On production it yields
+  with the MF labels, each since #2489 with `alt_prop: 'novN'` (the area card's new-build column) and
+  `example_m2` (its worked example: the median floor area of active rent flats of that size, 34 / 54 / 75 /
+  106 m² on 2026-11-09). `RENT_MAP_SQL` is migration 132's matview query without its GeoJSON column:
+  props `{name, kraj, level, vk1..vk4, nov1..nov4}` (`novN` = `ref_rent_novostavba_per_m2`, since #2489)
+  through `jsonb_strip_nulls` (an unpriced VK or a NULL kraj is absent and paints `null_color`), geometry
+  `st_transform(geom::geometry, 3857)`. On production it yields
   7,630 features identical (name, kraj, vk1–4) to the matview's 7,630 rows; only 15 polygons exceed 256
   vertices, so `ST_Subdivide` splits almost nothing.
 - **`render_sql_section(conn, key)`**: one SQL-sourced section through `run_section` — datum check,
