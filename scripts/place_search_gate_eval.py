@@ -42,6 +42,7 @@ TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
 # The place box asks from two trimmed characters (frontend/src/components/filter-controls/LocationTypeahead.tsx).
 MIN_QUERY_LEN = 2
+RENEW_BEFORE = timedelta(minutes=5)
 RAILWAY = Path(__file__).resolve().parents[1] / ".railway" / "node_modules" / ".bin" / "railway"
 # The API's project (.railway/railway.ts PROJECTS) and service (docs/architecture.md § Railway service configuration).
 TARGET = ["-p", "78652c43-bb7f-401b-a3de-5f532f76f72c", "-s", "79e65a88-1629-439e-a961-a815f83539de",
@@ -234,7 +235,8 @@ def _vintage(label: str) -> str:
 
 
 class Route:
-    """Own search as the smoke account, one request at a time, every request sent counted, since the host logs each."""
+    """Own search as the smoke account, one request at a time: the token renewed before it lapses, a 401 answered by
+    one fresh sign-in, and every request sent counted, since the host logs each."""
 
     def __init__(self, io: Boundaries, api: str, ua: str) -> None:
         self.io, self.api, self.ua = io, api, ua
@@ -253,13 +255,21 @@ class Route:
 
     def ask(self, text: str) -> list[Row] | None:
         """Own search's rows for one text; None when the route errs or times out."""
-        self.sent += 1
-        try:
-            res = self.io.http.post(f"{self.api}/places/suggest", json={"query": text, "limit": 10},
-                                    headers={"Authorization": f"Bearer {self.token}", "User-Agent": self.ua},
-                                    timeout=TIMEOUT_S)
-        except requests.RequestException:
-            return None
+        if self.io.now() >= self.expires - RENEW_BEFORE:
+            self.sign_in()
+        for fresh in (False, True):
+            self.sent += 1
+            try:
+                res = self.io.http.post(f"{self.api}/places/suggest", json={"query": text, "limit": 10},
+                                        headers={"Authorization": f"Bearer {self.token}", "User-Agent": self.ua},
+                                        timeout=TIMEOUT_S)
+            except requests.RequestException:
+                return None
+            if res.status_code != 401:
+                break
+            if fresh:
+                raise Stop("the route refused the smoke account's token after a fresh sign-in")
+            self.sign_in()
         if res.status_code != 200:
             return None
         return [(str(r["level"]), int(r["id"]), str(r["name"]), r.get("context")) for r in res.json()["items"]]

@@ -682,6 +682,66 @@ def test_a_deployment_created_during_the_replay_is_read_and_named(
     assert code == 0
 
 
+class _Tokens(_Canned):
+    """Canned rows behind a token check on the eval's clock: a token lapses `expires_in` seconds after its sign-in,
+    and the first `revoked` tokens are refused anyway."""
+
+    def __init__(self, at: dict[str, int], clock: _Clock, expires_in: int = 3600, revoked: int = 0) -> None:
+        super().__init__(at, others=2)
+        self.clock, self.expires_in, self.revoked, self.tokens = clock, expires_in, revoked, {}
+
+    def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:
+        if url == AUTH:
+            token = f"token-{len(self.tokens) + 1}"
+            self.tokens[token] = self.clock.at + timedelta(seconds=self.expires_in)
+            return _Answer(200, {"access_token": token, "expires_in": self.expires_in})
+        return super().post(url, json=json, headers=headers, timeout=timeout)
+
+    def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        token = headers["Authorization"].removeprefix("Bearer ")
+        if int(token.removeprefix("token-")) <= self.revoked or self.clock.at >= self.tokens[token]:
+            return _Answer(401, {"detail": "invalid token"})
+        return super().suggest(body, headers)
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("picks", "revoked", "lines"), [
+    (("Brno a", "Lom"), 0, ["own POST /places/suggest · sent 6 · log holds 6 of 6",
+                            "own · 200s n 6 · p50 200 ms · p95 200 ms · statuses 200: 6"]),
+    (("Brno a",), 1, ["own POST /places/suggest · sent 5 · log holds 5 of 5",
+                      "own · 200s n 4 · p50 200 ms · p95 200 ms · statuses 200: 4, 401: 1"]),
+], ids=["an hour between texts", "a token refused once"])
+def test_no_scored_question_meets_a_lapsed_token(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], picks: tuple[str, ...],
+    revoked: int, lines: list[str],
+) -> None:
+    """The token is renewed before it lapses; a 401 all the same signs in afresh once, and the retried request
+    counts among those sent, since the host logs both."""
+    for text in picks:
+        _resolve(client, TOWN_BRNO, text, 1)
+    clock = _clock(conn)
+    railway = _host(clock)
+    route = _Logged(_Tokens({text: 1 for text in picks}, clock, revoked=revoked), railway, clock, [200] * 6)
+    code, out = _run(conn, capsys, route, "--window-size", str(len(picks)), "--text-gap", "3600", clock=clock,
+                     railway=railway)
+    assert "route errors 0" in out
+    for line in lines:
+        assert line in out
+    assert code == 0
+
+
+@REQUIRED_DB
+def test_a_token_refused_after_a_fresh_sign_in_stops_the_run(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    code, out = _run(conn, capsys, _Tokens({"Brno a": 1}, clock, revoked=99), "--no-latency", "--window-size", "1",
+                     clock=clock)
+    assert out[-1] == "the route refused the smoke account's token after a fresh sign-in"
+    assert code == 2
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")
