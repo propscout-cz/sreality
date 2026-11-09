@@ -426,3 +426,16 @@ def test_a_route_error_that_persists_is_a_miss_and_is_counted(
     assert "route errors 1" in out
     assert "after strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
     assert code == 1
+
+
+@REQUIRED_DB
+def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Resolve records no door today (the address picker sends no pick); one would otherwise score a silent miss."""
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Nad Bořislavkou', 1, 'adresni_misto',"
+                 " 21000001)")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    assert out[-1] == "picks at a level no question is scored at: 1 (adresni_misto); look before scoring"
+    assert code == 2

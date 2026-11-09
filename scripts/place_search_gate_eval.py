@@ -31,6 +31,8 @@ PRAGUE = ZoneInfo("Europe/Prague")
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 # Window 1's first day: the recording's first full Prague day (#2473 live 2026-11-08 16:26Z; #2465).
 FIRST_DAY = date(2026, 11, 9)
+# The levels a pick's record names (api/maps.py PickedUnit): own search answers each as a row of that level and code.
+LEVELS = frozenset({"kraj", "okres", "obec", "momc", "cast_obce", "ulice"})
 Z = 1.959964
 TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
@@ -262,6 +264,11 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     not_live = sum(1 for p in window if p.code is not None and not live[(p.level, p.code)])
     print(f"rows {len(window)} · refused {refused} · NULL text {null_text} · not live {not_live}")
     print(f"digit share {null_text} of {len(window)} ({_share(null_text, len(window))})")
+    others = sorted({p.level for p in window} - LEVELS)
+    if others:
+        print(f"picks at a level no question is scored at: {sum(1 for p in window if p.level not in LEVELS)}"
+              f" ({', '.join(others)}); look before scoring")
+        return 2
     # Ruling 2026-11-08: a question seen in an earlier window is never scored again.
     earlier = {(p.text, p.level, p.code) for p in picks if p.created_at < start and p.text is not None}
     questions, asked_before = _questions(window, earlier)
