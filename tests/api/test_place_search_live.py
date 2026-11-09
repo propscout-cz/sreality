@@ -570,3 +570,18 @@ def test_a_street_and_its_cp_answer_the_door_with_its_label_street_and_point_bef
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0275, "lng": 15.2003}},
     ]
+
+
+def test_a_street_and_its_co_answer_the_door_whose_orientation_number_it_is(mirror, client):
+    """A bare number is tried as the č.o. too: Nádražní 345/12 is the house a user knows as Nádražní 12."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=345, co=12, point=(15.2011, 50.0281))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0281, "lng": 15.2011},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0281, "lng": 15.2011}},
+    ]

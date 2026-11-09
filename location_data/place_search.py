@@ -141,11 +141,15 @@ streets AS (
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
    ORDER BY s.code, s.valid_from DESC),
 doors AS (
-  SELECT st.code AS street_code, st.name AS street_name, st.obec_unit_id AS street_obec, ap.kod_adm
+  SELECT st.code AS street_code, st.name AS street_name, st.obec_unit_id AS street_obec, a.kod_adm
     FROM streets st
     JOIN ruian_streets sr ON sr.code = st.code
-    JOIN ruian_address_points ap ON ap.street_id = sr.id
-   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.valid_to IS NULL),
+    CROSS JOIN LATERAL (
+      SELECT ap.kod_adm FROM ruian_address_points ap
+       WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.valid_to IS NULL
+      UNION
+      SELECT ap.kod_adm FROM ruian_address_points ap
+       WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer AND ap.valid_to IS NULL) a),
 top AS (SELECT * FROM doors ORDER BY kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
   FROM top d
@@ -227,7 +231,8 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
             rows = cur.fetchall()
             doors: list[tuple[Any, ...]] = []
             if street_keys:
-                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "domovni": domovni, "limit": limit})
+                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "domovni": domovni, "bare": domovni,
+                                         "limit": limit})
                 doors = cur.fetchall()
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
