@@ -439,3 +439,25 @@ def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
     code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
     assert out[-1] == "picks at a level no question is scored at: 1 (adresni_misto); look before scoring"
     assert code == 2
+
+
+def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SUPABASE_DB_URL")
+    monkeypatch.delenv("SMOKE_TEST_NONADMIN_PASSWORD")
+    code, out = _refused_before_any_read(capsys, datetime(2026, 11, 20, 12, 0, tzinfo=UTC),
+                                         "--window-first", "2026-11-09", "--window-last", "2026-11-12")
+    assert out == ["missing in the environment: SUPABASE_DB_URL, SMOKE_TEST_NONADMIN_PASSWORD"]
+    assert code == 2
+
+
+def test_a_failure_prints_its_class_alone(capsys: pytest.CaptureFixture[str]) -> None:
+    """A driver's message can quote a statement's parameters or a connection string; neither reaches stdout."""
+    def failing() -> Any:
+        raise psycopg.OperationalError("connection to server at db.invalid failed for 'Brno a' with password x")
+
+    io = gate.Boundaries(http=None, open_conn=failing, now=lambda: datetime(2026, 11, 20, 12, 0, tzinfo=UTC),
+                         sleep=lambda _s: None)
+    code = gate.main(["--no-latency", "--window-first", "2026-11-09", "--window-last", "2026-11-12"], io)
+    assert capsys.readouterr().out.splitlines() == ["failed: OperationalError"]
+    assert code == 2

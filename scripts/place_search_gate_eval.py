@@ -235,6 +235,10 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if not args.no_latency:
         print("latency: the prefix replay and the host-log read are not built yet; run with --no-latency")
         return 2
+    missing = [name for name in CREDENTIALS if not os.environ.get(name)]
+    if missing:
+        print(f"missing in the environment: {', '.join(missing)}")
+        return 2
     start, end = _midnight(args.window_first), _midnight(args.window_last + timedelta(days=1))
     if args.window_first < FIRST_DAY:
         print(f"window 1 starts on {FIRST_DAY}, the recording's first full Prague day")
@@ -339,7 +343,12 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
 
 def main(argv: list[str] | None = None, io: Boundaries | None = None) -> int:
     args = _parser().parse_args(argv)
-    return _run(args, io or _default_boundaries())
+    try:
+        return _run(args, io or _default_boundaries())
+    except Exception as exc:
+        # The class alone: a driver's or an HTTP client's message can quote a pick's text or a credential.
+        print(f"failed: {type(exc).__name__}")
+        return 2
 
 
 if __name__ == "__main__":
