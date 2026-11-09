@@ -985,7 +985,16 @@ def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_
         {"level": "adresni_misto", "id": 21000203, "name": "Lhota, Kladno", "context": "Kladno", "point": None,
          "street": None},
     ]
-    assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota"), (21000203, "Lhota, Kladno")]
+    assert _suggest(client, "Lhota 25") == [
+        {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno",
+         "point": {"lat": 50.1703, "lng": 14.0021}, "street": None},
+        {"level": "adresni_misto", "id": 21000203, "name": "Lhota, Kladno", "context": "Kladno", "point": None,
+         "street": None},
+        {"level": "cast_obce", "id": LHOTA_LHOTA, "name": "Lhota", "context": "Lhota",
+         "point": {"lat": 50.1703, "lng": 14.0021}},
+        {"level": "obec", "id": LHOTA, "name": "Lhota", "context": "Kladno", "point": None},
+        {"level": "cast_obce", "id": LHOTA_KLADNO, "name": "Lhota", "context": "Kladno", "point": None},
+    ]
 
 
 @pytest.mark.parametrize("query", ["Nádražní 12, Pečky", "Nádražní 12 Kutná Hora"])
@@ -1116,18 +1125,18 @@ def test_a_street_named_with_an_ordinal_typed_with_its_town_answers_its_door(mir
 
 
 def test_a_failed_read_of_a_text_with_a_town_is_the_same_503_with_one_line_naming_no_town(mirror, client, conn, caplog):
-    """A text with a town reads the doors once per reading, in the name read's transaction: the first statement that
-    fails ends it, with the one SQLSTATE line."""
+    """A text with a town that reads the doors more than once ends at the first failing statement: the same 503 and one
+    SQLSTATE-only line naming no town. "Kolín, Nádražní 12" is read in the town Kolín, then as the whole text."""
     towns = _towns(mirror)
     mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
     mirror.publish()
     with caplog.at_level("INFO"):
-        assert _suggest(client, "Nádražní 12, Kolín") == [
+        assert _suggest(client, "Kolín, Nádražní 12") == [
             {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
              "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
         ]
         conn.execute("ALTER TABLE ruian_address_points RENAME TO ruian_address_points_gone")
-        res = client.post("/places/suggest", json={"query": "Nádražní 12, Kolín"})
+        res = client.post("/places/suggest", json={"query": "Kolín, Nádražní 12"})
     assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
     lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
     assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
