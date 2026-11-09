@@ -32,8 +32,15 @@ EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 Z = 1.959964
 TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
+_CURRENT_SQL = """
+SELECT v.id, v.label,
+       (SELECT count(*) FROM ruian_admin_unit_relations rel
+         WHERE rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = v.id)
+  FROM registry_versions v
+ WHERE v.is_current
+"""
 # A copy of own search's liveness (location_data/place_search.py) until Stage B: a unit is live when the current
-# version draws it, a street when that version holds it open.
+# version draws it, a street when that version holds it open; a městská část answers only with quarter pairs there.
 _LIVE_SQL = """
 SELECT a.level, a.code,
        CASE WHEN a.level = 'ulice' THEN EXISTS (
@@ -43,7 +50,12 @@ SELECT a.level, a.code,
             ELSE EXISTS (
               SELECT 1 FROM ruian_admin_units u
                WHERE u.level = a.level::ruian_level AND u.code = a.code
-                 AND %(cur)s BETWEEN u.first_version_id AND u.last_version_id) END
+                 AND %(cur)s BETWEEN u.first_version_id AND u.last_version_id) END,
+       a.level <> 'momc' OR EXISTS (
+              SELECT 1 FROM ruian_admin_units u
+                JOIN ruian_admin_unit_relations rel ON rel.from_id = u.id
+               WHERE u.level = 'momc' AND u.code = a.code AND %(cur)s BETWEEN u.first_version_id AND u.last_version_id
+                 AND rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = %(cur)s)
   FROM unnest(%(levels)s::text[], %(codes)s::bigint[]) AS a(level, code)
 """
 CREDENTIALS = ("SUPABASE_DB_URL", "SMOKE_TEST_NONADMIN_EMAIL", "SMOKE_TEST_NONADMIN_PASSWORD", "VITE_SUPABASE_URL",
@@ -137,15 +149,33 @@ def _share(part: int, whole: int) -> str:
     return f"{100 * part / whole:.1f} %" if whole else "—"
 
 
-def _live(conn: psycopg.Connection, window: list[StoredPick]) -> dict[tuple[str, int], bool] | None:
-    """Whether the current version still holds each place the window's picks name; None with no current version."""
-    row = conn.execute("SELECT id FROM registry_versions WHERE is_current").fetchone()
+@dataclass(frozen=True)
+class Registry:
+    version: int
+    label: str
+    pairs: int
+    live: dict[tuple[str, int], bool]
+    answerable: dict[tuple[str, int], bool]
+
+
+def _registry(conn: psycopg.Connection, window: list[StoredPick]) -> Registry | None:
+    """The current version, its quarter pairs, and per place the window's picks name: whether that version still holds
+    it, and whether own search can answer it there (a městská část only with a pair). None with no current version."""
+    row = conn.execute(_CURRENT_SQL).fetchone()
     if row is None:
         return None
+    version, label, pairs = row
     places = sorted({(p.level, p.code) for p in window if p.code is not None})
-    rows = conn.execute(_LIVE_SQL, {"cur": row[0], "levels": [lv for lv, _ in places],
+    rows = conn.execute(_LIVE_SQL, {"cur": version, "levels": [lv for lv, _ in places],
                                     "codes": [code for _, code in places]}).fetchall()
-    return {(level, int(code)): bool(live) for level, code, live in rows}
+    return Registry(int(version), str(label), int(pairs),
+                    {(level, int(code)): bool(live) for level, code, live, _ in rows},
+                    {(level, int(code)): bool(answerable) for level, code, _, answerable in rows})
+
+
+def _vintage(label: str) -> str:
+    """The load's vintage from a registry label such as 'ruian:2026-10-31'."""
+    return label.removeprefix("ruian:").replace("-", "") if label.startswith("ruian:") else "<the current vintage>"
 
 
 def _sign_in(io: Boundaries) -> str | None:
@@ -208,10 +238,13 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
         window = [p for p in picks if p.created_at >= start]
-        live = _live(conn, window)
-    if live is None:
+        registry = _registry(conn, window)
+    if registry is None:
         print("no current registry version")
         return 2
+    live = registry.live
+    print(f"window {args.window_first} to {args.window_last} · registry {registry.label} (version {registry.version})"
+          f" · momc pairs {registry.pairs}")
     refused = sum(1 for p in window if p.code is None)
     null_text = sum(1 for p in window if p.text is None)
     not_live = sum(1 for p in window if p.code is not None and not live[(p.level, p.code)])
@@ -225,6 +258,12 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     print(f"questions N = {len(scorable)}")
     if not scorable:
         print("N = 0: no interval and no verdict")
+        return 2
+    unanswerable = [q for q in scorable if not registry.answerable[(q.level, q.code)]]
+    if unanswerable:
+        print(f"momc questions with no quarter pair at the current version: {len(unanswerable)} (pairs there:"
+              f" {registry.pairs}); first re-dispatch the load's finishing step, then confirm the pairs:"
+              f" gh workflow run location_registry_load.yml -f vintage={_vintage(registry.label)}")
         return 2
 
     token = _sign_in(io)

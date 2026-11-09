@@ -28,11 +28,13 @@ from tests._live_property import REQUIRED_DB, _mirror_unit, db_url  # noqa: E402
 from tests.api._jwt import mint  # noqa: E402
 
 BRNO, PRAHA, PRAHA_6, VOKOVICE, LOMNICE = 582786, 554782, 500178, 490067, 581917
+BRNO_STRED, STARE_BRNO = 551082, 411744
 BRNO_BOX = (16.50, 49.10, 16.70, 49.30)
 PRAHA_BOX = (14.20, 49.90, 14.70, 50.20)
 TOWN_BRNO = {"lat": 49.2, "lng": 16.6, "type": "regional.municipality", "name": "Brno"}
 MOMC_PRAHA_6 = {"lat": 50.1, "lng": 14.4, "type": "regional.municipality", "name": "Praha 6"}
 PART_BARRANDOV = {"lat": 50.03, "lng": 14.4, "type": "regional.municipality_part", "name": "Barrandov"}
+MOMC_BRNO_STRED = {"lat": 49.19, "lng": 16.6, "type": "regional.municipality_part", "name": "Brno-střed"}
 
 AUTH = "https://auth.test/auth/v1/token?grant_type=password"
 API = "http://testserver"
@@ -75,7 +77,8 @@ def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: i
 
 def _mirror(conn: psycopg.Connection) -> dict[str, int]:
     """Brno in its okres and kraj, Praha in its kraj: drawn (resolve places a point in them) and named in the index
-    (own search finds them by name); the městská část Praha 6 stands in Vokovice by one door."""
+    (own search finds them by name); the městské části Praha 6 and Brno-střed each stand in one quarter by one door,
+    with no quarter pair yet (a test writes the pairs it needs)."""
     conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
     version = conn.execute(
         "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
@@ -96,7 +99,19 @@ def _mirror(conn: psycopg.Connection) -> dict[str, int]:
     ids["praha_6"] = _unit(conn, "momc", PRAHA_6, "Praha 6", ids["praha"], version)
     ids["vokovice"] = _unit(conn, "cast_obce", VOKOVICE, "Vokovice", ids["praha"], version)
     _door(conn, 21000001, ids["praha"], PRAHA, ids["praha_6"], ids["vokovice"], VOKOVICE, (14.348, 50.101), version)
+    ids["brno_stred"] = _unit(conn, "momc", BRNO_STRED, "Brno-střed", ids["brno"], version)
+    ids["stare_brno"] = _unit(conn, "cast_obce", STARE_BRNO, "Staré Brno", ids["brno"], version)
+    _door(conn, 21000002, ids["brno"], BRNO, ids["brno_stred"], ids["stare_brno"], STARE_BRNO, (16.6, 49.19), version)
     return ids
+
+
+def _pair(conn: psycopg.Connection, momc: int, part: int) -> None:
+    """A městská část's quarter pair at the current version, as the registry load's finish step writes it."""
+    conn.execute(
+        "INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)"
+        " SELECT m.id, q.id, 'momc_cast_obce', v.id FROM ruian_admin_units m, ruian_admin_units q, registry_versions v"
+        " WHERE m.level = 'momc' AND m.code = %s AND q.level = 'cast_obce' AND q.code = %s AND v.is_current",
+        (momc, part))
 
 
 @pytest.fixture()
@@ -302,4 +317,35 @@ def test_a_strike_that_is_no_miss_stops_the_run(conn: psycopg.Connection, client
     route, strikes = _three_picks(client, tmp_path, f"{strike}\n")
     code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3", "--strikes", strikes)
     assert out[-1] == refusal
+    assert code == 2
+
+
+@REQUIRED_DB
+def test_a_shortcut_question_is_scored_as_its_mestska_cast(conn: psycopg.Connection, client: TestClient,
+                                                           capsys: pytest.CaptureFixture[str]) -> None:
+    """Resolve answers a městská část's quarters and records the městská část; own search's shortcut row is the
+    městská část itself: first for its own name, second after the town for the town's name."""
+    _pair(conn, PRAHA_6, VOKOVICE)
+    _pair(conn, BRNO_STRED, STARE_BRNO)
+    _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
+    _resolve(client, MOMC_PRAHA_6, "Praha", 2)
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
+    assert out[0].endswith(" · momc pairs 2")
+    assert "after strikes · top-5: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
+    assert "after strikes · top-1: 1 of 2 (needs 2) · Wilson 9.5–90.5 %" in out
+    assert code == 1
+
+
+@REQUIRED_DB
+def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_question(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no pair at the current version own search answers no shortcut, so the question would score a miss that
+    says nothing about own search (the #2450 note on #2452)."""
+    _pair(conn, BRNO_STRED, STARE_BRNO)
+    _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
+    _resolve(client, MOMC_PRAHA_6, "Praha", 2)
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
+    assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);")
+    assert "gh workflow run location_registry_load.yml" in out[-1]
     assert code == 2
