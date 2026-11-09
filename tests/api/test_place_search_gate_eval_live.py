@@ -398,3 +398,31 @@ def test_a_window_the_gate_cannot_score_is_refused_before_any_read(capsys: pytes
                                          "--window-first", first, "--window-last", last)
     assert out == [refusal]
     assert code == 2
+
+
+class _Flaky(_Canned):
+    """Canned rows behind a route that answers 503 the first `fails[text]` times it is asked a text."""
+
+    def __init__(self, at: dict[str, int], fails: dict[str, int]) -> None:
+        super().__init__(at)
+        self.fails = dict(fails)
+
+    def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        if self.fails.get(body["query"], 0) > 0:
+            self.fails[body["query"]] -= 1
+            return _Answer(503, {"detail": {"code": "place_search_unavailable"}})
+        return super().suggest(body, headers)
+
+
+@REQUIRED_DB
+def test_a_route_error_that_persists_is_a_miss_and_is_counted(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One retry rides out a blip; a question whose answer never comes is a miss own search earned."""
+    for text in ("Brno a", "Brno b", "Brno c"):
+        _resolve(client, TOWN_BRNO, text, 1)
+    route = _Flaky({"Brno a": 1, "Brno b": 1, "Brno c": 1}, fails={"Brno b": 1, "Brno c": 2})
+    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3")
+    assert "route errors 1" in out
+    assert "after strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
+    assert code == 1

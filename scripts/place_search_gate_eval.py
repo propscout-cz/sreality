@@ -297,6 +297,9 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         if answers:
             io.sleep(WHOLE_TEXT_GAP_S)
         answers[text] = _ask(io, args.api, headers, text)
+        if answers[text] is None:
+            io.sleep(WHOLE_TEXT_GAP_S)
+            answers[text] = _ask(io, args.api, headers, text)
 
     scored = []
     for q in scorable:
@@ -312,6 +315,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
             print(f"strike {n} {refusal}")
             return 2
     kept = [s for s in scored if s.question.number not in struck]
+    print(f"route errors {sum(1 for q in scorable if answers[q.text] is None)}")
     print(f"struck {len(struck)}")
     print(f"N = {len(scored)} before strikes, {len(kept)} after")
     _block("before strikes", scored)
