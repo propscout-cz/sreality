@@ -569,6 +569,24 @@ def test_the_latency_run_reads_both_medians_from_the_host_log(
     assert code == exit_code
 
 
+@REQUIRED_DB
+def test_the_replay_types_one_text_at_a_time_spaced_out(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The place box's keystrokes, 0.2 s apart, and 30 s between texts, so the name index is not held warm."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _resolve(client, TOWN_BRNO, "Lom", 1)
+    clock = _clock(conn)
+    railway = _host(clock)
+    route = _Logged(_Canned({"Brno a": 1, "Lom": 1}, others=2), railway, clock, [200] * 6)
+    code, out = _run(conn, capsys, route, "--window-size", "2", clock=clock, railway=railway)
+    assert clock.events == [("post", "Br"), ("sleep", 0.2), ("post", "Brn"), ("sleep", 0.2), ("post", "Brno"),
+                            ("sleep", 0.2), ("post", "Brno a"), ("sleep", 30.0), ("post", "Lo"), ("sleep", 0.2),
+                            ("post", "Lom")]
+    assert "own POST /places/suggest · sent 6 · log holds 6 of 6" in out
+    assert code == 0
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")
