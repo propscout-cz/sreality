@@ -95,8 +95,8 @@ estate JSON and bezrealitky's advert-with-query from their own `append_payload_i
 sites. Every failure warns and returns — an archive must never break the scrape it rides in.
 
 **Bodies live in R2, so the archive needs the R2 env vars** (the image lane's four) — on all 14
-page-fetching lanes since #1074 (`tests/test_scrape_lane_r2_env.py`) AND on the job runner, whose
-`location_intake` READS them back (`tests/test_railway_config.py`); MISSING when the path was first called ready, and
+page-fetching lanes since #1074 (`tests/test_scrape_lane_r2_env.py`) AND the job runner, where
+`location_intake` READS them (`tests/test_railway_config.py`); MISSING when first called ready, and
 INVISIBLE: the append warns `payload archive needs R2 for …` and archives nothing while the scrape
 stays green. Railway's worker: own dashboard. Over `LOCATION_PAYLOAD_R2_THRESHOLD_BYTES` (2048,
 TOAST) compressed spills to `body_r2_key` — every portal but bezrealitky, whose small bodies archive
