@@ -122,19 +122,19 @@ class _Mirror:
     def house(self, kod: int, obec: int, *, cp: int, street: int | None = None, part: int | None = None,
               typ: str = "č.p.", co: int | None = None, znak: str | None = None,
               point: tuple[float, float] | None = None, version: int | None = None,
-              valid_to: str | None = None) -> None:
+              valid_to: str | None = None, momc: int | None = None) -> None:
         """A numbered door on `street` (a street ROW, as the load points a door) or, streetless, in `part`; born in
-        `version` (the current one by default); `valid_to` retires it."""
+        `version` (the current one by default); `valid_to` retires it; `momc` is the městská část row it lies in."""
         version = self.v if version is None else version
         lng, lat = point if point is not None else (None, None)
         self.conn.execute(
             "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, street_id, ulice_kod,"
             " cast_obce_unit_id, cast_obce_kod, typ_so, cislo_domovni, cislo_orientacni, znak_orientacniho, psc,"
-            " geom, plati_od, valid_to, first_version_id, last_version_id)"
+            " geom, plati_od, valid_to, first_version_id, last_version_id, momc_unit_id)"
             " VALUES (%s, %s, %s, %s, (SELECT code FROM ruian_streets WHERE id = %s), %s, %s, %s, %s, %s, %s, '28002',"
-            " ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326), '2020-01-01', %s, %s, %s)",
+            " ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326), '2020-01-01', %s, %s, %s, %s)",
             (kod, obec, self.codes[obec], street, street, part, self.codes[part] if part else None, typ, cp, co,
-             znak, lng, lat, valid_to, version, version))
+             znak, lng, lat, valid_to, version, version, momc))
 
     def close_street(self, street: int, version: int) -> None:
         """`version` closes the street row, as the load's street upsert does before it reopens a changed one."""
@@ -1042,3 +1042,26 @@ def test_a_letter_on_a_bare_number_is_the_co_s_letter_with_or_without_its_town(m
     assert _suggest(client, "Nádražní 12a") == [door, {**street, "point": None}]
     assert _suggest(client, "Nádražní 12a, Kolín") == [door]
     assert _suggest(client, "Nádražní 12a Kolín") == [door]
+
+
+NADRAZNI_PRAHA = 401003
+
+
+@pytest.mark.parametrize(("query", "kod"), [("Nádražní 12, Praha 6", 21000611), ("Praha 7, Nádražní 12", 21000612),
+                                           ("Nádražní 12 Praha 6", 21000611)])
+def test_a_mestska_cast_typed_as_the_town_answers_the_door_that_lies_in_it(mirror, client, query, kod):
+    """A street runs through several městské části of its town, and its doors carry the one each lies in: Nádražní 12
+    is in Praha 6, Nádražní 345/12 in Praha 7. Both pieces of "Praha 7, Nádražní 12" carry a number; "Praha 7" in a town
+    "Nádražní 12" names nothing, so the other reading answers."""
+    praha = _praha(mirror)
+    praha_6, praha_7 = mirror.unit("momc", PRAHA_6, "Praha 6", praha), mirror.unit("momc", PRAHA_7, "Praha 7", praha)
+    nadrazni = mirror.street(NADRAZNI_PRAHA, "Nádražní", praha)
+    mirror.house(21000611, praha, street=nadrazni, cp=12, momc=praha_6)
+    mirror.house(21000612, praha, street=nadrazni, cp=345, co=12, momc=praha_7)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_PRAHA, "name": "Nádražní", "context": "Praha"}
+    door = {21000611: {"level": "adresni_misto", "id": 21000611, "name": "Nádražní 12, Praha",
+                       "context": "území Hlavního města Prahy", "point": None, "street": street},
+            21000612: {"level": "adresni_misto", "id": 21000612, "name": "Nádražní 345/12, Praha",
+                       "context": "území Hlavního města Prahy", "point": None, "street": street}}
+    assert _suggest(client, query) == [door[kod]]
