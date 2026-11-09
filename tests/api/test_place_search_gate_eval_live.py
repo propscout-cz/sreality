@@ -148,8 +148,26 @@ class _Route:
             token = mint({"sub": str(uuid.uuid4()), "app_metadata": {"automation": True}})
             return _Answer(200, {"access_token": token, "expires_in": 3600})
         if url == f"{API}/places/suggest":
-            return self.client.post("/places/suggest", json=json, headers=headers)
+            return self.suggest(json, headers)
         raise AssertionError(f"the eval called an unrouted URL: {url}")
+
+    def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        return self.client.post("/places/suggest", json=body, headers=headers)
+
+
+FILLER = [("kraj", 116), ("okres", 3702), ("obec", PRAHA), ("kraj", 19), ("momc", PRAHA_6)]
+
+
+class _Canned(_Route):
+    """Own search's rows, canned per text: Brno at the 1-based position `at[text]`, filler rows before it."""
+
+    def __init__(self, at: dict[str, int]) -> None:
+        self.at = at
+
+    def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        position = self.at[body["query"]]
+        rows = [*FILLER[:position - 1], ("obec", BRNO), *FILLER[position - 1:]]
+        return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
 
 
 def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any,
@@ -217,3 +235,31 @@ def test_a_question_asked_in_an_earlier_window_is_left_out_and_n_0_gives_no_verd
     assert "questions N = 0" in out
     assert out[-1] == "N = 0: no interval and no verdict"
     assert code == 2
+
+
+# 200 distinct digit-free texts, every one picked as Brno.
+TEXTS_200 = [f"Brno {a}{b}" for a in "abcdefghijklmnopqrst" for b in "abcdefghij"]
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("top5", "top1", "lines", "exit_code"), [
+    (194, 180, ["after strikes · top-5: 194 of 200 (needs 194) · Wilson 93.6–98.6 %",
+                "after strikes · top-1: 180 of 200 (needs 180) · Wilson 85.1–93.4 %",
+                "questions: top-5 pass · top-1 pass → pass"], 0),
+    (193, 180, ["after strikes · top-5: 193 of 200 (needs 194) · Wilson 93.0–98.3 %",
+                "questions: top-5 fail · top-1 pass → fail"], 1),
+    (194, 179, ["after strikes · top-1: 179 of 200 (needs 180) · Wilson 84.5–93.0 %",
+                "questions: top-5 pass · top-1 fail → fail"], 1),
+], ids=["194 top-5 and 180 top-1 pass", "193 top-5 fail", "179 top-1 fail"])
+def test_at_n_200_the_gate_needs_194_top5_and_180_top1_hits(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+    top5: int, top1: int, lines: list[str], exit_code: int,
+) -> None:
+    for text in TEXTS_200:
+        _resolve(client, TOWN_BRNO, text, 1)
+    at = {text: 1 if n < top1 else 3 if n < top5 else 6 for n, text in enumerate(TEXTS_200)}
+    code, out = _run(conn, capsys, _Canned(at), "--no-latency")
+    assert "questions N = 200" in out
+    for line in lines:
+        assert line in out
+    assert code == exit_code
