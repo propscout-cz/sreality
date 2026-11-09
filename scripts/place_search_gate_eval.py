@@ -92,9 +92,10 @@ def _midnight(day: date) -> datetime:
     return datetime.combine(day, dt_time.min, PRAGUE)
 
 
-def _questions(window: list[StoredPick]) -> list[Question]:
-    """The window's distinct (text, level, code) with a text, numbered by first appearance (then level, code, text),
-    an order stable across runs; a repeat keeps its best Mapy rank."""
+def _questions(window: list[StoredPick], earlier: set[tuple[str, str, int | None]]) -> tuple[list[Question], int]:
+    """The window's distinct (text, level, code) with a text and not in `earlier`, numbered by first appearance (then
+    level, code, text), an order stable across runs, so a strike is a number; a repeat keeps its best Mapy rank. Also
+    how many were left out as earlier."""
     first: dict[tuple[str, str, int | None], datetime] = {}
     best: dict[tuple[str, str, int | None], int] = {}
     for pick in window:
@@ -103,9 +104,10 @@ def _questions(window: list[StoredPick]) -> list[Question]:
         key = (pick.text, pick.level, pick.code)
         first.setdefault(key, pick.created_at)
         best[key] = min(best.get(key, pick.rank), pick.rank)
-    ordered = sorted(first, key=lambda k: (first[k], k[1], k[2] is None, k[2] or 0, k[0]))
-    return [Question(n, text, level, code, best[(text, level, code)])
-            for n, (text, level, code) in enumerate(ordered, 1)]
+    ordered = sorted((k for k in first if k not in earlier),
+                     key=lambda k: (first[k], k[1], k[2] is None, k[2] or 0, k[0]))
+    return ([Question(n, text, level, code, best[(text, level, code)])
+             for n, (text, level, code) in enumerate(ordered, 1)], len(first) - len(ordered))
 
 
 def _share(part: int, whole: int) -> str:
@@ -188,9 +190,15 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     not_live = sum(1 for p in window if p.code is not None and not live[(p.level, p.code)])
     print(f"rows {len(window)} · refused {refused} · NULL text {null_text} · not live {not_live}")
     print(f"digit share {null_text} of {len(window)} ({_share(null_text, len(window))})")
-    questions = _questions(window)
+    # Ruling 2026-11-08: a question seen in an earlier window is never scored again.
+    earlier = {(p.text, p.level, p.code) for p in picks if p.created_at < start and p.text is not None}
+    questions, asked_before = _questions(window, earlier)
+    print(f"asked in an earlier window: {asked_before}")
     scorable = [q for q in questions if q.code is not None and live[(q.level, q.code)]]
     print(f"questions N = {len(scorable)}")
+    if not scorable:
+        print("N = 0: no interval and no verdict")
+        return 2
 
     token = _sign_in(io)
     if token is None:

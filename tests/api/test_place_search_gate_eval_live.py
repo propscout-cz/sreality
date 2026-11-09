@@ -201,3 +201,19 @@ def test_null_text_refused_and_not_live_rows_are_counted_and_left_out(
     assert "questions N = 1" in out
     assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert code == 0
+
+
+@REQUIRED_DB
+def test_a_question_asked_in_an_earlier_window_is_left_out_and_n_0_gives_no_verdict(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ruling 2026-11-08: every window scores own search on questions it was never scored against."""
+    # Resolve writes now(); the earlier pick is written as it was two days ago.
+    conn.execute("INSERT INTO place_picks (created_at, text, rank, level, code)"
+                 " VALUES (now() - interval '2 days', 'Brno', 1, 'obec', %s)", (BRNO,))
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    assert "asked in an earlier window: 1" in out
+    assert "questions N = 0" in out
+    assert out[-1] == "N = 0: no interval and no verdict"
+    assert code == 2
