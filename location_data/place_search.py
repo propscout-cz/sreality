@@ -169,10 +169,12 @@ doors AS (
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
          AND (%(orientacni)s::integer IS NULL OR ap.cislo_orientacni = %(orientacni)s::integer)
-         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text) AND ap.valid_to IS NULL
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text)
+         AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)
       UNION
       SELECT ap.kod_adm FROM ruian_address_points ap
-       WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer AND ap.valid_to IS NULL) a
+       WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer
+         AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)) a
   UNION ALL
   SELECT k.served, NULL, NULL, NULL, ap.kod_adm
     FROM candidates k
@@ -181,7 +183,7 @@ doors AS (
     JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
    WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
      AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
-     AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL),
+     AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)),
 top AS (SELECT * FROM doors ORDER BY served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
   FROM top d
