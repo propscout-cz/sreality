@@ -809,11 +809,14 @@ def test_the_looks_run_ends_by_naming_its_report_and_how_to_delete_it(
     addresses = tmp_path / "addresses.tsv"
     addresses.write_text("21000001\tNad Bořislavkou 487\n", encoding="utf-8")
     report = tmp_path / "look.html"
+    report.write_text("an earlier look")
+    report.chmod(0o644)
     route = _Doors({"Brno": 1}, {"Nad Bořislavkou 487": (21000001, 1)})
     code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "1", "--addresses", str(addresses),
                      "--report", str(report))
     assert out[-2] == "verdict: questions pass · latency not measured · addresses pass → pass"
     assert out[-1] == f"Report: {report}. Delete it after the look: rm {report}"
+    assert report.stat().st_mode & 0o777 == 0o600
     assert code == 0
 
 

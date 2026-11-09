@@ -624,6 +624,7 @@ def _report(tally: list[str], questions: list[Question], registry: Registry, ans
 
 def _write_private(path: Path, page: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(page)
 
