@@ -409,17 +409,28 @@ def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: Test
 
 
 @REQUIRED_DB
-@pytest.mark.parametrize(("strike", "refusal"), [
-    ("1", "strike 1 is not a miss"),
-    ("4", "strike 4 is not a question number"),
-], ids=["a top-1 hit", "no such question"])
-def test_a_strike_that_is_no_miss_stops_the_run(conn: psycopg.Connection, client: TestClient,
-                                                capsys: pytest.CaptureFixture[str], tmp_path: Path, strike: str,
-                                                refusal: str) -> None:
-    route, strikes = _three_picks(client, tmp_path, f"{strike}\n")
+def test_a_strike_on_no_question_stops_the_run(conn: psycopg.Connection, client: TestClient,
+                                               capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    route, strikes = _three_picks(client, tmp_path, "4\n")
     code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
-    assert out[-1] == refusal
+    assert out[-1] == "strike 4 is not a question number"
     assert code == 2
+
+
+@REQUIRED_DB
+def test_a_strike_on_a_question_now_answered_top_1_is_dropped_and_said(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    """An answer can change between the look and the figures (own search's tie order refreshes hourly): the question
+    counts as the hit it now is, and the replay already sent is not thrown away."""
+    route, strikes = _three_picks(client, tmp_path, "1\n")
+    code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
+    assert "strike 1 now answers top-1: strike dropped" in out
+    assert "struck 0" in out
+    assert "N = 3 before strikes, 3 after" in out
+    assert "after strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
+    assert out[-1] == "verdict: questions fail · latency not measured · addresses not asked → fail"
+    assert code == 1
 
 
 @REQUIRED_DB

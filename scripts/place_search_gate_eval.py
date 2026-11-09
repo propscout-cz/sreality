@@ -15,8 +15,10 @@ IPv4 transaction pooler; no production DB string is kept on disk):
     python3 -m scripts.place_search_gate_eval --window-first D1 --window-last D2 ... )
   (a) the look:     ... --no-latency --report ~/gate-look.html
   (b) the operator strikes mislabelled misses by question number, one per line, in ~/gate-strikes.txt
-  (c) the figures:  ... --strikes ~/gate-strikes.txt --addresses ~/gate-addresses.tsv  (about 30 s a text)
-  (d) rm ~/gate-look.html ~/gate-strikes.txt ~/gate-addresses.tsv
+  (c) the figures:  ... --strikes ~/gate-strikes.txt --addresses ~/gate-addresses.tsv --report ~/gate-figures.html
+      (about 30 s a text); answers can move between (a) and (c), so before the verdict goes on #2465 the operator
+      checks in that report that every unstruck miss is a real miss: a new mislabelled one means (c) again, struck
+  (d) rm ~/gate-look.html ~/gate-figures.html ~/gate-strikes.txt ~/gate-addresses.tsv
 Exit 0: every measured part passes; 1: a part fails; 2: a refusal, an error, or an incomplete part with none failed."""
 
 from __future__ import annotations
@@ -698,10 +700,12 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         doors = _replay(route, list(dict.fromkeys(text for _, text in addresses)), WHOLE_TEXT_GAP_S, 0.0, _whole)
 
     scored = [Scored(q, _rank(answers[q.text], (q.level, q.code))) for q in scorable]
+    # The answers can differ from the look's run; a struck question answered top-1 now counts as the hit it is.
     for s in scored:
         if s.question.number in struck and s.own_rank == 1:
-            raise Stop(f"strike {s.question.number} is not a miss")
-    kept = [s for s in scored if s.question.number not in struck]
+            say(f"strike {s.question.number} now answers top-1: strike dropped")
+            struck.discard(s.question.number)
+    kept =[s for s in scored if s.question.number not in struck]
     say(f"route errors {sum(1 for q in scorable if answers[q.text] is None)}")
     say(f"struck {len(struck)}")
     say(f"N = {len(scored)} before strikes, {len(kept)} after")

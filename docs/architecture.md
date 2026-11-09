@@ -1191,7 +1191,7 @@ rules. Identify which one a task belongs to before you start.
   refused and not-live rows are counted and left out, the digit share is NULL-text rows over the window's rows, and a
   pick at a level outside kraj, okres, obec, momc, část obce and ulice stops the run. Numbered by first pick, then
   level, code, text, so the operator's strikes are numbers in a file, never text; striking an unknown or unscorable
-  number or a top-1 hit stops the run. A momc question whose městská část has no quarter pair at the current version
+  number stops the run, and a struck question this run finds answered top-1 is dropped from the strikes and said. A momc question whose městská část has no quarter pair at the current version
   stops it before any request, naming the finishing-only re-dispatch (vintage from the version's `source_date`) after
   its precondition: no `registry_versions` row newer, as it writes to production. Top-1: the first row is the stored place (a
   shortcut: `momc` and the městská část's code); top-5: within the first five. An answer other than 200, or a
@@ -1219,8 +1219,10 @@ rules. Identify which one a task belongs to before you start.
   (that would send the texts to the model's provider): the operator opens it (`wslview`) and deletes it after the
   look. Exit 0 every measured part passes, 1 a part fails, 2 a refusal, an error, or an incomplete part with none
   failed. **Run** (the
-  recipe and the four steps are the module docstring, `--help`): in the operator's terminal, the database string
-  pasted for the command (the IPv4 transaction pooler; none is kept on disk); before it, the momc pairs at the current
+  recipe and its steps are the module docstring, `--help`): in the operator's terminal, the database string
+  pasted for the command (the IPv4 transaction pooler; none is kept on disk); the figures' run writes its own report
+  from the answers it scores, since answers can move after the look, and the operator checks there that every
+  unstruck miss is real before the verdict goes on #2465; before it, the momc pairs at the current
   version, no merge during the replay and no registry load (the 1st of the month) across it, as liveness is judged at
   the version current when the eval reads. After #2461 the same window is re-scored and that verdict replaces the
   first.
