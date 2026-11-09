@@ -307,7 +307,7 @@ def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
     assert "after strikes · top-5: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 1, top-5 1 of 1" in out
     assert "questions: top-5 pass · top-1 pass → pass" in out
-    assert out[-1] == "verdict: questions pass · latency not measured → pass"
+    assert out[-1] == "verdict: questions pass · latency not measured · addresses not asked → pass"
     assert code == 0
 
 
@@ -399,7 +399,7 @@ def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: Test
     assert "after strikes · top-1: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
     assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 2, top-5 2 of 2" in out
     assert "questions: top-5 pass · top-1 pass → pass" in out
-    assert out[-1] == "verdict: questions pass · latency not measured → pass"
+    assert out[-1] == "verdict: questions pass · latency not measured · addresses not asked → pass"
     assert code == 0
 
 
@@ -642,10 +642,10 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
 @pytest.mark.parametrize(("lag", "lines", "polls", "exit_code"), [
     (timedelta(seconds=45), ["own POST /places/suggest · sent 4 · log holds 4 of 4",
                              "latency: own p50 200 ms ≤ Mapy p50 344 ms → not slower → pass",
-                             "verdict: questions pass · latency pass → pass"], 2, 0),
+                             "verdict: questions pass · latency pass · addresses not asked → pass"], 2, 0),
     (timedelta(minutes=10), ["own POST /places/suggest · sent 4 · log holds 0 of 4", "own · 200s n 0 · statuses —",
                              "latency: incomplete: no verdict without both medians and every request sent in the log",
-                             "verdict: questions pass · latency incomplete → incomplete"], 10, 2),
+                             "verdict: questions pass · latency incomplete · addresses not asked → incomplete"], 10, 2),
 ], ids=["caught up in a minute", "still behind after 5 minutes"])
 def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], lag: timedelta,
@@ -740,6 +740,55 @@ def test_a_token_refused_after_a_fresh_sign_in_stops_the_run(
                      clock=clock)
     assert out[-1] == "the route refused the smoke account's token after a fresh sign-in"
     assert code == 2
+
+
+class _Doors(_Canned):
+    """Canned rows, and for a dictated address its door (`adresni_misto`, kód ADM) at the 1-based `doors[text][1]`."""
+
+    def __init__(self, at: dict[str, int], doors: dict[str, tuple[int, int]]) -> None:
+        super().__init__(at, others=2)
+        self.doors = doors
+
+    def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
+        if body["query"] not in self.doors:
+            return super().suggest(body, headers)
+        kod, position = self.doors[body["query"]]
+        rows = [*FILLER[:position - 1], ("adresni_misto", kod), *FILLER[position - 1:]]
+        return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
+
+
+# Invented doors: kód ADM and the house as dictated.
+DOORS_30 = {f"Lhota {n}": (21000100 + n, 1 if n <= 27 else 2) for n in range(1, 31)}
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("doors", "lines", "exit_code"), [
+    ({"Nad Bořislavkou 487": (21000001, 1), "Lhota 25": (21000099, 6)},
+     ["addresses N = 2 · route errors 0", "addresses · top-5: 1 of 2 (needs 2)", "addresses · top-1: 1 of 2 (needs 2)",
+      "addresses: top-5 fail · top-1 fail → fail",
+      "verdict: questions pass · latency pass · addresses fail → fail"], 1),
+    (DOORS_30, ["addresses N = 30 · route errors 0", "addresses · top-5: 30 of 30 (needs 30)",
+                "addresses · top-1: 27 of 30 (needs 27)", "addresses: top-5 pass · top-1 pass → pass",
+                "verdict: questions pass · latency pass · addresses pass → pass"], 0),
+], ids=["one door sixth", "Q2 c at 30"])
+def test_dictated_address_questions_are_scored_by_their_kod_adm(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+    doors: dict[str, tuple[int, int]], lines: list[str], exit_code: int,
+) -> None:
+    """Asked after the replay under their own agent, so the own latency read holds the replay's requests only."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    path = tmp_path / "addresses.tsv"
+    path.write_text("# kód ADM<TAB>the house as dictated\n"
+                    + "".join(f"{kod}\t{text}\n" for text, (kod, _) in doors.items()), encoding="utf-8")
+    clock = _clock(conn)
+    railway = _host(clock)
+    route = _Logged(_Doors({"Brno a": 1}, doors), railway, clock, [200] * (4 + len(doors)))
+    code, out = _run(conn, capsys, route, "--window-size", "1", "--addresses", str(path), clock=clock,
+                     railway=railway)
+    assert "own POST /places/suggest · sent 4 · log holds 4 of 4" in out
+    for line in lines:
+        assert line in out
+    assert code == exit_code
 
 
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],

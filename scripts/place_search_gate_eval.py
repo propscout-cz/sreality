@@ -37,6 +37,7 @@ EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 FIRST_DAY = date(2026, 11, 9)
 # The levels a pick's record names (api/maps.py PickedUnit): own search answers each as a row of that level and code.
 LEVELS = frozenset({"kraj", "okres", "obec", "momc", "cast_obce", "ulice"})
+DOOR = "adresni_misto"
 Z = 1.959964
 TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
@@ -151,6 +152,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="questions that fill a window (Q2 c: 200); a smaller size is for tests")
     p.add_argument("--no-latency", action="store_true", help="ask each text whole, once; read no log (the look's run)")
     p.add_argument("--strikes", type=Path, help="the operator's struck question numbers, one per line, '#' comments")
+    p.add_argument("--addresses", type=Path,
+                   help="the dictated address questions: kod_adm<TAB>the house as dictated, one per line, '#' comments")
     p.add_argument("--text-gap", type=float, default=30.0, help="seconds between texts in the prefix replay")
     p.add_argument("--keystroke-gap", type=float, default=0.2, help="seconds between a text's prefixes")
     p.add_argument("--mapy-from", type=_aware, help="start Mapy's 7 days no earlier than this (after its cache went)")
@@ -177,6 +180,26 @@ def _strikes(path: Path | None) -> set[int]:
             raise Stop(f"strikes: line {n} is not a question number")
         numbers.add(int(value))
     return numbers
+
+
+def _addresses(path: Path | None) -> list[tuple[int, str]]:
+    """The dictated address questions: each house's kód ADM, which is the label (#2451: never the door's label), and
+    the text as dictated."""
+    if path is None:
+        return []
+    if _inside_checkout(path):
+        raise Stop("addresses: the file is inside a git checkout; keep it outside, and delete it after the run")
+    questions: list[tuple[int, str]] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        kod, tab, text = line.partition("\t")
+        if not tab or not kod.strip().isdecimal() or not text.strip():
+            raise Stop(f"addresses: line {n} is not kod_adm<TAB>text")
+        questions.append((int(kod), text.strip()))
+    if not questions:
+        raise Stop("addresses: the file holds no question")
+    return questions
 
 
 def _midnight(day: date) -> datetime:
@@ -467,6 +490,22 @@ def _rank(rows: list[Row] | None, place: tuple[str, int]) -> int | None:
     return found[0] if found else None
 
 
+def _score_addresses(say: _Out, addresses: list[tuple[int, str]], answers: dict[str, list[Row] | None]) -> str:
+    """Q2 c's thresholds over the dictated questions: a hit is the house's door row; no strike, no Mapy figure."""
+    ranks = [_rank(answers[text], (DOOR, kod)) for kod, text in addresses]
+    n = len(ranks)
+    top5 = sum(1 for r in ranks if r is not None and r <= 5)
+    top1 = sum(1 for r in ranks if r == 1)
+    needs5, needs1 = _needs(97, n), _needs(90, n)
+    say(f"addresses N = {n} · route errors {sum(1 for _, text in addresses if answers[text] is None)}")
+    say(f"addresses · top-5: {top5} of {n} (needs {needs5})")
+    say(f"addresses · top-1: {top1} of {n} (needs {needs1})")
+    verdict = "pass" if top5 >= needs5 and top1 >= needs1 else "fail"
+    say(f"addresses: top-5 {'pass' if top5 >= needs5 else 'fail'} · top-1 {'pass' if top1 >= needs1 else 'fail'}"
+        f" → {verdict}")
+    return verdict
+
+
 def _run(args: argparse.Namespace, io: Boundaries) -> int:
     say = _Out()
     missing = [name for name in CREDENTIALS if not os.environ.get(name)]
@@ -480,6 +519,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if end > io.now():
         raise Stop(f"{args.window_last} is not over yet in Prague")
     struck = _strikes(args.strikes)
+    addresses = _addresses(args.addresses)
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
         window = [p for p in picks if p.created_at >= start]
@@ -535,6 +575,9 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         run_start = io.now()
         answers = _replay(route, texts, args.text_gap, args.keystroke_gap, _prefixes)
         run_end, sent = io.now(), route.sent
+    if addresses:
+        route.ua = f"{ua}-addresses"
+        doors = _replay(route, list(dict.fromkeys(text for _, text in addresses)), WHOLE_TEXT_GAP_S, 0.0, _whole)
 
     scored = [Scored(q, _rank(answers[q.text], (q.level, q.code))) for q in scorable]
     for s in scored:
@@ -550,7 +593,8 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     pass5, pass1 = _block(say, "after strikes", kept)
     say("Wilson: questions cluster by about four people, so this interval is too narrow")
     say("Mapy: biased upward: every pick is a row Mapy listed; a repeat keeps its best rank")
-    parts = {"questions": "pass" if pass5 and pass1 else "fail", "latency": "not measured"}
+    parts = {"questions": "pass" if pass5 and pass1 else "fail", "latency": "not measured",
+             "addresses": "not asked"}
     say(f"questions: top-5 {'pass' if pass5 else 'fail'} · top-1 {'pass' if pass1 else 'fail'} → {parts['questions']}")
 
     if not args.no_latency:
@@ -562,7 +606,9 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
             parts["latency"] = "pass" if own_p50 <= mapy_p50 else "fail"
             say(f"latency: own p50 {own_p50} ms {'≤' if own_p50 <= mapy_p50 else '>'} Mapy p50 {mapy_p50} ms →"
                 f" {'not slower' if own_p50 <= mapy_p50 else 'slower'} → {parts['latency']}")
-    measured = [v for v in parts.values() if v != "not measured"]
+    if addresses:
+        parts["addresses"] = _score_addresses(say, addresses, doors)
+    measured = [v for v in parts.values() if v not in ("not measured", "not asked")]
     overall = "fail" if "fail" in measured else "incomplete" if "incomplete" in measured else "pass"
     say(f"verdict: {' · '.join(f'{part} {value}' for part, value in parts.items())} → {overall}")
     return {"pass": 0, "fail": 1, "incomplete": 2}[overall]
