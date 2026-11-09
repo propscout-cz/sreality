@@ -1100,3 +1100,16 @@ def test_a_village_typed_with_a_mestska_cast_answers_its_streetless_door_only_if
          "point": None, "street": None},
     ]
     assert _suggest(client, "Dejvice 6, Praha 7") == []
+
+
+@pytest.mark.parametrize("query", ["28. října 5, Kolín", "28. října 5 Kolín"])
+def test_a_street_named_with_an_ordinal_typed_with_its_town_answers_its_door(mirror, client, query):
+    """The ordinal is part of the street's name, never a number the town follows. The whole text names nothing (0.53
+    to the street)."""
+    towns = _towns(mirror)
+    mirror.house(21000131, towns["kolin"], street=mirror.street(401010, "28. října", towns["kolin"]), cp=5)
+    mirror.publish()
+    assert _suggest(client, query) == [
+        {"level": "adresni_misto", "id": 21000131, "name": "28. října 5, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": 401010, "name": "28. října", "context": "Kolín"}},
+    ]
