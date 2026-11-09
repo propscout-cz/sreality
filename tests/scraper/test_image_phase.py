@@ -188,6 +188,32 @@ def test_classify_404_alive_is_source_unavailable(monkeypatch):
     assert alive == {42}
 
 
+def test_classify_404_a_freshness_check_the_stop_cut_is_no_verdict(monkeypatch):
+    """#2438: the realtime worker's SIGTERM sets `scraper.stop`, so the images lane's freshness check of a 404 is cut
+    before its request. That says nothing about the listing: no check row, no alive verdict cached for the run, no
+    parked image; the row is tried again by the next pass."""
+    from scraper import freshness, stop
+    from scraper.sreality_client import SrealityClient
+
+    stop.arm()
+    stop.EVENT.set()
+    logged: list[Any] = []
+    monkeypatch.setattr(freshness.listing_write, "latest_snapshot", lambda *_a: None)
+    monkeypatch.setattr(freshness, "_insert_log", lambda *a, **kw: logged.append(a))
+    client = SrealityClient(category_main=1, category_type=2)
+    monkeypatch.setattr(client._session, "get", lambda *_a, **_kw: pytest.fail("a stopped check makes no request"))
+    gone: set[int] = set()
+    alive: set[int] = set()
+
+    kind = scraper_main._classify_image_failure(
+        conn=None, client=client, sreality_id=42,
+        error=_http_error(404),
+        gone_listings=gone, alive_listings=alive,
+    )
+    assert kind == "transient"
+    assert gone == alive == set() and logged == []
+
+
 def test_classify_404_alive_cached_is_source_unavailable(monkeypatch):
     """A listing already cached alive: a 404 image is source_unavailable
     (dead URL), but a non-404 error stays transient."""

@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from scraper import sold_db, sold_fetch
+from scraper import sold_db, sold_fetch, stop
 from scraper.rate_ledger import RateBudgetUnavailable
 from scraper.reas_parser import ReasPayloadError
 
@@ -268,6 +268,19 @@ def test_a_shared_budget_refusal_is_raised_and_leaves_no_ledger_row(cell):
 
     with pytest.raises(RateBudgetUnavailable):
         sold_fetch.fetch_cell(_FakeConn(), _Refused(), 500496)
+
+    assert cell["ledger"] == [] and cell["upserts"] == []
+
+
+def test_a_stop_is_raised_and_leaves_no_ledger_row(cell):
+    # A deploy's SIGTERM reaches the worker's sold_comps lane through `scraper.stop` (#2438): the cell in hand was
+    # cut by us, so it is walked again next pass, never held back six hours as `failed`.
+    class _Stopped:
+        def fetch_sold_page(self, bounds, *, page: int = 1) -> str:
+            raise stop.StopRequested("a stop signal arrived")
+
+    with pytest.raises(stop.StopRequested):
+        sold_fetch.fetch_cell(_FakeConn(), _Stopped(), 500496)
 
     assert cell["ledger"] == [] and cell["upserts"] == []
 

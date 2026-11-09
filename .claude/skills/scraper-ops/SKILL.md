@@ -232,14 +232,14 @@ from the slow "download each ad" write:
   no per-listing loop.
 - **The detail drain (the worker's drain lane; by hand `--drain-only`).** Claims a bounded slice of the queue
   (`realtime_drain_slice` per source a pass; by hand `--max-detail`), fetches details on a rate-limited pool, and writes
-  each ~100-item flush through **`listing_write.write_listings`** on all nine portals (set-based, ONE transaction:
+  each ~100-item flush through **`listing_write.write_listings`** on every portal (set-based, ONE transaction:
   upsert, images/videos, failure clear, snapshot-on-change, dirty marks). sreality uses the **session pooler**
   (`connect_session()`, prepared statements), the crawlers `connect()`. New listings land `property_id` NULL and become
-  **singletons** via `recompute_property_stats`'s bounded straggler-attach (the write carries no matching at all;
-  grouping is out-of-band and operator-ordered, rule #15). A gone fetch records its verdict + dequeues it (flips only
+  **singletons** via `recompute_property_stats`'s straggler-attach (no matching in the write, rule #15). A gone fetch records its verdict + dequeues it (flips only
   under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. A hand run records `run_type='detail'`,
-  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a SIGKILLed
-  claim is recovered by the next run's `reclaim_stale_claims`.
+  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a stop (the
+  worker's SIGTERM too, #2438) hands back unfetched claims, flushes the rest; a SIGKILLed claim waits ~30 min for
+  `reclaim_stale_claims`.
 
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
 walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked, each page loop out

@@ -618,7 +618,13 @@ Four changes, each closing one link:
   on why an item failed, so an item whose own error lands after the refusal is handed back too,
   without an attempt charge (a retry, never a lost attempt). The sold_comps tick stops at
   the refused cell (`fetch_cell` re-raises the refusal and writes no ledger row) instead of
-  failing every remaining cell one by one. The Actions walks and drains and the `reas_main` CLI
+  failing every remaining cell one by one. A deploy's SIGTERM is the same refusal since #2438:
+  the worker's handler sets `scraper.stop` (armed at boot; the event loop owns the signals), so
+  a drain chunk in flight hands back what it has not fetched (`refused_reason = "stop"`,
+  `DRAIN stop signal mid-chunk`, counted `deadline_stopped`) and flushes the rest, a probe
+  stops without a `budget_refused`, and a sold_comps cell the stop cut writes no ledger row,
+  where before the chunk fetched on until SIGKILL and its claims waited out the 30-min
+  reclaim. The Actions walks and drains and the `reas_main` CLI
   pass no bound (NULL) and wait as long as the ledger says: a walk is built to wait, and a sticky
   refusal would abandon the rest of a three-hour walk (at penalty > 1x a healthy frontier can
   pass 120 s on the slowest ledger portal). Two changes cut the frontier's growth for every

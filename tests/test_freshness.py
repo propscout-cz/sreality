@@ -255,6 +255,22 @@ def test_generic_exception_is_fetch_error(monkeypatch):
     assert all("UPDATE listings" not in sql for sql, _ in conn.executions)
 
 
+def test_a_check_the_stop_cut_is_raised_and_records_nothing(monkeypatch):
+    """#2438: the realtime worker's SIGTERM sets `scraper.stop`, and every sreality request after it is cut. A cut
+    check is no check: a `fetch_error` row would read as a fresh check for `verify_listing_freshness`'s 24 h, and the
+    images lane would cache the listing alive. So it records nothing and the stop goes on to the caller."""
+    from scraper import stop
+
+    calls = _patch_db(monkeypatch, _snap(_load_raw()))
+    client = _StubClient(exc=stop.StopRequested("a stop signal arrived"))
+    conn = _FakeConn()
+    with pytest.raises(stop.StopRequested):
+        freshness.freshness_check(conn, client, sreality_id=2836292428)
+
+    assert calls["log"] == [] and calls["upsert"] == [] and calls["nominate"] == []
+    assert conn.executions == []
+
+
 def test_db_write_failure_is_fetch_error(monkeypatch):
     prev_raw = _load_raw()
     new_raw = copy.deepcopy(prev_raw)
