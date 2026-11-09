@@ -604,3 +604,19 @@ def test_a_village_and_its_cp_answer_its_streetless_door_whose_one_label_has_no_
         {"level": "cast_obce", "id": 70971, "name": "Lhota", "context": "Lhota",
          "point": {"lat": 50.1703, "lng": 14.0021}},
     ]
+
+
+def test_a_town_and_a_number_is_never_read_as_a_door_so_praha_6_stays_its_shortcut(mirror, client):
+    """A village is a část obce, never the town: a č.p. is unique only within its část, and "Praha 6" is the městská
+    část. Dejvice has a streetless č.p. 6, as Vysočany does in production; it is not answered."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    mirror.quarters(praha_6, dejvice, mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha))
+    mirror.house(21000601, praha, part=dejvice, cp=6)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6")) == [
+        ("momc", PRAHA_6, "Praha 6", "Praha"),
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
+        ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+    ]
