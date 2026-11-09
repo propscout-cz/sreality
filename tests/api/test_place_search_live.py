@@ -900,3 +900,25 @@ def test_a_failed_door_read_is_the_same_503_and_no_log_line_carries_the_typed_te
     assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
     assert not any("nádražní" in r.getMessage().lower() or "nadrazni" in r.getMessage().lower() or r.exc_info
                    for r in caplog.records)
+
+
+DOOR_KOLIN = {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+              "point": {"lat": 50.0275, "lng": 15.2003},
+              "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}}
+
+
+@pytest.mark.parametrize("query", ["Nádražní 12, Kolín"])
+def test_a_street_and_number_typed_with_its_town_answer_its_door_first_the_row_the_street_and_number_give(
+        mirror, client, query):
+    """#2485 (story 53): the town is split off before the door read. The whole text names no place by similarity (0.50
+    to the street at best), so the door is the only row, the same row "Nádražní 12" answers."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, query) == [DOOR_KOLIN]
+    assert _suggest(client, "Nádražní 12") == [
+        DOOR_KOLIN,
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]

@@ -267,6 +267,42 @@ def _door(row: tuple[Any, ...]) -> Place:
     return Place(_DOOR_LEVEL, int(kod), label, context, lat, lng, street=street)
 
 
+@dataclass(frozen=True)
+class _Reading:
+    """One way to read the text as an address: its street part, number slots and town key (None: every town)."""
+
+    street: str
+    domovni: int
+    typ: str | None
+    orientacni: int | None
+    znak: str | None
+    town: str | None
+
+    def params(self, limit: int) -> dict[str, Any]:
+        return {"street_keys": _street_keys(self.street), "part_key": normalize_name(self.street),
+                "domovni": self.domovni, "orientacni": self.orientacni, "znak": self.znak, "typ": self.typ or TYP_CP,
+                "bare": self.domovni if self.orientacni is None and self.typ is None else None, "limit": limit}
+
+
+def _address(text: str, town: str | None) -> _Reading | None:
+    street_part, slots = split_street_and_number(text)
+    domovni, typ = house_number(slots)
+    if domovni is None:
+        return None
+    orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
+    return _Reading(street_part, domovni, typ, orientacni, slots.get("znak_orientacniho"), town)
+
+
+def _addresses(query: str) -> list[_Reading]:
+    """The readings in the order they are tried; the whole text's, as #2451 read it, always last."""
+    readings: list[_Reading | None] = []
+    pieces = [piece.strip() for piece in query.split(",")]
+    if len(pieces) == 2 and all(pieces):
+        readings.append(_address(pieces[0], normalize_name(pieces[1])))
+    readings.append(_address(query, None))
+    return [r for r in readings if r is not None]
+
+
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     unit_key, street_key = normalize_name(query), normalize_street_name(query)
     unit_prefix, unit_fuzzy = _arm(unit_key)
@@ -278,24 +314,18 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
-    street_part, slots = split_street_and_number(query)
-    domovni, typ = house_number(slots)
-    orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
-    znak = slots.get("znak_orientacniho")
-    street_keys = _street_keys(street_part) if domovni is not None else []
+    readings = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)
             cur.execute(_SUGGEST_SQL, params)
             rows = cur.fetchall()
             doors: list[tuple[Any, ...]] = []
-            if street_keys:
-                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "part_key": normalize_name(street_part),
-                                         "domovni": domovni, "orientacni": orientacni, "znak": znak,
-                                         "typ": typ or TYP_CP,
-                                         "bare": domovni if orientacni is None and typ is None else None,
-                                         "limit": limit})
+            for reading in readings:
+                cur.execute(_DOORS_SQL, reading)
                 doors = cur.fetchall()
+                if doors:
+                    break
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
         LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)
