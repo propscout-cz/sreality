@@ -75,7 +75,7 @@ MAPY_SPAN = timedelta(days=7)
 SKEW = timedelta(minutes=1)
 POLL_S, POLL_TIMES = 30.0, 10
 _CURRENT_SQL = """
-SELECT v.id, v.label,
+SELECT v.id, v.label, v.source_date,
        (SELECT count(*) FROM ruian_admin_unit_relations rel
          WHERE rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = v.id)
   FROM registry_versions v
@@ -264,6 +264,7 @@ def _share(part: int, whole: int) -> str:
 class Registry:
     version: int
     label: str
+    vintage: date
     pairs: int
     live: dict[tuple[str, int], bool]
     answerable: dict[tuple[str, int], bool]
@@ -276,19 +277,14 @@ def _registry(conn: psycopg.Connection, window: list[StoredPick]) -> Registry | 
     row = conn.execute(_CURRENT_SQL).fetchone()
     if row is None:
         return None
-    version, label, pairs = row
+    version, label, vintage, pairs = row
     places = sorted({(p.level, p.code) for p in window if p.code is not None})
     rows = conn.execute(_LIVE_SQL, {"cur": version, "levels": [lv for lv, _ in places],
                                     "codes": [code for _, code in places]}).fetchall()
-    return Registry(int(version), str(label), int(pairs),
+    return Registry(int(version), str(label), vintage, int(pairs),
                     {(level, int(code)): bool(live) for level, code, live, *_ in rows},
                     {(level, int(code)): bool(answerable) for level, code, _, answerable, *_ in rows},
                     {(level, int(code)): (name, context) for level, code, _, _, name, context in rows})
-
-
-def _vintage(label: str) -> str:
-    """The load's vintage from a registry label such as 'ruian:2026-10-31'."""
-    return label.removeprefix("ruian:").replace("-", "") if label.startswith("ruian:") else "<the current vintage>"
 
 
 class Route:
@@ -682,8 +678,10 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     unanswerable = [q for q in scorable if not registry.answerable[(q.level, q.code)]]
     if unanswerable:
         raise Stop(f"momc questions with no quarter pair at the current version: {len(unanswerable)} (pairs there:"
-                   f" {registry.pairs}); first re-dispatch the load's finishing step, then confirm the pairs:"
-                   f" gh workflow run location_registry_load.yml -f vintage={_vintage(registry.label)}")
+                   f" {registry.pairs}); first confirm with a SELECT that no registry_versions row is newer than version"
+                   f" {registry.version} (doors are unversioned), then, with the operator's OK, re-dispatch the load's"
+                   f" finishing step (it writes to production): gh workflow run location_registry_load.yml"
+                   f" -f vintage={registry.vintage:%Y%m%d}; then confirm the pairs")
     numbers, scorable_numbers = {q.number for q in questions}, {q.number for q in scorable}
     for n in sorted(struck):
         if n not in numbers or n not in scorable_numbers:

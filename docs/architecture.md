@@ -1192,7 +1192,8 @@ rules. Identify which one a task belongs to before you start.
   pick at a level outside kraj, okres, obec, momc, část obce and ulice stops the run. Numbered by first pick, then
   level, code, text, so the operator's strikes are numbers in a file, never text; striking an unknown or unscorable
   number or a top-1 hit stops the run. A momc question whose městská část has no quarter pair at the current version
-  stops it before any request, naming the finishing-only re-dispatch. Top-1: the first row is the stored place (a
+  stops it before any request, naming the finishing-only re-dispatch (vintage from the version's `source_date`) after
+  its precondition: no `registry_versions` row newer, as it writes to production. Top-1: the first row is the stored place (a
   shortcut: `momc` and the městská část's code); top-5: within the first five. An answer other than 200, or a
   timeout, is asked once more after the gap, and one that stays failed is a miss ("route errors k"). Pass: ⌈0.97 N⌉
   top-5 and ⌈0.90 N⌉ top-1 hits after strikes; printed before and after strikes with the Wilson 95 % interval (too

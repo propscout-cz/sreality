@@ -443,8 +443,9 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
     _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
     _resolve(client, MOMC_PRAHA_6, "Praha", 2)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
-    assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);")
-    assert "gh workflow run location_registry_load.yml" in out[-1]
+    assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);"
+                              " first confirm with a SELECT that no registry_versions row is newer than version ")
+    assert "gh workflow run location_registry_load.yml -f vintage=20261101;" in out[-1]
     assert code == 2
 
 
