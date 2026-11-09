@@ -6,16 +6,19 @@ CHECK, a UNIQUE or an FK, so nothing in this file claims the mirror accepted a r
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import inspect
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from location_data import load_assertions, loader_db, name_index, ruian_boundaries, ruian_load
+from scraper import job_lease, jobs
 
 
 class _FakeCursor:
@@ -660,3 +663,43 @@ def test_an_incomplete_version_is_never_published(monkeypatch, tmp_path):
     load.missing = []
     assert load.dispatch() == 0
     assert load.calls["publish"] == 1
+
+
+# ---------------------------------------------- location-heavy: the load holds it on any host (#2028)
+
+def _main_holding(monkeypatch: pytest.MonkeyPatch, mine: bool, *argv: str,
+                  code: int = 0) -> tuple[int, list[object]]:
+    calls: list[object] = []
+    monkeypatch.setenv("SUPABASE_DB_SESSION_URL", "postgresql://stub")
+    monkeypatch.setattr(ruian_load.db, "connect", lambda *a, **k: _Noop())
+
+    @contextlib.contextmanager
+    def held_job(conn: object, job: jobs.Job, *, wait_s: float) -> Iterator[job_lease.HeldRun | None]:
+        calls.append(("held", job.name, job.resource, wait_s))
+        held = job_lease.HeldRun() if mine else None
+        yield held
+        if held is not None:
+            calls.append(("closed with", held.exit_code))
+
+    monkeypatch.setattr(ruian_load.job_lease, "held_job", held_job)
+    monkeypatch.setattr(ruian_load, "run", lambda **kwargs: calls.append("run") or code)
+    return ruian_load.main(list(argv)), calls
+
+
+def test_the_load_runs_only_while_it_holds_the_location_heavy_resource(monkeypatch):
+    """The GitHub `location-batch` group is gone: the load claims its registry entry's resource through the
+    lease module, waiting as long as the intake can hold it, and a load that never got it writes nothing."""
+    wait_s = jobs.resource_wait_s(jobs.entry("ruian_load"))
+    held = ("held", "ruian_load", jobs.LOCATION_HEAVY, wait_s)
+    assert _main_holding(monkeypatch, True) == (0, [held, "run", ("closed with", 0)])
+    assert _main_holding(monkeypatch, False) == (1, [held])
+
+
+def test_a_load_that_fails_without_raising_closes_its_run_failed(monkeypatch):
+    """`run` returns 1 on a blocking assertion: the held run closes with that code, never `ok`."""
+    held = ("held", "ruian_load", jobs.LOCATION_HEAVY, jobs.resource_wait_s(jobs.entry("ruian_load")))
+    assert _main_holding(monkeypatch, True, code=1) == (1, [held, "run", ("closed with", 1)])
+
+
+def test_a_dry_run_touches_no_database_and_holds_nothing(monkeypatch):
+    assert _main_holding(monkeypatch, False, "--dry-run") == (0, ["run"])

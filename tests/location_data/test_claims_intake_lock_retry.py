@@ -230,30 +230,3 @@ def test_the_lock_timeout_is_20s_and_env_overridable(
     monkeypatch.setenv(claims_intake.LOCK_TIMEOUT_ENV, "none")
     assert _timeouts()["lock_timeout"] == "20s"
 
-
-# ---------------------------------------------------------------- the yield read
-
-def test_running_batch_id_is_lane_scoped_and_ignores_a_stale_stamp() -> None:
-    """The read the fast schedule yields on: the HOURLY lane's still-running batch, and only
-    while its stamp is young enough to belong to a live run."""
-    assert claims_intake.RUNNING_BATCH_MAX_AGE_MINUTES == 65
-    sql = " ".join(claims_intake._RUNNING_BATCH_SQL.split())
-    assert "lane = %(lane)s" in sql
-    assert "outcome = 'running'" in sql
-    assert "started_at > now() - (%(max_age_minutes)s * interval '1 minute')" in sql
-
-    seen: dict[str, Any] = {}
-
-    class _Yield(_Conn):
-        def dispatch(self, cur: _Cursor, sql: str, params: dict[str, Any]) -> None:
-            cur._result = []
-            if "set_config" in sql:
-                return
-            seen.update(params)
-            cur._result = [(1318,)] if self.rows else []
-
-    assert claims_intake.running_batch_id(_Yield([1])) == 1318
-    assert seen == {"lane": claims_intake.LANE, "max_age_minutes": 65}
-    assert claims_intake.running_batch_id(_Yield([])) is None
-    # Never its own lane: the fast schedule would then yield to itself for ever.
-    assert claims_intake.LANE != claims_intake.FAST_LANE

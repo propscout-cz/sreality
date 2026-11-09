@@ -1836,7 +1836,6 @@ _FAST_STATS = {
 
 def _patch_intake_fast(
     monkeypatch: pytest.MonkeyPatch, *, stats: dict[str, Any] | None = None,
-    running_batch: int | None = None,
 ) -> dict[str, Any]:
     """Stub the intake entry points the lane touches and capture run()'s kwargs."""
     captured: dict[str, Any] = {"runs": 0}
@@ -1856,12 +1855,7 @@ def _patch_intake_fast(
         captured.update(kwargs)
         return dict(stats or _FAST_STATS)
 
-    def fake_running(c: Any, **kwargs: Any) -> int | None:
-        captured["yield_conn"] = c
-        return running_batch
-
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
-    monkeypatch.setattr("location_data.claims_intake.running_batch_id", fake_running)
     monkeypatch.setattr("location_data.claims_intake.run", fake_run)
     monkeypatch.setattr(rw, "_project_contracts_once", lambda: True)
     monkeypatch.setattr(rw, "_INTAKE_FAST_PASS_LOCK", rw._PassLock("location_intake_fast"))
@@ -1908,39 +1902,17 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     assert rw._read_location_intake_fast_interval() == 5, "an interval knob is not the flag"
 
 
-def test_location_intake_fast_yields_to_a_running_github_run(
+def test_location_intake_fast_never_stands_aside_for_the_hourly_job(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    """W12. Both schedules bump the same `dirty_locations` rows, and the hourly/full run is
-    the one that cannot be re-dispatched cheaply — a `mode=full` walk is hours of work that
-    two lock timeouts already killed twice (2026-09-14). So the minute lane stands aside
-    while one is in flight and says so in its heartbeat; nothing is lost, because the hourly
-    run re-reads its own 15-minute-lag slice."""
-    captured = _patch_intake_fast(monkeypatch, running_batch=1318)
+    """#2028: the hourly job drains a backlog run after run on the job runner, so a minute lane
+    that yielded to its 'running' batch would leave new listings unmined for hours."""
+    from location_data import claims_intake
 
-    out = rw._location_intake_fast_sync()
+    captured = _patch_intake_fast(monkeypatch)
 
-    assert out == {"ran": False, "yielded_to": 1318}
-    assert captured["runs"] == 0, "the yield comes BEFORE any work"
-    assert captured["conn_obj"].closed is True
-    # A yielded tick is not a failed one, and the async wrapper must not read the
-    # work counters that are absent from it.
-    state: dict[str, Any] = {"lanes": {}}
-    asyncio.run(rw._location_intake_fast_pass(asyncio.Event(), state))
-    assert state["lanes"]["location_intake_fast"]["last"]["yielded_to"] == 1318
-
-
-def test_location_intake_fast_does_not_yield_to_a_stale_stamp(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """A killed run leaves its 'running' row behind for ever. `running_batch_id` bounds the
-    read on `started_at`, so a stale stamp reads as none and the tick runs."""
-    captured = _patch_intake_fast(monkeypatch, running_batch=None)
-
-    out = rw._location_intake_fast_sync()
-
-    assert out["ran"] is True
-    assert captured["runs"] == 1
-    # ONE connection for the yield read and the scan: the read is one bounded SELECT.
-    assert captured["yield_conn"] is captured["conn"]
+    assert rw._location_intake_fast_sync()["ran"] is True
+    assert captured["runs"] == 1 and captured["conn_obj"].closed is True
+    assert not hasattr(claims_intake, "running_batch_id")
 
 
 def test_location_intake_fast_sync_runs_the_shared_scan_on_its_own_lane(
@@ -2035,7 +2007,7 @@ def test_location_intake_fast_pass_returns_early_when_stopping(
 def test_a_failed_contract_projection_never_stops_the_lane(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # The projection raises by design when a contract's governed bytes changed without a
-    # version bump, and the AUTHORITATIVE projector is location_claims_intake.yml. A worker
+    # version bump, and the AUTHORITATIVE projector is the hourly location_intake job. A worker
     # that refused to scan over that would trade a loud failure for a silent one.
     def boom(*a: Any, **k: Any) -> None:
         raise RuntimeError("sreality@3 is already loaded with a different sha256")

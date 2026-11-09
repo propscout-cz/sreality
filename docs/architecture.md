@@ -1555,7 +1555,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, of `clip` since #2032 (CLIP tags, vectors
   and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
-  or any other DB-heavy job (`job_lease`'s heavy turn):
+  or any other DB-heavy job (`job_lease`'s heavy turn), and of the hourly claim intake `location_intake` since #2028
+  (§ Location data):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -5191,8 +5192,8 @@ the claims on their ads, a detach clears them on the ads it moved (R1, `detach_l
 (`held: false`; the UI asks for an address); the portal pin stays evidence; část, okres and kraj picks
 wait for W5.
 
-**ONE LANE, THREE HALVES.** `location_data/claims_intake.py` (hourly, `35 * * * *`, and the worker's
-minute lane) is the only portal writer of `location_claims`, and it reads the three substrates we
+**ONE LANE, THREE HALVES.** `location_data/claims_intake.py` (the job runner's hourly `location_intake`
+at :35, and the worker's minute lane) is the only portal writer of `location_claims`, and it reads the three substrates we
 hold: `listings.raw_json`; the LATEST stored detail body in `portal_raw_payloads`, joined on
 `(source, source_id_native)` (`.listing_id` is nullable and nothing ever populated it), fetched from
 R2 and scoped by the contract's exclusion zones; and the text lane's stored reading (W3). ONE
@@ -5302,8 +5303,8 @@ that returns only new bodies. The extraction is the same forkserver path, two wo
 `page_readers.ExtractionPool` reused across ticks (rebuilt when the contract data moves or a worker
 dies; `EXTRACTION_TIMEOUT_S` is what keeps a pathological page from ever holding a tick). The fast lane also never inherits a stopped full walk (`_full_walk_handoff` looks
 that cursor up by lane and the fast lane never runs `--mode full`), and it projects the portal
-contracts from the image once at startup — a failure there is a warning, because
-`location_claims_intake.yml` is the authoritative projector. **Expected latency, detail write to
+contracts from the image once at startup — a failure there is a warning, because the hourly job
+projects them before every run and fails on a changed contract. **Expected latency, detail write to
 Browse:** ≤2 min lag → ≤1 min tick → the resolver drain's own worker lane (~15 s) → `browse_list`'s
 pg_cron rebuild, `*/15`. So a claim and a verdict land within ~3–4 minutes, and the read model — not
 the claim lane — is what the operator now waits on. **A batch that loses a LOCK runs again (W12):**
@@ -5312,11 +5313,9 @@ idempotent, so both loops retry THE SAME batch (2 s doubling to 30 s, counters r
 transaction, `lock_retries` in the summary) and only five consecutive losses — or any other error,
 a lost connection above all — stamp the run `failed`; the ceiling is `INTAKE_LOCK_TIMEOUT_S`, 20 s
 rather than 5, because waiting behind one of the drain's four concurrent slices is now the normal
-case. **And the minute lane yields while a GitHub run holds the lane:** one bounded read for an
-`outcome='running'` row of the hourly lane younger than 65 minutes (older is a stale stamp from a
-killed run) skips the tick with a `yielded_to=<batch_id>` heartbeat note — nothing is lost, because
-the hourly run re-reads its own 15-minute-lag slice, and only new-listing latency degrades to that
-run while a full walk is in progress.
+case. **The minute lane never stands aside for the hourly job** (its W12 yield went with #2028): on
+the job runner that job drains a backlog run after run for hours, a cut run is due again within a
+minute, and both schedules' batches retry a lost lock.
 
 **A PAGE THAT CARRIED NO LOCATION GETS A SECOND LOOK (W8).** ceskereality and realitymix geocode an
 ad AFTER publishing it. Measured 2026-09-14, of the audit page's active "no data" rows
@@ -5362,18 +5361,24 @@ its last pass.
 predecessor — `ok` there means the table was walked, and the next full pass is the contract-bump
 re-walk from 0; incremental resumes from ANY terminal outcome, because its cursor is a position in an
 append-only log rather than a coverage claim, and it only ever advances past a batch whose
-transaction closed. `--max-seconds` defaults to 2400 **in the CLI**, not only in the workflow; a
+transaction closed. `--max-seconds` defaults to 2400 **in the CLI**, not only in the registry; a
 batch does not START unless the previous batch's measured duration fits what is left, and the run's
-backlog readout runs AFTER the terminal stamp, so it cannot push the job past the 55-minute ceiling
+backlog readout runs AFTER the terminal stamp, so it cannot push the job past its timeout (70 min)
 and lose the cursor of a run that had otherwise finished cleanly — and it is counted **from that
 run's cursor** under a 60 s ceiling of its own (W6-b2), so "backlog remaining" means what the next
-pass would mine from there and a count that overruns reports `?` instead of a 600 s tail. **The lane self-chains while it has
-a backlog**: GitHub fires an hourly cron ~7 times a day, so a contract bump's 250 000-body backlog
-would drain at ~6 000 bodies a fired tick. A run dispatches ONE successor with its own budget when it
-reports an unfinished half THAT IT MOVED (`bodies_pass_complete=false` with `bodies_mined>0`, or
-`reached_end=false` with `listings>0`) — the progress term is the loop breaker — and it **yields**
-first: if any member of the `location-batch` group is already waiting the chain ends, because the
-group holds one pending slot and GitHub supersedes the OLDER entry.
+pass would mine from there and a count that overruns reports `?` instead of a 600 s tail. **A backlog
+drains run after run** (#2028; on GitHub it was a self-chain, since its hourly cron fired ~7 times a
+day): a run that leaves an unfinished half THAT IT MOVED (`bodies_pass_complete=false` with
+`bodies_mined>0`, or `reached_end=false` with `listings>0`; `claims_intake.more_remains`) exits 75 and
+the runner re-dues it a minute later — the progress term is the loop breaker, and a dry run never asks.
+A requested run's 75 re-dues the registry's unscoped incremental argv, so a run that empties the change
+log carries on any stopped full walk, a one-portal re-mine's included, in that portal's own batch row
+(`_full_walk_handoff`). The runner's SIGTERM (a deploy, 90 s before its SIGKILL) only marks a stop
+(`scraper.stop`): the batch in hand commits, the run stamps `stopped` at its cursor and exits 143,
+due again at once. Every run but a dry one first projects the image's portal contracts, so a contract
+changed without a version bump refuses the run (exit 2). Its `main` sets the fetch width to 32 (the
+module default stays 16, which every scrape's archive client reads) and the extraction pool is
+`JOB_CPUS` (4) wide.
 
 **TWELVE CLAIM TYPES, AND THE CONTRACT RAILS.** `contracts/portals/<portal>.yaml` × 9 declares every
 extractor (permanent id, surface, licence class, caps, priors, exclusion zones) and
@@ -5848,9 +5853,15 @@ test); the `location_town_coverage` gauge's `registry` cell reads Problem when t
 (no current version, a current one older than 40 d, or a load staged for more than 24 h:
 `location_registry_max_age_days`, `location_registry_max_staged_hours`).
 
-**OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load and claim intake — share the OUTER
-`location-batch` concurrency group so **at most one runs at a time** (each keeps its own inner group
-at job level); a new heavy lane joins it. On 2026-08-10 four concurrent lanes dropped backends across
+**OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load and claim intake — share the job
+runner's `location-heavy` resource (`scraper/jobs.py`; GitHub's `location-batch` group until #2028) so
+**at most one runs at a time**: the runner claims the intake through it, and the load, on GitHub until
+#2033, claims it in its own main (`job_lease.held_job`: its row and an open `job_runs` row, waiting
+as long as an intake run can hold it), so the intake's Health cell reads `waiting for ruian_load`
+during a load, never red; a load that never got it exits 1 with nothing loaded, one that returns
+non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropped is closed `lost`
+by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
+four concurrent lanes dropped backends across
 the fleet, degraded the live Browse rebuild to multi-minute DataFileReads and wedged two lanes with
 no error at all. **The resolve DRAIN is outside the group** (operator decision, 2026-09-10): it is
 the one member that is latency-bound rather than instance-bound — a handful of small indexed reads
@@ -5896,8 +5907,9 @@ per-listing statement gets, and cancelling it threw the whole batch away.
   the ONE event that makes the rows below it eligible again — here, a contract bump.
 * **A 5 s lock ceiling is not resilience** (W12, 2026-09-14) — two `mode=full` walks died ~80 s
   in (runs 34817669095, 34824922631) because a queue-row bump waited behind a drain slice; a batch
-  that lost a lock must RETRY ITSELF (idempotent, cursor unmoved) rather than skip its rows, and of
-  two schedules writing the same rows one has to yield.
+  that lost a lock must RETRY ITSELF (idempotent, cursor unmoved) rather than skip its rows. The
+  minute lane also yielded to a running hourly run; #2028 dropped that yield, since retried batches
+  let both schedules write the same rows side by side.
 * **A contract bump must never outrun its re-mine** (W11, 2026-09-14; W18-b, 2026-09-17) — a read
   filtered by contract version blacked out 595,816 listings, then blanked 29,545 bazos ones a partial
   re-mine had reached for one entry of five. W3 ended the class: one claim per fact, written only on a

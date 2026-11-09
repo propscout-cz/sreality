@@ -12,7 +12,8 @@ error at all:
 
 Two rails answer that, and this file is the gate on both:
 
-  1. the lanes share ONE outer concurrency group, so they queue instead of competing;
+  1. the heavy lanes queue instead of competing: ONE outer concurrency group on GitHub until
+     2026-11 (#2028), the job runner's shared `location-heavy` resource since;
   2. no batch statement runs without a ceiling — a wedge has to become an error that the
      existing per-row / per-unit resilience already knows how to handle.
 
@@ -28,99 +29,54 @@ the claim spine that the intake and the archive sweep WRITE, so it never carried
 and the `scheduled_jobs` lease CAS; `test_the_resolve_drain_is_out_of_the_shared_group` below
 is the rail that keeps it out.
 
-AMENDED 2026-09-12 (W1-a3): a member SELF-CHAINS again. The hourly cron fires ~7 times a day
-and a contract bump leaves a 250 000-body backlog, so the intake dispatches one successor
-while it has work left. The ban this file used to hold became the yield it always named as
-the fix — `test_a_self_chaining_member_yields_to_every_other_member_first`, plus seven tests
-that execute the chain script itself against a stub `gh`, because a yield that is wrong shows
-up only as somebody else's cancelled run hours later.
+AMENDED 2026-11 (#2028): the intake runs on the job runner. Its GitHub self-chain, the yield
+that kept the chain off the group's one pending slot, and the group itself are gone; a run that
+leaves work it moved exits 75 and the runner re-dues it a minute later (section 4).
 """
 
 from __future__ import annotations
 
 import inspect
-import json
-import os
-import shutil
-import subprocess
+import signal
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import psycopg
 import pytest
 import yaml
 
-from location_data import claims_intake, loader_db, ruian_boundaries as rb
+from location_data import claims_intake, contracts, loader_db, payloads, ruian_boundaries as rb, ruian_load
 from location_data.resolver import drain, resolve_db
+from scraper import jobs, stop
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOWS = _ROOT / ".github" / "workflows"
 
-# Every heavy location batch lane. A new one belongs in this tuple AND in the group.
-LOCATION_BATCH_WORKFLOWS = (
-    "location_registry_load.yml",
-    # THE claim lane (rule 25 W1-a): one hourly pass over `listings.raw_json` AND the
-    # stored page body, so it carries what the four deleted lanes carried — a corpus scan,
-    # an R2 fan-out and the claim writes in one transaction.
-    "location_claims_intake.yml",
-)
 OUTER_GROUP = "location-batch"
-
-
-def _workflow(name: str) -> dict:
-    return yaml.safe_load((_WORKFLOWS / name).read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------- 1. serialization
 
 
-@pytest.mark.parametrize("name", LOCATION_BATCH_WORKFLOWS)
-def test_every_location_batch_lane_is_in_the_shared_outer_group(name: str):
-    """One group across every lane, so at most one heavy lane runs at a time."""
-    wf = _workflow(name)
-    concurrency = wf.get("concurrency")
-    assert concurrency, f"{name}: no workflow-level concurrency block"
-    assert concurrency["group"] == OUTER_GROUP, (
-        f"{name}: workflow-level group is {concurrency['group']!r}, not {OUTER_GROUP!r} — "
-        "the per-lane group belongs on the JOB, the cross-lane one on the workflow"
-    )
-
-
-@pytest.mark.parametrize("name", LOCATION_BATCH_WORKFLOWS)
-def test_the_shared_group_never_cancels_a_lane_in_flight(name: str):
-    """A cancelled COPY / batch / unit loop is work thrown away, and for the registry
-    lanes it is work that has to be redone from a checkpoint. Queue, never pre-empt."""
-    assert _workflow(name)["concurrency"]["cancel-in-progress"] is False
-
-
-@pytest.mark.parametrize("name", LOCATION_BATCH_WORKFLOWS)
-def test_the_per_lane_group_survives_as_a_job_level_group(name: str):
-    """The outer group stops CROSS-lane overlap; each lane still needs its own guard
-    against overlapping ITSELF (two intakes fighting one watermark, two inventory runs
-    fighting one keyset cursor, a boundary pack overlapping a baseline)."""
-    jobs = _workflow(name)["jobs"]
-    inner = {
-        job["concurrency"]["group"]
-        for job in jobs.values()
-        if isinstance(job.get("concurrency"), dict)
-    }
-    assert inner, f"{name}: no job-level concurrency group — the per-lane guard was lost"
-    assert OUTER_GROUP not in inner, (
-        f"{name}: the job-level group repeats {OUTER_GROUP!r}, which serializes nothing "
-        "extra; it must be the lane's own group"
-    )
-
-
-def test_the_four_lanes_are_the_only_members_of_the_group():
-    """A workflow that joins `location-batch` without being a heavy location lane would
-    queue behind a 3-hour registry load for no reason."""
+def test_no_workflow_holds_the_retired_location_batch_group():
+    """The group was GitHub's. The claim intake left GitHub for the job runner (#2028), so the
+    heavy lanes queue on the shared `location-heavy` resource, which the database enforces on any
+    host; a workflow back in the group would serialise against nothing."""
     members = {
         path.name
         for path in sorted(_WORKFLOWS.glob("*.yml"))
-        if (yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-        .get("concurrency", {})
-        .get("group") == OUTER_GROUP
+        if OUTER_GROUP in str(((yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+                               .get("concurrency") or {}).get("group", ""))
     }
-    assert members == set(LOCATION_BATCH_WORKFLOWS)
+    assert members == set()
+
+
+def test_the_heavy_location_jobs_share_one_resource():
+    """The intake and the registry load never overlap: they share `location-heavy`, claimed
+    through `scraper.job_lease` by the runner for the intake and by the load's own main."""
+    assert {j.name for j in jobs.declared() if j.resource == jobs.LOCATION_HEAVY} == {
+        "location_intake", "ruian_load"}
+    assert "job_lease.held_job(" in inspect.getsource(ruian_load.main)
 
 
 def test_env_timeout_s_never_yields_an_unbounded_or_broken_budget(monkeypatch):
@@ -304,7 +260,8 @@ def test_the_intake_preflight_reads_are_bounded_too():
     Each preflight read must be the FIRST statement of a guarded block, not a bare
     `conn.cursor()` on the autocommit connection."""
     sources = {
-        "_ACTIVE_CONTRACT_SQL": (inspect.getsource(claims_intake.run), "statement_timeout"),
+        # Its own helper since #2028: a full walk carried on for one portal reads it too.
+        "_ACTIVE_CONTRACT_SQL": (inspect.getsource(claims_intake._active_contract_id), "statement_timeout"),
         # W1-a2 replaced the watermark read with the cutover seed, in its own helper —
         # two reads, two guarded blocks, neither able to hang the run before its first
         # batch row exists.
@@ -538,165 +495,7 @@ class _GuardAwareCursor(_Cursor):
             conn.first_in_transaction = len(conn.executed)
         super().execute(sql, params)
 
-# --------------------------------------------- 4. the intake's chain, as YAML and as shell
-
-CHAIN_STEP = "Chain the next run"
-INTAKE = "location_claims_intake.yml"
-
-
-def _chain_step() -> dict:
-    steps = _workflow(INTAKE)["jobs"]["intake"]["steps"]
-    return next(s for s in steps if s.get("name") == CHAIN_STEP)
-
-
-def _chain_script() -> str:
-    """The chain step's shell, verbatim. It carries no `${{ }}`, which is what makes the
-    step's DECISION testable rather than only its text: everything it reads is an env var,
-    so the tests below run this exact script against a stub `gh`."""
-    step = _chain_step()
-    assert "${{" not in step["run"], (
-        "the chain script interpolates a GitHub expression; keep it env-var-only so the "
-        "yield can be tested")
-    return step["run"]
-
-
-def _group_members() -> set[str]:
-    """Every workflow that can hold `location-batch`, read off the workflows themselves.
-
-    NOT `LOCATION_BATCH_WORKFLOWS`: read off the workflows' own concurrency blocks, so a
-    member that joins the group through an expression cannot hide from the chain's yield (the
-    resolve lane did, until the location programme's W2 took it off GitHub on 2026-10-31).
-    """
-    members = set()
-    for path in sorted(_WORKFLOWS.glob("*.yml")):
-        group = ((yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-                 .get("concurrency") or {}).get("group", "")
-        if OUTER_GROUP in str(group):
-            members.add(path.name)
-    return members
-
-
-def test_a_self_chaining_member_yields_to_every_other_member_first():
-    """The one pending slot of `location-batch` is a trap for a self-chaining lane: GitHub
-    supersedes the OLDER pending run, so a chain hop dispatched in the last seconds evicts
-    whatever was waiting. 2026-09-10: the hourly intake (10:00Z) and the corpus-wide
-    full-resolve (12:15Z) were both cancelled that way, and the fix was a yield step in the
-    chaining lane. Rule 25 W1-a then removed the only self-chaining member outright.
-
-    W1-a3 REINTRODUCES ONE, deliberately: GitHub fires the hourly cron ~7 times a day, and a
-    contract bump leaves a 250 000-body backlog that drains at ~6 000 bodies a fired tick.
-    The trap is answered by the yield rather than by the ban — so the rail is now the yield
-    itself, and it is checked INSIDE the chain step's own script rather than anywhere in the
-    file: a `gh run list` in some unrelated step would satisfy a substring search and yield
-    nothing.
-    """
-    for name in sorted(_group_members()):
-        script = (_WORKFLOWS / name).read_text(encoding="utf-8")
-        if f"gh workflow run {name}" not in script and 'gh workflow run "$WORKFLOW"' not in script:
-            continue
-        assert name == INTAKE, (
-            f"{name} re-dispatches itself; only the intake's chain has been reviewed for "
-            f"the {OUTER_GROUP!r} pending-slot trap")
-        chain = _chain_script()
-        dispatch = chain.index('gh workflow run "$WORKFLOW"')
-        yields = chain.index("gh run list")
-        assert yields < dispatch, (
-            "the chain dispatches its successor before asking whether anything is waiting; "
-            f"a self-chaining member of {OUTER_GROUP!r} evicts whatever else is in the "
-            "group's one pending slot")
-
-
-def test_the_chain_asks_every_workflow_that_can_hold_the_group():
-    """The list the yield walks is a hand-written env var; the member most easily left off it
-    (the resolve lane, before W2 took it off GitHub) was the one the 2026-09-10 incident was
-    about."""
-    declared = set(_chain_step()["env"]["GROUP_WORKFLOWS"].split())
-
-    assert declared == _group_members(), (
-        f"GROUP_WORKFLOWS is {sorted(declared)}; the workflows that can hold "
-        f"{OUTER_GROUP!r} are {sorted(_group_members())}"
-    )
-
-
-
-# The chain's `gh run list` calls differ only by the jq filter they pass, so a stub that
-# ignored the filter would test the shell around the yield and not the yield. This one emits
-# the real `--json databaseId,status,event` shape and hands it to jq, exactly as gh does —
-# and answers PER WORKFLOW, because the resolve lane's rule is not the others'.
-_GH_STUB = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_CALLS"
-case "$*" in
-  *"run list"*) ;;
-  *) exit 0 ;;
-esac
-workflow=""
-for arg in "$@"; do
-  case "$arg" in --workflow=*) workflow="${arg#--workflow=}" ;; esac
-done
-slug=$(printf '%s' "$workflow" | tr 'a-z.-' 'A-Z__')
-per_workflow="GH_RUNS_WAITING_$slug"
-payload="${!per_workflow:-}"
-[ -n "$payload" ] || payload="$GH_RUNS_WAITING"
-case "$*" in *in_progress*) payload="$GH_RUNS_RUNNING" ;; esac
-filter=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -q|--jq) filter="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-printf '%s' "$payload" | jq -r "$filter"
-"""
-
-
-def _runs(*rows: tuple[int, str] | tuple[int, str, str]) -> str:
-    """`gh run list --json databaseId,status,event`'s own shape. The event defaults to the
-    cron tick, which is what most queued runs in this fleet are."""
-    return json.dumps([
-        {"databaseId": row[0], "status": row[1],
-         "event": row[2] if len(row) > 2 else "schedule"}
-        for row in rows
-    ])
-
-
-def _run_chain(tmp_path: Path, summary: dict | str, *, waiting: str = "[]",
-               running: str = "[]", run_id: str = "77",
-               waiting_by_workflow: dict[str, str] | None = None) -> tuple[str, list[str]]:
-    """Execute the chain script with a stub `gh`; returns (stdout, the gh calls it made)."""
-    calls = tmp_path / "gh-calls.txt"
-    calls.write_text("", encoding="utf-8")
-    stub = tmp_path / "bin"
-    stub.mkdir(exist_ok=True)
-    (stub / "gh").write_text(_GH_STUB, encoding="utf-8")
-    (stub / "gh").chmod(0o755)
-    body = summary if isinstance(summary, str) else f"INTAKE done {json.dumps(summary)}"
-    (tmp_path / "intake.log").write_text(
-        f"2026-09-12 05:00:00 INFO location_data.claims_intake {body}\n", encoding="utf-8")
-    script = tmp_path / "chain.sh"
-    script.write_text(_chain_script(), encoding="utf-8")
-    # THE STEP'S OWN ENV, not a copy of it: `GROUP_WORKFLOWS` is the list the yield walks,
-    # and a test that supplied its own would pass while the deployed list was short.
-    step_env = {k: v for k, v in _chain_step()["env"].items() if "${{" not in str(v)}
-    env = {
-        "PATH": f"{stub}:{os.environ['PATH']}", "GH_CALLS": str(calls),
-        "GH_RUNS_WAITING": waiting, "GH_RUNS_RUNNING": running,
-        **{f"GH_RUNS_WAITING_{name.upper().replace('.', '_').replace('-', '_')}": rows
-           for name, rows in (waiting_by_workflow or {}).items()},
-        "GITHUB_RUN_ID": run_id, "GITHUB_REF_NAME": "main",
-        "CHAIN_SOURCE": "", "CHAIN_MODE": "incremental",
-        "CHAIN_MAX_SECONDS": "2400", "CHAIN_BATCH_SIZE": "10000",
-        **step_env,
-    }
-    # `bash -e`, the runner's own shell for a `run:` block: a step that aborts on a stray
-    # non-zero is a chain that silently stops, and that is a property of THIS script.
-    done = subprocess.run(["bash", "-e", str(script)], cwd=tmp_path, env=env,
-                          capture_output=True, text=True, timeout=60)
-    assert done.returncode == 0, done.stderr
-    assert "jq:" not in done.stderr, done.stderr
-    dispatched = [line for line in calls.read_text(encoding="utf-8").splitlines()
-                  if line.startswith("workflow run")]
-    return done.stdout, dispatched
-
+# ------------------------------------- 4. the intake's more-remains exit (the chain's successor)
 
 # `bodies_mined` / `listings` are the PROGRESS terms: work left is not enough, the run must
 # also have moved the half that is unfinished.
@@ -706,140 +505,102 @@ DRAINED = {"bodies_pass_complete": True, "bodies_mined": 12,
            "reached_end": True, "listings": 400, "outcome": "ok"}
 
 
-def test_the_chain_dispatches_one_successor_with_this_run_s_own_budget(tmp_path: Path):
-    """The backlog case, which is every run for the days after a contract bump. ONE
-    successor, and it inherits the budget and batch size this run actually used — a chained
-    run is a `workflow_dispatch`, so it never sees the cron's defaults."""
-    out, dispatched = _run_chain(tmp_path, BACKLOG)
-
-    assert len(dispatched) == 1, out
-    assert "--ref main" in dispatched[0]
-    assert "-f max_seconds=2400" in dispatched[0]
-    assert "-f batch_size=10000" in dispatched[0]
-    assert "-f mode=incremental" in dispatched[0]
-    assert "-f chain=true" in dispatched[0]
-
-
-def test_the_chain_ends_when_both_halves_reached_their_end(tmp_path: Path):
-    """STEADY STATE IS CRON-ONLY. A lane that chained on every run would hold the group's
-    one pending slot for ever and turn an hourly lane into a permanent one."""
-    out, dispatched = _run_chain(tmp_path, DRAINED)
-
-    assert dispatched == []
-    assert "chain ends" in out
+@pytest.mark.parametrize("stats,more", [
+    # The backlog case, every run for the days after a contract bump.
+    (BACKLOG, True),
+    # Steady state: the hourly slot owns the hour.
+    (DRAINED, False),
+    # The other half's backlog: a scan stopped on its budget mid-log.
+    (dict(DRAINED, reached_end=False, listings=20000), True),
+    # THE ENDLESS-LOOP DEFECT: `bodies_pass_complete` is False until the drain sets it, so a
+    # run with no page-capable portal or no R2 credential reports a backlog it never looked at.
+    (dict(BACKLOG, bodies_mined=0), False),
+    # The same rail on the payload half: a scan that stopped before its first batch.
+    (dict(DRAINED, reached_end=False, listings=0), False),
+])
+def test_more_remains_only_for_work_this_run_moved(stats: dict, more: bool):
+    assert claims_intake.more_remains(stats) is more
 
 
-def test_an_unfinished_listing_scan_chains_too(tmp_path: Path):
-    """The other half's backlog. After a cron gap the snapshot window is hours wide, and a
-    run that stopped on its budget mid-scan has the same claim on a successor as one that
-    stopped mid-drain."""
-    _, dispatched = _run_chain(tmp_path, dict(DRAINED, reached_end=False, listings=20000))
+class _Connect:
+    def __enter__(self) -> object:
+        return self
 
-    assert len(dispatched) == 1
-
-
-def test_a_run_that_mined_nothing_does_not_chain(tmp_path: Path):
-    """THE ENDLESS-CHAIN DEFECT. `bodies_pass_complete` is False until the drain sets it, so
-    a run with no page-capable portal (`--source sreality`) or no R2 credential used to
-    report a backlog it had never looked at — and a chain keyed on that alone would dispatch
-    clean short runs for ever, each holding `location-batch` on the way through. Work left
-    only counts when this run moved it."""
-    out, dispatched = _run_chain(
-        tmp_path, dict(BACKLOG, bodies_mined=0, bodies_pass_complete=False))
-
-    assert dispatched == []
-    assert "chain ends" in out
+    def __exit__(self, *exc: object) -> bool:
+        return False
 
 
-def test_a_scan_that_opened_no_listing_does_not_chain_either(tmp_path: Path):
-    """The same rail on the payload half: `reached_end` is False on a run that stopped
-    before its first batch, and a successor would stop in the same place."""
-    _, dispatched = _run_chain(
-        tmp_path, dict(DRAINED, reached_end=False, listings=0))
+def _main(monkeypatch: pytest.MonkeyPatch, stats: dict, *argv: str,
+          refused: Exception | None = None, during: Callable[[], None] = lambda: None) -> tuple[int, list[str]]:
+    calls: list[str] = []
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://stub")
+    monkeypatch.setattr(claims_intake.db, "connect", lambda *a, **k: _Connect())
+    monkeypatch.setattr(contracts, "load_all", lambda: ["sreality@4"])
 
-    assert dispatched == []
+    def projected(conn: object, contract: str, **kwargs: str) -> None:
+        calls.append(f"project {contract} {kwargs}")
+        if refused is not None:
+            raise refused
 
+    def ran(conn: object, **kwargs: object) -> dict:
+        calls.append("run")
+        during()
+        return dict(stats)
 
-def test_the_chain_yields_to_a_run_already_waiting_in_the_group(tmp_path: Path):
-    """The 2026-09-10 eviction, as a rail. The cron tick queued behind this run is the run
-    that must get the slot — the chain's work is the same work, so yielding costs the
-    backlog nothing and costs the operator nothing."""
-    out, dispatched = _run_chain(tmp_path, BACKLOG, waiting=_runs((4242, "queued")))
-
-    assert dispatched == []
-    assert "chain yields" in out
-
-
-def test_a_scheduled_tick_of_a_permanent_member_still_stops_the_chain(tmp_path: Path):
-    """The exception is ONE workflow wide. The intake's own cron tick is a `schedule` run
-    that really is queued on `location-batch` — the run the chain exists to let through."""
-    out, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        waiting_by_workflow={INTAKE: _runs((4242, "queued", "schedule"))})
-
-    assert dispatched == []
-    assert "chain yields" in out
+    monkeypatch.setattr(contracts, "project", projected)
+    monkeypatch.setattr(claims_intake, "run", ran)
+    return claims_intake.main(list(argv)), calls
 
 
-def test_the_chain_never_stacks_on_an_intake_already_running(tmp_path: Path):
-    """Two intakes share one watermark and re-read each other's window."""
-    out, dispatched = _run_chain(tmp_path, BACKLOG, running=_runs((9999, "in_progress")))
-
-    assert dispatched == []
-    assert "chain yields" in out
-
-
-def test_this_run_is_not_mistaken_for_a_second_intake(tmp_path: Path):
-    """The in-progress query returns the CHAINING run itself — every time, since it is still
-    running when it asks. Reading that as "another intake is up" would mean the chain never
-    fires at all."""
-    _, dispatched = _run_chain(
-        tmp_path, BACKLOG, running=_runs((77, "in_progress")), run_id="77")
-
-    assert len(dispatched) == 1
+def test_a_run_that_leaves_work_it_moved_exits_75_so_the_runner_re_dues_it(monkeypatch):
+    """The runner reads 75 as ok and re-dues the job a minute later (`job_lease.MORE_REMAINS_S`):
+    a backlog drains run after run, the chain's work with no dispatch, no yield and no group."""
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
+    assert _main(monkeypatch, BACKLOG) == (75, ["project sreality@4 {'git_ref': 'abc123'}", "run"])
+    assert _main(monkeypatch, DRAINED)[0] == 0
 
 
-def test_the_running_query_excludes_only_this_run_not_finished_ones(tmp_path: Path):
-    """The two halves of that filter, together: `in_progress` selects, `grep -v` drops this
-    run, and a COMPLETED sibling must survive neither — it is neither in progress nor this
-    run, and treating it as a live intake would stop every chain."""
-    _, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        running=_runs((77, "in_progress"), (10, "completed")), run_id="77")
-
-    assert len(dispatched) == 1
-
-
-def test_a_summary_the_chain_cannot_read_chains_nothing(tmp_path: Path):
-    """A run whose last line is missing or malformed is a run nobody can say has work left.
-    Chaining on an unreadable summary is how a lane loops on its own failure."""
-    out, dispatched = _run_chain(tmp_path, "INTAKE done not-json-at-all")
-
-    assert dispatched == []
-    assert "chain ends" in out
+def test_the_hourly_job_fetches_bodies_as_wide_as_the_workflow_did(monkeypatch):
+    """The workflow set LOCATION_BODY_FETCH_WORKERS=32 (W1-a4: the R2 fetch is most of a bodies batch) and the runner
+    sets no such variable, so the intake's own main does, a value already set first. The default stays 16 for every
+    other user of the archive client (each scrape's `append_payload`); the minute lane sets its own 8."""
+    monkeypatch.setenv(payloads.BODY_FETCH_WORKERS_ENV, "registers the undo")
+    monkeypatch.delenv(payloads.BODY_FETCH_WORKERS_ENV)
+    assert payloads.body_fetch_workers() == 16
+    widths: list[int] = []
+    _main(monkeypatch, DRAINED, during=lambda: widths.append(payloads.body_fetch_workers()))
+    monkeypatch.setenv(payloads.BODY_FETCH_WORKERS_ENV, "24")
+    _main(monkeypatch, DRAINED, during=lambda: widths.append(payloads.body_fetch_workers()))
+    assert widths == [32, 24]
 
 
-def test_the_waiting_query_sees_a_queued_sibling_among_finished_runs(tmp_path: Path):
-    """gh's own filter, applied to gh's own shape. The list a real query returns is mostly
-    COMPLETED runs; a filter that let those through would make the chain yield for ever, and
-    one that dropped the queued run would make it never yield at all."""
-    out, dispatched = _run_chain(
-        tmp_path, BACKLOG,
-        waiting=_runs((10, "completed"), (11, "completed"), (4242, "queued")))
-
-    assert dispatched == []
-    assert "chain yields" in out and "4242" in out
+@pytest.fixture(autouse=True)
+def _restore_signals() -> Iterator[None]:
+    """`claims_intake.main` installs the stop handlers: pytest gets its own back, and its Ctrl-C."""
+    saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+    yield
+    for s, handler in saved.items():
+        signal.signal(s, handler)
+    stop.reset()
 
 
-def test_a_missing_jq_fails_the_chain_tests_instead_of_passing_unfiltered(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The chain's `| head -1` swallows the stub's exit code, so without this a jq that never
-    ran reads as "nothing waiting" and every test expecting a dispatch passes unfiltered."""
-    tools = tmp_path / "tools-without-jq"
-    tools.mkdir()
-    for tool in ("bash", "env", "grep", "head", "python3", "sed", "tail", "tr"):
-        (tools / tool).symlink_to(shutil.which(tool))
-    monkeypatch.setenv("PATH", str(tools))
+def test_a_deploy_s_sigterm_finalizes_the_run_and_exits_interrupted(monkeypatch):
+    """The runner SIGTERMs its child at a deploy (`job_process.GRACE_S` before the SIGKILL). The handler only marks the
+    stop, so `run` ends after the batch in hand and stamps its cursor; 143 reads as interrupted, due again at once,
+    never as a 75 whose `ok` would hide the cut."""
+    def sigterm() -> None:
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)  # SIG_DFL, an int, would kill the process
 
-    with pytest.raises(AssertionError, match="jq:"):
-        _run_chain(tmp_path, BACKLOG, running=_runs((77, "in_progress")), run_id="77")
+    assert _main(monkeypatch, BACKLOG, during=sigterm)[0] == stop.EXIT_CODE
+
+
+def test_a_dry_run_projects_nothing_and_never_asks_for_more(monkeypatch):
+    assert _main(monkeypatch, BACKLOG, "--dry-run") == (0, ["run"])
+
+
+def test_a_contract_changed_without_a_bump_refuses_the_run(monkeypatch):
+    """Every run first projects the contracts from the image, as the workflow's first step did:
+    git is the store of record, and a changed contract under a loaded version fails loudly."""
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA", raising=False)
+    refused = contracts.ContractError("sreality@4 is already loaded with a different sha256")
+    assert _main(monkeypatch, BACKLOG, refused=refused) == (2, ["project sreality@4 {'git_ref': 'local'}"])

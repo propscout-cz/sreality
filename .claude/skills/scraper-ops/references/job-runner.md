@@ -3,8 +3,9 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
-`map_overlays`, since #2032 `clip`, and since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep`
-(06:00 UTC), whose workflows those PRs deleted; each later move PR (#2028–#2031, #2033) flips more entries' host. On
+`map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
+and since #2028 `location_intake`, whose workflows those PRs deleted; each later move PR (#2029–#2031, #2033) flips
+more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -46,12 +47,28 @@ Recipes:
   `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
   run). The last line is `CLIP_JOB exit=<code> why=…`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
-  running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
-  can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
+  running, pause the new row (`runner-pause`) past the last one's end: a queued run in a non-cancelling group starts
+  when the run ahead ends, so one running and one queued is two timeouts from now. List again before the pause lapses
+  and extend it while one is still queued or running. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
   slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
 - **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
   so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
   held its first slot.
+- **location_intake's exits (#2028):** 75 when it leaves an unfinished half it moved (`claims_intake.more_remains`:
+  unmined bodies with some mined, or a change-log scan stopped with listings opened), so a contract bump's backlog
+  drains run after run, a minute apart; 0 otherwise and on a `--dry-run`; 143 on the runner's SIGTERM (the batch in
+  hand commits and the run stamps `stopped`, so the next resumes there); 2 when a contract changed without a
+  version bump (every run but a dry one projects the image's contracts first) or the schema is missing. A full
+  re-walk is `request location_intake -- --mode full` (`--source X` for one portal). Its 75 re-dues the registry's
+  unscoped incremental argv, which carries any stopped full walk on, a one-portal one included, once it has emptied
+  the change log.
+- **`location-heavy` off the runner:** the RÚIAN load runs on GitHub until #2033 and claims the resource in its own
+  main (`job_lease.held_job`: its `scheduled_jobs` row, runner `github_actions`, and an open `job_runs` row), waiting
+  `jobs.resource_wait_s` (the intake's timeout + 10 min) and exiting 1 with nothing loaded if it never got it; a
+  load that returns non-zero hands its code to the `HeldRun` it was given, which closes the run `failed`. While
+  it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`; a run its workflow dropped
+  without a release lapses after the load's `timeout_s` and the reaper closes it `lost`. Under the runner
+  (`JOB_NAME` = the job) `held_job` is the runner's own claim.
 
 ## Log lines (Railway logs)
 
@@ -169,8 +186,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
   older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
   one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
   does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
-- **For the move PRs (#2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
-  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200).
+- **For the move PRs (#2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it.
   `tests/scraper/test_job_registry.py`'s argv census refuses a runner job's `--max-seconds` past ⅔ of its `timeout_s`, so
   a move PR sets `timeout_s` ≥ 1.5× the job's own budget, lowers the budget, or asks the operator. A walk stopped at
   its own timeout records `timeout`, a Problem: W4 keeps `walk_timeout_s` above each walk's p95. W2's three jobs are
@@ -178,6 +195,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   1500` against 3300) and W3's sweeps: property_sweep's 6000 s budget against 9000 (its worst run, budget + one
   in-flight batch + finalize, is 130 min; only a budget stop's tail crosses 6000 s), broker_sweep's against 4500
   (its full runs since Broker Unify W3, 2026-10-01: 2982 s at most, under the 3000 s line; one failed at 3497 s).
+  W3's location_intake (#2028) went to 4200 for its 2400 s, room for a last batch and the readout under the line.
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
   `health_job_cells(interval)` with `select '[]'::jsonb`.
 

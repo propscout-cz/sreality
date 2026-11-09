@@ -58,11 +58,12 @@ WHAT IT WRITES, AND ONLY THAT
   logged once per reason per batch. (`location_claim_observations`, `location_claim_absences`
   and `location_enrichment_state` were written by every lane and read by none: dropped, 498.)
 
-CLI:
+CLI (the job runner's `location_intake`, hourly; exit 75 when work it moved is left, so a backlog
+drains run after run):
     python -m location_data.claims_intake --mode incremental
     python -m location_data.claims_intake --mode full --source sreality --max-seconds 3000
-Required: SUPABASE_DB_URL. Additionally requires migrations 380-387 + 403 and a projected,
-active portal contract per source (`python -m location_data.contracts --load`).
+Required: SUPABASE_DB_URL. Additionally requires migrations 380-387 + 403; every run but a dry
+one first projects the image's portal contracts (`location_data.contracts`).
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ from typing import Any, NamedTuple, TypeVar
 import psycopg
 from psycopg.types.json import Jsonb
 
-from location_data import loader_db, page_readers, payloads, text_reading
+from location_data import contracts, loader_db, page_readers, payloads, text_reading
 from location_data.claims_store import write_claims
 # The names re-exported here are the ones something OUTSIDE this module imports from it —
 # the contract validator's mirror gates (`TRANSFORMS`/`GUARDS`), the licence-ladder tables the
@@ -118,7 +119,7 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     point_wkt,
     sreality_payload_shape,
 )
-from scraper import db
+from scraper import db, stop
 from scraper.cpus import job_cpus
 from toolkit import description_extraction as text_lane
 
@@ -157,6 +158,8 @@ DEFAULT_SNAPSHOT_LAG_MINUTES = 15.0
 MIN_BATCH_SIZE = 10_000
 MAX_BATCH_SIZE = 30_000
 DEFAULT_BATCH_SIZE = 20_000
+# The job runner's "more remains" (scraper.job_runner.MORE_REMAINS_EXIT): the job is due again a minute later.
+MORE_REMAINS_EXIT = os.EX_TEMPFAIL
 
 # EVERY RUN HAS A BUDGET, and the default lives here rather than only in the workflow.
 # A `workflow_dispatch` without one used to run unbounded, hit `timeout-minutes: 55`, be
@@ -184,9 +187,8 @@ _FAILURE_STAMP_TIMEOUT_S = 30
 # wait and the retry below absorbs the rest.
 LOCK_TIMEOUT_ENV = "INTAKE_LOCK_TIMEOUT_S"
 DEFAULT_LOCK_TIMEOUT_S = 20
-_RUNNING_BATCH_TIMEOUT_S = 10
-# And so is the backlog readout's (W6-b2): a best-effort `count(*)` that cannot answer in a
-# minute must not hold the job open for ten (600 s spent on an idle hop whose drain took 5 s).
+# The backlog readout has a short ceiling of its own (W6-b2): a best-effort `count(*)` that cannot
+# answer in a minute must not hold the job open for ten (600 s spent on an idle hop whose drain took 5 s).
 _BACKLOG_READOUT_TIMEOUT_S = 60
 
 # ONE BODY FETCH PER BODY IS THE WHOLE COST OF THE PAGE HALF, and the fleet appends
@@ -501,24 +503,6 @@ _BATCH_INSERT_SQL = """
     RETURNING id
 """
 
-# THE YIELD READ (W12): is a GitHub run of `lane` still in flight? Every minute, so it reads
-# location_claim_batches_running_idx (migration 730; partial on 'running', in this ORDER BY),
-# never the never-pruned table (74k rows on 2026-11-05). `started_at` bounds it because a killed
-# run leaves its 'running' stamp behind for ever, and a stale marker must never silence the
-# minute lane permanently.
-_RUNNING_BATCH_SQL = """
-    SELECT id FROM location_claim_batches
-    WHERE lane = %(lane)s
-      AND outcome = 'running'
-      AND started_at > now() - (%(max_age_minutes)s * interval '1 minute')
-    ORDER BY id DESC
-    LIMIT 1
-"""
-
-# The hourly job's own ceiling is `timeout-minutes: 55`, so anything older than this is a
-# stamp nothing will ever finish.
-RUNNING_BATCH_MAX_AGE_MINUTES = 65
-
 # `cursor_after_ts` is NOT written any more, by either mode: leaving it NULL on every row this
 # lane writes is what lets `_resume_point` tell a W1-a2 snapshot cursor from a pre-W1-a2
 # listing-id one. The column stays; nothing populates it.
@@ -546,6 +530,27 @@ _RESUME_SQL = """
       AND resumable
       AND cursor_after_id IS NOT NULL
       AND outcome IN ('ok', 'stopped', 'failed')
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+"""
+
+# THE WALK AN INCREMENTAL RUN CARRIES ON (W1-a7, `_full_walk_handoff`): each source's newest finished
+# full row, then the newest of those still unfinished, so a source's older stop never outranks its
+# own newer `ok`. An unscoped run takes any source's walk (#2028): a one-portal re-mine is a single
+# request on the job runner, whose exit 75 re-dues the registry's unscoped argv.
+_STOPPED_FULL_WALK_SQL = """
+    SELECT source, cursor_after_id FROM (
+        SELECT DISTINCT ON (source) source, outcome, cursor_after_id, started_at, id
+        FROM location_claim_batches
+        WHERE lane = %(lane)s
+          AND scan_mode = 'full'
+          AND resumable
+          AND cursor_after_id IS NOT NULL
+          AND outcome IN ('ok', 'stopped', 'failed')
+          AND (%(source)s::text IS NULL OR source = %(source)s::text)
+        ORDER BY source, started_at DESC, id DESC
+    ) newest
+    WHERE outcome IN ('stopped', 'failed')
     ORDER BY started_at DESC, id DESC
     LIMIT 1
 """
@@ -804,7 +809,7 @@ _UNMINED_BODIES_SQL = (
 
 # One count per RUN (never per batch), both statements' predicates rebuilt into one, and
 # read FROM THE CURSOR THIS RUN STAMPED (W6-b2): "backlog remaining" is what the next pass
-# would mine from there, which is how the chain and the operator read it. From 0 it re-scanned
+# would mine from there, which is how the operator reads it. From 0 it re-scanned
 # all 744k rows to re-report the dead prefix the cursor exists to skip; a contract bump resets
 # the cursor and makes this the full count again.
 _UNMINED_BODY_BACKLOG_SQL = (
@@ -908,27 +913,14 @@ def guarded(
             yield cur
 
 
-def running_batch_id(
-    conn: psycopg.Connection, *, lane: str = LANE,
-    max_age_minutes: int = RUNNING_BATCH_MAX_AGE_MINUTES,
-) -> int | None:
-    """The id of a run of `lane` that is still stamped 'running', for a schedule that wants
-    to yield to it. Read-only; a stale stamp (see `_RUNNING_BATCH_SQL`) reads as none."""
-    with guarded(conn, _RUNNING_BATCH_TIMEOUT_S) as cur:
-        cur.execute(_RUNNING_BATCH_SQL,
-                    {"lane": lane, "max_age_minutes": max_age_minutes})
-        row = cur.fetchone()
-    return int(row[0]) if row else None
-
-
 # ------------------------------------------------------------------ lock resilience (W12)
 
 # A batch that lost a LOCK lost a race, not its data: the transaction rolled back on the way
 # out, the keyset cursor has not moved, and re-running it writes the same rows (the one
 # write is keyed and change-only, the enqueue is a bump). So the same batch runs
 # again — the intake never skips rows to make progress. Everything else, a lost connection
-# above all, is raised for `run()` to stamp `failed` on, exactly as before: the workflow
-# restarts and the cursor is where the last committed batch left it.
+# above all, is raised for `run()` to stamp `failed` on, exactly as before: the runner
+# retries it and the cursor is where the last committed batch left it.
 _LOCK_SQLSTATES = frozenset({"55P03", "40P01"})  # lock_not_available, deadlock_detected
 BATCH_RETRY_BACKOFF_S = 2.0
 BATCH_RETRY_BACKOFF_MAX_S = 30.0
@@ -1146,17 +1138,27 @@ def _bodies_resume_point(
     return int(row[0])
 
 
+def _active_contract_id(conn: psycopg.Connection, source: str | None, statement_timeout: int) -> int | None:
+    """The source's active contract header, for its batch rows; None for an unscoped run."""
+    if not source:
+        return None
+    with guarded(conn, statement_timeout) as cur:
+        cur.execute(_ACTIVE_CONTRACT_SQL, {"source": source})
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
 def _full_walk_handoff(
     conn: psycopg.Connection, *, scan_mode: str, source: str | None, anchored: bool,
     dry_run: bool, budget: "_Budget", last_seconds: float, lane: str = LANE,
-) -> int | None:
-    """The cursor of a STOPPED full walk an incremental run should carry on with, or None.
+) -> tuple[str | None, int] | None:
+    """The (source, cursor) of a STOPPED full walk an incremental run should carry on with, or None.
 
-    W1-a7. A hop is dispatched with the run's OWN mode and the cron is `incremental`, so a
-    chain that yields to a waiting cron run (13:06Z, 2026-09-12) hands the successor
-    `incremental` and the stopped full walk — a contract-bump re-walk, 80 000 of ~376k served
-    listings — falls off the chain until somebody dispatches `full` by hand. A run that has
-    emptied the change log has budget and nothing to spend it on, so it spends it there.
+    W1-a7. The hourly run is `incremental`, so a full walk's next hop used to inherit
+    `incremental` and the stopped walk — a contract-bump re-walk, 80 000 of ~376k served
+    listings — fell off until somebody dispatched `full` by hand. A run that has emptied the
+    change log has budget and nothing to spend it on, so it spends it there. An unscoped run
+    carries on a one-portal walk too (#2028; `_STOPPED_FULL_WALK_SQL`), scoped to that portal.
 
     It CONTINUES, it never STARTS: no stopped/failed cursor means nothing to continue, and
     `--mode full` keeps its meaning. An anchored or dry run hands off nothing (neither
@@ -1171,13 +1173,16 @@ def _full_walk_handoff(
         return None
     if not budget.room_for(last_seconds):
         return None
-    resumed = _resume_point(conn, mode="full", source=source, lane=lane)
-    if resumed is None:
+    with conn.cursor() as cur:
+        cur.execute(_STOPPED_FULL_WALK_SQL, {"lane": lane, "source": source})
+        row = cur.fetchone()
+    if row is None:
         return None
+    walk_source, resumed = row[0], int(row[1])
     LOG.info("INTAKE the change log is empty with %.0fs left: continuing the stopped full "
              "walk for source=%s from after_id=%d",
-             budget.left() or 0.0, source or "*", resumed)
-    return resumed
+             budget.left() or 0.0, walk_source or "*", resumed)
+    return walk_source, resumed
 
 
 def _finish_and_open_full_batch(
@@ -1202,7 +1207,7 @@ def _finish_and_open_full_batch(
         cur.execute(_BATCH_INSERT_SQL, {
             "lane": lane, "source": source, "extractor_version": INTAKE_VERSION,
             "contract_id": contract_id, "wave": WAVE,
-            "job_run_id": os.environ.get("GITHUB_RUN_ID"),
+            "job_run_id": os.environ.get("JOB_RUN_ID"),
             "note": f"continued from batch {batch_id}" + (f" | {note}" if note else ""),
             "scan_mode": "full", "resumable": True,
         })
@@ -1263,6 +1268,9 @@ class _Budget:
         return self.max_seconds * share - self.spent()
 
     def room_for(self, estimate: float, share: float = 1.0) -> bool:
+        # A stop (the job runner's SIGTERM, `main`) spends the budget: the batch in hand finishes and the run stamps.
+        if stop.requested():
+            return False
         left = self.left(share)
         return left is None or left > estimate
 
@@ -1274,7 +1282,7 @@ class _Budget:
 class Schedule:
     """WHAT DIFFERS BETWEEN THE TWO SCHEDULES OF THE ONE LANE (W7-a, W7-a2).
 
-    Every default IS the hourly GitHub run, so `run()` with no schedule behaves byte for
+    Every default IS the hourly runner job, so `run()` with no schedule behaves byte for
     byte as it did — the fields exist because the realtime worker runs the SAME function on
     a minute's cadence and a 45 s budget, which changes six things and nothing else.
 
@@ -1292,7 +1300,7 @@ class Schedule:
         deliberately NOT a truncation inside a window: the bodies cursor advances to the
         window's max id, so dropping eligible rows from a window would walk past bodies
         nothing would ever come back for.
-      * `backlog_readout` — the run-end `count(*)`. It is the hourly chain's signal; a
+      * `backlog_readout` — the run-end `count(*)`. It is the hourly run's readout; a
         60 s-cadence lane that paid for it every tick would spend more time counting the
         backlog than draining it.
       * `readings` — the FULL selector is hourly only: its read (8.2 s cold) fails a 5 s gate (W3).
@@ -1610,9 +1618,9 @@ def drain_unmined_bodies(
         if dry_run:
             # A shape check, not a drain: it writes no claims, so spending the bucket on the
             # rest of the backlog buys nothing. It leaves `bodies_pass_complete` FALSE on
-            # purpose (it did not drain the backlog); what keeps that out of the chain is
-            # the workflow's `if: inputs.dry_run != true`, so a dry run is never asked what
-            # work it left — dropping that guard would give it an endless successor.
+            # purpose (it did not drain the backlog); what keeps that from exiting 75 is
+            # `main`'s `not args.dry_run`, so a dry run is never asked what work it left —
+            # dropping that guard would have the runner re-run it every minute.
             LOG.info("INTAKE bodies-first: --dry-run takes one batch, not the backlog")
             break
         # The WINDOW is what ends the pass, never the survivors: a short window is the end
@@ -1751,7 +1759,7 @@ def run(
     store: page_readers.BodyStore | None = None,
     schedule: Schedule = HOURLY,
 ) -> dict[str, Any]:
-    """One pass of the claim lane. `schedule` is what differs between the hourly GitHub run
+    """One pass of the claim lane. `schedule` is what differs between the hourly runner job
     and the realtime worker's minute tick — its DEFAULT is the hourly run, byte for byte."""
     lane = schedule.lane
     lag_seconds = schedule.lag_seconds
@@ -1796,12 +1804,7 @@ def run(
     # why an unbounded one is dangerous: under the IO pressure of a concurrent registry load
     # a "small" read still waits for its pages, and a run that hangs before its first batch
     # row exists leaves nothing at all to diagnose from.
-    contract_id: int | None = None
-    if source:
-        with guarded(conn, statement_timeout) as cur:
-            cur.execute(_ACTIVE_CONTRACT_SQL, {"source": source})
-            row = cur.fetchone()
-            contract_id = int(row[0]) if row else None
+    contract_id = _active_contract_id(conn, source, statement_timeout)
 
     # An operator-anchored run does not certify that everything below its anchor was
     # scanned, so it neither resumes from a stored cursor nor becomes one. `--start-after-id`
@@ -1829,7 +1832,7 @@ def run(
             cur.execute(_BATCH_INSERT_SQL, {
                 "lane": lane, "source": source, "extractor_version": INTAKE_VERSION,
                 "contract_id": contract_id, "wave": WAVE,
-                "job_run_id": os.environ.get("GITHUB_RUN_ID"), "note": note,
+                "job_run_id": os.environ.get("JOB_RUN_ID"), "note": note,
                 "scan_mode": mode, "resumable": not anchored,
             })
             batch_id = int(cur.fetchone()[0])
@@ -1858,11 +1861,11 @@ def run(
         "stopped_early": False, "reached_end": False, "resumed_from_id": after_id,
     }
     refusals: dict[str, int] = {}
-    # The PHASE's mode and its share of the counters, not the run's: an incremental run that
-    # empties the change log hands its remaining budget to a stopped full walk (W1-a7), and
-    # the scan reads both from here on. Bound BEFORE the try: the failure path stamps them,
-    # and the bodies pass can raise ahead of the first payload batch.
-    scan_mode = mode
+    # The PHASE's mode, source and share of the counters, not the run's: an incremental run
+    # that empties the change log hands its remaining budget to a stopped full walk (W1-a7),
+    # one portal's included, and the scan reads them from here on. Bound BEFORE the try: the
+    # failure path stamps them, and the bodies pass can raise ahead of the first payload batch.
+    scan_mode, scan_source = mode, source
     row_count_base = 0
     try:
         # BODIES FIRST, on the hourly schedule: its backlog is bounded by the CORPUS and
@@ -1895,7 +1898,7 @@ def run(
                 statement = (_LISTINGS_INCREMENTAL_SQL if scan_mode == "incremental"
                              else _LISTINGS_FULL_SQL)
                 cur.execute(statement, {
-                    "after_id": after_id, "source": source, "batch_size": size,
+                    "after_id": after_id, "source": scan_source, "batch_size": size,
                     "lag_seconds": lag_seconds})
                 records = cur.fetchall()
                 if not records:
@@ -1980,14 +1983,16 @@ def run(
                 if handoff is None:
                     stats["reached_end"] = True
                     break
+                scan_source, handoff_cursor = handoff
                 batch_id = _finish_and_open_full_batch(
                     conn, batch_id=batch_id, stats=stats,
                     row_count=stats["written"] - row_count_base,
-                    cursor_after_id=after_id, source=source, contract_id=contract_id,
+                    cursor_after_id=after_id, source=scan_source,
+                    contract_id=_active_contract_id(conn, scan_source, statement_timeout),
                     note=note, statement_timeout=statement_timeout, lane=lane)
-                after_id, scan_mode = handoff, "full"
+                after_id, scan_mode = handoff_cursor, "full"
                 stats["full_walk_continued"] = True
-                stats["full_walk_cursor"] = handoff
+                stats["full_walk_cursor"] = handoff_cursor
                 row_count_base = stats["written"]
                 continue
             # ADVANCED ONLY HERE, after the transaction closed. The cursor that gets
@@ -2058,7 +2063,7 @@ def run(
 
     # THE READOUT COMES AFTER THE TERMINAL STAMP, deliberately: a `count(*)` under its own
     # 60 s ceiling, run once the budget is spent. Ahead of the stamp it could push the job
-    # past `timeout-minutes: 55` and lose the cursor of a run that had otherwise finished
+    # past its timeout and lose the cursor of a run that had otherwise finished
     # cleanly. Nothing below this line decides whether the run is resumable.
     if schedule.backlog_readout and page_capable and store is not None:
         stats["bodies_backlog_remaining"] = _unmined_body_backlog(
@@ -2105,6 +2110,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def more_remains(stats: dict[str, Any]) -> bool:
+    """Work left that THIS run moved: an unfinished half it made no progress on (no page-capable portal, no R2
+    credential, a scan stopped before its first batch) would hand the next run the same nothing, for ever."""
+    return bool((not stats["bodies_pass_complete"] and stats["bodies_mined"] > 0)
+                or (not stats["reached_end"] and stats["listings"] > 0))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -2116,20 +2128,34 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: SUPABASE_DB_URL is not set.", file=sys.stderr)
         return 2
     batch_size = max(MIN_BATCH_SIZE, min(MAX_BATCH_SIZE, args.batch_size))
+    # The hourly job's fetch width, which its workflow set (W1-a4: at 16 a 1,500-body batch spent ~35 s fetching);
+    # here, not as the module default, which every scrape's archive client reads too. A value already set wins.
+    os.environ.setdefault(payloads.BODY_FETCH_WORKERS_ENV, str(payloads.MAX_BODY_FETCH_WORKERS))
+    # The runner's SIGTERM (a deploy, or timeout_s) only marks the stop: the batch in hand commits and the run stamps
+    # its cursor inside the 90 s before the SIGKILL, instead of dying with its row 'running', which no resume reads.
+    stop.install()
 
     with db.connect() as conn:
         try:
+            # Git is the store of record (02 §2.1.8): the image's contracts are projected first, every run, and a
+            # contract changed without a version bump refuses the run.
+            if not args.dry_run:
+                for contract in contracts.load_all():
+                    contracts.project(conn, contract, git_ref=os.environ.get("RAILWAY_GIT_COMMIT_SHA", "local"))
             stats = run(
                 conn, mode=args.mode, source=args.source, batch_size=batch_size,
                 max_seconds=args.max_seconds, limit=args.limit,
                 start_after_id=args.start_after_id,
                 statement_timeout=args.statement_timeout, dry_run=args.dry_run,
                 note=args.note)
-        except IntakeRefused as exc:
+        except (IntakeRefused, contracts.ContractError) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 2
     LOG.info("INTAKE done %s", json.dumps(stats, default=str, sort_keys=True))
-    return 0
+    if stop.requested():
+        return stop.EXIT_CODE
+    # The job runner re-dues a run that exits 75 a minute later, so a backlog drains run after run.
+    return MORE_REMAINS_EXIT if not args.dry_run and more_remains(stats) else 0
 
 
 if __name__ == "__main__":  # pragma: no cover

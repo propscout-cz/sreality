@@ -229,9 +229,10 @@ transaction pooler, several times slower, and says so once in the log and every 
 `worker_heartbeats.details->'location_resolve'->'last'->>'session_pooler'`.
 
 Two caveats this lane accepts rather than fixes:
-- **The `location-batch` Actions concurrency group does not reach Railway** (that is the point of
-  Decision 8). The worker drain can now run concurrently with the registry load, claim intake and
-  Mapy inventory, which the 2026-08-10 incident deliberately serialized. Mitigations already in
+- **The heavy-lane exclusion does not reach the worker** (that is the point of Decision 8; it was
+  the `location-batch` Actions group, the job runner's `location-heavy` resource since #2028). The
+  worker drain can now run concurrently with the registry load and the claim intake, which the
+  2026-08-10 incident deliberately serialized. Mitigations already in
   place: a bounded number of connections (`LOCATION_RESOLVE_WORKERS`, default 4 since W2-a5 — set it
   to 1 to restore the single-connection posture), batch 250, `SET LOCAL
   statement_timeout`/`lock_timeout` on every batch transaction, and
@@ -249,8 +250,8 @@ Two caveats this lane accepts rather than fixes:
 
 **Location-intake-fast lane (W7-a, ships LIVE):** the claim lane's change-driven listing scan
 (`location_data.claims_intake.run`, `mode="incremental"`) also runs from this worker, every ~60 s.
-Not a second lane — a second SCHEDULE for the same module. The hourly `location_claims_intake.yml`
-plus its 15-minute snapshot lag left a listing written 45 s after a tick with no claims and no
+Not a second lane — a second SCHEDULE for the same module. The hourly run (then a GitHub workflow,
+the job runner's `location_intake` since #2028) plus its 15-minute snapshot lag left a listing written 45 s after a tick with no claims and no
 verdict for up to ~75 minutes, and under W5 the consumers serve only resolved locations, so that is
 ~75 minutes invisible in Browse (measured 2026-09-13). The worker pass is the payload half only —
 `skip_bodies=True`: no bodies-first drain, no R2 client, no `forkserver` pool — with a **2-minute**
@@ -283,7 +284,8 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 - **The contracts are projected from the image once at lane start** (`contracts/` is in the Docker
   image already, for `payload_norm`), idempotent per `(portal, contract_version)`. A failure is a
   WARNING, never a dead lane: the projection raises by design when a contract's governed bytes moved
-  without a version bump, and `location_claims_intake.yml` is the authoritative projector.
+  without a version bump, and the hourly `location_intake` job, which projects before every run and
+  fails on it, is the authoritative projector.
 - **Latency, detail write to Browse:** ≤2 min lag → ≤1 min tick → the resolve lane (~15 s) →
   `browse_list`'s `*/15` pg_cron rebuild. Claim and verdict in ~3–4 minutes; the read model is now
   the slowest hop, not the claim lane.
