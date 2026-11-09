@@ -1102,8 +1102,9 @@ rules. Identify which one a task belongs to before you start.
   behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
   `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
   register name, the parent unit's name (an obec's okres, an okres's kraj, a quarter's or street's obec; none for a
-  kraj) and the fly-to `{lat, lng}` or null. It answers kraj, okres, obec, část obce and street, and a městská část as
-  a place shortcut (below): never a KÚ, region soudržnosti, the country, a PSČ (a key with no letter answers `[]`
+  kraj) and the fly-to `{lat, lng}` or null. It answers kraj, okres, obec, část obce and street, a městská část as
+  a place shortcut and a RÚIAN door (`adresni_misto`) for a typed house number (both below): never a KÚ, region
+  soudržnosti, the country, a PSČ (a key with no letter answers `[]`
   before any read) or a place outside the current registry version (a unit is read at the gazetteer's version, a
   street by version membership).
   One read, three tiers: exact (`name_norm` equal on a gazetteer row that is not `qualifier_stripped`), prefix
@@ -1128,7 +1129,38 @@ rules. Identify which one a task belongs to before you start.
   pair and a re-run adds none. Doors are updated in place, not versioned, so the pairs are true for the doors as they
   stand when finish runs. The type reads `<from>_<to>` (a quarter can straddle two městské části, so neither contains
   the other; #2461's settlement-unit pairs follow it), not `katastr_in_obec`'s `<from>_in_<to>`. The pairs are register
-  facts, not a location store (rule 25). Two read models (migration 738,
+  facts, not a location store (rule 25). **Door rows** (#2451; stories 44, 53). When the resolver's own parsers
+  (`split_street_and_number`, `house_number`: reused, never edited, as they are resolver-versioned) split the text into
+  a name and a house number, one more statement runs in the same transaction, under the same 2 s timeout and 503 path;
+  the name read still reads the whole text, so "Praha 6" keeps its shortcut and the register street "Na Hroudách 1" its
+  exact row. Its candidates are EVERY exact namesake at the gazetteer's version, as about 77 % of street names repeat
+  in another town and only about one Nádražní in seven has a door 12: streets whose `name_norm` is the name as typed,
+  without the generic word ("Nádražní ulice") or with the resolver's abbreviation folds ("nám. Míru" is náměstí
+  Míru), and, for a streetless door, části obce named exactly so (a village is a část, never the town: a č.p. is unique
+  only within its část). A literal LIMIT 1000 per kind guards a runaway name and ranks nothing (the largest, Zahradní,
+  is 705 streets). Candidates reach their doors by stable code, through every street row of the code and every obec
+  row of the town, as the resolver does. A bare number is tried as the č.p. AND as the č.o., two arms that are each an
+  index condition on `ruian_ap_street_hn` (an OR would use only its `street_id`); "12/3a" asks that č.p. and č.o.,
+  where a typed letter must match and an untyped one matches every letter (the address picker's binder required the
+  letter to match); only a marked č.ev. ("Lhota č.ev. 25") reads a č.ev. door, never a bare number; a "č.p." marker
+  reads as a bare number (the parser's behaviour). A streetless door has no č.o., so a typed one answers none. Doors are
+  read `valid_to IS NULL` and `first_version_id` at most the gazetteer's version: a door a running load inserts waits
+  for its version to publish, but doors are unversioned, so an in-place update or retirement shows at once, and a
+  re-pointed door's label may carry the next version's street name while its street chip carries the current one's.
+  A door row is `{level: 'adresni_misto', id, name, context, point, street}`: the kód ADM, the ONE label (no number for
+  a streetless or č.ev. door, migration 503), its town's okres, the door's own point, and its street's chip `{level:
+  'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
+  foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, shared by the door read
+  (computed for the rows kept) and `DOOR_LABEL_SQL`, which the address picker imports until the switch-over (#2453)
+  moves it to door rows, if addresses pass the gate. Order, a builder decision no ruling covers (#2441, #2451, #2453):
+  door rows follow the whole text's exact rows and precede its prefix and fuzzy rows, as their street part is an exact
+  namesake; among doors, the candidate's tier (an exact village before a `qualifier_stripped` one), its served
+  properties, then kód ADM, so č.p. and č.o. are not ranked apart. The list is cut at the limit, so doors can fill it:
+  production's "Nádražní 12" has 67 doors, shows 10 and no street; "Lhota 25" shows the 10 best-served of 33 and no
+  town. No door carries the number: the name rows answer as before. Not split, so answering no door: "Nádražní 12a"
+  and a town after the number ("Nádražní 12, Kolín", "Nádražní 12 Kolín"), for the gate (#2465) to weigh. Measured on
+  production (2026-11-09): about 50 ms warm, 0.4–0.7 s cold (worst "Nádražní 12", 668 ms), every probe index-backed,
+  no new index. Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
   (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,
@@ -5048,7 +5080,8 @@ portal has ever had, and one atomic DELETE of that size spends its `statement_ti
 address line opens Browse's place typeahead; `/maps/resolve` with `address_point: true` binds an address
 pick to its ONE door (the resolver's own `address_points_by_number` on the bound street, or a streetless
 village's obec, exactly one door within `REGISTRY_PIN_CONFLICT_M`; nothing scans the mirror), a street
-or an obec pick as the chips do. `POST /location/corrections {property_id, pick}` (admin) →
+or an obec pick as the chips do. The door's label is `DOOR_LABEL_SQL` from `location_data/place_search.py`,
+shared with own place search's door rows (#2451). `POST /location/corrections {property_id, pick}` (admin) →
 `operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
 `obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
 types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
