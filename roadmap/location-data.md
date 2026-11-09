@@ -1386,7 +1386,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
 - **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
   `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
   records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
-  gate's eval over `picks_between` (#2452); the switch-over DELETE (#2453); Stage B drop (#2455).
+  gate's run #2465 (its eval over `picks_between`, #2452, is built); the switch-over DELETE (#2453); Stage B drop
+  (#2455).
 - **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
   built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
   point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
@@ -1401,7 +1402,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   read at the gazetteer's version and ranked by the sum of their served properties; no pair at that version, no row.
   **Next:** v4 has no pairs, so no shortcut answers until a finishing-only re-dispatch of `20261031` (first check that
   no later `registry_versions` row exists: doors are unversioned) or the 12-01 load; verify 382 pairs at v4, 10 for
-  Praha 6, before gate eval #2452; the row label and "expanded" notice ride with #2453.
+  Praha 6, before the gate's run #2465 (its eval stops on a momc question with no pair); the row label and
+  "expanded" notice ride with #2453.
 - **Address rows — built 2026-11-09** (#2451; spec #2441 Part 4, stories 44, 53; no migration; as built:
   `docs/architecture.md` § own place search). A street or a village with a house number also answers RÚIAN doors
   (`adresni_misto`: the one label, its town's okres, the door's point, its street's chip or null) from ONE batched read
@@ -1409,9 +1411,29 @@ component is slimmed twice — each wave rewrites one component and slims its st
   only a marked č.ev. is read as a č.ev. number (a č.ev. door's č.o. answers like any č.o.). Door rows follow the whole text's exact rows and precede its similar ones (a
   builder decision for the operator), so they can fill the list. The door label moved from `api/maps.py` to
   `place_search.DOOR_LABEL_SQL`, which the address picker imports. **Next:** gate #2465 with dictated address
-  questions (#2452): a town after the number ("Nádražní 12, Kolín") answers no door yet, and the eval must score
-  streetless and č.ev. doors by kód ADM, as their label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
+  questions (#2452): an address typed with its town answers since #2485 (below), and the eval scores
+  every door by kód ADM, as a streetless or č.ev. door's label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
   picker saves `{adresni_misto, door code}` if addresses pass).
+- **Addresses typed with their town — built 2026-11-09** (#2485; spec #2441 Part 4, story 53; no migration, no new
+  index; as built: `docs/architecture.md` § own place search). "Nádražní 12, Kolín", "Kolín, Nádražní 12" and
+  "Nádražní 12 Kolín" answer only the doors in a town of that exact name (an obec, část obce or městská část, every
+  homonym kept; an okres or a kraj never), so the town, not the served counts, decides which same-named street
+  answers; a town that names nothing answers no door; "12a" is the č.o.'s letter. Each reading is one statement, the
+  whole text's always last, so a text with no town answers as before ("12a" aside). **Next:** the gate's run #2465
+  weighs the forms not read (a městská část without its register suffix, "Plzeň 2" for "Plzeň 2-Slovany"; a dash; a
+  PSČ); the okres question pending with the operator gains an input (an okres is never the town, so production's
+  "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not inside obec Kladno).
+- **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
+  built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
+  picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
+  /places/suggest` as the non-admin smoke account, never Mapy; both latency medians from the API host's HTTP log
+  through the pinned Railway CLI (Mapy's 7 days read before the prefix replay); dictated addresses scored by kód ADM;
+  a local HTML report for the look, outside any checkout, deleted after. A question from an earlier window is left
+  out; a window is scored only up to the day its 200th question landed; a momc question with no quarter pair stops
+  the run. Test: `tests/api/test_place_search_gate_eval_live.py` (migrations lane). **Next:** gate #2465, whose
+  clock starts when this deploys (window 1 from 2026-11-09; comment the first day and the questions so far there);
+  before its run, the finishing-only re-dispatch of `20261031` for the momc pairs (0 at v4), the address count ruled
+  on #2465 and, by the soft order, #2461 (else the window is re-scored); removal at Stage B #2455.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM

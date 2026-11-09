@@ -33,7 +33,7 @@ apply, `scripts/railway_iac_wizard.sh`).
 | `GH_DISPATCH_TOKEN` (fine-grained PAT, Actions read+write) | no | yes | no | | `api/price_stats.py` | github.com → Settings → Fine-grained tokens → resource owner **propscout-cz**, only `sreality`, Actions read+write (1 year; recreated 2026-10-27, #2008); approve it under the org's token requests if pending | `PUT …/workflows/scrape_price_stats.yml/enable` on the active workflow → 204 (a no-op write: only a write proves the Actions write scope); the API's variable by eye |
 | `STRIPE_WEBHOOK_SECRET` | no | **absent** (audit 2026-10-25: the billing webhook fails closed) | no | | `api/routes/billing.py` | Stripe → Developers → Webhooks → endpoint → Roll secret, only if stored | Stripe's "Send test event" → 2xx |
 | `STRIPE_SECRET_KEY` | no | absent | no | | nothing | Stripe → Developers → API keys → Roll, only if it was ever stored | n/a |
-| `SMOKE_TEST_ADMIN_PASSWORD`, `SMOKE_TEST_NONADMIN_PASSWORD` | no | no | no | local `.env` only | the production smoke checks | sign in, then set a new password (`PUT /auth/v1/user`) | sign-in with the new password |
+| `SMOKE_TEST_ADMIN_PASSWORD`, `SMOKE_TEST_NONADMIN_PASSWORD` | no | no | no | local `.env` only | the production smoke checks; the non-admin pair also `scripts/place_search_gate_eval.py` (#2452, until Stage B #2455) | sign in, then set a new password (`PUT /auth/v1/user`) | sign-in with the new password |
 
 Declare `SUPABASE_SERVICE_ROLE_KEY` in `.railway/railway.ts` in the PR that sets it (#2075, which also declares agent-worker and gives it `SUPABASE_URL`, which the realtime worker lacks): a set name the file omits plans as a destructive delete.
 

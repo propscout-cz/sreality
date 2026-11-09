@@ -1443,59 +1443,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
     },
     {
-      "filename": "recompute_property_stats.yml",
-      "name": "Jobs: recompute property stats (daily full reconcile)",
-      "description": "DAILY FULL SWEEP for the canonical `properties` parent. Attaches any straggler unlinked listings, then recomputes EVERY property's is_active rollup, source / site counts, first/last-seen span, representative child, current price, and the price-history aggregates (drop / rise counts, max drop %) from the union of its children's snapshots. Finally it clears the dirty_properties rows queued before it started, for the id range it recomputed.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 4 * * *",
-          "human": "Daily at 04:15 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "batch_size",
-          "description": "Properties recomputed per statement",
-          "required": true,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report straggler + dirty + property counts and the resume cursor, then exit without writing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock sweep budget in seconds (clean-stop past it, saving where the next run resumes; a resumed run that stops again is RED; clamped to 6000 — timeout-minutes is sized for that ceiling, raise both together in the yml)",
-          "required": false,
-          "type": "string",
-          "default": "6000",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-property-maintenance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 130,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/recompute_property_stats.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
-    },
-    {
       "filename": "reextract.yml",
       "name": "Data: re-extract a field from stored pages",
       "description": "Replays the CURRENT parser over already-stored `portal_raw_pages` HTML to recover the two things a portal publishes that are NOT `listings` columns: the `images` child rows and the `raw_json.broker` block. Every typed column is `reparse.yml`'s work. No re-fetch, no LLM, no new secrets — and it repairs INACTIVE listings too, which a re-fetch structurally cannot.",
@@ -1684,51 +1631,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/reparse.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reparse.yml"
-    },
-    {
-      "filename": "resolve_brokers_full.yml",
-      "name": "Broker resolution (full sweep + backfill)",
-      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), runs the cross-source merge step, recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), relabels firms, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It publishes no count: every broker number is read from the broker book, which the property pass keeps. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. The broker_resolution lease keeps it apart from the worker's incremental broker lane.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "35 4 * * *",
-          "human": "Daily at 04:35 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "full | backfill (same code path; backfill = first population)",
-          "required": false,
-          "type": "choice",
-          "default": "full",
-          "options": [
-            "full",
-            "backfill"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget for the attribution scan; finalize cleanly before timeout",
-          "required": false,
-          "type": "string",
-          "default": "1500",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "broker-resolution-full",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/resolve_brokers_full.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
     },
     {
       "filename": "run_job.yml",

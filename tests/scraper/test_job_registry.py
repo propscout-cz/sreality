@@ -89,9 +89,9 @@ def argv_problems(job: Job) -> list[str]:
             problems.append(f"{job.name}: a walk's budget is the runner's SIGTERM at timeout_s, not --max-seconds")
     elif budget is not None and not 0 < budget < job.timeout_s:
         problems.append(f"{job.name}: --max-seconds {budget} must fire inside timeout_s {job.timeout_s}")
-    elif budget is not None and job.host == jobs.RUNNER and budget * 3 > job.timeout_s * 2:
-        problems.append(f"{job.name}: --max-seconds {budget} passes 2/3 of timeout_s {job.timeout_s}, where Health "
-                        "reads a healthy run in flight as Watch")
+    elif budget is not None and job.host == jobs.RUNNER and 3 * budget > 2 * job.timeout_s:
+        problems.append(f"{job.name}: --max-seconds {budget} is past 2/3 of timeout_s {job.timeout_s}, its job cell's "
+                        "Watch line, so every run that uses it reads Watch")
     return problems
 
 
@@ -102,7 +102,6 @@ def _entry(name: str) -> Job:
 def test_the_registry_spans_every_portal() -> None:
     assert len(PORTAL_CLASSES) >= 10, "the portal list shrank: a census over its walks proves less"
     assert len(jobs.declared()) == FIXED + len(PORTAL_CLASSES)
-    assert {"stale_images", "rent_map", "map_overlays", "clip"} <= {j.name for j in jobs.runner_jobs()}
 
 
 @pytest.mark.parametrize("job", jobs.declared(), ids=lambda j: j.name)
@@ -119,6 +118,8 @@ def test_the_argv_census_fires() -> None:
     sweep = _entry("property_sweep")
     assert argv_problems(replace(sweep, timeout_s=6000))
     assert argv_problems(replace(_entry("location_intake"), timeout_s=3300)), "2400 s of budget against 55 min"
+    assert argv_problems(replace(sweep, timeout_s=8999, host=jobs.RUNNER)), "a budget past the Watch line"
+    assert argv_problems(replace(sweep, timeout_s=8999, host=jobs.UNTIL_MOVED)) == [], "its move PR's to settle"
     walk = _entry("walk_bazos")
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index")))
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index-only", "--drain-only")))
@@ -290,7 +291,8 @@ def _occupied_hours(job: Job, siblings: Sequence[Job] = ()) -> set[int]:
 
 
 # The census holds for scheduled runs and their retries (the runner keeps a DB-heavy job's backoff, timeout and lost
-# retries in its own hour); an interrupted run is due again at once (#2024 R-a (b)), so a deploy can overlap two.
+# retries in its own hour). A run off its hours (an interrupted one is due again at once, #2024 R-a (b); a recovery
+# after hours down; a request) waits for any other DB-heavy run on the runner instead (job_lease's heavy turn, #2027).
 def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
     """No two DB-heavy jobs' scheduled runs hold the database in one hour, unless one resource keeps them apart."""
     heavy = [j for j in entries if j.db_heavy]
@@ -523,32 +525,24 @@ def test_every_job_has_exactly_one_host() -> None:
     assert pairing_problems(jobs.declared(), _repo_workflows()) == []
 
 
-def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
-    first_wave = {"stale_images", "rent_map", "map_overlays"}
-    workflows = _repo_workflows()
+# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027, #2028).
+MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
+         ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
+         ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
+         ("location_intake", "location_claims_intake.yml"))
+
+
+@pytest.mark.parametrize(("name", "file"), MOVED)
+def test_a_move_is_a_host_flip_plus_its_workflows_deletion(name: str, file: str) -> None:
+    job, workflows = _entry(name), _repo_workflows()
+    assert job.host == jobs.RUNNER and file not in workflows
     assert pairing_problems(jobs.declared(), workflows) == []
-    kept = Workflow("refresh_stale_images.yml", True, 1200,
-                    (Invocation("scripts.refresh_stale_image_urls", frozenset()),))
-    assert pairing_problems(jobs.declared(), {**workflows, kept.file: kept}) == [  # flipped, workflow kept
-        "stale_images: on the runner, and refresh_stale_images.yml still runs scripts.refresh_stale_image_urls"]
-    unflipped = [replace(j, host=jobs.UNTIL_MOVED) if j.name in first_wave else j for j in jobs.declared()]
+    kept = Workflow(file, True, job.timeout_s, (Invocation(job.argv[0], frozenset()),))
+    assert pairing_problems(jobs.declared(), {**workflows, file: kept}) == [  # flipped, workflow kept
+        f"{name}: on the runner, and {file} still runs {job.argv[0]}"]
+    unflipped = [replace(j, host=jobs.UNTIL_MOVED) if j.name == name else j for j in jobs.declared()]
     assert pairing_problems(unflipped, workflows) == [  # deleted, not flipped
-        f"{n}: waiting to move, and no scheduled workflow runs it" for n in ("stale_images", "rent_map", "map_overlays")]
-    # W5 (#2032): clip's move, both halves.
-    kept_clip = Workflow("clip_tag.yml", True, 3300, (Invocation("scripts.clip_tag_backfill", frozenset()),))
-    assert pairing_problems(jobs.declared(), {**workflows, kept_clip.file: kept_clip}) == [
-        "clip: on the runner, and clip_tag.yml still runs scripts.clip_tag_backfill"]
-    unflipped_clip = [replace(j, host=jobs.UNTIL_MOVED) if j.name == "clip" else j for j in jobs.declared()]
-    assert pairing_problems(unflipped_clip, workflows) == ["clip: waiting to move, and no scheduled workflow runs it"]
-    # W3 (#2028): the intake's move, both halves.
-    kept_intake = Workflow("location_claims_intake.yml", True, 3300,
-                           (Invocation("location_data.claims_intake", frozenset({"--mode"})),))
-    assert pairing_problems(jobs.declared(), {**workflows, kept_intake.file: kept_intake}) == [
-        "location_intake: on the runner, and location_claims_intake.yml still runs location_data.claims_intake"]
-    unflipped_intake = [replace(j, host=jobs.UNTIL_MOVED) if j.name == "location_intake" else j
-                        for j in jobs.declared()]
-    assert pairing_problems(unflipped_intake, workflows) == [
-        "location_intake: waiting to move, and no scheduled workflow runs it"]
+        f"{name}: waiting to move, and no scheduled workflow runs it"]
 
 
 def test_the_pairing_census_fires() -> None:

@@ -79,8 +79,8 @@ Wave 4 retired seven portal keys into the four portal checks the worker measures
 into `delisting`. `property_maintenance`'s sweep arm (the 2026-08-06 sweep death and stranded lease,
 read from a stamp, never a properties scan) became the `jobs` check's `artifact/property_sweep`
 cell: a completed cycle (one run, or two through `app_settings.property_sweep_cursor` since
-2026-10-03) stamps the `property_sweep` derived artifact (migration 622), whose 38 h budget plus
-GitHub's 18 h delivery slack keeps its Problem at 56 h, as ruled for the two-run cycle; its 52 h
+2026-10-03) stamps the `property_sweep` derived artifact (migration 622), whose Problem stays at 56 h, as
+ruled for the two-run cycle (38 h + GitHub's 18 h slack; 56 h on the runner since 731, #2027); its 52 h
 Watch is gone, because an artifact cell has no Watch tier, and the sweep's own RED exit is the
 faster alarm. Their thresholds, SQL and tests went with them.
 Health dashboard sprint wave 5 retired `broker_merge_suppression` (hourly, on GitHub) into the
@@ -916,8 +916,8 @@ exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never 
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
 `is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
 `*/15`) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
-38 h on a daily cron, so with the slack it reads Problem at 56 h, the retired `property_maintenance`
-sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
+38 h on a daily cron, so with the slack it read Problem at 56 h, the retired `property_maintenance`
+sweep arm's fail line (migration 731 moved it to `job-runner` at 56 h, no slack, #2027), and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
 live row was inside its budget at build.
 
