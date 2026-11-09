@@ -114,6 +114,17 @@ def _pair(conn: psycopg.Connection, momc: int, part: int) -> None:
         (momc, part))
 
 
+def _not_live_lomnice(conn: psycopg.Connection) -> None:
+    """Lomnice, drawn last at an older version: resolve cannot record a unit the current version no longer draws, so
+    its one pick is written as it once was."""
+    older = conn.execute(
+        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
+        " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
+        ).fetchone()[0]
+    _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
+    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
+
+
 @pytest.fixture()
 def client(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """The real routes on the test connection, resolve's pick written on it too, a verified caller."""
@@ -178,6 +189,12 @@ class _Route:
 FILLER = [("kraj", 116), ("okres", 3702), ("obec", PRAHA), ("kraj", 19), ("momc", PRAHA_6)]
 
 
+def _answer(row: tuple[str, int], position: int) -> _Answer:
+    """`row` at the 1-based `position` among the filler rows."""
+    rows = [*FILLER[:position - 1], row, *FILLER[position - 1:]]
+    return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
+
+
 class _Canned(_Route):
     """Own search's rows, canned per text: Brno at the 1-based position `at[text]` (`others` for a text not in it),
     filler rows before it."""
@@ -189,8 +206,7 @@ class _Canned(_Route):
         position = self.at.get(body["query"], self.others)
         if position is None:
             raise _Breach(f"no canned answer for {body['query']!r}")
-        rows = [*FILLER[:position - 1], ("obec", BRNO), *FILLER[position - 1:]]
-        return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
+        return _answer(("obec", BRNO), position)
 
 
 class _Clock:
@@ -277,11 +293,15 @@ def _clock(conn: psycopg.Connection) -> _Clock:
     return _Clock(conn.execute("SELECT now()").fetchone()[0] + timedelta(days=3))
 
 
+def _today(conn: psycopg.Connection) -> Any:
+    return conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
+
+
 def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any, *argv: str,
          clock: _Clock | None = None, railway: Any = None, size: int | None = None) -> tuple[int, list[str]]:
     """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins); `size`
     stands in for the 200 questions that fill a window."""
-    day = conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
+    day = _today(conn)
     clock = clock or _clock(conn)
 
     @contextlib.contextmanager
@@ -323,13 +343,7 @@ def test_null_text_refused_and_not_live_rows_are_counted_and_left_out(
     _resolve(client, TOWN_BRNO, "Brno", 1)
     _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
     _resolve(client, PART_BARRANDOV, "Barrandov", 3)
-    older = conn.execute(
-        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
-        " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
-        ).fetchone()[0]
-    _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
-    # Resolve cannot record a unit the current version no longer draws, so this one row is written as it once was.
-    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
+    _not_live_lomnice(conn)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "rows 4 · refused 1 · NULL text 1 · not live 1" in out
     assert "digit share 1 of 4 (25.0 %)" in out
@@ -463,10 +477,6 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
                               " first confirm with a SELECT that no registry_versions row is newer than version ")
     assert "gh workflow run location_registry_load.yml -f vintage=20261101;" in out[-1]
     assert code == 2
-
-
-def _today(conn: psycopg.Connection) -> Any:
-    return conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
 
 
 @REQUIRED_DB
@@ -676,19 +686,22 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
 
 
 @REQUIRED_DB
-@pytest.mark.parametrize(("lag", "lines", "polls", "exit_code"), [
+@pytest.mark.parametrize(("lag", "lines", "waited", "exit_code"), [
     (timedelta(seconds=45), ["own POST /places/suggest · sent 4 · log holds 4 of 4",
                              "latency: own p50 200 ms ≤ Mapy p50 344 ms → not slower → pass",
-                             "verdict: questions pass · latency pass · addresses not asked → pass"], 2, 0),
+                             "verdict: questions pass · latency pass · addresses not asked → pass"],
+     timedelta(minutes=1), 0),
     (timedelta(minutes=10), ["own POST /places/suggest · sent 4 · log holds 0 of 4", "own · 200s n 0 · statuses —",
                              "latency: incomplete: no verdict without both medians over their full spans and every"
                              " request sent in the log",
-                             "verdict: questions pass · latency incomplete · addresses not asked → incomplete"], 10, 2),
+                             "verdict: questions pass · latency incomplete · addresses not asked → incomplete"],
+     timedelta(minutes=5), 2),
 ], ids=["caught up in a minute", "still behind after 5 minutes"])
 def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], lag: timedelta,
-    lines: list[str], polls: int, exit_code: int,
+    lines: list[str], waited: timedelta, exit_code: int,
 ) -> None:
+    """`waited`: the time on the eval's clock after the host logged the replay's last request, "Brno a"."""
     _resolve(client, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     railway = _host(clock, lag)
@@ -696,8 +709,7 @@ def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=1)
     for line in lines:
         assert line in out
-    assert clock.events[-polls:] == [("sleep", 30.0)] * polls
-    assert clock.events[-polls - 1] == ("post", "Brno a")
+    assert clock.at - datetime.fromisoformat(railway.rows[-1]["timestamp"]) == waited
     assert code == exit_code
 
 
@@ -791,8 +803,7 @@ class _Doors(_Canned):
         if body["query"] not in self.doors:
             return super().suggest(body, headers)
         kod, position = self.doors[body["query"]]
-        rows = [*FILLER[:position - 1], ("adresni_misto", kod), *FILLER[position - 1:]]
-        return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
+        return _answer(("adresni_misto", kod), position)
 
 
 # Invented doors: kód ADM and the house as dictated.
@@ -838,12 +849,7 @@ def test_the_looks_run_ends_by_naming_its_report_and_how_to_delete_it(
     _resolve(client, TOWN_BRNO, "Brno", 1)
     _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
     _resolve(client, PART_BARRANDOV, "Barrandov", 3)
-    older = conn.execute(
-        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
-        " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
-        ).fetchone()[0]
-    _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
-    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
+    _not_live_lomnice(conn)
     addresses = tmp_path / "addresses.tsv"
     addresses.write_text("21000001\tNad Bořislavkou 487\n", encoding="utf-8")
     report = tmp_path / "look.html"
