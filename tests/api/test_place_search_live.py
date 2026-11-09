@@ -1024,3 +1024,21 @@ def test_a_town_name_two_obce_share_answers_the_doors_in_both_the_served_first(m
         {"level": "adresni_misto", "id": 21000141, "name": "Nádražní 12, Kladno", "context": "Kladno", "point": None,
          "street": {"level": "ulice", "id": 401011, "name": "Nádražní", "context": "Kladno"}},
     ]
+
+
+def test_a_letter_on_a_bare_number_is_the_co_s_letter_with_or_without_its_town(mirror, client):
+    """Builder decision for the operator's ruling (PR notes), as the ticket recommends: RÚIAN carries a letter only on
+    the č.o., so "12a" is the č.o. 12 with the letter a, never the č.p. 12 or the č.o. 12b. With no town, the street
+    follows by similarity (0.69); with one, nothing else is similar enough."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=345, co=12, znak="a")
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=346, co=12, znak="b")
+    mirror.house(21000103, towns["kolin"], street=nadrazni, cp=12)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    door = {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 345/12a, Kolín", "context": "Kolín",
+            "point": None, "street": street}
+    assert _suggest(client, "Nádražní 12a") == [door, {**street, "point": None}]
+    assert _suggest(client, "Nádražní 12a, Kolín") == [door]
+    assert _suggest(client, "Nádražní 12a Kolín") == [door]

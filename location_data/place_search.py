@@ -36,7 +36,9 @@ _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
 # "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
 # ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
-_TOWN_AFTER = re.compile(r"(?<![\w./])(\d{1,6}(?:\s*/\s*\d{1,5}[a-zA-Z]?)?)\s+(?=[^\W\d_])")
+_TOWN_AFTER = re.compile(r"(?<![\w./])(\d{1,6}(?:\s*/\s*\d{1,5}[a-zA-Z]?|[a-zA-Z])?)\s+(?=[^\W\d_])")
+# "Nádražní 12a", which the resolver's parser reads as no number: RÚIAN carries a letter on the č.o. alone.
+_LETTERED = re.compile(r"^(?P<street>.*\S)\s+(?P<co>\d{1,5})(?P<znak>[a-zA-Z])$")
 _DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
@@ -209,6 +211,7 @@ doors AS (
       UNION
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text)
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)) a
   UNION ALL
   SELECT k.tier, k.served, NULL, NULL, NULL, ap.kod_adm
@@ -293,26 +296,30 @@ class _Reading:
     """One way to read the text as an address: its street part, number slots and town key (None: every town)."""
 
     street: str
-    domovni: int
+    domovni: int | None
     typ: str | None
     orientacni: int | None
     znak: str | None
+    bare: int | None  # tried as the č.o. alone
     town: str | None
 
     def params(self, limit: int) -> dict[str, Any]:
         return {"street_keys": _street_keys(self.street), "part_key": normalize_name(self.street),
                 "domovni": self.domovni, "orientacni": self.orientacni, "znak": self.znak, "typ": self.typ or TYP_CP,
-                "bare": self.domovni if self.orientacni is None and self.typ is None else None, "town": self.town,
-                "limit": limit}
+                "bare": self.bare, "town": self.town, "limit": limit}
 
 
 def _address(text: str, town: str | None) -> _Reading | None:
     street_part, slots = split_street_and_number(text)
     domovni, typ = house_number(slots)
     if domovni is None:
-        return None
+        lettered = _LETTERED.match(text.strip())
+        if lettered is None:
+            return None
+        return _Reading(lettered["street"], None, None, None, lettered["znak"].lower(), int(lettered["co"]), town)
     orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
-    return _Reading(street_part, domovni, typ, orientacni, slots.get("znak_orientacniho"), town)
+    return _Reading(street_part, domovni, typ, orientacni, slots.get("znak_orientacniho"),
+                    domovni if orientacni is None and typ is None else None, town)
 
 
 def _addresses(query: str) -> list[_Reading]:
