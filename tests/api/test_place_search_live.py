@@ -848,3 +848,21 @@ def test_doors_fill_the_whole_list_when_there_are_as_many_as_the_limit(mirror, c
         {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno", "point": None,
          "street": None},
     ]}
+
+
+def test_a_failed_door_read_is_the_same_503_and_no_log_line_carries_the_typed_text(mirror, client, conn, caplog):
+    """The door read runs in the name read's transaction, under its timeout and its SQLSTATE-only log line. A text
+    with no number never reads the doors."""
+    towns = _towns(mirror)
+    mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
+    mirror.publish()
+    with caplog.at_level("INFO"):
+        assert _doors(_suggest(client, "Nádražní 12")) == [(21000101, "Nádražní 12, Kolín")]
+        conn.execute("ALTER TABLE ruian_address_points RENAME TO ruian_address_points_gone")
+        assert _chips(_suggest(client, "Nádražní")) == [("ulice", NADRAZNI_KOLIN, "Nádražní", "Kolín")]
+        res = client.post("/places/suggest", json={"query": "Nádražní 12"})
+    assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
+    lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
+    assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
+    assert not any("nádražní" in r.getMessage().lower() or "nadrazni" in r.getMessage().lower() or r.exc_info
+                   for r in caplog.records)

@@ -28,7 +28,7 @@ LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
-DOOR_LEVEL = "adresni_misto"
+_DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
 # picker's preview (api/maps.py imports DOOR_LABEL_SQL until the Mapy path goes, #2454).
@@ -215,7 +215,7 @@ class Place:
         item = {**self.chip(), "point": point}
         if self.places is not None:
             item["places"] = [p.chip() for p in self.places]
-        if self.level == DOOR_LEVEL:
+        if self.level == _DOOR_LEVEL:
             item["street"] = None if self.street is None else self.street.chip()
         return item
 
@@ -252,7 +252,7 @@ def _street_keys(part: str) -> list[str]:
 def _door(row: tuple[Any, ...]) -> Place:
     kod, label, context, lat, lng, street_code, street_name, street_context = row
     street = None if street_code is None else Place("ulice", int(street_code), street_name, street_context)
-    return Place(DOOR_LEVEL, int(kod), label, context, lat, lng, street=street)
+    return Place(_DOOR_LEVEL, int(kod), label, context, lat, lng, street=street)
 
 
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
