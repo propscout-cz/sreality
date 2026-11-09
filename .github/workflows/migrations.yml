@@ -385,9 +385,10 @@ jobs:
 
       # Own place search (#2449): POST /places/suggest over a mirror the test seeds, its gazetteer built by the loader's
       # own step and both read models refreshed, answers chips (the town Brno before the street Brněnská), a městská
-      # část only as a shortcut carrying its quarters at the index's version (#2450), never a KÚ, country, PSČ or closed
-      # place, ranks by served properties (a shortcut by its quarters' sum) then population then code, and answers
-      # 503 on a failed read without logging the typed text. Only a real schema runs pg_trgm, the matviews and the read.
+      # část only as a shortcut carrying its quarters at the index's version (#2450), a street or village with a house
+      # number as RÚIAN doors with their street's chip (#2451), never a KÚ, country, PSČ or closed place, ranks by
+      # served properties (a shortcut by its quarters' sum) then population then code, and answers 503 on a failed read
+      # without logging the typed text. Only a real schema runs pg_trgm, the matviews and the read.
       - name: Own place search answers chips from the register (#2449)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

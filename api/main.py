@@ -431,9 +431,9 @@ def _place_search_unavailable() -> HTTPException:
 
 @app.post("/places/suggest")
 def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
-    """Own place search (#2449): rows that are already chips, or a shortcut that adds its places (#2450). Ships with no
-    caller until the switch-over (#2453). The connection opens here, not as a dependency, so a database it cannot
-    reach is the same 503 as a failed read."""
+    """Own place search (#2449): rows that are already chips, a shortcut that adds its places (#2450), or a door with
+    its street's chip (#2451). Ships with no caller until the switch-over (#2453). The connection opens here, not as a
+    dependency, so a database it cannot reach is the same 503 as a failed read."""
     try:
         with deps.open_background_conn() as conn:
             places = place_search.suggest(conn, body.query, limit=body.limit)

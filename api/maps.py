@@ -51,6 +51,7 @@ from fastapi import HTTPException
 
 from api import http_json
 from api.location_filter import ChipLevel
+from location_data.place_search import DOOR_LABEL_SQL
 from location_data.resolver.bind import REGISTRY_PIN_CONFLICT_M
 from location_data.resolver.composite import match_streets
 from location_data.resolver.geo import haversine_m
@@ -452,21 +453,6 @@ def _street_of(type_: str, name: str, regional_structure: Sequence[Any]) -> str 
     return name if type_ != "regional.address" else _entry_name(regional_structure, "regional.street")
 
 
-# The door's label: the ONE label (rule 25) over its register fields, as the row will read.
-# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
-_DOOR_LABEL_SQL = """
-SELECT location_display_label(
-         s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
-         ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
-         o.name, c.name, 'CZ', 'cz')
-  FROM ruian_address_points ap
-  LEFT JOIN ruian_streets s ON s.id = ap.street_id
-  LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
-  LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id
- WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
-"""
-
-
 # THE ADDRESS PICKER'S DOOR (W3b). The number is the `regional.address` entry's; a street
 # entry binds as the chip does and, unbound, binds nothing (never the whole obec). One keyed
 # read of the resolver's own lookup — nothing searches the 3 M points — and exactly ONE door
@@ -505,7 +491,7 @@ def _resolve_address_point(
                  "— no code", len(near), REGISTRY_PIN_CONFLICT_M, obec[1], None if street is None else street.code)
         return None
     with conn.cursor() as cur:
-        cur.execute(_DOOR_LABEL_SQL, (near[0].kod_adm,))
+        cur.execute(DOOR_LABEL_SQL, (near[0].kod_adm,))
         row = cur.fetchone()
     return near[0].kod_adm, None if row is None else row[0]
 

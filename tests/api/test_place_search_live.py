@@ -1,7 +1,9 @@
 """Own place search (#2449; spec #2441 Part 4, Q2 c, Q6 a, Q9, Q12 a), EXECUTED against the replayed schema (CI's
 migrations lane, `TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): `POST /places/suggest` over a mini RÚIAN
 mirror seeded in the transaction, its gazetteer built by the loader's own `name_index.rebuild`, both read models
-refreshed through `refresh_matview` before the first search. Nothing calls Mapy. Every test rolls back.
+refreshed through `refresh_matview` before the first search. Nothing calls Mapy. Every test rolls back. Door rows
+(#2451; stories 44, 53) are asserted on numbered doors the mirror seeds; one door per street wherever a street's point
+is asserted, as its point is its doors' mean.
 
 The mirror is RÚIAN-only, so no foreign place can exist in it: a foreign row has nowhere to come from.
 """
@@ -102,19 +104,47 @@ class _Mirror:
             " VALUES (%s::ruian_level, %s, %s, %s, %s, 'official')", (level, unit, version, name, normalize_name(name)))
 
     def street(self, code: int, name: str, obec: int, *, door: tuple[float, float] | None = None,
-               version: int | None = None) -> None:
-        """Open, drawn in `version` alone (the current one by default)."""
+               version: int | None = None, valid_from: str = "2020-01-01") -> int:
+        """Open, drawn in `version` alone (the current one by default). Returns its row id."""
         version = self.v if version is None else version
-        self.conn.execute(
+        street = int(self.conn.execute(
             "INSERT INTO ruian_streets (code, name, name_norm, obec_unit_id, first_version_id, last_version_id,"
-            " valid_from) VALUES (%s, %s, %s, %s, %s, %s, '2020-01-01')",
-            (code, name, normalize_street_name(name), obec, version, version))
+            " valid_from) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (code, name, normalize_street_name(name), obec, version, version, valid_from)).fetchone()[0])
         if door is not None:
             self.conn.execute(
                 "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, ulice_kod, psc, geom, plati_od,"
                 " first_version_id, last_version_id) VALUES (%s, %s, %s, %s, '68201',"
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
                 (next(self.doors), obec, self.codes[obec], code, *door, version, version))
+        return street
+
+    def house(self, kod: int, obec: int, *, cp: int, street: int | None = None, part: int | None = None,
+              typ: str = "č.p.", co: int | None = None, znak: str | None = None,
+              point: tuple[float, float] | None = None, version: int | None = None,
+              valid_to: str | None = None) -> None:
+        """A numbered door on `street` (a street ROW, as the load points a door) or, streetless, in `part`; born in
+        `version` (the current one by default); `valid_to` retires it."""
+        version = self.v if version is None else version
+        lng, lat = point if point is not None else (None, None)
+        self.conn.execute(
+            "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, street_id, ulice_kod,"
+            " cast_obce_unit_id, cast_obce_kod, typ_so, cislo_domovni, cislo_orientacni, znak_orientacniho, psc,"
+            " geom, plati_od, valid_to, first_version_id, last_version_id)"
+            " VALUES (%s, %s, %s, %s, (SELECT code FROM ruian_streets WHERE id = %s), %s, %s, %s, %s, %s, %s, '28002',"
+            " ST_SetSRID(ST_MakePoint(%s::float8, %s::float8), 4326), '2020-01-01', %s, %s, %s)",
+            (kod, obec, self.codes[obec], street, street, part, self.codes[part] if part else None, typ, cp, co,
+             znak, lng, lat, valid_to, version, version))
+
+    def close_street(self, street: int, version: int) -> None:
+        """`version` closes the street row, as the load's street upsert does before it reopens a changed one."""
+        self.conn.execute("UPDATE ruian_streets SET valid_to = '2026-11-30', last_version_id = %s WHERE id = %s",
+                          (version, street))
+
+    def repoint(self, kod: int, street: int, version: int) -> None:
+        """The load updates the door in place onto `street`, the row it now belongs to (doors are not versioned)."""
+        self.conn.execute("UPDATE ruian_address_points SET street_id = %s, last_version_id = %s WHERE kod_adm = %s",
+                          (street, version, kod))
 
     def quarters(self, momc: int, *parts: int, version: int | None = None) -> None:
         """A městská část's quarter pairs at `version` (the current one by default), as the load's finish step writes
@@ -522,3 +552,351 @@ def test_own_search_never_reads_the_picks_its_holdout(mirror, client, conn):
     mirror.publish()
     conn.execute("ALTER TABLE place_picks RENAME TO place_picks_holdout")
     assert _chips(_suggest(client, "Brno"))[0] == ("obec", BRNO, "Brno", "Brno-město")
+
+
+KOLIN_OKRES, KOLIN, NADRAZNI_KOLIN, NADRAZNI_KH = 3204, 533165, 401001, 401002
+
+
+def _towns(m: _Mirror) -> dict[str, int]:
+    """Kolín and Kutná Hora, each in its okres of the same name, in one kraj. Returns their and the kraj's unit ids."""
+    kraj = m.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    return {"kraj": kraj, "kolin": m.unit("obec", KOLIN, "Kolín", m.unit("okres", KOLIN_OKRES, "Kolín", kraj)),
+            "kutna_hora": m.unit("obec", KUTNA_HORA, "Kutná Hora",
+                                 m.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora", kraj))}
+
+
+def _doors(items: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    return [(i["id"], i["name"]) for i in items if i["level"] == "adresni_misto"]
+
+
+def test_a_street_and_its_cp_answer_the_door_with_its_label_street_and_point_before_the_street(mirror, client):
+    """Story 44: the door row is its level, kód ADM, the one door label, its town's okres, its point and the street's
+    chip. The street itself answers by similarity ('nadrazni 12' to 'nadrazni' is 0.75), after the door."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
+
+
+def test_a_street_and_its_co_answer_the_door_whose_orientation_number_it_is(mirror, client):
+    """A bare number is tried as the č.o. too: Nádražní 345/12 is the house a user knows as Nádražní 12."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=345, co=12, point=(15.2011, 50.0281))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0281, "lng": 15.2011},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0281, "lng": 15.2011}},
+    ]
+
+
+def test_a_village_and_its_cp_answer_its_streetless_door_whose_one_label_has_no_number(mirror, client):
+    """Story 53: "<village> <number>" is the Czech address of a house on no street, its village a část obce. The one
+    door label (rule 25) names no number for a streetless door, so the row reads as the village; its context, the
+    town's okres, tells it apart. The town and the část answer by similarity (0.67), the town first by its people."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.population(513041, 663)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25,
+                 point=(14.0021, 50.1703))
+    mirror.publish()
+    assert _suggest(client, "Lhota 25") == [
+        {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno",
+         "point": {"lat": 50.1703, "lng": 14.0021}, "street": None},
+        {"level": "obec", "id": 513041, "name": "Lhota", "context": "Kladno", "point": None},
+        {"level": "cast_obce", "id": 70971, "name": "Lhota", "context": "Lhota",
+         "point": {"lat": 50.1703, "lng": 14.0021}},
+    ]
+
+
+def test_a_town_and_a_number_is_never_read_as_a_door_so_praha_6_stays_its_shortcut(mirror, client):
+    """A village is a část obce, never the town: a č.p. is unique only within its část, and "Praha 6" is the městská
+    část. Dejvice has a streetless č.p. 6, as Vysočany does in production; it is not answered."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    mirror.quarters(praha_6, dejvice, mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha))
+    mirror.house(21000601, praha, part=dejvice, cp=6)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6")) == [
+        ("momc", PRAHA_6, "Praha 6", "Praha"),
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
+        ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+    ]
+
+
+def test_one_read_answers_the_doors_of_same_named_streets_in_two_towns_the_served_street_s_first(mirror, client):
+    """About 77 % of street names repeat in another town, so the read takes every exact namesake at once. Q12 a: the
+    street in Kutná Hora serves a property and the one in Kolín none, so its door answers first though its code is
+    higher; the streets themselves follow by similarity, in the same order."""
+    towns = _towns(mirror)
+    kolin = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kutna_hora = mirror.street(NADRAZNI_KH, "Nádražní", towns["kutna_hora"])
+    mirror.house(21000101, towns["kolin"], street=kolin, cp=12, point=(15.2003, 50.0275))
+    mirror.house(21000102, towns["kutna_hora"], street=kutna_hora, cp=12, point=(15.2681, 49.9481))
+    mirror.served(region=STREDOCESKY, okres=KUTNA_HORA_OKRES, obec=KUTNA_HORA, street=NADRAZNI_KH)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kutná Hora", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681},
+         "street": {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora"}},
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
+
+
+def test_a_bare_number_answers_its_cp_door_and_its_co_door_on_one_street_ties_by_code(mirror, client):
+    """Both readings at once, neither ranked above the other: 345/12 has the lower code, so it goes first. 13/2 carries
+    no 12."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=345, co=12)
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12)
+    mirror.house(21000103, towns["kolin"], street=nadrazni, cp=13, co=2)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {**street, "point": None},
+    ]
+
+
+def test_a_typed_cp_and_co_answer_only_that_door_a_typed_letter_must_match_an_untyped_one_matches_any(mirror, client):
+    """12/3a is the č.p. 12 with the č.o. 3a: never 12/3b, the č.p. 3, or 99/12 (a typed č.o. ends the bare reading).
+    Typed without its letter, 12/3 answers both letters, by code. Doors only: 'nadrazni 12 3a' reaches the street at
+    exactly 0.6, which this test does not pin."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, co=3, znak="a")
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12, co=3, znak="b")
+    mirror.house(21000103, towns["kolin"], street=nadrazni, cp=3)
+    mirror.house(21000104, towns["kolin"], street=nadrazni, cp=99, co=12)
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní 12/3a")) == [(21000101, "Nádražní 12/3a, Kolín")]
+    assert _doors(_suggest(client, "Nádražní 12/3")) == [
+        (21000101, "Nádražní 12/3a, Kolín"),
+        (21000102, "Nádražní 12/3b, Kolín"),
+    ]
+
+
+def test_a_village_and_a_typed_co_answer_no_streetless_door(mirror, client):
+    """A house on no street carries no č.o., so "Lhota 25/3" is no streetless č.p. 25."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota")]
+    assert _doors(_suggest(client, "Lhota 25/3")) == []
+
+
+def test_a_whole_text_that_is_exactly_a_name_answers_before_the_doors_and_they_before_what_is_only_similar(
+        mirror, client):
+    """The register has a street named "Na Hroudách 1": the whole text is exactly its name, so it answers first. The
+    door Na Hroudách 1 comes next, as its street part is an exact name too, and the street Na Hroudách, only similar
+    to the whole text, after it."""
+    nymburk = mirror.unit("obec", 537004, "Nymburk",
+                          mirror.unit("okres", 3208, "Nymburk", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")))
+    na_hroudach = mirror.street(402001, "Na Hroudách", nymburk)
+    mirror.street(402002, "Na Hroudách 1", nymburk)
+    mirror.house(21000801, nymburk, street=na_hroudach, cp=1)
+    mirror.publish()
+    assert _suggest(client, "Na Hroudách 1") == [
+        {"level": "ulice", "id": 402002, "name": "Na Hroudách 1", "context": "Nymburk", "point": None},
+        {"level": "adresni_misto", "id": 21000801, "name": "Na Hroudách 1, Nymburk", "context": "Nymburk",
+         "point": None, "street": {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk"}},
+        {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk", "point": None},
+    ]
+
+
+def test_a_number_no_door_carries_answers_the_whole_text_s_rows_as_before(mirror, client):
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 99") == [
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
+
+
+def test_an_evidence_number_answers_only_when_marked_and_its_one_label_has_no_number(mirror, client):
+    """A bare number is a č.p. or a č.o., never a č.ev.: the č.ev. 12 answers "Nádražní č.ev. 12" alone. The one door
+    label names no č.ev. Only the door: the whole text is 0.53 similar to the street."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, typ="č.ev.")
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní 12")) == []
+    assert _suggest(client, "Nádražní č.ev. 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]
+
+
+def test_an_evidence_door_s_co_answers_a_bare_number_like_any_co_and_its_label_names_the_co_alone(mirror, client):
+    """A bare number is never read as a č.ev. number, but a č.ev. door's own č.o. is a č.o., as the resolver's lookup
+    reads it: production has 1,822 current č.ev. doors on a street with a č.o. (kód 14647397, č.ev. 2085 and č.o. 15,
+    reads "5. května 15, Brandýs nad Labem-Stará Boleslav"). The one label names the č.o., never the č.ev."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=2085, typ="č.ev.", co=15)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    assert _suggest(client, "Nádražní 15") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 15, Kolín", "context": "Kolín", "point": None,
+         "street": street},
+        {**street, "point": None},
+    ]
+    assert _doors(_suggest(client, "Nádražní 2085")) == []
+    assert _doors(_suggest(client, "Nádražní č.ev. 2085")) == [(21000102, "Nádražní 15, Kolín")]
+
+
+def test_a_village_s_evidence_number_answers_only_when_marked(mirror, client):
+    """Production has 296,432 streetless č.ev. doors, a cottage's number; "Lhota 25" is the č.p. 25."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25, typ="č.ev.")
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == []
+    assert _doors(_suggest(client, "Lhota č.ev. 25")) == [(21000201, "Lhota")]
+
+
+def test_doors_answer_at_the_index_s_version_while_a_load_writes_the_next(mirror, client):
+    """Ported from the shortcut's version test. A load writes the next version for hours before its pointer swap and
+    updates doors in place. Nádražní closes and reopens: its door 12, re-pointed to the new row, is still found by the
+    street's stable code, once, with the street read at the index's version. Not answered: a door the load retired,
+    a door on a street only the next version draws, and the doors the load inserts, born in a version not yet
+    published, on a street or in a village."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12)
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12, valid_to="2026-11-30")
+    lhota = mirror.unit("obec", 513041, "Lhota", mirror.unit("okres", 3203, "Kladno", towns["kraj"]))
+    village = mirror.unit("cast_obce", 70971, "Lhota", lhota)
+    mirror.publish()
+
+    nxt = mirror.next_version()
+    mirror.close_street(nadrazni, nxt)
+    reopened = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"], version=nxt, valid_from="2026-11-30")
+    mirror.repoint(21000101, reopened, nxt)
+    newer = mirror.street(NADRAZNI_KH, "Nádražní", towns["kutna_hora"], version=nxt, valid_from="2026-11-30")
+    mirror.house(21000103, towns["kutna_hora"], street=newer, cp=12)
+    mirror.house(21000104, towns["kolin"], street=reopened, cp=12, version=nxt)
+    mirror.house(21000105, towns["kolin"], street=reopened, cp=345, co=12, version=nxt)
+    mirror.house(21000202, lhota, part=village, cp=25, version=nxt)
+
+    assert [i for i in _suggest(client, "Nádražní 12") if i["level"] == "adresni_misto"] == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]
+    assert _doors(_suggest(client, "Lhota 25")) == []
+
+
+def test_a_village_named_exactly_answers_before_one_whose_name_only_starts_so_before_its_qualifier(mirror, client):
+    """As the name read ranks a qualifier-stripped name below an exact one: Lhota u Příbramě's č.p. 25 has the lower
+    code, yet the Lhota's answers first. Production answers "Lhota 25" with 19 doors in official Lhotas and 14 in
+    qualified ones."""
+    kraj = mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    lhota = mirror.unit("obec", 513041, "Lhota", mirror.unit("okres", 3203, "Kladno", kraj))
+    breznice = mirror.unit("obec", 540153, "Březnice", mirror.unit("okres", 3211, "Příbram", kraj))
+    mirror.house(21000201, breznice, part=mirror.unit("cast_obce", 70960, "Lhota u Příbramě", breznice), cp=25)
+    mirror.house(21000202, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == [(21000202, "Lhota"), (21000201, "Lhota u Příbramě, Březnice")]
+
+
+def test_a_street_typed_short_answers_the_register_s_long_name_and_one_the_register_spells_short(mirror, client):
+    """The resolver's own abbreviation folds: "nám. Míru" is the register's náměstí Míru. The register spells some
+    streets short itself, so the key as typed stays: "Nám. 5. května" is one."""
+    towns = _towns(mirror)
+    mirror.house(21000301, towns["kolin"], street=mirror.street(401005, "náměstí Míru", towns["kolin"]), cp=5)
+    mirror.house(21000302, towns["kolin"], street=mirror.street(401006, "Nám. 5. května", towns["kolin"]), cp=3)
+    mirror.publish()
+    assert _doors(_suggest(client, "nám. Míru 5")) == [(21000301, "náměstí Míru 5, Kolín")]
+    assert _doors(_suggest(client, "Nám. 5. května 3")) == [(21000302, "Nám. 5. května 3, Kolín")]
+
+
+def test_a_street_typed_long_answers_the_register_s_short_spelling_and_csa_reaches_every_spelling(mirror, client):
+    """The folds work on both sides, as the resolver folds them: "náměstí Svobody" reaches the register's "Nám.
+    Svobody" (production spells 1,001 current streets short: 38 "nam svobody" beside 56 "namesti svobody"), and "ČSA"
+    and "Čs. armády" each reach "Československé armády"."""
+    towns = _towns(mirror)
+    mirror.house(21000303, towns["kolin"], street=mirror.street(401007, "Nám. Svobody", towns["kolin"]), cp=1)
+    mirror.house(21000304, towns["kolin"], street=mirror.street(401008, "Československé armády", towns["kolin"]),
+                 cp=3)
+    mirror.publish()
+    assert _doors(_suggest(client, "náměstí Svobody 1")) == [(21000303, "Nám. Svobody 1, Kolín")]
+    assert _doors(_suggest(client, "ČSA 3")) == [(21000304, "Československé armády 3, Kolín")]
+    assert _doors(_suggest(client, "Čs. armády 3")) == [(21000304, "Československé armády 3, Kolín")]
+
+
+def test_a_street_typed_with_the_word_ulice_after_it_answers_its_door(mirror, client):
+    """The resolver's generic-word strip: "Nádražní ulice 12" is Nádražní 12."""
+    towns = _towns(mirror)
+    mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní ulice 12")) == [(21000101, "Nádražní 12, Kolín")]
+
+
+def test_doors_fill_the_whole_list_when_there_are_as_many_as_the_limit(mirror, client):
+    """Builder decision for the operator's ruling (PR notes): doors rank above what is only similar, so a common street
+    shows doors alone (production has 67 doors for "Nádražní 12", 10 shown, no street row) and a common village
+    shows no town ("Lhota 25", 33 doors)."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=345, co=12)
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12)
+    lhota = mirror.unit("obec", 513041, "Lhota", mirror.unit("okres", 3203, "Kladno", towns["kraj"]))
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    res = client.post("/places/suggest", json={"query": "Nádražní 12", "limit": 2})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+    ]}
+    res = client.post("/places/suggest", json={"query": "Lhota 25", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno", "point": None,
+         "street": None},
+    ]}
+
+
+def test_a_failed_door_read_is_the_same_503_and_no_log_line_carries_the_typed_text(mirror, client, conn, caplog):
+    """The door read runs in the name read's transaction, under its timeout and its SQLSTATE-only log line. A text
+    with no number never reads the doors."""
+    towns = _towns(mirror)
+    mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
+    mirror.publish()
+    with caplog.at_level("INFO"):
+        assert _doors(_suggest(client, "Nádražní 12")) == [(21000101, "Nádražní 12, Kolín")]
+        conn.execute("ALTER TABLE ruian_address_points RENAME TO ruian_address_points_gone")
+        assert _chips(_suggest(client, "Nádražní")) == [("ulice", NADRAZNI_KOLIN, "Nádražní", "Kolín")]
+        res = client.post("/places/suggest", json={"query": "Nádražní 12"})
+    assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
+    lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
+    assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
+    assert not any("nádražní" in r.getMessage().lower() or "nadrazni" in r.getMessage().lower() or r.exc_info
+                   for r in caplog.records)
