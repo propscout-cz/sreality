@@ -238,8 +238,9 @@ never raw exception text. Route-owned refusals (property_split's 409) stay.
 logs level and reason, never the typed name. Its optional `pick` `{text 1–200, rank 1–10}` (extra=forbid: a
 malformed one 422s before any bind) is recorded after the answer (architecture § the pick record).
 `POST /places/suggest` `{query 1–200, limit 1–10}` (extra=forbid) answers `{items}` from `location_data.place_search`:
-uncached, no count, preflight cached 600 s; a failed read or no connection is its own 503 `place_search_unavailable`,
-logged by SQLSTATE or error class (architecture § own place search).
+uncached, no count, a městská část as a shortcut whose `places` are its quarters' chips; preflight cached 600 s; a
+failed read or no connection is its own 503 `place_search_unavailable`, logged by SQLSTATE or error class
+(architecture § own place search).
 `frontend/src/lib/api.ts` is the ONE transport (uploads + blob downloads, no raw `fetch()` beside
 it): `REQUEST_DEADLINE_MS` (130 s) sits above the server's 120 s budget and under Railway's ~300 s
 close — keep that ordering — a deadline abort (`ApiError.kind === 'timeout'`) is NEVER retried;

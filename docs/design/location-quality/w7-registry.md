@@ -151,6 +151,6 @@ Praha: 0 movers, which holds only once W5's sweep has drained, because a row sti
 ## Risks and what stays open
 - **ČÚZK changes the pack.** Dropping 9999 or the field fails the load loudly (`okres_partition`, `BoundarySchemaError`, the okres completeness gate): a ruling, never a silent NULL. The same if ČÚZK splits Praha into okres-level obvody.
 - **Latent mirror defect (not W7).** The loader never closes a unit or street RÚIAN dropped; 1 street is live that v3 no longer contains.
-- **`katastr_in_obec` has no reader either** (39,222 rows, 13,074 a version, one obec per KÚ, so nothing beyond `parent_id`). It is the last relation, so removing it retires `ruian_admin_unit_relations` whole. Kept: not in the ruling.
+- **`katastr_in_obec` has no reader either** (39,222 rows, 13,074 a version, one obec per KÚ, so nothing beyond `parent_id`). It is the last relation, so removing it retires `ruian_admin_unit_relations` whole. Kept: not in the ruling. (#2450 adds `momc_cast_obce`, read by own place search, so the table stays.)
 - **`ruian_name_index.parent_okres_unit_id`** is written and read by nothing (`parent_obec_unit_id` is read). Kept: not in the ruling.
 - **Draft PR #1634** (MF PR-F, never applied) also drops `has_polygon`; remove its line when it is revived.

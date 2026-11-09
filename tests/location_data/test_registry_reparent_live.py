@@ -483,3 +483,85 @@ def test_a_mestska_cast_pick_reads_the_name_index_and_answers_its_parts(conn):
     momc = _bind_momc(conn, level="obec", version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
     assert momc is not None and momc.name == "Praha 6" and momc.parts == [(PART, "Vokovice")]
     assert _bind_momc(conn, level="obec", version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None
+
+
+def _pairs(conn: Any) -> list[tuple]:
+    """Own place search's shortcut pairs (#2450): (version, momc code, quarter code, both rows open)."""
+    return [tuple(r) for r in conn.execute(
+        "SELECT r.registry_version_id, m.code, q.code, m.valid_to IS NULL AND q.valid_to IS NULL "
+        "FROM ruian_admin_unit_relations r JOIN ruian_admin_units m ON m.id = r.from_id "
+        "JOIN ruian_admin_units q ON q.id = r.to_id "
+        "WHERE r.relation_type = 'momc_cast_obce' AND m.code = ANY(%s) ORDER BY 1, 2, 3",
+        ([MOMC],)).fetchall()]
+
+
+def test_the_finish_step_lands_a_mestska_cast_s_quarters_at_its_version_and_a_rerun_lands_them_again(conn):
+    """Published without its pairs (as v4 was before #2450), the version gets them from the finish step that a
+    re-dispatch of a current vintage redoes; on the reopened rows, which the version's name index names. A second
+    finish adds nothing."""
+    m = _load_w7_over_old_shape(conn)
+    ruian_load.publish(conn, m.v2)
+    assert _pairs(conn) == []
+
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]
+
+
+def test_the_pairs_join_doors_on_the_stable_code_whichever_row_of_a_unit_a_door_holds(conn):
+    """A load re-points doors in place while it closes and reopens their units: DOOR still holds the closed rows of its
+    městská část and quarter, a second door the open městská část and another quarter. Both pairs land on the rows of
+    the version being finished."""
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), (new_momc, *_) = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    dejvice = conn.execute(
+        "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+        "first_version_id, last_version_id) VALUES ('cast_obce', 9910068, 'Dejvice', 'dejvice', "
+        "'x9910068'::ltree, %s, %s, %s) RETURNING id", (V2_DATE, m.v2, m.v2),
+    ).fetchone()[0]
+    conn.execute("UPDATE ruian_address_points SET momc_unit_id = %s, cast_obce_unit_id = %s "
+                 "WHERE kod_adm = %s", (old_momc, old_part, DOOR))
+    _door_of_another_part(conn, DOOR + 100, dejvice, new_momc)
+
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True), (m.v2, MOMC, 9910068, True)]
+
+
+def test_a_retired_door_gives_a_mestska_cast_no_quarter_pair(conn):
+    m = _load_w7_over_old_shape(conn)
+    conn.execute("UPDATE ruian_address_points SET valid_to = %s WHERE kod_adm = %s", (V2_DATE, DOOR))
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == []
+
+
+def test_after_the_finish_step_own_place_search_answers_praha_6_as_a_shortcut_with_its_quarter(conn):
+    """The whole path: the load, its gazetteer, the pointer swap, the finish step, then the search (#2450)."""
+    from location_data import place_search
+
+    m = _load_w7_over_old_shape(conn)
+    name_index.rebuild(conn, m.v2)
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert [p.item() for p in place_search.suggest(conn, "Praha 6", limit=10) if p.level == "momc"] == [
+        {"level": "momc", "id": MOMC, "name": "Praha 6", "context": "Praha", "point": {"lat": 50.08, "lng": 14.39},
+         "places": [{"level": "cast_obce", "id": PART, "name": "Vokovice", "context": "Praha"}]}]
+
+
+def test_finishing_the_current_version_while_a_later_one_sits_staged_lands_its_pairs_on_its_own_rows(conn):
+    """A re-dispatch of the current vintage while a later load sits staged, killed before its pointer swap: v2 has
+    closed Praha 6 and Vokovice and reopened them, but v1's name index names the rows v2 closed, so v1's pair is on
+    those, the rows that are members of v1."""
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), _ = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    ruian_load.publish(conn, m.v1)
+    ruian_load.finish(conn, m.v1, keep_staging=False)
+    assert _pairs(conn) == [(m.v1, MOMC, PART, False)]
+    assert conn.execute(
+        "SELECT from_id, to_id FROM ruian_admin_unit_relations "
+        "WHERE relation_type = 'momc_cast_obce' AND registry_version_id = %s", (m.v1,),
+    ).fetchall() == [(old_momc, old_part)]

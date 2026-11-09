@@ -60,17 +60,22 @@ class _Mirror:
             " is_current) VALUES (%s, 'baseline', '2026-11-01', '{}', 'p', 'q', %s) RETURNING id",
             (f"test:place-search:{uuid.uuid4().hex}", current)).fetchone()[0])
 
+    def next_version(self) -> int:
+        """A later version a load is writing, not yet current."""
+        return self._version(current=False)
+
     def unit(self, level: str, code: int, name: str, parent: int | None = None, *,
              point: tuple[float, float] | None = None, version: int | None = None,
-             valid_to: str | None = None) -> int:
+             valid_from: str = "2020-01-01", valid_to: str | None = None) -> int:
         """Drawn in `version` alone (the current one by default); `valid_to` closes it."""
         version = self.v if version is None else version
         path = ".".join(p for p in (self.paths.get(parent) if parent else None, f"{LABEL_PREFIX[level]}{code}") if p)
         unit = int(self.conn.execute(
             "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, valid_to,"
-            " first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01',"
+            " first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, %s,"
             " %s, %s, %s) RETURNING id",
-            (level, code, name, normalize_name(name), parent, path, valid_to, version, version)).fetchone()[0])
+            (level, code, name, normalize_name(name), parent, path, valid_from, valid_to, version,
+             version)).fetchone()[0])
         self.paths[unit], self.codes[unit] = path, code
         if point is not None:
             lng, lat = point
@@ -80,6 +85,15 @@ class _Mirror:
                 " containment_radius_m) SELECT %s, %s, 'authoritative', 0, ST_Multi(ST_Expand(p, 0.01)), p, 0, p, 0"
                 "   FROM (SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326) AS p) s", (unit, version, lng, lat))
         return unit
+
+    def touch(self, unit: int, version: int) -> None:
+        """The unit survives into `version`, as the load's unit upsert carries it."""
+        self.conn.execute("UPDATE ruian_admin_units SET last_version_id = %s WHERE id = %s", (version, unit))
+
+    def close(self, unit: int, version: int) -> None:
+        """`version` closes the unit, as the load's unit upsert does before it reopens a changed one."""
+        self.conn.execute("UPDATE ruian_admin_units SET valid_to = '2026-11-30', last_version_id = %s WHERE id = %s",
+                          (version, unit))
 
     def index_at(self, unit: int, level: str, name: str, version: int) -> None:
         """The unit's gazetteer row at `version`, as that version's load wrote it."""
@@ -101,6 +115,23 @@ class _Mirror:
                 " first_version_id, last_version_id) VALUES (%s, %s, %s, %s, '68201',"
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
                 (next(self.doors), obec, self.codes[obec], code, *door, version, version))
+
+    def quarters(self, momc: int, *parts: int, version: int | None = None) -> None:
+        """A městská část's quarter pairs at `version` (the current one by default), as the load's finish step writes
+        them: unit rows, not codes."""
+        version = self.v if version is None else version
+        for part in parts:
+            self.conn.execute(
+                "INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, registry_version_id)"
+                " VALUES (%s, %s, 'momc_cast_obce', %s)", (momc, part, version))
+
+    def door(self, obec: int, *, momc: int, part: int, point: tuple[float, float]) -> None:
+        """An open door with no street, in `part` of `momc`."""
+        self.conn.execute(
+            "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, momc_unit_id, cast_obce_unit_id,"
+            " cast_obce_kod, psc, geom, plati_od, first_version_id, last_version_id) VALUES (%s, %s, %s, %s, %s, %s,"
+            " '16000', ST_SetSRID(ST_MakePoint(%s, %s), 4326), '2020-01-01', %s, %s)",
+            (next(self.doors), obec, self.codes[obec], momc, part, self.codes[part], *point, self.v, self.v))
 
     def served(self, *, region: int | None = None, okres: int | None = None, obec: int | None = None,
                part: int | None = None, street: int | None = None, active: bool = True,
@@ -156,10 +187,15 @@ def _chips(items: list[dict[str, Any]]) -> list[tuple[str, int, str, str | None]
     return [(i["level"], i["id"], i["name"], i["context"]) for i in items]
 
 
+def _praha(m: _Mirror) -> int:
+    """The town Praha under its okres and kraj. Returns its unit id."""
+    return m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
+                                                 m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+
+
 def _zizkov(m: _Mirror) -> dict[str, int]:
     """Two quarters named Žižkov: one in Praha, one in Kutná Hora. Returns their towns' unit ids."""
-    praha = m.unit("obec", PRAHA, "Praha", m.unit("okres", PRAHA_OKRES, "území Hlavního města Prahy",
-                                                  m.unit("kraj", PRAHA_KRAJ, "Hlavní město Praha")))
+    praha = _praha(m)
     kutna_hora = m.unit("obec", KUTNA_HORA, "Kutná Hora", m.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora",
                                                                m.unit("kraj", STREDOCESKY, "Středočeský kraj")))
     m.unit("cast_obce", ZIZKOV_PRAHA, "Žižkov", praha)
@@ -202,12 +238,10 @@ def test_zizkov_finds_both_quarters_named_zizkov_each_with_its_town_and_a_tie_br
     ]
 
 
-def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_never_answered(mirror, client):
-    """Q6 a, Q9. "praha 6" names the městská část exactly, yet answers only what its word "praha" reaches by
-    similarity, the kraj and the town; with no served property and no population the lower code answers first."""
+def test_a_cadastral_area_a_cohesion_region_and_the_country_are_never_answered(mirror, client):
+    """Q6 a, Q9. A městská část answers, as a shortcut (#2450): the shortcut tests below."""
     towns = _zizkov(mirror)
     mirror.unit("katastralni_uzemi", 727415, "Žižkov", towns["praha"])
-    mirror.unit("momc", 500178, "Praha 6", towns["praha"])
     mirror.unit("region_soudrznosti", 11, "Praha")
     mirror.unit("stat", 1, "Česká republika")
     mirror.publish()
@@ -215,11 +249,112 @@ def test_a_cadastral_area_a_mestska_cast_a_cohesion_region_and_the_country_are_n
         ("cast_obce", ZIZKOV_KH, "Žižkov", "Kutná Hora"),
         ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha"),
     ]
-    assert _chips(_suggest(client, "praha 6")) == [
+    assert _suggest(client, "ceska") == []
+
+
+PRAHA_1, PRAHA_6, PRAHA_7 = 500054, 500178, 500186
+DEJVICE, VOKOVICE, BUBENEC, HRADCANY, JOSEFOV, HOLESOVICE = 400459, 400441, 490024, 490075, 127001, 490067
+
+
+def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mirror, client):
+    """#2380: a městská část is no served level, so its row is a shortcut whose places are its quarters' chips, the
+    register's pairs, in name order; it flies to its doors. Then what the word "praha" reaches by similarity, the kraj
+    and the town, the lower code first."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    vokovice = mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha)
+    bubenec = mirror.unit("cast_obce", BUBENEC, "Bubeneč", praha)
+    mirror.quarters(praha_6, dejvice, vokovice, bubenec)
+    mirror.door(praha, momc=praha_6, part=dejvice, point=(14.3907, 50.1004))
+    mirror.publish()
+    assert _suggest(client, "Praha 6") == [
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha",
+         "point": {"lat": 50.1004, "lng": 14.3907},
+         "places": [{"level": "cast_obce", "id": BUBENEC, "name": "Bubeneč", "context": "Praha"},
+                    {"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
+        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+    ]
+
+
+def test_shortcuts_rank_by_the_sum_of_their_quarters_served_properties_a_shared_quarter_counting_for_each(
+        mirror, client):
+    """Hradčany is in Praha 1 and Praha 6 (#2380). Praha 6 serves 3 + 3 = 6 through Dejvice and Hradčany, Praha 1
+    2 + 3 = 5 through Josefov and Hradčany, Praha 7 4 through Holešovice, the largest quarter. Without Hradčany, or
+    by its largest quarter, Praha 7 would lead; by code, Praha 1. The town is exact, the shortcuts prefix; four rows
+    fill the limit, so nothing fuzzy is read."""
+    praha = _praha(mirror)
+    praha_1 = mirror.unit("momc", PRAHA_1, "Praha 1", praha)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    praha_7 = mirror.unit("momc", PRAHA_7, "Praha 7", praha)
+    hradcany = mirror.unit("cast_obce", HRADCANY, "Hradčany", praha)
+    mirror.quarters(praha_1, mirror.unit("cast_obce", JOSEFOV, "Josefov", praha), hradcany)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), hradcany)
+    mirror.quarters(praha_7, mirror.unit("cast_obce", HOLESOVICE, "Holešovice", praha))
+    for part, properties in ((JOSEFOV, 2), (DEJVICE, 3), (HRADCANY, 3), (HOLESOVICE, 4)):
+        for _ in range(properties):
+            mirror.served(obec=PRAHA, part=part)
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Praha", "limit": 4})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": HRADCANY, "name": "Hradčany", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_1, "name": "Praha 1", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": HRADCANY, "name": "Hradčany", "context": "Praha"},
+                    {"level": "cast_obce", "id": JOSEFOV, "name": "Josefov", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_7, "name": "Praha 7", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": HOLESOVICE, "name": "Holešovice", "context": "Praha"}]},
+    ]}
+
+
+def test_a_mestska_cast_with_no_pairs_at_the_index_s_version_answers_no_row_and_takes_no_row_s_place(mirror, client):
+    """Between a load's pointer swap and its finish step the new version has no pairs yet, and an older version's do
+    not stand in. Praha 6 answers nothing, and what "praha" reaches by similarity still fills the rows, even the one
+    row a limit of one leaves."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), version=mirror.old)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6")) == [
         ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
         ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
     ]
-    assert _suggest(client, "ceska") == []
+    res = client.post("/places/suggest", json={"query": "Praha 6", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert _chips(res.json()["items"]) == [("kraj", PRAHA_KRAJ, "Hlavní město Praha", None)]
+
+
+def test_a_shortcut_reads_its_quarters_at_the_index_s_version_while_a_load_writes_the_next(mirror, client):
+    """Ported from the re-parent tests: a load writes the next version for hours before its pointer swap. Praha 6
+    and Vokovice survive into it on their rows, Dejvice closes and reopens renamed, Bubeneč is born, the next version's
+    gazetteer is built and its pairs hang off the same Praha 6 row. The shortcut answers the index's version: Dejvice
+    by the name it has there, Vokovice, each once, and no Bubeneč."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    vokovice = mirror.unit("cast_obce", VOKOVICE, "Vokovice", praha)
+    mirror.quarters(praha_6, dejvice, vokovice)
+    mirror.publish()
+
+    nxt = mirror.next_version()
+    mirror.touch(praha_6, nxt)
+    mirror.touch(vokovice, nxt)
+    mirror.close(dejvice, nxt)
+    new_dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice-Sever", praha, version=nxt, valid_from="2026-11-30")
+    bubenec = mirror.unit("cast_obce", BUBENEC, "Bubeneč", praha, version=nxt, valid_from="2026-11-30")
+    mirror.quarters(praha_6, new_dejvice, vokovice, bubenec, version=nxt)
+    name_index.rebuild(mirror.conn, nxt)
+
+    assert [i for i in _suggest(client, "Praha 6") if i["level"] == "momc"] == [
+        {"level": "momc", "id": PRAHA_6, "name": "Praha 6", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
+                    {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
+    ]
 
 
 @pytest.mark.parametrize("query", ["110 00", "ulice .", "Starý Dvůr", "Zábrdí", "Zaniklá"],

@@ -1393,7 +1393,15 @@ component is slimmed twice — each wave rewrites one component and slims its st
   deal type, then population, then code; one ranking for every box, no count returned. Two service-role read models
   (`place_served_counts` hourly at :37, `place_facts` in the registry load's finish step) and the gazetteer's btree
   swapped for `text_pattern_ops` (net 0 indexes). No caller yet. **Next:** gate #2465 → switch-over #2453 (deletes the
-  Mapy search path, Q2 c); shortcuts #2450, addresses #2451, settlement units #2461 on the same module.
+  Mapy search path, Q2 c); addresses #2451, settlement units #2461 on the same module.
+- **Place shortcuts — built 2026-11-09** (#2450; spec #2441 Part 4, story 43; no migration; as built:
+  `docs/architecture.md` § own place search). The registry load's finish step writes each městská část's quarter
+  pairs (`ruian_admin_unit_relations`, type `momc_cast_obce`) at its version from open doors, on the stable code; a
+  retired door gives none, a re-run adds none. "Praha 6" answers one `momc` row whose `places` are its quarters' chips,
+  read at the gazetteer's version and ranked by the sum of their served properties; no pair at that version, no row.
+  **Next:** v4 has no pairs, so no shortcut answers until a finishing-only re-dispatch of `20261031` (first check that
+  no later `registry_versions` row exists: doors are unversioned) or the 12-01 load; verify 382 pairs at v4, 10 for
+  Praha 6, before gate eval #2452; the row label and "expanded" notice ride with #2453.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
