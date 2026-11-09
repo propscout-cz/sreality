@@ -131,6 +131,10 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
  ORDER BY r.tier, r.served DESC, r.population DESC NULLS LAST, r.code, r.level
 """
 
+# THE DOOR READ (#2451): one batched read over EVERY exact namesake street, and every exact namesake část obce for a
+# streetless door, ranked as the name read ranks (Q12 a). Every namesake, not the top few: about 77 % of street names
+# repeat in another town and only about one Nádražní in seven has a door 12, so a short list answers almost nothing.
+# The LIMIT 1000 per kind is a guard against a runaway name, not a ranking (the largest, Zahradní, is 705 streets).
 _DOORS_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 streets AS (
@@ -147,10 +151,19 @@ parts AS (
    WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(part_key)s::text
      AND n.entity_kind = 'cast_obce' AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
    ORDER BY u.code, u.valid_from DESC),
+candidates AS (
+  (SELECT coalesce(c.n, 0) AS served, st.code AS street_code, st.name AS street_name,
+          st.obec_unit_id AS street_obec, NULL::bigint AS part_code, NULL::bigint AS part_parent
+     FROM streets st LEFT JOIN place_served_counts c ON c.level = 'ulice' AND c.code = st.code
+    ORDER BY 1 DESC, 2 LIMIT 1000)
+  UNION ALL
+  (SELECT coalesce(c.n, 0), NULL, NULL, NULL, p.code, p.parent_id
+     FROM parts p LEFT JOIN place_served_counts c ON c.level = 'cast_obce' AND c.code = p.code
+    ORDER BY 1 DESC, 5 LIMIT 1000)),
 doors AS (
-  SELECT st.code AS street_code, st.name AS street_name, st.obec_unit_id AS street_obec, a.kod_adm
-    FROM streets st
-    JOIN ruian_streets sr ON sr.code = st.code
+  SELECT k.served, k.street_code, k.street_name, k.street_obec, a.kod_adm
+    FROM candidates k
+    JOIN ruian_streets sr ON sr.code = k.street_code
     CROSS JOIN LATERAL (
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.valid_to IS NULL
@@ -158,20 +171,20 @@ doors AS (
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer AND ap.valid_to IS NULL) a
   UNION ALL
-  SELECT NULL, NULL, NULL, ap.kod_adm
-    FROM parts p
-    JOIN ruian_admin_units po ON po.id = p.parent_id AND po.level = 'obec'
+  SELECT k.served, NULL, NULL, NULL, ap.kod_adm
+    FROM candidates k
+    JOIN ruian_admin_units po ON po.id = k.part_parent AND po.level = 'obec'
     JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
     JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
-   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.street_id IS NULL AND ap.cast_obce_kod = p.code
+   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
      AND ap.valid_to IS NULL),
-top AS (SELECT * FROM doors ORDER BY kod_adm LIMIT %(limit)s)
+top AS (SELECT * FROM doors ORDER BY served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
   FROM top d
   JOIN ruian_address_points ap ON ap.kod_adm = d.kod_adm{_DOOR_LABEL_JOINS}
   LEFT JOIN ruian_admin_units tc ON tc.id = o.parent_id AND tc.level IN ('kraj', 'okres', 'obec')
   LEFT JOIN ruian_admin_units so ON so.id = d.street_obec AND so.level IN ('kraj', 'okres', 'obec')
- ORDER BY d.kod_adm
+ ORDER BY d.served DESC, d.kod_adm
 """
 
 

@@ -620,3 +620,28 @@ def test_a_town_and_a_number_is_never_read_as_a_door_so_praha_6_stays_its_shortc
         ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
         ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
     ]
+
+
+def test_one_read_answers_the_doors_of_same_named_streets_in_two_towns_the_served_street_s_first(mirror, client):
+    """About 77 % of street names repeat in another town, so the read takes every exact namesake at once. Q12 a: the
+    street in Kutná Hora serves a property and the one in Kolín none, so its door answers first though its code is
+    higher; the streets themselves follow by similarity, in the same order."""
+    towns = _towns(mirror)
+    kolin = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kutna_hora = mirror.street(NADRAZNI_KH, "Nádražní", towns["kutna_hora"])
+    mirror.house(21000101, towns["kolin"], street=kolin, cp=12, point=(15.2003, 50.0275))
+    mirror.house(21000102, towns["kutna_hora"], street=kutna_hora, cp=12, point=(15.2681, 49.9481))
+    mirror.served(region=STREDOCESKY, okres=KUTNA_HORA_OKRES, obec=KUTNA_HORA, street=NADRAZNI_KH)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kutná Hora", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681},
+         "street": {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora"}},
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
