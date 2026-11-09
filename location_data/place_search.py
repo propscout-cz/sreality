@@ -298,7 +298,8 @@ def _addresses(query: str) -> list[_Reading]:
     readings: list[_Reading | None] = []
     pieces = [piece.strip() for piece in query.split(",")]
     if len(pieces) == 2 and all(pieces):
-        readings.append(_address(pieces[0], normalize_name(pieces[1])))
+        left, right = pieces
+        readings += [_address(left, normalize_name(right)), _address(right, normalize_name(left))]
     readings.append(_address(query, None))
     return [r for r in readings if r is not None]
 
