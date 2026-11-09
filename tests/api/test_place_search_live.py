@@ -922,3 +922,17 @@ def test_a_street_and_number_typed_with_its_town_answer_its_door_first_the_row_t
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0275, "lng": 15.2003}},
     ]
+
+
+def test_a_street_whose_name_holds_a_number_still_answers_its_door_as_the_whole_text_is_read_last(mirror, client):
+    """The town split reads "Pod 5 Lipami 12" as "Pod 5" in a town "Lipami 12", which names nothing, so the whole text
+    answers as #2451 read it; the street follows by similarity (0.81)."""
+    towns = _towns(mirror)
+    mirror.house(21000105, towns["kolin"], street=mirror.street(401009, "Pod 5 Lipami", towns["kolin"]), cp=12)
+    mirror.publish()
+    street = {"level": "ulice", "id": 401009, "name": "Pod 5 Lipami", "context": "Kolín"}
+    assert _suggest(client, "Pod 5 Lipami 12") == [
+        {"level": "adresni_misto", "id": 21000105, "name": "Pod 5 Lipami 12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {**street, "point": None},
+    ]
