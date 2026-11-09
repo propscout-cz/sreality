@@ -751,6 +751,24 @@ def test_an_evidence_number_answers_only_when_marked_and_its_one_label_has_no_nu
     ]
 
 
+def test_an_evidence_door_s_co_answers_a_bare_number_like_any_co_and_its_label_names_the_co_alone(mirror, client):
+    """A bare number is never read as a č.ev. number, but a č.ev. door's own č.o. is a č.o., as the resolver's lookup
+    reads it: production has 1,822 current č.ev. doors on a street with a č.o. (kód 14647397, č.ev. 2085 and č.o. 15,
+    reads "5. května 15, Brandýs nad Labem-Stará Boleslav"). The one label names the č.o., never the č.ev."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=2085, typ="č.ev.", co=15)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    assert _suggest(client, "Nádražní 15") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 15, Kolín", "context": "Kolín", "point": None,
+         "street": street},
+        {**street, "point": None},
+    ]
+    assert _doors(_suggest(client, "Nádražní 2085")) == []
+    assert _doors(_suggest(client, "Nádražní č.ev. 2085")) == [(21000102, "Nádražní 15, Kolín")]
+
+
 def test_a_village_s_evidence_number_answers_only_when_marked(mirror, client):
     """Production has 296,432 streetless č.ev. doors, a cottage's number; "Lhota 25" is the č.p. 25."""
     okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))

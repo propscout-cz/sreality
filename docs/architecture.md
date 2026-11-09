@@ -1142,13 +1142,14 @@ rules. Identify which one a task belongs to before you start.
   row of the town, as the resolver does. A bare number is tried as the č.p. AND as the č.o., two arms that are each an
   index condition on `ruian_ap_street_hn` (an OR would use only its `street_id`); "12/3a" asks that č.p. and č.o.,
   where a typed letter must match and an untyped one matches every letter (the address picker's binder required the
-  letter to match); only a marked č.ev. ("Lhota č.ev. 25") reads a č.ev. door, never a bare number; a "č.p." marker
+  letter to match); a bare number is never read as a č.ev. number (only a marked "Lhota č.ev. 25" is), but a č.ev.
+  door's own č.o. answers it like any č.o., as the resolver's lookup does (1,822 current doors); a "č.p." marker
   reads as a bare number (the parser's behaviour). A streetless door has no č.o., so a typed one answers none. Doors are
   read `valid_to IS NULL` and `first_version_id` at most the gazetteer's version: a door a running load inserts waits
   for its version to publish, but doors are unversioned, so an in-place update or retirement shows at once, and a
   re-pointed door's label may carry the next version's street name while its street chip carries the current one's.
   A door row is `{level: 'adresni_misto', id, name, context, point, street}`: the kód ADM, the ONE label (no number for
-  a streetless or č.ev. door, migration 503), its town's okres, the door's own point, and its street's chip `{level:
+  a streetless door, for a č.ev. door only its č.o. if any, never the č.ev.; migration 503), its town's okres, the door's own point, and its street's chip `{level:
   'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
   foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, shared by the door read
   (computed for the rows kept) and `DOOR_LABEL_SQL`, which the address picker imports until the switch-over (#2453)

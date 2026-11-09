@@ -11,9 +11,10 @@ properties; with no pair at that version it answers nothing. Never reads the pla
 holdout.
 
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
-`adresni_misto`, kód ADM, the one door label (which names no number for a streetless or č.ev. door), its town's okres as
-context, its point, and its street's chip in `street` (null for a streetless door). A bare number is tried as the č.p.
-and as the č.o., never as a č.ev. Door rows go after the whole text's exact rows and before its similar ones.
+`adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
+its č.o., if any), its town's okres as context, its point, and its street's chip in `street` (null for a streetless
+door). A bare number is tried as the č.p. and as the č.o., never as a č.ev. Door rows go after the whole text's exact
+rows and before its similar ones.
 """
 
 from __future__ import annotations

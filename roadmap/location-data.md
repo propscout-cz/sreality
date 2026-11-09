@@ -1406,11 +1406,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `docs/architecture.md` § own place search). A street or a village with a house number also answers RÚIAN doors
   (`adresni_misto`: the one label, its town's okres, the door's point, its street's chip or null) from ONE batched read
   over every exact namesake street and část at the gazetteer's version; a bare number is tried as č.p. and as č.o.,
-  only a marked č.ev. reads a č.ev. door. Door rows follow the whole text's exact rows and precede its similar ones (a
+  only a marked č.ev. is read as a č.ev. number (a č.ev. door's č.o. answers like any č.o.). Door rows follow the whole text's exact rows and precede its similar ones (a
   builder decision for the operator), so they can fill the list. The door label moved from `api/maps.py` to
   `place_search.DOOR_LABEL_SQL`, which the address picker imports. **Next:** gate #2465 with dictated address
   questions (#2452): a town after the number ("Nádražní 12, Kolín") answers no door yet, and the eval must score
-  streetless and č.ev. doors by kód ADM, as their label has no number; SPA #2453 (the street chip and fly-to; the
+  streetless and č.ev. doors by kód ADM, as their label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
   picker saves `{adresni_misto, door code}` if addresses pass).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
