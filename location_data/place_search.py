@@ -167,7 +167,7 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # every row of the code (a street runs through several of either). With no town each condition folds away at plan
 # time: the statement is unnamed, its parameters planned in.
 _TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
-_IN_TOWN = """
+_DOOR_IN_TOWN = """
          AND (%(town)s::text IS NULL OR ap.obec_kod IN (SELECT code FROM town WHERE level = 'obec')
               OR ap.cast_obce_kod IN (SELECT code FROM town WHERE level = 'cast_obce')
               OR ap.momc_unit_id IN (SELECT m.id FROM ruian_admin_units m
@@ -217,12 +217,12 @@ doors AS (
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
          AND (%(orientacni)s::integer IS NULL OR ap.cislo_orientacni = %(orientacni)s::integer)
-         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_IN_TOWN}
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_DOOR_IN_TOWN}
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)
       UNION
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer
-         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_IN_TOWN}
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_DOOR_IN_TOWN}
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)) a
   UNION ALL
   SELECT k.tier, k.served, NULL, NULL, NULL, ap.kod_adm
@@ -231,7 +231,7 @@ doors AS (
     JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
     JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
    WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
-     AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code{_IN_TOWN}
+     AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code{_DOOR_IN_TOWN}
      AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)),
 top AS (SELECT * FROM doors ORDER BY tier, served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
@@ -364,15 +364,15 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
-    readings = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]
+    door_params = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)
             cur.execute(_SUGGEST_SQL, params)
             rows = cur.fetchall()
             doors: list[tuple[Any, ...]] = []
-            for reading in readings:
-                cur.execute(_DOORS_SQL, reading)
+            for bound in door_params:
+                cur.execute(_DOORS_SQL, bound)
                 doors = cur.fetchall()
                 if doors:
                     break
