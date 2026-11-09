@@ -816,6 +816,20 @@ def test_a_street_typed_short_answers_the_register_s_long_name_and_one_the_regis
     assert _doors(_suggest(client, "Nám. 5. května 3")) == [(21000302, "Nám. 5. května 3, Kolín")]
 
 
+def test_a_street_typed_long_answers_the_register_s_short_spelling_and_csa_reaches_every_spelling(mirror, client):
+    """The folds work on both sides, as the resolver folds them: "náměstí Svobody" reaches the register's "Nám.
+    Svobody" (production spells 1,001 current streets short: 38 "nam svobody" beside 56 "namesti svobody"), and "ČSA"
+    and "Čs. armády" each reach "Československé armády"."""
+    towns = _towns(mirror)
+    mirror.house(21000303, towns["kolin"], street=mirror.street(401007, "Nám. Svobody", towns["kolin"]), cp=1)
+    mirror.house(21000304, towns["kolin"], street=mirror.street(401008, "Československé armády", towns["kolin"]),
+                 cp=3)
+    mirror.publish()
+    assert _doors(_suggest(client, "náměstí Svobody 1")) == [(21000303, "Nám. Svobody 1, Kolín")]
+    assert _doors(_suggest(client, "ČSA 3")) == [(21000304, "Československé armády 3, Kolín")]
+    assert _doors(_suggest(client, "Čs. armády 3")) == [(21000304, "Československé armády 3, Kolín")]
+
+
 def test_a_street_typed_with_the_word_ulice_after_it_answers_its_door(mirror, client):
     """The resolver's generic-word strip: "Nádražní ulice 12" is Nádražní 12."""
     towns = _towns(mirror)

@@ -1135,8 +1135,8 @@ rules. Identify which one a task belongs to before you start.
   the name read still reads the whole text, so "Praha 6" keeps its shortcut and the register street "Na Hroudách 1" its
   exact row. Its candidates are EVERY exact namesake at the gazetteer's version, as about 77 % of street names repeat
   in another town and only about one Nádražní in seven has a door 12: streets whose `name_norm` is the name as typed,
-  without the generic word ("Nádražní ulice") or with the resolver's abbreviation folds ("nám. Míru" is náměstí
-  Míru), and, for a streetless door, části obce named exactly so (a village is a část, never the town: a č.p. is unique
+  without the generic word ("Nádražní ulice") or in any spelling the resolver's abbreviation folds make equal on both
+  sides (`abbreviation_spellings`: "nám. Míru" and náměstí Míru, "ČSA" and Čs. armády), and, for a streetless door, části obce named exactly so (a village is a část, never the town: a č.p. is unique
   only within its část). A literal LIMIT 1000 per kind guards a runaway name and ranks nothing (the largest, Zahradní,
   is 705 streets). Candidates reach their doors by stable code, through every street row of the code and every obec
   row of the town, as the resolver does. A bare number is tried as the č.p. AND as the č.o., two arms that are each an

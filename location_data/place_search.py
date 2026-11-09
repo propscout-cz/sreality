@@ -26,7 +26,7 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
-from location_data.resolver.composite import fold_abbreviations
+from location_data.resolver.composite import abbreviation_spellings
 from location_data.resolver.normalize import TYP_CP, house_number, split_street_and_number, strip_street_generic
 
 LOG = logging.getLogger("location_data.place_search")
@@ -251,12 +251,12 @@ def _arm(key: str) -> tuple[str | None, str | None]:
 
 
 def _street_keys(part: str) -> list[str]:
-    """The exact keys a door's street part names a street by, the resolver's own: as typed, without the generic word
-    ("Nádražní ulice"), and each with the abbreviation folds ("nám. Míru" is the register's náměstí Míru). The key as
-    typed stays, as the register spells some streets short itself ("Nám. 5. května") and some with the word ("Nová
-    ulice")."""
+    """The exact keys a door's street part names a street by: as typed, without the generic word ("Nádražní ulice"),
+    and each in every spelling the resolver's abbreviation folds make equal, on both sides as the resolver folds them
+    ("nám. Míru" reaches the register's náměstí Míru, "náměstí Svobody" its "Nám. Svobody", "ČSA" its "Československé
+    armády"). The key as typed stays, as the register spells some streets with the word ("Nová ulice")."""
     keys = {normalize_street_name(part), normalize_street_name(strip_street_generic(part))}
-    return sorted((keys | {fold_abbreviations(k) for k in keys}) - {""})
+    return sorted(set().union(*(abbreviation_spellings(k) | {k} for k in keys)) - {""})
 
 
 def _door(row: tuple[Any, ...]) -> Place:
