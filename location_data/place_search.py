@@ -9,6 +9,11 @@ or none. It answers kraj, okres, obec, část obce and street, never a cadastral
 quarters' chips, the register's `momc_cast_obce` pairs at the index's version, and it ranks by the sum of their served
 properties; with no pair at that version it answers nothing. Never reads the place picks (migration 737): they are its
 holdout.
+
+A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
+`adresni_misto`, kód ADM, the one door label (which names no number for a streetless or č.ev. door), its town's okres as
+context, its point, and its street's chip in `street` (null for a streetless door). A bare number is tried as the č.p.
+and as the č.o., never as a č.ev. Door rows go after the whole text's exact rows and before its similar ones.
 """
 
 from __future__ import annotations
@@ -134,9 +139,14 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 """
 
 # THE DOOR READ (#2451): one batched read over EVERY exact namesake street, and every exact namesake část obce for a
-# streetless door, ranked as the name read ranks (Q12 a). Every namesake, not the top few: about 77 % of street names
-# repeat in another town and only about one Nádražní in seven has a door 12, so a short list answers almost nothing.
-# The LIMIT 1000 per kind is a guard against a runaway name, not a ranking (the largest, Zahradní, is 705 streets).
+# streetless door (a village is a část, never the town: a č.p. is unique only within its část), ranked as the name read
+# ranks (Q12 a). Every namesake, not the top few: about 77 % of street names repeat in another town and only about one
+# Nádražní in seven has a door 12, so a short list answers almost nothing. The LIMIT 1000 per kind guards against a
+# runaway name; it is no ranking (the largest, Zahradní, is 705 streets). Candidates are read at the index's version and
+# reach their doors by stable code, through every street row of the code and every obec row of the town (resolve_db's
+# rule): a load updates doors in place, re-pointing them to the rows it reopens. A door it inserts waits for its version
+# to publish. The č.p. and the č.o. are two arms, each an index condition on ruian_ap_street_hn, as the OR form would
+# use only its street_id. Labels are computed for the `top` rows alone.
 _DOORS_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 streets AS (
@@ -290,5 +300,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         raise SearchUnavailable from None
     names = [(tier, Place(level, int(code), name, context, lat, lng, _places(places)))
              for level, code, name, context, lat, lng, places, tier in rows]
+    # A door's street part is an exact name, so doors rank with the exact tier: after the whole text's exact rows
+    # ("Praha 6", the register street "Na Hroudách 1"), before what is only similar to it.
     return ([p for tier, p in names if tier == 0] + [_door(row) for row in doors]
             + [p for tier, p in names if tier > 0])[:limit]
