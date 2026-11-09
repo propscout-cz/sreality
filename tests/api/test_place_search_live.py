@@ -966,3 +966,23 @@ def test_the_town_typed_decides_which_of_two_same_named_streets_answers_whatever
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0275, "lng": 15.2003}},
     ]
+
+
+KLADNO_OKRES, KLADNO, LHOTA, LHOTA_LHOTA, LHOTA_KLADNO = 3203, 532053, 513041, 70971, 70972
+
+
+def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_that_town_s_village(mirror, client):
+    """Two villages called Lhota: one is its own obec in okres Kladno and serves a property, the other a část of the town
+    Kladno (its code invented). "Lhota 25, Kladno" answers the town's: an okres is a region, never the town."""
+    okres = mirror.unit("okres", KLADNO_OKRES, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    kladno, lhota = mirror.unit("obec", KLADNO, "Kladno", okres), mirror.unit("obec", LHOTA, "Lhota", okres)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", LHOTA_LHOTA, "Lhota", lhota), cp=25,
+                 point=(14.0021, 50.1703))
+    mirror.house(21000203, kladno, part=mirror.unit("cast_obce", LHOTA_KLADNO, "Lhota", kladno), cp=25)
+    mirror.served(region=STREDOCESKY, okres=KLADNO_OKRES, obec=LHOTA, part=LHOTA_LHOTA)
+    mirror.publish()
+    assert _suggest(client, "Lhota 25, Kladno") == [
+        {"level": "adresni_misto", "id": 21000203, "name": "Lhota, Kladno", "context": "Kladno", "point": None,
+         "street": None},
+    ]
+    assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota"), (21000203, "Lhota, Kladno")]
