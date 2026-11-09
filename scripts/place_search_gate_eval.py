@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -84,8 +85,30 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--window-last", type=date.fromisoformat, required=True)
     p.add_argument("--window-size", type=int, default=200)
     p.add_argument("--no-latency", action="store_true")
+    p.add_argument("--strikes", type=Path, help="the operator's struck question numbers, one per line, '#' comments")
     p.add_argument("--api", default="https://api.propscout.cz")
     return p
+
+
+def _inside_checkout(path: Path) -> bool:
+    return any((d / ".git").exists() for d in path.resolve().parents)
+
+
+def _strikes(path: Path | None) -> set[int] | str:
+    """The struck numbers, or why the file is refused. Only numbers ever go in it, so nothing it says is printed."""
+    if path is None:
+        return set()
+    if _inside_checkout(path):
+        return "strikes: the file is inside a git checkout; keep it outside, and delete it after the run"
+    numbers: set[int] = set()
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        value = line.split("#", 1)[0].strip()
+        if not value:
+            continue
+        if not value.isdecimal():
+            return f"strikes: line {n} is not a question number"
+        numbers.add(int(value))
+    return numbers
 
 
 def _midnight(day: date) -> datetime:
@@ -177,6 +200,10 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if not args.no_latency:
         print("latency: the prefix replay and the host-log read are not built yet; run with --no-latency")
         return 2
+    struck = _strikes(args.strikes)
+    if isinstance(struck, str):
+        print(struck)
+        return 2
     start, end = _midnight(args.window_first), _midnight(args.window_last + timedelta(days=1))
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
@@ -215,8 +242,22 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         rows = answers[q.text] or []
         place = (q.level, q.code)
         scored.append(Scored(q, rows.index(place) + 1 if place in rows else None))
+    numbers = {q.number for q in questions}
+    by_number = {s.question.number: s for s in scored}
+    for n in sorted(struck):
+        refusal = ("is not a question number" if n not in numbers else "is not scorable" if n not in by_number
+                   else "is not a miss" if by_number[n].own_rank == 1 else None)
+        if refusal:
+            print(f"strike {n} {refusal}")
+            return 2
+    kept = [s for s in scored if s.question.number not in struck]
+    print(f"struck {len(struck)}")
+    print(f"N = {len(scored)} before strikes, {len(kept)} after")
     _block("before strikes", scored)
-    pass5, pass1 = _block("after strikes", scored)
+    if not kept:
+        print("N = 0 after strikes: no interval and no verdict")
+        return 2
+    pass5, pass1 = _block("after strikes", kept)
     print("Wilson: questions cluster by about four people, so this interval is too narrow")
     print("Mapy: biased upward: every pick is a row Mapy listed; a repeat keeps its best rank")
     verdict = "pass" if pass5 and pass1 else "fail"

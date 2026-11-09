@@ -10,6 +10,7 @@ import contextlib
 import uuid
 from collections.abc import Iterator
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -263,3 +264,42 @@ def test_at_n_200_the_gate_needs_194_top5_and_180_top1_hits(
     for line in lines:
         assert line in out
     assert code == exit_code
+
+
+def _three_picks(client: TestClient, tmp_path: Path, strikes: str) -> tuple[_Canned, str]:
+    """Questions #1 to #3 (one second, one level and code: numbered by text), Mapy ranks 1, 4 and 7; own search answers
+    #1 and #2 first and #3 sixth. Returns the route and the strikes file."""
+    for text, rank in (("Brno a", 1), ("Brno b", 4), ("Brno c", 7)):
+        _resolve(client, TOWN_BRNO, text, rank)
+    path = tmp_path / "strikes.txt"
+    path.write_text(strikes)
+    return _Canned({"Brno a": 1, "Brno b": 1, "Brno c": 6}), str(path)
+
+
+@REQUIRED_DB
+def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: TestClient,
+                                          capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    route, strikes = _three_picks(client, tmp_path, "# the operator's look: #3 names its okres\n3\n")
+    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3", "--strikes", strikes)
+    assert "struck 1" in out
+    assert "N = 3 before strikes, 2 after" in out
+    assert "before strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
+    assert "before strikes · Mapy rank-based (biased upward): top-1 1 of 3, top-5 2 of 3" in out
+    assert "after strikes · top-1: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
+    assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 2, top-5 2 of 2" in out
+    assert out[-1] == "questions: top-5 pass · top-1 pass → pass"
+    assert code == 0
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("strike", "refusal"), [
+    ("1", "strike 1 is not a miss"),
+    ("4", "strike 4 is not a question number"),
+], ids=["a top-1 hit", "no such question"])
+def test_a_strike_that_is_no_miss_stops_the_run(conn: psycopg.Connection, client: TestClient,
+                                                capsys: pytest.CaptureFixture[str], tmp_path: Path, strike: str,
+                                                refusal: str) -> None:
+    route, strikes = _three_picks(client, tmp_path, f"{strike}\n")
+    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3", "--strikes", strikes)
+    assert out[-1] == refusal
+    assert code == 2
