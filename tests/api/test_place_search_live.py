@@ -736,3 +736,13 @@ def test_an_evidence_number_answers_only_when_marked_and_its_one_label_has_no_nu
         {"level": "adresni_misto", "id": 21000101, "name": "Nádražní, Kolín", "context": "Kolín", "point": None,
          "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
     ]
+
+
+def test_a_village_s_evidence_number_answers_only_when_marked(mirror, client):
+    """Production has 296,432 streetless č.ev. doors, a cottage's number; "Lhota 25" is the č.p. 25."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25, typ="č.ev.")
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == []
+    assert _doors(_suggest(client, "Lhota č.ev. 25")) == [(21000201, "Lhota")]

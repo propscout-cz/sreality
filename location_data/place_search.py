@@ -179,7 +179,8 @@ doors AS (
     JOIN ruian_admin_units po ON po.id = k.part_parent AND po.level = 'obec'
     JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
     JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
-   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
+   WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
+     AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
      AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL),
 top AS (SELECT * FROM doors ORDER BY served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
