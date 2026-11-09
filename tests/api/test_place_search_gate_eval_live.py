@@ -75,7 +75,7 @@ def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: i
         " '2020-01-01', %s, %s)", (kod, obec, obec_code, part, part_code, momc, *point, version, version))
 
 
-def _mirror(conn: psycopg.Connection) -> dict[str, int]:
+def _mirror(conn: psycopg.Connection) -> None:
     """Brno in its okres and kraj, Praha in its kraj: drawn (resolve places a point in them) and named in the index
     (own search finds them by name); the městské části Praha 6 and Brno-střed each stand in one quarter by one door,
     with no quarter pair yet (a test writes the pairs it needs)."""
@@ -84,7 +84,7 @@ def _mirror(conn: psycopg.Connection) -> dict[str, int]:
         "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
         " is_current) VALUES ('test:gate-eval', 'baseline', '2026-11-01', '{}', 'p', 'q', true) RETURNING id",
         ).fetchone()[0]
-    ids: dict[str, int] = {"version": version}
+    ids: dict[str, int] = {}
     with conn.cursor() as cur:
         ids["jmk"] = _mirror_unit(cur, "kraj", 116, "Jihomoravský kraj", BRNO_BOX, version=version)
         ids["brno_mesto"] = _mirror_unit(cur, "okres", 3702, "Brno-město", BRNO_BOX, parent=ids["jmk"],
@@ -102,7 +102,6 @@ def _mirror(conn: psycopg.Connection) -> dict[str, int]:
     ids["brno_stred"] = _unit(conn, "momc", BRNO_STRED, "Brno-střed", ids["brno"], version)
     ids["stare_brno"] = _unit(conn, "cast_obce", STARE_BRNO, "Staré Brno", ids["brno"], version)
     _door(conn, 21000002, ids["brno"], BRNO, ids["brno_stred"], ids["stare_brno"], STARE_BRNO, (16.6, 49.19), version)
-    return ids
 
 
 def _pair(conn: psycopg.Connection, momc: int, part: int) -> None:
