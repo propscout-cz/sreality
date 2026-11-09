@@ -1131,8 +1131,9 @@ rules. Identify which one a task belongs to before you start.
   the other; #2461's settlement-unit pairs follow it), not `katastr_in_obec`'s `<from>_in_<to>`. The pairs are register
   facts, not a location store (rule 25). **Door rows** (#2451; stories 44, 53). When the resolver's own parsers
   (`split_street_and_number`, `house_number`: reused, never edited, as they are resolver-versioned) split the text into
-  a name and a house number, one more statement runs in the same transaction, under the same 2 s timeout and 503 path;
-  the name read still reads the whole text, so "Praha 6" keeps its shortcut and the register street "Na Hroudách 1" its
+  a name and a house number (or a lettered number ends it, below), the door read runs in the same transaction, under the
+  same 2 s timeout and 503 path, one statement per reading (most texts one, a typed town up to three); the name read
+  still reads the whole text, so "Praha 6" keeps its shortcut and the register street "Na Hroudách 1" its
   exact row. Its candidates are EVERY exact namesake at the gazetteer's version, as about 77 % of street names repeat
   in another town and only about one Nádražní in seven has a door 12: streets whose `name_norm` is the name as typed,
   without the generic word ("Nádražní ulice") or in any spelling the resolver's abbreviation folds make equal on both
@@ -1158,10 +1159,45 @@ rules. Identify which one a task belongs to before you start.
   namesake; among doors, the candidate's tier (an exact village before a `qualifier_stripped` one), its served
   properties, then kód ADM, so č.p. and č.o. are not ranked apart. The list is cut at the limit, so doors can fill it:
   production's "Nádražní 12" has 67 doors, shows 10 and no street; "Lhota 25" shows the 10 best-served of 33 and no
-  town. No door carries the number: the name rows answer as before. Not split, so answering no door: "Nádražní 12a"
-  and a town after the number ("Nádražní 12, Kolín", "Nádražní 12 Kolín"), for the gate (#2465) to weigh. Measured on
-  production (2026-11-09): about 50 ms warm, 0.4–0.7 s cold (worst "Nádražní 12", 668 ms), every probe index-backed,
-  no new index. Two read models (migration 738,
+  town. No door carries the number: the name rows answer as before. Measured on production (2026-11-09): about 50 ms
+  warm, 0.4–0.7 s cold (worst "Nádražní 12", 668 ms), every probe index-backed, no new index. **A typed town** (#2485;
+  story 53). The text gives up to three readings, each one door statement, tried in order until one answers a door, the
+  whole text's #2451 reading always last. With one comma and two non-empty pieces: the address before it in the town
+  after it ("Nádražní 12, Kolín"), then the reverse ("Kolín, Nádražní 12"). With no comma: the words after the LAST
+  number that whitespace and a letter follow ("Nádražní 12 Kolín"), so an ordinal ("28. října 5 Kolín") and a č.o.
+  ("12/3") never split and "Nádražní 12 Praha 6" keeps Praha's 6. A piece with no number gives no reading, and a town
+  piece with no letter (a PSČ) drops its reading rather than reading every town. A text of neither shape has the whole
+  text's reading alone; "Pod 5 Lipami 12" first tries "Pod 5" in a town "Lipami 12", which names nothing, then answers
+  as the whole text. The town is every obec, část obce and městská část (the resolver's `composite.WHOLE_LEVELS`) whose
+  `name_norm` is the piece's key at the gazetteer's version, every name kind (a `qualifier_stripped` one too, so
+  "Kostelec" is 25 places, Kostelec nad Orlicí among them), every homonym kept: the read narrows a list and binds
+  nothing, so the resolver's obec-first ladder and fail-closed rule are not reused, but its levels are: an okres or a
+  kraj is never the town. Streets and villages narrow to the town's obec (the town, or a část's or městská část's parent
+  obec, through every row of its code), and doors, in every arm, to where they lie: an obec by `obec_kod`, a část by
+  `cast_obce_kod`, a městská část by the door's own `momc_unit_id` through every row of its code, with no quarter-pair
+  gate. Every open door of the eight divided cities carries one (2026-11-09: Praha 134,757, Brno 62,523, Ostrava 34,095,
+  Plzeň 27,599, Ústí nad Labem 17,000, Liberec 16,344, Pardubice 12,916, Opava 9,031; 142 codes), so "Praha 6",
+  "Brno-střed", "Ostrava-Jih" and "Pardubice II" all narrow. Doors rank as above inside the town, so the town, not the
+  served counts, decides which same-named street answers: "Nádražní 12, Kolín" answers Kolín's door 12 first, the row
+  "Nádražní 12" gives it; "Lhota 25, Kladno" the streetless door of a Lhota inside Kladno; a name two obce share answers
+  both towns' doors. A town that names nothing, or a town without the street, answers no door: the later readings still
+  run, but the whole text's #2451 reading is none or keys on the town's words ("kolin nadrazni"), so in practice answers
+  nothing. Consequences, with no ruling (the okres question is pending; Q12 a's ranking is unchanged): production's
+  "Lhota 25, Kladno" answers none, as no Lhota lies inside either obec Kladno (okres Kladno's Lhota is its own obec);
+  "Nádražní 12, Podolí" (5 obce and 19 části, one in Praha) answers the Podolí obce's doors and Praha's část Podolí's by
+  served counts, so the Praha quarter can outrank a village. **A letter on a bare number** ("Nádražní 12a"), which the
+  resolver's parser reads as no number, is the č.o.'s letter (RÚIAN carries one on the č.o. alone): the č.o. arm with
+  that letter, never a č.p.; it splits off a town as a number does ("Nádražní 12a Kolín"); a streetless door has no
+  č.o., so "Lhota 12a" answers none, and "12 a" with a space is no letter. The name read takes the whole text, so a town
+  text usually shows door rows only (a street door carries its street chip) and "Nádražní 12a" adds its street as a
+  fuzzy row. Not read, so answering no door, for the gate (#2465) to weigh: a composite town ("Praha 6 - Dejvice"), a
+  PSČ in the town ("280 02 Kolín"), two or more commas, "12 a", a town first with no comma ("Kolín Nádražní 12"), a dash
+  ("Nádražní 12 - Kolín"), and a městská část without its register suffix: seven of Plzeň's ten ("Plzeň 2" is "Plzeň
+  2-Slovany"; only 1, 3 and 4 are bare) and Pardubice's Roman numerals ("Pardubice 2" is "Pardubice II"). Measured on
+  production (2026-11-09): "Nádražní 12, Mladá Boleslav" 13.9 ms (planning 9.9 ms), every node index-backed
+  (`ruian_name_index_norm_prefix`; streets by a bitmap on `ruian_streets_name_norm` and a hashed town filter; the one
+  sequential scan `registry_versions`, 4 rows), no new index; with no town each town condition folds away at plan time,
+  as the route's statements are unnamed, their parameters planned in. Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
   (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,
