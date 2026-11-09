@@ -29,6 +29,8 @@ from scraper import db
 
 PRAGUE = ZoneInfo("Europe/Prague")
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
+# Window 1's first day: the recording's first full Prague day (#2473 live 2026-11-08 16:26Z; #2465).
+FIRST_DAY = date(2026, 11, 9)
 Z = 1.959964
 TIMEOUT_S = 10.0
 WHOLE_TEXT_GAP_S = 1.0
@@ -83,6 +85,7 @@ class Question:
     level: str
     code: int | None
     best_rank: int
+    first_at: datetime
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,7 @@ def _questions(window: list[StoredPick], earlier: set[tuple[str, str, int | None
         best[key] = min(best.get(key, pick.rank), pick.rank)
     ordered = sorted((k for k in first if k not in earlier),
                      key=lambda k: (first[k], k[1], k[2] is None, k[2] or 0, k[0]))
-    return ([Question(n, text, level, code, best[(text, level, code)])
+    return ([Question(n, text, level, code, best[(text, level, code)], first[(text, level, code)])
              for n, (text, level, code) in enumerate(ordered, 1)], len(first) - len(ordered))
 
 
@@ -230,11 +233,20 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if not args.no_latency:
         print("latency: the prefix replay and the host-log read are not built yet; run with --no-latency")
         return 2
+    start, end = _midnight(args.window_first), _midnight(args.window_last + timedelta(days=1))
+    if args.window_first < FIRST_DAY:
+        print(f"window 1 starts on {FIRST_DAY}, the recording's first full Prague day")
+        return 2
+    if args.window_last < args.window_first:
+        print(f"--window-last {args.window_last} is before --window-first {args.window_first}")
+        return 2
+    if end > io.now():
+        print(f"{args.window_last} is not over yet in Prague")
+        return 2
     struck = _strikes(args.strikes)
     if isinstance(struck, str):
         print(struck)
         return 2
-    start, end = _midnight(args.window_first), _midnight(args.window_last + timedelta(days=1))
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
         window = [p for p in picks if p.created_at >= start]
@@ -258,6 +270,16 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     print(f"questions N = {len(scorable)}")
     if not scorable:
         print("N = 0: no interval and no verdict")
+        return 2
+    # A window runs to the day its last question lands, and no further: later days are the next window's.
+    size = args.window_size
+    if len(scorable) < size:
+        print(f"the window is not full: {len(scorable)} of {size} questions by {args.window_last}; score it once"
+              f" question {size} lands")
+        return 2
+    landed = scorable[size - 1].first_at.astimezone(PRAGUE).date()
+    if landed != args.window_last:
+        print(f"question {size} of the window landed on {landed}: score --window-last {landed}")
         return 2
     unanswerable = [q for q in scorable if not registry.answerable[(q.level, q.code)]]
     if unanswerable:

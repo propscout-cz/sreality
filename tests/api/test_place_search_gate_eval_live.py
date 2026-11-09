@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -188,14 +188,15 @@ class _Canned(_Route):
 
 def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any,
          *argv: str) -> tuple[int, list[str]]:
-    """The eval over the window of the transaction's Prague day, two days later (a completed day, DST or not)."""
+    """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins), three days
+    later, so that day and the next are over, DST or not."""
     now, day = conn.execute("SELECT now(), (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()
 
     @contextlib.contextmanager
     def open_conn() -> Iterator[psycopg.Connection]:
         yield conn
 
-    io = gate.Boundaries(http=http, open_conn=open_conn, now=lambda: now + timedelta(days=2), sleep=lambda _s: None)
+    io = gate.Boundaries(http=http, open_conn=open_conn, now=lambda: now + timedelta(days=3), sleep=lambda _s: None)
     code = gate.main(["--window-first", day.isoformat(), "--window-last", day.isoformat(), "--api", API, *argv], io)
     return code, capsys.readouterr().out.splitlines()
 
@@ -348,4 +349,52 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
     code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
     assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);")
     assert "gh workflow run location_registry_load.yml" in out[-1]
+    assert code == 2
+
+
+def _today(conn: psycopg.Connection) -> Any:
+    return conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
+
+
+@REQUIRED_DB
+def test_a_window_short_of_its_size_gives_no_verdict(conn: psycopg.Connection, client: TestClient,
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    code, out = _run(conn, capsys, _Route(client), "--no-latency")
+    assert out[-1] == f"the window is not full: 1 of 200 questions by {_today(conn)}; score it once question 200 lands"
+    assert code == 2
+
+
+@REQUIRED_DB
+def test_a_window_scored_past_the_day_its_last_question_landed_is_refused(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The days after it belong to the next window, whose questions a score would spend (ruling 2026-11-08)."""
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    today = _today(conn)
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1",
+                     "--window-last", (today + timedelta(days=1)).isoformat())
+    assert out[-1] == f"question 1 of the window landed on {today}: score --window-last {today}"
+    assert code == 2
+
+
+def _refused_before_any_read(capsys: pytest.CaptureFixture[str], now: datetime, *argv: str) -> tuple[int, list[str]]:
+    def no_conn() -> Any:
+        raise AssertionError("the eval read the database")
+
+    io = gate.Boundaries(http=None, open_conn=no_conn, now=lambda: now, sleep=lambda _s: None)
+    code = gate.main(["--no-latency", *argv], io)
+    return code, capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize(("first", "last", "refusal"), [
+    ("2026-11-08", "2026-11-12", "window 1 starts on 2026-11-09, the recording's first full Prague day"),
+    ("2026-11-12", "2026-11-11", "--window-last 2026-11-11 is before --window-first 2026-11-12"),
+    ("2026-11-12", "2026-11-20", "2026-11-20 is not over yet in Prague"),
+], ids=["before the recording", "inverted", "not over"])
+def test_a_window_the_gate_cannot_score_is_refused_before_any_read(capsys: pytest.CaptureFixture[str], first: str,
+                                                                   last: str, refusal: str) -> None:
+    code, out = _refused_before_any_read(capsys, datetime(2026, 11, 20, 22, 59, tzinfo=UTC),
+                                         "--window-first", first, "--window-last", last)
+    assert out == [refusal]
     assert code == 2
