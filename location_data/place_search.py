@@ -124,7 +124,8 @@ ranked AS (
 SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
        (SELECT json_agg(json_build_array(q.level, q.code, q.name, qp.name)) FROM quarters q
           LEFT JOIN ruian_admin_units qp ON qp.id = q.parent_id AND qp.level IN ('kraj', 'okres', 'obec')
-         WHERE q.unit_id = r.unit_id)
+         WHERE q.unit_id = r.unit_id),
+       r.tier
   FROM ranked r
   LEFT JOIN ruian_admin_units par ON par.id = r.parent_id AND par.level IN ('kraj', 'okres', 'obec')
   LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code
@@ -271,6 +272,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
         LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)
         raise SearchUnavailable from None
-    names = [Place(level, int(code), name, context, lat, lng, _places(places))
-             for level, code, name, context, lat, lng, places in rows]
-    return ([_door(row) for row in doors] + names)[:limit]
+    names = [(tier, Place(level, int(code), name, context, lat, lng, _places(places)))
+             for level, code, name, context, lat, lng, places, tier in rows]
+    return ([p for tier, p in names if tier == 0] + [_door(row) for row in doors]
+            + [p for tier, p in names if tier > 0])[:limit]

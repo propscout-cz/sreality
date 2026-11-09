@@ -692,3 +692,22 @@ def test_a_village_and_a_typed_co_answer_no_streetless_door(mirror, client):
     mirror.publish()
     assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota")]
     assert _doors(_suggest(client, "Lhota 25/3")) == []
+
+
+def test_a_whole_text_that_is_exactly_a_name_answers_before_the_doors_and_they_before_what_is_only_similar(
+        mirror, client):
+    """The register has a street named "Na Hroudách 1": the whole text is exactly its name, so it answers first. The
+    door Na Hroudách 1 comes next, as its street part is an exact name too, and the street Na Hroudách, only similar
+    to the whole text, after it."""
+    nymburk = mirror.unit("obec", 537004, "Nymburk",
+                          mirror.unit("okres", 3208, "Nymburk", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")))
+    na_hroudach = mirror.street(402001, "Na Hroudách", nymburk)
+    mirror.street(402002, "Na Hroudách 1", nymburk)
+    mirror.house(21000801, nymburk, street=na_hroudach, cp=1)
+    mirror.publish()
+    assert _suggest(client, "Na Hroudách 1") == [
+        {"level": "ulice", "id": 402002, "name": "Na Hroudách 1", "context": "Nymburk", "point": None},
+        {"level": "adresni_misto", "id": 21000801, "name": "Na Hroudách 1, Nymburk", "context": "Nymburk",
+         "point": None, "street": {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk"}},
+        {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk", "point": None},
+    ]
