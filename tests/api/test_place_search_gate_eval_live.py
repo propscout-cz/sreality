@@ -461,3 +461,11 @@ def test_a_failure_prints_its_class_alone(capsys: pytest.CaptureFixture[str]) ->
     code = gate.main(["--no-latency", "--window-first", "2026-11-09", "--window-last", "2026-11-12"], io)
     assert capsys.readouterr().out.splitlines() == ["failed: OperationalError"]
     assert code == 2
+
+
+def test_a_window_size_below_1_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        _refused_before_any_read(capsys, datetime(2026, 11, 20, 12, 0, tzinfo=UTC), "--window-first", "2026-11-09",
+                                 "--window-last", "2026-11-12", "--window-size", "0")
+    assert exit_.value.code == 2
+    assert "--window-size: 0 is not a positive whole number" in capsys.readouterr().err

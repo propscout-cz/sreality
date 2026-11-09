@@ -96,11 +96,18 @@ class Scored:
     own_rank: int | None
 
 
+def _positive(value: str) -> int:
+    if not value.isdecimal() or int(value) < 1:
+        raise argparse.ArgumentTypeError(f"{value} is not a positive whole number")
+    return int(value)
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m scripts.place_search_gate_eval", description=__doc__)
     p.add_argument("--window-first", type=date.fromisoformat, required=True)
     p.add_argument("--window-last", type=date.fromisoformat, required=True)
-    p.add_argument("--window-size", type=int, default=200)
+    p.add_argument("--window-size", type=_positive, default=200,
+                   help="questions that fill a window (Q2 c: 200); a smaller size is for tests")
     p.add_argument("--no-latency", action="store_true")
     p.add_argument("--strikes", type=Path, help="the operator's struck question numbers, one per line, '#' comments")
     p.add_argument("--api", default="https://api.propscout.cz")
@@ -206,6 +213,20 @@ def _ask(io: Boundaries, api: str, headers: dict[str, str], text: str) -> list[t
     return [(str(row["level"]), int(row["id"])) for row in res.json()["items"]]
 
 
+def _ask_whole(io: Boundaries, api: str, headers: dict[str, str],
+               texts: list[str]) -> dict[str, list[tuple[str, int]] | None]:
+    """Each text whole, once, a gap between texts; a failed question is asked once more after the gap."""
+    answers: dict[str, list[tuple[str, int]] | None] = {}
+    for text in texts:
+        if answers:
+            io.sleep(WHOLE_TEXT_GAP_S)
+        answers[text] = _ask(io, api, headers, text)
+        if answers[text] is None:
+            io.sleep(WHOLE_TEXT_GAP_S)
+            answers[text] = _ask(io, api, headers, text)
+    return answers
+
+
 def _needs(percent: int, n: int) -> int:
     return -(-percent * n // 100)
 
@@ -303,14 +324,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if token is None:
         return 2
     headers = {"Authorization": f"Bearer {token}", "User-Agent": f"propscout-gate-eval-2452/run-{secrets.token_hex(4)}"}
-    answers: dict[str, list[tuple[str, int]] | None] = {}
-    for text in dict.fromkeys(q.text for q in questions):
-        if answers:
-            io.sleep(WHOLE_TEXT_GAP_S)
-        answers[text] = _ask(io, args.api, headers, text)
-        if answers[text] is None:
-            io.sleep(WHOLE_TEXT_GAP_S)
-            answers[text] = _ask(io, args.api, headers, text)
+    answers = _ask_whole(io, args.api, headers, list(dict.fromkeys(q.text for q in questions)))
 
     scored = []
     for q in scorable:
