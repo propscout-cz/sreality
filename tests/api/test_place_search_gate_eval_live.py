@@ -590,6 +590,26 @@ def test_the_latency_run_reads_both_medians_from_the_host_log(
 
 
 @REQUIRED_DB
+def test_a_mapy_span_cut_short_by_mapy_from_leaves_latency_incomplete(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Mapy's median is over 7 days of traffic after its cache went: 2½ days of it decide nothing."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    railway = _host(clock)
+    route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
+    cache_went = clock.at - timedelta(days=2, hours=12)
+    code, out = _run(conn, capsys, route, "--mapy-from", cache_went.isoformat(), clock=clock, railway=railway, size=1)
+    assert "Mapy · 200s n 1 · p50 344 ms · p95 344 ms · aborts 1 of 2 (50.0 %) · statuses 200: 1, 499: 1" in out
+    complete = clock.at + timedelta(days=4, hours=12)
+    assert (f"Mapy: only 2 d since --mapy-from; its 7 days are complete on {complete.astimezone(UTC):%Y-%m-%d %H:%M}Z:"
+            " latency incomplete") in out
+    assert "own · 200s n 4 · p50 200 ms · p95 200 ms · statuses 200: 4" in out
+    assert out[-1] == "verdict: questions pass · latency incomplete · addresses not asked → incomplete"
+    assert code == 2
+
+
+@REQUIRED_DB
 def test_the_replay_types_one_text_at_a_time_spaced_out(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -661,7 +681,8 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
                              "latency: own p50 200 ms ≤ Mapy p50 344 ms → not slower → pass",
                              "verdict: questions pass · latency pass · addresses not asked → pass"], 2, 0),
     (timedelta(minutes=10), ["own POST /places/suggest · sent 4 · log holds 0 of 4", "own · 200s n 0 · statuses —",
-                             "latency: incomplete: no verdict without both medians and every request sent in the log",
+                             "latency: incomplete: no verdict without both medians over their full spans and every"
+                             " request sent in the log",
                              "verdict: questions pass · latency incomplete · addresses not asked → incomplete"], 10, 2),
 ], ids=["caught up in a minute", "still behind after 5 minutes"])
 def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(

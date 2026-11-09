@@ -1199,7 +1199,8 @@ rules. Identify which one a task belongs to before you start.
   top-5 and ⌈0.90 N⌉ top-1 hits after strikes; printed before and after strikes with the Wilson 95 % interval (too
   narrow: questions cluster by about four people) and Mapy's rank-based top-1 and top-5 from the stored rank, a
   repeat keeping its best, marked biased upward. **Latency**, by method from the API host's HTTP log: Mapy's
-  `GET /maps/suggest`, every client, over the 7 days before the replay (or from a later `--mapy-from`), read FIRST so
+  `GET /maps/suggest`, every client, over the 7 days before the replay (or the 7 days from `--mapy-from`, once they
+  have passed; until then latency is incomplete), read FIRST so
   retention cannot eat its oldest rows (the earliest row is printed); then the prefix replay (each numbered text,
   refused and not-live ones too, from two trimmed characters, 0.2 s between keystrokes, 30 s between texts; the last
   prefix's answer is the one scored); then its own rows, found by the run's agent and re-read every 30 s for up to

@@ -182,7 +182,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--report", type=Path, help="write the look's local HTML report here, outside any git checkout")
     p.add_argument("--text-gap", type=float, default=30.0, help="seconds between texts in the prefix replay")
     p.add_argument("--keystroke-gap", type=float, default=0.2, help="seconds between a text's prefixes")
-    p.add_argument("--mapy-from", type=_aware, help="start Mapy's 7 days no earlier than this (after its cache went)")
+    p.add_argument("--mapy-from", type=_aware,
+                   help="start Mapy's 7 days here (when its cache went); a run before 7 days have passed leaves latency"
+                        " incomplete")
     p.add_argument("--api", default="https://api.propscout.cz")
     return p
 
@@ -465,6 +467,10 @@ def _mapy(io: Boundaries, say: _Out, mapy_from: datetime | None) -> int | None:
     aborts = sum(1 for r in rows if r["httpStatus"] == 499)
     p50 = _figures(say, "Mapy", rows, f" · aborts {aborts} of {len(rows)} ({_share(aborts, len(rows))})")
     say("Mapy: its 300 s cache's hits are in these figures, unless --mapy-from starts after the cache went")
+    if end - start < MAPY_SPAN:
+        say(f"Mapy: only {(end - start).days} d since --mapy-from; its 7 days are complete on"
+            f" {_minute(start + MAPY_SPAN)}: latency incomplete")
+        return None
     return p50
 
 
@@ -723,7 +729,8 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         own_p50, complete = _own(io, say, ua, sent, run_start, run_end)
         if own_p50 is None or mapy_p50 is None or not complete:
             parts["latency"] = "incomplete"
-            say("latency: incomplete: no verdict without both medians and every request sent in the log")
+            say("latency: incomplete: no verdict without both medians over their full spans and every request sent in"
+                " the log")
         else:
             parts["latency"] = "pass" if own_p50 <= mapy_p50 else "fail"
             say(f"latency: own p50 {own_p50} ms {'≤' if own_p50 <= mapy_p50 else '>'} Mapy p50 {mapy_p50} ms →"
