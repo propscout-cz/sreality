@@ -986,3 +986,15 @@ def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_
          "street": None},
     ]
     assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota"), (21000203, "Lhota, Kladno")]
+
+
+@pytest.mark.parametrize("query", ["Nádražní 12, Pečky", "Nádražní 12 Kutná Hora"])
+def test_a_typed_town_that_names_nothing_or_has_no_such_street_answers_no_door_of_another_town(mirror, client, query):
+    """Builder decision for the operator's ruling (PR notes), as the ticket recommends: the mirror has no Pečky, and
+    Kutná Hora has no Nádražní, so Kolín's door 12 is not offered in their place. The whole text names nothing either
+    (0.50 to the street at best)."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, query) == []
