@@ -1,7 +1,9 @@
 """Own place search (#2449; spec #2441 Part 4, Q2 c, Q6 a, Q9, Q12 a), EXECUTED against the replayed schema (CI's
 migrations lane, `TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): `POST /places/suggest` over a mini RÚIAN
 mirror seeded in the transaction, its gazetteer built by the loader's own `name_index.rebuild`, both read models
-refreshed through `refresh_matview` before the first search. Nothing calls Mapy. Every test rolls back.
+refreshed through `refresh_matview` before the first search. Nothing calls Mapy. Every test rolls back. Door rows
+(#2451; stories 44, 53) are asserted on numbered doors the mirror seeds; one door per street wherever a street's point
+is asserted, as its point is its doors' mean.
 
 The mirror is RÚIAN-only, so no foreign place can exist in it: a foreign row has nowhere to come from.
 """
