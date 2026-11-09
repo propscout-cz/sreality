@@ -1065,3 +1065,23 @@ def test_a_mestska_cast_typed_as_the_town_answers_the_door_that_lies_in_it(mirro
             21000612: {"level": "adresni_misto", "id": 21000612, "name": "Nádražní 345/12, Praha",
                        "context": "území Hlavního města Prahy", "point": None, "street": street}}
     assert _suggest(client, query) == [door[kod]]
+
+
+KOLIN_II, KOLIN_III = 402095, 402109
+
+
+def test_a_cast_obce_typed_as_the_town_answers_the_door_that_lies_in_it(mirror, client):
+    """A č.p. is unique only within its část, so one street can carry two doors 12, here in Kolín II and Kolín III
+    (production's Kolín has 16 such pairs). The one label names the town alone, so the two rows read alike; typed with
+    Kolín III, only its door answers."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kolin_ii = mirror.unit("cast_obce", KOLIN_II, "Kolín II", towns["kolin"])
+    kolin_iii = mirror.unit("cast_obce", KOLIN_III, "Kolín III", towns["kolin"])
+    mirror.house(21000121, towns["kolin"], street=nadrazni, part=kolin_ii, cp=12)
+    mirror.house(21000122, towns["kolin"], street=nadrazni, part=kolin_iii, cp=12)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12, Kolín III") == [
+        {"level": "adresni_misto", "id": 21000122, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]

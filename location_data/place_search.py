@@ -158,12 +158,13 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
 # homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its
 # fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets and
-# villages narrow to its obce, and doors to those that lie in it: its obec by code, or its městská část through every
-# row of the code (a street runs through several). With no town each condition folds away at plan time: the statement
-# is unnamed, its parameters planned in.
+# villages narrow to its obce, and doors to those that lie in it: its obec or část by code, or its městská část through
+# every row of the code (a street runs through several of either). With no town each condition folds away at plan
+# time: the statement is unnamed, its parameters planned in.
 _TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
 _IN_TOWN = """
          AND (%(town)s::text IS NULL OR ap.obec_kod IN (SELECT code FROM town WHERE level = 'obec')
+              OR ap.cast_obce_kod IN (SELECT code FROM town WHERE level = 'cast_obce')
               OR ap.momc_unit_id IN (SELECT m.id FROM ruian_admin_units m
                                       JOIN town t ON t.level = 'momc' AND m.level = 'momc' AND m.code = t.code))"""
 _DOORS_SQL = f"""
