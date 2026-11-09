@@ -278,8 +278,9 @@ def _clock(conn: psycopg.Connection) -> _Clock:
 
 
 def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any, *argv: str,
-         clock: _Clock | None = None, railway: Any = None) -> tuple[int, list[str]]:
-    """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins)."""
+         clock: _Clock | None = None, railway: Any = None, size: int | None = None) -> tuple[int, list[str]]:
+    """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins); `size`
+    stands in for the 200 questions that fill a window."""
     day = conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
     clock = clock or _clock(conn)
 
@@ -291,7 +292,11 @@ def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any
         raise _Breach(f"the eval ran railway {argv[:2]} on a run that reads no log")
 
     io = gate.Boundaries(http=http, open_conn=open_conn, run_cli=railway or no_cli, now=clock.now, sleep=clock.sleep)
-    code = gate.main(["--window-first", day.isoformat(), "--window-last", day.isoformat(), "--api", API, *argv], io)
+    with pytest.MonkeyPatch.context() as patch:
+        if size is not None:
+            patch.setattr(gate, "WINDOW_SIZE", size)
+        code = gate.main(["--window-first", day.isoformat(), "--window-last", day.isoformat(), "--api", API, *argv],
+                         io)
     return code, capsys.readouterr().out.splitlines()
 
 
@@ -301,7 +306,7 @@ def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
 ) -> None:
     _resolve(client, TOWN_BRNO, "Brno", 2)
     _resolve(client, TOWN_BRNO, "Brno", 1)
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "questions N = 1" in out
     assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert "after strikes · top-5: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
@@ -325,7 +330,7 @@ def test_null_text_refused_and_not_live_rows_are_counted_and_left_out(
     _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
     # Resolve cannot record a unit the current version no longer draws, so this one row is written as it once was.
     conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "rows 4 · refused 1 · NULL text 1 · not live 1" in out
     assert "digit share 1 of 4 (25.0 %)" in out
     assert "questions N = 1" in out
@@ -342,7 +347,7 @@ def test_a_question_asked_in_an_earlier_window_is_left_out_and_n_0_gives_no_verd
     conn.execute("INSERT INTO place_picks (created_at, text, rank, level, code)"
                  " VALUES (now() - interval '2 days', 'Brno', 1, 'obec', %s)", (BRNO,))
     _resolve(client, TOWN_BRNO, "Brno", 1)
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "asked in an earlier window: 1" in out
     assert "questions N = 0" in out
     assert out[-1] == "N = 0: no interval and no verdict"
@@ -391,7 +396,7 @@ def _three_picks(client: TestClient, tmp_path: Path, strikes: str) -> tuple[_Can
 def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: TestClient,
                                           capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     route, strikes = _three_picks(client, tmp_path, "# the operator's look: #3 names its okres\n3\n")
-    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3", "--strikes", strikes)
+    code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
     assert "struck 1" in out
     assert "N = 3 before strikes, 2 after" in out
     assert "before strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
@@ -412,7 +417,7 @@ def test_a_strike_that_is_no_miss_stops_the_run(conn: psycopg.Connection, client
                                                 capsys: pytest.CaptureFixture[str], tmp_path: Path, strike: str,
                                                 refusal: str) -> None:
     route, strikes = _three_picks(client, tmp_path, f"{strike}\n")
-    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3", "--strikes", strikes)
+    code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
     assert out[-1] == refusal
     assert code == 2
 
@@ -426,7 +431,7 @@ def test_a_shortcut_question_is_scored_as_its_mestska_cast(conn: psycopg.Connect
     _pair(conn, BRNO_STRED, STARE_BRNO)
     _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
     _resolve(client, MOMC_PRAHA_6, "Praha", 2)
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=2)
     assert out[0].endswith(" · momc pairs 2")
     assert "after strikes · top-5: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
     assert "after strikes · top-1: 1 of 2 (needs 2) · Wilson 9.5–90.5 %" in out
@@ -442,7 +447,7 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
     _pair(conn, BRNO_STRED, STARE_BRNO)
     _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
     _resolve(client, MOMC_PRAHA_6, "Praha", 2)
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "2")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=2)
     assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);"
                               " first confirm with a SELECT that no registry_versions row is newer than version ")
     assert "gh workflow run location_registry_load.yml -f vintage=20261101;" in out[-1]
@@ -469,8 +474,8 @@ def test_a_window_scored_past_the_day_its_last_question_landed_is_refused(
     """The days after it belong to the next window, whose questions a score would spend (ruling 2026-11-08)."""
     _resolve(client, TOWN_BRNO, "Brno", 1)
     today = _today(conn)
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1",
-                     "--window-last", (today + timedelta(days=1)).isoformat())
+    code, out = _run(conn, capsys, _Route(client), "--no-latency",
+                     "--window-last", (today + timedelta(days=1)).isoformat(), size=1)
     assert out[-1] == f"question 1 of the window landed on {today}: score --window-last {today}"
     assert code == 2
 
@@ -519,7 +524,7 @@ def test_a_route_error_that_persists_is_a_miss_and_is_counted(
     for text in ("Brno a", "Brno b", "Brno c"):
         _resolve(client, TOWN_BRNO, text, 1)
     route = _Flaky({"Brno a": 1, "Brno b": 1, "Brno c": 1}, fails={"Brno b": 1, "Brno c": 2})
-    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "3")
+    code, out = _run(conn, capsys, route, "--no-latency", size=3)
     assert "route errors 1" in out
     assert "after strikes · top-1: 2 of 3 (needs 3) · Wilson 20.8–93.9 %" in out
     assert code == 1
@@ -533,7 +538,7 @@ def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
     _resolve(client, TOWN_BRNO, "Brno", 1)
     conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Nad Bořislavkou', 1, 'adresni_misto',"
                  " 21000001)")
-    code, out = _run(conn, capsys, _Route(client), "--no-latency", "--window-size", "1")
+    code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert out[-1] == "picks at a level no question is scored at: 1 (adresni_misto); look before scoring"
     assert code == 2
 
@@ -564,7 +569,7 @@ def test_the_latency_run_reads_both_medians_from_the_host_log(
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, durations)
-    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=1)
     assert "Mapy · 200s n 2 · p50 344 ms · p95 560 ms · aborts 1 of 3 (33.3 %) · statuses 200: 2, 499: 1" in out
     assert "own POST /places/suggest · sent 4 · log holds 4 of 4" in out
     assert own in out
@@ -583,7 +588,7 @@ def test_the_replay_types_one_text_at_a_time_spaced_out(
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Canned({"Brno a": 1, "Lom": 1}, others=2), railway, clock, [200] * 6)
-    code, out = _run(conn, capsys, route, "--window-size", "2", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=2)
     assert clock.events == [("post", "Br"), ("sleep", 0.2), ("post", "Brn"), ("sleep", 0.2), ("post", "Brno"),
                             ("sleep", 0.2), ("post", "Brno a"), ("sleep", 30.0), ("post", "Lo"), ("sleep", 0.2),
                             ("post", "Lom")]
@@ -613,7 +618,7 @@ def test_mapys_side_reads_every_deployment_that_can_have_served_in_its_7_days(
     railway.log(begin + timedelta(days=1), "GET", "/maps/suggest", 200, 560)
     railway.log(begin + timedelta(days=3), "GET", "/maps/suggest", 499, 1200)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
-    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=1)
     header = next(line for line in out if line.startswith("Mapy GET /maps/suggest"))
     assert header.endswith(f" · deployments read 4 · rows 3 · earliest row {_stamp(begin + timedelta(seconds=30))}")
     assert "Mapy · 200s n 2 · p50 344 ms · p95 560 ms · aborts 1 of 3 (33.3 %) · statuses 200: 2, 499: 1" in out
@@ -633,7 +638,7 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
     for n in range(5000):
         railway.log(begin + timedelta(hours=2, minutes=n), "GET", "/maps/suggest", 200, 300)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
-    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=1)
     assert ("Mapy · 200s n 5000 · p50 300 ms · p95 300 ms · aborts 1 of 5001 (0.0 %) · statuses 200: 5000, 499: 1"
             in out)
     assert code == 0
@@ -656,7 +661,7 @@ def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     clock = _clock(conn)
     railway = _host(clock, lag)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
-    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=1)
     for line in lines:
         assert line in out
     assert clock.events[-polls:] == [("sleep", 30.0)] * polls
@@ -675,7 +680,7 @@ def test_a_deployment_created_during_the_replay_is_read_and_named(
     railway = _host(clock)
     railway.deployments.append(("dep-2", clock.at + timedelta(seconds=10), clock.at + timedelta(seconds=20)))
     route = _Logged(_Canned({"Brno a": 1, "Lom": 1}, others=2), railway, clock, [230, 183, 200, 186, 900, 950])
-    code, out = _run(conn, capsys, route, "--window-size", "2", clock=clock, railway=railway)
+    code, out = _run(conn, capsys, route, clock=clock, railway=railway, size=2)
     assert "own POST /places/suggest · sent 6 · log holds 6 of 6" in out
     assert ("own: a deployment was created during the replay; its cold start skews the p50: run again with no merge"
             in out)
@@ -723,8 +728,8 @@ def test_no_scored_question_meets_a_lapsed_token(
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Tokens({text: 1 for text in picks}, clock, revoked=revoked), railway, clock, [200] * 6)
-    code, out = _run(conn, capsys, route, "--window-size", str(len(picks)), "--text-gap", "3600", clock=clock,
-                     railway=railway)
+    code, out = _run(conn, capsys, route, "--text-gap", "3600", clock=clock,
+                     railway=railway, size=len(picks))
     assert "route errors 0" in out
     for line in lines:
         assert line in out
@@ -737,8 +742,8 @@ def test_a_token_refused_after_a_fresh_sign_in_stops_the_run(
 ) -> None:
     _resolve(client, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
-    code, out = _run(conn, capsys, _Tokens({"Brno a": 1}, clock, revoked=99), "--no-latency", "--window-size", "1",
-                     clock=clock)
+    code, out = _run(conn, capsys, _Tokens({"Brno a": 1}, clock, revoked=99), "--no-latency",
+                     clock=clock, size=1)
     assert out[-1] == "the route refused the smoke account's token after a fresh sign-in"
     assert code == 2
 
@@ -784,8 +789,8 @@ def test_dictated_address_questions_are_scored_by_their_kod_adm(
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Doors({"Brno a": 1}, doors), railway, clock, [200] * (4 + len(doors)))
-    code, out = _run(conn, capsys, route, "--window-size", "1", "--addresses", str(path), clock=clock,
-                     railway=railway)
+    code, out = _run(conn, capsys, route, "--addresses", str(path), clock=clock,
+                     railway=railway, size=1)
     assert "own POST /places/suggest · sent 4 · log holds 4 of 4" in out
     for line in lines:
         assert line in out
@@ -813,8 +818,8 @@ def test_the_looks_run_ends_by_naming_its_report_and_how_to_delete_it(
     report.write_text("an earlier look")
     report.chmod(0o644)
     route = _Doors({"Brno": 1}, {"Nad Bořislavkou 487": (21000001, 1)})
-    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "1", "--addresses", str(addresses),
-                     "--report", str(report))
+    code, out = _run(conn, capsys, route, "--no-latency", "--addresses", str(addresses),
+                     "--report", str(report), size=1)
     assert out[-2] == "verdict: questions pass · latency not measured · addresses pass → pass"
     assert out[-1] == f"Report: {report}. Delete it after the look: rm {report}"
     assert report.stat().st_mode & 0o777 == 0o600
@@ -841,11 +846,3 @@ def test_a_failure_prints_its_class_alone(capsys: pytest.CaptureFixture[str]) ->
     code = gate.main(["--no-latency", "--window-first", "2026-11-09", "--window-last", "2026-11-12"], io)
     assert capsys.readouterr().out.splitlines() == ["failed: OperationalError"]
     assert code == 2
-
-
-def test_a_window_size_below_1_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exit_:
-        _refused_before_any_read(capsys, datetime(2026, 11, 20, 12, 0, tzinfo=UTC), "--window-first", "2026-11-09",
-                                 "--window-last", "2026-11-12", "--window-size", "0")
-    assert exit_.value.code == 2
-    assert "--window-size: 0 is not a positive whole number" in capsys.readouterr().err

@@ -51,6 +51,8 @@ PRAGUE = ZoneInfo("Europe/Prague")
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 # Window 1's first day: the recording's first full Prague day (#2473 live 2026-11-08 16:26Z; #2465).
 FIRST_DAY = date(2026, 11, 9)
+# Q2 c: a window fills at its 200th scorable question.
+WINDOW_SIZE = 200
 # The levels a pick's record names (api/maps.py PickedUnit): own search answers each as a row of that level and code.
 LEVELS = frozenset({"kraj", "okres", "obec", "momc", "cast_obce", "ulice"})
 DOOR = "adresni_misto"
@@ -159,12 +161,6 @@ class Scored:
     own_rank: int | None
 
 
-def _positive(value: str) -> int:
-    if not value.isdecimal() or int(value) < 1:
-        raise argparse.ArgumentTypeError(f"{value} is not a positive whole number")
-    return int(value)
-
-
 def _aware(value: str) -> datetime:
     at = datetime.fromisoformat(value)
     if at.tzinfo is None:
@@ -177,8 +173,6 @@ def _parser() -> argparse.ArgumentParser:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--window-first", type=date.fromisoformat, required=True)
     p.add_argument("--window-last", type=date.fromisoformat, required=True)
-    p.add_argument("--window-size", type=_positive, default=200,
-                   help="questions that fill a window (Q2 c: 200); a smaller size is for tests")
     p.add_argument("--no-latency", action="store_true", help="ask each text whole, once; read no log (the look's run)")
     p.add_argument("--strikes", type=Path, help="the operator's struck question numbers, one per line, '#' comments")
     p.add_argument("--addresses", type=Path,
@@ -668,7 +662,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     if not scorable:
         raise Stop("N = 0: no interval and no verdict")
     # A window runs to the day its last question lands, and no further: later days are the next window's.
-    size = args.window_size
+    size = WINDOW_SIZE
     if len(scorable) < size:
         raise Stop(f"the window is not full: {len(scorable)} of {size} questions by {args.window_last}; score it"
                    f" once question {size} lands")
