@@ -1331,21 +1331,18 @@ def test_a_release_on_a_dead_connection_falls_back_to_the_callers_reconnect() ->
     assert fresh.closed
 
 
-def test_workflow_timeout_covers_the_budget_ceiling() -> None:
-    """`_MAX_BUDGET_SECONDS` and the workflow's `timeout-minutes` are ONE
-    decision: the clean-stop only beats the runner's SIGKILL while the outer
-    timeout leaves room for the budget PLUS one in-flight batch (bounded by
-    `_BATCH_STATEMENT_TIMEOUT`) plus prelude/finalize. Raising one alone
-    re-creates the silent `cancelled` this script exists to eliminate."""
-    from pathlib import Path
-
+def test_the_runner_timeout_covers_the_budget_ceiling() -> None:
+    """`_MAX_BUDGET_SECONDS` and the `property_sweep` entry's `timeout_s`
+    (scraper/jobs.py, #2027) are ONE decision: the clean-stop only beats the
+    runner's kill while the timeout leaves room for the budget PLUS one
+    in-flight batch (bounded by `_BATCH_STATEMENT_TIMEOUT`) plus
+    prelude/finalize. Raising one alone re-creates the stopped run this script
+    exists to eliminate."""
     import scripts.recompute_property_stats as rps
+    from scraper import jobs
 
-    yaml = pytest.importorskip("yaml")
-    root = Path(__file__).resolve().parent.parent
-    wf = yaml.safe_load(
-        (root / ".github/workflows/recompute_property_stats.yml").read_text())
-    timeout_s = wf["jobs"]["recompute"]["timeout-minutes"] * 60
+    [entry] = [j for j in jobs.runner_jobs() if j.name == "property_sweep"]
+    timeout_s = entry.timeout_s
     # One in-flight batch = _BATCH_STATEMENT_TIMEOUT x its retry budget (the
     # deadline is only checked at a batch boundary, so a batch that starts just
     # under the wire runs its full retried worst case past it). DERIVED from the
@@ -1364,13 +1361,9 @@ def test_workflow_timeout_covers_the_budget_ceiling() -> None:
     # gap and must stay comfortably under the lease TTL.
     assert batch_ceiling_s < rps._LEASE_TTL_S - job_lease.FENCE_MARGIN_S
 
-    # The dispatch default must be dispatchable — i.e. at or under the clamp,
-    # never silently truncated to it. (YAML 1.1 parses the bare key `on` as the
-    # boolean True, hence the two-key lookup.)
-    triggers = wf.get("on", wf.get(True))
-    default_budget = float(
-        triggers["workflow_dispatch"]["inputs"]["max_seconds"]["default"])
-    assert default_budget <= rps._MAX_BUDGET_SECONDS
+    # The entry's budget runs whole: at or under the clamp, never silently truncated to it.
+    budget = float(entry.argv[entry.argv.index("--max-seconds") + 1])
+    assert budget <= rps._MAX_BUDGET_SECONDS
 
 
 # --- one property, one voice (migrations 561 + 588) --------------------------------------

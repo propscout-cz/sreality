@@ -9,7 +9,8 @@ Three shapes over one row:
 * `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
   A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
   request is a person asking, a pause only stops the schedule), never a retired one, never while a
-  sibling sharing its `resource` holds a live lease, and opens one `job_runs` row; the database's
+  sibling sharing its `resource` holds a live lease or, for a DB-heavy job, while another DB-heavy
+  job's run is open, and opens one `job_runs` row; the database's
   unique indexes allow one open run per job and per resource, so a lost race is a refused claim.
   The holder renews and fences itself (`Lease.fenced`, on the shared `clock`) before the lease can
   expire under it. The release closes the run and moves `due_at` by a due kind (`DUE_KINDS`): the
@@ -80,6 +81,13 @@ STATEMENT_TIMEOUT_S = 5
 
 _FREE = "(j.lease_holder IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < now())"
 _UNPAUSED = "(j.paused_until IS NULL OR j.paused_until <= now())"
+# A DB-heavy job never starts beside another DB-heavy job's open run (#2027): a recovery after hours down, a deploy's
+# re-run or a request would otherwise find two due at once. No unique index spans two jobs, so a heavy claim first
+# takes _HEAVY_TURN_SQL: two replicas' heavy claims take turns, and the second reads the first's committed run.
+_ONE_HEAVY = """(j.job_name <> ALL(%(heavy)s::text[]) OR NOT EXISTS (
+         SELECT 1 FROM job_runs h
+          WHERE h.ended_at IS NULL AND h.job_name = ANY(%(heavy)s::text[]) AND h.job_name <> j.job_name))"""
+_HEAVY_TURN_SQL = "SELECT pg_advisory_xact_lock(hashtext('job_runner_db_heavy'))"
 
 # The next slot strictly after now() on the grid anchored at the Unix epoch: missed slots are skipped.
 _NEXT_SLOT_SQL = (
@@ -97,6 +105,7 @@ UPDATE scheduled_jobs j
    AND j.retired_at IS NULL
    AND ((j.due_at <= now() AND {_UNPAUSED}) OR j.requested_at <= now())
    AND {_FREE}
+   AND {_ONE_HEAVY}
    AND (j.resource IS NULL OR NOT EXISTS (
          SELECT 1 FROM scheduled_jobs s
           WHERE s.resource = j.resource AND s.job_name <> j.job_name
@@ -358,6 +367,7 @@ SELECT j.job_name
    AND j.runner = %(runner)s AND j.registry_at IS NOT NULL AND j.retired_at IS NULL
    AND {_FREE}
    AND ((j.due_at <= now() AND {_UNPAUSED}) OR j.requested_at <= now())
+   AND {_ONE_HEAVY}
    AND NOT EXISTS (SELECT 1 FROM job_runs r
                     WHERE r.ended_at IS NULL
                       AND (r.job_name = j.job_name OR (j.resource IS NOT NULL AND r.resource = j.resource)))
@@ -476,13 +486,16 @@ def _bounded(conn: psycopg.Connection) -> Iterator[psycopg.Cursor]:
 
 
 def claim(conn: psycopg.Connection, job_name: str, *, holder: str | None = None,
-          ttl_s: int = TTL_S, version: str | None = None) -> Lease | None:
-    """Claims a due job and opens its run, or returns None (not due, paused, retired, held, sibling busy)."""
+          ttl_s: int = TTL_S, version: str | None = None, heavy: Sequence[str] = ()) -> Lease | None:
+    """Claims a due job and opens its run, or returns None (not due, paused, retired, held, sibling busy, or a
+    DB-heavy job while another of `heavy` runs)."""
     holder = holder or holder_id()
-    params = {"job": job_name, "holder": holder, "ttl": ttl_s, "version": version}
+    params = {"job": job_name, "holder": holder, "ttl": ttl_s, "version": version, "heavy": list(heavy)}
     sent_at = clock()
     try:
         with _bounded(conn) as cur:
+            if job_name in heavy:
+                cur.execute(_HEAVY_TURN_SQL)
             cur.execute(_CLAIM_SQL, params)
             row = cur.fetchone()
             if row is None:
@@ -604,10 +617,11 @@ def reap_lost(conn: psycopg.Connection, *, names: Sequence[str], on_hour: Sequen
         return [row[0] for row in cur.fetchall()]
 
 
-def due(conn: psycopg.Connection, names: Sequence[str], *, runner: str = RUNNER) -> list[str]:
-    """The claimable names among `names`, oldest due (or requested) first."""
+def due(conn: psycopg.Connection, names: Sequence[str], *, heavy: Sequence[str] = (),
+        runner: str = RUNNER) -> list[str]:
+    """The claimable names among `names`, oldest due (or requested) first; one of `heavy` not while another runs."""
     with _bounded(conn) as cur:
-        cur.execute(_DUE_SQL, {"names": list(names), "runner": runner})
+        cur.execute(_DUE_SQL, {"names": list(names), "heavy": list(heavy), "runner": runner})
         return [row[0] for row in cur.fetchall()]
 
 

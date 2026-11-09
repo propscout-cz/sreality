@@ -51,12 +51,19 @@ _FIXED: tuple[Job, ...] = (
     Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, RUNNER),
     Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, RUNNER,
         db_heavy=True),
-    # 03:00: clear of the hourly intake's 00:35 slot, and it holds through the kill grace. (The daily
-    # full location resolve left this table in the location programme's W2: the worker sweeps itself.)
+    # The daily sweeps (#2027), each held off the other by the hour census and by job_lease's DB-heavy turn. A
+    # property sweep runs its 6000 s budget, one in-flight batch (24 min) and its finalize: 130 min; its timeout is
+    # 1.5x the budget, so only a budget stop's tail reads Watch. (The daily full location resolve left this table
+    # in the location programme's W2: the worker sweeps itself.)
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
-        DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 3 * HOUR, 150 * 60, 1024, 1, RUNNER, db_heavy=True),
+    # A broker sweep's 36 full runs since Broker Unify W3 (2026-10-01 to 11-05, end to end from their logs) took
+    # 1684 s p50, 2799 s p95, 2982 s at most; 10-02's failed at 3497 s, its 28-min rollup outliving the lease. The
+    # lease wait and attribution spend the 1500 s budget and the firm links ~300 s (1843 s at most), then merge,
+    # rollups and candidates take 48-1137 s, each tried twice at most (~4120 s, worst case). 75 min clears that; its
+    # Watch line (50 min) clears every completed run, 10-01's the closest.
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
-        DAY, 6 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 6 * HOUR, 75 * 60, 1024, 1, RUNNER, db_heavy=True),
     # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),

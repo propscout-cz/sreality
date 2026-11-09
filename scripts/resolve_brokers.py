@@ -51,6 +51,7 @@ import bisect
 import json
 import logging
 import os
+import signal
 import sys
 import time
 import uuid
@@ -58,13 +59,18 @@ from collections.abc import Callable, Iterator, Set as AbstractSet
 from contextlib import contextmanager
 from typing import Any, TypeVar
 
-from scraper import db, job_lease
+from scraper import db, job_lease, stop
 from toolkit import broker_resolver as R
 from toolkit.broker_sources import BROKER_SOURCE_NAMES, attribution_statements, dirty_repointed
 
 LOG = logging.getLogger("resolve_brokers")
 
 _T = TypeVar("_T")
+
+
+def _sigterm_to_systemexit(signum: int, frame: Any) -> None:
+    raise SystemExit(stop.EXIT_CODE)
+
 
 _FREE_KEY = "broker_free_email_domains"
 _FRANCHISE_KEY = "broker_franchise_domains"
@@ -450,7 +456,7 @@ _LOCK_WAIT_MAX_SECONDS = 1260
 # loop, which runs AFTER attribution has usually spent all of --max-seconds. Sized
 # from the measured phase (43s on 2026-08-10, 186s on 08-09, both over the full
 # ~107-chunk corpus) with ~1.6x headroom for corpus growth. Counts on top of
-# --max-seconds, so resolve_brokers_full.yml's timeout-minutes covers both.
+# --max-seconds, so the broker_sweep entry's timeout_s (scraper/jobs.py) covers both.
 _FIRM_LINK_MIN_SECONDS = 300
 
 
@@ -1695,6 +1701,11 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+
+    # The job runner's stop (a deploy, or timeout_s) is SIGTERM, whose default is instant death: no `finally`, so the
+    # lease would strand for its 20-min TTL and stall the worker's broker lane. SystemExit unwinds `job_lease.held`,
+    # which releases it; the TTL stays the backstop if the release loses the race with the SIGKILL 90 s later.
+    signal.signal(signal.SIGTERM, _sigterm_to_systemexit)
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")

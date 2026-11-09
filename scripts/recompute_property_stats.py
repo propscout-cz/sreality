@@ -32,7 +32,7 @@
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
-commits independently -- a workflow timeout preserves completed batches.
+commits independently -- a timeout preserves completed batches.
 
 Liveness (2026-08-06 incident): the maintenance lease is a SHORT (15 min) TTL
 heartbeat-renewed every batch/slice — never a runtime-sized grant — so a
@@ -43,8 +43,8 @@ release the lease. The next run continues that CYCLE from the cursor instead
 of id 1 (2026-10-03: four daily runs in a row stopped near id 540k of 927k,
 each restarting at 1, so the tail went days without a reconcile). The first
 stop of a cycle exits 0 with a warning; a resumed run that stops again, or a
-run that stops before its first batch (nothing to resume), exits RED (GH
-reports a timeout kill as `cancelled`, which alerts nobody). The jobs
+run that stops before its first batch (nothing to resume), exits RED, a
+`failed` run on its job cell rather than a kill at timeout_s. The jobs
 check's `artifact/property_sweep` cell (scripts/checks/platform.py) watches
 the completion stamp (derived_artifacts, migration 622) independently.
 
@@ -52,12 +52,12 @@ Two run modes (Phase 3 -- real-time properties):
 
   * --incremental (by hand; the realtime worker's maintenance lane runs it every 30 s): attach new stragglers + recompute
     ONLY the properties queued in `dirty_properties` by the writers + settle. O(changes).
-  * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
+  * full (default, daily reconcile, the job runner's property_sweep): attach (again after
     every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
     cuts it) + reconcile childless + clear the queue. The self-healing backstop
     for anything the incremental pass missed.
 
-Usage (typically via the workflows above):
+Usage (typically via the jobs above):
 
     python -m scripts.recompute_property_stats --batch-size 2000       # full
     python -m scripts.recompute_property_stats --incremental            # dirty-set
@@ -692,13 +692,13 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
 # TRY the lease and skip when held (the next tick is seconds away); the daily full
 # sweep WAITS (bounded) until it holds it — the backstop must not be skipped.
 #
-# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to
-# take a single 3-hour grant sized to its whole runtime and release it in a
-# `finally` — but a GH Actions timeout kill escalates SIGINT→SIGTERM→SIGKILL
-# faster than the release round-trip, so every timeout stranded the lease and
-# froze ALL property maintenance (worker lane + both crons) for hours
-# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze). Cleanup-
-# on-death cannot be relied on; cheap-death can: every writer takes the same
+# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to take
+# a single 3-hour grant sized to its whole runtime and release it in a `finally` —
+# but a timeout kill (then GitHub's SIGINT→SIGTERM→SIGKILL, now the runner's SIGKILL
+# 90 s after its SIGTERM) can beat the release round-trip, so every timeout stranded
+# the lease and froze ALL property maintenance (worker lane + both crons) for hours
+# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze).
+# Cleanup-on-death cannot be relied on; cheap-death can: every writer takes the same
 # 15-minute TTL and renews it between batches, so a kill at ANY point strands the
 # row for at most 15 minutes. A renewal refuses a lapsed lease, so the TTL less
 # job_lease.FENCE_MARGIN_S must comfortably exceed one batch's worst case — a sweep
@@ -719,12 +719,12 @@ _LEASE_RUNNER = "railway-realtime-worker"
 # is genuinely wrong, not merely slow.
 _MAX_LEASE_WAIT_SECONDS = 1200.0
 
-# Ceiling for --max-seconds. The workflow's timeout-minutes (130) is sized as
-# budget + one in-flight batch + prelude + finalize headroom FOR THIS
-# CEILING; an unclamped dispatch input above it would let the runner
-# SIGKILL a healthy sweep before its clean-stop fires — a silent `cancelled`,
-# the exact mode this script exists to eliminate. Raising the ceiling means
-# raising timeout-minutes in the same change.
+# Ceiling for --max-seconds. The property_sweep entry's timeout_s
+# (scraper/jobs.py) is sized as budget + one in-flight batch + prelude +
+# finalize headroom FOR THIS CEILING; an unclamped request argument above it
+# would let the runner kill a healthy sweep before its clean-stop fires — the
+# exact mode this script exists to eliminate. Raising the ceiling means
+# raising timeout_s in the same change.
 #
 # 6000s (100 min), raised from 4200s: the six sweeps to 2026-08-10 measured
 # 3502/3777/4044/3890/3626s — 83-96% of the old 4200s ceiling, i.e. one bad day
@@ -756,11 +756,11 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # Retry budget for ONE recompute batch (db.run_resilient defaults to 4). A batch
 # runs under the 10-min ceiling above, so four attempts could burn 40 minutes
 # inside a single loop iteration — the deadline is only checked at a batch
-# BOUNDARY, so that would sail past the workflow's outer timeout and re-create
-# the silent `cancelled` this script exists to eliminate. Two attempts keeps the
+# BOUNDARY, so that would sail past the runner's timeout_s and re-create
+# the kill mid-batch this script exists to eliminate. Two attempts keeps the
 # useful part of the budget (a dropped connection or a passing lock wait replays
 # once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
-# _BOOK_STATEMENT_TIMEOUT), which is what the workflow's timeout-minutes is sized
+# _BOOK_STATEMENT_TIMEOUT), which is what the runner's timeout_s is sized
 # for. A range that times out twice is the poisoned range the error log names,
 # not a blip. 24 min also exceeds _LEASE_TTL_S, which is why the lease renewal runs
 # INSIDE the retried op (main()'s `renewed`) rather than once per loop iteration.
@@ -850,19 +850,19 @@ def main() -> int:
              "covered, saves where the next run resumes the cycle, and releases "
              "the lease; a resumed run that runs out again, or a run that runs out "
              "before its first batch, exits RED (1) — a "
-             "visible failure instead of a silent timeout-minutes `cancelled` kill. "
-             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the workflow's "
-             "timeout-minutes backstop is sized for that ceiling, and a "
-             "larger budget would let the runner SIGKILL the job before the "
-             "clean-stop fires (raising both requires editing the yml).",
+             "visible failure instead of a kill mid-batch at the runner's timeout_s. "
+             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the job runner's "
+             "timeout_s is sized for that ceiling, and a larger budget would "
+             "let the runner kill the job before the clean-stop fires "
+             "(raising both requires editing scraper/jobs.py).",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    # SIGTERM (the middle step of GH's SIGINT→SIGTERM→SIGKILL cancel ladder)
-    # defaults to instant death — no finally, lease stranded. Route it through
-    # SystemExit so the release path gets its chance; the short renewed TTL is
-    # the guarantee for when even this loses the race.
+    # SIGTERM (the job runner's stop at a deploy or timeout_s, 90 s before its
+    # SIGKILL) defaults to instant death — no finally, lease stranded. Route it
+    # through SystemExit so the release path gets its chance; the short renewed
+    # TTL is the guarantee for when even this loses the race.
     signal.signal(signal.SIGTERM, _sigterm_to_systemexit)
 
     logging.basicConfig(
@@ -992,8 +992,8 @@ def main() -> int:
             if budget < args.max_seconds:
                 LOG.warning(
                     "RECOMPUTE --max-seconds %.0f clamped to %.0f — the "
-                    "workflow's timeout-minutes backstop is sized for this "
-                    "ceiling; raise both together in the yml",
+                    "job runner's timeout_s is sized for this ceiling; raise "
+                    "both together in scraper/jobs.py",
                     args.max_seconds, budget,
                 )
             deadline = started_at + budget
@@ -1022,7 +1022,7 @@ def main() -> int:
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
-                # instead of being SIGKILLed mid-statement by timeout-minutes.
+                # instead of being killed mid-statement at the runner's timeout_s.
                 batch_started = time.monotonic()
                 if batch_started >= deadline:
                     incomplete_at = lo
@@ -1137,8 +1137,8 @@ def main() -> int:
         return 0
     if incomplete_at is not None:
         # RED on purpose: a resumed run that runs out again means the cycle needs three or
-        # more runs — genuinely too slow, not a partial success. GH only emails on
-        # scheduled-run FAILURES (a timeout kill lands as `cancelled` and alerts nobody,
+        # more runs — genuinely too slow, not a partial success, so its job cell shows a
+        # `failed` run (on GitHub a timeout kill landed as `cancelled` and alerted nobody,
         # which is how 5 dead sweeps went unnoticed for 4 days). The id tail above
         # `incomplete_at` keeps its pre-sweep stats until a cycle completes; the jobs
         # check's `artifact/property_sweep` cell tracks that staleness.
@@ -1148,7 +1148,7 @@ def main() -> int:
             "cursor saved at id %d (resumed by a run within %s of the cycle's start, else "
             "the next run starts over at id 1); exiting RED — investigate per-batch cost "
             "first (see the progress logs); raising the budget past %.0fs requires editing "
-            "BOTH --max-seconds and the workflow's timeout-minutes",
+            "BOTH --max-seconds and the job runner's timeout_s (scraper/jobs.py)",
             elapsed, start_lo, incomplete_at - 1, max_id, batches, total_batches,
             runs + 1, cycle_started_at, incomplete_at, _CURSOR_MAX_AGE,
             _MAX_BUDGET_SECONDS,
