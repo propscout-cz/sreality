@@ -34,6 +34,9 @@ LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
+# "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
+# ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
+_TOWN_AFTER = re.compile(r"(?<![\w./])(\d{1,6}(?:\s*/\s*\d{1,5}[a-zA-Z]?)?)\s+(?=[^\W\d_])")
 _DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
@@ -300,6 +303,9 @@ def _addresses(query: str) -> list[_Reading]:
     if len(pieces) == 2 and all(pieces):
         left, right = pieces
         readings += [_address(left, normalize_name(right)), _address(right, normalize_name(left))]
+    elif len(pieces) == 1 and (splits := list(_TOWN_AFTER.finditer(query))):
+        last = splits[-1]
+        readings.append(_address(query[:last.end(1)], normalize_name(query[last.end():])))
     readings.append(_address(query, None))
     return [r for r in readings if r is not None]
 

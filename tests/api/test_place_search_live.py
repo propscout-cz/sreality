@@ -907,7 +907,7 @@ DOOR_KOLIN = {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12,
               "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}}
 
 
-@pytest.mark.parametrize("query", ["Nádražní 12, Kolín", "Kolín, Nádražní 12"])
+@pytest.mark.parametrize("query", ["Nádražní 12, Kolín", "Kolín, Nádražní 12", "Nádražní 12 Kolín"])
 def test_a_street_and_number_typed_with_its_town_answer_its_door_first_the_row_the_street_and_number_give(
         mirror, client, query):
     """#2485 (story 53): the town is split off before the door read. The whole text names no place by similarity (0.50
