@@ -21,7 +21,7 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
-from location_data.resolver.normalize import house_number, split_street_and_number
+from location_data.resolver.normalize import TYP_CP, house_number, split_street_and_number
 
 LOG = logging.getLogger("location_data.place_search")
 
@@ -167,7 +167,7 @@ doors AS (
     JOIN ruian_streets sr ON sr.code = k.street_code
     CROSS JOIN LATERAL (
       SELECT ap.kod_adm FROM ruian_address_points ap
-       WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer
+       WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
          AND (%(orientacni)s::integer IS NULL OR ap.cislo_orientacni = %(orientacni)s::integer)
          AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text) AND ap.valid_to IS NULL
       UNION
@@ -253,7 +253,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "limit": limit,
     }
     street_part, slots = split_street_and_number(query)
-    domovni, _ = house_number(slots)
+    domovni, typ = house_number(slots)
     orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
     znak = slots.get("znak_orientacniho")
     street_keys = [normalize_street_name(street_part)] if domovni is not None else []
@@ -266,7 +266,9 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
             if street_keys:
                 cur.execute(_DOORS_SQL, {"street_keys": street_keys, "part_key": normalize_name(street_part),
                                          "domovni": domovni, "orientacni": orientacni, "znak": znak,
-                                         "bare": domovni if orientacni is None else None, "limit": limit})
+                                         "typ": typ or TYP_CP,
+                                         "bare": domovni if orientacni is None and typ is None else None,
+                                         "limit": limit})
                 doors = cur.fetchall()
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.

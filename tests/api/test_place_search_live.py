@@ -722,3 +722,17 @@ def test_a_number_no_door_carries_answers_the_whole_text_s_rows_as_before(mirror
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0275, "lng": 15.2003}},
     ]
+
+
+def test_an_evidence_number_answers_only_when_marked_and_its_one_label_has_no_number(mirror, client):
+    """A bare number is a č.p. or a č.o., never a č.ev.: the č.ev. 12 answers "Nádražní č.ev. 12" alone. The one door
+    label names no č.ev. Only the door: the whole text is 0.53 similar to the street."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, typ="č.ev.")
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní 12")) == []
+    assert _suggest(client, "Nádražní č.ev. 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]
