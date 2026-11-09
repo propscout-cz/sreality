@@ -812,3 +812,11 @@ def test_a_street_typed_short_answers_the_register_s_long_name_and_one_the_regis
     mirror.publish()
     assert _doors(_suggest(client, "nám. Míru 5")) == [(21000301, "náměstí Míru 5, Kolín")]
     assert _doors(_suggest(client, "Nám. 5. května 3")) == [(21000302, "Nám. 5. května 3, Kolín")]
+
+
+def test_a_street_typed_with_the_word_ulice_after_it_answers_its_door(mirror, client):
+    """The resolver's generic-word strip: "Nádražní ulice 12" is Nádražní 12."""
+    towns = _towns(mirror)
+    mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
+    mirror.publish()
+    assert _doors(_suggest(client, "Nádražní ulice 12")) == [(21000101, "Nádražní 12, Kolín")]
