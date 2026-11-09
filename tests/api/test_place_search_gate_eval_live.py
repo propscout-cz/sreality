@@ -663,6 +663,25 @@ def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     assert code == exit_code
 
 
+@REQUIRED_DB
+def test_a_deployment_created_during_the_replay_is_read_and_named(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A merge 10 s into the replay: the second text's requests reach the new deployment, cold."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _resolve(client, TOWN_BRNO, "Lom", 1)
+    clock = _clock(conn)
+    railway = _host(clock)
+    railway.deployments.append(("dep-2", clock.at + timedelta(seconds=10), clock.at + timedelta(seconds=20)))
+    route = _Logged(_Canned({"Brno a": 1, "Lom": 1}, others=2), railway, clock, [230, 183, 200, 186, 900, 950])
+    code, out = _run(conn, capsys, route, "--window-size", "2", clock=clock, railway=railway)
+    assert "own POST /places/suggest · sent 6 · log holds 6 of 6" in out
+    assert ("own: a deployment was created during the replay; its cold start skews the p50: run again with no merge"
+            in out)
+    assert "own · 200s n 6 · p50 200 ms · p95 950 ms · statuses 200: 6" in out
+    assert code == 0
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")

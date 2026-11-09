@@ -414,13 +414,16 @@ def _own(io: Boundaries, say: _Out, ua: str, sent: int, run_start: datetime,
     """Own side: the replay's requests, found by the run's agent; the log is read again every 30 s, up to 5 minutes,
     until it holds every request sent. Returns the p50 and whether it held them all."""
     start, end = run_start - SKEW, run_end + SKEW
-    serving = _serving(_deployments(io), start, end)
+    deployments = _deployments(io)
+    serving = _serving(deployments, start, end)
     for n in range(POLL_TIMES + 1):
         rows = _log(io, serving, "POST", "/places/suggest", start, end, ua)
         if len(rows) >= sent or n == POLL_TIMES:
             break
         io.sleep(POLL_S)
     say(f"own POST /places/suggest · sent {sent} · log holds {len(rows)} of {sent}")
+    if any(run_start <= d.created <= run_end for d in deployments):
+        say("own: a deployment was created during the replay; its cold start skews the p50: run again with no merge")
     return _figures(say, "own", rows), len(rows) >= sent
 
 
