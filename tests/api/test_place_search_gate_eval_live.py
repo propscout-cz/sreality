@@ -587,6 +587,35 @@ def test_the_replay_types_one_text_at_a_time_spaced_out(
     assert code == 0
 
 
+@REQUIRED_DB
+def test_mapys_side_reads_every_deployment_that_can_have_served_in_its_7_days(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The list gives no removal time. Y came up 39 minutes before the 7 days began; X was created 8 minutes before
+    them and replaced a second later by W, which came up a minute into them, so Y served that minute; V came up
+    inside them. Z, replaced by Y long before, is not read."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    begin = clock.at - timedelta(days=7)
+    railway = _Railway([
+        ("dep-z", begin - timedelta(hours=3), begin - timedelta(hours=3)),
+        ("dep-y", begin - timedelta(minutes=40), begin - timedelta(minutes=39)),
+        ("dep-x", begin - timedelta(minutes=8), None),
+        ("dep-w", begin - timedelta(minutes=8) + timedelta(seconds=1), begin + timedelta(minutes=1)),
+        ("dep-v", begin + timedelta(days=2), begin + timedelta(days=2)),
+    ])
+    railway.log(begin - timedelta(hours=1), "GET", "/maps/suggest", 200, 900)
+    railway.log(begin + timedelta(seconds=30), "GET", "/maps/suggest", 200, 344)
+    railway.log(begin + timedelta(days=1), "GET", "/maps/suggest", 200, 560)
+    railway.log(begin + timedelta(days=3), "GET", "/maps/suggest", 499, 1200)
+    route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
+    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    header = next(line for line in out if line.startswith("Mapy GET /maps/suggest"))
+    assert header.endswith(f" · deployments read 4 · rows 3 · earliest row {_stamp(begin + timedelta(seconds=30))}")
+    assert "Mapy · 200s n 2 · p50 344 ms · p95 560 ms · aborts 1 of 3 (33.3 %) · statuses 200: 2, 499: 1" in out
+    assert code == 0
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")

@@ -48,6 +48,10 @@ TARGET = ["-p", "78652c43-bb7f-401b-a3de-5f532f76f72c", "-s", "79e65a88-1629-439
           "-e", "production"]
 # The most rows one `logs` call returns (5001 is refused); a range holding more comes back as its newest rows only.
 LOG_LINES = 5000
+# The deployment list gives no removal time. One that ran this long before the next was created surely came up, so
+# every older one was gone by then; one replaced sooner may never have served, and the one before it went on serving.
+SETTLE = timedelta(minutes=30)
+NEVER_SERVED = frozenset({"FAILED", "SKIPPED"})
 MAPY_SPAN = timedelta(days=7)
 # This box's clock against the edge's stamps; the run's own agent keeps the read exact.
 SKEW = timedelta(minutes=1)
@@ -315,8 +319,15 @@ def _deployments(io: Boundaries) -> list[Deployment]:
 
 
 def _serving(deployments: list[Deployment], start: datetime, end: datetime) -> list[Deployment]:
-    """Every deployment that can have served inside [start, end]."""
-    return [d for d in deployments if d.created <= end]
+    """Every deployment that can have served inside [start, end]: those created by `end`, back to the newest created
+    before `start` that ran SETTLE unreplaced."""
+    made = [d for d in deployments if d.created <= end]
+    for i in range(len(made) - 1, -1, -1):
+        d = made[i]
+        replaced = made[i + 1].created if i + 1 < len(made) else end
+        if d.created <= start and d.status not in NEVER_SERVED and min(replaced, start) - d.created >= SETTLE:
+            return made[i:]
+    return made
 
 
 def _cli_time(at: datetime) -> str:
