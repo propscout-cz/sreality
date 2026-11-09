@@ -21,6 +21,7 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
+from location_data.resolver.composite import fold_abbreviations
 from location_data.resolver.normalize import TYP_CP, house_number, split_street_and_number
 
 LOG = logging.getLogger("location_data.place_search")
@@ -239,6 +240,14 @@ def _arm(key: str) -> tuple[str | None, str | None]:
     return key + "%", key if len(key) >= _FUZZY_MIN_CHARS else None
 
 
+def _street_keys(part: str) -> list[str]:
+    """The exact keys a door's street part names a street by: as typed, and with the resolver's abbreviation folds
+    ("nám. Míru" is the register's náměstí Míru). The key as typed stays, as the register spells some streets short
+    itself ("Nám. 5. května")."""
+    key = normalize_street_name(part)
+    return sorted({key, fold_abbreviations(key)} - {""})
+
+
 def _door(row: tuple[Any, ...]) -> Place:
     kod, label, context, lat, lng, street_code, street_name, street_context = row
     street = None if street_code is None else Place("ulice", int(street_code), street_name, street_context)
@@ -260,7 +269,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     domovni, typ = house_number(slots)
     orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
     znak = slots.get("znak_orientacniho")
-    street_keys = [normalize_street_name(street_part)] if domovni is not None else []
+    street_keys = _street_keys(street_part) if domovni is not None else []
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)

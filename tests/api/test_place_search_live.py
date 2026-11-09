@@ -801,3 +801,14 @@ def test_a_village_named_exactly_answers_before_one_whose_name_only_starts_so_be
     mirror.house(21000202, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
     mirror.publish()
     assert _doors(_suggest(client, "Lhota 25")) == [(21000202, "Lhota"), (21000201, "Lhota u Příbramě, Březnice")]
+
+
+def test_a_street_typed_short_answers_the_register_s_long_name_and_one_the_register_spells_short(mirror, client):
+    """The resolver's own abbreviation folds: "nám. Míru" is the register's náměstí Míru. The register spells some
+    streets short itself, so the key as typed stays: "Nám. 5. května" is one."""
+    towns = _towns(mirror)
+    mirror.house(21000301, towns["kolin"], street=mirror.street(401005, "náměstí Míru", towns["kolin"]), cp=5)
+    mirror.house(21000302, towns["kolin"], street=mirror.street(401006, "Nám. 5. května", towns["kolin"]), cp=3)
+    mirror.publish()
+    assert _doors(_suggest(client, "nám. Míru 5")) == [(21000301, "náměstí Míru 5, Kolín")]
+    assert _doors(_suggest(client, "Nám. 5. května 3")) == [(21000302, "Nám. 5. května 3, Kolín")]
