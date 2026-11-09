@@ -154,9 +154,10 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # use only its street_id. Labels are computed for the `top` rows alone.
 #
 # A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
-# homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its fail-closed
-# rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets and villages narrow to
-# its obce. With no town each condition folds away at plan time: the statement is unnamed, its parameters planned in.
+# homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its
+# fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets and
+# villages narrow to its obce. With no town each condition folds away at plan time: the statement is unnamed, its
+# parameters planned in.
 _TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
 _DOORS_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),

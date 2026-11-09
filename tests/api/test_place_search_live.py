@@ -972,8 +972,8 @@ KLADNO_OKRES, KLADNO, LHOTA, LHOTA_LHOTA, LHOTA_KLADNO = 3203, 532053, 513041, 7
 
 
 def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_that_town_s_village(mirror, client):
-    """Two villages called Lhota: one is its own obec in okres Kladno and serves a property, the other a část of the town
-    Kladno (its code invented). "Lhota 25, Kladno" answers the town's: an okres is a region, never the town."""
+    """Two villages called Lhota: one is its own obec in okres Kladno and serves a property, the other a část of the
+    town Kladno (its code invented). "Lhota 25, Kladno" answers the town's: an okres is a region, never the town."""
     okres = mirror.unit("okres", KLADNO_OKRES, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
     kladno, lhota = mirror.unit("obec", KLADNO, "Kladno", okres), mirror.unit("obec", LHOTA, "Lhota", okres)
     mirror.house(21000201, lhota, part=mirror.unit("cast_obce", LHOTA_LHOTA, "Lhota", lhota), cp=25,
@@ -998,3 +998,29 @@ def test_a_typed_town_that_names_nothing_or_has_no_such_street_answers_no_door_o
     mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
     mirror.publish()
     assert _suggest(client, query) == []
+
+
+PARDUBICKY, CHRUDIM_OKRES, KLADNO_CHRUDIM = 94, 3603, 571580
+
+
+def test_a_town_name_two_obce_share_answers_the_doors_in_both_the_served_first(mirror, client):
+    """Builder decision for the operator's ruling (PR notes): every town of the typed name is kept, as production has
+    two obce Kladno (okresy Kladno and Chrudim). Their doors rank as any doors do: the served street's first though its
+    code is higher. Kolín's door 12 serves the most and is not in either."""
+    towns = _towns(mirror)
+    kladno = mirror.unit("obec", KLADNO, "Kladno", mirror.unit("okres", KLADNO_OKRES, "Kladno", towns["kraj"]))
+    pardubicky = mirror.unit("kraj", PARDUBICKY, "Pardubický kraj")
+    chrudim = mirror.unit("obec", KLADNO_CHRUDIM, "Kladno", mirror.unit("okres", CHRUDIM_OKRES, "Chrudim", pardubicky))
+    mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
+    mirror.house(21000141, kladno, street=mirror.street(401011, "Nádražní", kladno), cp=12)
+    mirror.house(21000142, chrudim, street=mirror.street(401012, "Nádražní", chrudim), cp=12)
+    mirror.served(region=PARDUBICKY, okres=CHRUDIM_OKRES, obec=KLADNO_CHRUDIM, street=401012)
+    for _ in range(2):
+        mirror.served(region=STREDOCESKY, okres=KOLIN_OKRES, obec=KOLIN, street=NADRAZNI_KOLIN)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12, Kladno") == [
+        {"level": "adresni_misto", "id": 21000142, "name": "Nádražní 12, Kladno", "context": "Chrudim", "point": None,
+         "street": {"level": "ulice", "id": 401012, "name": "Nádražní", "context": "Kladno"}},
+        {"level": "adresni_misto", "id": 21000141, "name": "Nádražní 12, Kladno", "context": "Kladno", "point": None,
+         "street": {"level": "ulice", "id": 401011, "name": "Nádražní", "context": "Kladno"}},
+    ]
