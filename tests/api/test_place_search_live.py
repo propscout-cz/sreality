@@ -645,3 +645,22 @@ def test_one_read_answers_the_doors_of_same_named_streets_in_two_towns_the_serve
         {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
          "point": {"lat": 50.0275, "lng": 15.2003}},
     ]
+
+
+def test_a_bare_number_answers_its_cp_door_and_its_co_door_on_one_street_ties_by_code(mirror, client):
+    """Both readings at once, neither ranked above the other: 345/12 has the lower code, so it goes first. 13/2 carries
+    no 12."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=345, co=12)
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12)
+    mirror.house(21000103, towns["kolin"], street=nadrazni, cp=13, co=2)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {**street, "point": None},
+    ]
