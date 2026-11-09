@@ -13,8 +13,13 @@ holdout.
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
 `adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
 its č.o., if any), its town's okres as context, its point, and its street's chip in `street` (null for a streetless
-door). A bare number is tried as the č.p. and as the č.o., never as a č.ev. Door rows go after the whole text's exact
-rows and before its similar ones.
+door). A bare number is tried as the č.p. and as the č.o., never as a č.ev.; a letter on it ("12a") is the č.o.'s. Door
+rows go after the whole text's exact rows and before its similar ones.
+
+The address may carry its town (#2485): after a comma, before it, or as the words after the number ("Nádražní 12,
+Kolín", "Kolín, Nádražní 12", "Nádražní 12 Kolín"). Its doors are then only those in a town of that exact name, an obec,
+a část obce or a městská část, every homonym kept; a town that names nothing answers no door. Each reading is one
+statement, tried in order until one answers, the whole text's always last; the name read takes the whole text.
 """
 
 from __future__ import annotations
@@ -328,16 +333,22 @@ def _address(text: str, town: str | None) -> _Reading | None:
                     domovni if orientacni is None and typ is None else None, town)
 
 
+def _in_town(text: str, town: str) -> _Reading | None:
+    """None, not a reading in every town, when the town piece has no letter to name a town by (a PSČ)."""
+    key = normalize_name(town)
+    return _address(text, key) if _LETTER.search(key) else None
+
+
 def _addresses(query: str) -> list[_Reading]:
     """The readings in the order they are tried; the whole text's, as #2451 read it, always last."""
     readings: list[_Reading | None] = []
     pieces = [piece.strip() for piece in query.split(",")]
     if len(pieces) == 2 and all(pieces):
         left, right = pieces
-        readings += [_address(left, normalize_name(right)), _address(right, normalize_name(left))]
+        readings += [_in_town(left, right), _in_town(right, left)]
     elif len(pieces) == 1 and (splits := list(_TOWN_AFTER.finditer(query))):
         last = splits[-1]
-        readings.append(_address(query[:last.end(1)], normalize_name(query[last.end():])))
+        readings.append(_in_town(query[:last.end(1)], query[last.end():]))
     readings.append(_address(query, None))
     return [r for r in readings if r is not None]
 
