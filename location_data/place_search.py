@@ -13,8 +13,13 @@ holdout.
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
 `adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
 its č.o., if any), its town's okres as context, its point, and its street's chip in `street` (null for a streetless
-door). A bare number is tried as the č.p. and as the č.o., never as a č.ev. Door rows go after the whole text's exact
-rows and before its similar ones.
+door). A bare number is tried as the č.p. and as the č.o., never as a č.ev.; a letter on it ("12a") is the č.o.'s. Door
+rows go after the whole text's exact rows and before its similar ones.
+
+The address may carry its town (#2485): after a comma, before it, or as the words after the number ("Nádražní 12,
+Kolín", "Kolín, Nádražní 12", "Nádražní 12 Kolín"). Its doors are then only those in a town of that exact name, an obec,
+a část obce or a městská část, every homonym kept; a town that names nothing answers no door. Each reading is one
+statement, tried in order until one answers, the whole text's always last; the name read takes the whole text.
 """
 
 from __future__ import annotations
@@ -27,13 +32,18 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
-from location_data.resolver.composite import abbreviation_spellings
+from location_data.resolver.composite import WHOLE_LEVELS, abbreviation_spellings
 from location_data.resolver.normalize import TYP_CP, house_number, split_street_and_number, strip_street_generic
 
 LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
 _LETTER = re.compile(r"[a-z]")
+# "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
+# ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
+_TOWN_AFTER = re.compile(r"(?<![\w./])(\d{1,6}(?:\s*/\s*\d{1,5}[a-zA-Z]?|[a-zA-Z])?)\s+(?=[^\W\d_])")
+# "Nádražní 12a", which the resolver's parser reads as no number: RÚIAN carries a letter on the č.o. alone.
+_LETTERED = re.compile(r"^(?P<street>.*\S)\s+(?P<co>\d{1,5})(?P<znak>[a-zA-Z])$")
 _DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
@@ -149,14 +159,37 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # rule): a load updates doors in place, re-pointing them to the rows it reopens. A door it inserts waits for its version
 # to publish. The č.p. and the č.o. are two arms, each an index condition on ruian_ap_street_hn, as the OR form would
 # use only its street_id. Labels are computed for the `top` rows alone.
+#
+# A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
+# homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its
+# fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets and
+# villages narrow to its obce, and doors to those that lie in it: its obec or část by code, or its městská část through
+# every row of the code (a street runs through several of either). With no town each condition folds away at plan
+# time: the statement is unnamed, its parameters planned in.
+_TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
+_DOOR_IN_TOWN = """
+         AND (%(town)s::text IS NULL OR ap.obec_kod IN (SELECT code FROM town WHERE level = 'obec')
+              OR ap.cast_obce_kod IN (SELECT code FROM town WHERE level = 'cast_obce')
+              OR ap.momc_unit_id IN (SELECT m.id FROM ruian_admin_units m
+                                      JOIN town t ON t.level = 'momc' AND m.level = 'momc' AND m.code = t.code))"""
 _DOORS_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
+town AS (
+  SELECT DISTINCT u.level, u.code, CASE WHEN u.level = 'obec' THEN u.code ELSE po.code END AS obec_code
+    FROM ruian_name_index n
+    JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
+    LEFT JOIN ruian_admin_units po ON po.id = u.parent_id AND po.level = 'obec'
+   WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(town)s::text
+     AND n.entity_kind IN ({_TOWN_LEVELS})
+     AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id),
+town_obce AS (SELECT o.id FROM ruian_admin_units o WHERE o.level = 'obec' AND o.code IN (SELECT obec_code FROM town)),
 streets AS (
   SELECT DISTINCT ON (s.code) s.code, s.name, s.obec_unit_id
     FROM ruian_streets s
    WHERE s.name_norm = ANY(%(street_keys)s::text[])
      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
+     AND (%(town)s::text IS NULL OR s.obec_unit_id IN (SELECT id FROM town_obce))
    ORDER BY s.code, s.valid_from DESC),
 parts AS (
   SELECT DISTINCT ON (u.code) u.code, u.parent_id,
@@ -165,6 +198,7 @@ parts AS (
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(part_key)s::text
      AND n.entity_kind = 'cast_obce' AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
+     AND (%(town)s::text IS NULL OR u.parent_id IN (SELECT id FROM town_obce))
    ORDER BY u.code, tier, u.valid_from DESC),
 candidates AS (
   (SELECT 0 AS tier, coalesce(c.n, 0) AS served, st.code AS street_code, st.name AS street_name,
@@ -183,11 +217,12 @@ doors AS (
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
          AND (%(orientacni)s::integer IS NULL OR ap.cislo_orientacni = %(orientacni)s::integer)
-         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text)
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_DOOR_IN_TOWN}
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)
       UNION
       SELECT ap.kod_adm FROM ruian_address_points ap
        WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer
+         AND (%(znak)s::text IS NULL OR lower(ap.znak_orientacniho) = %(znak)s::text){_DOOR_IN_TOWN}
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)) a
   UNION ALL
   SELECT k.tier, k.served, NULL, NULL, NULL, ap.kod_adm
@@ -196,7 +231,7 @@ doors AS (
     JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
     JOIN ruian_address_points ap ON ap.obec_unit_id = ob.id
    WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
-     AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
+     AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code{_DOOR_IN_TOWN}
      AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)),
 top AS (SELECT * FROM doors ORDER BY tier, served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
@@ -267,6 +302,57 @@ def _door(row: tuple[Any, ...]) -> Place:
     return Place(_DOOR_LEVEL, int(kod), label, context, lat, lng, street=street)
 
 
+@dataclass(frozen=True)
+class _Reading:
+    """One way to read the text as an address: its street part, number slots and town key (None: every town)."""
+
+    street: str
+    domovni: int | None
+    typ: str | None
+    orientacni: int | None
+    znak: str | None
+    bare: int | None  # tried as the č.o. alone
+    town: str | None
+
+    def params(self, limit: int) -> dict[str, Any]:
+        return {"street_keys": _street_keys(self.street), "part_key": normalize_name(self.street),
+                "domovni": self.domovni, "orientacni": self.orientacni, "znak": self.znak, "typ": self.typ or TYP_CP,
+                "bare": self.bare, "town": self.town, "limit": limit}
+
+
+def _address(text: str, town: str | None) -> _Reading | None:
+    street_part, slots = split_street_and_number(text)
+    domovni, typ = house_number(slots)
+    if domovni is None:
+        lettered = _LETTERED.match(text.strip())
+        if lettered is None:
+            return None
+        return _Reading(lettered["street"], None, None, None, lettered["znak"].lower(), int(lettered["co"]), town)
+    orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
+    return _Reading(street_part, domovni, typ, orientacni, slots.get("znak_orientacniho"),
+                    domovni if orientacni is None and typ is None else None, town)
+
+
+def _in_town(text: str, town: str) -> _Reading | None:
+    """None, not a reading in every town, when the town piece has no letter to name a town by (a PSČ)."""
+    key = normalize_name(town)
+    return _address(text, key) if _LETTER.search(key) else None
+
+
+def _addresses(query: str) -> list[_Reading]:
+    """The readings in the order they are tried; the whole text's, as #2451 read it, always last."""
+    readings: list[_Reading | None] = []
+    pieces = [piece.strip() for piece in query.split(",")]
+    if len(pieces) == 2 and all(pieces):
+        left, right = pieces
+        readings += [_in_town(left, right), _in_town(right, left)]
+    elif len(pieces) == 1 and (splits := list(_TOWN_AFTER.finditer(query))):
+        last = splits[-1]
+        readings.append(_in_town(query[:last.end(1)], query[last.end():]))
+    readings.append(_address(query, None))
+    return [r for r in readings if r is not None]
+
+
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     unit_key, street_key = normalize_name(query), normalize_street_name(query)
     unit_prefix, unit_fuzzy = _arm(unit_key)
@@ -278,24 +364,18 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
-    street_part, slots = split_street_and_number(query)
-    domovni, typ = house_number(slots)
-    orientacni = int(str(slots["cislo_orientacni"])) if "cislo_orientacni" in slots else None
-    znak = slots.get("znak_orientacniho")
-    street_keys = _street_keys(street_part) if domovni is not None else []
+    door_params = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)
             cur.execute(_SUGGEST_SQL, params)
             rows = cur.fetchall()
             doors: list[tuple[Any, ...]] = []
-            if street_keys:
-                cur.execute(_DOORS_SQL, {"street_keys": street_keys, "part_key": normalize_name(street_part),
-                                         "domovni": domovni, "orientacni": orientacni, "znak": znak,
-                                         "typ": typ or TYP_CP,
-                                         "bare": domovni if orientacni is None and typ is None else None,
-                                         "limit": limit})
+            for bound in door_params:
+                cur.execute(_DOORS_SQL, bound)
                 doors = cur.fetchall()
+                if doors:
+                    break
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
         LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)

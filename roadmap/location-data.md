@@ -1411,9 +1411,18 @@ component is slimmed twice — each wave rewrites one component and slims its st
   only a marked č.ev. is read as a č.ev. number (a č.ev. door's č.o. answers like any č.o.). Door rows follow the whole text's exact rows and precede its similar ones (a
   builder decision for the operator), so they can fill the list. The door label moved from `api/maps.py` to
   `place_search.DOOR_LABEL_SQL`, which the address picker imports. **Next:** gate #2465 with dictated address
-  questions (#2452): a town after the number ("Nádražní 12, Kolín") answers no door yet (#2485), and the eval scores
+  questions (#2452): an address typed with its town answers since #2485 (below), and the eval scores
   every door by kód ADM, as a streetless or č.ev. door's label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
   picker saves `{adresni_misto, door code}` if addresses pass).
+- **Addresses typed with their town — built 2026-11-09** (#2485; spec #2441 Part 4, story 53; no migration, no new
+  index; as built: `docs/architecture.md` § own place search). "Nádražní 12, Kolín", "Kolín, Nádražní 12" and
+  "Nádražní 12 Kolín" answer only the doors in a town of that exact name (an obec, část obce or městská část, every
+  homonym kept; an okres or a kraj never), so the town, not the served counts, decides which same-named street
+  answers; a town that names nothing answers no door; "12a" is the č.o.'s letter. Each reading is one statement, the
+  whole text's always last, so a text with no town answers as before ("12a" aside). **Next:** the gate's run #2465
+  weighs the forms not read (a městská část without its register suffix, "Plzeň 2" for "Plzeň 2-Slovany"; a dash; a
+  PSČ); the okres question pending with the operator gains an input (an okres is never the town, so production's
+  "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not inside obec Kladno).
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
